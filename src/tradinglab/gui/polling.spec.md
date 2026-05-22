@@ -29,11 +29,16 @@ Also hosts the pure scheduler helpers (only caller is here).
   epoch for grace_s after next 16:00 ET weekday close.
 - `_compute_fetch_delay_ms(interval, last_bar_epoch, now_epoch,
   include_extended, min_backoff_ms, grace_intraday_s=5,
-  grace_daily_s=300) -> int` — anchors on last bar + interval +
-  grace so session-aligned intraday bars (e.g. 1h bars closing at
-  10:30/11:30 NYSE) are honored. For daily / weekly / monthly,
-  always schedules to 16:05 ET next weekday (daily timestamps
-  don't encode close time).
+  grace_daily_s=300, intraday_refresh_on_daily=False) -> int` —
+  anchors on last bar + interval + grace so session-aligned
+  intraday bars (e.g. 1h bars closing at 10:30/11:30 NYSE) are
+  honored. For daily / weekly / monthly, normally schedules to
+  16:05 ET next weekday (daily timestamps don't encode close
+  time). When `intraday_refresh_on_daily=True` AND `interval ==
+  "1d"` AND market is open, schedules ~5-min cadence instead so
+  the daily chart's synthetic today-bar can refresh continuously
+  from cached intraday data (audit `daily-today-upsample`);
+  outside RTH falls through to the standard daily 16:05 path.
 - `_silent_tcl(*extra_excs)` — context manager swallowing
   `tk.TclError` + extras. Module-local clone to avoid a
   `gui.polling → app` import cycle.
@@ -54,7 +59,11 @@ Also hosts the pure scheduler helpers (only caller is here).
   blocks the worker), so they post to `self._worker_inbox`.
 - `_drain_worker_inbox()` — pop items: `stash` (cache fetched
   bars), `refresh` (watchlist refresh), `reference` (reference-
-  data redraw), `card_stash` (chartstack card cache fill).
+  data redraw), `card_stash` (chartstack card cache fill). When
+  a `prefetch` event arrives for an intraday interval, also
+  calls `_refresh_daily_synth_for_active_view` so a daily chart
+  picks up the freshly-warmed intraday data without a round-trip
+  (audit `daily-today-upsample`).
 - `_drain_stream_queue()` — pop streaming events. Routes
   `"card:N"`-slot events to `self._chartstack.apply_stream_event`;
   routes `tick`/`rollover` for main chart through
@@ -73,7 +82,12 @@ Also hosts the pure scheduler helpers (only caller is here).
   `_fetch_executor` (off Tk thread). Result marshaled via
   `_await_future_on_tk` and fed into `_load_data` through
   `_prefetched_raw`. Bumps `_fetch_token` before submission so
-  stale results from a superseding ticker switch can drop.
+  stale results from a superseding ticker switch can drop. **1d
+  ticks redirect to intraday prefetch** (`_ensure_prefetched(sym,
+  "5m", force=True)`) for primary + compare instead of refetching
+  daily — the prefetch-arrival handler then re-renders the
+  daily chart with the updated synthetic today-bar (audit
+  `daily-today-upsample`).
 
 ### Class attributes expected on the host
 

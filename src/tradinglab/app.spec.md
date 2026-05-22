@@ -115,6 +115,9 @@ Active when no stream is registered for the source. Delay computed by pure helpe
 ### Companion-interval prefetch
 End of every successful `_load_data` fires background prefetches for `{"5m", "1d"} − {current_interval}` on primary + compare via `_prefetch_companion_intervals`. Dedup via `_prefetch_inflight`, capped at `_PREFETCH_INFLIGHT_MAX=4`. Each prefetch: fresh-cache early-out → dedup → cap → disk-prime → executor submit → stale-overwrite guard (refuse to stomp newer in-memory) → disk merge + save.
 
+### Today's-bar upsampling on the daily chart
+Most data providers lag today's daily bar until after the close, so a mid-session user on a 1d chart sees "everything up to yesterday" while the 5m chart shows the live forming bar. `_maybe_upsample_today_daily(candles, source, symbol, interval)` layers a synthetic today-bar onto a daily series by aggregating whatever intraday data is already cached (finest interval wins — see `data/today_upsample.find_best_intraday_source`). Called from `_load_data` AFTER the truthful cache store (so `_full_cache` keeps the provider's raw lagged data, ready to overwrite the synth bar on the next render boundary) and from the compare-on cache-hit branch of `_on_compare_toggle`. When an intraday companion-prefetch lands, `_refresh_daily_synth_for_active_view(prefetched_symbol=...)` re-runs the upsample + pair-filter + render path (no network, no indicator-cache clear — forming-bar invalidation via `_invalidate_focused_panels` covers the right edge). The polling tick on 1d redirects to a 5m prefetch (see `gui/polling.spec.md`). Scope: 1d only; 1wk/1mo deferred (see `data/today_upsample.spec.md`). Audit `daily-today-upsample`.
+
 ### Notebook tab labels
 `_refresh_tab_labels` updates Primary / Compare titles to reflect `ticker_var` after successful load and bad-ticker revert (`_tab_label_for_primary` / `_tab_label_for_compare`).
 

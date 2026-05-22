@@ -147,6 +147,7 @@ def _compute_fetch_delay_ms(
     min_backoff_ms: int,
     grace_intraday_s: int = 5,
     grace_daily_s: int = 300,
+    intraday_refresh_on_daily: bool = False,
 ) -> int:
     """Pure scheduler: return Tk ``after()`` delay (ms) for the next fetch.
 
@@ -159,8 +160,25 @@ def _compute_fetch_delay_ms(
     For daily/weekly/monthly intervals, always schedules for 16:05 ET
     next weekday because daily bar timestamps don't represent close
     times, so last_bar + 86400s would skip ~17 hours of real time.
+
+    When ``intraday_refresh_on_daily=True`` and ``interval == "1d"``,
+    schedules at intraday cadence (every 5 minutes, market-hours-only)
+    instead so the daily chart's synthetic today-bar can refresh
+    continuously from the live intraday feed. Audit
+    ``daily-today-upsample``. Outside market hours we fall through to
+    the standard daily 16:05 ET schedule — no point burning fetches.
     """
     if not is_intraday(interval):
+        if intraday_refresh_on_daily and interval == "1d":
+            target_s = now_epoch + 5 * 60 + grace_intraday_s
+            postponed = _postpone_past_closed_market(
+                target_s, include_extended=False,
+            )
+            if postponed <= target_s + 60:
+                # Still inside market hours: intraday cadence.
+                delay_s = max(min_backoff_ms / 1000.0, target_s - now_epoch)
+                return int(delay_s * 1000)
+            # Outside market hours: defer to next daily close.
         target_s = _next_daily_close_epoch(now_epoch, grace_s=grace_daily_s)
         delay_s = max(min_backoff_ms / 1000.0, target_s - now_epoch)
         return int(delay_s * 1000)
@@ -265,6 +283,21 @@ class PollingMixin:
                     try:
                         key, bars = payload
                         self._apply_prefetch_result(key, bars)
+                        # If we're viewing a daily-class chart and the
+                        # arriving prefetch is an intraday companion
+                        # for the active symbol, re-render so today's
+                        # synthetic daily bar picks up the freshly-
+                        # warmed intraday data. Cheap (no network) —
+                        # see :meth:`_refresh_daily_synth_for_active_view`.
+                        # Audit ``daily-today-upsample``.
+                        try:
+                            _src, _sym, _iv = key
+                            if is_intraday(_iv):
+                                self._refresh_daily_synth_for_active_view(
+                                    prefetched_symbol=_sym,
+                                )
+                        except Exception:  # noqa: BLE001
+                            pass
                     except Exception:  # noqa: BLE001
                         pass
                 elif kind == "refresh":
@@ -476,6 +509,7 @@ class PollingMixin:
                 now_epoch=time.time(),
                 include_extended=include_ext,
                 min_backoff_ms=self._MIN_POLL_BACKOFF_MS,
+                intraday_refresh_on_daily=True,
             )
         with _silent_tcl():
             self._poll_job = self._track_after(
@@ -534,6 +568,28 @@ class PollingMixin:
                     self._poll_retry_expected_min_ts = None
         else:
             self._poll_retry_expected_min_ts = None
+
+        # Daily-view live-refresh path: on 1d, instead of refetching the
+        # daily series (which lags by ~1 day so nothing changes mid-
+        # session), warm the 5m intraday cache for the active symbols.
+        # The prefetch-arrival handler will redraw the daily chart with
+        # an updated synthetic today-bar (see
+        # :meth:`_refresh_daily_synth_for_active_view`). Outside market
+        # hours the daily-cadence branch in ``_compute_fetch_delay_ms``
+        # routes us to 16:05 ET instead, so this tick only fires
+        # mid-session. Audit ``daily-today-upsample``.
+        if interval == "1d":
+            try:
+                for tic in (raw_primary, raw_compare):
+                    if tic:
+                        self._ensure_prefetched(tic, "5m", force=True)
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                self._schedule_next_bar_fetch()
+            except Exception:  # noqa: BLE001
+                pass
+            return
 
         # Drop the active primary/compare entries so fresh data is fetched.
         for tic in (raw_primary, raw_compare):

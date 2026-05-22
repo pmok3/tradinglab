@@ -57,6 +57,15 @@ from .core.viewport import (
 )
 from .data import DATA_SOURCES, DataController, FetchService
 from .data.stream_controller import StreamController
+from .data.today_upsample import (
+    SUPPORTED_INTERVALS as _DAILY_UPSAMPLE_INTERVALS,
+)
+from .data.today_upsample import (
+    find_best_intraday_source as _find_best_intraday_source,
+)
+from .data.today_upsample import (
+    upsample_daily_with_today as _upsample_daily_with_today,
+)
 from .drawings import (
     DEFAULT_COLOR as _DRAWING_DEFAULT_COLOR,
 )
@@ -1916,6 +1925,16 @@ class ChartApp(
             # asynchronously). This matches user expectation: "I already
             # saw this ticker; toggling should be instant."
             compare_raw = list(cached)
+            # Layer today's synthetic daily bar on top when on 1d — the
+            # cache stores truthful (provider-lagged) data, so toggling
+            # compare on mid-session without re-running ``_load_data``
+            # would otherwise show "yesterday" on the compare panel
+            # while the primary already has today's synth bar. Audit
+            # ``daily-today-upsample``.
+            compare_raw = self._maybe_upsample_today_daily(
+                compare_raw, source=src, symbol=raw_compare,
+                interval=interval,
+            )
             self._confirmed_compare_ticker = raw_compare
             primary, compare = self._apply_pair_filter_and_align(
                 self._primary_raw, compare_raw,
@@ -2076,6 +2095,122 @@ class ChartApp(
             all_intervals=self._PREFETCH_COMPANION_INTERVALS,
             prefetch_fn=self._ensure_prefetched,
         )
+
+    def _maybe_upsample_today_daily(
+        self,
+        candles: list[Candle],
+        *,
+        source: str,
+        symbol: str,
+        interval: str,
+    ) -> list[Candle]:
+        """Append a synthetic today's-bar to ``candles`` when on a daily view.
+
+        Most data providers (yfinance, Schwab, Polygon) lag today's
+        daily bar until after the close — mid-session the user sees
+        "everything up to yesterday" on 1d. This helper appends (or
+        overwrites) the running daily bar by aggregating whatever
+        intraday data is already cached for ``symbol`` (finest cached
+        interval wins). Audit ``daily-today-upsample``.
+
+        No-op (returns ``candles`` unchanged) when:
+        - ``interval`` is not in :data:`_DAILY_UPSAMPLE_INTERVALS`
+        - no symbol provided (compare slot off)
+        - no intraday cache exists for ``symbol`` — the companion-
+          interval prefetch fired by :meth:`_prefetch_companion_intervals`
+          will warm the 5m cache shortly; the prefetch-arrival path
+          (:meth:`_drain_worker_inbox`) re-renders with the synth bar
+          once data lands.
+
+        The returned list is always a fresh copy when synthesis runs,
+        so the truthful ``_full_cache`` entry stays unmodified — a
+        subsequent provider fetch that finally contains today's daily
+        bar replaces the synth bar at the next render boundary.
+        """
+        if not symbol or interval not in _DAILY_UPSAMPLE_INTERVALS:
+            return candles
+        intraday = _find_best_intraday_source(
+            self._full_cache, source=source, symbol=symbol,
+        )
+        if intraday is None:
+            return candles
+        return _upsample_daily_with_today(
+            candles, intraday_candles=intraday,
+        )
+
+    def _refresh_daily_synth_for_active_view(
+        self, *, prefetched_symbol: str,
+    ) -> None:
+        """Re-render the daily chart when an intraday prefetch lands.
+
+        Called from the prefetch-arrival path
+        (:meth:`_drain_worker_inbox`) when a 5m/1m/… fetch completes
+        and the active view is a daily chart. Rebuilds ``_primary_raw``
+        / ``_compare_raw`` from the truthful ``_full_cache`` plus the
+        freshly-warmed intraday cache and triggers a redraw. Audit
+        ``daily-today-upsample``.
+
+        Cheap by design — does NOT round-trip the network, does NOT
+        clear the indicator cache (the daily series only gains one
+        bar at the right edge, which the forming-bar invalidation
+        path already handles via ``_invalidate_focused_panels``).
+        """
+        try:
+            interval = self.interval_var.get()
+        except Exception:  # noqa: BLE001
+            return
+        if interval not in _DAILY_UPSAMPLE_INTERVALS:
+            return
+        try:
+            src = self.source_var.get()
+            raw_primary = self.ticker_var.get().strip().upper()
+            compare_on = bool(self.compare_var.get())
+            raw_compare = (self.compare_ticker_var.get().strip().upper()
+                           if compare_on else "")
+        except Exception:  # noqa: BLE001
+            return
+        if prefetched_symbol not in (raw_primary, raw_compare):
+            return
+        primary_clean = list(
+            self._full_cache.get((src, raw_primary, interval)) or [],
+        )
+        if not primary_clean:
+            return
+        primary_raw = self._maybe_upsample_today_daily(
+            primary_clean, source=src, symbol=raw_primary, interval=interval,
+        )
+        compare_raw: list[Candle] = []
+        if compare_on and raw_compare:
+            compare_clean = list(
+                self._full_cache.get((src, raw_compare, interval)) or [],
+            )
+            compare_raw = self._maybe_upsample_today_daily(
+                compare_clean, source=src, symbol=raw_compare,
+                interval=interval,
+            )
+        if compare_on and compare_raw:
+            primary, compare = self._apply_pair_filter_and_align(
+                primary_raw, compare_raw,
+            )
+        else:
+            primary, _ = self._apply_pair_filter_and_align(
+                primary_raw, None,
+            )
+            compare = []
+        self._set_data_state(
+            primary_raw=primary_raw,
+            primary=primary,
+            compare_raw=compare_raw,
+            compare=compare,
+        )
+        try:
+            self._invalidate_focused_panels(list(primary))
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            self._render()
+        except Exception:  # noqa: BLE001
+            pass
 
     def _tab_label_for_primary(self) -> str:
         """Return the notebook label for the primary tab.
@@ -2612,7 +2747,12 @@ class ChartApp(
         compare_raw = list(compare_raw) if compare_raw is not None else []
 
         # Store back into both memory + disk caches so the next session
-        # has persistent access to what we've seen.
+        # has persistent access to what we've seen. Cache stores the
+        # truthful (provider-as-is) candles BEFORE we layer today's
+        # synthetic daily bar on top — keeps the on-disk + in-memory
+        # caches faithful, so the next provider fetch that includes
+        # today's real daily bar simply lands here and overwrites our
+        # synth at the next render boundary.
         if primary_raw:
             self._full_cache[primary_key] = primary_raw
             self._trim_full_cache()
@@ -2625,6 +2765,21 @@ class ChartApp(
             self._confirmed_compare_ticker = raw_compare
             if mem_compare is not compare_raw:
                 disk_cache.save(*compare_key, compare_raw)
+
+        # Today's-bar upsampling for daily-class views: most providers
+        # lag the live session by ~1 day, so 1d shows "everything up
+        # to yesterday" mid-session while 5m shows the current bar.
+        # When we have intraday data cached for the same symbol,
+        # aggregate today's intraday bars into a synthetic daily bar
+        # and append it. Audit ``daily-today-upsample``.
+        primary_raw = self._maybe_upsample_today_daily(
+            primary_raw, source=src, symbol=raw_primary, interval=interval,
+        )
+        if compare_key and compare_raw:
+            compare_raw = self._maybe_upsample_today_daily(
+                compare_raw, source=src, symbol=raw_compare,
+                interval=interval,
+            )
 
         # Apply pair filter + align. Always run — even in single-chart
         # mode — so the Pre/Post toggle actually drops extended-hours

@@ -262,6 +262,58 @@ class TestComputeFetchDelayMs:
         )
         assert delay >= 5000
 
+    def test_intraday_refresh_on_daily_uses_5min_cadence_in_rth(self):
+        """When ``intraday_refresh_on_daily=True`` and we're on 1d during
+        RTH, schedule at intraday cadence (5 min) so today's synthetic
+        daily bar can refresh continuously. Audit
+        ``daily-today-upsample``."""
+        now = _epoch_at(2025, 5, 13, 11, 0, 0)  # 11:00 ET Tue
+        delay = _polling._compute_fetch_delay_ms(
+            "1d", None, now, include_extended=False,
+            min_backoff_ms=500, grace_intraday_s=5,
+            intraday_refresh_on_daily=True,
+        )
+        # 5 min + 5s = 305s = 305,000ms.
+        assert 300_000 < delay < 310_000
+
+    def test_intraday_refresh_on_daily_falls_back_outside_rth(self):
+        """Outside RTH the daily flag has no effect — schedule for the
+        next 16:05 ET. We don't want to burn fetches when no new
+        intraday bars are being produced."""
+        now = _epoch_at(2025, 5, 13, 20, 30, 0)  # 20:30 ET — after close
+        delay = _polling._compute_fetch_delay_ms(
+            "1d", None, now, include_extended=False,
+            min_backoff_ms=500, grace_intraday_s=5, grace_daily_s=300,
+            intraday_refresh_on_daily=True,
+        )
+        # From 20:30 Tue to 16:05 Wed = ~19h35m = 70_500s = 70_500_000ms.
+        assert 70_000_000 < delay < 71_000_000
+
+    def test_intraday_refresh_on_daily_ignored_for_5m(self):
+        """The flag only affects daily-class intervals — intraday
+        intervals keep their existing cadence."""
+        now = _epoch_at(2025, 5, 13, 10, 1, 0)
+        last = _epoch_at(2025, 5, 13, 10, 0, 0)
+        delay = _polling._compute_fetch_delay_ms(
+            "5m", last, now, include_extended=False,
+            min_backoff_ms=500, grace_intraday_s=5,
+            intraday_refresh_on_daily=True,
+        )
+        # Same as the standard intraday path (4m 5s).
+        assert 240_000 < delay < 250_000
+
+    def test_intraday_refresh_on_daily_ignored_for_1wk(self):
+        """Weekly stays on the daily-close schedule (no synth support
+        for 1wk yet — see ``data/today_upsample.SUPPORTED_INTERVALS``)."""
+        now = _epoch_at(2025, 5, 13, 10, 0, 0)
+        delay = _polling._compute_fetch_delay_ms(
+            "1wk", None, now, include_extended=False,
+            min_backoff_ms=500,
+            intraday_refresh_on_daily=True,
+        )
+        # Should match the standard 1d/1wk path — 6h5m to 16:05.
+        assert 21_800_000 < delay < 22_000_000
+
 
 # ---------------------------------------------------------------------------
 # 5. PollingMixin — _track_after + _schedule_reload with a fake harness
