@@ -114,6 +114,7 @@ A one-spec-per-`.py` documentation set. Each spec follows a fixed 9-section layo
 |---|---|
 | `gui/__init__.spec.md` | Subpackage marker; avoids `tradinglab.app` back-imports. |
 | `gui/color_palette.spec.md` | Per-scope indicator colour palette + assignment helpers; deterministic next-colour selection per (scope, kind). |
+| `gui/menu_theme.spec.md` | Classic `tk.Menu` palette helper; recursively themes menubars/cascades so dark-mode cascade arrows inherit the menu foreground. |
 | `gui/dialogs.spec.md` | `_SettingsDialog` (live preview, cancel-revert) + `_WatchlistDialog` (CRUD + pin column + import/export). |
 | `gui/interaction.spec.md` | `InteractionMixin` — pan (blit), zoom (rubber band), hover, crosshair, click-to-type, Y-autoscale. |
 | `gui/watchlist_tab.spec.md` | `WatchlistTabMixin` — nested-notebook with one sub-tab per pinned watchlist (cap 5); snapshot-driven Treeview per sub-tab, click-to-sort (per-tab), debounced repaint. |

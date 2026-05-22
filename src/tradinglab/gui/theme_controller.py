@@ -18,6 +18,7 @@ from ..constants import (
     ttk_combobox_listbox_options,
 )
 from ..rendering import style_axes
+from .menu_theme import apply_menu_theme
 
 
 @contextlib.contextmanager
@@ -248,33 +249,15 @@ class ThemeController:
                 pass
 
     def _apply_menubar_theme(self, theme: dict) -> None:
-        """Repaint the top-level menubar + cascades to match the active theme."""
+        """Repaint the top-level menubar + every cascade submenu."""
         root = self._root
         mb = getattr(root, "_menubar", None)
         if mb is None:
             return
-        if theme is None:
-            theme = LIGHT_THEME
-        bg = theme.get("win_bg", "#f0f0f0")
-        fg = theme.get("text", "#111111")
-        # Foreground for disabled menu entries (e.g. the gated
-        # "Highlight Flat HA Candles" entry when HA is off). Picking a
-        # muted grey from the palette avoids the Windows-default
-        # etched/embossed disabled-text style that looks blurry on
-        # dark backgrounds. Falls back to ``fg`` for older palettes
-        # that don't carry the key. Audit ``menu-disabled-fg``.
-        fg_disabled = theme.get("text_disabled", fg)
-        opts = dict(
-            background=bg,
-            foreground=fg,
-            activebackground=fg,
-            activeforeground=bg,
-            selectcolor=fg,
-            disabledforeground=fg_disabled,
-        )
-        for menu in [mb, *getattr(root, "_menubar_submenus", [])]:
-            with _silent_tcl():
-                menu.configure(**opts)
+        palette = theme or LIGHT_THEME
+        apply_menu_theme(mb, palette)
+        for menu in getattr(root, "_menubar_submenus", []):
+            apply_menu_theme(menu, palette)
 
     def _load_theme_overrides(self) -> dict[str, dict[str, str]]:
         """Load the ``theme_overrides`` dict from settings.json, defensively."""
