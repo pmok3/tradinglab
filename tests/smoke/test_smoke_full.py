@@ -198,8 +198,16 @@ def check_50_compare_mode(app) -> None:
     """spec §7 — enabling compare mode creates a second panel."""
     app.compare_enabled_var.set(True)
     app._schedule_reload(delay_ms=0)
-    _pump(app, 0.5)
-    # After enabling compare, the ax map should have 4 entries (2 price, 2 vol)
+    # Wait for the compare panel to actually materialize. A static 500ms
+    # pump was too brittle when prior smoke checks left the cache "stale"
+    # — a real refetch round-trip can take ~1-2s on a busy session even
+    # with the synthetic fetcher, surfacing as `price=1 volume=1` on the
+    # 3rd `pytest --count=3` iteration. Predicate-pump up to 5s instead.
+    def _compare_panels_ready() -> bool:
+        kinds = [v[1] for v in app._ax_candle_map.values()]
+        return kinds.count("price") == 2 and kinds.count("volume") == 2
+
+    _pump_until(app, _compare_panels_ready, timeout=5.0)
     kinds = [v[1] for v in app._ax_candle_map.values()]
     n_price = kinds.count("price")
     n_vol = kinds.count("volume")
@@ -211,7 +219,11 @@ def check_50_compare_mode(app) -> None:
     # Disable again
     app.compare_enabled_var.set(False)
     app._schedule_reload(delay_ms=0)
-    _pump(app, 0.5)
+    _pump_until(
+        app,
+        lambda: [v[1] for v in app._ax_candle_map.values()].count("price") == 1,
+        timeout=5.0,
+    )
     kinds = [v[1] for v in app._ax_candle_map.values()]
     assert kinds.count("price") == 1, (
         f"after compare-off expected 1 price axis, got {kinds.count('price')}"
@@ -18441,6 +18453,13 @@ def check_d80_horizontal_lines(app) -> None:
         "(regression C2 — add path uses the variable, propagating "
         "back would loop or always reset).")
     print("  [OK] _last_drawing_color tracks dialog color commits (C2)")
+
+    # Restore the default before any later check / next smoke iteration
+    # reaches the `_last_drawing_color == DEFAULT_COLOR` assertion at
+    # the top of this function. Without this, running the mega-test
+    # with `pytest --count=N` flakes at iteration 2 because the prior
+    # iteration left `#ff00aa` (or `#00ff11`) in the variable.
+    app._last_drawing_color = DEFAULT_COLOR
 
     # --- _redraw_drawings_overlay survives an empty / partial state.
     try:
