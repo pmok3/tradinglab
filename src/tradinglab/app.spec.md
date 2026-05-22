@@ -51,7 +51,7 @@ Slots are axes-grouping IDs: `"primary"` / `"compare"`. Drilldown reuses the pri
 - `ind_state` — per-slot indicator render state, owned by `indicators/render.py`.
 
 ### Indicator event subscription (`_on_indicator_event`)
-Subscribes once to `IndicatorManager`. Filters to `{"add", "remove", "update", "clear", "reorder", "preset_loaded", "loaded", "redraw"}`. `"preset_saved"` / `"preset_deleted"` are intentionally excluded (no chart-state change; menu cascade rebuilds via `postcommand`).
+Subscribes once to `IndicatorManager`. Filters to `{"add", "remove", "update", "clear", "reorder", "preset_loaded", "loaded", "redraw"}`. `"preset_saved"` / `"preset_deleted"` are intentionally excluded (no chart-state change; menu cascade rebuilds via `postcommand`). Reference-data arrivals (RRVOL compare-symbol bars) clear `IndicatorCache` and route through this same `"redraw"` path so a slot first rendered as all-NaN repaints as soon as the secondary symbol lands.
 
 ## Dependencies
 - Internal: `. (constants, models, formatting, settings, disk_cache, rendering)`, `.core.*`, `.data.*`, `.indicators.* (factories, manager, render)`, `.streaming.*`, `.watchlists.*`, `.gui.* (dialogs, interaction, workers, watchlist_tab, polling, x_axis_locator, chartstack, geometry_store, live_price_overlay, ...)`, `.backtest.replay`.
