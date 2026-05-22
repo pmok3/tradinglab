@@ -1,0 +1,67 @@
+{
+  "created_at": "2026-05-06T04:52:27Z",
+  "created_with": {
+    "app": "tradinglab",
+    "template": true,
+    "version": "1.0.0"
+  },
+  "id": "tmpl-scan-above-vwap-rising",
+  "name": "Above rising VWAP (1m)",
+  "options": {
+    "default_view": "new",
+    "new_view_capacity": 500,
+    "show_insufficient_data_rows": false
+  },
+  "output_columns": null,
+  "primary_interval": "1m",
+  "rank_by": {
+    "id": "close",
+    "kind": "builtin"
+  },
+  "rank_dir": "desc",
+  "rank_interval": "",
+  "root": {
+    "children": [
+      {
+        "enabled": true,
+        "id": "f527a93e-33cf-4e87-ae5d-e8c604f87b14",
+        "interval": "1m",
+        "left": {
+          "id": "close",
+          "kind": "builtin"
+        },
+        "op": ">",
+        "params": {
+          "right": {
+            "id": "vwap",
+            "kind": "indicator"
+          }
+        },
+        "type": "condition"
+      },
+      {
+        "enabled": true,
+        "id": "51da3217-018d-45ed-b59c-732992a01eff",
+        "interval": "1m",
+        "left": {
+          "id": "vwap",
+          "kind": "indicator"
+        },
+        "op": "is_rising",
+        "params": {
+          "lookback": 3
+        },
+        "type": "condition"
+      }
+    ],
+    "combinator": "and",
+    "enabled": true,
+    "id": "c4e27b1c-3bcb-494e-be1b-1c4dd5ccf2d3",
+    "type": "group"
+  },
+  "schema_version": 1,
+  "universe_filter": {
+    "kind": "all"
+  },
+  "updated_at": "2026-05-06T04:52:27Z"
+}

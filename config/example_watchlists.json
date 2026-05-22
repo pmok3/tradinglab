@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "watchlists": [
+    {
+      "name": "Megacap Tech",
+      "tickers": ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA"]
+    },
+    {
+      "name": "Semiconductors",
+      "tickers": ["NVDA", "AMD", "INTC", "TSM", "AVGO", "QCOM", "MU"]
+    },
+    {
+      "name": "ETFs",
+      "tickers": ["SPY", "QQQ", "IWM", "DIA", "VTI"]
+    },
+    {
+      "name": "Crypto",
+      "tickers": ["BTC-USD", "ETH-USD", "SOL-USD"]
+    }
+  ],
+  "pinned": ["Megacap Tech", "Semiconductors", "ETFs"]
+}

@@ -1,0 +1,82 @@
+{
+  "created_at": "2026-05-06T04:52:27Z",
+  "created_with": {
+    "app": "tradinglab",
+    "template": true,
+    "version": "1.0.0"
+  },
+  "id": "tmpl-scan-ema-trend",
+  "name": "Uptrend: close & EMA(9) > EMA(21) (5m)",
+  "options": {
+    "default_view": "new",
+    "new_view_capacity": 500,
+    "show_insufficient_data_rows": false
+  },
+  "output_columns": null,
+  "primary_interval": "5m",
+  "rank_by": {
+    "id": "rvol",
+    "kind": "indicator",
+    "params": {
+      "mode": "simple"
+    }
+  },
+  "rank_dir": "desc",
+  "rank_interval": "",
+  "root": {
+    "children": [
+      {
+        "enabled": true,
+        "id": "a82be7de-2d13-4b2b-b4e3-909c720c964d",
+        "interval": "5m",
+        "left": {
+          "id": "close",
+          "kind": "builtin"
+        },
+        "op": ">",
+        "params": {
+          "right": {
+            "id": "ema",
+            "kind": "indicator",
+            "params": {
+              "length": 21
+            }
+          }
+        },
+        "type": "condition"
+      },
+      {
+        "enabled": true,
+        "id": "fa556b4f-d35e-4174-9fdd-6d59ad0d8b62",
+        "interval": "5m",
+        "left": {
+          "id": "ema",
+          "kind": "indicator",
+          "params": {
+            "length": 9
+          }
+        },
+        "op": ">",
+        "params": {
+          "right": {
+            "id": "ema",
+            "kind": "indicator",
+            "params": {
+              "length": 21
+            }
+          }
+        },
+        "type": "condition"
+      }
+    ],
+    "combinator": "and",
+    "enabled": true,
+    "id": "350dcb9d-5c20-4e65-8397-7f9461279bff",
+    "type": "group"
+  },
+  "schema_version": 1,
+  "universe_filter": {
+    "kind": "all"
+  },
+  "updated_at": "2026-05-06T04:52:27Z"
+}

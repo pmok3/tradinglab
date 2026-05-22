@@ -1,0 +1,28 @@
+{
+  "description": "EMA 9/21, VWAP. The starting-point overlay set.",
+  "indicators": [
+    {
+      "id": "ema-9",
+      "kind": "ema",
+      "panel": "overlay",
+      "params": {
+        "length": 9
+      }
+    },
+    {
+      "id": "ema-21",
+      "kind": "ema",
+      "panel": "overlay",
+      "params": {
+        "length": 21
+      }
+    },
+    {
+      "id": "vwap",
+      "kind": "vwap",
+      "panel": "overlay",
+      "params": {}
+    }
+  ],
+  "name": "Default"
+}

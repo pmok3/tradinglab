@@ -1,0 +1,243 @@
+# gui/watchlist_tab.py — Spec
+
+## Purpose
+
+Mixin owning the Watchlist tab's **pinned sub-tab container**,
+snapshot-driven repaint, background preload workers, and
+click-to-sort. The top-level Watchlist tab hosts a nested
+`ttk.Notebook` of *pinned* watchlists (up to
+`WatchlistManager.MAX_PINNED`; default 5). The catalog can be
+larger; pinning makes a list reachable from the main UI.
+
+## State (initialized by `ChartApp`)
+
+- `_watchlist_snapshot: Dict[ticker, dict]` — shared ticker data pool.
+- `_watchlist_subnotebook: ttk.Notebook`.
+- `_watchlist_sub_frames: Dict[name, ttk.Frame]`.
+- `_watchlist_trees: Dict[name, ttk.Treeview]`.
+- `_watchlist_sort_by_name: Dict[name, Tuple[Optional[str], bool]]`.
+- `_watchlist_empty_frame: Optional[ttk.Frame]` — 0-pinned placeholder.
+- `_watchlist_tree` — **alias** pointing at the selected sub-tab's
+  Treeview (back-compat for smoke tests and `_apply_theme`).
+- `_watchlists`, `_watchlist_tab_refresh_job`, `_after_jobs`,
+  `watchlist_var` (mirrors active sub-tab name).
+
+## Public API
+
+- `_DEFAULT_WATCHLIST_NAME` and `_DEFAULT_WATCHLIST_TICKERS` are
+  re-exports of `tradinglab.watchlists.DEFAULT_WATCHLIST_NAME` /
+  `DEFAULT_WATCHLIST_TICKERS` (single source of truth).
+  `_WL_COLUMNS` (4 tuples) module-local.
+- `class WatchlistTabMixin`:
+  - `_ensure_default_watchlist()` — first-run creates "Default";
+    auto-pins first name if pin list is empty after load.
+
+### Sub-tab plumbing
+
+- `_build_watchlist_container(parent) -> Frame` — builds nested
+  `ttk.Notebook` once during `_build_ui`. Binds
+  `<<NotebookTabChanged>>` and `<Button-3>`.
+- `_rebuild_watchlist_subtabs()` — teardown + rebuild from
+  `WatchlistManager.pinned_names()`. Preserves selection by name.
+  Calls `_apply_theme()` so post-init rebuilds get bull/bear
+  colors. Populates every sub-tab once.
+- `_make_watchlist_tree(parent, name) -> Treeview` — 4-column
+  tree; sort command captures `name` so click-to-sort is
+  per-sub-tab. Installs widget-level
+  `<KeyPress-space>` → `_cycle_watchlist_ticker()` returning
+  `"break"` (highest-priority binding fires before the Treeview
+  class binding which would otherwise swallow the event).
+- `_build_watchlist_empty_state()` — `(no pins)` placeholder tab.
+- `_on_watchlist_subtab_changed(event)` — mirrors selection into
+  `watchlist_var`, updates alias, repaints.
+- `_sync_watchlist_tree_alias()` — points alias at selected
+  sub-tab (or first pinned as fallback).
+- `_on_watchlist_subtab_right_click(event)` — identifies tab via
+  `notebook.index(f"@{x},{y}")` (guarded by `TclError`); pops
+  context menu `Unpin` / `Move left` / `Move right` (Move
+  disabled at edges).
+- `_unpin_watchlist(name)` / `_move_pinned_watchlist(name, delta)`
+  — mutate manager then `_rebuild_watchlist_subtabs`.
+
+### Repaint + sort
+
+- `_on_watchlist_double(event)` — double-click: uses `event.widget`
+  to pick the right tree. Routes to `compare_ticker_var` when
+  `_last_hovered_slot == "compare"` AND compare mode on; else
+  `ticker_var`. Calls `_load_data()` (or
+  `_reload_preserving_drilldown` for active drilldown +
+  interval=5m). Does NOT switch notebook away from Watchlist.
+- `_cycle_watchlist_ticker()` — Space-key handler: advances
+  `_last_clicked_slot`'s ticker to next entry in active pinned
+  watchlist (mod-N wrap, stateless lookup by current symbol).
+  Returns False on empty / no-op cycles. Honors drilldown lock
+  via `_reload_preserving_drilldown`.
+- `_sort_watchlist_by(name, col)` — toggle sort; updates
+  `_watchlist_sort_by_name[name]`; repaints.
+- `_populate_watchlist_tab(name=None)` — repaint Treeview for
+  pinned watchlist `name` (or current if None). Partitions rows
+  by `(is_missing, value)` so blanks always trail, then sorts
+  with `list.sort(reverse=reverse)`. (Negate-value approach was
+  buggy for prefix-string columns like `A` vs `AA`.)
+- `_populate_all_watchlist_tabs()` — loop over every pinned
+  sub-tab (used by debounced refresh).
+- `_watchlist_sort_key(col, ticker, snap) -> (is_missing, value)`.
+- `_schedule_watchlist_tab_refresh(delay_ms=60)` /
+  `_run_watchlist_tab_refresh()` — debounce; callback hits every
+  pinned tab.
+
+### Ticker helpers
+
+- `_watchlist_tickers(name=None) -> List[str]` — falls back to
+  first-pinned, then first-existing.
+- `_pinned_ticker_union() -> List[str]` — deduped union across
+  all pinned (preserves first-seen order).
+
+### Preload
+
+- `_preload_watchlist()` / `_preload_watchlist_daily()` — one
+  fetch per ticker in `_pinned_ticker_union()` (dedup prevents
+  fetching shared tickers N times).
+- `_preload_one_last(ticker, src=None, itv=None)` /
+  `_preload_one_daily(ticker, src=None)` — worker-thread fetchers.
+  Populate `_watchlist_snapshot[ticker]` and warm
+  `ChartApp._full_cache[(src, ticker, itv)]`. `src` / `itv` read
+  on **caller's** thread (typically Tk main) and passed as args
+  — workers must not access Tcl/Tk variables.
+- **Inbox queue, not `after()`** — results deposited on
+  `ChartApp._worker_inbox` (queue.Queue), drained by
+  `_drain_worker_inbox` every ~80 ms. (`tk.createcommand` blocks
+  under `self.after` from non-main threads on this Tk build, so
+  direct worker `after()` would silently drop completions.)
+  Items: `("stash", (key, bars))`, `("refresh", None)`.
+- **Synchronous fast path** for smoke tests: when invoked on the
+  Tk thread the cache stash is applied inline.
+- `_kick_watchlist_preloads()` — incremental wrapper invoked at
+  the end of `_rebuild_watchlist_subtabs`. Submits
+  `_preload_one_last` only when `last` is missing, and
+  `_preload_one_daily` only when both `change_1d` and `chg` are
+  missing. Lets brand-new pins populate without requiring
+  `_load_data`.
+
+### Recurring poll loop
+
+- `_WATCHLIST_POLL_RTH_OPEN_MIN = 570` / `_WATCHLIST_POLL_RTH_CLOSE_MIN
+  = 960` — approximate US regular trading hours in ET (09:30 incl.
+  – 16:00 excl., weekdays). Holidays not handled (worst case: a
+  few extra cache-fresh short-circuit hits on a holiday).
+- `_watchlist_poll_in_rth_now() -> bool` — True iff wall-clock is
+  inside the RTH window above. Conservative fallback (`True`) when
+  `zoneinfo` is unavailable so the user sees live-cadence polling
+  rather than a silent off-hours slowdown.
+- `_watchlist_poll_effective_delay_ms() -> Optional[int]` — reads
+  `defaults.get("watchlist_poll_interval_sec")` (default 60) and
+  `defaults.get("watchlist_poll_offhours_multiplier")` (default
+  5.0). Returns `None` when interval ≤ 0 (disabled). Off-hours
+  multiplies the interval. **Floor of 5 seconds** as a defense
+  against misconfiguration causing tight-loop spam.
+- `_start_watchlist_poll_loop()` — arms the first tick via
+  `_track_after`. Called once from `ChartApp.__init__` after the
+  initial `_kick_watchlist_preloads()`. Idempotent
+  (`getattr(self, "_watchlist_poll_job", None) is not None` ⇒
+  no-op). When polling is disabled, sets `_watchlist_poll_job =
+  None` and returns.
+- `_watchlist_poll_tick()` — re-runs `_preload_watchlist` +
+  `_preload_watchlist_daily` and re-arms itself. **Sandbox guard**:
+  while a replay session is active the engine drives clock
+  advancement, so we skip the preload body BUT still re-arm so
+  polling resumes immediately on sandbox exit (different from
+  `_schedule_next_bar_fetch`, which drops the timer entirely on
+  sandbox). The preload helpers own their own cache-freshness +
+  in-flight dedup, so a tick on a fully-cached watchlist during
+  RTH costs zero HTTP calls. A tick after a transient fetch
+  failure re-submits the missing tickers and clears the visible
+  orphan.
+- **Orphan-snapshot recovery** in `_preload_watchlist` /
+  `_preload_watchlist_daily`: when the disk-cache is fresh but the
+  `_watchlist_snapshot` row is missing `last` / `change_1d` /
+  `pct_1d`, rebuild those fields directly from
+  `cached[-1].close` (and `cached[-2].close` for the day-over-day
+  delta) instead of waiting on a re-fetch the cache-fresh check
+  will keep skipping. When any orphan repair runs, a
+  `_schedule_watchlist_tab_refresh()` nudge ensures the repaint
+  catches up.
+
+## Dependencies
+
+- Internal: `..data.DATA_SOURCES`,
+  `..constants.BULL_COLOR`/`BEAR_COLOR` (late-imported).
+- External: `tkinter`, `tkinter.ttk`.
+
+## Design Decisions
+
+- **Nested notebook**: keeps top-level notebook stable (Primary /
+  Compare / Watchlist).
+- **Full rebuild on pin changes** (cheap for ≤5 sub-tabs).
+- **Per-tab sort state**; stale entries pruned during rebuild.
+- **Shared `_watchlist_snapshot`** keyed by ticker — one ticker's
+  data is the same in every sub-tab; preload fires once per
+  unique ticker via `_pinned_ticker_union`.
+- **`_watchlist_tree` back-compat alias** for smoke tests + theme
+  loop; `_sync_watchlist_tree_alias()` keeps it pointed at the
+  selected pinned tree.
+- **`_apply_theme` loops `_watchlist_trees.values()`** so every
+  tree gets bull/bear tag colors.
+- **Change columns pinned to 1d** regardless of chart interval
+  (matches broker day-over-day semantics).
+- **Sandbox-aware watchlist values**: while sandbox active, both
+  worker fetchers slice the cached series against
+  `ChartApp._sandbox_watchlist_clock()` (returns `(active,
+  clock_ts, session_date)`) before writing to the snapshot —
+  otherwise watchlist shows today's live values during a
+  historical replay. `_preload_one_last` uses close of latest
+  intraday bar whose timestamp ≤ `clock_ts`. `_preload_one_daily`
+  filters to bars whose `date.date() < session_date`; computes
+  `change_1d = last_intraday − prior_session_close` (matches a
+  real broker ticker at that historical moment); falls back to
+  filtered day-over-day. `_refresh_watchlist_for_sandbox()`
+  clears clock-dependent fields and resubmits both preloads;
+  called on (a) sandbox start, (b) every `next_bar` advance.
+- **Double-click preserves tab focus** (user-requested).
+
+## Invariants
+
+- `_watchlist_snapshot` keys are upper-cased ticker symbols.
+- Row tags are `("bull",)`, `("bear",)`, or `()` only.
+- `_populate_watchlist_tab(name)` fully replaces existing rows.
+- Sort with missing values: blanks at bottom regardless of dir.
+- `_watchlist_trees.keys() == WatchlistManager.pinned_names()`
+  after every rebuild (or `{}` in empty state).
+- `watchlist_var.get()` equals visible sub-tab's name (or last
+  selected name immediately post-rebuild).
+- **Workers must not touch Tk widgets, StringVars, or call
+  `self.after`**. All worker→UI marshalling via `_worker_inbox`.
+- **`WatchlistManager` is NOT observed** — refresh requires
+  explicit `_rebuild_watchlist_subtabs` after mutation.
+
+## Data Flow
+
+```
+_rebuild_watchlist_subtabs():
+    pinned = manager.pinned_names()
+    remember current selection
+    teardown all sub-tab widgets
+    prune _watchlist_sort_by_name keys not in manager.list_names()
+    if not pinned:
+        render empty-state placeholder
+        _add_plus_subtab()
+        return
+    for name in pinned: make tree, add to subnotebook
+    _add_plus_subtab()             # hidden at MAX_PINNED
+    restore selection (by name) or fall back to pinned[0]
+    _apply_theme()                 # tag colors on new trees
+    populate every sub-tab
+    _sync_watchlist_tree_alias()
+    _kick_watchlist_preloads()
+```
+
+The `"+"` sub-tab opens a modal picker of **unpinned but existing**
+watchlists (not a new-name prompt — brand-new creation is owned
+by the Watchlists toolbar button). Hidden only when
+`len(pinned) >= MAX_PINNED`; when no unpinned candidates remain
+it stays visible (discoverability) and clicking surfaces a hint
+pointing at the Watchlists button.

@@ -1,0 +1,121 @@
+{
+  "arm_window_end": "15:30",
+  "arm_window_start": "09:35",
+  "cooldown_secs": 0,
+  "created_at": "2026-05-06T04:52:27Z",
+  "created_with": {
+    "app": "tradinglab",
+    "template": true,
+    "version": "1.0.0"
+  },
+  "direction": "long",
+  "enabled": true,
+  "extra": {},
+  "id": "tmpl-ema9-pullback-long-1m",
+  "max_fires_per_session_per_symbol": 1,
+  "max_fires_per_session_total": null,
+  "name": "9 EMA pullback (long, 1m)",
+  "on_fill_exit_ids": [],
+  "position_already_open_policy": "block",
+  "require_market_open": true,
+  "schema_version": 1,
+  "sizing": {
+    "kind": "fixed_qty",
+    "qty": 100.0,
+    "share_rounding": "down"
+  },
+  "trigger": {
+    "condition": {
+      "children": [
+        {
+          "enabled": true,
+          "id": "7c22c250-4189-475a-97c3-9ac19731400a",
+          "interval": "1m",
+          "left": {
+            "id": "low",
+            "kind": "builtin"
+          },
+          "op": "<=",
+          "params": {
+            "right": {
+              "id": "ema",
+              "kind": "indicator",
+              "params": {
+                "length": 9
+              }
+            }
+          },
+          "type": "condition"
+        },
+        {
+          "enabled": true,
+          "id": "4651a7ca-b6a4-404b-86d1-606fb2c0d276",
+          "interval": "1m",
+          "left": {
+            "id": "close",
+            "kind": "builtin"
+          },
+          "op": ">",
+          "params": {
+            "right": {
+              "id": "ema",
+              "kind": "indicator",
+              "params": {
+                "length": 9
+              }
+            }
+          },
+          "type": "condition"
+        },
+        {
+          "enabled": true,
+          "id": "cd1c9b6a-1017-4c29-8bea-b282c03c0607",
+          "interval": "1m",
+          "left": {
+            "id": "close",
+            "kind": "builtin"
+          },
+          "op": ">",
+          "params": {
+            "right": {
+              "id": "open",
+              "kind": "builtin"
+            }
+          },
+          "type": "condition"
+        },
+        {
+          "enabled": true,
+          "id": "2895db7c-e496-41e0-af09-1b85e844fc61",
+          "interval": "1m",
+          "left": {
+            "id": "close",
+            "kind": "builtin"
+          },
+          "op": ">",
+          "params": {
+            "right": {
+              "id": "vwap",
+              "kind": "indicator"
+            }
+          },
+          "type": "condition"
+        }
+      ],
+      "combinator": "and",
+      "enabled": true,
+      "id": "fe9bade6-92c4-493a-91b3-c803b6980cac",
+      "type": "group"
+    },
+    "evaluate_intrabar": false,
+    "id": "71319cde68c943f69fed223b67218151",
+    "interval": "1m",
+    "kind": "indicator",
+    "label": "9 EMA pullback",
+    "time_in_force": "day"
+  },
+  "universe": {
+    "from_attached_chart": true
+  },
+  "updated_at": "2026-05-06T04:52:27Z"
+}

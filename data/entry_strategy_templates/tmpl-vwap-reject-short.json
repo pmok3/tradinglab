@@ -1,0 +1,65 @@
+{
+  "arm_window_end": "15:30",
+  "arm_window_start": "09:35",
+  "cooldown_secs": 0,
+  "created_at": "2026-05-06T04:52:27Z",
+  "created_with": {
+    "app": "tradinglab",
+    "template": true,
+    "version": "1.0.0"
+  },
+  "direction": "short",
+  "enabled": true,
+  "extra": {},
+  "id": "tmpl-vwap-reject-short",
+  "max_fires_per_session_per_symbol": 1,
+  "max_fires_per_session_total": null,
+  "name": "VWAP reject (short)",
+  "on_fill_exit_ids": [],
+  "position_already_open_policy": "block",
+  "require_market_open": true,
+  "schema_version": 1,
+  "sizing": {
+    "kind": "fixed_qty",
+    "qty": 100.0,
+    "share_rounding": "down"
+  },
+  "trigger": {
+    "condition": {
+      "children": [
+        {
+          "enabled": true,
+          "id": "ffe1db9d-1f51-4c59-bfb0-a37475b684da",
+          "interval": "1m",
+          "left": {
+            "id": "close",
+            "kind": "builtin"
+          },
+          "op": "crosses_below",
+          "params": {
+            "lookback": 1,
+            "right": {
+              "id": "vwap",
+              "kind": "indicator"
+            }
+          },
+          "type": "condition"
+        }
+      ],
+      "combinator": "and",
+      "enabled": true,
+      "id": "62513378-9f06-4bd3-a113-bcfba239dd8c",
+      "type": "group"
+    },
+    "evaluate_intrabar": false,
+    "id": "5b64ba3b75594fa39a1a01fcb0009f68",
+    "interval": "1m",
+    "kind": "indicator",
+    "label": "VWAP reject",
+    "time_in_force": "day"
+  },
+  "universe": {
+    "from_attached_chart": true
+  },
+  "updated_at": "2026-05-06T04:52:27Z"
+}

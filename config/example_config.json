@@ -1,0 +1,17 @@
+{
+  "_comment": "tradinglab configuration file. Load via File -> Load Configuration. Keys starting with underscore are documentation-only and ignored on load. Delete any key to fall back to its built-in default.",
+  "_comment_default_window_bars": "Number of bars in the right-edge default window (Reset view, fresh load, ticker change). Larger = more history visible; smaller = more zoomed-in by default.",
+  "_comment_display_tz": "IANA timezone (e.g. 'America/Los_Angeles') applied to intraday timestamps. Empty = display in Eastern Time (market local).",
+  "_comment_price_bot_pad_frac": "Bottom padding on price axes as a fraction of the data span.",
+  "_comment_price_top_pad_frac": "Top headroom on price axes as a fraction of the data span. Reserves space for the always-on top-left OHLCV readout strip so the highest bar can't collide with it.",
+  "_comment_scroll_zoom_invert": "Mouse-wheel zoom direction. False = scroll DOWN zooms IN (TradingView). True = scroll UP zooms IN (macOS natural-scroll).",
+  "_comment_startup_defaults": "Per-key startup overrides. Recognized keys: ticker, compare, interval, source, theme. Sparse merge over BUILTIN_STARTUP_DEFAULTS in constants.py.",
+  "_comment_theme_overrides": "Per-theme color overrides. Sparse merge over the built-in light/dark themes. Schema: {'light': {key: '#hex', ...}, 'dark': {...}}.",
+  "default_window_bars": 200,
+  "display_tz": "",
+  "price_bot_pad_frac": 0.05,
+  "price_top_pad_frac": 0.12,
+  "scroll_zoom_invert": false,
+  "startup_defaults": {},
+  "theme_overrides": {}
+}

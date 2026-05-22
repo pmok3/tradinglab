@@ -1,0 +1,618 @@
+"""Polling / scheduling mixin for :class:`tradinglab.app.ChartApp`.
+
+Owns three concerns that share Tk ``after()`` plumbing:
+
+* **After-job tracking** — :meth:`PollingMixin._track_after` wraps
+  ``self.after`` so job ids self-evict from ``self._after_jobs`` when
+  they fire. ``_on_close`` cancels whatever ids remain.
+* **Periodic drains** — pulls events from the streaming queue and the
+  cross-thread worker inbox onto the Tk main loop, then re-arms.
+* **Bar-close polling** — debounced reloads and exchange-close-aligned
+  next-bar fetches (intraday + daily/weekly/monthly).
+
+Also home to the pure scheduler helpers
+(``_market_window_et``/``_postpone_past_closed_market``/
+``_next_daily_close_epoch``/``_compute_fetch_delay_ms``) that
+:class:`ChartApp` formerly carried at module scope. They live here
+because the polling code is their only caller — the back-compat
+re-export from :mod:`tradinglab.app` keeps the existing
+``tests/smoke/test_smoke_full.py`` import path working.
+
+Mixin rules (see decomposition plan):
+* No ``__init__``. The mixin relies on attributes that
+  :class:`ChartApp.__init__` already initialises:
+  ``_after_jobs``, ``_stream_queue``, ``_worker_inbox``, ``_poll_job``,
+  ``_reload_job``, ``_poll_retry_count``, ``_poll_retry_expected_min_ts``,
+  ``_full_cache``, ``_primary``, ``_fetch_executor``, ``_fetch_token``,
+  ``_stream_active``, ``_stream_token``, ``_indicator_cache``,
+  ``_prefetched_raw``, ``_preserve_xlim_on_render``,
+  ``_slide_xlim_to_right_edge``, ``_drilldown_day``, plus Tk vars
+  (``source_var``, ``interval_var``, ``ticker_var``, ``compare_var``,
+  ``compare_ticker_var``, ``prepost_var``).
+* No cooperative ``super()`` — plain MRO.
+* No name collisions with other mixins or :class:`ChartApp`.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import datetime as _dt
+import queue
+import time
+import tkinter as tk
+
+from ..constants import interval_minutes, is_intraday
+from ..data import DATA_SOURCES
+
+
+# ---------------------------------------------------------------------------
+# Local ``_silent_tcl`` clone.
+#
+# Mirrors the same-named helper in :mod:`tradinglab.app` and
+# :mod:`tradinglab.backtest.replay`. Kept module-local rather than
+# shared to avoid a ``gui.polling`` → ``app`` import cycle (the mixin
+# is imported BY app during class-creation time).
+# ---------------------------------------------------------------------------
+@contextlib.contextmanager
+def _silent_tcl(*extra_excs: type[BaseException]):
+    excs = (tk.TclError,) + extra_excs
+    try:
+        yield
+    except excs:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Pure scheduler helpers — unit-testable with injected ``now`` timestamps
+# instead of sleeping or patching ``time.time``.
+# ---------------------------------------------------------------------------
+def _market_window_et(include_extended: bool) -> tuple[_dt.time, _dt.time]:
+    """Return (open, close) ET ``time`` pair for a regular weekday.
+
+    Extended hours on NYSE/NASDAQ run 04:00-20:00 ET; regular hours
+    09:30-16:00 ET.
+    """
+    if include_extended:
+        return _dt.time(4, 0), _dt.time(20, 0)
+    return _dt.time(9, 30), _dt.time(16, 0)
+
+
+def _postpone_past_closed_market(target_epoch: float,
+                                  include_extended: bool = True) -> float:
+    """If ``target_epoch`` lands outside NYSE hours (ET), return the
+    epoch for the next market-open moment; else return it unchanged.
+
+    Returns the input unchanged if the ET timezone cannot be loaded
+    (e.g. no ``tzdata`` on Windows without it installed) — conservative
+    behavior so scheduling still produces *some* fetch rather than
+    silently breaking.
+    """
+    try:
+        from zoneinfo import ZoneInfo
+    except Exception:  # noqa: BLE001
+        return target_epoch
+    try:
+        ET = ZoneInfo("America/New_York")
+    except Exception:  # noqa: BLE001
+        return target_epoch
+    t = _dt.datetime.fromtimestamp(target_epoch, tz=ET)
+    open_t, close_t = _market_window_et(include_extended)
+    is_weekday = t.weekday() < 5
+    in_hours = is_weekday and open_t <= t.time() < close_t
+    if in_hours:
+        return target_epoch
+    if is_weekday and t.time() < open_t:
+        target_date = t.date()
+    else:
+        d = t.date() + _dt.timedelta(days=1)
+        while d.weekday() >= 5:
+            d += _dt.timedelta(days=1)
+        target_date = d
+    nxt = _dt.datetime.combine(target_date, open_t, tzinfo=ET)
+    return nxt.timestamp()
+
+
+def _next_daily_close_epoch(now_epoch: float, grace_s: int = 300) -> float:
+    """Return epoch for ``grace_s`` after the next 16:00 ET weekday close.
+
+    Used for daily/weekly/monthly intervals where bar timestamps don't
+    encode close times. Schedules every weekday at 16:05 ET — callers
+    can decide to drop fetches for non-boundary days (e.g. 1wk only on
+    Fridays) as an optimization; here we poll every weekday so
+    in-progress weekly/monthly candles also refresh.
+    """
+    try:
+        from zoneinfo import ZoneInfo
+        ET = ZoneInfo("America/New_York")
+    except Exception:  # noqa: BLE001
+        return now_epoch + 24 * 3600
+    now = _dt.datetime.fromtimestamp(now_epoch, tz=ET)
+    close_today = now.replace(hour=16, minute=0, second=0, microsecond=0)
+    target = close_today + _dt.timedelta(seconds=grace_s)
+    if now >= target or now.weekday() >= 5:
+        d = now.date() + _dt.timedelta(days=1)
+        while d.weekday() >= 5:
+            d += _dt.timedelta(days=1)
+        target = _dt.datetime.combine(
+            d, _dt.time(16, 0), tzinfo=ET
+        ) + _dt.timedelta(seconds=grace_s)
+    return target.timestamp()
+
+
+def _compute_fetch_delay_ms(
+    interval: str,
+    last_bar_epoch: float | None,
+    now_epoch: float,
+    include_extended: bool,
+    min_backoff_ms: int,
+    grace_intraday_s: int = 5,
+    grace_daily_s: int = 300,
+) -> int:
+    """Pure scheduler: return Tk ``after()`` delay (ms) for the next fetch.
+
+    Anchors on the last bar's epoch timestamp + interval + grace so
+    session-aligned intraday bars (e.g. 1h bars that close at
+    10:30/11:30 ET on NYSE) are honored by the exchange's own
+    boundaries rather than re-derived from midnight. If the target
+    lands outside market hours (intraday only), postpones to next open.
+
+    For daily/weekly/monthly intervals, always schedules for 16:05 ET
+    next weekday because daily bar timestamps don't represent close
+    times, so last_bar + 86400s would skip ~17 hours of real time.
+    """
+    if not is_intraday(interval):
+        target_s = _next_daily_close_epoch(now_epoch, grace_s=grace_daily_s)
+        delay_s = max(min_backoff_ms / 1000.0, target_s - now_epoch)
+        return int(delay_s * 1000)
+
+    iv_sec = interval_minutes(interval) * 60
+    if last_bar_epoch is not None:
+        target_s = last_bar_epoch + iv_sec + grace_intraday_s
+        if target_s <= now_epoch:
+            target_s = now_epoch + grace_intraday_s
+    else:
+        target_s = now_epoch + iv_sec + grace_intraday_s
+
+    target_s = _postpone_past_closed_market(target_s, include_extended)
+    delay_s = max(min_backoff_ms / 1000.0, target_s - now_epoch)
+    return int(delay_s * 1000)
+
+
+# ---------------------------------------------------------------------------
+# Mixin
+# ---------------------------------------------------------------------------
+class PollingMixin:
+    """After-job tracking + periodic drains + bar-close polling."""
+
+    # Re-declared on ChartApp as class attributes. Listed here only so
+    # static analysers know the mixin expects them on ``cls``.
+    _MIN_POLL_BACKOFF_MS: int
+    _POLL_RETRY_DELAY_MS: int
+    _POLL_RETRY_MAX: int
+
+    # ------------------------------------------------------------------
+    # After-job tracking
+    # ------------------------------------------------------------------
+    def _track_after(self, delay_ms, fn, *args):
+        """Schedule ``fn`` via Tk ``after()`` and auto-remove the job
+        id from ``self._after_jobs`` when it fires.
+
+        Replaces the unbounded ``self._after_jobs.append(self.after(...))``
+        pattern: jobs that fire normally pop themselves out of the set,
+        so long-running sessions don't accumulate stale ids. ``_on_close``
+        iterates whatever's left and cancels them.
+
+        Returns the Tk job id (string) so callers can store it for
+        ``after_cancel`` if they need to cancel before fire.
+        """
+        # Mutable cell so the wrapper can see the id assigned below.
+        cell: list[str | None] = [None]
+
+        def _wrapped():
+            try:
+                jid = cell[0]
+                if jid is not None:
+                    self._after_jobs.discard(jid)
+            except Exception:  # noqa: BLE001
+                pass
+            return fn(*args)
+
+        job_id = self.after(max(0, int(delay_ms)), _wrapped)
+        cell[0] = job_id
+        self._after_jobs.add(job_id)
+        return job_id
+
+    # ------------------------------------------------------------------
+    # Periodic drains (stream queue + worker inbox)
+    # ------------------------------------------------------------------
+    def _schedule_drain(self) -> None:
+        """Re-arm the stream-drain timer."""
+        try:
+            job = self._track_after(50, self._drain_stream_queue)
+        except tk.TclError:
+            return
+        self._stream_drain_after = job
+
+    def _schedule_worker_inbox_drain(self) -> None:
+        """Re-arm the worker-inbox drain timer (Tk thread).
+
+        Workers cannot call ``self.after`` on this Python/Tk build —
+        ``tk.createcommand`` blocks the worker thread instead of
+        raising. Hence preload jobs deposit completion items on
+        ``self._worker_inbox`` and this periodic Tk-thread tick drains
+        and applies them. Period chosen at ~80ms so a Space-cycle
+        watchlist refresh feels instant without burning idle CPU.
+        """
+        try:
+            job = self._track_after(80, self._drain_worker_inbox)
+        except tk.TclError:
+            return
+        self._worker_inbox_after = job
+
+    def _drain_worker_inbox(self) -> None:
+        refresh_pending = False
+        reference_pending = False
+        try:
+            while True:
+                kind, payload = self._worker_inbox.get_nowait()
+                if kind == "stash":
+                    try:
+                        key, bars = payload
+                        self._stash_full_cache(key, bars)
+                    except Exception:  # noqa: BLE001
+                        pass
+                elif kind == "prefetch":
+                    try:
+                        key, bars = payload
+                        self._apply_prefetch_result(key, bars)
+                    except Exception:  # noqa: BLE001
+                        pass
+                elif kind == "refresh":
+                    refresh_pending = True
+                elif kind == "reference":
+                    reference_pending = True
+                elif kind == "card_stash":
+                    try:
+                        slot_index, token, symbol, bars = payload
+                        cs = getattr(self, "_chartstack", None)
+                        if cs is not None and hasattr(cs, "apply_card_stash"):
+                            cs.apply_card_stash(slot_index, token, symbol, bars)
+                    except Exception:  # noqa: BLE001
+                        pass
+        except queue.Empty:
+            pass
+        if refresh_pending:
+            try:
+                wt = getattr(self, "watchlist_tab", None)
+                if wt is not None and hasattr(wt, "_schedule_watchlist_tab_refresh"):
+                    wt._schedule_watchlist_tab_refresh()
+                elif hasattr(self, "_schedule_watchlist_tab_refresh"):
+                    self._schedule_watchlist_tab_refresh()
+            except Exception:  # noqa: BLE001
+                pass
+        if reference_pending:
+            try:
+                self._reference_data_redraw()
+            except Exception:  # noqa: BLE001
+                pass
+        self._schedule_worker_inbox_drain()
+
+    def _drain_stream_queue(self) -> None:
+        """Pop all queued events and dispatch to tick/rollover handlers.
+
+        Rollovers may append a new bar, which requires a slice refresh
+        (via :meth:`_refresh_view_after_append`). Ticks mutate in place
+        and route through :meth:`_refresh_view_after_tick` — no topology
+        rebuild, which means hover/crosshair stay alive (spec §5.8).
+
+        ChartStack (M3) shares the same queue but uses a ``"card:N"``
+        slot prefix; events with that prefix are routed to
+        ``self._chartstack.apply_stream_event`` instead of the main
+        chart pipeline.
+        """
+        ticked = False
+        rolled = False
+        drain = getattr(getattr(self, "_stream_ctrl", None), "drain", None)
+        if callable(drain):
+            try:
+                events = drain()
+            except Exception:  # noqa: BLE001
+                events = []
+        else:
+            events = []
+            try:
+                while True:
+                    events.append(self._stream_queue.get_nowait())
+            except queue.Empty:
+                pass
+        for evt in events:
+            kind = evt[5] if len(evt) > 5 else ""
+            slot = evt[1] if len(evt) > 1 else ""
+            # ChartStack branch: slot string starts with "card:".
+            # Format: (token, "card:N", src, ticker, interval, kind, bar)
+            if isinstance(slot, str) and slot.startswith("card:"):
+                cs = getattr(self, "_chartstack", None)
+                if cs is None or not hasattr(cs, "apply_stream_event"):
+                    continue
+                try:
+                    slot_index = int(slot.split(":", 1)[1])
+                except (ValueError, IndexError):
+                    continue
+                token = evt[0] if len(evt) > 0 else 0
+                bar = evt[6] if len(evt) > 6 else None
+                try:
+                    cs.apply_stream_event(slot_index, token, kind, bar)
+                except Exception:  # noqa: BLE001
+                    pass
+                continue
+            if kind == "tick":
+                if self._apply_stream_tick(evt):
+                    ticked = True
+            elif kind == "rollover":
+                if self._apply_stream_rollover(evt):
+                    rolled = True
+        if rolled:
+            try:
+                # Rewire the slot so _panel_state['candles'] sees the
+                # now-grown list (object identity is preserved by tick
+                # but not by rollover's potential new-list creation).
+                src = self.source_var.get()
+                interval = self.interval_var.get()
+                tic = self.ticker_var.get().strip().upper()
+                raw = self._full_cache.get((src, tic, interval))
+                if raw is not None:
+                    self._primary = raw
+                    self.candles = raw
+                    self._rewire_slot_candles("primary", raw)
+                self._refresh_view_after_append("primary")
+            except Exception:  # noqa: BLE001
+                # Fallback to full render on any refresh-path failure.
+                try:
+                    self._render()
+                except Exception:  # noqa: BLE001
+                    pass
+        elif ticked:
+            try:
+                self._refresh_view_after_tick("primary")
+            except Exception:  # noqa: BLE001
+                pass
+        self._schedule_drain()
+
+    # ------------------------------------------------------------------
+    # Debounced reload + next-bar scheduler (spec §9.3)
+    # ------------------------------------------------------------------
+    def _schedule_reload(self, delay_ms: int = 700) -> None:
+        """Debounced reload: after ``delay_ms`` ms, runs ``_do_scheduled_reload``."""
+        if self._reload_job is not None:
+            try:
+                self.after_cancel(self._reload_job)
+            except Exception:  # noqa: BLE001
+                pass
+            self._reload_job = None
+        with _silent_tcl():
+            self._reload_job = self._track_after(
+                int(delay_ms), self._do_scheduled_reload)
+
+    def _do_scheduled_reload(self) -> None:
+        self._reload_job = None
+        # Preserve drill-down state when typing/click-to-type swaps the
+        # ticker mid-zoom: keep the same calendar day if the new ticker
+        # has data there, else fall back to its most recent day.
+        if self._drilldown_day is not None and self.interval_var.get() == "5m":
+            self._reload_preserving_drilldown(self._load_data)
+            return
+        # Default path: explicit user intent clears bar-index pan
+        # (spec §9.3) but DOES preserve the timestamp window so that
+        # switching to a new symbol keeps the same calendar day in
+        # view instead of snapping back to the right edge.
+        self._preserve_xlim_on_render = False
+        self._preserve_xlim_by_time_on_render = True
+        # Explicit reload also clears any in-flight poll-retry bookkeeping
+        # so the retry budget doesn't carry across an interval/ticker switch.
+        self._poll_retry_count = 0
+        self._poll_retry_expected_min_ts = None
+        try:
+            self._load_data_async()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _schedule_next_bar_fetch(self) -> None:
+        """Arm an after() timer aligned to the next bar-close boundary.
+
+        Sandbox guard: refuse to arm a poll while a replay session is
+        active (the engine drives clock advancement, not the live poll).
+
+        Uses ``_compute_fetch_delay_ms`` (pure helper) to derive the
+        delay from the last bar's timestamp + interval + grace, then
+        postpones past known-closed market hours. Suppressed while
+        streaming is active.
+
+        Retry path: if the previous tick expected a newer bar and the
+        fetch did not advance the last-bar timestamp, schedule a short
+        retry at ``_POLL_RETRY_DELAY_MS`` until ``_POLL_RETRY_MAX`` is
+        exhausted. Retries bypass the aligned-bar scheduler because
+        they're specifically trying to catch a published-late bar.
+        """
+        if self._is_sandbox_active():
+            return
+        if self._poll_job is not None:
+            try:
+                self.after_cancel(self._poll_job)
+            except Exception:  # noqa: BLE001
+                pass
+            self._poll_job = None
+        if self._stream_active:
+            return
+
+        interval = self.interval_var.get()
+        last_ts = None
+        try:
+            if self._primary:
+                d = self._primary[-1].date
+                last_ts = d.timestamp() if hasattr(d, "timestamp") else float(d)
+        except Exception:  # noqa: BLE001
+            last_ts = None
+
+        expected = self._poll_retry_expected_min_ts
+        if (expected is not None
+                and is_intraday(interval)
+                and (last_ts is None or last_ts < expected)
+                and self._poll_retry_count < self._POLL_RETRY_MAX):
+            # Previous tick didn't bring in the expected new bar.
+            # Retry soon without going through the aligned scheduler.
+            self._poll_retry_count += 1
+            delay_ms = self._POLL_RETRY_DELAY_MS
+        else:
+            # Success (or non-retriable path): reset retry state.
+            self._poll_retry_count = 0
+            self._poll_retry_expected_min_ts = None
+            try:
+                include_ext = bool(self.prepost_var.get())
+            except Exception:  # noqa: BLE001
+                include_ext = True
+            delay_ms = _compute_fetch_delay_ms(
+                interval=interval,
+                last_bar_epoch=last_ts,
+                now_epoch=time.time(),
+                include_extended=include_ext,
+                min_backoff_ms=self._MIN_POLL_BACKOFF_MS,
+            )
+        with _silent_tcl():
+            self._poll_job = self._track_after(
+                delay_ms, self._next_bar_fetch_tick)
+
+    def _next_bar_fetch_tick(self) -> None:
+        """Fire a background reload when a new bar should have closed.
+
+        Sandbox guard: if a replay session is active, drop this tick on
+        the floor — the engine drives clock advancement, not the live
+        poll.
+
+        Runs the provider fetch on ``_fetch_executor`` so the Tk main
+        thread stays responsive — a slow yfinance HTTP call no longer
+        freezes the GUI mid-pan/hover. When the fetch resolves, the
+        result is marshalled back to the main thread via
+        ``self.after(0, …)`` and handed to ``_load_data`` through the
+        ``_prefetched_raw`` slot. Stale results (superseded by a newer
+        ticker/interval load) are dropped via ``_fetch_token`` gating
+        before ``_load_data`` is even invoked.
+
+        Also preserves xlim and records retry bookkeeping (see
+        ``_schedule_next_bar_fetch``).
+        """
+        if self._is_sandbox_active():
+            self._poll_job = None
+            return
+        self._poll_job = None
+        self._preserve_xlim_on_render = True
+        self._slide_xlim_to_right_edge = not self._user_has_panned_x()
+
+        src = self.source_var.get()
+        interval = self.interval_var.get()
+        raw_primary = self.ticker_var.get().strip().upper()
+        compare_on = bool(self.compare_var.get())
+        raw_compare = (self.compare_ticker_var.get().strip().upper()
+                       if compare_on else "")
+
+        # Retry bookkeeping (intraday only): expected-min-ts = last_bar +
+        # interval. Used by _schedule_next_bar_fetch to decide between a
+        # short retry and the aligned schedule.
+        if is_intraday(interval):
+            last_ts = None
+            try:
+                if self._primary:
+                    d = self._primary[-1].date
+                    last_ts = (d.timestamp() if hasattr(d, "timestamp")
+                               else float(d))
+            except Exception:  # noqa: BLE001
+                last_ts = None
+            if last_ts is not None:
+                try:
+                    iv_sec = interval_minutes(interval) * 60
+                    self._poll_retry_expected_min_ts = last_ts + iv_sec
+                except Exception:  # noqa: BLE001
+                    self._poll_retry_expected_min_ts = None
+        else:
+            self._poll_retry_expected_min_ts = None
+
+        # Drop the active primary/compare entries so fresh data is fetched.
+        for tic in (raw_primary, raw_compare):
+            if tic:
+                self._full_cache.pop((src, tic, interval), None)
+
+        fetcher = DATA_SOURCES.get(src)
+        executor = getattr(self, "_fetch_executor", None)
+        if fetcher is None or executor is None:
+            # No async infrastructure available — fall back to sync path.
+            try:
+                self._load_data()
+            except Exception:  # noqa: BLE001
+                pass
+            return
+
+        # Bump token BEFORE submitting so a ticker-switch that happens
+        # while this fetch is in-flight supersedes it cleanly.
+        self._fetch_token += 1
+        token = self._fetch_token
+
+        def _work():
+            p: list = []
+            c: list = []
+            try:
+                p = fetcher(raw_primary, interval) or []
+            except Exception:  # noqa: BLE001
+                p = []
+            if raw_compare:
+                try:
+                    c = fetcher(raw_compare, interval) or []
+                except Exception:  # noqa: BLE001
+                    c = []
+            return p, c
+
+        try:
+            fut = executor.submit(_work)
+        except Exception:  # noqa: BLE001
+            # Executor rejected submission (e.g. shutdown): fallback.
+            try:
+                self._load_data()
+            except Exception:  # noqa: BLE001
+                pass
+            return
+
+        def _on_result(result) -> None:
+            # Stale-token guard: a newer fetch (or explicit ticker
+            # change) has superseded us — silently drop.
+            if token != self._fetch_token:
+                return
+            if result is None:
+                p_raw, c_raw = None, None
+            else:
+                p_raw, c_raw = result
+            self._prefetched_raw = {
+                "token": token,
+                "src": src,
+                "interval": interval,
+                "primary_ticker": raw_primary,
+                "compare_ticker": raw_compare,
+                "primary": p_raw,
+                "compare": c_raw,
+            }
+            try:
+                self._load_data()
+            finally:
+                self._prefetched_raw = None
+
+        # Marshal back to Tk via a main-loop poll (see
+        # `_await_future_on_tk` for why `add_done_callback` +
+        # `self.after()` from the worker thread is unsafe).
+        self._await_future_on_tk(fut, _on_result)
+
+
+__all__ = [
+    "PollingMixin",
+    "_compute_fetch_delay_ms",
+    "_market_window_et",
+    "_next_daily_close_epoch",
+    "_postpone_past_closed_market",
+    "_silent_tcl",
+]

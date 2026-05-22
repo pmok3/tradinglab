@@ -1,0 +1,23 @@
+{
+  "description": "Bollinger Bands + ATR(14) sub-pane.",
+  "indicators": [
+    {
+      "id": "bb-20-2",
+      "kind": "bbands",
+      "panel": "overlay",
+      "params": {
+        "length": 20,
+        "stddev": 2.0
+      }
+    },
+    {
+      "id": "atr-14",
+      "kind": "atr",
+      "panel": "atr",
+      "params": {
+        "length": 14
+      }
+    }
+  ],
+  "name": "Volatility"
+}

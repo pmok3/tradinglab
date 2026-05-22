@@ -1,0 +1,75 @@
+{
+  "created_at": "2026-05-06T04:52:27Z",
+  "created_with": {
+    "app": "tradinglab",
+    "template": true,
+    "version": "1.0.0"
+  },
+  "eod_kill_switch": true,
+  "eod_offset_min": 5,
+  "extra": {},
+  "id": "tmpl-exit-scale-out-1-3",
+  "legs": [
+    {
+      "enabled": true,
+      "id": "pt1",
+      "label": "+1% (50%)",
+      "triggers": [
+        {
+          "enabled": true,
+          "id": "972ce76948b8462db1360495a5ecf167",
+          "kind": "limit",
+          "label": "+1% scale-out",
+          "offset_pct": 1.0,
+          "qty_pct": 50.0,
+          "time_in_force": "day"
+        }
+      ]
+    },
+    {
+      "enabled": true,
+      "id": "pt2",
+      "label": "+3% (50%)",
+      "triggers": [
+        {
+          "enabled": true,
+          "id": "e9d09db25f844683b6a10f4fb8ad1983",
+          "kind": "limit",
+          "label": "+3% scale-out",
+          "offset_pct": 3.0,
+          "qty_pct": 50.0,
+          "time_in_force": "day"
+        }
+      ]
+    },
+    {
+      "enabled": true,
+      "id": "stop",
+      "label": "-1% hard stop",
+      "triggers": [
+        {
+          "enabled": true,
+          "id": "9698db45ad9e4e5788fb8dd5d6ab5f07",
+          "kind": "stop",
+          "label": "-1% hard stop",
+          "offset_pct": -1.0,
+          "qty_pct": 100.0,
+          "time_in_force": "day"
+        }
+      ]
+    }
+  ],
+  "name": "Scale out 50/50 @ +1% / +3%",
+  "oco_groups": [
+    {
+      "cancel_on": "full_closeout",
+      "leg_ids": [
+        "pt1",
+        "pt2",
+        "stop"
+      ]
+    }
+  ],
+  "schema_version": 2,
+  "updated_at": "2026-05-06T04:52:27Z"
+}

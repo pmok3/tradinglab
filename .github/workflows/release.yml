@@ -1,0 +1,101 @@
+name: Release
+
+# Triggered by pushing a tag of the form ``vX.Y.Z`` (matching the
+# version bump produced by ``tools/bump_version.py``). Builds a
+# Windows redistributable via ``tools/build_exe.ps1``, uploads the
+# zip as both a workflow artifact and a GitHub Release asset.
+#
+# Manual ``workflow_dispatch`` runs are also supported so a
+# maintainer can produce a one-off build from the current main
+# branch without cutting a tag.
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Also publish to GitHub Releases (default: false for manual runs)"
+        required: false
+        default: "false"
+
+permissions:
+  contents: write  # required by softprops/action-gh-release
+
+jobs:
+  build-windows:
+    name: Build Windows redistributable
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # tools/build_exe.ps1 reads `git rev-parse`
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/AppData/Local/pip/Cache
+          key: pip-${{ runner.os }}-py312-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            pip-${{ runner.os }}-py312-
+
+      # Smoke gate runs BEFORE PyInstaller. PyInstaller takes ~8 minutes
+      # on the windows-latest runner; failing fast here saves the time
+      # (and the wasted GitHub Actions minutes) when the source tree is
+      # broken. This mirrors the dev iteration order: smoke-then-build.
+      - name: Install dev + schwab extras for smoke gate
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip wheel
+          python -m pip install -e ".[dev,schwab]"
+
+      - name: Run unit + smoke tests
+        shell: pwsh
+        env:
+          # Isolate the smoke harness from any leftover state on the
+          # runner image. The harness sets TRADINGLAB_CACHE_DIR
+          # itself, but pre-setting TRADINGLAB_DATA_DIR belt-and-
+          # braces the new paths.py root resolver too.
+          TRADINGLAB_DATA_DIR: ${{ runner.temp }}\smoke-data
+        run: |
+          python -m pytest tests/unit tests/smoke tests/scanner -q
+
+      - name: Build redistributable
+        shell: pwsh
+        # ``-NoSmoke`` because the next step runs the richer probe
+        # (GUI window + WM_CLOSE) that build_exe.ps1's bundled
+        # ``--version`` check can't cover.
+        run: ./tools/build_exe.ps1 -NoSmoke
+
+      - name: Verify frozen build (--version + GUI WM_CLOSE)
+        shell: pwsh
+        run: ./tools/verify_frozen.ps1
+
+      - name: Inspect output
+        shell: pwsh
+        run: |
+          Get-ChildItem dist | Format-Table Name, Length, LastWriteTime
+
+      - name: Upload as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TradingLab-windows
+          path: dist/TradingLab-*.zip
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish to GitHub Releases
+        if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.publish_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/TradingLab-*.zip
+          generate_release_notes: true
+          fail_on_unmatched_files: true

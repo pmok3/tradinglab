@@ -1,0 +1,37 @@
+{
+  "created_at": "2026-05-06T04:52:27Z",
+  "created_with": {
+    "app": "tradinglab",
+    "template": true,
+    "version": "1.0.0"
+  },
+  "eod_kill_switch": true,
+  "eod_offset_min": 5,
+  "extra": {},
+  "id": "tmpl-exit-chandelier-22-3",
+  "legs": [
+    {
+      "enabled": true,
+      "id": "chan",
+      "label": "chandelier 22/3x",
+      "triggers": [
+        {
+          "chandelier_atr_period": 22,
+          "chandelier_lookback": 22,
+          "chandelier_ma_type": "RMA",
+          "chandelier_multiplier": 3.0,
+          "enabled": true,
+          "id": "92a73b9c9a7248a79ccb81514e8f06e4",
+          "kind": "chandelier",
+          "label": "22-bar chandelier",
+          "qty_pct": 100.0,
+          "time_in_force": "day"
+        }
+      ]
+    }
+  ],
+  "name": "Chandelier stop (22, 3x)",
+  "oco_groups": [],
+  "schema_version": 2,
+  "updated_at": "2026-05-06T04:52:27Z"
+}

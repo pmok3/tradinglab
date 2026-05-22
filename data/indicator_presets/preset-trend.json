@@ -1,0 +1,30 @@
+{
+  "description": "SMA 50/200 (\"golden cross\") + ADX(14).",
+  "indicators": [
+    {
+      "id": "sma-50",
+      "kind": "sma",
+      "panel": "overlay",
+      "params": {
+        "length": 50
+      }
+    },
+    {
+      "id": "sma-200",
+      "kind": "sma",
+      "panel": "overlay",
+      "params": {
+        "length": 200
+      }
+    },
+    {
+      "id": "adx-14",
+      "kind": "adx",
+      "panel": "adx",
+      "params": {
+        "length": 14
+      }
+    }
+  ],
+  "name": "Trend"
+}

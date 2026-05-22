@@ -1,0 +1,57 @@
+# constants.py — Spec
+
+## Purpose
+Holds palette (light/dark theme dicts), the candlestick bull/bear colors, the interval→yfinance-period lookup, and a handful of small helpers for intraday session classification and interval arithmetic. Acts as the single source of truth for display colors and interval-related constants, avoiding circular imports.
+
+## Public API
+- `BULL_COLOR = "#26a69a"` / `BEAR_COLOR = "#ef5350"` — candlestick body/wick colors.
+- `LIGHT_THEME: dict`, `DARK_THEME: dict` — palettes keyed by named slot (`win_bg`, `fig_bg`, `ax_bg`, `text`, `grid`, `spine`, `tree_bg`, `tree_fg`, `bull_row_bg`/`fg`, `bear_row_bg`/`fg`, `tooltip_bg`/`fg`, `watermark`, `pre_shade`, `post_shade`, `crosshair`). Consumed by `app._apply_theme`, `rendering.style_axes`, `rendering.draw_session_shading`, and `gui/interaction.py` overlays.
+- `CUSTOMIZABLE_THEME_KEYS: list[tuple[str, str]]` — curated subset of theme keys exposed to end-user customization in the Settings dialog, as `(key, display_label)` pairs. Currently: `win_bg`, `ax_bg`, `text`, `grid`, `bull_row_bg`, `bear_row_bg`. Non-listed keys always take their base-theme value (acts as the allow-list for `resolve_theme`).
+- `DEFAULT_THEMES: dict[str, dict]` — mapping `{"light": LIGHT_THEME, "dark": DARK_THEME}` so callers can look up a palette by mode string instead of ternary-ing on `dark_var.get()`.
+- `resolve_theme(mode: str, overrides: dict | None) -> dict` — returns the effective palette for `mode` with user overrides shallow-merged on top. Filters through `CUSTOMIZABLE_THEME_KEYS` so a hand-edited settings file can't inject arbitrary or mistyped keys. Non-string override values are dropped. Used by `ChartApp._apply_theme`.
+- `BUILTIN_STARTUP_DEFAULTS: dict` — hardcoded fallback values for the user-customizable startup parameters: `{"ticker": "AMD", "compare": "SPY", "interval": "1d", "source": "yfinance", "theme": "light"}`. Source of truth for both the dialog editor and the resolver.
+- `STARTUP_DEFAULT_KEYS: list[tuple[str, str]]` — drives the dialog row order + labels: `[(ticker, "Default primary ticker"), (compare, "Default compare ticker"), (interval, "Default interval"), (source, "Default data source"), (theme, "Default theme (light/dark)")]`. Adding a new persisted default is a one-tuple insertion here (plus an entry in `BUILTIN_STARTUP_DEFAULTS` and a per-key validation branch in `resolve_startup_defaults`).
+- `resolve_startup_defaults(overrides: dict | None, *, intervals=None, sources=None) -> dict` — merges sparse `overrides` over `BUILTIN_STARTUP_DEFAULTS` with per-key validation: `ticker`/`compare` are non-empty strings and get `.strip().upper()`; `interval` must be in `intervals` when supplied; `source` must be in `sources` when supplied; `theme` must be `"light"` or `"dark"`. Anything that fails validation falls back to the builtin (silent — same pattern as `resolve_theme`). The runtime allow-lists are passed in so this module stays free of imports from `app` / `data` (no cycle).
+- `TTK_ROOT_STYLE = "."` — sentinel name of the root ttk style that the spec targets first.
+- `build_ttk_style_spec(theme: dict) -> list[tuple[str, dict, dict]]` — returns a declarative list of `(style_name, configure_kwargs, map_kwargs)` tuples describing every ttk widget class that needs palette (root, `TFrame`, `TLabel`, `TButton`, `Destructive.TButton`, `TCheckbutton`, `TEntry`, `TCombobox`, `TNotebook`, `TNotebook.Tab`, `Treeview`, `Treeview.Heading`). `Destructive.TButton` is a red-foreground variant reserved for genuinely-destructive actions; idle is red-on-`ax_bg` in both themes, hover / press inverts to white-on-red. Currently consumed by the **PANIC: Flatten All** sandbox button. Audit ``reset-view-style`` (2025) removed the style from the toolbar **Reset View** button because the action is a benign zoom restore, not data loss — colouring it red made the reviewer's stock-trader persona anxious about clicking it mid-trade. `map_kwargs` is `{}` for widgets that don't need per-state overrides. Consumed by `app._apply_ttk_style`.
+- `ttk_combobox_listbox_options(theme: dict) -> dict` — returns option-database keys (`*TCombobox*Listbox.background` etc.) for the readonly Combobox popdown, which is a plain Tk Listbox driven by the option database, not ttk.Style. Consumed by `app._apply_ttk_style`.
+- `INTERVAL_PERIODS: dict[str, str]` — e.g. `{"1m":"7d","5m":"60d","1h":"730d","1d":"2y","1wk":"10y","1mo":"max"}`. Used by `data/yfinance_source.fetch_live_data` to pick a yfinance `period=` argument that maximizes history while respecting yfinance's per-interval limits.
+- `CHART_PANE_STARTUP_RATIO: float = 0.80` — fraction of the main window width the chart pane occupies at every launch. Consumed by `app.py` during `_build_ui` to pin the `_main_paned` sash via `_apply_forced_sash`. Bypasses `gui/geometry_store.restore_sash` for the main paned — the previous design persisted the drag position, which led to the watchlist eating most of the space on subsequent launches if the user accidentally dragged the sash.
+- `CHARTSTACK_PANE_STARTUP_WIDTH_PX: int = 220` — width of the ChartStack card column in the 3-pane layout, in pixels. Matches `chartstack.card_width_px` so the column comfortably shows one card.
+- `compute_main_paned_sashes(main_w: int, *, chartstack_visible: bool, notebook_min_px: int = 280, chart_min_px: int = 200) -> list[int]` — pure helper returning cumulative `ttk.PanedWindow.sashpos` x-positions for the `_main_paned` layout. Returns `[chart_w]` in 2-pane mode and `[CHARTSTACK_PANE_STARTUP_WIDTH_PX, CHARTSTACK_PANE_STARTUP_WIDTH_PX + chart_w]` in 3-pane mode. **Headline invariant: the notebook (rightmost) pane has the same absolute width in both modes** — toggling ChartStack on only steals pixels from the chart, never from the notebook. Notebook width is `max(notebook_min_px, main_w - int(main_w * CHART_PANE_STARTUP_RATIO))` (computed via subtraction to dodge float-precision artefacts like `1920 * 0.20 == 383.999...`). The chart pane has a `chart_min_px` floor so absurdly narrow windows degrade gracefully (chart stays usable; notebook gives up width first). Consumed by both `app._build_ui` (startup) and `app._toggle_chartstack` (mid-session toggle) so the canonical layout is reapplied on every show/hide. Mid-session drags still work via Tk default behaviour but do **not** persist across launches.
+- `INTRADAY_INTERVALS: frozenset` = `{"1m","2m","5m","15m","30m","1h"}`.
+- `is_intraday(interval: str) -> bool` — membership test in `INTRADAY_INTERVALS`. Called throughout (app.py, data/normalize.py, streaming/synthetic.py, core/pairing.py, rendering.py indirectly via `draw_session_shading`).
+- `classify_session(hour: int, minute: int) -> str` — returns `"pre"`, `"regular"`, or `"post"` based on US Eastern wall clock: regular is `[09:30, 16:00)`, post is `[16:00, 20:00)`, everything else is `pre`. Called from `data/normalize.candles_from_dataframe`, `data/synthetic_source._gen_intraday`, `streaming/synthetic.SyntheticStreamSource._make_bar`, `rendering.draw_session_shading`.
+- `interval_minutes(interval: str) -> int` — converts `"5m"`/`"1h"` to minutes; **raises `ValueError`** on daily+ (callers reaching this on a daily interval are buggy). Used by `data/synthetic_source`, `streaming/synthetic`, `app._schedule_next_bar_fetch`, `app._cache_is_stale`.
+- `floor_to_interval(when: datetime, step_min: int) -> datetime` — zeros seconds/microseconds and floors `hour*60+minute` to a multiple of `step_min`. Used to line timestamps up with exchange bar boundaries in synthetic data and streaming rollover.
+
+## Dependencies
+- Internal: none.
+- External: `datetime` stdlib only. Intentionally zero heavy deps so this module is safe to import from any layer.
+
+## Design notes
+- Two theme dicts (not a class hierarchy) — palette stays trivially overridable
+  and JSON-serializable.
+- Declarative ttk spec (`build_ttk_style_spec`) rather than `style.configure`
+  calls in `app.py`: light/dark differ only in palette, never in widget
+  topology, so structure is expressed once as data. Module stays tk-free.
+- Pre/post band colors differ (cool blue pre, warm amber post) so users can
+  tell morning vs. evening at a glance.
+- `interval_minutes` **raises** on daily+ (silent 1440 would mask buggy
+  callers).
+- `classify_session` treats overnight as `"pre"` (rare bars, visually
+  indistinguishable from pre-market).
+- `INTERVAL_PERIODS` picks periods maximizing history within yfinance limits
+  (`"1h"→"730d"`, `"1m"→"7d"`).
+
+## Invariants
+- `is_intraday(i)` ↔ `i in INTRADAY_INTERVALS`.
+- `classify_session(9,30) == "regular"`; `(9,29) == "pre"`; `(16,0) == "post"`;
+  `(20,0) == "pre"`.
+- `interval_minutes("5m") == 5`; `("1h") == 60`; `("1d")` raises `ValueError`.
+- Every key in `LIGHT_THEME` is also in `DARK_THEME` and vice versa.
+- `build_ttk_style_spec(theme)` returns the same style names in the same
+  order regardless of theme — only `configure_kwargs`/`map_kwargs` values
+  differ. Guarantees runtime theme-swap can't leave a widget class unstyled.
+- `floor_to_interval` expects exchange-local naive datetime (a UTC-aware
+  input produces wrong boundaries).

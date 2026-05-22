@@ -1,0 +1,34 @@
+name: Bug report
+description: Report a defect in tradinglab
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: Clear, minimal reproduction.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: input
+    id: ticker
+    attributes:
+      label: Ticker / interval (if relevant)
+      placeholder: "e.g. AMD, 5m, compare with SPY"
+  - type: input
+    id: os
+    attributes:
+      label: OS + Python version
+      placeholder: "Windows 11, Python 3.12.3"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Stack trace / log output
+      render: shell

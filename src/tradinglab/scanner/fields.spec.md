@@ -1,0 +1,174 @@
+# scanner/fields.py — spec
+
+## Purpose
+
+Catalog of scannable fields. Single source of truth consumed by:
+
+- the **engine** for validation and dispatch,
+- the **block-editor GUI** for combobox population,
+- the **fields registry test suite** for shape enforcement.
+
+## Two field kinds
+
+### Built-in scalars
+
+Declared inline. Cheap, schema-stable values computed directly from
+OHLCV NumPy arrays. v1 set:
+
+| id                | label              | description                                 |
+| ----------------- | ------------------ | ------------------------------------------- |
+| `close`           | Close              | Closing price                               |
+| `open`            | Open               | Opening price                               |
+| `high`            | High               | Bar high                                    |
+| `low`             | Low                | Bar low                                     |
+| `volume`          | Volume             | Bar volume                                  |
+| `pct_change`      | % Change           | Percent change vs prior close               |
+| `gap_pct`         | Gap %              | Open vs prior-close gap, percent            |
+| `hod`             | High of Day        | Highest high so far today                   |
+| `lod`             | Low of Day         | Lowest low so far today                     |
+| `time_of_day`     | Time of Day (min)  | Minutes since midnight UTC                  |
+| `bars_since_open` | Bars Since Open    | Bars since first regular-session bar today  |
+| `ha_open`         | HA Open            | Heikin-Ashi open                            |
+| `ha_high`         | HA High            | Heikin-Ashi high                            |
+| `ha_low`          | HA Low             | Heikin-Ashi low                             |
+| `ha_close`        | HA Close           | Heikin-Ashi close                           |
+| `ha_color`        | HA Color (+1/-1)   | +1 if HA bullish (close≥open), -1 bearish   |
+| `ha_flat_top`     | HA Flat-Top        | 1 iff HA bar has no upper wick (direction-agnostic) |
+| `ha_flat_bottom`  | HA Flat-Bottom     | 1 iff HA bar has no lower wick (direction-agnostic) |
+| `ha_flat_bottom_bull` | HA Flat-Bottom (Bull) | 1 iff bull HA bar (`HA_close > HA_open`) has no lower wick |
+| `ha_flat_top_bear`    | HA Flat-Top (Bear)    | 1 iff bear HA bar (`HA_close < HA_open`) has no upper wick |
+| `ha_flat_strong`      | HA Flat (signed)      | +1 bull-flat-bottom / -1 bear-flat-top / 0 neither; None during warm-up |
+| `ha_streak`       | HA Streak (signed) | Signed run of same-color HA bars (+N / -N)  |
+| `ha_flat_top_streak`    | HA Flat-Top Streak    | Consecutive flat-top bars (bear continuation)  |
+| `ha_flat_bottom_streak` | HA Flat-Bottom Streak | Consecutive flat-bottom bars (bull continuation) |
+| `key_bar`                  | Key Bar (signed)            | +1 bull / -1 bear / 0 not-key-bar; None during warmup |
+| `key_bar_bull`             | Key Bar (Bull)              | 1 iff this bar is a bull key bar                  |
+| `key_bar_bear`             | Key Bar (Bear)              | 1 iff this bar is a bear key bar                  |
+| `bars_since_bull_key_bar`  | Bars Since Bull Key Bar     | Bars elapsed since most recent bull key bar       |
+| `bars_since_bear_key_bar`  | Bars Since Bear Key Bar     | Bars elapsed since most recent bear key bar       |
+| `last_bull_key_bar_high`   | Last Bull Key Bar High      | High of most recent bull key bar                  |
+| `last_bull_key_bar_low`    | Last Bull Key Bar Low       | Low  of most recent bull key bar                  |
+| `last_bear_key_bar_high`   | Last Bear Key Bar High      | High of most recent bear key bar                  |
+| `last_bear_key_bar_low`    | Last Bear Key Bar Low       | Low  of most recent bear key bar                  |
+
+`hod`/`lod` are **prefix-restricted** to bars `[0..i]` (no look-ahead).
+
+### Heikin-Ashi builtins
+
+`ha_*` project `core.heikin_ashi.ha_arrays` over `[0..i]` (same
+no-look-ahead rule). Four HA arrays cached on a process-global LRU
+keyed by `(id(bars), len)` so multiple `ha_*` fields against the same
+`BarsNp` snapshot share one O(n) compute.
+
+Boolean-style fields return `±1.0`/`1.0`/`0.0` (not Python bools) to
+fit the float-only field-compute signature. Flat-wick equality uses
+price-scaled tolerance (`max(1e-9, |price|·1e-9)`) for FP drift.
+
+The **direction-aware** trio (`ha_flat_bottom_bull`, `ha_flat_top_bear`,
+`ha_flat_strong`) narrows the direction-agnostic fields by requiring
+bar color to match the trend (strict-greater bull / strict-less bear;
+doji never qualify). Shares its compute
+(`core.ha_flat.compute_ha_flat_arrays_np`) with the View → Highlight
+Flat HA Candles overlay so chart and conditions cannot disagree.
+Cached per-`BarsNp` on `BarsKeyedCache[HAFlatArrays]`.
+
+`ha_streak`, `ha_flat_top_streak`, `ha_flat_bottom_streak` walk
+backward; stop at the first run-break *or* first NaN bar (gap).
+
+HA fields are **builtins, not indicators** — not in
+`SCANNABLE_INDICATORS`. Independent of the View → Heikin-Ashi Candles
+display toggle (which is a render-time substitution).
+
+### Key bar builtins
+
+`key_bar*` / `*_key_bar_*` project
+`core.key_bar.compute_key_bar_arrays(candles)` over a candle list
+reconstructed from `BarsNp`. Cached process-globally keyed on
+`id(BarsNp)` plus identity check (guards id-recycling). LRU cap 64.
+
+A bar is a key bar when **all** three clear:
+
+1. `tr > 1.0 × baseline_tr`,
+2. `rvol > 1.1`,
+3. `|close − open| / (high − low) > 0.69`.
+
+Direction: `close > open` → bull (+1); `close < open` → bear (−1);
+equal close/open emits `0`.
+
+Baselines are interval-aware:
+- **Intraday**: TR via `ATR(mode="tod", length=20)`; volume via
+  `TimeOfDayRVOL(lookback_days=20, aggregator="mean",
+  session_filter="regular_only")` (already a ratio; threshold `>1.1`).
+- **Daily/weekly/monthly**: rolling 20-bar mean of TR and volume.
+
+**Asymmetry note**: range comparison uses TR (with gap term);
+body-ratio denominator uses (H−L) (no gap). Matches how traders
+eyeball bars.
+
+`key_bar` returns `None` during warmup; `*_bull`/`*_bear` same, else
+`0.0` when not a key bar in that direction. `bars_since_*_key_bar`
+returns `None` if no matching key bar seen (avoids spurious `0`
+matches).
+
+Shares compute with the chart's *View → Highlight Key Bars* toggle.
+
+### Allowlisted indicators (`SCANNABLE_INDICATORS`)
+
+Map of `kind_id → ((output_key, dtype), ...)`. Indicators present here
+are projected over `indicators.base.INDICATORS` as scanner fields;
+others are NOT surfaced even if chart-registered. First output key is
+the default when `FieldRef.output_key` is empty.
+
+**Fail-closed by design.** New indicator authors must opt-in, killing
+the footgun where a categorical/boolean output gets picked in a
+numeric comparison and silently returns `None`.
+
+v1 allowlist: sma, ema, rsi, bbands (middle/upper/lower), atr,
+adx (adx/+di/-di), vwap, avwap, smi (smi/signal), lrsi, rvol, rrvol.
+
+Unified `rvol`/`rrvol` ids cover all flavours (simple / cumulative /
+time_of_day, optional z-score) via the indicator's own `mode` and
+`z_score` params. Legacy ids (`rvol_simple`, `rvol_cum`, `rvol_tod`,
+`rvol_z_*`, `rrvol_*`) are migrated transparently by
+`FieldRef.from_dict`.
+
+## Public API
+
+- `all_fields() -> list[FieldSpec]` — full catalog, builtins first.
+- `get_field(id, kind="") -> FieldSpec | None` — lookup by stable id.
+- `is_scannable(ref) -> bool` — quick truthy check.
+- `validate_field_ref(ref) -> None` — raises on unknown id / disallowed
+  output key.
+- `builtin_compute(field_id) -> Callable | None` — for engine dispatch.
+- `field_ref_resets_daily(ref) -> bool` — True when the field resets at
+  the start of every regular session (HOD/LOD, time_of_day,
+  bars_since_open, cumulative RVOL, session-anchored VWAP, …). Used by
+  engine/runner to decide whether a condition's cached prefix needs
+  re-evaluation at session boundaries.
+- `condition_uses_daily_reset_field(node) -> bool` — recursive walk of
+  `Condition`/`Group`; mirrors daily-reset awareness up to the group
+  level for conservative prefix-cache pruning.
+
+## What we *don't* do here
+
+- Run indicator `compute()` — the engine does that.
+- Cache results across scans — the runner-scope memo does that.
+- Decide tri-valued logic — the engine does. Builtin computes return
+  `None` only for OOB / NaN / division-by-zero.
+
+## Extension contract
+
+New indicator output:
+1. Register the indicator under `INDICATORS`.
+2. Add `kind_id` to `SCANNABLE_INDICATORS` with each numerically
+   scannable output key.
+
+New builtin scalar:
+1. Implement `_b_<name>(bars, i, params) -> Optional[float]`.
+2. Append a `FieldSpec` to `_BUILTINS`.
+
+## Forward-compat reservation
+
+`FieldRef.interval` overrides are persisted but rejected by the v1
+engine. `validate_field_ref` does NOT check this — engine concern
+(structural vs behavioral).

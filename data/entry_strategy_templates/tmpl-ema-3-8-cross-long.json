@@ -1,0 +1,71 @@
+{
+  "arm_window_end": "15:30",
+  "arm_window_start": "09:35",
+  "cooldown_secs": 60,
+  "created_at": "2026-05-06T04:52:27Z",
+  "created_with": {
+    "app": "tradinglab",
+    "template": true,
+    "version": "1.0.0"
+  },
+  "direction": "long",
+  "enabled": true,
+  "extra": {},
+  "id": "tmpl-ema-3-8-cross-long",
+  "max_fires_per_session_per_symbol": 1,
+  "max_fires_per_session_total": null,
+  "name": "3/8 EMA cross (long)",
+  "on_fill_exit_ids": [],
+  "position_already_open_policy": "block",
+  "require_market_open": true,
+  "schema_version": 1,
+  "sizing": {
+    "kind": "fixed_qty",
+    "qty": 100.0,
+    "share_rounding": "down"
+  },
+  "trigger": {
+    "condition": {
+      "children": [
+        {
+          "enabled": true,
+          "id": "0c209c5a-7afb-474a-a544-4c3b3b929f39",
+          "interval": "1m",
+          "left": {
+            "id": "ema",
+            "kind": "indicator",
+            "params": {
+              "length": 3
+            }
+          },
+          "op": "crosses_above",
+          "params": {
+            "lookback": 1,
+            "right": {
+              "id": "ema",
+              "kind": "indicator",
+              "params": {
+                "length": 8
+              }
+            }
+          },
+          "type": "condition"
+        }
+      ],
+      "combinator": "and",
+      "enabled": true,
+      "id": "ceeeaa12-3c8f-4117-8fb5-0e9891981c95",
+      "type": "group"
+    },
+    "evaluate_intrabar": false,
+    "id": "d2ee8b7ecce34f2ebc0403d11228c352",
+    "interval": "1m",
+    "kind": "indicator",
+    "label": "3/8 EMA cross",
+    "time_in_force": "day"
+  },
+  "universe": {
+    "from_attached_chart": true
+  },
+  "updated_at": "2026-05-06T04:52:27Z"
+}

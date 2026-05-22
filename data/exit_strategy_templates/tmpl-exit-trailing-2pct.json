@@ -1,0 +1,36 @@
+{
+  "created_at": "2026-05-06T04:52:27Z",
+  "created_with": {
+    "app": "tradinglab",
+    "template": true,
+    "version": "1.0.0"
+  },
+  "eod_kill_switch": true,
+  "eod_offset_min": 5,
+  "extra": {},
+  "id": "tmpl-exit-trailing-2pct",
+  "legs": [
+    {
+      "enabled": true,
+      "id": "trail",
+      "label": "trail 2x ATR(14)",
+      "triggers": [
+        {
+          "enabled": true,
+          "id": "d9ced0cec74a4c11bed5d6a2ee490814",
+          "kind": "trailing_stop",
+          "label": "2% trailing",
+          "qty_pct": 100.0,
+          "time_in_force": "day",
+          "trail_basis": "intrabar",
+          "trail_unit": "percent",
+          "trail_value": 2.0
+        }
+      ]
+    }
+  ],
+  "name": "2% trailing stop",
+  "oco_groups": [],
+  "schema_version": 2,
+  "updated_at": "2026-05-06T04:52:27Z"
+}

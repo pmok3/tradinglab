@@ -1,0 +1,51 @@
+{
+  "created_at": "2026-05-06T04:52:27Z",
+  "created_with": {
+    "app": "tradinglab",
+    "template": true,
+    "version": "1.0.0"
+  },
+  "id": "tmpl-scan-nr7",
+  "name": "NR7 narrow-range coil (5m)",
+  "options": {
+    "default_view": "new",
+    "new_view_capacity": 500,
+    "show_insufficient_data_rows": false
+  },
+  "output_columns": null,
+  "primary_interval": "5m",
+  "rank_by": {
+    "id": "atr",
+    "kind": "indicator",
+    "params": {
+      "length": 14
+    }
+  },
+  "rank_dir": "asc",
+  "rank_interval": "",
+  "root": {
+    "children": [
+      {
+        "enabled": true,
+        "id": "c12d6d6e-978f-48f5-a884-c05de8d1d8ab",
+        "interval": "5m",
+        "left": {
+          "id": "close",
+          "kind": "builtin"
+        },
+        "op": "nr7",
+        "params": {},
+        "type": "condition"
+      }
+    ],
+    "combinator": "and",
+    "enabled": true,
+    "id": "82cfc926-1cdc-4531-9407-e4556091c310",
+    "type": "group"
+  },
+  "schema_version": 1,
+  "universe_filter": {
+    "kind": "all"
+  },
+  "updated_at": "2026-05-06T04:52:27Z"
+}
