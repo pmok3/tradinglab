@@ -16,9 +16,12 @@ Exposes `GeometryStore` class + process-wide `store()` singleton.
 - `load()` — read JSON; missing / corrupt / future-version files
   yield empty in-memory cache.
 - `save()` — atomic write; logs and swallows `OSError`.
-- `restore_window(toplevel, key, default="1280x800+100+100") -> str`
+- `compute_screen_percent_geometry(screen_w, screen_h, *, width_pct=0.9, height_pct=0.9, min_width=1200, min_height=780, taskbar_buffer_px=80) -> str`
+  — return the centered percent-of-screen fallback geometry used by
+  the main window when no reasonable saved geometry exists.
+- `restore_window(toplevel, key, default="1280x800+100+100", *, min_size=None) -> str`
   — apply stored geometry (after `_clamp_to_screen`); returns the
-  string actually applied.
+  string actually applied. `min_size` rejects stale too-small windows.
 - `bind_window(toplevel, key)` — wire `<Configure>` with 500 ms
   debounce; persists trailing event only.
 - `restore_sash(paned, key, default_positions, *, min_pane_widths=None)`
@@ -32,9 +35,9 @@ Exposes `GeometryStore` class + process-wide `store()` singleton.
 - `get(key, default=None)` / `set(key, value)` — free-form K/V on
   the same backing file (write-through; no debounce).
 - `store() -> GeometryStore` — process-wide singleton.
-- `_clamp_to_screen(geometry, screen_w, screen_h, *, default)` —
-  reject any geometry whose top-left is < -100 px or bottom-right
-  is > screen + 100 px (multi-monitor safety).
+- `_clamp_to_screen(geometry, screen_w, screen_h, *, default, min_size=None)` —
+  reject any geometry whose top-left is < -100 px, bottom-right is
+  > screen + 100 px, or width/height are below `min_size` when supplied.
 
 ## Schema
 

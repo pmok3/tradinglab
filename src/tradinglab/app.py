@@ -92,6 +92,7 @@ from .gui.dialogs import (
 from .gui.drilldown import DrilldownMixin, _DrilldownRequest
 from .gui.entries_app import EntriesAppMixin
 from .gui.exits_app import ExitsAppMixin
+from .gui.geometry_store import compute_screen_percent_geometry
 from .gui.help_menu import HelpMenuMixin
 from .gui.indicator_menu import IndicatorMenuMixin
 from .gui.interaction import InteractionMixin
@@ -476,27 +477,36 @@ class ChartApp(
         # Normalize the entry immediately after the View menu is built.
         self._sync_highlight_ha_flat_menu_state()
         # Window geometry: restored from `gui/geometry_store.py` (UI/UX
-        # audit P0 #3). The prior adaptive-90% block is now the FALLBACK
-        # default when no stored geometry exists or the saved geometry
-        # would land off-screen (e.g. monitor unplugged). Sash positions
-        # are restored separately after `_build_ui` constructs the
-        # PanedWindow — see the `_geometry_store.restore_sash` calls
-        # below.
+        # audit P0 #3). The adaptive percent-of-screen block remains the
+        # fallback when no stored geometry exists or the saved geometry is
+        # off-screen / too small (e.g. monitor change or accidental shrink).
+        # Sash positions are restored separately after `_build_ui` constructs
+        # the PanedWindow — see the `_geometry_store.restore_sash` calls below.
         try:
             sw = self.winfo_screenwidth()
             sh = self.winfo_screenheight()
         except tk.TclError:
             sw, sh = 1600, 900
-        win_w = max(1200, int(sw * 0.9))
-        win_h = max(780, int(sh * 0.9))
-        off_x = max(0, (sw - win_w) // 2)
-        off_y = max(0, (sh - win_h) // 3)
-        _default_geom = f"{win_w}x{win_h}+{off_x}+{off_y}"
+        startup_min_w = min(1200, max(1, int(sw)))
+        startup_min_h = min(780, max(1, int(sh)))
+        _default_geom = compute_screen_percent_geometry(
+            sw,
+            sh,
+            width_pct=_defaults.get("startup_width_pct"),
+            height_pct=_defaults.get("startup_height_pct"),
+            min_width=startup_min_w,
+            min_height=startup_min_h,
+        )
+        self.minsize(startup_min_w, startup_min_h)
         try:
             from .gui.geometry_store import store as _geom_store
             self._geometry_store = _geom_store()
             applied_geom = self._geometry_store.restore_window(
-                self, "main", default=_default_geom)
+                self,
+                "main",
+                default=_default_geom,
+                min_size=(startup_min_w, startup_min_h),
+            )
             self._geometry_store.bind_window(self, "main")
         except Exception:  # noqa: BLE001 - geometry persistence is best-effort
             self._geometry_store = None
@@ -505,7 +515,6 @@ class ChartApp(
         # Stash the actually-applied geometry so the post-build sash
         # restore can derive a sensible default sash position from it.
         self._initial_geometry: str = applied_geom
-        self.minsize(1100, 700)
 
         # Verbose status log: routes every message to the status bar,
         # an in-memory ring buffer (history window), a daily on-disk
@@ -2090,8 +2099,9 @@ class ChartApp(
         except Exception:  # noqa: BLE001
             pass
         try:
-            # Coalesce via the existing indicator-redraw scheduler.
-            self._sched_indicator_redraw()
+            # Reuse the indicator event path so reference arrivals are
+            # coalesced with user-triggered indicator redraws.
+            self._on_indicator_event("redraw", None)
         except Exception:  # noqa: BLE001
             pass
 

@@ -163,6 +163,8 @@ A starter file lives at [`config/example_config.json`](config/example_config.jso
 {
   "_comment": "My personal config",
   "default_window_bars": 300,
+  "startup_width_pct": 0.9,
+  "startup_height_pct": 0.9,
   "scroll_zoom_invert": true,
   "display_tz": "America/Los_Angeles",
   "startup_defaults": { "ticker": "NVDA", "compare": "QQQ", "theme": "dark" }
@@ -203,6 +205,8 @@ A starter file lives at [`config/example_watchlists.json`](config/example_watchl
 | `theme_overrides` | `dict` | `{}` | Per-theme color overrides. Sparse merge over light/dark themes. Schema: `{"light": {key: "#hex", ...}, "dark": {...}}`. |
 | `startup_defaults` | `dict` | `{}` | Initial values for `ticker`, `compare`, `interval`, `source`, `theme`. |
 | `default_window_bars` | `int` | `200` | Bars in the right-edge default window. |
+| `startup_width_pct` | `float` | `0.9` | Main-window percent-of-screen fallback width when no reasonable saved geometry exists. |
+| `startup_height_pct` | `float` | `0.9` | Main-window percent-of-screen fallback height when no reasonable saved geometry exists. |
 | `price_top_pad_frac` | `float` | `0.12` | Top headroom on price axes (reserves space for the OHLCV readout). |
 | `price_bot_pad_frac` | `float` | `0.05` | Bottom padding on price axes. |
 

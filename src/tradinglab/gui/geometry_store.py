@@ -78,32 +78,84 @@ def _parse_geometry(geometry: str) -> tuple[int, int, int, int] | None:
         return None
 
 
+def _fallback_geometry(default: str) -> str:
+    return default if _parse_geometry(default) else _DEFAULT_GEOMETRY
+
+
+def compute_screen_percent_geometry(
+    screen_w: int,
+    screen_h: int,
+    *,
+    width_pct: float = 0.9,
+    height_pct: float = 0.9,
+    min_width: int = 1200,
+    min_height: int = 780,
+    taskbar_buffer_px: int = 80,
+) -> str:
+    """Return centered ``WxH+X+Y`` using hardcoded screen percentages."""
+    try:
+        sw = max(1, int(screen_w))
+        sh = max(1, int(screen_h))
+        width_frac = min(1.0, max(0.1, float(width_pct)))
+        height_frac = min(1.0, max(0.1, float(height_pct)))
+        min_w = max(1, int(min_width))
+        min_h = max(1, int(min_height))
+        buffer_px = max(0, int(taskbar_buffer_px))
+    except (TypeError, ValueError):
+        sw, sh = 1600, 900
+        width_frac = height_frac = 0.9
+        min_w, min_h, buffer_px = 1200, 780, 80
+
+    max_w = sw
+    max_h = sh - buffer_px if sh > min_h + buffer_px else sh
+    max_h = max(1, max_h)
+    win_w = min(max_w, max(min_w, int(sw * width_frac)))
+    win_h = min(max_h, max(min_h, int(sh * height_frac)))
+    off_x = max(0, (sw - win_w) // 2)
+    off_y = max(0, (sh - win_h) // 3)
+    return f"{win_w}x{win_h}+{off_x}+{off_y}"
+
+
 def _clamp_to_screen(
     geometry: str,
     screen_w: int,
     screen_h: int,
     *,
     default: str = _DEFAULT_GEOMETRY,
+    min_size: tuple[int, int] | None = None,
 ) -> str:
-    """Reject restores that would land mostly off-screen.
+    """Reject restores that would land mostly off-screen or too small.
 
     A geometry is acceptable iff the top-left is at most 100 px
     outside the virtual screen and the bottom-right is at most
     100 px past the far edge. Anything more aggressive (a window
     saved on a now-disconnected monitor) falls back to ``default``.
-    If the default itself fails to parse we hand back the
-    module-level ``_DEFAULT_GEOMETRY``.
+    Callers may also pass ``min_size`` to reject stale windows that
+    would reopen below the current usability floor.
     """
+    fallback = _fallback_geometry(default)
     parsed = _parse_geometry(geometry)
     if parsed is None:
-        return default if _parse_geometry(default) else _DEFAULT_GEOMETRY
+        return fallback
+    try:
+        screen_w = max(1, int(screen_w))
+        screen_h = max(1, int(screen_h))
+    except (TypeError, ValueError):
+        screen_w, screen_h = 1920, 1080
     w, h, x, y = parsed
     if w <= 0 or h <= 0:
-        return default if _parse_geometry(default) else _DEFAULT_GEOMETRY
+        return fallback
+    if min_size is not None:
+        try:
+            min_w, min_h = int(min_size[0]), int(min_size[1])
+        except (TypeError, ValueError, IndexError):
+            min_w, min_h = 0, 0
+        if (min_w > 0 and w < min_w) or (min_h > 0 and h < min_h):
+            return fallback
     if x < -100 or y < -100:
-        return default if _parse_geometry(default) else _DEFAULT_GEOMETRY
+        return fallback
     if x + w > screen_w + 100 or y + h > screen_h + 100:
-        return default if _parse_geometry(default) else _DEFAULT_GEOMETRY
+        return fallback
     return geometry
 
 
@@ -224,12 +276,15 @@ class GeometryStore:
         toplevel: tk.Misc,
         key: str,
         default: str = _DEFAULT_GEOMETRY,
+        *,
+        min_size: tuple[int, int] | None = None,
     ) -> str:
         """Apply the stored geometry for ``key`` to ``toplevel``.
 
         Returns the geometry string actually applied (after the
         multi-monitor clamp). Falls back to ``default`` whenever the
-        stored geometry is missing or off-screen.
+        stored geometry is missing, off-screen, or smaller than
+        ``min_size`` when one is supplied.
         """
         if not self._loaded:
             self.load()
@@ -239,7 +294,7 @@ class GeometryStore:
             screen_h = int(toplevel.winfo_screenheight())
         except Exception:  # noqa: BLE001 - Tk not initialised; fall back
             screen_w, screen_h = 1920, 1080
-        applied = _clamp_to_screen(stored, screen_w, screen_h, default=default)
+        applied = _clamp_to_screen(stored, screen_w, screen_h, default=default, min_size=min_size)
         try:
             toplevel.geometry(applied)
         except Exception:  # noqa: BLE001 - geometry rejection is non-fatal
@@ -431,6 +486,7 @@ __all__ = [
     "SCHEMA_VERSION",
     "store",
     "attach_persistent_geometry",
+    "compute_screen_percent_geometry",
     "_clamp_to_screen",
     "_reset_singleton_for_tests",
 ]

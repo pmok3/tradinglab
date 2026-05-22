@@ -139,6 +139,14 @@ TUNABLES: tuple[Tunable, ...] = (
             "Number of bars in the right-edge default window (Reset view, fresh load, ticker change). "
             "Larger = more history visible; smaller = more zoomed-in by default.",
             _v_int(min_=10, max_=5000)),
+    Tunable("startup_width_pct", 0.9, "float",
+            "Fraction of the current screen width used for the main window when no reasonable saved "
+            "geometry exists.",
+            _v_float(min_=0.5, max_=1.0)),
+    Tunable("startup_height_pct", 0.9, "float",
+            "Fraction of the current screen height used for the main window when no reasonable saved "
+            "geometry exists.",
+            _v_float(min_=0.5, max_=1.0)),
     Tunable("price_top_pad_frac", 0.12, "float",
             "Top headroom on price axes as a fraction of the data span. Reserves space for the always-on "
             "top-left OHLCV readout strip so the highest bar can't collide with it.",

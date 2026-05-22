@@ -10,6 +10,23 @@ import pytest
 from tradinglab.gui import geometry_store as gs
 
 
+class _FakeTopLevel:
+    def __init__(self, *, screen_w: int = 1920, screen_h: int = 1080) -> None:
+        self.screen_w = screen_w
+        self.screen_h = screen_h
+        self.applied: list[str] = []
+
+    def winfo_screenwidth(self) -> int:
+        return self.screen_w
+
+    def winfo_screenheight(self) -> int:
+        return self.screen_h
+
+    def geometry(self, geometry: str) -> None:
+        self.applied.append(geometry)
+
+
+
 def test_round_trip_save_and_load(tmp_path: Path) -> None:
     store = gs.GeometryStore(path=tmp_path / "geometry.json")
     store.load()  # missing file -> empty cache
@@ -30,6 +47,28 @@ def test_round_trip_save_and_load(tmp_path: Path) -> None:
     assert other.get("kv.demo") == {"answer": 42}
 
 
+def test_compute_screen_percent_geometry_matches_startup_default() -> None:
+    assert gs.compute_screen_percent_geometry(
+        1920,
+        1080,
+        width_pct=0.9,
+        height_pct=0.9,
+        min_width=1200,
+        min_height=780,
+    ) == "1728x972+96+36"
+
+
+def test_compute_screen_percent_geometry_caps_for_taskbar_space() -> None:
+    assert gs.compute_screen_percent_geometry(
+        3840,
+        2160,
+        width_pct=1.0,
+        height_pct=1.0,
+        min_width=1200,
+        min_height=780,
+    ) == "3840x2080+0+26"
+
+
 def test_clamp_to_screen_accepts_in_bounds() -> None:
     assert gs._clamp_to_screen("1280x800+100+100", 1920, 1080) == "1280x800+100+100"
     # Slightly off-screen (within 100 px slack) — still accepted.
@@ -42,8 +81,36 @@ def test_clamp_to_screen_rejects_off_screen() -> None:
     assert gs._clamp_to_screen("1280x800-9999-9999", 1920, 1080, default=default) == default
     # Bottom-right past virtual bounds.
     assert gs._clamp_to_screen("1280x800+5000+5000", 1920, 1080, default=default) == default
+    # Too large for the current screen.
+    assert gs._clamp_to_screen("2500x1400+0+0", 1920, 1080, default=default) == default
     # Bogus geometry string.
     assert gs._clamp_to_screen("not-a-geometry", 1920, 1080, default=default) == default
+
+
+def test_restore_window_rejects_too_small_saved_main_geometry(tmp_path: Path) -> None:
+    default = "1728x972+96+36"
+    store = gs.GeometryStore(path=tmp_path / "geometry.json")
+    store.load()
+    store.set_window("main", "1100x700+238+170")
+
+    top = _FakeTopLevel(screen_w=1920, screen_h=1080)
+    applied = store.restore_window(top, "main", default=default, min_size=(1200, 780))
+
+    assert applied == default
+    assert top.applied == [default]
+
+
+def test_restore_window_accepts_reasonable_saved_main_geometry(tmp_path: Path) -> None:
+    stored = "1500x840+200+120"
+    store = gs.GeometryStore(path=tmp_path / "geometry.json")
+    store.load()
+    store.set_window("main", stored)
+
+    top = _FakeTopLevel(screen_w=1920, screen_h=1080)
+    applied = store.restore_window(top, "main", default="1728x972+96+36", min_size=(1200, 780))
+
+    assert applied == stored
+    assert top.applied == [stored]
 
 
 def test_load_missing_file_is_empty(tmp_path: Path) -> None:

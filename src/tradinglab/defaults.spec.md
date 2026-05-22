@@ -32,6 +32,8 @@ Each tunable has a validator so corrupt `settings.json` can't inject garbage.
 | `theme_overrides` | dict | {} | Per-theme color overrides. |
 | `startup_defaults` | dict | {} | Per-key startup overrides (ticker, compare, interval, source, theme). |
 | `default_window_bars` | int | 200 | Right-edge default window size (bars). Note: a per-interval default is a known follow-up — at 5m this currently shows ~1 week of data. |
+| `startup_width_pct` | float | 0.9 | Main-window percent-of-screen fallback width when no reasonable saved geometry exists. |
+| `startup_height_pct` | float | 0.9 | Main-window percent-of-screen fallback height when no reasonable saved geometry exists. |
 | `full_cache_size` | int | 16 | LRU memory-cache size for fetched (candles, meta) tuples. |
 | `hover_throttle_ms` | int | 16 | Coalescing window for hover/crosshair updates. |
 | `scroll_zoom_factor_per_step` | float | 1.15 | Per-notch zoom factor. |
@@ -66,6 +68,7 @@ Each tunable has a validator so corrupt `settings.json` can't inject garbage.
 | `theme_overrides` | `app.py` theme system |
 | `startup_defaults` | `app.py:__init__` → `constants.resolve_startup_defaults` |
 | `default_window_bars` | `app.py` `_render`, `_reset_view`, drilldown sizing |
+| `startup_width_pct` / `startup_height_pct` | `app.py:__init__` → `gui.geometry_store.compute_screen_percent_geometry` |
 | `full_cache_size` | `app.py` `_FULL_CACHE_MAX` constant |
 | `hover_throttle_ms` | `gui/interaction.py` `_HOVER_THROTTLE_MS` |
 | `scroll_zoom_factor_per_step` / `_step_clamp` / `_min_bars` | `InteractionMixin._SCROLL_ZOOM_*` class attrs |
