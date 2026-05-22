@@ -358,13 +358,32 @@ try {
     }
 
     # ---------------------------------------------------------------------
-    # 9. Zip dist/TradingLab/ → dist/TradingLab-<ver>-win64.zip
+    # 9. Zip dist/TradingLab/ → dist/TradingLab-<ver>-<arch>.zip
     # ---------------------------------------------------------------------
     Write-Step "Compressing redistributable archive"
     if (-not (Test-Path $OutputDir)) {
         New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
     }
-    $arch = if ([Environment]::Is64BitOperatingSystem) { "win64" } else { "win32" }
+    # Detect the produced exe's actual architecture by reading the PE
+    # machine code (offset 4 after the PE header pointer at 0x3C).
+    # ``[Environment]::Is64BitOperatingSystem`` only tells us the host
+    # OS bitness, NOT what PyInstaller actually produced — Windows-on-
+    # ARM with x64 Python under Prism would mislabel the archive as
+    # ``winarm64`` if we relied on the host.
+    $arch = "win64"
+    try {
+        $exeBytes = [System.IO.File]::ReadAllBytes($exePath)
+        $peOff = [BitConverter]::ToInt32($exeBytes, 0x3C)
+        $mach = [BitConverter]::ToUInt16($exeBytes, $peOff + 4)
+        switch ($mach) {
+            0x8664  { $arch = "win64" }     # AMD64 / x86_64
+            0xAA64  { $arch = "winarm64" }  # ARM64
+            0x14C   { $arch = "win32" }     # i386 (legacy)
+            default { $arch = "win64" }     # safest fallback for unknown 64-bit
+        }
+    } catch {
+        Write-Host "  ⚠ couldn't read exe PE header, defaulting arch to win64" -ForegroundColor Yellow
+    }
     $zipName = "TradingLab-$Version-$arch.zip"
     $zipPath = Join-Path $OutputDir $zipName
     if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
