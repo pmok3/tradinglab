@@ -321,6 +321,8 @@ class EntriesTab(ttk.Frame):
                     background=bg, foreground=fg,
                     insertbackground=fg,
                     selectbackground=sel_bg, selectforeground=sel_fg,
+                    highlightbackground=sel_bg, highlightcolor=sel_bg,
+                    highlightthickness=1, borderwidth=0, relief="flat",
                 )
             except tk.TclError:
                 pass

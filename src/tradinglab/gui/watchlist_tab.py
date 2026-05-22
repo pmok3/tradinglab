@@ -579,7 +579,9 @@ class WatchlistTabMixin:
         lb = tk.Listbox(
             dlg, height=height, exportselection=False, activestyle="dotbox",
             background=tree_bg, foreground=tree_fg,
-            selectbackground=spine, selectforeground=tree_fg)
+            selectbackground=spine, selectforeground=tree_fg,
+            highlightbackground=spine, highlightcolor=spine,
+            highlightthickness=1, borderwidth=0, relief="flat")
         for n in names:
             lb.insert("end", n)
         lb.selection_set(0)
@@ -666,7 +668,7 @@ class WatchlistTabMixin:
             tree = next(iter(self._watchlist_trees.values()))
         self._watchlist_tree = tree  # type: ignore[assignment]
 
-    def _current_menu_colors(self) -> dict[str, str]:
+    def _current_menu_colors(self) -> dict[str, object]:
         """Return a kwargs dict for theming tk.Menu / tk.Toplevel popups
         from the currently-active palette.
 
@@ -683,13 +685,16 @@ class WatchlistTabMixin:
         theme = getattr(self._theme_ctrl, "theme", None) or {}
         bg = theme.get("win_bg", "#f0f0f0")
         fg = theme.get("text", "#111111")
+        active_bg = theme.get("grid", bg)
         return dict(
             background=bg,
             foreground=fg,
-            activebackground=fg,
-            activeforeground=bg,
+            activebackground=active_bg,
+            activeforeground=fg,
             selectcolor=fg,
             disabledforeground=theme.get("text_disabled", fg),
+            borderwidth=0,
+            relief=tk.FLAT,
         )
 
     def _on_watchlist_subtab_right_click(self, event) -> None:

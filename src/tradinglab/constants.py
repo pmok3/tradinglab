@@ -98,38 +98,81 @@ def build_ttk_style_spec(theme: dict) -> list:
     per-state overrides.
     """
     fg = theme["text"]
+    disabled_fg = theme.get("text_disabled", fg)
     bg = theme["win_bg"]
     ax_bg = theme["ax_bg"]
     tree_bg = theme["tree_bg"]
     tree_fg = theme["tree_fg"]
     spine = theme["spine"]
+    chrome = dict(
+        bordercolor=spine,
+        lightcolor=spine,
+        darkcolor=spine,
+        selectbackground=spine,
+        selectforeground=fg,
+        troughcolor=bg,
+    )
+    field_chrome = dict(chrome, fieldbackground=ax_bg)
+    flat_chrome = dict(chrome, borderwidth=1, relief="flat")
+    selection_map = dict(
+        selectbackground=[("disabled", spine), ("!disabled", spine)],
+        selectforeground=[("disabled", disabled_fg), ("!disabled", fg)],
+    )
+    button_chrome_map = dict(
+        **selection_map,
+        bordercolor=[("disabled", spine), ("active", spine),
+                     ("pressed", spine), ("alternate", spine),
+                     ("focus", spine)],
+        lightcolor=[("disabled", spine), ("active", spine),
+                    ("pressed", spine), ("focus", spine)],
+        darkcolor=[("disabled", spine), ("active", spine),
+                   ("pressed", spine), ("focus", spine)],
+    )
     return [
         (TTK_ROOT_STYLE,
-         dict(background=bg, foreground=fg, fieldbackground=ax_bg),
-         {}),
+         dict(background=bg, foreground=fg, **field_chrome),
+         selection_map),
         ("TFrame",
-         dict(background=bg),
-         {}),
+         dict(background=bg, **chrome),
+         selection_map),
         ("TLabel",
-         dict(background=bg, foreground=fg),
-         {}),
+         dict(background=bg, foreground=fg, **chrome),
+         dict(foreground=[("disabled", disabled_fg)], **selection_map)),
         ("TButton",
-         dict(background=ax_bg, foreground=fg),
-         dict(background=[("active", spine)],
-              foreground=[("active", fg)])),
+         dict(background=ax_bg, foreground=fg, **flat_chrome),
+         dict(
+             background=[("disabled", ax_bg), ("active", spine),
+                         ("pressed", spine)],
+             foreground=[("disabled", disabled_fg), ("active", fg),
+                         ("pressed", fg)],
+             **button_chrome_map,
+         )),
         # Destructive variant: idle is red-on-axBg in both themes so the
         # button reads as "danger" without being a wall of red; hover /
         # press inverts to white-on-red for an unambiguous commit cue.
         # Used by the PANIC: Flatten All button and the toolbar Reset
         # View button.
         ("Destructive.TButton",
-         dict(background=ax_bg, foreground="#cc3333"),
-         dict(background=[("active", "#cc3333"), ("pressed", "#a92929")],
-              foreground=[("active", "#ffffff"), ("pressed", "#ffffff")])),
+         dict(background=ax_bg, foreground="#cc3333", **flat_chrome),
+         dict(
+             background=[("disabled", ax_bg), ("active", "#cc3333"),
+                         ("pressed", "#a92929")],
+             foreground=[("disabled", disabled_fg), ("active", "#ffffff"),
+                         ("pressed", "#ffffff")],
+             bordercolor=[("disabled", spine), ("active", "#cc3333"),
+                          ("pressed", "#a92929"), ("focus", spine)],
+             lightcolor=[("disabled", spine), ("active", "#cc3333"),
+                         ("pressed", "#a92929")],
+             darkcolor=[("disabled", spine), ("active", "#cc3333"),
+                        ("pressed", "#a92929")],
+             **selection_map,
+         )),
         ("TCheckbutton",
-         dict(background=bg, foreground=fg),
-         dict(background=[("active", bg)],
-              foreground=[("active", fg)])),
+         dict(background=bg, foreground=fg, **chrome),
+         dict(background=[("active", bg), ("pressed", bg)],
+              foreground=[("disabled", disabled_fg), ("active", fg),
+                          ("pressed", fg)],
+              **selection_map)),
         # ``TRadiobutton`` mirrors ``TCheckbutton`` — pinned to the
         # window-background on every state so the LABEL never grows a
         # light-grey hover halo in dark mode. The radio indicator
@@ -138,25 +181,37 @@ def build_ttk_style_spec(theme: dict) -> list:
         # we only suppress the label-bg sweep. Audit
         # ``radio-hover-dark``.
         ("TRadiobutton",
-         dict(background=bg, foreground=fg),
+         dict(background=bg, foreground=fg, **chrome),
          dict(background=[("active", bg), ("pressed", bg)],
-              foreground=[("active", fg), ("pressed", fg)])),
+              foreground=[("disabled", disabled_fg), ("active", fg),
+                          ("pressed", fg)],
+              **selection_map)),
         ("TEntry",
-         dict(fieldbackground=ax_bg, foreground=fg, insertcolor=fg),
-         {}),
+         dict(foreground=fg, insertcolor=fg, **field_chrome),
+         dict(fieldbackground=[("disabled", ax_bg), ("readonly", ax_bg)],
+              foreground=[("disabled", disabled_fg), ("readonly", fg)],
+              **selection_map)),
         ("TCombobox",
-         dict(fieldbackground=ax_bg, background=ax_bg,
-              foreground=fg, arrowcolor=fg),
-         dict(fieldbackground=[("readonly", ax_bg)],
-              foreground=[("readonly", fg)],
-              background=[("readonly", ax_bg)])),
+         dict(background=ax_bg, foreground=fg, arrowcolor=fg,
+              insertcolor=fg, **field_chrome),
+         dict(fieldbackground=[("disabled", ax_bg), ("readonly", ax_bg)],
+              foreground=[("disabled", disabled_fg), ("readonly", fg)],
+              background=[("disabled", ax_bg), ("readonly", ax_bg),
+                          ("active", spine)],
+              arrowcolor=[("disabled", disabled_fg), ("active", fg)],
+              **selection_map)),
         ("TNotebook",
-         dict(background=bg, borderwidth=0),
-         {}),
+         dict(background=bg, borderwidth=0, **chrome),
+         selection_map),
         ("TNotebook.Tab",
-         dict(background=ax_bg, foreground=fg, padding=(8, 3)),
-         dict(background=[("selected", bg)],
-              foreground=[("selected", fg)])),
+         dict(background=ax_bg, foreground=fg, padding=(8, 3), **chrome),
+         dict(background=[("selected", bg), ("active", spine)],
+              foreground=[("disabled", disabled_fg), ("selected", fg),
+                          ("active", fg)],
+              bordercolor=[("selected", spine), ("active", spine)],
+              lightcolor=[("selected", spine), ("active", spine)],
+              darkcolor=[("selected", spine), ("active", spine)],
+              **selection_map)),
         # Body rows: only map the ``selected`` state. Adding ``active``/
         # ``hover`` here would override per-row bull/bear
         # ``tag_configure`` colors (state maps beat tag styles), so
@@ -164,18 +219,29 @@ def build_ttk_style_spec(theme: dict) -> list:
         # the per-row tint.
         ("Treeview",
          dict(background=tree_bg, foreground=tree_fg,
-              fieldbackground=tree_bg, bordercolor=spine),
+              fieldbackground=tree_bg, **chrome),
          dict(background=[("selected", spine)],
-              foreground=[("selected", fg)])),
+              foreground=[("selected", fg)],
+              bordercolor=[("focus", spine)],
+              lightcolor=[("focus", spine)],
+              darkcolor=[("focus", spine)],
+              **selection_map)),
         # Heading hover/active/pressed fall back to the OS default
         # (light grey) without an explicit map, flashing through dark
         # mode. Pin every state to the palette spine color.
         ("Treeview.Heading",
-         dict(background=ax_bg, foreground=fg, bordercolor=spine),
+         dict(background=ax_bg, foreground=fg, **flat_chrome),
          dict(background=[("active", spine), ("pressed", spine),
                           ("hover", spine)],
               foreground=[("active", fg), ("pressed", fg),
-                          ("hover", fg)])),
+                          ("hover", fg)],
+              bordercolor=[("active", spine), ("pressed", spine),
+                           ("hover", spine)],
+              lightcolor=[("active", spine), ("pressed", spine),
+                          ("hover", spine)],
+              darkcolor=[("active", spine), ("pressed", spine),
+                         ("hover", spine)],
+              **selection_map)),
         # ttk container widgets that were previously falling back to
         # the OS default palette (which renders light-grey on dark
         # mode). Without these, the Entries / Watchlist tabs and any
@@ -183,30 +249,42 @@ def build_ttk_style_spec(theme: dict) -> list:
         # / ``ttk.Scrollbar`` look unthemed in dark mode. Audit
         # ``ttk-container-dark``.
         ("TLabelframe",
-         dict(background=bg, bordercolor=spine),
-         {}),
+         dict(background=bg, **flat_chrome),
+         selection_map),
         ("TLabelframe.Label",
-         dict(background=bg, foreground=fg),
-         {}),
+         dict(background=bg, foreground=fg, **chrome),
+         dict(foreground=[("disabled", disabled_fg)], **selection_map)),
         ("TPanedwindow",
-         dict(background=bg),
-         {}),
+         dict(background=bg, **chrome),
+         selection_map),
         # ``TPanedwindow`` separator widget used by the clam theme.
         # Painting the sash with the ``spine`` colour gives a subtle
         # but visible divider line.
         ("Sash",
-         dict(background=spine, sashthickness=4),
-         {}),
+         dict(background=spine, sashthickness=4, **flat_chrome),
+         selection_map),
         ("TScrollbar",
-         dict(background=ax_bg, troughcolor=bg,
-              bordercolor=spine, arrowcolor=fg),
-         dict(background=[("active", spine), ("pressed", spine)],
-              arrowcolor=[("active", fg), ("pressed", fg)])),
+         dict(background=ax_bg, arrowcolor=fg, **flat_chrome),
+         dict(background=[("disabled", ax_bg), ("active", spine),
+                          ("pressed", spine)],
+              arrowcolor=[("disabled", disabled_fg), ("active", fg),
+                          ("pressed", fg)],
+              bordercolor=[("disabled", spine), ("active", spine),
+                           ("pressed", spine)],
+              lightcolor=[("disabled", spine), ("active", spine),
+                          ("pressed", spine)],
+              darkcolor=[("disabled", spine), ("active", spine),
+                         ("pressed", spine)],
+              **selection_map)),
         ("TSpinbox",
-         dict(fieldbackground=ax_bg, background=ax_bg,
-              foreground=fg, arrowcolor=fg, insertcolor=fg),
-         dict(fieldbackground=[("readonly", ax_bg)],
-              foreground=[("readonly", fg)])),
+         dict(background=ax_bg, foreground=fg, arrowcolor=fg,
+              insertcolor=fg, **field_chrome),
+         dict(fieldbackground=[("disabled", ax_bg), ("readonly", ax_bg)],
+              foreground=[("disabled", disabled_fg), ("readonly", fg)],
+              background=[("disabled", ax_bg), ("readonly", ax_bg),
+                          ("active", spine)],
+              arrowcolor=[("disabled", disabled_fg), ("active", fg)],
+              **selection_map)),
     ]
 
 

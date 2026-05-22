@@ -68,6 +68,11 @@ class EntriesTab(ttk.Frame):
   <meta-blurb>` so it fits on one line in a Treeview row.
 - **Import/Export** routes through `storage.import_from_path` /
   `storage.export_to_path` (with file dialog).
+- **Dark-mode non-ttk chrome.** `_apply_theme(theme)` repaints the
+  audit-tail and stats `tk.Text` panes, including the focus/highlight
+  ring (`highlightbackground` / `highlightcolor`) plus flat/no-border
+  chrome, because ttk styles do not reach classic `Text` widgets.
+  Audit `watchlist-entries-full-dark`.
 
 ## Invariants
 

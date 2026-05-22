@@ -60,14 +60,18 @@ larger; pinning makes a list reachable from the main UI.
   created on-demand and discarded after `tk_popup`, it cannot live
   in the controller's `_menubar_submenus` sweep. Audit
   `watchlist-popup-theme`.
-- `_current_menu_colors() -> dict[str, str]` — reads the current
+- `_current_menu_colors() -> dict[str, object]` — reads the current
   palette from `self._theme_ctrl.theme` and returns the
   `(background, foreground, activebackground, activeforeground,
-  selectcolor, disabledforeground)` kwargs dict used to colour
-  on-demand `tk.Menu` popups so they match dark mode. The
-  `_pick_watchlist_name` Toplevel + Listbox use the same theme
-  lookup inline (separate from this helper since they need
-  `win_bg`/`tree_bg`/`tree_fg`/`spine` rather than the menu set).
+  selectcolor, disabledforeground, borderwidth, relief)` kwargs
+  dict used to colour on-demand `tk.Menu` popups so they match dark
+  mode. The active row uses `grid` rather than `text` so hover does
+  not flash a light strip in dark mode. The `_pick_watchlist_name`
+  Toplevel + Listbox use the same theme lookup inline (separate from
+  this helper since they need `win_bg`/`tree_bg`/`tree_fg`/`spine`
+  rather than the menu set); the Listbox also pins its focus ring
+  and border to `spine`/flat chrome so the picker has no Win32
+  `SystemButtonFace` ring. Audit `watchlist-entries-full-dark`.
 - `_unpin_watchlist(name)` / `_move_pinned_watchlist(name, delta)`
   — mutate manager then `_rebuild_watchlist_subtabs`.
 
