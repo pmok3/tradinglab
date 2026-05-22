@@ -9,14 +9,15 @@ yfinance-backed events fetcher. Calls `yfinance.Ticker(symbol)` and materialises
 Registered as the `"yfinance"` source in `EVENT_SOURCES` when yfinance imports cleanly; package falls back silently to synthetic otherwise.
 
 ## Dependencies
-Internal: `.base`, `.normalize`. External: `yfinance` (optional), `pandas` (via yfinance).
+Internal: `.base`, `.normalize`. External: `yfinance` (optional), `pandas` (via yfinance), **`lxml`** — yfinance's `Ticker.earnings_dates` parses an HTML calendar page via `pandas.read_html`, which raises `ImportError` without lxml (or html5lib). lxml is pinned as a direct dependency in `pyproject.toml` because yfinance>=1.3 dropped it from its declared deps. Audit `next-earn-lxml`.
 
 ## Design Decisions
-- **Thin shell post-refactor** (~80 lines): owns the yfinance import, `Ticker(symbol)` construction, two property accesses, and bundle assembly. Decode lives in `events.normalize`.
+- **Thin shell post-refactor** (~110 lines): owns the yfinance import, `Ticker(symbol)` construction, two property accesses, and bundle assembly. Decode lives in `events.normalize`.
 - **Single Ticker per call.** `Ticker.earnings_dates` and `Ticker.actions` reuse the same yfinance session.
 - **Returns `None` on any failure** (import error, network, empty response). Events cache then keeps serving the prior bundle.
 - **Slot inference from hour.** yfinance's earnings-date column is tz-aware; `normalize.slot_from_hour` checks local-ET time-of-day against 09:30 / 16:00 to assign `BMO` / `DMH` / `AMC`. Approximate.
 - **Adjusted bars stay on the price side** (Decision 9). This module does NOT back-out adjustments from dividend amounts; engine's `CorporateAction` consumer treats amounts as nominal per-share cash.
+- **One-shot WARN log when `earnings_dates` raises** — module-level `_logged_earnings_dates_failure` set keys on exception class name so a chronic install issue (most commonly missing lxml) surfaces exactly once in the log instead of on every watchlist tick. Fall-through (return `None`) is unchanged. Audit `next-earn-lxml`.
 
 ## Invariants
 - Returned bundle's `fetched_at` is non-zero ms-since-epoch.
