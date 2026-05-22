@@ -29,6 +29,8 @@ import time
 from collections import OrderedDict
 from datetime import datetime, timedelta
 
+import pytest
+
 # Re-export helpers at module scope so existing references inside
 # ``check_*`` functions keep working without rewriting 128 callsites.
 from tests.smoke._helpers import (  # noqa: F401  (used inside check_* fns)
@@ -18842,6 +18844,13 @@ if __name__ == "__main__":
 # Importing two ChartApps in the same pytest session would create two Tk
 # roots and break Tk's process-wide assumptions.
 # ---------------------------------------------------------------------------
+# Mega-test wall-clock: ~86 s on Windows ARM64, ~120+ s on macOS-latest
+# (macOS Tk + ``app.update()`` is significantly slower per pump round-
+# trip). Bumped past the default 120 s pytest-timeout so the macOS CI
+# matrix isn't gated on per-pump latency; if the test actually hangs
+# (vs runs slow), the explicit 300 s here still surfaces it as a
+# failure with the stack dump instead of stalling for 6 hours.
+@pytest.mark.timeout(300)
 def test_smoke_full(app) -> None:
     check_00_import()
     _run_all_checks(app)
