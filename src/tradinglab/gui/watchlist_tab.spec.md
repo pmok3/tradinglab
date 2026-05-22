@@ -115,7 +115,9 @@ larger; pinning makes a list reachable from the main UI.
   Populate `_watchlist_snapshot[ticker]` and warm
   `ChartApp._full_cache[(src, ticker, itv)]`. `src` / `itv` read
   on **caller's** thread (typically Tk main) and passed as args
-  — workers must not access Tcl/Tk variables.
+  — workers must not access Tcl/Tk variables. Intraday Last writes
+  carry private `_last_source` / `_last_day` metadata so daily Change
+  can anchor to the correct prior session close.
 - **Inbox queue, not `after()`** — results deposited on
   `ChartApp._worker_inbox` (queue.Queue), drained by
   `_drain_worker_inbox` every ~80 ms. (`tk.createcommand` blocks
@@ -126,8 +128,8 @@ larger; pinning makes a list reachable from the main UI.
   Tk thread the cache stash is applied inline.
 - `_kick_watchlist_preloads()` — incremental wrapper invoked at
   the end of `_rebuild_watchlist_subtabs`. Submits
-  `_preload_one_last` only when `last` is missing, and
-  `_preload_one_daily` only when both `change_1d` and `chg` are
+  `_preload_one_last` when `last` is missing or only a daily fallback,
+  and `_preload_one_daily` only when both `change_1d` and `chg` are
   missing. Lets brand-new pins populate without requiring
   `_load_data`.
 
@@ -167,10 +169,10 @@ larger; pinning makes a list reachable from the main UI.
 - **Orphan-snapshot recovery** in `_preload_watchlist` /
   `_preload_watchlist_daily`: when the disk-cache is fresh but the
   `_watchlist_snapshot` row is missing `last` / `change_1d` /
-  `pct_1d`, rebuild those fields directly from
-  `cached[-1].close` (and `cached[-2].close` for the day-over-day
-  delta) instead of waiting on a re-fetch the cache-fresh check
-  will keep skipping. When any orphan repair runs, a
+  `pct_1d`, rebuild from cached intraday Last plus the cached daily
+  tail. A daily-only fallback is tagged with `_last_source="daily"`
+  so the next intraday repair or fetch overwrites it and recomputes
+  Change. When any orphan repair runs, a
   `_schedule_watchlist_tab_refresh()` nudge ensures the repaint
   catches up.
 
@@ -194,8 +196,17 @@ larger; pinning makes a list reachable from the main UI.
   selected pinned tree.
 - **`_apply_theme` loops `_watchlist_trees.values()`** so every
   tree gets bull/bear tag colors.
-- **Change columns pinned to 1d** regardless of chart interval
-  (matches broker day-over-day semantics).
+- **Change columns pinned to 1d** regardless of chart interval.
+  The displayed move matches broker ticker semantics, not the
+  currently selected chart aggregation.
+- **Live Change anchor rules**: live Change and Change Pct use
+  `Last − prior_session_close`. `Last` is the most recent intraday
+  close when available. The prior close is the latest daily bar whose
+  session date is strictly before the intraday Last's session date,
+  so a provider-emitted current-day partial daily bar is never used
+  as the reference. If intraday Last is unavailable, daily closes
+  provide a temporary day-over-day fallback until intraday refresh
+  lands.
 - **Sandbox-aware watchlist values**: while sandbox active, both
   worker fetchers slice the cached series against
   `ChartApp._sandbox_watchlist_clock()` (returns `(active,
@@ -205,10 +216,11 @@ larger; pinning makes a list reachable from the main UI.
   intraday bar whose timestamp ≤ `clock_ts`. `_preload_one_daily`
   filters to bars whose `date.date() < session_date`; computes
   `change_1d = last_intraday − prior_session_close` (matches a
-  real broker ticker at that historical moment); falls back to
-  filtered day-over-day. `_refresh_watchlist_for_sandbox()`
-  clears clock-dependent fields and resubmits both preloads;
-  called on (a) sandbox start, (b) every `next_bar` advance.
+  real broker ticker at that historical moment). If intraday Last
+  has not landed, it falls back to filtered day-over-day.
+  `_refresh_watchlist_for_sandbox()` clears clock-dependent fields
+  and resubmits both preloads; called on (a) sandbox start,
+  (b) every `next_bar` advance.
 - **Double-click preserves tab focus** (user-requested).
 
 ## Invariants

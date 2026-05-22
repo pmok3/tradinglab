@@ -114,6 +114,55 @@ def _format_next_earn(bundle: object, *, now_ms: int) -> tuple[str, int]:
     return f"T-{trading}", trading
 
 
+def _watchlist_candle_day(candle: object) -> object | None:
+    """Return the candle's session date, or ``None`` if unavailable."""
+    try:
+        return candle.date.date()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _watchlist_daily_tail(
+    candles: object,
+    *,
+    limit: int = 8,
+) -> list[tuple[object | None, float]]:
+    """Return a compact ``(session_date, close)`` tail from daily candles."""
+    try:
+        seq = list(candles or [])
+    except Exception:  # noqa: BLE001
+        return []
+    tail: list[tuple[object | None, float]] = []
+    for candle in seq[-limit:]:
+        close = getattr(candle, "close", None)
+        if not isinstance(close, (int, float)):
+            continue
+        tail.append((_watchlist_candle_day(candle), float(close)))
+    return tail
+
+
+def _watchlist_prior_close_from_tail(
+    tail: list[tuple[object | None, float]],
+    current_day: object | None,
+) -> float | None:
+    """Pick the latest daily close strictly before ``current_day``."""
+    if not tail:
+        return None
+    if current_day is not None:
+        prior: float | None = None
+        for day, close in tail:
+            try:
+                is_before = day is not None and day < current_day
+            except TypeError:
+                is_before = False
+            if is_before:
+                prior = close
+        if prior is not None:
+            return prior
+        return None
+    return tail[-1][1]
+
+
 class WatchlistTabMixin:
     """Watchlist tab repaint + preload helpers."""
 
@@ -1188,10 +1237,13 @@ class WatchlistTabMixin:
             return
         for t in tickers:
             snap = self._watchlist_snapshot.get(t) or {}
-            if "last" in snap and ("change_1d" in snap or "chg" in snap):
+            has_intraday_last = (
+                "last" in snap and snap.get("_last_source") != "daily"
+            )
+            if has_intraday_last and ("change_1d" in snap or "chg" in snap):
                 continue
             try:
-                if "last" not in snap:
+                if not has_intraday_last:
                     executor.submit(self._preload_one_last, t, src, itv)
                 if "change_1d" not in snap and "chg" not in snap:
                     executor.submit(self._preload_one_daily, t, src)
@@ -1217,6 +1269,79 @@ class WatchlistTabMixin:
         except Exception:  # noqa: BLE001
             return (False, None, None)
 
+    def _apply_watchlist_change_from_daily_tail(
+        self,
+        ticker: str,
+        tail: list[tuple[object | None, float]],
+        *,
+        allow_last_fallback: bool,
+    ) -> bool:
+        """Update a snapshot's Change columns from a daily close tail."""
+        if not tail:
+            return False
+        snap = self._watchlist_snapshot.setdefault(ticker, {})
+        snap["_daily_change_tail"] = list(tail)
+        current = snap.get("last")
+        current_day = snap.get("_last_day")
+        use_existing_last = isinstance(current, (int, float)) and not (
+            allow_last_fallback and snap.get("_last_source") == "daily"
+        )
+        if use_existing_last:
+            prior = _watchlist_prior_close_from_tail(tail, current_day)
+            if prior is None and current_day is None:
+                prior = tail[-1][1]
+        elif len(tail) >= 2:
+            current_day, current = tail[-1]
+            prior = tail[-2][1]
+            if allow_last_fallback:
+                snap["last"] = current
+                snap["_last_source"] = "daily"
+                if current_day is not None:
+                    snap["_last_day"] = current_day
+        else:
+            return False
+        if prior is None:
+            return False
+        chg = float(current) - float(prior)
+        pct = (chg / float(prior) * 100.0) if prior else 0.0
+        snap["change_1d"] = chg
+        snap["pct_1d"] = pct
+        snap["chg"] = chg
+        snap["pct"] = pct
+        return True
+
+    def _apply_watchlist_change_from_daily(
+        self,
+        ticker: str,
+        candles: object,
+        *,
+        allow_last_fallback: bool = True,
+    ) -> bool:
+        """Update Last/Change from daily candles using intraday Last as current."""
+        tail = _watchlist_daily_tail(candles)
+        return self._apply_watchlist_change_from_daily_tail(
+            ticker, tail, allow_last_fallback=allow_last_fallback)
+
+    def _refresh_watchlist_change_after_last(
+        self,
+        ticker: str,
+        src: str | None,
+    ) -> bool:
+        """Recompute Change after an intraday Last update, if daily data exists."""
+        snap = self._watchlist_snapshot.get(ticker)
+        if not isinstance(snap, dict):
+            return False
+        if src is not None:
+            cached = self._full_cache.get((src, ticker, "1d"))
+            if cached:
+                return self._apply_watchlist_change_from_daily(
+                    ticker, cached, allow_last_fallback=False)
+        tail = snap.get("_daily_change_tail")
+        if isinstance(tail, list):
+            return self._apply_watchlist_change_from_daily_tail(
+                ticker, tail, allow_last_fallback=False)
+        return False
+
     def _refresh_watchlist_for_sandbox(self) -> None:
         """Re-run the price-preload pipeline so watchlist Last/Change
         reflect the sandbox clock.
@@ -1234,7 +1359,10 @@ class WatchlistTabMixin:
             for snap in snap_map.values():
                 if not isinstance(snap, dict):
                     continue
-                for k in ("last", "change_1d", "pct_1d", "chg", "pct"):
+                for k in (
+                    "last", "change_1d", "pct_1d", "chg", "pct",
+                    "_last_source", "_last_day", "_daily_change_tail",
+                ):
                     snap.pop(k, None)
         # Bypass _preload_watchlist*'s cache-freshness short-circuit:
         # the cached candles ARE still fresh (only the sandbox clock
@@ -1303,9 +1431,18 @@ class WatchlistTabMixin:
             cached = self._full_cache.get(key)
             if cached and not self._cache_is_stale(cached, itv):
                 snap = self._watchlist_snapshot.setdefault(t, {})
-                if "last" not in snap and cached:
+                needs_intraday_last = (
+                    "last" not in snap or snap.get("_last_source") == "daily"
+                )
+                if needs_intraday_last and cached:
                     try:
-                        snap["last"] = cached[-1].close
+                        last_bar = cached[-1]
+                        snap["last"] = last_bar.close
+                        snap["_last_source"] = "intraday"
+                        day = _watchlist_candle_day(last_bar)
+                        if day is not None:
+                            snap["_last_day"] = day
+                        self._refresh_watchlist_change_after_last(t, src)
                         orphan_repaired = True
                     except Exception:  # noqa: BLE001
                         pass
@@ -1370,19 +1507,10 @@ class WatchlistTabMixin:
             cached = self._full_cache.get(key)
             if cached and not self._cache_is_stale(cached, "1d"):
                 snap = self._watchlist_snapshot.setdefault(t, {})
-                if "change_1d" not in snap and len(cached) >= 2:
+                if "change_1d" not in snap:
                     try:
-                        prev = cached[-2].close
-                        cur = cached[-1].close
-                        chg = cur - prev
-                        pct = (chg / prev * 100.0) if prev else 0.0
-                        snap["change_1d"] = chg
-                        snap["pct_1d"] = pct
-                        snap.setdefault("chg", chg)
-                        snap.setdefault("pct", pct)
-                        if "last" not in snap:
-                            snap["last"] = cur
-                        orphan_repaired = True
+                        if self._apply_watchlist_change_from_daily(t, cached):
+                            orphan_repaired = True
                     except Exception:  # noqa: BLE001
                         pass
                 continue
@@ -1424,7 +1552,7 @@ class WatchlistTabMixin:
                 # so Last reflects the historical moment, not today's
                 # live close (look-ahead bias).
                 sb_active, sb_ts, _sb_date = self._sandbox_watchlist_clock()
-                last_close: float | None = None
+                last_bar = None
                 if sb_active and sb_ts is not None:
                     for c in cs:
                         try:
@@ -1432,13 +1560,19 @@ class WatchlistTabMixin:
                         except Exception:  # noqa: BLE001
                             continue
                         if cts <= sb_ts:
-                            last_close = c.close
+                            last_bar = c
                         else:
                             break
                 else:
-                    last_close = cs[-1].close
-                if last_close is not None:
-                    self._watchlist_snapshot.setdefault(ticker, {})["last"] = last_close
+                    last_bar = cs[-1]
+                if last_bar is not None:
+                    snap = self._watchlist_snapshot.setdefault(ticker, {})
+                    snap["last"] = last_bar.close
+                    snap["_last_source"] = "intraday"
+                    day = _watchlist_candle_day(last_bar)
+                    if day is not None:
+                        snap["_last_day"] = day
+                    self._refresh_watchlist_change_after_last(ticker, src)
                 # Hand bars to the Tk-thread inbox; ``self.after`` from
                 # a worker thread blocks on tk.createcommand on this
                 # Python/Tk build, so we use a thread-safe queue.
@@ -1486,58 +1620,25 @@ class WatchlistTabMixin:
             if fetcher is None:
                 return
             cs = fetcher(ticker, "1d")
-            if cs and len(cs) >= 2:
+            if cs:
                 # Sandbox: filter daily series to bars whose session
                 # date is strictly less than the replay session date,
-                # then compute change vs prior session close. The
-                # "current" reference price is the intraday last (set
-                # by _preload_one_last from the sliced intraday series)
-                # so chg/pct reflect "intraday move from prior close"
-                # at the replay moment — matching how a real broker
-                # ticker would have rendered that day. Falls back to
-                # day-over-day on the filtered tail if the intraday
-                # last hasn't landed yet.
+                # then compute change vs prior session close. Live mode
+                # uses the same anchor rule: intraday Last is the
+                # current price, and the reference is the latest daily
+                # close strictly before that Last's session date. If no
+                # intraday Last has landed, daily closes provide a
+                # temporary fallback that _preload_one_last overwrites.
                 sb_active, _sb_ts, sb_date = self._sandbox_watchlist_clock()
                 if sb_active and sb_date is not None:
                     filtered = [c for c in cs if c.date.date() < sb_date]
-                    if len(filtered) < 1:
-                        # No daily history before the session date; bail
-                        # rather than poisoning the snapshot.
+                    if not filtered:
                         return
-                    prior_close = filtered[-1].close
-                    if not prior_close:
-                        return
-                    snap = self._watchlist_snapshot.setdefault(ticker, {})
-                    last_intraday = snap.get("last")
-                    if isinstance(last_intraday, (int, float)):
-                        chg = last_intraday - prior_close
-                        pct = chg / prior_close * 100.0
-                    elif len(filtered) >= 2:
-                        chg = filtered[-1].close - filtered[-2].close
-                        pct = (chg / filtered[-2].close * 100.0
-                               if filtered[-2].close else 0.0)
-                    else:
-                        return
-                    snap["change_1d"] = chg
-                    snap["pct_1d"] = pct
-                    snap["chg"] = chg
-                    snap["pct"] = pct
-                    # Do NOT setdefault("last", filtered[-1].close):
-                    # in sandbox the intraday slice owns "last", and
-                    # using filtered[-1].close would be the prior
-                    # session's close — visibly stale.
+                    self._apply_watchlist_change_from_daily(
+                        ticker, filtered, allow_last_fallback=False)
                 else:
-                    chg = cs[-1].close - cs[-2].close
-                    pct = (chg / cs[-2].close * 100.0) if cs[-2].close else 0.0
-                    snap = self._watchlist_snapshot.setdefault(ticker, {})
-                    # Pin the Change columns to the 1d aggregation regardless
-                    # of the chart interval (spec §18.4).
-                    snap["change_1d"] = chg
-                    snap["pct_1d"] = pct
-                    snap.setdefault("chg", chg)
-                    snap.setdefault("pct", pct)
-                    if "last" not in snap:
-                        snap["last"] = cs[-1].close
+                    self._apply_watchlist_change_from_daily(
+                        ticker, cs, allow_last_fallback=True)
                 try:
                     bars = list(cs)
                     if threading.current_thread() is threading.main_thread():

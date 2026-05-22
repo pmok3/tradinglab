@@ -26,6 +26,7 @@ from unittest.mock import patch
 import pytest
 
 from tradinglab import defaults as _d
+from tradinglab.gui import watchlist_tab as _wl_tab
 from tradinglab.gui.watchlist_tab import WatchlistTabMixin
 from tradinglab.models import Candle
 
@@ -56,6 +57,14 @@ class _StubExecutor:
         return _Fut()
 
 
+class _StubInbox:
+    def __init__(self) -> None:
+        self.items: list[Any] = []
+
+    def put_nowait(self, item: Any) -> None:
+        self.items.append(item)
+
+
 class _Harness(WatchlistTabMixin):
     """Minimal stand-in for ``ChartApp`` that exercises the mixin
     without booting a Tk root.
@@ -65,18 +74,26 @@ class _Harness(WatchlistTabMixin):
     call the methods under test.
     """
 
-    def __init__(self, *, tickers: list[str] | None = None,
-                 sandbox: bool = False, stale: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        tickers: list[str] | None = None,
+        sandbox: bool = False,
+        stale: bool = False,
+        sandbox_clock: tuple[bool, int | None, object | None] | None = None,
+    ) -> None:
         self._executor = _StubExecutor()
         self._full_cache: dict[tuple, list[Candle]] = {}
         self._watchlist_snapshot: dict[str, dict[str, Any]] = {}
         self._watchlist_preload_inflight: set = set()
         self._watchlist_poll_job: str | None = None
         self._events_cache: dict[str, Any] = {}
+        self._worker_inbox = _StubInbox()
         self.source_var = _StubVar("yfinance")
         self.interval_var = _StubVar("5m")
         self._tickers = list(tickers or ["AAPL", "INTC"])
         self._sandbox = sandbox
+        self._sandbox_clock = sandbox_clock or (False, None, None)
         self._stale = stale
         self.after_calls: list[tuple[int, Callable[..., Any]]] = []
         self.refresh_called: int = 0
@@ -91,12 +108,20 @@ class _Harness(WatchlistTabMixin):
     def _is_sandbox_active(self) -> bool:
         return self._sandbox
 
+    def _sandbox_watchlist_clock(self) -> tuple[bool, int | None, object | None]:
+        if not self._sandbox:
+            return (False, None, None)
+        return self._sandbox_clock
+
     def _track_after(self, ms: int, fn: Callable[..., Any]) -> str:
         self.after_calls.append((ms, fn))
         return f"after#{len(self.after_calls)}"
 
     def _schedule_watchlist_tab_refresh(self) -> None:
         self.refresh_called += 1
+
+    def _stash_full_cache(self, key: tuple, bars: list[Candle]) -> None:
+        self._full_cache[key] = bars
 
     def _preload_watchlist_events(self) -> None:  # neutralised
         return
@@ -105,6 +130,13 @@ class _Harness(WatchlistTabMixin):
 def _candle(close: float, ts: float = 0.0) -> Candle:
     """Build a Candle with a sentinel date; tests only read .close."""
     d = _dt.datetime.fromtimestamp(ts or 1_700_000_000.0, tz=_dt.timezone.utc)
+    return Candle(date=d, open=close, high=close, low=close,
+                  close=close, volume=0)
+
+
+def _dated_candle(day: _dt.date, close: float, *, hour: int = 0, minute: int = 0) -> Candle:
+    d = _dt.datetime(day.year, day.month, day.day, hour, minute,
+                     tzinfo=_dt.timezone.utc)
     return Candle(date=d, open=close, high=close, low=close,
                   close=close, volume=0)
 
@@ -363,3 +395,140 @@ class TestOrphanRecovery:
         snap = h._watchlist_snapshot["INTC"]
         assert snap["change_1d"] == 1.0
         assert snap["pct_1d"] == 0.0
+
+    def test_preload_watchlist_overwrites_daily_fallback_last(self):
+        h = _Harness(tickers=["INTC"], stale=False)
+        h._full_cache[("yfinance", "INTC", "5m")] = [
+            _dated_candle(_dt.date(2025, 5, 14), 23.5, hour=15, minute=55)
+        ]
+        h._watchlist_snapshot["INTC"] = {
+            "last": 22.0,
+            "_last_source": "daily",
+        }
+        h._preload_watchlist()
+        assert h._watchlist_snapshot["INTC"]["last"] == pytest.approx(23.5)
+        assert h._watchlist_snapshot["INTC"]["_last_source"] == "intraday"
+
+
+# ---------------------------------------------------------------------------
+# 6. Watchlist Change anchors
+# ---------------------------------------------------------------------------
+
+
+class TestWatchlistChangeAnchors:
+    def _install_fetcher(
+        self,
+        monkeypatch,
+        *,
+        daily: list[Candle],
+        intraday: list[Candle],
+    ) -> None:
+        def _fake_fetch(ticker: str, interval: str):
+            if ticker != "INTC":
+                return []
+            if interval == "1d":
+                return list(daily)
+            return list(intraday)
+
+        monkeypatch.setitem(_wl_tab.DATA_SOURCES, "yfinance", _fake_fetch)
+
+    def test_live_change_uses_intraday_last_minus_prior_close(self, monkeypatch):
+        day_2 = _dt.date(2025, 5, 12)
+        day_1 = _dt.date(2025, 5, 13)
+        today = _dt.date(2025, 5, 14)
+        daily = [_dated_candle(day_2, 100.0), _dated_candle(day_1, 110.0)]
+        intraday = [_dated_candle(today, 113.0, hour=15, minute=55)]
+        self._install_fetcher(monkeypatch, daily=daily, intraday=intraday)
+        h = _Harness(tickers=["INTC"])
+
+        h._preload_one_last("INTC", "yfinance", "5m")
+        h._preload_one_daily("INTC", "yfinance")
+
+        snap = h._watchlist_snapshot["INTC"]
+        assert snap["last"] == pytest.approx(113.0)
+        assert snap["change_1d"] == pytest.approx(3.0)
+        assert snap["pct_1d"] == pytest.approx(3.0 / 110.0 * 100.0)
+
+    def test_live_change_excludes_today_partial_daily_bar(self, monkeypatch):
+        day_2 = _dt.date(2025, 5, 12)
+        day_1 = _dt.date(2025, 5, 13)
+        today = _dt.date(2025, 5, 14)
+        daily = [
+            _dated_candle(day_2, 100.0),
+            _dated_candle(day_1, 110.0),
+            _dated_candle(today, 111.0),
+        ]
+        intraday = [_dated_candle(today, 113.0, hour=15, minute=55)]
+        self._install_fetcher(monkeypatch, daily=daily, intraday=intraday)
+        h = _Harness(tickers=["INTC"])
+
+        h._preload_one_last("INTC", "yfinance", "5m")
+        h._preload_one_daily("INTC", "yfinance")
+
+        snap = h._watchlist_snapshot["INTC"]
+        assert snap["last"] == pytest.approx(113.0)
+        assert snap["change_1d"] == pytest.approx(3.0)
+        assert snap["pct_1d"] == pytest.approx(3.0 / 110.0 * 100.0)
+
+    def test_daily_then_intraday_recomputes_change(self, monkeypatch):
+        day_2 = _dt.date(2025, 5, 12)
+        day_1 = _dt.date(2025, 5, 13)
+        today = _dt.date(2025, 5, 14)
+        daily = [_dated_candle(day_2, 100.0), _dated_candle(day_1, 110.0)]
+        intraday = [_dated_candle(today, 113.0, hour=15, minute=55)]
+        self._install_fetcher(monkeypatch, daily=daily, intraday=intraday)
+        h = _Harness(tickers=["INTC"])
+
+        h._preload_one_daily("INTC", "yfinance")
+        assert h._watchlist_snapshot["INTC"]["change_1d"] == pytest.approx(10.0)
+        h._preload_one_last("INTC", "yfinance", "5m")
+
+        snap = h._watchlist_snapshot["INTC"]
+        assert snap["last"] == pytest.approx(113.0)
+        assert snap["change_1d"] == pytest.approx(3.0)
+        assert snap["pct_1d"] == pytest.approx(3.0 / 110.0 * 100.0)
+
+    def test_daily_change_falls_back_without_intraday(self, monkeypatch):
+        day_2 = _dt.date(2025, 5, 12)
+        day_1 = _dt.date(2025, 5, 13)
+        daily = [_dated_candle(day_2, 100.0), _dated_candle(day_1, 110.0)]
+        self._install_fetcher(monkeypatch, daily=daily, intraday=[])
+        h = _Harness(tickers=["INTC"])
+
+        h._preload_one_daily("INTC", "yfinance")
+
+        snap = h._watchlist_snapshot["INTC"]
+        assert snap["last"] == pytest.approx(110.0)
+        assert snap["_last_source"] == "daily"
+        assert snap["change_1d"] == pytest.approx(10.0)
+        assert snap["pct_1d"] == pytest.approx(10.0)
+
+    def test_sandbox_change_uses_replay_last_minus_prior(self, monkeypatch):
+        day_2 = _dt.date(2025, 5, 12)
+        day_1 = _dt.date(2025, 5, 13)
+        replay_day = _dt.date(2025, 5, 14)
+        daily = [
+            _dated_candle(day_2, 100.0),
+            _dated_candle(day_1, 110.0),
+            _dated_candle(replay_day, 120.0),
+        ]
+        intraday = [
+            _dated_candle(replay_day, 112.0, hour=10, minute=0),
+            _dated_candle(replay_day, 113.0, hour=10, minute=5),
+            _dated_candle(replay_day, 130.0, hour=15, minute=55),
+        ]
+        self._install_fetcher(monkeypatch, daily=daily, intraday=intraday)
+        replay_ts = int(intraday[1].date.timestamp())
+        h = _Harness(
+            tickers=["INTC"],
+            sandbox=True,
+            sandbox_clock=(True, replay_ts, replay_day),
+        )
+
+        h._preload_one_last("INTC", "yfinance", "5m")
+        h._preload_one_daily("INTC", "yfinance")
+
+        snap = h._watchlist_snapshot["INTC"]
+        assert snap["last"] == pytest.approx(113.0)
+        assert snap["change_1d"] == pytest.approx(3.0)
+        assert snap["pct_1d"] == pytest.approx(3.0 / 110.0 * 100.0)

@@ -13786,8 +13786,8 @@ def check_b40_sandbox_watchlist_uses_replay_clock(app) -> None:
       B. Sandbox active: ``_preload_one_daily`` computes change vs
          prior session close, using the intraday last from (A).
       C. Without sandbox: ``_preload_one_last`` uses ``cs[-1].close``
-         and ``_preload_one_daily`` uses day-over-day (regression
-         guard for the non-sandbox path).
+         and ``_preload_one_daily`` uses intraday Last minus the prior
+         session close (regression guard for the live path).
       D. ``_refresh_watchlist_for_sandbox`` clears clock-dependent
          snapshot fields so a stale today-value doesn't paint while
          the worker pool refills.
@@ -13835,12 +13835,12 @@ def check_b40_sandbox_watchlist_uses_replay_clock(app) -> None:
         app._preload_one_daily(ticker, src)
         snap_live = app._watchlist_snapshot.get(ticker, {})
         live_last = intraday[-1].close
-        live_chg = daily[-1].close - daily[-2].close
+        live_chg = live_last - daily[-2].close
         assert abs(snap_live.get("last", -1) - live_last) < 1e-6, (
             f"C: non-sandbox last should be cs[-1].close={live_last}; "
             f"got {snap_live.get('last')}")
         assert abs(snap_live.get("change_1d", -1) - live_chg) < 1e-6, (
-            f"C: non-sandbox change_1d should be cs[-1]-cs[-2]={live_chg}; "
+            f"C: live change_1d should be last-prior_close={live_chg}; "
             f"got {snap_live.get('change_1d')}")
 
         # ---- start a sandbox session at days[2] ----------------------
