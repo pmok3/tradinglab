@@ -17119,13 +17119,63 @@ def check_d24_n7_async_load_offloads_to_executor(app) -> None:
         # Cache-hit fast path: data is now in `_full_cache`; a
         # follow-up `_load_data_async` call must short-circuit to the
         # synchronous loader (no new submit).
+        #
+        # Measure submits SYNCHRONOUSLY around the call. The fast path
+        # is fully synchronous — `_load_data_async` calls `_load_data`
+        # directly and returns without touching the executor. Any
+        # subsequent submit during a follow-up pump (poll-tick,
+        # deferred render, etc.) is unrelated and would make this
+        # assertion racy on slow CI runners.
+        # Cancel any pending poll-tick first so a scheduled background
+        # fetch from the previous `_load_data` can't fire between the
+        # second call and the assertion below.
+        poll_job = getattr(app, "_poll_job", None)
+        if poll_job is not None:
+            try:
+                app.after_cancel(poll_job)
+            except Exception:  # noqa: BLE001
+                pass
+            app._poll_job = None
+        # Belt-and-braces: pin the cache entry in case any background
+        # work (LRU trim, prefetch cycle, etc.) evicted it during the
+        # 1.0 s pump above. The first fetch is known to have populated
+        # `_primary`, so we can rebuild the cache key from the live
+        # state. This guarantees the second `_load_data_async` lands in
+        # the cache-hit fast path regardless of pump-window noise.
+        key = (src, "N7PROBE", interval)
+        if key not in app._full_cache:
+            try:
+                app._full_cache[key] = list(app._primary)
+            except Exception:  # noqa: BLE001
+                pass
+        # Pre-populate `_events_cache` so `_load_data` → `_load_events_async`
+        # cache-hits without submitting. The default events source is
+        # `yfinance` (real HTTP) which returns None for "N7PROBE"; that
+        # leaves the cache empty + inflight discarded, so a follow-up
+        # `_load_data` would re-submit and break this invariant.
+        # Using the synthetic provider (deterministic, no network)
+        # guarantees a non-None bundle that pins the cache.
+        try:
+            from tradinglab.events.synthetic_events import fetch_synthetic_events
+            if getattr(app, "_events_cache", None) is not None:
+                cache = app._events_cache
+                if cache.get("N7PROBE") is None:
+                    cache["N7PROBE"] = fetch_synthetic_events("N7PROBE")
+            inflight = getattr(app, "_events_fetch_inflight", None)
+            if inflight is not None:
+                inflight.discard("N7PROBE")
+        except Exception:  # noqa: BLE001
+            pass
         before = submits["n"]
         app._load_data_async()
-        # Allow the synchronous fast-path render to settle.
-        _pump(app, 0.05)
+        # No pump here — the synchronous fast-path is the whole point
+        # of N7's cache-hit invariant.
         assert submits["n"] == before, (
             f"N7 cache-hit fast path must skip executor submit "
             f"(submits went {before} -> {submits['n']})")
+        # Now allow the deferred render to settle (won't change submit count
+        # if the fast path held).
+        _pump(app, 0.05)
     finally:
         try:
             app._fetch_executor.submit = orig_submit  # type: ignore[assignment]

@@ -35,6 +35,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=7.4",
+    "pytest-timeout>=2.3",
     "ruff>=0.15,<0.16",
 ]
 schwab = [
@@ -61,7 +62,11 @@ version = { attr = "tradinglab._version.__version__" }
 minversion = "7.0"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
-addopts = "-ra --strict-markers"
+# `--timeout=120` per-test cap so a hung Tk / future-poll loop fails the
+# test instead of stalling the entire CI job (which previously stuck on
+# macOS for the runner's 6-hour default). `--timeout-method=thread`
+# survives the GIL in case the hang is in C-extension matplotlib code.
+addopts = "-ra --strict-markers --timeout=120 --timeout-method=thread"
 markers = [
     "smoke: end-to-end smoke tests (slow, headless GUI)",
 ]
