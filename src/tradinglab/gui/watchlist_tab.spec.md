@@ -55,7 +55,19 @@ larger; pinning makes a list reachable from the main UI.
 - `_on_watchlist_subtab_right_click(event)` — identifies tab via
   `notebook.index(f"@{x},{y}")` (guarded by `TclError`); pops
   context menu `Unpin` / `Move left` / `Move right` (Move
-  disabled at edges).
+  disabled at edges). The popup `tk.Menu` is themed inline at
+  construction via `_current_menu_colors()` — because it is
+  created on-demand and discarded after `tk_popup`, it cannot live
+  in the controller's `_menubar_submenus` sweep. Audit
+  `watchlist-popup-theme`.
+- `_current_menu_colors() -> dict[str, str]` — reads the current
+  palette from `self._theme_ctrl.theme` and returns the
+  `(background, foreground, activebackground, activeforeground,
+  selectcolor, disabledforeground)` kwargs dict used to colour
+  on-demand `tk.Menu` popups so they match dark mode. The
+  `_pick_watchlist_name` Toplevel + Listbox use the same theme
+  lookup inline (separate from this helper since they need
+  `win_bg`/`tree_bg`/`tree_fg`/`spine` rather than the menu set).
 - `_unpin_watchlist(name)` / `_move_pinned_watchlist(name, delta)`
   — mutate manager then `_rebuild_watchlist_subtabs`.
 

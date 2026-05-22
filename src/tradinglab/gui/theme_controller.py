@@ -119,6 +119,37 @@ class ThemeController:
                 style.theme_use("clam")
             except tk.TclError:
                 pass
+            # Patch the Treeview.Heading layout: clam's built-in
+            # ``Treeheading.cell`` element paints its background with a
+            # hard-coded light grey (``#dcdad5``) at the C level — it
+            # has zero configurable options, so neither ``style.configure``
+            # nor ``style.map`` can recolor it. The visible symptom in
+            # dark mode is that every Treeview header row (Watchlists,
+            # Entries, Exits, Primary, Compare, Scanner) keeps a glaring
+            # light strip at the top of the table. Dropping the
+            # ``Treeheading.cell`` element lets the next layer
+            # (``Treeheading.border``) paint the header using its
+            # configured ``-background`` instead. Audit
+            # ``treeview-heading-dark``.
+            try:
+                style.layout("Treeview.Heading", [
+                    ("Treeheading.border", {
+                        "sticky": "nswe",
+                        "children": [
+                            ("Treeheading.padding", {
+                                "sticky": "nswe",
+                                "children": [
+                                    ("Treeheading.image",
+                                     {"side": "right", "sticky": ""}),
+                                    ("Treeheading.text",
+                                     {"sticky": "we"}),
+                                ],
+                            }),
+                        ],
+                    }),
+                ])
+            except tk.TclError:
+                pass
             for name, configure_kw, map_kw in build_ttk_style_spec(theme):
                 style.configure(name, **configure_kw)
                 if map_kw:
@@ -146,6 +177,17 @@ class ThemeController:
         trees.extend(getattr(root, "_watchlist_trees", {}).values())
         trees.append(getattr(root, "_primary_table", None))
         trees.append(getattr(root, "_compare_table", None))
+        # Entries / Exits strategy trees expose ``_tree`` on the tab
+        # widget. Forward-looking: today the rows aren't bull/bear-tagged,
+        # but registering the palette now keeps every Treeview reachable
+        # by the theme controller in one pass (audit
+        # ``treeview-heading-dark`` companion change).
+        for tab_attr in ("_entries_tab", "_exits_tab"):
+            tab = getattr(root, tab_attr, None)
+            if tab is not None:
+                tree = getattr(tab, "_tree", None)
+                if tree is not None:
+                    trees.append(tree)
         for tree in trees:
             if tree is None:
                 continue

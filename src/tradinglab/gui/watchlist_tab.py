@@ -496,6 +496,22 @@ class WatchlistTabMixin:
         """
         dlg = tk.Toplevel(self)
         dlg.title("Load watchlist")
+        # Match the active palette: tk.Toplevel + tk.Listbox are not
+        # ttk widgets so the theme controller's TTK sweep does not
+        # reach them — see ``watchlist-popup-theme`` audit comment on
+        # ``_current_menu_colors``.
+        try:
+            theme = getattr(self._theme_ctrl, "theme", None) or {}
+            win_bg = theme.get("win_bg", "#f0f0f0")
+            tree_bg = theme.get("tree_bg", "#ffffff")
+            tree_fg = theme.get("tree_fg", "#111111")
+            spine = theme.get("spine", "#888888")
+            dlg.configure(background=win_bg)
+        except tk.TclError:
+            win_bg = "#f0f0f0"
+            tree_bg = "#ffffff"
+            tree_fg = "#111111"
+            spine = "#888888"
         try:
             dlg.transient(self)
         except Exception:  # noqa: BLE001
@@ -512,7 +528,9 @@ class WatchlistTabMixin:
         ).pack(padx=12, pady=(12, 6), anchor="w")
         height = min(12, max(4, len(names)))
         lb = tk.Listbox(
-            dlg, height=height, exportselection=False, activestyle="dotbox")
+            dlg, height=height, exportselection=False, activestyle="dotbox",
+            background=tree_bg, foreground=tree_fg,
+            selectbackground=spine, selectforeground=tree_fg)
         for n in names:
             lb.insert("end", n)
         lb.selection_set(0)
@@ -599,6 +617,32 @@ class WatchlistTabMixin:
             tree = next(iter(self._watchlist_trees.values()))
         self._watchlist_tree = tree  # type: ignore[assignment]
 
+    def _current_menu_colors(self) -> dict[str, str]:
+        """Return a kwargs dict for theming tk.Menu / tk.Toplevel popups
+        from the currently-active palette.
+
+        Watchlist owns two on-demand classic Tk widgets that are *not*
+        registered in ``_menubar_submenus`` (so the theme controller's
+        menubar sweep skips them): the subtab right-click context menu
+        (``_on_watchlist_subtab_right_click``) and the "Load watchlist"
+        Toplevel picker (``_pick_watchlist_name``). Both are created on
+        demand and discarded after use, so the simplest correct fix is
+        to colour them at construction time from the current theme. This
+        helper centralises that lookup so both call-sites stay in sync.
+        Audit ``watchlist-popup-theme``.
+        """
+        theme = getattr(self._theme_ctrl, "theme", None) or {}
+        bg = theme.get("win_bg", "#f0f0f0")
+        fg = theme.get("text", "#111111")
+        return dict(
+            background=bg,
+            foreground=fg,
+            activebackground=fg,
+            activeforeground=bg,
+            selectcolor=fg,
+            disabledforeground=theme.get("text_disabled", fg),
+        )
+
     def _on_watchlist_subtab_right_click(self, event) -> None:
         """Pop up a context menu on the sub-tab strip (Unpin / Move)."""
         sub = getattr(self, "_watchlist_subnotebook", None)
@@ -613,7 +657,7 @@ class WatchlistTabMixin:
         if idx < 0 or idx >= len(pinned):
             return
         name = pinned[idx]
-        menu = tk.Menu(self, tearoff=0)
+        menu = tk.Menu(self, tearoff=0, **self._current_menu_colors())
         menu.add_command(
             label=f"Unpin '{name}'",
             command=lambda n=name: self._unpin_watchlist(n))
