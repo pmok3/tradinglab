@@ -4,6 +4,78 @@ All notable changes to this project will be documented here. Format roughly foll
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-05-22
+
+### Added (0.1.1 cycle)
+
+- **`View → Volume time-of-day shading (1d bars)` discoverability toggle.**
+  Mirrors the Settings checkbox; rendering remains off by default.
+  Settings selection and menu state stay in sync. See
+  `gui/volume_tod_overlay.spec.md`. Audit
+  `volume-tod-view-menu-toggle`.
+- **Daily today-bar upsampling.** On the 1d chart, the most recent
+  daily bar is now upsampled from the active intraday cache (1m > 2m
+  > 5m > … > 1h), so live mid-session OHLCV matches what you see on
+  the 5m chart. `_full_cache` stays truthful — the synth bar lives
+  only in `_primary_raw`/`_compare_raw`. Audit
+  `daily-today-upsample`. See `data/today_upsample.spec.md`.
+- **Click pane-indicator labels to edit params.** Indicators with
+  their own pane (RSI, MACD, ATR, RRVOL, volume…) now respond to
+  B1 (open params popup) and B3 (context menu) on the pane label —
+  matching the existing UX for overlay indicators on the price chart.
+  Audit `pane-indicator-label-click`.
+- **`A` / `B` / `D` event marker glyphs.** Earnings AMC, Earnings
+  BMO, and Dividend events are now rendered as bold letter glyphs
+  (`A`, `B`, `D`) instead of squares/dots. Hover metadata and
+  cleanup logic preserved. See `events/*.spec.md`. Audit
+  `event-letter-markers`.
+
+### Fixed (0.1.1 cycle)
+
+- **Watchlist Change/% anchored to prior session close.** Live mode
+  no longer shows "yesterday vs. day-before-yesterday" when yfinance
+  hasn't emitted today's daily bar; intraday `last` − prior
+  completed daily close is the new anchor. Current-day partial
+  daily bars are excluded as anchors. Daily fallback is tagged and
+  overwritten by intraday refresh. Sandbox behaviour preserved.
+  Audit `watchlist-prior-close-anchor`.
+- **Indicators refresh on poll-fetch arrival during live session.**
+  When a 5m (or other) poll-fetch lands fresh bars, the indicator
+  cache is now invalidated for the affected slot so SMA / EMA /
+  derived arrays repaint instead of returning stale fingerprint-
+  matched results. Audit `indicator-poll-refresh`.
+- **RRVOL line renders on interval switch (5m).** When the user
+  flips to a sub-1d interval, RRVOL's compare-symbol candles arrive
+  async; previously the slot rendered empty until the user toggled
+  any other indicator. The slot now re-renders when the reference
+  data lands. Audit `rrvol-interval-switch`.
+- **HA "Highlight flat candles" toggle unlocked.** The menu entry
+  is always clickable (no longer greyed out when HA mode is off).
+  Render gates on HA mode AND the flat-toggle, so toggling either
+  off correctly hides the highlights. Audit
+  `ha-flat-toggle-unlocked`.
+- **Watchlists + Entries tabs: complete dark-mode coverage.**
+  Second-pass sweep — `TFrame`, `TNotebook`, Treeview body chrome,
+  context-menu active row, picker `Listbox` focus/border (Watchlists);
+  root/toolbar `TFrame`, toolbar `TButton`s, `TPanedwindow`s,
+  `TLabelframe`s, strategy `Treeview`, `TScrollbar`, audit/stats
+  `tk.Text` focus rings (Entries). Audit `ttk-container-dark-v2`.
+- **Cascade menu arrows visible in dark mode.** Append a Unicode
+  chevron (`›` U+203A) to every cascade label so it renders in the
+  menu's `fg` colour. The native Win32 cascade indicator on Windows
+  draws via `DrawFrameControl` → `GetSysColor(COLOR_MENUTEXT)`,
+  which ignores Tk color options; the workaround paints a light
+  chevron via Tk's text rendering instead. Always-on, idempotent.
+  Audits `menu-disabled-fg`, `menu-cascade-unicode-chevron`.
+- **Startup window restored to 90%-of-screen.** A saved
+  small/cramped `main` geometry was previously accepted unconditionally
+  and overrode the percent fallback. `geometry_store` now rejects
+  too-small saved main geometry, falls back to centered 90%×90%,
+  and exposes `startup_width_pct` / `startup_height_pct` tunables.
+  Audit `startup-window-percent`.
+
+
+
 ### Added
 
 - **Schwab credentials can now be configured ahead of OAuth landing.**
