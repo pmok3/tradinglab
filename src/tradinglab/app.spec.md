@@ -72,7 +72,7 @@ File structure:
 1. Submit worker that calls the source fetcher.
 2. On empty/error, fall back to `disk_cache.load`.
 3. Token-gated callback: `_fetch_token` bump on submit; callback drops if mismatched.
-4. `_full_cache[(source,ticker,interval,prepost)]` — OrderedDict, LRU, soft cap `_FULL_CACHE_MAX=16`. Pinned entries never evicted by trim.
+4. `_full_cache[(source,ticker,interval,prepost)]` — OrderedDict, LRU, soft cap `_FULL_CACHE_MAX=16`. Pinned entries (watchlist + currently active chart ticker) never evicted by trim. The active-ticker pin is essential so the 1d view's 5m companion (used by the volume-TOD overlay and the synthetic today-bar in `_maybe_upsample_today_daily`) survives stashes for unrelated tickers landing from background prefetches.
 5. `_series_cache[id(candles)]` — memoizes `_build_series_safe(...)`; verified via `sa._candles is candles` to defend against id-reuse.
 6. `_prefetched_raw` ingests executor-fetched bars without a second
    provider call. When it supplies fresh primary/compare data,

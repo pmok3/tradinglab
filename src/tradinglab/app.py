@@ -2966,6 +2966,18 @@ class ChartApp(
             pinned_tickers = frozenset(self._pinned_ticker_union())
         except Exception:  # noqa: BLE001
             pinned_tickers = frozenset()
+        try:
+            active_ticker = self.ticker_var.get().strip().upper()
+            if active_ticker:
+                # Pin the active ticker across ALL its intervals so the
+                # companion-prefetch pipeline doesn't LRU-evict its own
+                # warm data when a stash for an unrelated ticker
+                # overflows the cache. The 1d primary view depends on
+                # its 5m companion for the volume-TOD overlay and the
+                # synthetic today-bar (see _maybe_upsample_today_daily).
+                pinned_tickers = pinned_tickers | {active_ticker}
+        except Exception:  # noqa: BLE001
+            pass
         self._data_ctrl.trim(
             pinned_tickers=pinned_tickers,
             protected_key=protected_key,
