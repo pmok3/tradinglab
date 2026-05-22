@@ -10,19 +10,18 @@ from datetime import datetime, timedelta
 
 import pytest
 
+from tradinglab.data.schwab_login import build_authorize_url, extract_code
+from tradinglab.streaming.schwab import (
+    _is_login_ok,
+    build_login_request,
+    build_subs_request,
+)
 from tradinglab.streaming.schwab_aggregator import (
     MinuteBarBuilder,
     chart_equity_to_candle,
     decode_chart_equity_content,
     decode_levelone_content,
 )
-from tradinglab.streaming.schwab import (
-    build_login_request,
-    build_subs_request,
-    _is_login_ok,
-)
-from tradinglab.data.schwab_login import build_authorize_url, extract_code
-
 
 # ---------------------------------------------------------------------------
 # decode_*

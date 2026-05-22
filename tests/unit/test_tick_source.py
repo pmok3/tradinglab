@@ -22,10 +22,10 @@ from typing import List
 import tradinglab.indicators  # noqa: F401
 from tradinglab.models import Candle
 from tradinglab.scanner.model import (
+    OP_GT,
     Condition,
     FieldRef,
     Group,
-    OP_GT,
     ScanDefinition,
     UniverseFilter,
 )
@@ -37,9 +37,9 @@ from tradinglab.scanner.tick_source import (
 )
 
 
-def _candles(n: int, *, start_close: float = 100.0) -> List[Candle]:
+def _candles(n: int, *, start_close: float = 100.0) -> list[Candle]:
     base = datetime(2026, 5, 4, 9, 30, tzinfo=timezone.utc)
-    out: List[Candle] = []
+    out: list[Candle] = []
     for i in range(n):
         c = start_close + i
         out.append(Candle(
@@ -59,7 +59,7 @@ def test_polling_calls_fetch_fn_and_dispatches():
         calls["n"] += 1
         return {sym: _candles(3) for sym in symbols}
 
-    received: List[Tick] = []
+    received: list[Tick] = []
     src = PollingTickSource(fetch, ["AAA", "BBB"], interval_s=0.02)
     src.subscribe(received.append)
     src.start()
@@ -96,7 +96,7 @@ def test_polling_start_stop_idempotent():
 
 def test_polling_isolates_subscriber_exception():
     """A throwing subscriber must not kill the source thread."""
-    received: List[Tick] = []
+    received: list[Tick] = []
     def bad(_t: Tick) -> None:
         raise RuntimeError("boom")
 
@@ -125,7 +125,7 @@ def test_polling_isolates_fetch_exception():
             raise RuntimeError("first call boom")
         return {sym: _candles(2) for sym in symbols}
 
-    received: List[Tick] = []
+    received: list[Tick] = []
     src = PollingTickSource(fetch, ["AAA"], interval_s=0.02)
     src.subscribe(received.append)
     src.start()
@@ -254,7 +254,7 @@ def test_end_to_end_polling_to_runner():
     try:
         q.start()
         deadline = time.time() + 2.0
-        ticks: List[Tick] = []
+        ticks: list[Tick] = []
         while not ticks and time.time() < deadline:
             ticks = q.drain_all()
             if not ticks:

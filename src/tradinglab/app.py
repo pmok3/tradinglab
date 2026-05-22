@@ -19,6 +19,7 @@ surface.
 from __future__ import annotations
 
 import contextlib
+import logging
 import math
 import queue
 import time
@@ -144,6 +145,8 @@ _RENDER_BUFFER_MULTIPLIER = 3
 _MIN_RENDER_CANDLES = 500
 _MAX_TABLE_ROWS = 300
 from . import defaults as _defaults  # noqa: E402
+
+logger = logging.getLogger(__name__)
 
 _FULL_CACHE_MAX = _defaults.get("full_cache_size")
 _PAN_REDRAW_INTERVAL_MS = 16
@@ -420,7 +423,7 @@ class ChartApp(
         # --- Tk state variables (names are part of the public surface) --
         self._state = AppState(master=self, startup_defaults=sd)
         # Delegated to ``AppState`` but kept here in source for tests:
-        # value=bool(_settings.get("highlight_ha_flat", True))
+        # value=bool(_settings.get("highlight_ha_flat", False))
         # Backward-compat aliases — existing code and tests still read
         # the historic ``*_var`` attribute names directly.
         self.ticker_var = self._state.ticker
@@ -1424,6 +1427,12 @@ class ChartApp(
         if cs is not None:
             try:
                 cs.apply_theme(theme)
+            except Exception:  # noqa: BLE001
+                pass
+        doc_dlg = getattr(self, "_doc_viewer_dialog", None)
+        if doc_dlg is not None:
+            try:
+                doc_dlg._apply_theme()
             except Exception:  # noqa: BLE001
                 pass
         try:

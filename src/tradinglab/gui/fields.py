@@ -57,8 +57,9 @@ notebook page).
 from __future__ import annotations
 
 import tkinter as tk
+from collections.abc import Iterable
 from tkinter import ttk
-from typing import Any, Iterable, Optional, Tuple, Union
+from typing import Any, Union
 
 from .colors import ERROR_RED
 
@@ -101,7 +102,7 @@ class FieldRow(ttk.Frame):
         label: str,
         *,
         label_width: int = _DEFAULT_LABEL_WIDTH,
-        error_var: Optional[tk.StringVar] = None,
+        error_var: tk.StringVar | None = None,
         **frame_kwargs: Any,
     ) -> None:
         super().__init__(parent, **frame_kwargs)
@@ -151,14 +152,14 @@ def LabeledEntry(
     parent: tk.Misc,
     label: str,
     *,
-    textvariable: Optional[tk.Variable] = None,
-    show: Optional[str] = None,
-    width: Optional[int] = None,
+    textvariable: tk.Variable | None = None,
+    show: str | None = None,
+    width: int | None = None,
     label_width: int = _DEFAULT_LABEL_WIDTH,
-    error_var: Optional[tk.StringVar] = None,
-    state: Optional[str] = None,
+    error_var: tk.StringVar | None = None,
+    state: str | None = None,
     **entry_kwargs: Any,
-) -> Tuple[FieldRow, ttk.Entry]:
+) -> tuple[FieldRow, ttk.Entry]:
     """Build a :class:`FieldRow` with one ``ttk.Entry`` inside.
 
     Returns ``(row, entry)``. Caller is responsible for ``row.pack()``
@@ -187,14 +188,14 @@ def LabeledCombobox(
     parent: tk.Misc,
     label: str,
     *,
-    textvariable: Optional[tk.Variable] = None,
+    textvariable: tk.Variable | None = None,
     values: Iterable[str] = (),
-    width: Optional[int] = None,
+    width: int | None = None,
     label_width: int = _DEFAULT_LABEL_WIDTH,
     state: str = "readonly",
-    error_var: Optional[tk.StringVar] = None,
+    error_var: tk.StringVar | None = None,
     **combo_kwargs: Any,
-) -> Tuple[FieldRow, ttk.Combobox]:
+) -> tuple[FieldRow, ttk.Combobox]:
     """Build a :class:`FieldRow` with one ``ttk.Combobox`` inside.
 
     ``state="readonly"`` is the dropdown-only default. Pass ``"normal"``
@@ -218,12 +219,12 @@ def LabeledCheckbutton(
     parent: tk.Misc,
     label: str,
     *,
-    variable: Optional[tk.BooleanVar] = None,
-    text: Optional[str] = None,
+    variable: tk.BooleanVar | None = None,
+    text: str | None = None,
     label_width: int = _DEFAULT_LABEL_WIDTH,
-    error_var: Optional[tk.StringVar] = None,
+    error_var: tk.StringVar | None = None,
     **chk_kwargs: Any,
-) -> Tuple[FieldRow, ttk.Checkbutton]:
+) -> tuple[FieldRow, ttk.Checkbutton]:
     """Build a :class:`FieldRow` with one ``ttk.Checkbutton`` inside.
 
     ``label`` is the left-side row label (e.g. "Enabled:"); ``text``
@@ -246,15 +247,15 @@ def LabeledSpinbox(
     parent: tk.Misc,
     label: str,
     *,
-    textvariable: Optional[tk.Variable] = None,
+    textvariable: tk.Variable | None = None,
     from_: float = 0,
     to: float = 100,
     increment: float = 1,
-    width: Optional[int] = None,
+    width: int | None = None,
     label_width: int = _DEFAULT_LABEL_WIDTH,
-    error_var: Optional[tk.StringVar] = None,
+    error_var: tk.StringVar | None = None,
     **spin_kwargs: Any,
-) -> Tuple[FieldRow, ttk.Spinbox]:
+) -> tuple[FieldRow, ttk.Spinbox]:
     """Build a :class:`FieldRow` with one ``ttk.Spinbox`` inside.
 
     Use for numeric fields where ± step buttons aid input (cooldowns,

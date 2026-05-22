@@ -41,7 +41,7 @@ import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 RESUME_FILE_FORMAT = "tradinglab-sandbox-resume"
 RESUME_FILE_VERSION = 1
@@ -87,10 +87,10 @@ class SandboxResumeMetadata:
     engine_version: str
     """Engine version stamp from the SessionSpec (sandbox-1d etc.)."""
 
-    spec_dict: Dict[str, Any]
+    spec_dict: dict[str, Any]
     """Full SessionSpec.to_dict() output — used to rebuild the spec on resume."""
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """JSON-serialisable dict of the metadata + envelope."""
         return {
             "format": RESUME_FILE_FORMAT,
@@ -105,7 +105,7 @@ class SandboxResumeMetadata:
         }
 
     @classmethod
-    def from_dict(cls, payload: Dict[str, Any]) -> "SandboxResumeMetadata":
+    def from_dict(cls, payload: dict[str, Any]) -> SandboxResumeMetadata:
         """Reverse of :meth:`to_dict`. Raises ``ValueError`` on
         format / version mismatch so the caller can decide what to
         do (return None vs surface the error).
@@ -189,7 +189,7 @@ def write_resume_metadata(meta: SandboxResumeMetadata) -> None:
         pass
 
 
-def read_resume_metadata() -> Optional[SandboxResumeMetadata]:
+def read_resume_metadata() -> SandboxResumeMetadata | None:
     """Read the resume metadata if present and engine-compatible.
 
     Returns ``None`` for any of:
@@ -255,9 +255,9 @@ def build_metadata_from_session(
     ticker: str,
     interval: str,
     bars_processed: int,
-    spec_dict: Dict[str, Any],
-    engine_version: Optional[str] = None,
-    saved_at: Optional[str] = None,
+    spec_dict: dict[str, Any],
+    engine_version: str | None = None,
+    saved_at: str | None = None,
 ) -> SandboxResumeMetadata:
     """Convenience constructor used by ``ChartApp._on_close``.
 

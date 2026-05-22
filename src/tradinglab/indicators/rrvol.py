@@ -66,7 +66,8 @@ ness unusual vs its own recent RRVOL history?".
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, Dict, List, Mapping, Optional, Tuple
+from collections.abc import Mapping
+from typing import Any, ClassVar
 
 import numpy as np
 
@@ -206,12 +207,12 @@ class RRVOL:
     #: :attr:`tradinglab.indicators.rvol.RVOL.TRIGGER_RELEVANT_PARAMS`;
     #: see that class for rationale. ``threshold_warn`` and
     #: ``threshold_extreme`` are cosmetic-only reference-line knobs.
-    TRIGGER_RELEVANT_PARAMS: ClassVar[Tuple[str, ...]] = (
+    TRIGGER_RELEVANT_PARAMS: ClassVar[tuple[str, ...]] = (
         "mode", "length", "aggregator", "session_filter",
         "denominator_includes_current", "z_score",
     )
 
-    params_schema: ClassVar[Tuple[ParamDef, ...]] = (
+    params_schema: ClassVar[tuple[ParamDef, ...]] = (
         ParamDef("mode", "choice", default="simple",
                  choices=_MODES, description="Mode"),
         ParamDef("length", "int", default=20, min=1, max=500, step=1,
@@ -229,16 +230,16 @@ class RRVOL:
         ParamDef("threshold_extreme", "float", default=5.0, min=0.1,
                  max=100.0, step=0.1, description="Extreme level"),
     )
-    default_style: ClassVar[Dict[str, LineStyle]] = {
+    default_style: ClassVar[dict[str, LineStyle]] = {
         "rvol": LineStyle(color="#c5b0d5", width=1.4),
     }
-    reference_levels: ClassVar[Tuple[float, ...]] = ()
+    reference_levels: ClassVar[tuple[float, ...]] = ()
 
     @classmethod
     def is_available_for(
         cls,
         interval: str,
-        params: Optional[Mapping[str, Any]] = None,
+        params: Mapping[str, Any] | None = None,
     ) -> Availability:
         """Mode-aware availability — same gating as :class:`RVOL`."""
         mode = str((params or {}).get("mode", "simple"))
@@ -247,7 +248,7 @@ class RRVOL:
         return Availability(True, "")
 
     @classmethod
-    def pane_group_for(cls, params: Optional[Mapping[str, Any]]) -> str:
+    def pane_group_for(cls, params: Mapping[str, Any] | None) -> str:
         return "rvol_z" if bool((params or {}).get("z_score", False)) else "rvol"
 
     def __init__(
@@ -279,7 +280,7 @@ class RRVOL:
             threshold_warn, threshold_extreme,
         )
         if self.z_score:
-            self.reference_levels: Tuple[float, ...] = (0.0, 2.0)
+            self.reference_levels: tuple[float, ...] = (0.0, 2.0)
         else:
             self.reference_levels = (
                 1.0, float(self.threshold_warn), float(self.threshold_extreme),
@@ -289,7 +290,7 @@ class RRVOL:
                       "time_of_day": " ToD"}[self.mode]
         self.name = f"RRVOL{mode_short}{suffix}({self.length})"
 
-    def compute_arr(self, bars: Bars) -> Dict[str, np.ndarray]:
+    def compute_arr(self, bars: Bars) -> dict[str, np.ndarray]:
         return {
             "rvol": _compute_rrvol_arr(
                 bars,
@@ -302,5 +303,5 @@ class RRVOL:
             ),
         }
 
-    def compute(self, candles: List[Candle]) -> Dict[str, np.ndarray]:
+    def compute(self, candles: list[Candle]) -> dict[str, np.ndarray]:
         return self.compute_arr(Bars.from_candles(candles))

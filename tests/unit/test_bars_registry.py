@@ -17,13 +17,12 @@ from tradinglab.core.bars_registry import BarsRegistry, BarsView
 from tradinglab.data.multi_interval_cache import MultiIntervalCache
 from tradinglab.models import Candle
 
-
 # --- helpers ---------------------------------------------------------------
 
 
 def _candles(n: int, *, start_close: float = 100.0,
              start: datetime = datetime(2026, 5, 4, 9, 30),
-             interval_min: int = 5) -> List[Candle]:
+             interval_min: int = 5) -> list[Candle]:
     out = []
     for i in range(n):
         c = start_close + i

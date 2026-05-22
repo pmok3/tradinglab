@@ -41,7 +41,7 @@ from __future__ import annotations
 
 import logging
 import tkinter as tk
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -72,11 +72,11 @@ class EntriesAppMixin:
         from .entries_overlay import EntriesOverlay
         from .entries_tab import EntriesTab
 
-        self._entries_audit_log: Optional[EntriesAuditLog] = None
-        self._entry_paper_sink: Optional[EntryPaperSink] = None
-        self._entry_evaluator: Optional[EntryEvaluator] = None
-        self._entries_tab: Optional[EntriesTab] = None
-        self._entries_overlay: Optional[EntriesOverlay] = None
+        self._entries_audit_log: EntriesAuditLog | None = None
+        self._entry_paper_sink: EntryPaperSink | None = None
+        self._entry_evaluator: EntryEvaluator | None = None
+        self._entries_tab: EntriesTab | None = None
+        self._entries_overlay: EntriesOverlay | None = None
         self._entries_dialog = None
         self._entries_scan_unsubscribe = None
 
@@ -200,7 +200,7 @@ class EntriesAppMixin:
             logger.exception("EntriesAppMixin: exits.storage import failed")
             return None
 
-    def _get_active_symbol_for_entries(self) -> Optional[str]:
+    def _get_active_symbol_for_entries(self) -> str | None:
         """Provide the primary chart symbol to the evaluator (used by
         ``Universe.from_attached_chart``)."""
         try:

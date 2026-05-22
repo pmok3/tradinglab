@@ -79,7 +79,7 @@ def card_count() -> int:
     return max(lo, min(hi, n))
 
 
-def binding_mode() -> "BindingMode":
+def binding_mode() -> BindingMode:
     """Return the configured :class:`BindingMode`, defaulting to ``HYBRID``."""
     from .binding import BindingMode
     raw = get("chartstack.binding.mode")

@@ -28,7 +28,6 @@ import math
 from tradinglab.events.base import EventBundle
 from tradinglab.events.synthetic_events import fetch_synthetic_events
 
-
 _EPOCH = _dt.datetime(1970, 1, 1)
 
 
@@ -48,7 +47,7 @@ def test_synthetic_is_deterministic_per_ticker():
     assert a.symbol == b.symbol
     assert len(a.earnings) == len(b.earnings)
     assert len(a.dividends) == len(b.dividends)
-    for x, y in zip(a.earnings, b.earnings):
+    for x, y in zip(a.earnings, b.earnings, strict=False):
         assert x.ts == y.ts
         assert x.when == y.when
         assert x.eps_estimate == y.eps_estimate
@@ -57,7 +56,7 @@ def test_synthetic_is_deterministic_per_ticker():
             assert math.isnan(y.eps_actual)
         else:
             assert x.eps_actual == y.eps_actual
-    for x, y in zip(a.dividends, b.dividends):
+    for x, y in zip(a.dividends, b.dividends, strict=False):
         assert x.ex_ts == y.ex_ts
         assert x.kind == y.kind
         if math.isnan(x.amount):
@@ -140,7 +139,7 @@ def test_synthetic_bmo_amc_alternate():
     whens = [r.when for r in bundle.earnings[:6]]
     # Either BMO,AMC,BMO,AMC,... or AMC,BMO,AMC,BMO,... — accept either
     # as long as adjacent rows differ.
-    for prev, cur in zip(whens, whens[1:]):
+    for prev, cur in zip(whens, whens[1:], strict=False):
         assert prev != cur, f"adjacent earnings slots collide: {whens}"
 
 

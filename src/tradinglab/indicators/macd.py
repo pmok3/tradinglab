@@ -29,17 +29,17 @@ inherits its sign-based color (bright on the side it falls on).
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, Dict, Mapping, Tuple
+from collections.abc import Mapping
+from typing import ClassVar
 
 import numpy as np
 
 from ..core.bars import Bars
-from ..models import Candle
 from .base import LineStyle, ParamDef
 from .ma_kernels import MA_TYPES, apply_ma
 
 #: Source selector — which price series feeds the fast/slow MAs.
-_SOURCES: Tuple[str, ...] = ("close", "hl2", "hlc3", "ohlc4")
+_SOURCES: tuple[str, ...] = ("close", "hl2", "hlc3", "ohlc4")
 
 #: Default values, also published via ``params_schema``.
 _DEFAULT_FAST_LENGTH = 12
@@ -52,7 +52,7 @@ _DEFAULT_SOURCE = "close"
 #: ``(up_above, down_above, up_below, down_below)`` — i.e.
 #: (rising-above-zero, falling-above-zero, rising-below-zero,
 #: falling-below-zero). Matches the TradingView default.
-_HISTOGRAM_PALETTE: Tuple[str, str, str, str] = (
+_HISTOGRAM_PALETTE: tuple[str, str, str, str] = (
     "#26a69a",  # bright teal-green — rising above 0
     "#b2dfdb",  # pale teal-green   — falling above 0
     "#ffcdd2",  # pale red          — rising below 0
@@ -135,9 +135,9 @@ class MACD:
     kind_version: ClassVar[int] = 1
     overlay: ClassVar[bool] = False
     pane_group: ClassVar[str] = "macd"
-    reference_levels: ClassVar[Tuple[float, ...]] = (0.0,)
+    reference_levels: ClassVar[tuple[float, ...]] = (0.0,)
 
-    params_schema: ClassVar[Tuple[ParamDef, ...]] = (
+    params_schema: ClassVar[tuple[ParamDef, ...]] = (
         ParamDef("fast_length", "int",
                  default=_DEFAULT_FAST_LENGTH, min=2, max=2000, step=1,
                  description="Fast MA length"),
@@ -155,7 +155,7 @@ class MACD:
                  description="Price source"),
     )
 
-    default_style: ClassVar[Dict[str, LineStyle]] = {
+    default_style: ClassVar[dict[str, LineStyle]] = {
         "macd":      LineStyle(color="#2ca02c", width=1.4),  # green
         "signal":    LineStyle(color="#ff7f0e", width=1.2),  # orange
         "histogram": LineStyle(color=_HISTOGRAM_PALETTE[0], width=1.0),
@@ -172,7 +172,7 @@ class MACD:
 
     #: Four hex colors keyed by the same order as
     #: :func:`classify_histogram` returns (0..3).
-    histogram_palette: ClassVar[Tuple[str, str, str, str]] = _HISTOGRAM_PALETTE
+    histogram_palette: ClassVar[tuple[str, str, str, str]] = _HISTOGRAM_PALETTE
 
     def __init__(
         self,
@@ -218,12 +218,12 @@ class MACD:
         src_tag = "" if self.source == _DEFAULT_SOURCE else f",{self.source}"
         return f"{base}{ma_tag}{src_tag})"
 
-    def compute(self, candles) -> Dict[str, np.ndarray]:
+    def compute(self, candles) -> dict[str, np.ndarray]:
         """Compute from a candle sequence (canonical entry point)."""
         bars = Bars.from_candles(candles)
         return self.compute_arr(bars)
 
-    def compute_arr(self, bars: Bars) -> Dict[str, np.ndarray]:
+    def compute_arr(self, bars: Bars) -> dict[str, np.ndarray]:
         n = len(bars)
         empty = np.full(n, np.nan, dtype=np.float64)
         if n == 0:

@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..core.io_helpers import atomic_write_json
 from ..disk_cache import _cache_dir
@@ -54,7 +54,7 @@ def trail_state_path() -> Path:
     return positions_dir() / _TRAIL_FILE
 
 
-def _read_json(path: Path) -> Optional[dict]:
+def _read_json(path: Path) -> dict | None:
     if not path.exists():
         return None
     try:
@@ -74,7 +74,7 @@ def _read_json(path: Path) -> Optional[dict]:
 # ---------------------------------------------------------------------------
 
 
-def save_open_positions(positions: List[Position]) -> Path:
+def save_open_positions(positions: list[Position]) -> Path:
     """Persist the list of open positions atomically."""
     payload = {
         "schema_version": SCHEMA_VERSION,
@@ -85,7 +85,7 @@ def save_open_positions(positions: List[Position]) -> Path:
     return path
 
 
-def load_open_positions() -> List[Position]:
+def load_open_positions() -> list[Position]:
     """Load + parse open positions. Lenient: returns ``[]`` on any failure."""
     data = _read_json(open_positions_path())
     if data is None:
@@ -93,7 +93,7 @@ def load_open_positions() -> List[Position]:
     if int(data.get("schema_version", 1)) > SCHEMA_VERSION:
         LOG.warning("positions.storage: open.json schema_version too new; ignoring")
         return []
-    out: List[Position] = []
+    out: list[Position] = []
     for raw in data.get("positions", []) or []:
         try:
             out.append(Position.from_dict(raw))
@@ -107,14 +107,14 @@ def load_open_positions() -> List[Position]:
 # ---------------------------------------------------------------------------
 
 
-def save_trail_state(blob: Dict[str, Any]) -> Path:
+def save_trail_state(blob: dict[str, Any]) -> Path:
     payload = {"schema_version": SCHEMA_VERSION, "trail": dict(blob)}
     path = trail_state_path()
     atomic_write_json(path, payload)
     return path
 
 
-def load_trail_state() -> Dict[str, Any]:
+def load_trail_state() -> dict[str, Any]:
     """Return the persisted trail state blob, or ``{}`` if none / corrupt."""
     data = _read_json(trail_state_path())
     if data is None:

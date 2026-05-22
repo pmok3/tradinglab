@@ -29,8 +29,6 @@ from __future__ import annotations
 
 import pytest
 
-from tradinglab.scanner.model import FieldRef
-from tradinglab.scanner.fields import SCANNABLE_INDICATORS, all_fields
 from tradinglab.gui.scanner_tab import (
     _CURATED_RANK_PRESETS,
     _RANK_PRESETS,
@@ -38,6 +36,8 @@ from tradinglab.gui.scanner_tab import (
     _preset_key,
     _rank_preset_label,
 )
+from tradinglab.scanner.fields import SCANNABLE_INDICATORS, all_fields
+from tradinglab.scanner.model import FieldRef
 
 
 class TestCuratedHeadPreserved:

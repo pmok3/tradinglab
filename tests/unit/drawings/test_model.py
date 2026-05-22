@@ -12,14 +12,13 @@ from tradinglab.drawings.model import (
     DEFAULT_STYLE,
     DEFAULT_WIDTH,
     DRAWING_KIND_HLINE,
-    Drawing,
     MAX_WIDTH,
     VALID_STYLES,
+    Drawing,
     make_hline_drawing,
     normalize_ticker,
     snap_price_to_grid,
 )
-
 
 _UUID_HEX_RE = re.compile(r"^[0-9a-f]{32}$")
 _ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$")

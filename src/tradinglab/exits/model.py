@@ -25,9 +25,10 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple, Union
+from typing import Any
 
 from ..scanner.model import Group as ConditionGroup
 
@@ -148,25 +149,25 @@ class ExitTrigger:
     kind: TriggerKind = TriggerKind.MARKET
 
     # Price / offset family (limit, stop, stop_limit)
-    price: Optional[float] = None
-    offset_pct: Optional[float] = None
-    offset_dollar: Optional[float] = None
-    stop_limit_price: Optional[float] = None
-    stop_limit_offset: Optional[float] = None
+    price: float | None = None
+    offset_pct: float | None = None
+    offset_dollar: float | None = None
+    stop_limit_price: float | None = None
+    stop_limit_offset: float | None = None
 
     # Trailing-stop family
-    trail_unit: Optional[TrailUnit] = None
-    trail_value: Optional[float] = None
-    activation_unit: Optional[ActivationUnit] = None
-    activation_value: Optional[float] = None
+    trail_unit: TrailUnit | None = None
+    trail_value: float | None = None
+    activation_unit: ActivationUnit | None = None
+    activation_value: float | None = None
     trail_basis: TrailBasis = TrailBasis.INTRABAR
 
     # Time-of-day
-    time_of_day: Optional[str] = None  # "HH:MM"
+    time_of_day: str | None = None  # "HH:MM"
 
     # Indicator
-    condition: Optional[ConditionGroup] = None
-    interval: Optional[str] = None
+    condition: ConditionGroup | None = None
+    interval: str | None = None
     evaluate_intrabar: bool = False
 
     # Chandelier-stop family (Camp-B anchored, ratchet always on, touch
@@ -185,8 +186,8 @@ class ExitTrigger:
     enabled: bool = True
     label: str = ""
 
-    def to_dict(self) -> Dict[str, Any]:
-        out: Dict[str, Any] = {
+    def to_dict(self) -> dict[str, Any]:
+        out: dict[str, Any] = {
             "id": self.id,
             "kind": self.kind.value,
             "qty_pct": self.qty_pct,
@@ -229,7 +230,7 @@ class ExitTrigger:
         return out
 
     @classmethod
-    def from_dict(cls, d: Mapping[str, Any]) -> "ExitTrigger":
+    def from_dict(cls, d: Mapping[str, Any]) -> ExitTrigger:
         if not isinstance(d, Mapping):
             raise TypeError(f"ExitTrigger.from_dict expects mapping, got {type(d).__name__}")
         kind_str = d.get("kind")
@@ -291,10 +292,10 @@ class ExitLeg:
 
     id: str = field(default_factory=_new_id)
     label: str = ""
-    triggers: List[ExitTrigger] = field(default_factory=list)
+    triggers: list[ExitTrigger] = field(default_factory=list)
     enabled: bool = True
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "label": self.label,
@@ -303,7 +304,7 @@ class ExitLeg:
         }
 
     @classmethod
-    def from_dict(cls, d: Mapping[str, Any]) -> "ExitLeg":
+    def from_dict(cls, d: Mapping[str, Any]) -> ExitLeg:
         if not isinstance(d, Mapping):
             raise TypeError(f"ExitLeg.from_dict expects mapping, got {type(d).__name__}")
         triggers_raw = d.get("triggers", [])
@@ -327,7 +328,7 @@ class OCOGroup:
     after a fire — so a partial profit-take does NOT void the stop.
     """
 
-    leg_ids: Tuple[str, ...]
+    leg_ids: tuple[str, ...]
     cancel_on: str = "full_closeout"  # Literal["any_fire", "full_closeout"]
 
     _ALLOWED_CANCEL_ON = ("any_fire", "full_closeout")
@@ -341,11 +342,11 @@ class OCOGroup:
                 f"got {self.cancel_on!r}"
             )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {"leg_ids": list(self.leg_ids), "cancel_on": self.cancel_on}
 
     @classmethod
-    def from_dict(cls, d: Mapping[str, Any]) -> "OCOGroup":
+    def from_dict(cls, d: Mapping[str, Any]) -> OCOGroup:
         if not isinstance(d, Mapping):
             raise TypeError(f"OCOGroup.from_dict expects mapping, got {type(d).__name__}")
         leg_ids_raw = d.get("leg_ids", [])
@@ -362,11 +363,11 @@ class CreatedWith:
     app: str = "tradinglab"
     version: str = "0.0.0"
 
-    def to_dict(self) -> Dict[str, str]:
+    def to_dict(self) -> dict[str, str]:
         return {"app": self.app, "version": self.version}
 
     @classmethod
-    def from_dict(cls, d: Mapping[str, Any]) -> "CreatedWith":
+    def from_dict(cls, d: Mapping[str, Any]) -> CreatedWith:
         return cls(app=str(d.get("app", "tradinglab")), version=str(d.get("version", "0.0.0")))
 
 
@@ -382,17 +383,17 @@ class ExitStrategy:
 
     id: str = field(default_factory=_new_id)
     name: str = ""
-    legs: List[ExitLeg] = field(default_factory=list)
-    oco_groups: List[OCOGroup] = field(default_factory=list)
+    legs: list[ExitLeg] = field(default_factory=list)
+    oco_groups: list[OCOGroup] = field(default_factory=list)
     eod_kill_switch: bool = True
     eod_offset_min: int = 5
     schema_version: int = CURRENT_SCHEMA_VERSION
     created_with: CreatedWith = field(default_factory=CreatedWith)
     created_at: str = field(default_factory=_utcnow_iso)
     updated_at: str = field(default_factory=_utcnow_iso)
-    extra: Dict[str, Any] = field(default_factory=dict)
+    extra: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "name": self.name,
@@ -408,7 +409,7 @@ class ExitStrategy:
         }
 
     @classmethod
-    def from_dict(cls, d: Mapping[str, Any]) -> "ExitStrategy":
+    def from_dict(cls, d: Mapping[str, Any]) -> ExitStrategy:
         if not isinstance(d, Mapping):
             raise TypeError(f"ExitStrategy.from_dict expects mapping, got {type(d).__name__}")
         version = int(d.get("schema_version", CURRENT_SCHEMA_VERSION))
@@ -447,7 +448,7 @@ class ExitStrategy:
 # ---------------------------------------------------------------------------
 
 
-def validate_strategy(strategy: ExitStrategy) -> List[str]:
+def validate_strategy(strategy: ExitStrategy) -> list[str]:
     """Return a list of human-readable error strings; empty = valid.
 
     Callers (storage, GUI) can decide whether to refuse-save on errors
@@ -463,7 +464,7 @@ def validate_strategy(strategy: ExitStrategy) -> List[str]:
       is a known value (enforced by :class:`OCOGroup` itself).
     """
 
-    errs: List[str] = []
+    errs: list[str] = []
     if not strategy.name.strip():
         errs.append("strategy name is empty")
     if strategy.eod_offset_min < 0:
@@ -495,8 +496,8 @@ def validate_strategy(strategy: ExitStrategy) -> List[str]:
     return errs
 
 
-def _validate_trigger(t: ExitTrigger) -> List[str]:
-    errs: List[str] = []
+def _validate_trigger(t: ExitTrigger) -> list[str]:
+    errs: list[str] = []
     if not 0.0 < t.qty_pct <= 100.0:
         errs.append(f"qty_pct must be in (0, 100], got {t.qty_pct}")
 
@@ -573,13 +574,13 @@ def _valid_hhmm(s: str) -> bool:
     return 0 <= h <= 23 and 0 <= m <= 59
 
 
-def _as_float_opt(v: Any) -> Optional[float]:
+def _as_float_opt(v: Any) -> float | None:
     if v is None:
         return None
     return float(v)
 
 
-def _as_str_opt(v: Any) -> Optional[str]:
+def _as_str_opt(v: Any) -> str | None:
     if v is None:
         return None
     return str(v)
@@ -590,7 +591,7 @@ def _as_str_opt(v: Any) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
-def migrate(d: Mapping[str, Any], from_version: int) -> Dict[str, Any]:
+def migrate(d: Mapping[str, Any], from_version: int) -> dict[str, Any]:
     """Migrate a raw on-disk dict from ``from_version`` to current.
 
     Schema history:

@@ -25,20 +25,20 @@ from typing import List
 import numpy as np
 import pytest
 
+from tradinglab.core.bars import Bars
 from tradinglab.indicators.cache import (
     IndicatorCache,
     _candles_fingerprint,
     config_hash,
 )
 from tradinglab.indicators.moving_averages import EMA, SMA
-from tradinglab.core.bars import Bars
 from tradinglab.models import Candle
 
 
-def _mk_candles(n: int, seed: float = 0.0) -> List[Candle]:
+def _mk_candles(n: int, seed: float = 0.0) -> list[Candle]:
     """Deterministic walk; closes at +seed per bar for parity tests."""
     start = dt.datetime(2024, 1, 2, 9, 30, tzinfo=dt.timezone.utc)
-    out: List[Candle] = []
+    out: list[Candle] = []
     base = 100.0
     for i in range(n):
         op = base + i * 0.1 + seed
@@ -130,7 +130,7 @@ def test_get_or_compute_incremental_sma_growth_matches_full() -> None:
     bars = Bars.from_candles(candles)
     cache.get_or_compute_incremental(candles, h, sma, bars)
     # Grow the list in place by 5 bars.
-    for k in range(5):
+    for _k in range(5):
         last = candles[-1]
         candles.append(
             Candle(
@@ -154,7 +154,7 @@ def test_get_or_compute_incremental_ema_growth_matches_full() -> None:
     ema = EMA(length=12)
     bars = Bars.from_candles(candles)
     cache.get_or_compute_incremental(candles, h, ema, bars)
-    for k in range(8):
+    for _k in range(8):
         last = candles[-1]
         candles.append(
             Candle(

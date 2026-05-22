@@ -22,7 +22,7 @@ register_stream("synthetic-stream", SyntheticStreamSource())
 # this just keeps the stream-source dropdown clean for users who
 # haven't configured Schwab at all. Registration is cheap (no
 # network); the WS connection only opens on first subscribe.
-from ..data.credentials import get_credentials as _get_credentials
+from ..data.credentials import get_credentials as _get_credentials  # noqa: E402
 
 if _get_credentials().schwab.is_configured():
     register_stream("schwab-stream", SchwabStreamSource())

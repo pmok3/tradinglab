@@ -18,8 +18,9 @@ from __future__ import annotations
 
 import datetime as _dt
 import tkinter as tk
+from collections.abc import Callable
 from tkinter import ttk
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 
 from ._modal_keys import bind_modal_keys
 
@@ -64,12 +65,12 @@ class SandboxStartDialog(tk.Toplevel):
         app: Any,
         *,
         reference_symbol: str,
-        intervals: List[str],
-        eligible_dates_provider: Callable[[str], List[_dt.date]],
-        fetch_provider: Optional[Callable[[str], bool]] = None,
-        default_interval: Optional[str] = None,
-        default_selected_intervals: Optional[List[str]] = None,
-        manifest_provider: Optional[Callable[[], List[Any]]] = None,
+        intervals: list[str],
+        eligible_dates_provider: Callable[[str], list[_dt.date]],
+        fetch_provider: Callable[[str], bool] | None = None,
+        default_interval: str | None = None,
+        default_selected_intervals: list[str] | None = None,
+        manifest_provider: Callable[[], list[Any]] | None = None,
     ):
         super().__init__(app)
         self.app = app
@@ -83,7 +84,7 @@ class SandboxStartDialog(tk.Toplevel):
         # that haven't been wired yet (e.g. legacy tests) — the dialog
         # then offers only the "(none)" option.
         self._manifest_provider = manifest_provider
-        self._manifests: List[Any] = []
+        self._manifests: list[Any] = []
         self._refresh_manifests()
         # Phase 1d-multitf-2: multi-select intervals. The smallest
         # checked interval becomes the primary tick interval; larger
@@ -110,7 +111,7 @@ class SandboxStartDialog(tk.Toplevel):
         # poking at ``self._initial_interval``; equals smallest checked.
         self._initial_interval = sorted(
             initial_checked, key=self._minutes_for)[0]
-        self.result: Optional[Dict[str, Any]] = None
+        self.result: dict[str, Any] | None = None
 
         self.title("Start Sandbox Session")
         self.transient(app)
@@ -176,8 +177,8 @@ class SandboxStartDialog(tk.Toplevel):
         intervals_frame = ttk.Frame(frame)
         intervals_frame.grid(row=1, column=1, columnspan=2,
                              sticky="w", **pad)
-        self._interval_vars: Dict[str, tk.BooleanVar] = {}
-        self._interval_cbs: Dict[str, ttk.Checkbutton] = {}
+        self._interval_vars: dict[str, tk.BooleanVar] = {}
+        self._interval_cbs: dict[str, ttk.Checkbutton] = {}
         for col, itv in enumerate(self._intervals):
             var = tk.BooleanVar(value=(itv in self._initial_checked))
             cb = ttk.Checkbutton(
@@ -336,7 +337,7 @@ class SandboxStartDialog(tk.Toplevel):
             btns, text="Start", command=self._on_start)
         self._start_btn.pack(side=tk.RIGHT, padx=4)
 
-    def _selected_intervals(self) -> List[str]:
+    def _selected_intervals(self) -> list[str]:
         """Return checked intervals sorted ascending by minute count.
 
         Returns ``[]`` when nothing is checked. Order is deterministic
@@ -359,7 +360,7 @@ class SandboxStartDialog(tk.Toplevel):
         sel = self._selected_intervals()
         return sel[0] if sel else self._intervals[0]
 
-    def _validate_intervals(self) -> Optional[str]:
+    def _validate_intervals(self) -> str | None:
         """Return an error message describing an invalid checkbox combo, or None.
 
         Validation rules:
@@ -396,7 +397,7 @@ class SandboxStartDialog(tk.Toplevel):
         except Exception:  # noqa: BLE001
             self._manifests = []
 
-    def _universe_combo_values(self) -> List[str]:
+    def _universe_combo_values(self) -> list[str]:
         labels = [self._UNIVERSE_NONE_LABEL]
         for m in self._manifests:
             try:
@@ -406,7 +407,7 @@ class SandboxStartDialog(tk.Toplevel):
                 continue
         return labels
 
-    def _selected_manifest(self) -> Optional[Any]:
+    def _selected_manifest(self) -> Any | None:
         """Manifest currently chosen in the combobox, or None.
 
         We resolve by parsing the trailing ``(<id>, ...)`` slug rather
@@ -586,7 +587,7 @@ class SandboxStartDialog(tk.Toplevel):
             if self._date_var.get() == "(hidden)":
                 self._date_var.set("")
 
-    def _filtered_eligible_dates(self) -> List[_dt.date]:
+    def _filtered_eligible_dates(self) -> list[_dt.date]:
         """Eligible dates with the *intraday lookback* trimmed off the front.
 
         Random draws (manual button + blind mode) and the eligible-list
@@ -697,7 +698,7 @@ class SandboxStartDialog(tk.Toplevel):
         if blind and seed == 0:
             import time as _time
             seed = _time.time_ns() & 0x7FFFFFFF
-        eligible_dates: List[_dt.date] = []
+        eligible_dates: list[_dt.date] = []
         if blind:
             # Blind mode: dialog picks the date itself; the user never
             # sees it. Eligibility is mandatory here \u2014 without a list

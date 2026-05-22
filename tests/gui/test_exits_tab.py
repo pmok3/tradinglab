@@ -39,7 +39,6 @@ from tradinglab.exits.signals import ExitSignal
 from tradinglab.gui.exits_tab import ExitsTab, _AttachRow, _format_audit_record
 from tradinglab.positions.tracker import PositionTracker
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -49,9 +48,9 @@ class _RecordingSink:
     """Minimal ExitSignalSink for tests — records calls, returns ids."""
 
     def __init__(self) -> None:
-        self.submitted: List[ExitSignal] = []
-        self.cancels: List[str] = []
-        self.cancel_alls: List[str] = []
+        self.submitted: list[ExitSignal] = []
+        self.cancels: list[str] = []
+        self.cancel_alls: list[str] = []
         self._counter = 0
 
     def submit(self, signal: ExitSignal) -> str:
@@ -68,7 +67,7 @@ class _RecordingSink:
         self.cancel_alls.append(position_id)
         return 0
 
-    def working_order_ids_for_position(self, position_id: str) -> List[str]:
+    def working_order_ids_for_position(self, position_id: str) -> list[str]:
         return []
 
 
@@ -124,14 +123,14 @@ def test_toolbar_has_buttons(root: tk.Toplevel) -> None:
     tab, tracker, sink, evaluator = _make_tab(root)
     try:
         # Walk children to find PANIC button
-        descendants: List[tk.Misc] = []
+        descendants: list[tk.Misc] = []
 
         def _walk(w: tk.Misc) -> None:
             for c in w.winfo_children():
                 descendants.append(c)
                 _walk(c)
         _walk(tab)
-        labels: List[str] = []
+        labels: list[str] = []
         for w in descendants:
             try:
                 labels.append(str(w.cget("text")))
@@ -482,7 +481,7 @@ def test_apply_theme_light_restores_palette(root: tk.Toplevel) -> None:
     """A subsequent light-theme call restores the light-mode colours
     after a dark-mode call.
     """
-    from tradinglab.constants import LIGHT_THEME, DARK_THEME
+    from tradinglab.constants import DARK_THEME, LIGHT_THEME
     _clear_storage()
     tab, tracker, sink, evaluator = _make_tab(root)
     try:

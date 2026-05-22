@@ -21,9 +21,10 @@ from __future__ import annotations
 
 import random
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date as _date
-from typing import Any, Dict, List, Sequence
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -46,19 +47,19 @@ def _candle_session_date(candle: Any) -> _date:
 
 
 def build_eligible_deck(
-    candles_by_symbol: Dict[str, Sequence[Any]],
+    candles_by_symbol: dict[str, Sequence[Any]],
     *,
     min_bars_per_day: int = 20,
-) -> List[DeckEntry]:
+) -> list[DeckEntry]:
     """Return all (symbol, session_date) pairs with enough bars.
 
     Sorted by ``(symbol, session_date)`` so the *unshuffled* deck is
     canonical — two callers building from the same universe see the
     same order. Shuffles are applied separately via :func:`shuffle_deck`.
     """
-    entries: List[DeckEntry] = []
+    entries: list[DeckEntry] = []
     for symbol, candles in candles_by_symbol.items():
-        per_day: Dict[_date, int] = defaultdict(int)
+        per_day: dict[_date, int] = defaultdict(int)
         for c in candles:
             per_day[_candle_session_date(c)] += 1
         for d, count in per_day.items():
@@ -68,7 +69,7 @@ def build_eligible_deck(
     return entries
 
 
-def shuffle_deck(deck: Sequence[DeckEntry], seed: int) -> List[DeckEntry]:
+def shuffle_deck(deck: Sequence[DeckEntry], seed: int) -> list[DeckEntry]:
     """Return a deterministic permutation of ``deck``.
 
     Uses :class:`random.Random` so the global RNG is untouched —
@@ -99,7 +100,7 @@ def filter_candles_to_session(
     *,
     bounded: bool = False,
     regular_only: bool = False,
-) -> List[Any]:
+) -> list[Any]:
     """Trim ``candles`` to ``[session_date - lookback, end]`` (or to one day).
 
     Used by the sandbox controller when a deck-driven session is
@@ -147,7 +148,7 @@ def filter_candles_to_session(
         sorted_prior = sorted(prior_days)
         cutoff = sorted_prior[-n] if len(sorted_prior) >= n else sorted_prior[0]
     upper = session_date + timedelta(days=1) if bounded else None
-    out: List[Any] = []
+    out: list[Any] = []
     for c in candles:
         d = _candle_session_date(c)
         if d < cutoff:
@@ -166,7 +167,7 @@ def build_eligible_dates(
     min_bars_per_day: int = 20,
     regular_only: bool = False,
     min_lookback_days: int = 0,
-) -> List[_date]:
+) -> list[_date]:
     """Return sorted dates with ``>= min_bars_per_day`` bars in ``candles``.
 
     Date-only counterpart to :func:`build_eligible_deck`. Used by the
@@ -190,7 +191,7 @@ def build_eligible_dates(
     Sorted ascending so the unshuffled date list is canonical and
     reproducible across calls.
     """
-    per_day: Dict[_date, int] = defaultdict(int)
+    per_day: dict[_date, int] = defaultdict(int)
     for c in candles:
         if regular_only and getattr(c, "session", "regular") != "regular":
             continue
@@ -203,7 +204,7 @@ def build_eligible_dates(
     return qualifying
 
 
-def shuffle_dates(dates: Sequence[_date], seed: int) -> List[_date]:
+def shuffle_dates(dates: Sequence[_date], seed: int) -> list[_date]:
     """Deterministic permutation of ``dates`` (uses an isolated RNG)."""
     out = list(dates)
     rng = random.Random(int(seed))

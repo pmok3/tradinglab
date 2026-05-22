@@ -271,7 +271,7 @@ def test_validate_button_surfaces_errors(root):
 
 
 def test_save_refused_on_validation_errors(root):
-    captured: List[EntryStrategy] = []
+    captured: list[EntryStrategy] = []
     s = _valid_strategy()
     s.name = ""
     dlg = _make_dialog(root, strategy=s, on_save=captured.append)
@@ -282,7 +282,7 @@ def test_save_refused_on_validation_errors(root):
 
 
 def test_save_calls_on_save_when_valid(root):
-    captured: List[EntryStrategy] = []
+    captured: list[EntryStrategy] = []
     dlg = _make_dialog(root, strategy=_valid_strategy(),
                        on_save=captured.append)
     dlg._on_save_clicked(close=False)
@@ -292,8 +292,8 @@ def test_save_calls_on_save_when_valid(root):
 
 
 def test_cancel_does_not_call_on_save(root):
-    captured: List[EntryStrategy] = []
-    cancelled: List[bool] = []
+    captured: list[EntryStrategy] = []
+    cancelled: list[bool] = []
     dlg = _make_dialog(
         root,
         strategy=_valid_strategy(),

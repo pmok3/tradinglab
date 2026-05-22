@@ -35,14 +35,20 @@ via `ChartApp.set_theme_override(mode, key, hex)`.
   Applied to `dark` and activates dark mode.
 
 Footer: **Reset all** (wipes both modes via
-`clear_theme_overrides`) and **Close** (also bound to ESC and
-`WM_DELETE_WINDOW`).
+`clear_theme_overrides`), **Save and Close** (commits the live
+overrides + dismisses), **Cancel** (reverts to the dialog-open
+snapshot of `_theme_overrides` + `dark_var` and then dismisses).
+ESC and `WM_DELETE_WINDOW` route to **Cancel** so accidental
+closes never lose pre-edit state. Audit `theme-editor-save-cancel`.
 
 ## Live preview
 
 Every pick / preset routes through `set_theme_override` /
 `clear_theme_overrides` / `replace_theme_overrides`, each
-calling `_apply_theme()`. No "Apply" button — live theme console.
+calling `_apply_theme()`. **Save and Close** is a no-op besides
+`destroy()` (everything was already applied + persisted live).
+**Cancel** restores the snapshot via `replace_theme_overrides` +
+`dark_var.set` + a final `_apply_theme()` then `destroy()`.
 
 ## Geometry
 
@@ -63,9 +69,14 @@ Minsize `(440, 260)`.
 
 - **Modeless** (`transient(parent)` without `grab_set`): live
   preview demands the user can still drag the chart.
-- **No internal draft state**: every interaction commits through
-  parent's override APIs. Undo-on-cancel impossible by design —
-  that's what the per-mode "Default" preset is for.
+- **Snapshot + revert on Cancel** — `__init__` captures a
+  `copy.deepcopy` of `_theme_overrides` plus the current
+  `dark_var.get()`; `_on_cancel` replays both via
+  `replace_theme_overrides` and `dark_var.set` so accidental
+  ESC / window-close doesn't strand the user with half-finished
+  edits. Audit `theme-editor-save-cancel`.
+- **Save and Close is a no-op besides destroy** — every pick was
+  already applied + persisted live, so Save just dismisses.
 - **Presets keep the other mode intact** — `clear_other_mode` is
   reserved in `_PRESETS` but currently always `False`.
 - **Bloomberg palette only touches the 6 customisable keys**;

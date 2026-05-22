@@ -25,7 +25,7 @@ arm; INDICATOR fires when the condition group evaluates True).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 from .model import Direction, EntryTrigger, TriggerKind
 
@@ -144,7 +144,7 @@ def trigger_fill_price(
     bar: Any,
     *,
     direction: Direction,
-) -> Optional[float]:
+) -> float | None:
     """Return the conservative fill price for a fired trigger.
 
     Mirrors the exits paper engine: at fire time we report a

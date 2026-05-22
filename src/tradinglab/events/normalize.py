@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import math
-from typing import Any, List, Optional
+from typing import Any
 
 from .base import DividendRecord, EarningsRecord
 
@@ -84,7 +84,7 @@ def date_to_midnight_ms(d) -> int:
     return int((dt - _EPOCH_UTC).total_seconds() * 1000)
 
 
-def slot_from_hour(hour_et: Optional[int]) -> str:
+def slot_from_hour(hour_et: int | None) -> str:
     """Map a US/Eastern wall-clock hour to a ``BMO/AMC/DMH`` slot.
 
     BMO = before 09:30 ET, AMC = at-or-after 16:00 ET, DMH otherwise.
@@ -101,7 +101,7 @@ def slot_from_hour(hour_et: Optional[int]) -> str:
     return "DMH"
 
 
-def _extract_index_hour_et(idx) -> Optional[int]:
+def _extract_index_hour_et(idx) -> int | None:
     """Return a US/Eastern hour for a tz-aware index value, or None.
 
     The +1 nudge on hour==9 with minute≥30 collapses 09:30–09:59 ET
@@ -121,7 +121,7 @@ def _extract_index_hour_et(idx) -> Optional[int]:
     return h + (1 if m >= 30 and h == 9 else 0)
 
 
-def _index_to_date(idx) -> Optional[_dt.date]:
+def _index_to_date(idx) -> _dt.date | None:
     """Best-effort UTC-date extraction from a pandas Timestamp / date.
 
     Returns ``None`` on any failure so the row gets skipped rather than
@@ -138,7 +138,7 @@ def _index_to_date(idx) -> Optional[_dt.date]:
         return None
 
 
-def _resolve_column(df_columns, *candidates: str) -> Optional[str]:
+def _resolve_column(df_columns, *candidates: str) -> str | None:
     """Return the first column name that case-insensitively matches.
 
     Provider frames are inconsistent about capitalisation
@@ -172,7 +172,7 @@ def normalize_earnings_df(
     *,
     symbol: str,
     source: str = "",
-) -> List[EarningsRecord]:
+) -> list[EarningsRecord]:
     """Translate a provider earnings-dates DataFrame to records.
 
     Expects:
@@ -195,7 +195,7 @@ def normalize_earnings_df(
     c_rev_est = _resolve_column(columns, *REVENUE_EST_VARIANTS)
     c_rev_act = _resolve_column(columns, *REVENUE_ACT_VARIANTS)
 
-    records: List[EarningsRecord] = []
+    records: list[EarningsRecord] = []
     for idx, row in df.iterrows():
         day = _index_to_date(idx)
         if day is None:
@@ -223,7 +223,7 @@ def normalize_earnings_df(
     return records
 
 
-def _split_ratio_to_num_den(ratio: float) -> Optional[tuple]:
+def _split_ratio_to_num_den(ratio: float) -> tuple | None:
     """Convert a yfinance float split ratio to ``(num, den)`` ints.
 
     yfinance reports splits as a raw float:
@@ -257,7 +257,7 @@ def normalize_actions_df(
     *,
     symbol: str,
     source: str = "",
-) -> List[DividendRecord]:
+) -> list[DividendRecord]:
     """Translate a provider ``actions`` DataFrame to dividend/split records.
 
     Expects:
@@ -284,7 +284,7 @@ def normalize_actions_df(
     split_col = _resolve_column(columns, "Stock Splits", "Stock_Splits",
                                 "Splits")
 
-    records: List[DividendRecord] = []
+    records: list[DividendRecord] = []
     for idx, row in df.iterrows():
         day = _index_to_date(idx)
         if day is None:

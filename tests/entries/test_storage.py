@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from tradinglab.entries import storage
 from tradinglab.entries.model import (
     Direction,
     EntryStrategy,
@@ -16,7 +17,6 @@ from tradinglab.entries.model import (
     TriggerKind,
     Universe,
 )
-from tradinglab.entries import storage
 
 
 def _good(name: str = "Test", **overrides) -> EntryStrategy:

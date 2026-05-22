@@ -17,7 +17,6 @@ import pytest
 from tradinglab import constants
 from tradinglab.gui import colors
 
-
 _HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 

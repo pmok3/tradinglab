@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, time as dtime, timezone
+from datetime import datetime, timezone
+from datetime import time as dtime
 from typing import Any, Dict, List, Optional
 
 import pytest
@@ -16,7 +17,6 @@ from tradinglab.core.risk_gate import (
 )
 from tradinglab.positions.tracker import PositionTracker
 
-
 # ---- minimal fake EntrySignal --------------------------------------------
 
 @dataclass
@@ -24,9 +24,9 @@ class FakeSignal:
     symbol: str = "AAPL"
     qty: float = 100.0
     side: str = "buy"
-    price: Optional[float] = None
-    stop_price: Optional[float] = None
-    meta: Dict[str, Any] = field(default_factory=dict)
+    price: float | None = None
+    stop_price: float | None = None
+    meta: dict[str, Any] = field(default_factory=dict)
 
 
 @pytest.fixture(autouse=True)

@@ -15,7 +15,7 @@ semantics.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 
 @dataclass
@@ -99,7 +99,7 @@ class CardSeriesCache:
         """Drop all cached bars (e.g. on binding change)."""
         self._bars.clear()
 
-    def latest(self) -> Optional[Bar]:
+    def latest(self) -> Bar | None:
         """Return the trailing bar or ``None`` when empty."""
         return self._bars[-1] if self._bars else None
 

@@ -12,7 +12,7 @@ Determinism contract:
 
 from __future__ import annotations
 
-from typing import List, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 
 from .orders import Fill, Order, Side
 
@@ -23,9 +23,9 @@ def apply_fills(
     next_bar_ts: int,
     slippage_bps: float,
     commission: float,
-) -> List[Fill]:
+) -> list[Fill]:
     """Build fills for every order whose symbol has a next-bar open."""
-    out: List[Fill] = []
+    out: list[Fill] = []
     slip_frac = float(slippage_bps) / 10_000.0
     for o in orders:
         px = next_bar_opens.get(o.symbol)

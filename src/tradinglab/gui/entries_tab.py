@@ -31,22 +31,20 @@ stats panes live during sandbox replays.
 """
 from __future__ import annotations
 
-import dataclasses
 import json
 import logging
 import tkinter as tk
+from collections.abc import Callable
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any
 
 from .._resources import resource_path as _resource_path
 from ..entries import storage as _entries_storage
-from ..entries.audit import AuditLog
 from ..entries.evaluator import EntryEvaluator, EvaluatorStats
 from ..entries.model import (
     CreatedWith,
     EntryStrategy,
-    TriggerKind,
 )
 from .entries_dialog import EntriesDialog
 
@@ -67,7 +65,7 @@ _TREEVIEW_HEADERS = {
 }
 
 
-def _format_audit_record(rec: Dict[str, Any]) -> str:
+def _format_audit_record(rec: dict[str, Any]) -> str:
     """Compact one-line summary mirroring :func:`gui.exits_tab._format_audit_record`.
 
     When the record carries within-last-N-bars look-back evidence
@@ -158,8 +156,8 @@ class EntriesTab(ttk.Frame):
         evaluator: EntryEvaluator,
         storage: Any = None,
         exit_storage: Any = None,
-        on_chart_focus: Optional[Callable[[str], None]] = None,
-        templates_dir: Optional[Path] = None,
+        on_chart_focus: Callable[[str], None] | None = None,
+        templates_dir: Path | None = None,
     ) -> None:
         super().__init__(master)
         self._evaluator = evaluator
@@ -172,14 +170,14 @@ class EntriesTab(ttk.Frame):
         self._templates_dir = Path(templates_dir or self.DEFAULT_TEMPLATES_DIR)
 
         # Library snapshot (refreshed each refresh()).
-        self._library: List[EntryStrategy] = []
-        self._broken: List[Any] = []
+        self._library: list[EntryStrategy] = []
+        self._broken: list[Any] = []
 
         # Tracked Toplevel handles for cleanup-style dialogs.
-        self._dialog: Optional[EntriesDialog] = None
+        self._dialog: EntriesDialog | None = None
 
         # Auto-tick id (so we can cancel on destroy).
-        self._tick_after_id: Optional[str] = None
+        self._tick_after_id: str | None = None
 
         self._build_layout()
         self.refresh()
@@ -192,11 +190,11 @@ class EntriesTab(ttk.Frame):
     # ------------------------------------------------------------------
 
     @property
-    def library(self) -> Tuple[EntryStrategy, ...]:
+    def library(self) -> tuple[EntryStrategy, ...]:
         return tuple(self._library)
 
     @property
-    def selected_strategy_id(self) -> Optional[str]:
+    def selected_strategy_id(self) -> str | None:
         sel = self._tree.selection()
         if not sel:
             return None
@@ -296,7 +294,7 @@ class EntriesTab(ttk.Frame):
     # Theming
     # ------------------------------------------------------------------
 
-    def _apply_theme(self, theme: Dict[str, str]) -> None:
+    def _apply_theme(self, theme: dict[str, str]) -> None:
         """Repaint the non-ttk chrome to match the active palette.
 
         ttk.Style does NOT cover classic ``tk.Text`` widgets, so the
@@ -380,7 +378,7 @@ class EntriesTab(ttk.Frame):
 
     def _refresh_audit_tail(self) -> None:
         audit = getattr(self._evaluator, "_audit", None)
-        records: List[Dict[str, Any]] = []
+        records: list[dict[str, Any]] = []
         if audit is not None:
             try:
                 records = audit.tail(50)
@@ -460,7 +458,7 @@ class EntriesTab(ttk.Frame):
     # Toolbar callbacks
     # ------------------------------------------------------------------
 
-    def _exit_strategy_library(self) -> List[Any]:
+    def _exit_strategy_library(self) -> list[Any]:
         if self._exit_storage is None:
             return []
         try:
@@ -470,7 +468,7 @@ class EntriesTab(ttk.Frame):
             return []
         return list(good)
 
-    def _open_dialog(self, strategy: Optional[EntryStrategy]) -> None:
+    def _open_dialog(self, strategy: EntryStrategy | None) -> None:
         # We construct a fresh dialog per open — there's no singleton-
         # focus invariant for entries (unlike exits).
         try:

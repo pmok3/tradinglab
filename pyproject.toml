@@ -35,7 +35,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=7.4",
-    "ruff>=0.4",
+    "ruff>=0.15,<0.16",
 ]
 schwab = [
     # Required for the Schwab streaming WebSocket source. Base install
@@ -74,9 +74,12 @@ target-version = "py310"
 select = ["E", "F", "W", "I", "B", "UP"]
 ignore = [
     "E501",  # line length already enforced softly
+    "E701",  # multi-statements-on-one-line (style preference; existing codebase pattern)
+    "E702",  # multi-statements-on-one-line via semicolon (compact OHLC inits etc.)
+    "E741",  # ambiguous variable name (e.g. `l` = low in OHLC contexts)
     "B008",  # mpl APIs use mutable defaults
     "B904",  # legacy except-without-from in many places
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["E402", "F401", "F841"]
+"tests/**" = ["E402", "F401", "F841", "UP035", "B017"]

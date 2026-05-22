@@ -13,7 +13,7 @@ from __future__ import annotations
 import tkinter as tk
 from datetime import datetime, timezone
 from tkinter import ttk
-from typing import Any, Optional
+from typing import Any
 
 from ._modal_keys import bind_modal_keys
 from .colors import DOWN_RED, UP_GREEN
@@ -26,7 +26,7 @@ class PostTradeReviewDialog(tk.Toplevel):
         super().__init__(app)
         self.app = app
         self.post_trade = post_trade
-        self.result: Optional[str] = None
+        self.result: str | None = None
 
         side = post_trade.side.upper()
         self.title(f"Post-Trade Review — {post_trade.symbol} {side}")
@@ -128,7 +128,7 @@ class TagsEditorDialog(tk.Toplevel):
         super().__init__(app)
         self.app = app
         self.tag_store = tag_store
-        self.result: Optional[bool] = None  # True if applied; False/None if cancelled
+        self.result: bool | None = None  # True if applied; False/None if cancelled
 
         self.title("Sandbox Setup Tags")
         self.transient(app)

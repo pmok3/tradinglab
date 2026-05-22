@@ -53,7 +53,7 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any
 
 from matplotlib.axes import Axes
 from matplotlib.lines import Line2D
@@ -70,7 +70,7 @@ logger = logging.getLogger(__name__)
 #: Dotted line pattern. 2-on, 3-off in points. Sparser than the grid
 #: (which is solid) so the live-price cursor reads as "moving" rather
 #: than "static level".
-LIVE_PRICE_LINESTYLE: Tuple[int, Tuple[int, int]] = (0, (2, 3))
+LIVE_PRICE_LINESTYLE: tuple[int, tuple[int, int]] = (0, (2, 3))
 
 #: Z-order for the line + label artists. Below exits/entries overlay
 #: lines (4) and below the crosshair (10/11), above grid (<3).
@@ -115,7 +115,7 @@ class LivePriceOverlay:
 
     def __init__(self, *, enabled: bool = True) -> None:
         self._enabled = bool(enabled)
-        self._artists: Dict[str, Tuple[Line2D, Optional[Text]]] = {}
+        self._artists: dict[str, tuple[Line2D, Text | None]] = {}
         # Cached colours from the most recent ``redraw`` so theme-change
         # repaints can read them without the caller having to pass the
         # theme dict in again. Updated whenever a draw applies a colour.
@@ -142,7 +142,7 @@ class LivePriceOverlay:
         """Number of slots currently tracked. Testing helper."""
         return len(self._artists)
 
-    def get_artists(self, slot: str) -> Optional[Tuple[Line2D, Optional[Text]]]:
+    def get_artists(self, slot: str) -> tuple[Line2D, Text | None] | None:
         """Return ``(line, label)`` for ``slot`` or ``None``. Testing helper."""
         return self._artists.get(slot)
 
@@ -162,13 +162,13 @@ class LivePriceOverlay:
     def redraw(
         self,
         *,
-        ax_by_slot: Dict[str, Axes],
-        price_by_slot: Dict[str, Optional[float]],
+        ax_by_slot: dict[str, Axes],
+        price_by_slot: dict[str, float | None],
         color: str = "#888888",
         label_suffix: str = "",
-        label_bg: Optional[str] = None,
-        label_fg: Optional[str] = None,
-        label_edge: Optional[str] = None,
+        label_bg: str | None = None,
+        label_fg: str | None = None,
+        label_edge: str | None = None,
     ) -> None:
         """Rebuild artists for every slot in ``ax_by_slot``.
 
@@ -284,7 +284,7 @@ class LivePriceOverlay:
     def update_in_place(
         self,
         slot: str,
-        price: Optional[float],
+        price: float | None,
         *,
         label_suffix: str = "",
     ) -> bool:
@@ -347,9 +347,9 @@ class LivePriceOverlay:
         *,
         color: str,
         label_suffix: str,
-        label_bg: Optional[str] = None,
-        label_fg: Optional[str] = None,
-        label_edge: Optional[str] = None,
+        label_bg: str | None = None,
+        label_fg: str | None = None,
+        label_edge: str | None = None,
     ) -> None:
         line = ax.axhline(
             y=price,
@@ -359,7 +359,7 @@ class LivePriceOverlay:
             alpha=0.7,
             zorder=LIVE_PRICE_ZORDER,
         )
-        label: Optional[Text] = None
+        label: Text | None = None
         try:
             from matplotlib.transforms import blended_transform_factory
             tr = blended_transform_factory(ax.transAxes, ax.transData)
@@ -416,9 +416,9 @@ class LivePriceOverlay:
 def resolve_price(
     symbol: str,
     *,
-    last_stream_price: Dict[str, float],
-    panel_state_slot: Optional[Dict[str, Any]],
-) -> Optional[float]:
+    last_stream_price: dict[str, float],
+    panel_state_slot: dict[str, Any] | None,
+) -> float | None:
     """Return the freshest known price for ``symbol`` or ``None``.
 
     Resolution order (newest wins):

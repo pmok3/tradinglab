@@ -14,9 +14,10 @@ dependency yet.
 
 from __future__ import annotations
 
-from typing import Iterable, List
+import builtins
+from collections.abc import Iterable
 
-_DEFAULT_TAGS: List[str] = [
+_DEFAULT_TAGS: list[str] = [
     "breakout",
     "pullback",
     "reversal",
@@ -42,14 +43,14 @@ class TagStore:
     """
 
     def __init__(self, initial: Iterable[str] = ()) -> None:
-        self._tags: List[str] = []
+        self._tags: list[str] = []
         self.replace(list(initial) or list(_DEFAULT_TAGS))
 
     @staticmethod
     def _norm(tag: str) -> str:
         return str(tag).strip().casefold()
 
-    def list(self) -> List[str]:
+    def list(self) -> builtins.list[str]:
         return list(self._tags)
 
     def add(self, tag: str) -> bool:
@@ -73,7 +74,7 @@ class TagStore:
     def replace(self, tags: Iterable[str]) -> None:
         """Wholesale replace. Used by the editor dialog's OK button."""
         seen = set()
-        new_list: List[str] = []
+        new_list: list[str] = []
         for t in tags:
             n = self._norm(t)
             if not n or n in seen:

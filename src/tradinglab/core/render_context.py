@@ -40,13 +40,14 @@ exit.
 from __future__ import annotations
 
 import threading
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any, Dict, Iterator, Optional
+from typing import Any
 
 _local = threading.local()
 
 
-def current_context() -> Dict[str, Any]:
+def current_context() -> dict[str, Any]:
     """Return the current render context dict, or an empty dict.
 
     Callers should treat individual keys as optional; not every render
@@ -62,17 +63,17 @@ def current_context() -> Dict[str, Any]:
 @contextmanager
 def render_context(
     *,
-    interval: Optional[str] = None,
-    source: Optional[str] = None,
-    primary_symbol: Optional[str] = None,
-) -> Iterator[Dict[str, Any]]:
+    interval: str | None = None,
+    source: str | None = None,
+    primary_symbol: str | None = None,
+) -> Iterator[dict[str, Any]]:
     """Push a render context for the duration of the ``with`` block.
 
     Any key passed as ``None`` is omitted from the resulting context
     dict so callers that only know one field don't shadow another with
     a spurious None.
     """
-    payload: Dict[str, Any] = {}
+    payload: dict[str, Any] = {}
     if interval is not None:
         payload["interval"] = interval
     if source is not None:

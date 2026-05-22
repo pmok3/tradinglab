@@ -21,9 +21,9 @@ from typing import List, Tuple
 import pytest
 
 from tradinglab.gui.doc_viewer import (
-    TAG_NAMES,
     _DOC_ORDER,
     _DOC_TITLES,
+    TAG_NAMES,
     _apply_inline_markup,
     _discover_doc_files,
     _display_title_for,
@@ -31,7 +31,6 @@ from tradinglab.gui.doc_viewer import (
     _theme_palette,
     render_markdown_into_text,
 )
-
 
 # ---------------------------------------------------------------------------
 # Pure-renderer infrastructure
@@ -47,7 +46,7 @@ class _FakeTextWidget:
     """
 
     def __init__(self) -> None:
-        self.segments: List[Tuple[str, Tuple[str, ...]]] = []
+        self.segments: list[tuple[str, tuple[str, ...]]] = []
 
     def insert(self, _index, text, tags=()) -> None:
         if isinstance(tags, str):
@@ -57,7 +56,7 @@ class _FakeTextWidget:
     def joined(self) -> str:
         return "".join(s for s, _ in self.segments)
 
-    def tags_for(self, substring: str) -> List[Tuple[str, ...]]:
+    def tags_for(self, substring: str) -> list[tuple[str, ...]]:
         return [tags for text, tags in self.segments if substring in text]
 
 

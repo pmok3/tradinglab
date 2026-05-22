@@ -29,7 +29,7 @@ All three lines are overlay-class — they live on the price axes.
 
 from __future__ import annotations
 
-from typing import ClassVar, Dict, List, Optional, Tuple
+from typing import ClassVar
 
 import numpy as np
 
@@ -41,7 +41,7 @@ from .ma_kernels import MA_TYPES, apply_ma
 # Per-MA color palette so a chart with multiple BB configs reads at a
 # glance. Defaults override only when the user didn't already set a
 # style; see :meth:`__init__`.
-_DEFAULT_COLOR_BY_MA: Dict[str, str] = {
+_DEFAULT_COLOR_BY_MA: dict[str, str] = {
     "SMA": "#2ca02c",  # green
     "EMA": "#d62728",  # red (matches the previous BB-EMA hue)
     "WMA": "#9467bd",  # purple
@@ -52,7 +52,7 @@ _DEFAULT_COLOR_BY_MA: Dict[str, str] = {
 class BollingerBands:
     kind_id: ClassVar[str] = "bbands"
     kind_version: ClassVar[int] = 3
-    params_schema: ClassVar[Tuple[ParamDef, ...]] = (
+    params_schema: ClassVar[tuple[ParamDef, ...]] = (
         ParamDef("length", "int", default=20, min=2, max=2000, step=1,
                  description="Length"),
         ParamDef("num_std", "float", default=2.0, min=0.1, max=10.0, step=0.1,
@@ -63,7 +63,7 @@ class BollingerBands:
                  choices=MA_TYPES,
                  description="Moving Average"),
     )
-    default_style: ClassVar[Dict[str, LineStyle]] = {
+    default_style: ClassVar[dict[str, LineStyle]] = {
         # SMA-default colors. Per-instance overrides applied in
         # __init__ when a non-SMA ma_type is picked.
         "middle": LineStyle(color=_DEFAULT_COLOR_BY_MA["SMA"], width=1.2),
@@ -74,7 +74,7 @@ class BollingerBands:
     overlay = True
 
     def __init__(self, length: int = 20, num_std: float = 2.0,
-                 std_length: Optional[int] = None,
+                 std_length: int | None = None,
                  ma_type: str = "SMA") -> None:
         if length < 2:
             raise ValueError("length must be >= 2")
@@ -101,11 +101,12 @@ class BollingerBands:
         else:
             self.name = f"BB({length},{num_std:g}{ma_tag},σ={self.std_length})"
 
-    def compute_arr(self, bars: Bars) -> Dict[str, np.ndarray]:
+    def compute_arr(self, bars: Bars) -> dict[str, np.ndarray]:
         closes = bars.close
         n = self.length
         m = self.std_length
-        empty = lambda: np.full_like(closes, np.nan)
+        def empty():
+            return np.full_like(closes, np.nan)
         middle, upper, lower = empty(), empty(), empty()
 
         if closes.size == 0:
@@ -131,5 +132,5 @@ class BollingerBands:
 
         return {"middle": middle, "upper": upper, "lower": lower}
 
-    def compute(self, candles: List[Candle]) -> Dict[str, np.ndarray]:
+    def compute(self, candles: list[Candle]) -> dict[str, np.ndarray]:
         return self.compute_arr(Bars.from_candles(candles))

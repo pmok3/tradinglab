@@ -23,9 +23,10 @@ parsed tick dicts + the current wall clock. Tests drive it directly.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any
 
 from ..constants import classify_session, floor_to_interval
 from ..models import Candle
@@ -52,14 +53,14 @@ LEVELONE_FIELDS = {
 }
 
 
-def decode_levelone_content(content: Mapping[str, Any]) -> Dict[str, Any]:
+def decode_levelone_content(content: Mapping[str, Any]) -> dict[str, Any]:
     """Translate one LEVELONE_EQUITIES content dict to logical names.
 
     Schwab sends partial updates (only changed fields), so the result
     may be missing any key. Numeric fields are coerced to ``float`` /
     ``int`` only when present; absent keys stay absent.
     """
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
     for raw_key, val in content.items():
         name = LEVELONE_FIELDS.get(str(raw_key), None)
         if name is None:
@@ -85,8 +86,8 @@ CHART_EQUITY_FIELDS = {
 }
 
 
-def decode_chart_equity_content(content: Mapping[str, Any]) -> Dict[str, Any]:
-    out: Dict[str, Any] = {}
+def decode_chart_equity_content(content: Mapping[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
     for raw_key, val in content.items():
         name = CHART_EQUITY_FIELDS.get(str(raw_key), None)
         if name is None:
@@ -97,7 +98,7 @@ def decode_chart_equity_content(content: Mapping[str, Any]) -> Dict[str, Any]:
 
 def chart_equity_to_candle(
     decoded: Mapping[str, Any], *, tz=timezone.utc,
-) -> Optional[Candle]:
+) -> Candle | None:
     """Map a decoded CHART_EQUITY bar into our :class:`Candle`.
 
     Returns ``None`` if any required OHLCV/timestamp field is missing
@@ -135,7 +136,7 @@ class _Bar:
     # into per-bar volume by subtracting the cumulative value at bar
     # open. Set to None until the first cumulative we observe in the
     # bar, then frozen for the bar's lifetime.
-    _cum_volume_at_open: Optional[int] = None
+    _cum_volume_at_open: int | None = None
 
     def to_candle(self) -> Candle:
         return Candle(
@@ -161,9 +162,9 @@ class MinuteBarBuilder:
     """
 
     seed_close: float
-    _bar: Optional[_Bar] = field(default=None, init=False)
+    _bar: _Bar | None = field(default=None, init=False)
 
-    def open_initial_bar(self, now: datetime) -> Tuple[str, Candle]:
+    def open_initial_bar(self, now: datetime) -> tuple[str, Candle]:
         """Open the very first in-progress bar at ``now`` floored to 1-min.
 
         Returns the ``("rollover", Candle)`` event the source should
@@ -179,13 +180,13 @@ class MinuteBarBuilder:
 
     def apply_levelone(
         self, decoded: Mapping[str, Any], *, now: datetime,
-    ) -> List[Tuple[str, Candle]]:
+    ) -> list[tuple[str, Candle]]:
         """Apply one decoded LEVELONE update. Returns the events to emit.
 
         Multiple events can come back in one call if the wall clock
         already crossed a minute boundary since the last update.
         """
-        events: List[Tuple[str, Candle]] = []
+        events: list[tuple[str, Candle]] = []
         if self._bar is None:
             events.append(self.open_initial_bar(now))
 
@@ -229,15 +230,15 @@ class MinuteBarBuilder:
             events.append(("tick", bar.to_candle()))
         return events
 
-    def maybe_rollover(self, now: datetime) -> List[Tuple[str, Candle]]:
+    def maybe_rollover(self, now: datetime) -> list[tuple[str, Candle]]:
         """Force boundary check (no LEVELONE update). Used by the
         per-source clock thread so quiet symbols still roll over."""
         if self._bar is None:
             return [self.open_initial_bar(now)]
         return self._roll_to(now)
 
-    def _roll_to(self, now: datetime) -> List[Tuple[str, Candle]]:
-        events: List[Tuple[str, Candle]] = []
+    def _roll_to(self, now: datetime) -> list[tuple[str, Candle]]:
+        events: list[tuple[str, Candle]] = []
         bar = self._bar
         assert bar is not None
         target = floor_to_interval(now, 1)

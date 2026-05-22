@@ -107,7 +107,8 @@ pane.
 from __future__ import annotations
 
 import bisect
-from typing import Any, ClassVar, Dict, List, Mapping, Optional, Tuple
+from collections.abc import Mapping
+from typing import Any, ClassVar
 
 import numpy as np
 
@@ -126,14 +127,14 @@ from .sessions import (
     tod_key_np,
 )
 
-_MODES: Tuple[str, ...] = ("simple", "cumulative", "time_of_day")
-_AGGREGATORS: Tuple[str, ...] = ("mean", "median")
-_SESSION_FILTERS: Tuple[str, ...] = (
+_MODES: tuple[str, ...] = ("simple", "cumulative", "time_of_day")
+_AGGREGATORS: tuple[str, ...] = ("mean", "median")
+_SESSION_FILTERS: tuple[str, ...] = (
     "regular_only", "regular_plus_premarket", "extended",
 )
 
 #: Modes that require intraday data. Used by :meth:`RVOL.is_available_for`.
-_INTRADAY_MODES: Tuple[str, ...] = ("cumulative", "time_of_day")
+_INTRADAY_MODES: tuple[str, ...] = ("cumulative", "time_of_day")
 
 #: Minimum prior sessions before partial-warmup output begins.
 _MIN_WARMUP_SESSIONS = 5
@@ -166,7 +167,7 @@ def _validate_length(length: int) -> int:
     return n
 
 
-def _validate_thresholds(warn: float, extreme: float) -> Tuple[float, float]:
+def _validate_thresholds(warn: float, extreme: float) -> tuple[float, float]:
     w = float(warn)
     e = float(extreme)
     if w <= 0.0 or e <= 0.0:
@@ -246,10 +247,10 @@ def _compute_cumulative(
     tk = tod_key_np(bars)  # int32, h*60+m
 
     # Per-session cumulative-volume keyed by tod.
-    session_cum: List[Dict[int, float]] = []
+    session_cum: list[dict[int, float]] = []
     for grp in groups:
         cum = 0.0
-        keyed: Dict[int, float] = {}
+        keyed: dict[int, float] = {}
         for idx in grp:
             if not admit_mask[idx]:
                 continue
@@ -262,7 +263,7 @@ def _compute_cumulative(
 
     # Pre-sort each session's tod-keys + cumulative-values into parallel
     # arrays for O(log b) prefix lookup via bisect.
-    sorted_keyed: List[Tuple[List[int], List[float]]] = []
+    sorted_keyed: list[tuple[list[int], list[float]]] = []
     for keyed in session_cum:
         if not keyed:
             sorted_keyed.append(([], []))
@@ -283,7 +284,7 @@ def _compute_cumulative(
             today_cum = cur_keyed.get(k)
             if today_cum is None:
                 continue
-            baseline_vals: List[float] = []
+            baseline_vals: list[float] = []
             for keys_list, vals_list in prior_window:
                 if not keys_list:
                     continue
@@ -328,9 +329,9 @@ def _compute_time_of_day(
     tk = tod_key_np(bars)
 
     # Per-session per-tod-key volume map.
-    per_session: List[Dict[int, float]] = []
+    per_session: list[dict[int, float]] = []
     for grp in groups:
-        keyed: Dict[int, float] = {}
+        keyed: dict[int, float] = {}
         for idx in grp:
             if not admit_mask[idx]:
                 continue
@@ -458,12 +459,12 @@ class RVOL:
     #: referenced inside :meth:`compute_arr`) from the entries / exits /
     #: scanner block-editor forms. The full schema stays visible in the
     #: chart-side Manage Indicators dialog.
-    TRIGGER_RELEVANT_PARAMS: ClassVar[Tuple[str, ...]] = (
+    TRIGGER_RELEVANT_PARAMS: ClassVar[tuple[str, ...]] = (
         "mode", "length", "aggregator", "session_filter",
         "denominator_includes_current", "z_score",
     )
 
-    params_schema: ClassVar[Tuple[ParamDef, ...]] = (
+    params_schema: ClassVar[tuple[ParamDef, ...]] = (
         ParamDef("mode", "choice", default="simple",
                  choices=_MODES, description="Mode"),
         ParamDef("length", "int", default=20, min=1, max=500, step=1,
@@ -481,16 +482,16 @@ class RVOL:
         ParamDef("threshold_extreme", "float", default=5.0, min=0.1,
                  max=100.0, step=0.1, description="Extreme level"),
     )
-    default_style: ClassVar[Dict[str, LineStyle]] = {
+    default_style: ClassVar[dict[str, LineStyle]] = {
         "rvol": LineStyle(color="#aec7e8", width=1.4),
     }
-    reference_levels: ClassVar[Tuple[float, ...]] = ()
+    reference_levels: ClassVar[tuple[float, ...]] = ()
 
     @classmethod
     def is_available_for(
         cls,
         interval: str,
-        params: Optional[Mapping[str, Any]] = None,
+        params: Mapping[str, Any] | None = None,
     ) -> Availability:
         """Mode-aware availability check.
 
@@ -505,7 +506,7 @@ class RVOL:
         return Availability(True, "")
 
     @classmethod
-    def pane_group_for(cls, params: Optional[Mapping[str, Any]]) -> str:
+    def pane_group_for(cls, params: Mapping[str, Any] | None) -> str:
         """Return the pane group for an indicator with these params.
 
         Z-scores live on a 0-centered axis; plain RVOL lives on a
@@ -546,7 +547,7 @@ class RVOL:
         # Per-instance reference levels: z-scores get the Bellafiore
         # 0/+2σ pair; plain RVOL gets the 1.0 baseline + warn/extreme.
         if self.z_score:
-            self.reference_levels: Tuple[float, ...] = (0.0, 2.0)
+            self.reference_levels: tuple[float, ...] = (0.0, 2.0)
         else:
             self.reference_levels = (
                 1.0, float(self.threshold_warn), float(self.threshold_extreme),
@@ -557,7 +558,7 @@ class RVOL:
                       "time_of_day": " ToD"}[self.mode]
         self.name = f"RVOL{mode_short}{suffix}({self.length})"
 
-    def compute_arr(self, bars: Bars) -> Dict[str, np.ndarray]:
+    def compute_arr(self, bars: Bars) -> dict[str, np.ndarray]:
         return {
             "rvol": _dispatch_compute(
                 bars,
@@ -570,5 +571,5 @@ class RVOL:
             ),
         }
 
-    def compute(self, candles: List[Candle]) -> Dict[str, np.ndarray]:
+    def compute(self, candles: list[Candle]) -> dict[str, np.ndarray]:
         return self.compute_arr(Bars.from_candles(candles))

@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator
 
 import pytest
 
-from tradinglab.positions.model import Position
 from tradinglab.positions import storage
+from tradinglab.positions.model import Position
 
 
 @pytest.fixture

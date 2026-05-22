@@ -49,8 +49,6 @@ update path); leave it ``None`` for a full recompute.
 
 from __future__ import annotations
 
-from typing import Optional, Tuple
-
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
 
@@ -92,7 +90,7 @@ def compute_atr(
 def rolling_highest_high_since(
     highs: np.ndarray,
     lookback: int,
-    anchor_idx: Optional[int] = None,
+    anchor_idx: int | None = None,
 ) -> np.ndarray:
     """Per-bar rolling highest-high, optionally anchored.
 
@@ -128,7 +126,7 @@ def rolling_highest_high_since(
 def rolling_lowest_low_since(
     lows: np.ndarray,
     lookback: int,
-    anchor_idx: Optional[int] = None,
+    anchor_idx: int | None = None,
 ) -> np.ndarray:
     """Per-bar rolling lowest-low, optionally anchored. Mirror of
     :func:`rolling_highest_high_since`."""
@@ -154,14 +152,14 @@ def rolling_lowest_low_since(
     return out
 
 
-def _ratchet_long(arr: np.ndarray, prev: Optional[float]) -> np.ndarray:
+def _ratchet_long(arr: np.ndarray, prev: float | None) -> np.ndarray:
     """In-place ratchet (max-of-running) of a long chandelier series.
 
     NaN entries pass through untouched. ``prev`` seeds the running max
     so the function can be called incrementally on chunks.
     """
     out = arr.copy()
-    running: Optional[float] = prev
+    running: float | None = prev
     for i in range(out.size):
         v = out[i]
         if not np.isfinite(v):
@@ -172,10 +170,10 @@ def _ratchet_long(arr: np.ndarray, prev: Optional[float]) -> np.ndarray:
     return out
 
 
-def _ratchet_short(arr: np.ndarray, prev: Optional[float]) -> np.ndarray:
+def _ratchet_short(arr: np.ndarray, prev: float | None) -> np.ndarray:
     """In-place ratchet (min-of-running) of a short chandelier series."""
     out = arr.copy()
-    running: Optional[float] = prev
+    running: float | None = prev
     for i in range(out.size):
         v = out[i]
         if not np.isfinite(v):
@@ -192,9 +190,9 @@ def compute_chandelier_long(
     lookback: int,
     multiplier: float,
     *,
-    anchor_idx: Optional[int] = None,
-    ratchet_prev: Optional[float] = None,
-) -> Tuple[np.ndarray, Optional[float]]:
+    anchor_idx: int | None = None,
+    ratchet_prev: float | None = None,
+) -> tuple[np.ndarray, float | None]:
     """Long chandelier stop = highest_high(window) − multiplier × ATR.
 
     Returns ``(stops, final_ratchet)`` where ``final_ratchet`` is the
@@ -225,9 +223,9 @@ def compute_chandelier_short(
     lookback: int,
     multiplier: float,
     *,
-    anchor_idx: Optional[int] = None,
-    ratchet_prev: Optional[float] = None,
-) -> Tuple[np.ndarray, Optional[float]]:
+    anchor_idx: int | None = None,
+    ratchet_prev: float | None = None,
+) -> tuple[np.ndarray, float | None]:
     """Short chandelier stop = lowest_low(window) + multiplier × ATR.
 
     Mirror of :func:`compute_chandelier_long`. Returns

@@ -50,11 +50,11 @@ have no thread restriction.
 from __future__ import annotations
 
 import logging
-import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from datetime import time as dtime
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any
 
 from ..core.thread_guard import require_tk_thread
 from ..positions.model import Position, PositionEvent, PositionEventKind
@@ -108,8 +108,8 @@ class _TriggerSlot:
     trigger: ExitTrigger
     armed: bool = True
     state: TriggerState = field(default_factory=TriggerState)
-    submitted_order_ids: List[str] = field(default_factory=list)
-    last_fire_bar_ts_ns: Optional[int] = None
+    submitted_order_ids: list[str] = field(default_factory=list)
+    last_fire_bar_ts_ns: int | None = None
     error_count: int = 0
     broken: bool = False
 
@@ -117,16 +117,16 @@ class _TriggerSlot:
 @dataclass
 class _LegSlot:
     leg: ExitLeg
-    triggers: List[_TriggerSlot]
+    triggers: list[_TriggerSlot]
 
 
 @dataclass
 class _Attachment:
     strategy: ExitStrategy
-    legs: Dict[str, _LegSlot]
+    legs: dict[str, _LegSlot]
     position_id: str
-    oco_lookup: Dict[str, OCOGroup]
-    pending_full_closeout_cancel: Set[str] = field(default_factory=set)
+    oco_lookup: dict[str, OCOGroup]
+    pending_full_closeout_cancel: set[str] = field(default_factory=set)
     eod_fired: bool = False
 
 
@@ -153,7 +153,7 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _bar_ts_ns(bar: Bar) -> Optional[int]:
+def _bar_ts_ns(bar: Bar) -> int | None:
     if bar.date is None:
         return None
     try:
@@ -201,8 +201,8 @@ class ExitEvaluator:
         *,
         tracker: PositionTracker,
         sink: ExitSignalSink,
-        audit: Optional[AuditLog] = None,
-        bars_registry: Optional[Any] = None,
+        audit: AuditLog | None = None,
+        bars_registry: Any | None = None,
         session_close_time: dtime = dtime(16, 0),
         clock: Callable[[], datetime] = _utc_now,
         default_interval: str = "1m",
@@ -214,7 +214,7 @@ class ExitEvaluator:
         self._session_close_time = session_close_time
         self._clock = clock
         self._default_interval = default_interval
-        self._attached: Dict[str, _Attachment] = {}
+        self._attached: dict[str, _Attachment] = {}
         self._stats = EvaluatorStats()
         self._unsubscribe_tracker = tracker.subscribe(self._on_position_event)
 
@@ -235,14 +235,14 @@ class ExitEvaluator:
     # Read-only queries (any thread)
     # ------------------------------------------------------------------
 
-    def attached_strategy(self, position_id: str) -> Optional[ExitStrategy]:
+    def attached_strategy(self, position_id: str) -> ExitStrategy | None:
         att = self._attached.get(position_id)
         return att.strategy if att else None
 
     def is_attached(self, position_id: str) -> bool:
         return position_id in self._attached
 
-    def attached_position_ids(self) -> List[str]:
+    def attached_position_ids(self) -> list[str]:
         return list(self._attached.keys())
 
     def stats(self) -> EvaluatorStats:
@@ -257,7 +257,7 @@ class ExitEvaluator:
 
     def trigger_state(
         self, position_id: str, leg_id: str, trigger_id: str
-    ) -> Optional[_TriggerSlot]:
+    ) -> _TriggerSlot | None:
         att = self._attached.get(position_id)
         if att is None:
             return None
@@ -295,14 +295,14 @@ class ExitEvaluator:
         if position_id in self._attached:
             self._do_detach(position_id, reason="auto-replace", cancel_in_flight=True)
 
-        leg_slots: Dict[str, _LegSlot] = {}
+        leg_slots: dict[str, _LegSlot] = {}
         for leg in strategy.legs:
             triggers = [
                 _TriggerSlot(trigger=t) for t in leg.triggers if t.enabled
             ]
             leg_slots[leg.id] = _LegSlot(leg=leg, triggers=triggers)
 
-        oco_lookup: Dict[str, OCOGroup] = {}
+        oco_lookup: dict[str, OCOGroup] = {}
         for grp in strategy.oco_groups:
             for lid in grp.leg_ids:
                 oco_lookup[lid] = grp
@@ -399,8 +399,8 @@ class ExitEvaluator:
         bar: Bar,
         *,
         is_close: bool = True,
-        interval: Optional[str] = None,
-    ) -> List[ExitSignal]:
+        interval: str | None = None,
+    ) -> list[ExitSignal]:
         """Evaluate every armed trigger for the bound strategy.
 
         Returns the list of fired :class:`ExitSignal` instances. Each
@@ -428,7 +428,7 @@ class ExitEvaluator:
             sig = self._fire_eod_kill(att, pos, bar)
             return [sig] if sig is not None else []
 
-        fired: List[ExitSignal] = []
+        fired: list[ExitSignal] = []
         # Iterate a list copy so OCO sibling-cancel mutating armed flags
         # mid-loop is harmless.
         leg_items = list(att.legs.items())
@@ -460,7 +460,7 @@ class ExitEvaluator:
         bar: Bar,
         *,
         is_close: bool,
-    ) -> Optional[ExitSignal]:
+    ) -> ExitSignal | None:
         trigger = tslot.trigger
         kind = trigger.kind
 
@@ -539,8 +539,8 @@ class ExitEvaluator:
 
         order_kind = _order_kind_for_decision(kind, decision)
         side = OrderSide.SELL if pos.side == "long" else OrderSide.BUY
-        price_for_signal: Optional[float]
-        limit_price_for_signal: Optional[float]
+        price_for_signal: float | None
+        limit_price_for_signal: float | None
         if order_kind == ExitOrderKind.MARKET:
             price_for_signal = None
             limit_price_for_signal = None
@@ -565,7 +565,7 @@ class ExitEvaluator:
         )
 
         if self._audit is not None:
-            fire_meta: Dict[str, Any] = {"reason": decision.reason, "kind": kind.value}
+            fire_meta: dict[str, Any] = {"reason": decision.reason, "kind": kind.value}
             if decision.evidence:
                 fire_meta["evidence"] = [
                     {
@@ -767,7 +767,7 @@ class ExitEvaluator:
 
     def _fire_eod_kill(
         self, att: _Attachment, pos: Position, bar: Bar
-    ) -> Optional[ExitSignal]:
+    ) -> ExitSignal | None:
         """Cancel everything + submit a market exit for the entire qty_open."""
         # Cancel all in-flight orders for this position.
         try:
@@ -865,7 +865,7 @@ class ExitEvaluator:
         return n
 
     @require_tk_thread
-    def submit_market_flatten(self, position_id: str) -> Optional[ExitSignal]:
+    def submit_market_flatten(self, position_id: str) -> ExitSignal | None:
         """Phase 2 of panic flatten: market exit for ``qty_open``.
 
         Called by the GUI after :meth:`panic_flatten_position`. Safe

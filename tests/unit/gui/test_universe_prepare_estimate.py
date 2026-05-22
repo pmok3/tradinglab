@@ -14,7 +14,6 @@ from tradinglab.gui.universe_prepare_dialog import (
     compute_run_estimate,
 )
 
-
 # ---------------------------------------------------------------------------
 # Empty / null cases — label must be empty so the dialog can blank it
 # ---------------------------------------------------------------------------

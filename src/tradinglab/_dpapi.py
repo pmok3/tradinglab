@@ -48,7 +48,6 @@ import os
 import sys
 import tempfile
 from pathlib import Path
-from typing import Dict, Optional
 
 
 class DpapiError(RuntimeError):
@@ -230,7 +229,7 @@ def unprotect(ciphertext: bytes) -> bytes:
 # ---------------------------------------------------------------------------
 
 
-def save_secrets_dict(path: Path, mapping: Dict[str, str]) -> None:
+def save_secrets_dict(path: Path, mapping: dict[str, str]) -> None:
     """JSON-encode + DPAPI-encrypt ``mapping`` and atomically write to ``path``.
 
     Atomic semantics: writes to ``<path>.tmp`` then ``os.replace``s
@@ -261,7 +260,7 @@ def save_secrets_dict(path: Path, mapping: Dict[str, str]) -> None:
         raise
 
 
-def load_secrets_dict(path: Path) -> Optional[Dict[str, str]]:
+def load_secrets_dict(path: Path) -> dict[str, str] | None:
     """Read + DPAPI-decrypt + JSON-decode the blob at ``path``.
 
     Returns:

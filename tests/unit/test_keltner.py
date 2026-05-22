@@ -37,11 +37,11 @@ from tradinglab.indicators.wilder import true_range
 from tradinglab.models import Candle
 
 
-def _mk_candles(n: int, seed: float = 0.0) -> List[Candle]:
+def _mk_candles(n: int, seed: float = 0.0) -> list[Candle]:
     """Deterministic walk with non-trivial range — exercises TR fully."""
     start = dt.datetime(2024, 1, 2, 9, 30, tzinfo=dt.timezone.utc)
     rng = np.random.default_rng(int(seed * 1000) or 7)
-    out: List[Candle] = []
+    out: list[Candle] = []
     base = 100.0
     for i in range(n):
         drift = 0.05 * i + seed

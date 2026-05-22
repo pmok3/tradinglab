@@ -60,8 +60,9 @@ that don't expose that hook are silently no-op'd.
 from __future__ import annotations
 
 import tkinter as tk
+from collections.abc import Callable
 from tkinter import ttk
-from typing import Any, Callable, Optional, Tuple
+from typing import Any
 
 from ._modal_keys import bind_modal_keys
 from .colors import ERROR_RED
@@ -96,9 +97,9 @@ class BaseModalDialog(tk.Toplevel):
         parent: tk.Misc,
         *,
         title: str = "",
-        geometry_key: Optional[str] = None,
+        geometry_key: str | None = None,
         default_geometry: str = "640x480",
-        resizable: Tuple[bool, bool] = (True, True),
+        resizable: tuple[bool, bool] = (True, True),
         apply_dark_theme: bool = True,
     ) -> None:
         super().__init__(parent)
@@ -122,8 +123,8 @@ class BaseModalDialog(tk.Toplevel):
     def _finalize_modal(
         self,
         *,
-        primary: Optional[Callable[[], None]] = None,
-        cancel: Optional[Callable[[], None]] = None,
+        primary: Callable[[], None] | None = None,
+        cancel: Callable[[], None] | None = None,
         grab: bool = True,
     ) -> None:
         """Wire keybindings, geometry persistence, grab.
@@ -225,9 +226,9 @@ class BaseEditorDialog(BaseModalDialog):
         parent: tk.Misc,
         *,
         title: str = "",
-        geometry_key: Optional[str] = None,
+        geometry_key: str | None = None,
         default_geometry: str = "900x600",
-        resizable: Tuple[bool, bool] = (True, True),
+        resizable: tuple[bool, bool] = (True, True),
         apply_dark_theme: bool = True,
     ) -> None:
         super().__init__(
@@ -241,10 +242,10 @@ class BaseEditorDialog(BaseModalDialog):
         self._status_var = tk.StringVar(value="")
         # Footer widgets exposed for test introspection / per-dialog
         # state tweaks (e.g. disabling [Apply] while a long task runs).
-        self.btn_validate: Optional[ttk.Button] = None
-        self.btn_cancel: Optional[ttk.Button] = None
-        self.btn_apply: Optional[ttk.Button] = None
-        self.btn_save_close: Optional[ttk.Button] = None
+        self.btn_validate: ttk.Button | None = None
+        self.btn_cancel: ttk.Button | None = None
+        self.btn_apply: ttk.Button | None = None
+        self.btn_save_close: ttk.Button | None = None
 
     # ------------------------------------------------------------------
     # Footer builder
@@ -253,10 +254,10 @@ class BaseEditorDialog(BaseModalDialog):
         self,
         parent: tk.Misc,
         *,
-        on_validate: Optional[Callable[[], None]] = None,
-        on_cancel: Optional[Callable[[], None]] = None,
-        on_apply: Optional[Callable[[], None]] = None,
-        on_save_close: Optional[Callable[[], None]] = None,
+        on_validate: Callable[[], None] | None = None,
+        on_cancel: Callable[[], None] | None = None,
+        on_apply: Callable[[], None] | None = None,
+        on_save_close: Callable[[], None] | None = None,
         status_foreground: str = ERROR_RED,
     ) -> ttk.Frame:
         """Build the canonical 4-button editor footer.

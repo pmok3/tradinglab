@@ -12,7 +12,6 @@ from tradinglab.core.chandelier_math import (
     rolling_lowest_low_since,
 )
 
-
 # ---------------------------------------------------------------------------
 # rolling_highest_high_since / rolling_lowest_low_since
 # ---------------------------------------------------------------------------

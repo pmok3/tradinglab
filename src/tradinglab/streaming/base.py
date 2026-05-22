@@ -18,7 +18,8 @@ calls :func:`register_stream` at import time.
 
 from __future__ import annotations
 
-from typing import Callable, Dict, Protocol
+from collections.abc import Callable
+from typing import Protocol
 
 from ..models import Candle
 
@@ -53,7 +54,7 @@ class StreamSource(Protocol):
 
 
 # Global registry populated by sub-modules at import time.
-STREAM_SOURCES: Dict[str, StreamSource] = {}
+STREAM_SOURCES: dict[str, StreamSource] = {}
 
 
 def register_stream(name: str, source: StreamSource) -> None:

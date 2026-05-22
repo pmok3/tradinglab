@@ -36,8 +36,9 @@ from __future__ import annotations
 import json
 import logging
 import tkinter as tk
+from collections.abc import Callable, Iterable, Mapping
 from tkinter import filedialog, messagebox, simpledialog, ttk
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
+from typing import Any
 
 from ..scanner.model import (
     RANK_DIR_ASC,
@@ -52,7 +53,7 @@ from .scanner_block_editor import BlockEditor
 LOG = logging.getLogger(__name__)
 
 
-_TREE_COLS: Tuple[Tuple[str, str, int, str], ...] = (
+_TREE_COLS: tuple[tuple[str, str, int, str], ...] = (
     ("symbol", "Symbol", 80, "w"),
     ("match", "Match", 70, "center"),
     ("rank", "Rank", 90, "center"),
@@ -67,7 +68,7 @@ _INTERVAL_CHOICES = ("1m", "2m", "3m", "5m", "10m", "15m", "30m", "1h", "1d")
 # every scannable indicator / builtin is appended dynamically by
 # :func:`_build_rank_presets` so newly registered indicators show up
 # automatically without a code change here.
-_CURATED_RANK_PRESETS: Tuple[Tuple[str, Optional[FieldRef]], ...] = (
+_CURATED_RANK_PRESETS: tuple[tuple[str, FieldRef | None], ...] = (
     ("(none)", None),
     ("RVOL (cumulative)", FieldRef.indicator("rvol", params={"mode": "cumulative"})),
     ("RVOL (rolling)", FieldRef.indicator("rvol", params={"mode": "simple"})),
@@ -78,7 +79,7 @@ _CURATED_RANK_PRESETS: Tuple[Tuple[str, Optional[FieldRef]], ...] = (
 )
 
 
-def _preset_key(ref: Optional[FieldRef]) -> Tuple[Any, ...]:
+def _preset_key(ref: FieldRef | None) -> tuple[Any, ...]:
     """Stable key used to dedupe curated vs registry-derived presets."""
     if ref is None:
         return ("__none__",)
@@ -86,7 +87,7 @@ def _preset_key(ref: Optional[FieldRef]) -> Tuple[Any, ...]:
     return (ref.kind, ref.id, ref.output_key, params_items)
 
 
-def _build_rank_presets() -> Tuple[Tuple[str, Optional[FieldRef]], ...]:
+def _build_rank_presets() -> tuple[tuple[str, FieldRef | None], ...]:
     """Build the full rank-by preset list.
 
     Starts with :data:`_CURATED_RANK_PRESETS` (common ranks the user
@@ -102,7 +103,7 @@ def _build_rank_presets() -> Tuple[Tuple[str, Optional[FieldRef]], ...]:
     indicators show up the next time a sub-tab is created without
     needing an app restart.
     """
-    presets: List[Tuple[str, Optional[FieldRef]]] = list(_CURATED_RANK_PRESETS)
+    presets: list[tuple[str, FieldRef | None]] = list(_CURATED_RANK_PRESETS)
     seen = {_preset_key(ref) for _, ref in presets}
     try:
         from ..scanner.fields import all_fields
@@ -153,7 +154,7 @@ def _build_rank_presets() -> Tuple[Tuple[str, Optional[FieldRef]], ...]:
 # does not grow during a session, so a single snapshot is fine. Tests
 # that monkey-patch the registry can call :func:`_build_rank_presets`
 # directly.
-_RANK_PRESETS: Tuple[Tuple[str, Optional[FieldRef]], ...] = _build_rank_presets()
+_RANK_PRESETS: tuple[tuple[str, FieldRef | None], ...] = _build_rank_presets()
 
 _VIEW_NEW = "new"
 _VIEW_ACTIVE = "active"
@@ -165,7 +166,7 @@ _MAX_VISIBLE_ROWS = 500
 # ---------------------------------------------------------------------------
 
 
-def _format_rank(v: Optional[float]) -> str:
+def _format_rank(v: float | None) -> str:
     if v is None:
         return ""
     if abs(v) >= 1000:
@@ -173,7 +174,7 @@ def _format_rank(v: Optional[float]) -> str:
     return f"{v:,.2f}"
 
 
-def _format_match(matched: Optional[bool], is_new: bool) -> str:
+def _format_match(matched: bool | None, is_new: bool) -> str:
     if matched is True:
         return "● new" if is_new else "●"
     if matched is False:
@@ -188,7 +189,7 @@ def _format_time(ts: Any) -> str:
         return ""
 
 
-def _rank_preset_label(ref: Optional[FieldRef]) -> str:
+def _rank_preset_label(ref: FieldRef | None) -> str:
     """Reverse-lookup a label for ``ref`` in the preset list. Falls back
     to ``"custom"`` when the FieldRef doesn't match any preset (e.g. it
     was authored via JSON import).
@@ -224,15 +225,15 @@ class _ScanSubTab(ttk.Frame):
         parent: tk.Misc,
         scan: ScanDefinition,
         *,
-        on_change: Callable[["_ScanSubTab"], None],
-        on_row_action: Optional[Callable[[str, str], None]] = None,
+        on_change: Callable[[_ScanSubTab], None],
+        on_row_action: Callable[[str, str], None] | None = None,
     ) -> None:
         super().__init__(parent)
         self.scan = scan
         self._on_change_cb = on_change
         self._on_row_action = on_row_action
-        self._latest_result: Optional[ScanResult] = None
-        self._sort_col: Optional[str] = "rank"
+        self._latest_result: ScanResult | None = None
+        self._sort_col: str | None = "rank"
         self._sort_reverse: bool = True
 
         # ---- header row -------------------------------------------------
@@ -300,7 +301,7 @@ class _ScanSubTab(ttk.Frame):
         )
         self._edit_cond_btn.pack(side=tk.RIGHT, padx=6, pady=4)
 
-        self._cond_window: Optional[tk.Toplevel] = tk.Toplevel(self)
+        self._cond_window: tk.Toplevel | None = tk.Toplevel(self)
         self._cond_window.withdraw()
         try:
             self._cond_window.title(f"Conditions — {scan.name}")
@@ -381,7 +382,7 @@ class _ScanSubTab(ttk.Frame):
 
     # -- public API ----------------------------------------------------------
 
-    def update_result(self, result: Optional[ScanResult]) -> None:
+    def update_result(self, result: ScanResult | None) -> None:
         self._latest_result = result
         self._refresh_tree()
 
@@ -482,7 +483,7 @@ class _ScanSubTab(ttk.Frame):
 
     # -- tree refresh --------------------------------------------------------
 
-    def _select_rows(self, result: Optional[ScanResult]) -> List[MatchRow]:
+    def _select_rows(self, result: ScanResult | None) -> list[MatchRow]:
         if result is None:
             return []
         view = self._view_var.get()
@@ -494,7 +495,7 @@ class _ScanSubTab(ttk.Frame):
             rows = rows + [r for r in result.rows if r.matched is None]
         return rows
 
-    def _sort_rows(self, rows: List[MatchRow]) -> List[MatchRow]:
+    def _sort_rows(self, rows: list[MatchRow]) -> list[MatchRow]:
         col = self._sort_col
         rev = self._sort_reverse
         if col is None:
@@ -534,7 +535,7 @@ class _ScanSubTab(ttk.Frame):
 
         # Diff update: iid = symbol.
         existing = set(self._tree.get_children(""))
-        target_iids: List[str] = []
+        target_iids: list[str] = []
         for r in rows:
             iid = r.symbol
             target_iids.append(iid)
@@ -596,7 +597,7 @@ class _ScanSubTab(ttk.Frame):
 
     # -- row interactions ----------------------------------------------------
 
-    def _selected_symbol(self) -> Optional[str]:
+    def _selected_symbol(self) -> str | None:
         try:
             sel = self._tree.selection()
             if not sel:
@@ -605,7 +606,7 @@ class _ScanSubTab(ttk.Frame):
         except tk.TclError:
             return None
 
-    def _row_at(self, event) -> Optional[str]:
+    def _row_at(self, event) -> str | None:
         try:
             iid = self._tree.identify_row(event.y)
             if not iid:
@@ -679,23 +680,23 @@ class ScannerTab(ttk.Frame):
         self,
         parent: tk.Misc,
         *,
-        library: Optional[Mapping[str, ScanDefinition]] = None,
-        on_scan_saved: Optional[Callable[[ScanDefinition], None]] = None,
-        on_scan_deleted: Optional[Callable[[str], None]] = None,
-        on_row_action: Optional[Callable[[str, str], None]] = None,
-        new_scan_factory: Optional[Callable[[str], ScanDefinition]] = None,
-        initial_open_ids: Optional[Iterable[str]] = None,
+        library: Mapping[str, ScanDefinition] | None = None,
+        on_scan_saved: Callable[[ScanDefinition], None] | None = None,
+        on_scan_deleted: Callable[[str], None] | None = None,
+        on_row_action: Callable[[str, str], None] | None = None,
+        new_scan_factory: Callable[[str], ScanDefinition] | None = None,
+        initial_open_ids: Iterable[str] | None = None,
     ) -> None:
         super().__init__(parent)
-        self._library: Dict[str, ScanDefinition] = dict(library or {})
+        self._library: dict[str, ScanDefinition] = dict(library or {})
         self._on_scan_saved = on_scan_saved
         self._on_scan_deleted = on_scan_deleted
         self._on_row_action = on_row_action
         self._new_scan_factory = new_scan_factory or _default_new_scan
-        self._sub_tabs: Dict[str, _ScanSubTab] = {}
-        self._save_jobs: Dict[str, str] = {}  # scan_id → after-job id
+        self._sub_tabs: dict[str, _ScanSubTab] = {}
+        self._save_jobs: dict[str, str] = {}  # scan_id → after-job id
         # Ordered list of currently-open scan ids (mirrors notebook tab order).
-        self._open_ids: List[str] = list(
+        self._open_ids: list[str] = list(
             self._resolve_initial_open_ids(initial_open_ids))
 
         self._build_toolbar()
@@ -707,8 +708,8 @@ class ScannerTab(ttk.Frame):
         self._rebuild_subtabs()
 
     def _resolve_initial_open_ids(
-        self, requested: Optional[Iterable[str]],
-    ) -> List[str]:
+        self, requested: Iterable[str] | None,
+    ) -> list[str]:
         """Decide which scans to auto-open at construction.
 
         Explicit ``initial_open_ids`` wins (filtered to known ids).
@@ -739,10 +740,10 @@ class ScannerTab(ttk.Frame):
             self._open_ids = self._resolve_initial_open_ids(None)
         self._rebuild_subtabs()
 
-    def get_library(self) -> Dict[str, ScanDefinition]:
+    def get_library(self) -> dict[str, ScanDefinition]:
         return dict(self._library)
 
-    def get_active_scan_definitions(self) -> List[ScanDefinition]:
+    def get_active_scan_definitions(self) -> list[ScanDefinition]:
         """Return scans that are *open* (have a sub-tab). The runner
         only evaluates these — closed library scans cost nothing."""
         return [self._library[sid] for sid in self._open_ids
@@ -789,7 +790,7 @@ class ScannerTab(ttk.Frame):
         for scan_id, sub in self._sub_tabs.items():
             sub.update_result(results.get(scan_id))
 
-    def current_scan_id(self) -> Optional[str]:
+    def current_scan_id(self) -> str | None:
         try:
             sel = self._notebook.select()
             if not sel:
@@ -908,7 +909,7 @@ class ScannerTab(ttk.Frame):
     # -- toolbar actions -----------------------------------------------------
 
     def _ask_unique_name(self, prompt: str, initial: str = "",
-                        exclude_id: Optional[str] = None) -> Optional[str]:
+                        exclude_id: str | None = None) -> str | None:
         existing = {
             s.name for sid, s in self._library.items() if sid != exclude_id
         }
@@ -1102,7 +1103,7 @@ class ScannerTab(ttk.Frame):
         if not path:
             return
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
             scan = ScanDefinition.from_dict(data)
         except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as e:
@@ -1149,13 +1150,13 @@ class _LoadScanDialog(tk.Toplevel):
     def __init__(
         self,
         parent: tk.Misc,
-        candidates: List[Tuple[str, ScanDefinition]],
+        candidates: list[tuple[str, ScanDefinition]],
     ) -> None:
         super().__init__(parent)
         self.title("Load scan")
         self.transient(parent)
         self.resizable(True, True)
-        self._result: Optional[str] = None
+        self._result: str | None = None
         # Geometry persistence — small chooser dialog defaults to a
         # compact size but users can grow it on dense scan libraries.
         try:
@@ -1225,8 +1226,8 @@ class _LoadScanDialog(tk.Toplevel):
     def ask(
         cls,
         parent: tk.Misc,
-        candidates: List[Tuple[str, ScanDefinition]],
-    ) -> Optional[str]:
+        candidates: list[tuple[str, ScanDefinition]],
+    ) -> str | None:
         if not candidates:
             return None
         dlg = cls(parent, candidates)

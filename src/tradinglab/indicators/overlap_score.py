@@ -40,7 +40,7 @@ regimes (see the spec.md for the 2×2 matrix).
 
 from __future__ import annotations
 
-from typing import ClassVar, Dict, List, Tuple
+from typing import ClassVar
 
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
@@ -62,15 +62,15 @@ class OverlapScoreInverted:
 
     kind_id: ClassVar[str] = "overlap_score_inv"
     kind_version: ClassVar[int] = 1
-    params_schema: ClassVar[Tuple[ParamDef, ...]] = (
+    params_schema: ClassVar[tuple[ParamDef, ...]] = (
         ParamDef("lookback", "int", default=10, min=2, max=200, step=1,
                  description="Lookback"),
     )
-    default_style: ClassVar[Dict[str, LineStyle]] = {
+    default_style: ClassVar[dict[str, LineStyle]] = {
         "osi": LineStyle(color="#ab47bc", width=1.4),  # purple
     }
 
-    reference_levels: ClassVar[Tuple[float, ...]] = (20.0, 80.0)
+    reference_levels: ClassVar[tuple[float, ...]] = (20.0, 80.0)
 
     overlay = False  # lower pane
 
@@ -80,7 +80,7 @@ class OverlapScoreInverted:
         self.lookback = int(lookback)
         self.name = f"Overlap({self.lookback})"
 
-    def compute_arr(self, bars: Bars) -> Dict[str, np.ndarray]:
+    def compute_arr(self, bars: Bars) -> dict[str, np.ndarray]:
         n = len(bars)
         out = np.full(n, np.nan, dtype=np.float64)
         L = self.lookback
@@ -122,5 +122,5 @@ class OverlapScoreInverted:
         out[L:] = (1.0 - weighted) * 100.0
         return {"osi": out}
 
-    def compute(self, candles: List[Candle]) -> Dict[str, np.ndarray]:
+    def compute(self, candles: list[Candle]) -> dict[str, np.ndarray]:
         return self.compute_arr(Bars.from_candles(candles))

@@ -16,7 +16,6 @@ import tempfile
 import time
 from datetime import datetime, timedelta
 
-
 # --------------------------------------------------------------------- env --
 #
 # Redirect persistence into a throwaway tempdir before any tradinglab

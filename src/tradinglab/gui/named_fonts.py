@@ -60,7 +60,6 @@ import math
 import sys
 import tkinter as tk
 import tkinter.font as tkfont
-from typing import Tuple
 
 DEFAULT_SIZE = 9
 FIXED_SIZE = 10
@@ -75,7 +74,7 @@ FIXED_SIZE = 10
 #          chrome to be readable from across the room or for
 #          large-font hi-DPI setups where Windows scaling alone
 #          isn't enough. Audit ``font-scaling``.
-UI_SCALES: Tuple[float, ...] = (0.85, 1.0, 1.15, 1.30)
+UI_SCALES: tuple[float, ...] = (0.85, 1.0, 1.15, 1.30)
 DEFAULT_UI_SCALE: float = 1.0
 
 
@@ -117,7 +116,7 @@ else:
 # Names defined by the Tk core that we want to align with our
 # baseline. Any widget that says ``font="TkDefaultFont"`` (or
 # falls back to it implicitly) picks these up.
-_PROPORTIONAL_NAMED_FONTS: Tuple[str, ...] = (
+_PROPORTIONAL_NAMED_FONTS: tuple[str, ...] = (
     "TkDefaultFont",
     "TkTextFont",
     "TkMenuFont",
@@ -128,7 +127,7 @@ _PROPORTIONAL_NAMED_FONTS: Tuple[str, ...] = (
     "TkTooltipFont",
 )
 
-_FIXED_NAMED_FONTS: Tuple[str, ...] = (
+_FIXED_NAMED_FONTS: tuple[str, ...] = (
     "TkFixedFont",
 )
 

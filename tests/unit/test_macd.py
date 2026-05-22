@@ -34,11 +34,11 @@ from tradinglab.indicators.macd import classify_histogram
 from tradinglab.models import Candle
 
 
-def _mk_candles(n: int, seed: float = 0.0) -> List[Candle]:
+def _mk_candles(n: int, seed: float = 0.0) -> list[Candle]:
     """Deterministic OHLC walk with a sinusoid + linear drift."""
     start = dt.datetime(2024, 1, 2, 9, 30, tzinfo=dt.timezone.utc)
     rng = np.random.default_rng(int(seed * 1000) or 11)
-    out: List[Candle] = []
+    out: list[Candle] = []
     for i in range(n):
         drift = 0.05 * i + seed
         base = 100.0 + drift + 5.0 * np.sin(i * 0.18)

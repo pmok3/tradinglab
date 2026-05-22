@@ -30,7 +30,7 @@ Reference levels at ±40 and 0 are drawn by the render layer (see
 
 from __future__ import annotations
 
-from typing import ClassVar, Dict, List, Tuple
+from typing import ClassVar
 
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
@@ -50,7 +50,7 @@ class SMI:
 
     kind_id: ClassVar[str] = "smi"
     kind_version: ClassVar[int] = 1
-    params_schema: ClassVar[Tuple[ParamDef, ...]] = (
+    params_schema: ClassVar[tuple[ParamDef, ...]] = (
         ParamDef("length", "int", default=14, min=2, max=2000, step=1,
                  description="%K period"),
         ParamDef("smooth1", "int", default=3, min=1, max=200, step=1,
@@ -60,7 +60,7 @@ class SMI:
         ParamDef("signal_length", "int", default=3, min=1, max=200, step=1,
                  description="Signal"),
     )
-    default_style: ClassVar[Dict[str, LineStyle]] = {
+    default_style: ClassVar[dict[str, LineStyle]] = {
         # Teal SMI line; orange signal line for clear contrast on dark
         # and light themes alike.
         "smi":    LineStyle(color="#17becf", width=1.4),
@@ -69,7 +69,7 @@ class SMI:
 
     #: Horizontal guide lines drawn on the indicator pane by the
     #: render layer (axhline at each level). Empty tuple ⇒ no guides.
-    reference_levels: ClassVar[Tuple[float, ...]] = (-40.0, 0.0, 40.0)
+    reference_levels: ClassVar[tuple[float, ...]] = (-40.0, 0.0, 40.0)
 
     overlay = False  # draw in its own pane
 
@@ -99,7 +99,7 @@ class SMI:
 
     # --- public --------------------------------------------------------
 
-    def compute_arr(self, bars: Bars) -> Dict[str, np.ndarray]:
+    def compute_arr(self, bars: Bars) -> dict[str, np.ndarray]:
         n = len(bars)
         smi_out = np.full(n, np.nan, dtype=np.float64)
         sig_out = np.full(n, np.nan, dtype=np.float64)
@@ -156,7 +156,7 @@ class SMI:
 
         return {"smi": smi, "signal": signal}
 
-    def compute(self, candles: List[Candle]) -> Dict[str, np.ndarray]:
+    def compute(self, candles: list[Candle]) -> dict[str, np.ndarray]:
         return self.compute_arr(Bars.from_candles(candles))
 
 

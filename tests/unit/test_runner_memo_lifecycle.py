@@ -16,22 +16,21 @@ from typing import List
 import tradinglab.indicators  # noqa: F401  -- registers indicators
 from tradinglab.models import Candle
 from tradinglab.scanner.model import (
+    OP_GT,
     Condition,
     FieldRef,
     Group,
-    OP_GT,
     ScanDefinition,
     UniverseFilter,
 )
 from tradinglab.scanner.runner import ScanRunner
 
-
 # --- helpers ---------------------------------------------------------------
 
 
-def _candles(n: int, *, start_close: float = 100.0) -> List[Candle]:
+def _candles(n: int, *, start_close: float = 100.0) -> list[Candle]:
     base = datetime(2026, 5, 4, 9, 30, tzinfo=timezone.utc)
-    out: List[Candle] = []
+    out: list[Candle] = []
     for i in range(n):
         c = start_close + i
         out.append(Candle(
@@ -94,7 +93,7 @@ def test_appending_to_same_list_uses_buffer_append():
     runner = ScanRunner(max_workers=1)
     try:
         scan = _scan_gt(50.0)
-        aapl: List[Candle] = _candles(10)
+        aapl: list[Candle] = _candles(10)
         cs = {"AAPL": aapl}
         runner.run([scan], cs, interval="1m", tick_id=1)
         # Mutate the same list (sandbox pattern).
@@ -139,7 +138,7 @@ def test_last_bar_mutation_same_length_rebuilds():
     runner = ScanRunner(max_workers=1)
     try:
         scan = _scan_gt(50.0)
-        cs_list: List[Candle] = _candles(10)
+        cs_list: list[Candle] = _candles(10)
         runner.run([scan], {"AAPL": cs_list}, interval="1m", tick_id=1)
         # Replace last bar with a same-length but different-close one.
         last = cs_list[-1]

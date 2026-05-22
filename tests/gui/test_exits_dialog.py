@@ -33,9 +33,9 @@ from tradinglab.exits.model import (
     ExitStrategy,
     ExitTrigger,
     OCOGroup,
-    TriggerKind,
-    TrailUnit,
     TrailBasis,
+    TrailUnit,
+    TriggerKind,
 )
 from tradinglab.gui.exits_dialog import (
     ExitsDialog,
@@ -46,7 +46,6 @@ from tradinglab.gui.exits_dialog import (
     make_bracket_strategy,
     open_exits_dialog,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

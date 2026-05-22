@@ -37,26 +37,25 @@ from tradinglab.indicators.moving_averages import EMA, SMA
 from tradinglab.models import Candle
 from tradinglab.scanner.engine import IndicatorMemo, make_context
 from tradinglab.scanner.model import (
+    OP_GT,
     Condition,
     FieldRef,
     Group,
-    OP_GT,
     ScanDefinition,
     UniverseFilter,
 )
 from tradinglab.scanner.runner import ScanRunner
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def _random_walk(n: int, seed: int = 7) -> List[Candle]:
+def _random_walk(n: int, seed: int = 7) -> list[Candle]:
     rng = random.Random(seed)
     base = 100.0
     t0 = datetime(2026, 5, 4, 9, 30, tzinfo=timezone.utc)
-    out: List[Candle] = []
+    out: list[Candle] = []
     price = base
     for i in range(n):
         price = max(1.0, price + rng.uniform(-1.0, 1.0))
@@ -68,7 +67,7 @@ def _random_walk(n: int, seed: int = 7) -> List[Candle]:
     return out
 
 
-def _bars_of(candles: List[Candle]) -> Bars:
+def _bars_of(candles: list[Candle]) -> Bars:
     return Bars.from_candles(candles)
 
 

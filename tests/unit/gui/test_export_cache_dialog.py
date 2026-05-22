@@ -18,7 +18,6 @@ import pytest
 
 from tradinglab.models import Candle
 
-
 _ET = timezone(timedelta(hours=-4))
 
 
@@ -36,7 +35,7 @@ def root():
         pass
 
 
-def _make_candles(n: int = 3) -> List[Candle]:
+def _make_candles(n: int = 3) -> list[Candle]:
     start = datetime(2024, 3, 15, 9, 30, tzinfo=_ET)
     return [
         Candle(
@@ -151,8 +150,8 @@ class TestExportGating:
         try:
             dlg._destination = None
             dlg._on_export()
-            # Status message should mention "destination".
-            assert "destination" in dlg._status_var.get().lower()
+            # Status message should prompt for the zip file.
+            assert "zip" in dlg._status_var.get().lower()
         finally:
             dlg.destroy()
 
@@ -163,7 +162,7 @@ class TestExportGating:
         from tradinglab.gui.export_cache_dialog import ExportCacheDialog
         dlg = ExportCacheDialog(root)
         try:
-            dlg._destination = tmp_path
+            dlg._destination = tmp_path / "out.zip"
             dlg._select_none()
             dlg._on_export()
             assert "nothing" in dlg._status_var.get().lower()
@@ -194,8 +193,9 @@ class TestEndToEndExport:
 
         from tradinglab.gui.export_cache_dialog import ExportCacheDialog
         dlg = ExportCacheDialog(root)
+        zip_path = tmp_path / "out.zip"
         try:
-            dlg._destination = tmp_path
+            dlg._destination = zip_path
             dlg._on_export()
         finally:
             try:
@@ -203,10 +203,16 @@ class TestEndToEndExport:
             except tk.TclError:
                 pass
 
-        # Both selected entries should land in the subfolder-per-source
-        # layout the importer expects.
-        assert (tmp_path / "yfinance" / "AAPL_5m.csv").exists()
-        assert (tmp_path / "polygon" / "MSFT_1d.csv").exists()
+        # Audit ``local-export-zip``: dialog now writes a single zip,
+        # not a folder of loose CSVs.
+        import zipfile
+        assert zip_path.exists()
+        with zipfile.ZipFile(zip_path) as zf:
+            names = sorted(zf.namelist())
+        assert names == sorted([
+            "yfinance/AAPL_5m.csv",
+            "polygon/MSFT_1d.csv",
+        ])
 
     def test_skipped_entries_not_written(
         self, root: tk.Tk,
@@ -224,8 +230,9 @@ class TestEndToEndExport:
 
         from tradinglab.gui.export_cache_dialog import ExportCacheDialog
         dlg = ExportCacheDialog(root)
+        zip_path = tmp_path / "out.zip"
         try:
-            dlg._destination = tmp_path
+            dlg._destination = zip_path
             # Uncheck the polygon entry.
             key = dlg._key("polygon", "MSFT", "1d")
             dlg._selected[key] = False
@@ -236,5 +243,8 @@ class TestEndToEndExport:
             except tk.TclError:
                 pass
 
-        assert (tmp_path / "yfinance" / "AAPL_5m.csv").exists()
-        assert not (tmp_path / "polygon" / "MSFT_1d.csv").exists()
+        import zipfile
+        with zipfile.ZipFile(zip_path) as zf:
+            names = zf.namelist()
+        assert "yfinance/AAPL_5m.csv" in names
+        assert "polygon/MSFT_1d.csv" not in names

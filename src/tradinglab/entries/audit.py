@@ -22,10 +22,11 @@ import os
 import re
 import threading
 from collections import deque
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Deque, Dict, Iterable, List, Optional
+from typing import Any
 
 from ..core.thread_guard import require_tk_thread
 from ..disk_cache import _cache_dir
@@ -76,17 +77,17 @@ def _date_path(root: Path, day: date) -> Path:
     return root / f"{day.isoformat()}.jsonl"
 
 
-def _serialise_record(record: Dict[str, Any]) -> str:
+def _serialise_record(record: dict[str, Any]) -> str:
     body = json.dumps(record, ensure_ascii=False, sort_keys=True, default=str)
     if "\n" in body:
         body = body.replace("\n", " ")
     return body + "\n"
 
 
-def _read_jsonl(path: Path) -> List[Dict[str, Any]]:
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     try:
         with path.open("r", encoding="utf-8") as fh:
             for lineno, raw in enumerate(fh, start=1):
@@ -127,8 +128,8 @@ class AuditLog:
 
     root: Path = field(default_factory=audit_dir)
     clock: Callable[[], datetime] = field(default=_utc_now)
-    _current_date: Optional[date] = field(default=None, init=False, repr=False)
-    _current_handle: Optional[io.TextIOWrapper] = field(default=None, init=False, repr=False)
+    _current_date: date | None = field(default=None, init=False, repr=False)
+    _current_handle: io.TextIOWrapper | None = field(default=None, init=False, repr=False)
     _open_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -139,16 +140,16 @@ class AuditLog:
         self,
         kind: str,
         *,
-        strategy_id: Optional[str] = None,
-        symbol: Optional[str] = None,
-        position_id: Optional[str] = None,
-        trigger_id: Optional[str] = None,
-        order_id: Optional[str] = None,
-        qty: Optional[float] = None,
-        price: Optional[float] = None,
-        meta: Optional[Dict[str, Any]] = None,
-        ts: Optional[datetime] = None,
-    ) -> Dict[str, Any]:
+        strategy_id: str | None = None,
+        symbol: str | None = None,
+        position_id: str | None = None,
+        trigger_id: str | None = None,
+        order_id: str | None = None,
+        qty: float | None = None,
+        price: float | None = None,
+        meta: dict[str, Any] | None = None,
+        ts: datetime | None = None,
+    ) -> dict[str, Any]:
         """Append one record. Returns the persisted record dict.
 
         ``kind`` must be a member of :data:`KNOWN_KINDS`. ``symbol`` and
@@ -163,7 +164,7 @@ class AuditLog:
         when = ts if ts is not None else self.clock()
         if when.tzinfo is None:
             when = when.replace(tzinfo=timezone.utc)
-        record: Dict[str, Any] = {
+        record: dict[str, Any] = {
             "ts": when.isoformat(),
             "kind": kind,
             "strategy_id": strategy_id,
@@ -205,11 +206,11 @@ class AuditLog:
         self._current_handle = path.open("a", encoding="utf-8", newline="")
         self._current_date = day
 
-    def tail(self, n: int) -> List[Dict[str, Any]]:
+    def tail(self, n: int) -> list[dict[str, Any]]:
         """Return the last ``n`` records across all dates, oldest-first."""
         if n <= 0:
             return []
-        gathered: Deque[Dict[str, Any]] = deque()
+        gathered: deque[dict[str, Any]] = deque()
         for day_path in self._date_paths_newest_first():
             file_records = _read_jsonl(day_path)
             for rec in reversed(file_records):
@@ -220,12 +221,12 @@ class AuditLog:
                 break
         return list(reversed(gathered))
 
-    def list_dates(self) -> List[str]:
+    def list_dates(self) -> list[str]:
         try:
             files = self.root.iterdir()
         except OSError:
             return []
-        out: List[str] = []
+        out: list[str] = []
         for entry in files:
             m = _DATE_FILE_RE.match(entry.name)
             if m:
@@ -233,7 +234,7 @@ class AuditLog:
         out.sort(reverse=True)
         return out
 
-    def read_date(self, date_str: str) -> List[Dict[str, Any]]:
+    def read_date(self, date_str: str) -> list[dict[str, Any]]:
         if not _DATE_FILE_RE.match(f"{date_str}.jsonl"):
             raise ValueError(
                 f"entries audit log: invalid date string {date_str!r}; "

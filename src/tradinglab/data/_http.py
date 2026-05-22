@@ -25,7 +25,6 @@ from __future__ import annotations
 import urllib.request
 from urllib.parse import urlparse
 
-
 #: Cap on the body read by every vendor HTTP fetcher. 8 MB is
 #: generous — real Polygon / Alpaca / Schwab payloads are kilobytes
 #: to a few hundred kilobytes — but high enough that a paginated

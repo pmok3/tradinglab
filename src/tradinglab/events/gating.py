@@ -22,7 +22,6 @@ from __future__ import annotations
 import math
 from bisect import bisect_right
 from dataclasses import dataclass, field
-from typing import List
 
 from .base import DividendRecord, EarningsRecord, EventBundle
 
@@ -61,11 +60,11 @@ class EventsView:
     render historical glyphs, and ``forward_badges`` to render the
     "Earn T-2 AMC" right-edge label.
     """
-    past_earnings: List[EarningsRecord] = field(default_factory=list)
-    past_dividends: List[DividendRecord] = field(default_factory=list)
-    forward_earnings: List[EarningsRecord] = field(default_factory=list)
-    forward_dividends: List[DividendRecord] = field(default_factory=list)
-    forward_badges: List[ForwardEarningsBadge] = field(default_factory=list)
+    past_earnings: list[EarningsRecord] = field(default_factory=list)
+    past_dividends: list[DividendRecord] = field(default_factory=list)
+    forward_earnings: list[EarningsRecord] = field(default_factory=list)
+    forward_dividends: list[DividendRecord] = field(default_factory=list)
+    forward_badges: list[ForwardEarningsBadge] = field(default_factory=list)
 
 
 def _approx_trading_days_between(ms_start: int, ms_end: int) -> int:
@@ -132,8 +131,8 @@ def events_visible_for(
     forward_window_ms = max(1, int(forward_window_days)) * MS_PER_DAY
     upper = int(clock_ts) + forward_window_ms
 
-    forward_records: List[EarningsRecord] = []
-    forward_badges: List[ForwardEarningsBadge] = []
+    forward_records: list[EarningsRecord] = []
+    forward_badges: list[ForwardEarningsBadge] = []
     for e in bundle.earnings[cut:]:
         if e.ts > upper:
             break
@@ -157,7 +156,7 @@ def events_visible_for(
     div_cut = bisect_right(div_ts, int(clock_ts))
     past_dividends = list(bundle.dividends[:div_cut])
 
-    forward_dividends: List[DividendRecord] = []
+    forward_dividends: list[DividendRecord] = []
     if not blind:
         for d in bundle.dividends[div_cut:]:
             if d.ex_ts > upper:

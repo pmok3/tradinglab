@@ -24,6 +24,7 @@ Constructs and owns these Tk variables:
 - **Master-owned vars**: every Tk variable is created with `master=master` so it stays anchored to the app root for the full session.
 - **No `ChartApp` import**: the module must stay independent of `tradinglab.app` to avoid circular imports during startup.
 - **Compare label stays local**: the compare-label trace lives here because it only depends on Tk variables, while `interval` traces remain in `app.py` because they call back into `ChartApp` behavior.
+- **`highlight_ha_flat` defaults to OFF** — first-launch users see plain HA candles without the cross-hatched overlay. Previously the default was ON, which surprised users who didn't opt in. Users who want the highlight enable it explicitly via View → "Highlight Flat HA Candles"; the setting is persisted under `highlight_ha_flat` from then on. Audit `ha-flat-default-off`.
 
 ## Invariants
 - `compare_enabled` is an alias of `compare`.

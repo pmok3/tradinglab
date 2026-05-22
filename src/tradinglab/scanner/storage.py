@@ -34,10 +34,10 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import replace
 from enum import Enum
 from pathlib import Path
-from typing import Callable, List, Optional
 
 from ..core.io_helpers import atomic_write_json
 from ..disk_cache import _cache_dir
@@ -126,13 +126,13 @@ def _load_path(path: Path) -> ScanDefinition:
         raise ValueError(f"scan {path} failed to deserialize: {e}") from e
 
 
-def load_all() -> List[ScanDefinition]:
+def load_all() -> list[ScanDefinition]:
     """Load every scan in ``scans_dir()``. Skips + logs corrupt files.
 
     Order: alphabetical by ``ScanDefinition.name`` (case-insensitive),
     ties broken by id. Stable across runs.
     """
-    out: List[ScanDefinition] = []
+    out: list[ScanDefinition] = []
     d = scans_dir()
     if not d.exists():
         return out
@@ -162,7 +162,7 @@ def delete(scan_id: str) -> bool:
         return False
 
 
-def find_by_name(name: str) -> Optional[ScanDefinition]:
+def find_by_name(name: str) -> ScanDefinition | None:
     """Return the first scan whose name matches ``name`` case-insensitively."""
     target = (name or "").strip().lower()
     if not target:
@@ -208,8 +208,8 @@ def _make_unique_name(base: str) -> str:
 
 def import_scan(
     src_path: Path,
-    on_collision: Optional[Callable[[ScanDefinition, ScanDefinition], CollisionDecision]] = None,
-) -> Optional[ScanDefinition]:
+    on_collision: Callable[[ScanDefinition, ScanDefinition], CollisionDecision] | None = None,
+) -> ScanDefinition | None:
     """Import a scan from ``src_path`` into the local library.
 
     Two collision dimensions are checked, in order:

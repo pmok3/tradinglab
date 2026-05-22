@@ -81,6 +81,18 @@ position); close + reopen is the path.
 - **`apply_dark_theme=False`** to the base (no parent module
   defines `apply_dark_theme_to(top)`); we paint manually from
   `_theme_palette()`.
+- **Live theme repaint** (audit `doc-viewer-live-repaint`) — every
+  `tk.Frame` / `tk.Label` built by `_build_layout` is tagged with
+  `_dv_bg_key` / `_dv_fg_key` referencing palette slots and pushed
+  to `self._theme_tk_frames` / `self._theme_tk_labels`. The
+  `_apply_theme()` method re-detects dark mode via
+  `_is_parent_dark(parent)`, swaps `self._palette`, and walks those
+  lists to reconfigure widget colours; the text widget +
+  `_configure_tags()` are re-driven so every renderer tag picks up
+  the new palette. Called from
+  `app.ChartApp._on_theme_changed` (live toggle while open) and
+  from `open_doc_viewer` (singleton re-show after a hidden
+  toggle).
 
 ## Discovery
 

@@ -48,8 +48,8 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Callable
 from concurrent.futures import Executor
-from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from ..core.bars_buffer import BarsBuffer
 from ..models import Candle
@@ -58,9 +58,9 @@ from ..streaming.resampler import BarResampler, supported_intervals
 logger = logging.getLogger(__name__)
 
 
-_FetchHistory = Callable[[str, str], Optional[List[Candle]]]
+_FetchHistory = Callable[[str, str], list[Candle] | None]
 _OnArrival = Callable[[str, str], None]
-_Key = Tuple[str, str]
+_Key = tuple[str, str]
 
 
 class MultiIntervalCache:
@@ -90,19 +90,19 @@ class MultiIntervalCache:
     def __init__(
         self,
         *,
-        fetch_history: Optional[_FetchHistory] = None,
-        executor: Optional[Executor] = None,
-        on_arrival: Optional[_OnArrival] = None,
+        fetch_history: _FetchHistory | None = None,
+        executor: Executor | None = None,
+        on_arrival: _OnArrival | None = None,
     ) -> None:
-        self._fetch_history: Optional[_FetchHistory] = fetch_history
-        self._executor: Optional[Executor] = executor
-        self._on_arrival: Optional[_OnArrival] = on_arrival
-        self._buffers: Dict[_Key, BarsBuffer] = {}
+        self._fetch_history: _FetchHistory | None = fetch_history
+        self._executor: Executor | None = executor
+        self._on_arrival: _OnArrival | None = on_arrival
+        self._buffers: dict[_Key, BarsBuffer] = {}
         # Parallel candle list per buffer so BarsBuffer.view(candles=...)
         # has a back-reference for indicators without compute_arr.
-        self._candles: Dict[_Key, List[Candle]] = {}
-        self._resamplers: Dict[_Key, BarResampler] = {}
-        self._inflight: Set[_Key] = set()
+        self._candles: dict[_Key, list[Candle]] = {}
+        self._resamplers: dict[_Key, BarResampler] = {}
+        self._inflight: set[_Key] = set()
         self._lock = threading.RLock()
         self._supported: frozenset[str] = frozenset(supported_intervals())
 
@@ -110,7 +110,7 @@ class MultiIntervalCache:
 
     def get_bars(
         self, symbol: str, interval: str
-    ) -> Optional[BarsBuffer]:
+    ) -> BarsBuffer | None:
         """Return the cached ``BarsBuffer`` for ``(symbol, interval)``.
 
         On the first call for a non-1m key, kicks off a background
@@ -156,7 +156,7 @@ class MultiIntervalCache:
         return None
 
     def set_bars(
-        self, symbol: str, interval: str, candles: List[Candle]
+        self, symbol: str, interval: str, candles: list[Candle]
     ) -> None:
         """Inject a buffer manually. Used by tests and importers."""
         key: _Key = (symbol, interval)
@@ -197,7 +197,7 @@ class MultiIntervalCache:
             self._resamplers.clear()
             self._inflight.clear()
 
-    def stats(self) -> Dict[str, int]:
+    def stats(self) -> dict[str, int]:
         """Return summary counters for diagnostics / tests."""
         with self._lock:
             return {
@@ -219,7 +219,7 @@ class MultiIntervalCache:
         so a future ``get_bars`` retries.
         """
         key: _Key = (symbol, interval)
-        candles: Optional[List[Candle]] = None
+        candles: list[Candle] | None = None
         try:
             assert self._fetch_history is not None
             candles = self._fetch_history(symbol, interval)

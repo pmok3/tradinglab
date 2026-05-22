@@ -18,7 +18,6 @@ from tradinglab.events.base import (
 )
 from tradinglab.events.gating import events_visible_for
 
-
 MS_PER_DAY = 86_400_000
 
 

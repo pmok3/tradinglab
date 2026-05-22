@@ -34,8 +34,9 @@ operate against that metadata.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any
 
 from matplotlib.axes import Axes
 from matplotlib.lines import Line2D
@@ -71,7 +72,7 @@ _BADGE_AX_Y = 0.04
 
 
 # Per-glyph-kind matplotlib marker + fill style.
-_MARKER_STYLE: Dict[str, Dict[str, Any]] = {
+_MARKER_STYLE: dict[str, dict[str, Any]] = {
     GLYPH_EARNINGS_PAST:    {"marker": "s", "fillstyle": "full"},
     GLYPH_EARNINGS_FORWARD: {"marker": "s", "fillstyle": "none"},
     GLYPH_DIVIDEND:         {"marker": "o", "fillstyle": "full"},
@@ -99,8 +100,8 @@ class EventGlyphArtists:
     based on cursor X falling within the rightmost few axes-fraction
     pixels, so no x-data anchor is needed.
     """
-    artists: List[Any] = field(default_factory=list)
-    hit_meta: List[Tuple[float, str, str]] = field(default_factory=list)
+    artists: list[Any] = field(default_factory=list)
+    hit_meta: list[tuple[float, str, str]] = field(default_factory=list)
     forward_badge_tooltip: str = ""
 
 

@@ -40,10 +40,11 @@ import os
 import re
 import threading
 from collections import deque
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Deque, Dict, Iterable, List, Optional
+from typing import Any
 
 from ..core.thread_guard import require_tk_thread
 from ..disk_cache import _cache_dir
@@ -95,7 +96,7 @@ def _date_path(root: Path, day: date) -> Path:
     return root / f"{day.isoformat()}.jsonl"
 
 
-def _serialise_record(record: Dict[str, Any]) -> str:
+def _serialise_record(record: dict[str, Any]) -> str:
     """Render one record as a single JSONL line.
 
     Sort keys to keep the on-disk format deterministic per record (the
@@ -109,7 +110,7 @@ def _serialise_record(record: Dict[str, Any]) -> str:
     return body + "\n"
 
 
-def _read_jsonl(path: Path) -> List[Dict[str, Any]]:
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     """Read every JSON record from a JSONL file.
 
     Skips blank lines silently and corrupt (un-parseable) lines with a
@@ -117,7 +118,7 @@ def _read_jsonl(path: Path) -> List[Dict[str, Any]]:
     """
     if not path.exists():
         return []
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     try:
         with path.open("r", encoding="utf-8") as fh:
             for lineno, raw in enumerate(fh, start=1):
@@ -147,7 +148,7 @@ def _read_jsonl(path: Path) -> List[Dict[str, Any]]:
     return out
 
 
-def _tail_jsonl(path: Path, n: int) -> List[Dict[str, Any]]:
+def _tail_jsonl(path: Path, n: int) -> list[dict[str, Any]]:
     """Return the last ``n`` records from a JSONL file (oldest-first)."""
     if n <= 0 or not path.exists():
         return []
@@ -176,8 +177,8 @@ class AuditLog:
 
     root: Path = field(default_factory=audit_dir)
     clock: Callable[[], datetime] = field(default=_utc_now)
-    _current_date: Optional[date] = field(default=None, init=False, repr=False)
-    _current_handle: Optional[io.TextIOWrapper] = field(default=None, init=False, repr=False)
+    _current_date: date | None = field(default=None, init=False, repr=False)
+    _current_handle: io.TextIOWrapper | None = field(default=None, init=False, repr=False)
     _open_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -192,15 +193,15 @@ class AuditLog:
         self,
         kind: str,
         *,
-        strategy_id: Optional[str] = None,
-        position_id: Optional[str] = None,
-        leg_id: Optional[str] = None,
-        trigger_id: Optional[str] = None,
-        qty: Optional[float] = None,
-        price: Optional[float] = None,
-        meta: Optional[Dict[str, Any]] = None,
-        ts: Optional[datetime] = None,
-    ) -> Dict[str, Any]:
+        strategy_id: str | None = None,
+        position_id: str | None = None,
+        leg_id: str | None = None,
+        trigger_id: str | None = None,
+        qty: float | None = None,
+        price: float | None = None,
+        meta: dict[str, Any] | None = None,
+        ts: datetime | None = None,
+    ) -> dict[str, Any]:
         """Append one record. Returns the persisted record dict.
 
         ``kind`` must be a member of :data:`KNOWN_KINDS` — adding a new
@@ -222,7 +223,7 @@ class AuditLog:
             # Treat naive timestamps as UTC. Avoids ambiguity in the
             # JSON output.
             when = when.replace(tzinfo=timezone.utc)
-        record: Dict[str, Any] = {
+        record: dict[str, Any] = {
             "ts": when.isoformat(),
             "kind": kind,
             "strategy_id": strategy_id,
@@ -276,7 +277,7 @@ class AuditLog:
     # Reader path (any thread)
     # ------------------------------------------------------------------
 
-    def tail(self, n: int) -> List[Dict[str, Any]]:
+    def tail(self, n: int) -> list[dict[str, Any]]:
         """Return the last ``n`` records across all dates, oldest-first.
 
         Walks date files newest-to-oldest until ``n`` records are
@@ -284,7 +285,7 @@ class AuditLog:
         """
         if n <= 0:
             return []
-        gathered: Deque[Dict[str, Any]] = deque()
+        gathered: deque[dict[str, Any]] = deque()
         for day_path in self._date_paths_newest_first():
             file_records = _read_jsonl(day_path)
             # Append in reverse so we see newest first per file.
@@ -299,13 +300,13 @@ class AuditLog:
         out = list(reversed(gathered))
         return out
 
-    def list_dates(self) -> List[str]:
+    def list_dates(self) -> list[str]:
         """Return ``YYYY-MM-DD`` strings sorted **newest first**."""
         try:
             files = self.root.iterdir()
         except OSError:
             return []
-        out: List[str] = []
+        out: list[str] = []
         for entry in files:
             m = _DATE_FILE_RE.match(entry.name)
             if m:
@@ -313,7 +314,7 @@ class AuditLog:
         out.sort(reverse=True)
         return out
 
-    def read_date(self, date_str: str) -> List[Dict[str, Any]]:
+    def read_date(self, date_str: str) -> list[dict[str, Any]]:
         """Return all records for a specific ``YYYY-MM-DD`` (oldest-first)."""
         if not _DATE_FILE_RE.match(f"{date_str}.jsonl"):
             raise ValueError(

@@ -59,10 +59,11 @@ through JSON without losing information.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from dataclasses import field as dc_field
 from datetime import datetime, timezone
-from typing import Any, ClassVar, Dict, List, Mapping, Optional, Tuple, Union
+from typing import Any, ClassVar
 
 # Indicator kind_id migrations live in the indicator base module so they
 # stay co-located with the registry. Imported lazily inside FieldRef.from_dict
@@ -111,7 +112,7 @@ OP_NR7            = "nr7"
 #:
 #: The engine uses this map for validation; the GUI uses it to render
 #: the per-operator param row in the block editor.
-OPERATOR_PARAM_SCHEMA: Dict[str, Tuple[Tuple[str, str], ...]] = {
+OPERATOR_PARAM_SCHEMA: dict[str, tuple[tuple[str, str], ...]] = {
     OP_GT:  (("right", "field"),),
     OP_LT:  (("right", "field"),),
     OP_GE:  (("right", "field"),),
@@ -133,10 +134,10 @@ OPERATOR_PARAM_SCHEMA: Dict[str, Tuple[Tuple[str, str], ...]] = {
     OP_NR7:            (),
 }
 
-ALL_OPERATORS: Tuple[str, ...] = tuple(OPERATOR_PARAM_SCHEMA.keys())
+ALL_OPERATORS: tuple[str, ...] = tuple(OPERATOR_PARAM_SCHEMA.keys())
 
 
-def operator_param_schema(op: str) -> Tuple[Tuple[str, str], ...]:
+def operator_param_schema(op: str) -> tuple[tuple[str, str], ...]:
     """Return the named-param schema for ``op``. Raise on unknown op."""
     if op not in OPERATOR_PARAM_SCHEMA:
         raise ValueError(f"unknown operator: {op!r}")
@@ -170,7 +171,7 @@ WITHIN_LAST_MODE_ANY = "any"
 WITHIN_LAST_MODE_ALL = "all"
 WITHIN_LAST_MODE_EXACTLY = "exactly"
 
-WITHIN_LAST_MODES: Tuple[str, ...] = (
+WITHIN_LAST_MODES: tuple[str, ...] = (
     WITHIN_LAST_MODE_ANY,
     WITHIN_LAST_MODE_ALL,
     WITHIN_LAST_MODE_EXACTLY,
@@ -228,10 +229,10 @@ class MatchEvidence:
     node_id: str
     bars_ago: int
     timestamp: str = ""
-    value: Optional[float] = None
+    value: float | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
-        d: Dict[str, Any] = {
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
             "node_id": self.node_id,
             "bars_ago": int(self.bars_ago),
         }
@@ -242,7 +243,7 @@ class MatchEvidence:
         return d
 
     @classmethod
-    def from_dict(cls, d: Mapping[str, Any]) -> "MatchEvidence":
+    def from_dict(cls, d: Mapping[str, Any]) -> MatchEvidence:
         v = d.get("value")
         return cls(
             node_id=str(d["node_id"]),
@@ -293,8 +294,8 @@ class FieldRef:
     id: str = ""
     params: Mapping[str, Any] = dc_field(default_factory=dict)
     output_key: str = ""
-    value: Optional[float] = None
-    interval: Optional[str] = None
+    value: float | None = None
+    interval: str | None = None
 
     def __post_init__(self) -> None:
         if self.kind not in _FIELD_KINDS:
@@ -314,8 +315,8 @@ class FieldRef:
 
     # -- serialization -------------------------------------------------------
 
-    def to_dict(self) -> Dict[str, Any]:
-        d: Dict[str, Any] = {"kind": self.kind}
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {"kind": self.kind}
         if self.kind == FIELD_KIND_LITERAL:
             d["value"] = float(self.value)  # type: ignore[arg-type]
         else:
@@ -329,7 +330,7 @@ class FieldRef:
         return d
 
     @classmethod
-    def from_dict(cls, d: Mapping[str, Any]) -> "FieldRef":
+    def from_dict(cls, d: Mapping[str, Any]) -> FieldRef:
         if not isinstance(d, Mapping):
             raise TypeError(f"FieldRef.from_dict expects a mapping, got {type(d).__name__}")
         kind = d.get("kind")
@@ -371,18 +372,18 @@ class FieldRef:
     # -- convenience ---------------------------------------------------------
 
     @classmethod
-    def literal(cls, value: float) -> "FieldRef":
+    def literal(cls, value: float) -> FieldRef:
         return cls(kind=FIELD_KIND_LITERAL, value=float(value))
 
     @classmethod
     def builtin(cls, id: str, *, output_key: str = "",
-                interval: Optional[str] = None) -> "FieldRef":
+                interval: str | None = None) -> FieldRef:
         return cls(kind=FIELD_KIND_BUILTIN, id=id, output_key=output_key,
                    interval=interval)
 
     @classmethod
-    def indicator(cls, id: str, *, params: Optional[Mapping[str, Any]] = None,
-                  output_key: str = "", interval: Optional[str] = None) -> "FieldRef":
+    def indicator(cls, id: str, *, params: Mapping[str, Any] | None = None,
+                  output_key: str = "", interval: str | None = None) -> FieldRef:
         return cls(kind=FIELD_KIND_INDICATOR, id=id,
                    params=dict(params or {}), output_key=output_key,
                    interval=interval)
@@ -396,7 +397,7 @@ class FieldRef:
 # (see :data:`OPERATOR_PARAM_SCHEMA`) say which named slot expects which
 # kind. We persist FieldRef-valued slots as nested dicts and primitive
 # slots as raw JSON numbers.
-ParamValue = Union[FieldRef, int, float]
+ParamValue = FieldRef | int | float
 
 
 def _serialize_param_value(v: ParamValue) -> Any:
@@ -449,7 +450,7 @@ class Condition:
 
     left: FieldRef
     op: str
-    params: Dict[str, ParamValue] = dc_field(default_factory=dict)
+    params: dict[str, ParamValue] = dc_field(default_factory=dict)
     interval: str = "5m"
     enabled: bool = True
     id: str = dc_field(default_factory=_new_id)
@@ -486,8 +487,8 @@ class Condition:
             )
         _validate_within_last("Condition", self.within_last_bars, self.within_last_mode)
 
-    def to_dict(self) -> Dict[str, Any]:
-        d: Dict[str, Any] = {
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
             "type": self.type,
             "id": self.id,
             "enabled": self.enabled,
@@ -505,11 +506,11 @@ class Condition:
         return d
 
     @classmethod
-    def from_dict(cls, d: Mapping[str, Any]) -> "Condition":
+    def from_dict(cls, d: Mapping[str, Any]) -> Condition:
         if d.get("type") != "condition":
             raise ValueError(f"Condition.from_dict: expected type='condition', got {d.get('type')!r}")
         params_raw = d.get("params") or {}
-        params: Dict[str, ParamValue] = {
+        params: dict[str, ParamValue] = {
             k: _deserialize_param_value(v) for k, v in params_raw.items()
         }
         return cls(
@@ -535,7 +536,7 @@ class Group:
     """
 
     combinator: str = "and"
-    children: List[Union[Condition, "Group"]] = dc_field(default_factory=list)
+    children: list[Condition | Group] = dc_field(default_factory=list)
     enabled: bool = True
     id: str = dc_field(default_factory=_new_id)
     # Within-last-N-bars temporal quantifier — applied to the entire
@@ -555,8 +556,8 @@ class Group:
             self.id = _new_id()
         _validate_within_last("Group", self.within_last_bars, self.within_last_mode)
 
-    def to_dict(self) -> Dict[str, Any]:
-        d: Dict[str, Any] = {
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
             "type": self.type,
             "id": self.id,
             "enabled": self.enabled,
@@ -570,10 +571,10 @@ class Group:
         return d
 
     @classmethod
-    def from_dict(cls, d: Mapping[str, Any]) -> "Group":
+    def from_dict(cls, d: Mapping[str, Any]) -> Group:
         if d.get("type") != "group":
             raise ValueError(f"Group.from_dict: expected type='group', got {d.get('type')!r}")
-        children: List[Union[Condition, "Group"]] = []
+        children: list[Condition | Group] = []
         for c in d.get("children", ()):
             ctype = c.get("type") if isinstance(c, Mapping) else None
             if ctype == "condition":
@@ -609,7 +610,7 @@ class UniverseFilter:
 
     kind: str = "all"
     name: str = ""
-    symbols: Tuple[str, ...] = ()
+    symbols: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.kind not in ("all", "watchlist", "symbols"):
@@ -621,8 +622,8 @@ class UniverseFilter:
         # Normalize symbols tuple.
         object.__setattr__(self, "symbols", tuple(s.upper() for s in self.symbols))
 
-    def to_dict(self) -> Dict[str, Any]:
-        d: Dict[str, Any] = {"kind": self.kind}
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {"kind": self.kind}
         if self.kind == "watchlist":
             d["name"] = self.name
         elif self.kind == "symbols":
@@ -630,7 +631,7 @@ class UniverseFilter:
         return d
 
     @classmethod
-    def from_dict(cls, d: Mapping[str, Any]) -> "UniverseFilter":
+    def from_dict(cls, d: Mapping[str, Any]) -> UniverseFilter:
         kind = str(d.get("kind", "all"))
         return cls(
             kind=kind,
@@ -639,7 +640,7 @@ class UniverseFilter:
         )
 
     @classmethod
-    def all(cls) -> "UniverseFilter":
+    def all(cls) -> UniverseFilter:
         return cls(kind="all")
 
 
@@ -670,7 +671,7 @@ class OutputColumn:
     label: str = ""
     visible: bool = True
     condition_id: str = ""
-    field: Optional[FieldRef] = None
+    field: FieldRef | None = None
     interval: str = ""
     id: str = dc_field(default_factory=_new_id)
 
@@ -684,8 +685,8 @@ class OutputColumn:
         else:
             raise ValueError(f"OutputColumn.kind invalid: {self.kind!r}")
 
-    def to_dict(self) -> Dict[str, Any]:
-        d: Dict[str, Any] = {
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
             "id": self.id,
             "kind": self.kind,
             "label": self.label,
@@ -699,7 +700,7 @@ class OutputColumn:
         return d
 
     @classmethod
-    def from_dict(cls, d: Mapping[str, Any]) -> "OutputColumn":
+    def from_dict(cls, d: Mapping[str, Any]) -> OutputColumn:
         kind = str(d.get("kind", ""))
         if kind == OUTPUT_COL_CONDITION_VALUE:
             return cls(
@@ -742,7 +743,7 @@ class ScanOptions:
     show_insufficient_data_rows: bool = False
     default_view: str = VIEW_NEW
     new_view_capacity: int = 500
-    extra: Dict[str, Any] = dc_field(default_factory=dict)
+    extra: dict[str, Any] = dc_field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.default_view not in (VIEW_NEW, VIEW_ACTIVE):
@@ -750,8 +751,8 @@ class ScanOptions:
         if self.new_view_capacity < 1:
             raise ValueError("ScanOptions.new_view_capacity must be >= 1")
 
-    def to_dict(self) -> Dict[str, Any]:
-        d: Dict[str, Any] = {
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
             "show_insufficient_data_rows": self.show_insufficient_data_rows,
             "default_view": self.default_view,
             "new_view_capacity": self.new_view_capacity,
@@ -761,7 +762,7 @@ class ScanOptions:
         return d
 
     @classmethod
-    def from_dict(cls, d: Mapping[str, Any]) -> "ScanOptions":
+    def from_dict(cls, d: Mapping[str, Any]) -> ScanOptions:
         known = {"show_insufficient_data_rows", "default_view", "new_view_capacity", "extra"}
         return cls(
             show_insufficient_data_rows=bool(d.get("show_insufficient_data_rows", False)),
@@ -786,11 +787,11 @@ class CreatedWith:
     app: str = "tradinglab"
     version: str = ""
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {"app": self.app, "version": self.version}
 
     @classmethod
-    def from_dict(cls, d: Mapping[str, Any]) -> "CreatedWith":
+    def from_dict(cls, d: Mapping[str, Any]) -> CreatedWith:
         return cls(app=str(d.get("app", "tradinglab")),
                    version=str(d.get("version", "")))
 
@@ -803,9 +804,9 @@ class ScanDefinition:
     root: Group
     primary_interval: str = "5m"
     universe_filter: UniverseFilter = dc_field(default_factory=UniverseFilter.all)
-    output_columns: Optional[List[OutputColumn]] = None
+    output_columns: list[OutputColumn] | None = None
     options: ScanOptions = dc_field(default_factory=ScanOptions)
-    rank_by: Optional[FieldRef] = None
+    rank_by: FieldRef | None = None
     rank_dir: str = RANK_DIR_DESC
     rank_interval: str = ""              # "" → use primary_interval
     schema_version: int = SCHEMA_VERSION
@@ -827,8 +828,8 @@ class ScanDefinition:
 
     # -- serialization -------------------------------------------------------
 
-    def to_dict(self) -> Dict[str, Any]:
-        d: Dict[str, Any] = {
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
             "schema_version": self.schema_version,
             "id": self.id,
             "name": self.name,
@@ -851,10 +852,10 @@ class ScanDefinition:
         return d
 
     @classmethod
-    def from_dict(cls, d: Mapping[str, Any]) -> "ScanDefinition":
+    def from_dict(cls, d: Mapping[str, Any]) -> ScanDefinition:
         d = migrate(d, int(d.get("schema_version", 1)))
         cols_raw = d.get("output_columns", None)
-        cols: Optional[List[OutputColumn]]
+        cols: list[OutputColumn] | None
         if cols_raw is None:
             cols = None
         else:
@@ -878,18 +879,18 @@ class ScanDefinition:
 
     # -- helpers -------------------------------------------------------------
 
-    def touch(self) -> "ScanDefinition":
+    def touch(self) -> ScanDefinition:
         """Return a copy with ``updated_at`` set to now."""
         return replace(self, updated_at=_utcnow_iso())
 
-    def all_conditions(self) -> List[Condition]:
+    def all_conditions(self) -> list[Condition]:
         """Depth-first list of every leaf :class:`Condition` in the tree."""
-        out: List[Condition] = []
+        out: list[Condition] = []
         _walk_conditions(self.root, out)
         return out
 
 
-def _walk_conditions(node: Union[Condition, Group], out: List[Condition]) -> None:
+def _walk_conditions(node: Condition | Group, out: list[Condition]) -> None:
     if isinstance(node, Condition):
         out.append(node)
         return
@@ -902,7 +903,7 @@ def _walk_conditions(node: Union[Condition, Group], out: List[Condition]) -> Non
 # ---------------------------------------------------------------------------
 
 
-def migrate(d: Mapping[str, Any], from_version: int) -> Dict[str, Any]:
+def migrate(d: Mapping[str, Any], from_version: int) -> dict[str, Any]:
     """Migrate a raw scan dict from ``from_version`` to :data:`SCHEMA_VERSION`.
 
     Currently a no-op (we are at v1). Future migrations chain through

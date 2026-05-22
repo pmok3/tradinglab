@@ -28,8 +28,8 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Tuple
 
 from .._resources import resource_path
 from ..disk_cache import _cache_dir
@@ -41,7 +41,7 @@ _SENTINEL_NAME = ".templates_seeded"
 # Mapping: (bundled_subdir_under_data, target_storage_dir_callable).
 # We import storage helpers lazily inside _seed_one() to keep this
 # module import-cheap (templates package is touched at startup).
-_TEMPLATE_KINDS: Tuple[Tuple[str, str], ...] = (
+_TEMPLATE_KINDS: tuple[tuple[str, str], ...] = (
     ("entry_strategy_templates", "entries"),
     ("exit_strategy_templates", "exits"),
     ("scanner_templates", "scans"),
@@ -121,7 +121,7 @@ def _seed_one(
     *,
     force: bool,
     on_seed: Callable[[str, Path], None] | None,
-) -> Tuple[int, int]:
+) -> tuple[int, int]:
     """Seed one template kind. Returns ``(copied, skipped)``.
 
     - ``copied`` = files written this run.

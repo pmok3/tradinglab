@@ -29,7 +29,6 @@ import os
 from tradinglab import _dpapi
 from tradinglab.gui import credentials_dialog
 
-
 # ---------------------------------------------------------------------------
 # Test 1 — non-Windows / DPAPI unavailable
 # ---------------------------------------------------------------------------

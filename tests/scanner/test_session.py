@@ -15,7 +15,7 @@ from tradinglab.scanner.session import find_session_open_index
 def _make_intraday(days: int, bars_per_day: int = 5,
                    interval_min: int = 5) -> Bars:
     """``days * bars_per_day`` intraday candles starting 9:30 AM UTC."""
-    out: List[Candle] = []
+    out: list[Candle] = []
     base = datetime(2026, 5, 4, 9, 30, tzinfo=timezone.utc)
     for d in range(days):
         for b in range(bars_per_day):
@@ -62,7 +62,7 @@ def test_find_session_open_three_day_buffer():
 def test_find_session_open_daily_interval_returns_self():
     # Daily candles: each on its own UTC date, so session-open is
     # always the bar itself (no clamp).
-    out: List[Candle] = []
+    out: list[Candle] = []
     base = datetime(2026, 5, 4, 0, 0, tzinfo=timezone.utc)
     for d in range(10):
         ts = base + timedelta(days=d)

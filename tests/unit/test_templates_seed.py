@@ -13,7 +13,6 @@ from tradinglab.templates import (
 )
 from tradinglab.templates.seed import _is_library_empty
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

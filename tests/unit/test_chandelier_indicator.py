@@ -14,10 +14,10 @@ from tradinglab.indicators.config import IndicatorConfig
 from tradinglab.models import Candle
 
 
-def _mk_candles(n: int, seed: int = 7) -> List[Candle]:
+def _mk_candles(n: int, seed: int = 7) -> list[Candle]:
     start = dt.datetime(2024, 1, 2, 9, 30, tzinfo=dt.timezone.utc)
     rng = np.random.default_rng(seed)
-    out: List[Candle] = []
+    out: list[Candle] = []
     base = 100.0
     for i in range(n):
         drift = 0.05 * i

@@ -18,7 +18,6 @@ from tradinglab.preload.fundamental_filter import (
     passes_fundamental_filter,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -30,9 +29,9 @@ def _daily_bars(
     close: float,
     volume: float,
     start: datetime = datetime(2024, 1, 2, tzinfo=timezone.utc),
-) -> List[Candle]:
+) -> list[Candle]:
     """Build ``n`` consecutive daily Candle objects with constant close + volume."""
-    out: List[Candle] = []
+    out: list[Candle] = []
     t = start
     for _ in range(n):
         out.append(Candle(

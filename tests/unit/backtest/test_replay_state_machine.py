@@ -30,10 +30,9 @@ import numpy as np
 import pytest
 
 from tradinglab.backtest.replay import SandboxController, SandboxMemento
-from tradinglab.backtest.session import SessionSpec, SessionResult, ENGINE_VERSION
+from tradinglab.backtest.session import ENGINE_VERSION, SessionResult, SessionSpec
 from tradinglab.backtest.tags import TagStore
 from tradinglab.models import Candle
-
 
 # ---------------------------------------------------------------------------
 # Test helpers
@@ -46,9 +45,9 @@ def _make_intraday_candles(
     start: _dt.datetime = _dt.datetime(2025, 3, 4, 9, 30),
     interval_min: int = 5,
     base: float = 100.0,
-) -> List[Candle]:
+) -> list[Candle]:
     """Generate ``n`` regular-session candles at ``interval_min`` cadence."""
-    out: List[Candle] = []
+    out: list[Candle] = []
     for i in range(n):
         ts = start + _dt.timedelta(minutes=interval_min * i)
         out.append(Candle(
@@ -79,9 +78,9 @@ class _FakeChartApp:
     """Minimal stand-in for :class:`ChartApp` that exposes only the
     public primitives the controller reads/writes. No Tk, no plotting."""
 
-    _primary: List[Any] = field(default_factory=list)
-    _compare: List[Any] = field(default_factory=list)
-    candles: List[Any] = field(default_factory=list)
+    _primary: list[Any] = field(default_factory=list)
+    _compare: list[Any] = field(default_factory=list)
+    candles: list[Any] = field(default_factory=list)
     _drilldown_day: Any = None
     _confirmed_primary_ticker: str = ""
     _confirmed_compare_ticker: str = ""
@@ -98,12 +97,12 @@ class _FakeChartApp:
     # Call recorders.
     render_calls: int = 0
     cancel_fetch_calls: int = 0
-    install_primary_calls: List[dict] = field(default_factory=list)
-    install_compare_calls: List[dict] = field(default_factory=list)
-    invalidate_focused_calls: List[Any] = field(default_factory=list)
-    notify_appended_calls: List[Any] = field(default_factory=list)
-    draw_slice_calls: List[tuple] = field(default_factory=list)
-    refresh_view_calls: List[str] = field(default_factory=list)
+    install_primary_calls: list[dict] = field(default_factory=list)
+    install_compare_calls: list[dict] = field(default_factory=list)
+    invalidate_focused_calls: list[Any] = field(default_factory=list)
+    notify_appended_calls: list[Any] = field(default_factory=list)
+    draw_slice_calls: list[tuple] = field(default_factory=list)
+    refresh_view_calls: list[str] = field(default_factory=list)
     capture_png_calls: int = 0
     hide_panel_calls: int = 0
     reset_compare_calls: int = 0
@@ -118,7 +117,7 @@ class _FakeChartApp:
         self.cancel_fetch_calls += 1
 
     def _install_sandbox_primary_series(
-        self, *, symbol: str, candles: List[Any], interval: str,
+        self, *, symbol: str, candles: list[Any], interval: str,
         full_session_length: int = 0, **_: Any,
     ) -> None:
         self._primary = candles  # the controller's identity-stable list
@@ -132,7 +131,7 @@ class _FakeChartApp:
                  length=len(candles)))
 
     def _install_sandbox_compare_series(
-        self, *, symbol: str, candles: List[Any], interval: str,
+        self, *, symbol: str, candles: list[Any], interval: str,
         full_session_length: int = 0, **_: Any,
     ) -> None:
         self._compare = candles
@@ -155,7 +154,7 @@ class _FakeChartApp:
     def _refresh_view_after_append(self, slot_key: str) -> None:
         self.refresh_view_calls.append(slot_key)
 
-    def _capture_chart_png(self, *_a, **_kw) -> Optional[str]:
+    def _capture_chart_png(self, *_a, **_kw) -> str | None:
         self.capture_png_calls += 1
         return None
 
@@ -184,14 +183,14 @@ def _make_session_spec(*, deck_seed: int = 42,
 
 def _ctl_and_start(
     *,
-    spec: Optional[SessionSpec] = None,
+    spec: SessionSpec | None = None,
     n_bars: int = 30,
     session_date: _dt.date = _dt.date(2025, 3, 4),
     lookback_days: int = 1,
     auto_cycle: bool = False,
-    eligible_dates: Optional[List[_dt.date]] = None,
-    display_intervals: Optional[tuple] = None,
-) -> tuple[SandboxController, _FakeChartApp, List[Candle]]:
+    eligible_dates: list[_dt.date] | None = None,
+    display_intervals: tuple | None = None,
+) -> tuple[SandboxController, _FakeChartApp, list[Candle]]:
     app = _FakeChartApp()
     spec = spec or _make_session_spec()
     candles = _make_intraday_candles(n_bars)

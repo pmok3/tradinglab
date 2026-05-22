@@ -605,9 +605,9 @@ def test_chartstack_lockstep_with_next_bar(app) -> None:
     import datetime as _dt
     import tkinter as tk
 
+    from tradinglab.backtest.bars import _clear_cache_for_tests
     from tradinglab.backtest.replay import SandboxController
     from tradinglab.backtest.session import ENGINE_VERSION, SessionSpec
-    from tradinglab.backtest.bars import _clear_cache_for_tests
     from tradinglab.models import Candle
 
     _clear_cache_for_tests()
@@ -742,12 +742,12 @@ def test_chartstack_m6_alert_tints_card_on_rvol_spike(app) -> None:
     import datetime as _dt
     import tkinter as tk
 
+    from tradinglab.backtest.bars import _clear_cache_for_tests
     from tradinglab.backtest.replay import SandboxController
     from tradinglab.backtest.session import ENGINE_VERSION, SessionSpec
-    from tradinglab.backtest.bars import _clear_cache_for_tests
-    from tradinglab.models import Candle
     from tradinglab.gui.chartstack.alerts import AlertTier
     from tradinglab.gui.colors import WARN_AMBER
+    from tradinglab.models import Candle
 
     _clear_cache_for_tests()
 

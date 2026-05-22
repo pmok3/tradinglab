@@ -88,9 +88,14 @@ checkbox groups, called from `_on_menu_sandbox_start` / `_on_menu_sandbox_end`.
   dialog can't silently lose data.
 - **Row keys are stable per-row monotonic ids**, not list positions.
 - **`_apply_theme()` repaints non-ttk chrome** — walks descendants, sets
-  `bg = app._theme["win_bg"]` on every `tk.Frame`/`tk.Canvas`/`Toplevel`.
-  Invoked from `__init__`, `_build_row`, `_build_param_widgets`. The parent
-  app's `_apply_theme` cascades into open dialogs.
+  `bg = app._theme["win_bg"]` on every `tk.Frame`/`tk.Canvas`/`Toplevel`,
+  plus `bg = win_bg` and `fg = app._theme["text"]` on every plain
+  `tk.Label` (drag handles, captions, swatch labels). Labels tagged
+  with `_preserve_fg = True` (e.g. the blue help-icon ⓘ) keep their
+  baked-in foreground colour but still get the new background. Audit
+  `indicator-dialog-label-theme`. Invoked from `__init__`, `_build_row`,
+  `_build_param_widgets`. The parent app's `_apply_theme` cascades
+  into open dialogs.
 - **Param subframe wraps via grid**, dynamic via
   `_compute_max_cols_for_schema(schema)` based on inner-frame width and
   per-ParamDef cell-width estimates. `_build_one_param_widget` accepts

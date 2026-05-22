@@ -13,20 +13,18 @@ import matplotlib
 
 matplotlib.use("Agg")  # noqa: E402
 
+import pytest
 from matplotlib.figure import Figure  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
 from matplotlib.text import Text  # noqa: E402
 
-import pytest
-
 from tradinglab.gui.live_price_overlay import (
-    LIVE_PRICE_LINESTYLE,
     LIVE_PRICE_LABEL_ZORDER,
+    LIVE_PRICE_LINESTYLE,
     LIVE_PRICE_ZORDER,
     LivePriceOverlay,
     format_price,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -377,7 +375,7 @@ class TestBoxedBadge:
         assert to_hex(line.get_color()) == "#888888"
 
     def test_legacy_call_without_box_yields_plain_text_no_bbox(self, axes_pair):
-        from matplotlib.text import Text, Annotation
+        from matplotlib.text import Annotation, Text
         ax_p, _ = axes_pair
         ov = LivePriceOverlay()
         ov.redraw(

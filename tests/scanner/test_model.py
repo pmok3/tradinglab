@@ -13,6 +13,8 @@ import pytest
 from tradinglab.scanner.model import (
     ALL_OPERATORS,
     OPERATOR_PARAM_SCHEMA,
+    OUTPUT_COL_CONDITION_VALUE,
+    OUTPUT_COL_FIELD,
     SCHEMA_VERSION,
     VIEW_ACTIVE,
     VIEW_NEW,
@@ -25,14 +27,11 @@ from tradinglab.scanner.model import (
     Group,
     MatchEvidence,
     OutputColumn,
-    OUTPUT_COL_CONDITION_VALUE,
-    OUTPUT_COL_FIELD,
     ScanDefinition,
     ScanOptions,
     UniverseFilter,
     migrate,
 )
-
 
 # ---------------------------------------------------------------------------
 # FieldRef

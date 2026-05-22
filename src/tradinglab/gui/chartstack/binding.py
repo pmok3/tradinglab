@@ -16,9 +16,9 @@ worrying about side effects.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from enum import Enum
-from typing import Iterable, Optional, Sequence
 
 
 class BindingMode(Enum):
@@ -38,7 +38,7 @@ class CardBinding:
     source_label: str
 
 
-def _normalise_symbol(value: object) -> Optional[str]:
+def _normalise_symbol(value: object) -> str | None:
     """Coerce arbitrary input to an upper-case ticker, or ``None``."""
     if value is None:
         return None
@@ -60,7 +60,7 @@ def _normalise_symbol(value: object) -> Optional[str]:
     return None
 
 
-def _dedup_in_order(symbols: Iterable[Optional[str]]) -> list[str]:
+def _dedup_in_order(symbols: Iterable[str | None]) -> list[str]:
     """Return ``symbols`` minus duplicates, preserving first-seen order."""
     seen: set[str] = set()
     out: list[str] = []
@@ -76,11 +76,11 @@ def _dedup_in_order(symbols: Iterable[Optional[str]]) -> list[str]:
 
 def _pad_to_count(
     bindings: list[CardBinding], count: int
-) -> list[Optional[CardBinding]]:
+) -> list[CardBinding | None]:
     """Right-pad ``bindings`` with ``None`` to length ``count``."""
     if count <= 0:
         return []
-    out: list[Optional[CardBinding]] = list(bindings[:count])
+    out: list[CardBinding | None] = list(bindings[:count])
     while len(out) < count:
         out.append(None)
     return out
@@ -94,7 +94,7 @@ def resolve_bindings(
     open_positions: Sequence[object] = (),
     manual_pins: Sequence[object] = (),
     card_count: int = 3,
-) -> list[Optional[CardBinding]]:
+) -> list[CardBinding | None]:
     """Compute the binding list for ``card_count`` slots.
 
     Inputs are tolerant: each may be a sequence of strings, dicts

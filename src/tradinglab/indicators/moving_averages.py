@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import ClassVar, Dict, List, Tuple
+from typing import ClassVar
 
 import numpy as np
 
@@ -20,11 +20,11 @@ class SMA:
 
     kind_id: ClassVar[str] = "sma"
     kind_version: ClassVar[int] = 1
-    params_schema: ClassVar[Tuple[ParamDef, ...]] = (
+    params_schema: ClassVar[tuple[ParamDef, ...]] = (
         ParamDef("length", "int", default=20, min=1, max=2000, step=1,
                  description="Length"),
     )
-    default_style: ClassVar[Dict[str, LineStyle]] = {
+    default_style: ClassVar[dict[str, LineStyle]] = {
         "sma": LineStyle(color="#1f77b4", width=1.4),
     }
 
@@ -36,7 +36,7 @@ class SMA:
         self.length = length
         self.name = f"SMA({length})"
 
-    def compute_arr(self, bars: Bars) -> Dict[str, np.ndarray]:
+    def compute_arr(self, bars: Bars) -> dict[str, np.ndarray]:
         closes = bars.close
         out = np.full_like(closes, np.nan)
         n = self.length
@@ -45,7 +45,7 @@ class SMA:
             out[n - 1:] = (csum[n:] - csum[:-n]) / n
         return {"sma": out}
 
-    def compute(self, candles: List[Candle]) -> Dict[str, np.ndarray]:
+    def compute(self, candles: list[Candle]) -> dict[str, np.ndarray]:
         return self.compute_arr(Bars.from_candles(candles))
 
     # --- incremental protocol -------------------------------------------
@@ -53,17 +53,17 @@ class SMA:
     # recompute via :class:`IndicatorMemo` (intentional — forming is rare
     # relative to closed-bar appends).
 
-    def inc_init(self, bars: Bars) -> Dict[str, object]:
+    def inc_init(self, bars: Bars) -> dict[str, object]:
         """Build initial incremental state mirroring :meth:`compute_arr`."""
         return {"output": self.compute_arr(bars), "len": int(bars.close.size)}
 
     def inc_step(
         self,
-        state: Dict[str, object],
+        state: dict[str, object],
         bars: Bars,
         *,
         prev_len: int,
-    ) -> Dict[str, object]:
+    ) -> dict[str, object]:
         """Extend state by one or more closed bars.
 
         Raises ``ValueError`` if ``len(bars) <= prev_len`` — the caller
@@ -106,11 +106,11 @@ class EMA:
 
     kind_id: ClassVar[str] = "ema"
     kind_version: ClassVar[int] = 2
-    params_schema: ClassVar[Tuple[ParamDef, ...]] = (
+    params_schema: ClassVar[tuple[ParamDef, ...]] = (
         ParamDef("length", "int", default=20, min=1, max=2000, step=1,
                  description="Length"),
     )
-    default_style: ClassVar[Dict[str, LineStyle]] = {
+    default_style: ClassVar[dict[str, LineStyle]] = {
         "ema": LineStyle(color="#ff7f0e", width=1.4),
     }
 
@@ -123,7 +123,7 @@ class EMA:
         self.alpha = 2.0 / (length + 1)
         self.name = f"EMA({length})"
 
-    def compute_arr(self, bars: Bars) -> Dict[str, np.ndarray]:
+    def compute_arr(self, bars: Bars) -> dict[str, np.ndarray]:
         closes = bars.close
         n = closes.size
         out = np.full(n, np.nan, dtype=np.float64)
@@ -139,12 +139,12 @@ class EMA:
             out[i] = prev
         return {"ema": out}
 
-    def compute(self, candles: List[Candle]) -> Dict[str, np.ndarray]:
+    def compute(self, candles: list[Candle]) -> dict[str, np.ndarray]:
         return self.compute_arr(Bars.from_candles(candles))
 
     # --- incremental protocol -------------------------------------------
 
-    def inc_init(self, bars: Bars) -> Dict[str, object]:
+    def inc_init(self, bars: Bars) -> dict[str, object]:
         """Build initial state.
 
         ``committed_idx`` is the highest index whose EMA has been
@@ -171,11 +171,11 @@ class EMA:
 
     def inc_step(
         self,
-        state: Dict[str, object],
+        state: dict[str, object],
         bars: Bars,
         *,
         prev_len: int,
-    ) -> Dict[str, object]:
+    ) -> dict[str, object]:
         """Extend state by one or more closed bars via the recurrence.
 
         Crosses the seed threshold gracefully if ``prev_len < L``

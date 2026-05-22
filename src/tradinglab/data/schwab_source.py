@@ -50,7 +50,7 @@ Reference response shape (Market Data v1, ``/pricehistory``)::
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..models import Candle
 from .credentials import SchwabCredentials, get_credentials
@@ -68,8 +68,8 @@ _SCHWAB_KEYMAP = {
 
 
 def candles_from_schwab_response(
-    payload: Dict[str, Any], *, interval: str,
-) -> List[Candle]:
+    payload: dict[str, Any], *, interval: str,
+) -> list[Candle]:
     """Map a parsed Schwab ``/pricehistory`` response to candles.
 
     Tolerates both the standard envelope (``{"candles": [...]}``) and a
@@ -110,7 +110,7 @@ _INTERVAL_TO_SCHWAB = {
 
 def fetch_schwab_data(
     ticker: str = "AAPL", interval: str = "1d",
-) -> Optional[List[Candle]]:
+) -> list[Candle] | None:
     """``DataFetcher``-compatible Schwab fetcher.
 
     Returns ``None`` whenever the request can't be made — missing
@@ -140,7 +140,7 @@ def fetch_schwab_data(
     return candles_from_schwab_response(payload, interval=interval)
 
 
-def _maybe_get_access_token(creds: SchwabCredentials) -> Optional[str]:
+def _maybe_get_access_token(creds: SchwabCredentials) -> str | None:
     """Return a valid access token by reading + refreshing the token cache.
 
     Delegates to :mod:`tradinglab.data.schwab_auth`, which owns
@@ -166,7 +166,7 @@ SCHWAB_REGISTRATION_ENABLED: bool = False
 
 def _http_get_pricehistory(
     ticker: str, interval: str, access_token: str,
-) -> Dict[str, Any]:  # pragma: no cover - network path
+) -> dict[str, Any]:  # pragma: no cover - network path
     """Issue the GET against Schwab's price-history endpoint.
 
     Implementation deferred until OAuth lands; see module docstring.

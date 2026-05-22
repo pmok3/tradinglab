@@ -15,7 +15,6 @@ import pytest
 from tradinglab.data import schwab_auth
 from tradinglab.data.credentials import SchwabCredentials
 
-
 CREDS = SchwabCredentials(
     app_key="my-app-key", app_secret="my-app-secret",
     redirect_uri="https://127.0.0.1",

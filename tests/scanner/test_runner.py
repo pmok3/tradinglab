@@ -10,10 +10,10 @@ import pytest
 import tradinglab.indicators  # noqa: F401  -- registers indicators
 from tradinglab.models import Candle
 from tradinglab.scanner.model import (
+    OP_GT,
     Condition,
     FieldRef,
     Group,
-    OP_GT,
     ScanDefinition,
     UniverseFilter,
 )
@@ -26,9 +26,9 @@ from tradinglab.scanner.runner import (
 )
 
 
-def _candles(closes: List[float],
+def _candles(closes: list[float],
              start: datetime = datetime(2026, 5, 4, 9, 30, tzinfo=timezone.utc),
-             interval_min: int = 5) -> List[Candle]:
+             interval_min: int = 5) -> list[Candle]:
     out = []
     for i, c in enumerate(closes):
         out.append(Candle(
@@ -156,8 +156,8 @@ def test_run_scan_sync_universe_filter_symbols():
 def test_run_scan_sync_memo_is_shared_across_calls():
     """Two scans referencing the same indicator on the same symbol should
     only call compute() once."""
-    from tradinglab.scanner.runner import run_scan_sync
     from tradinglab.scanner.engine import IndicatorMemo
+    from tradinglab.scanner.runner import run_scan_sync
 
     scan_a = _scan_close_gt(0.0, name="a")
     scan_b = _scan_close_gt(0.0, name="b")

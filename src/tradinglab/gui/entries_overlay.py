@@ -22,8 +22,9 @@ and are therefore not rendered.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any
 
 from matplotlib.axes import Axes
 from matplotlib.lines import Line2D
@@ -50,8 +51,8 @@ class OverlayLine:
     """
 
     kind: str  # "armed_limit" / "armed_stop" / "pending_limit" / "pending_stop" / "pending_stop_limit"
-    strategy_id: Optional[str]
-    pending_order_id: Optional[str]
+    strategy_id: str | None
+    pending_order_id: str | None
     symbol: str
     direction: Direction
     price: float
@@ -86,9 +87,9 @@ def _strategy_targets_symbol(s: EntryStrategy, symbol: str) -> bool:
 def compute_overlay_lines(
     *,
     evaluator: EntryEvaluator,
-    paper_engine: Optional[PaperBrokerEngine],
-    primary_symbol: Optional[str],
-) -> List[OverlayLine]:
+    paper_engine: PaperBrokerEngine | None,
+    primary_symbol: str | None,
+) -> list[OverlayLine]:
     """Build all overlay-line descriptors for the primary chart.
 
     Returns the complete list (armed + pending), in deterministic
@@ -105,7 +106,7 @@ def compute_overlay_lines(
     if not sym:
         return []
 
-    out: List[OverlayLine] = []
+    out: list[OverlayLine] = []
 
     # 1) Armed strategies (snapshot via evaluator).
     armed_ids = set()
@@ -144,7 +145,7 @@ def compute_overlay_lines(
 
 def _line_for_armed_strategy(
     s: EntryStrategy, symbol: str,
-) -> Optional[OverlayLine]:
+) -> OverlayLine | None:
     """Return one armed-line descriptor or ``None`` if N/A."""
     kind = s.trigger.kind
     direction = s.direction
@@ -197,7 +198,7 @@ def _line_for_armed_strategy(
     return None
 
 
-def _lines_for_pending_order(po: Any, symbol: str) -> List[OverlayLine]:
+def _lines_for_pending_order(po: Any, symbol: str) -> list[OverlayLine]:
     """Build one or two lines for a pending PaperOrder.
 
     A STOP_LIMIT pending order has both a stop price and a limit price;
@@ -210,7 +211,7 @@ def _lines_for_pending_order(po: Any, symbol: str) -> List[OverlayLine]:
         else Direction.SHORT
     )
     color = _COLOR_LONG if direction is Direction.LONG else _COLOR_SHORT
-    out: List[OverlayLine] = []
+    out: list[OverlayLine] = []
     if po.kind is PaperOrderKind.LIMIT and po.price is not None:
         out.append(OverlayLine(
             kind="pending_limit",
@@ -284,8 +285,8 @@ class EntriesOverlay:
         self,
         *,
         evaluator: EntryEvaluator,
-        paper_engine: Optional[PaperBrokerEngine] = None,
-        request_redraw: Optional[Callable[[], None]] = None,
+        paper_engine: PaperBrokerEngine | None = None,
+        request_redraw: Callable[[], None] | None = None,
         enabled: bool = True,
     ) -> None:
         self._evaluator = evaluator
@@ -293,7 +294,7 @@ class EntriesOverlay:
         self._request_redraw = request_redraw or (lambda: None)
         self._enabled = bool(enabled)
         # Map (kind, key) → list[(line, label)] purely for cleanup.
-        self._artists: Dict[str, List[Tuple[Line2D, Optional[Text]]]] = {}
+        self._artists: dict[str, list[tuple[Line2D, Text | None]]] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -325,9 +326,9 @@ class EntriesOverlay:
 
     def redraw(
         self,
-        primary_ax: Optional[Axes],
-        primary_symbol: Optional[str],
-    ) -> List[OverlayLine]:
+        primary_ax: Axes | None,
+        primary_symbol: str | None,
+    ) -> list[OverlayLine]:
         self.clear()
         if not self._enabled or primary_ax is None or not primary_symbol:
             return []
@@ -363,7 +364,7 @@ class EntriesOverlay:
             zorder=4,
             alpha=0.85 if desc.pending else 0.7,
         )
-        label: Optional[Text] = None
+        label: Text | None = None
         try:
             from matplotlib.transforms import blended_transform_factory
             tr = blended_transform_factory(ax.transAxes, ax.transData)

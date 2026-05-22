@@ -42,8 +42,9 @@ Adding a new tunable
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any
 
 from . import settings as _settings
 
@@ -51,8 +52,8 @@ from . import settings as _settings
 # Validator factories — all return (ok, normalized_value)
 # ---------------------------------------------------------------------------
 
-def _v_int(min_: Optional[int] = None, max_: Optional[int] = None) -> Callable[[Any], Tuple[bool, Any]]:
-    def check(v: Any) -> Tuple[bool, Any]:
+def _v_int(min_: int | None = None, max_: int | None = None) -> Callable[[Any], tuple[bool, Any]]:
+    def check(v: Any) -> tuple[bool, Any]:
         if isinstance(v, bool) or not isinstance(v, (int, float)):
             return False, None
         try:
@@ -67,8 +68,8 @@ def _v_int(min_: Optional[int] = None, max_: Optional[int] = None) -> Callable[[
     return check
 
 
-def _v_float(min_: Optional[float] = None, max_: Optional[float] = None) -> Callable[[Any], Tuple[bool, Any]]:
-    def check(v: Any) -> Tuple[bool, Any]:
+def _v_float(min_: float | None = None, max_: float | None = None) -> Callable[[Any], tuple[bool, Any]]:
+    def check(v: Any) -> tuple[bool, Any]:
         if isinstance(v, bool) or not isinstance(v, (int, float)):
             return False, None
         fv = float(v)
@@ -80,14 +81,14 @@ def _v_float(min_: Optional[float] = None, max_: Optional[float] = None) -> Call
     return check
 
 
-def _v_bool(v: Any) -> Tuple[bool, Any]:
+def _v_bool(v: Any) -> tuple[bool, Any]:
     if isinstance(v, bool):
         return True, v
     return False, None
 
 
-def _v_str(allow_empty: bool = True) -> Callable[[Any], Tuple[bool, Any]]:
-    def check(v: Any) -> Tuple[bool, Any]:
+def _v_str(allow_empty: bool = True) -> Callable[[Any], tuple[bool, Any]]:
+    def check(v: Any) -> tuple[bool, Any]:
         if not isinstance(v, str):
             return False, None
         if not allow_empty and not v:
@@ -96,7 +97,7 @@ def _v_str(allow_empty: bool = True) -> Callable[[Any], Tuple[bool, Any]]:
     return check
 
 
-def _v_dict(v: Any) -> Tuple[bool, Any]:
+def _v_dict(v: Any) -> tuple[bool, Any]:
     if isinstance(v, dict):
         return True, v
     return False, None
@@ -112,11 +113,11 @@ class Tunable:
     default: Any
     kind: str            # short type tag for docs ("int", "float", "bool", "str", "dict")
     description: str
-    validator: Callable[[Any], Tuple[bool, Any]]
+    validator: Callable[[Any], tuple[bool, Any]]
     is_user_facing: bool = True   # exposed in the example config + Save Configuration
 
 
-TUNABLES: Tuple[Tunable, ...] = (
+TUNABLES: tuple[Tunable, ...] = (
     # --- User-facing settings (round-trip through the loaded config file) ---
     Tunable("display_tz", "", "str",
             "IANA timezone (e.g. 'America/Los_Angeles') applied to intraday timestamps. "
@@ -379,20 +380,20 @@ TUNABLES: Tuple[Tunable, ...] = (
 
 
 # Index by key for O(1) lookup.
-_BY_KEY: Dict[str, Tunable] = {t.key: t for t in TUNABLES}
+_BY_KEY: dict[str, Tunable] = {t.key: t for t in TUNABLES}
 
 # Resolved cache: populated on first get(), invalidated by reload().
-_resolved: Optional[Dict[str, Any]] = None
+_resolved: dict[str, Any] | None = None
 
 
-def _load_overrides() -> Dict[str, Any]:
+def _load_overrides() -> dict[str, Any]:
     """Read settings.json and return validated overrides keyed by tunable name.
 
     Bad / missing keys are silently dropped (caller falls back to built-in
     default). Unknown keys in settings.json are preserved by ``settings.set``
     on subsequent writes — we just don't look them up here.
     """
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
     try:
         raw = _settings.load()
     except Exception:  # noqa: BLE001
@@ -406,11 +407,11 @@ def _load_overrides() -> Dict[str, Any]:
     return out
 
 
-def _ensure_loaded() -> Dict[str, Any]:
+def _ensure_loaded() -> dict[str, Any]:
     global _resolved
     if _resolved is None:
         overrides = _load_overrides()
-        merged: Dict[str, Any] = {t.key: t.default for t in TUNABLES}
+        merged: dict[str, Any] = {t.key: t.default for t in TUNABLES}
         merged.update(overrides)
         _resolved = merged
     return _resolved
@@ -429,7 +430,7 @@ def get(key: str) -> Any:
     return _ensure_loaded()[key]
 
 
-def describe(key: str) -> Tuple[Any, str, str]:
+def describe(key: str) -> tuple[Any, str, str]:
     """Return ``(default, kind, description)`` for ``key``."""
     t = _BY_KEY[key]
     return (t.default, t.kind, t.description)
@@ -452,13 +453,13 @@ def as_markdown_table() -> str:
     return "\n".join(rows)
 
 
-def user_facing_keys() -> Tuple[str, ...]:
+def user_facing_keys() -> tuple[str, ...]:
     """Return the curated subset of keys exported in the example config and
     written by File → Save Configuration… (perf knobs are excluded)."""
     return tuple(t.key for t in TUNABLES if t.is_user_facing)
 
 
-def example_payload(*, with_comments: bool = True) -> Dict[str, Any]:
+def example_payload(*, with_comments: bool = True) -> dict[str, Any]:
     """Build the dict written to ``config/example_config.json``.
 
     Includes every user-facing tunable at its built-in default, plus
@@ -467,7 +468,7 @@ def example_payload(*, with_comments: bool = True) -> Dict[str, Any]:
     stripped on import (any key starting with ``_`` is ignored by
     :func:`tradinglab.settings.import_from_file`).
     """
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
     if with_comments:
         out["_comment"] = (
             "tradinglab configuration file. Load via File -> Load Configuration. "

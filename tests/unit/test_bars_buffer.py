@@ -17,7 +17,6 @@ from tradinglab.core.bars import Bars
 from tradinglab.core.bars_buffer import BarsBuffer
 from tradinglab.models import Candle
 
-
 # --- helpers ---------------------------------------------------------------
 
 

@@ -29,21 +29,20 @@ from tradinglab.scanner.engine import (
     validate_scan,
 )
 from tradinglab.scanner.model import (
+    OP_GT,
     Condition,
     FieldRef,
     Group,
-    OP_GT,
     ScanDefinition,
     UniverseFilter,
 )
 
-
 # --- helpers ---------------------------------------------------------------
 
 
-def _candles(closes: List[float],
+def _candles(closes: list[float],
              start: datetime = datetime(2026, 5, 4, 9, 30),
-             interval_min: int = 5) -> List[Candle]:
+             interval_min: int = 5) -> list[Candle]:
     out = []
     for i, c in enumerate(closes):
         out.append(Candle(

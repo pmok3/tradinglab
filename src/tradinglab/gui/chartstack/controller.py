@@ -26,8 +26,9 @@ pattern as ``ChartApp._fetch_token`` / ``_stream_token``.
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .binding import CardBinding
@@ -86,7 +87,7 @@ class SubscriptionRegistry:
         *,
         upstream_factory: Callable[
             [str, str, str, Callable[[str, Any], None]],
-            Optional[Callable[[], None]],
+            Callable[[], None] | None,
         ],
     ) -> Callable[[], None]:
         """Register ``callback`` for tick + rollover events on the key.
@@ -141,7 +142,7 @@ class SubscriptionRegistry:
             if released["done"]:
                 return
             released["done"] = True
-            stale_unsub: Optional[Callable[[], None]] = None
+            stale_unsub: Callable[[], None] | None = None
             with self._lock:
                 entry = self._entries.get(key)
                 if entry is None:
@@ -237,18 +238,18 @@ class CardController:
         self.slot_index = int(slot_index)
         self.owner_app = owner_app
         self._state = CardState.IDLE
-        self._binding: Optional["CardBinding"] = None
+        self._binding: CardBinding | None = None
         self._token: int = 0
-        self._stream_release: Optional[Callable[[], None]] = None
+        self._stream_release: Callable[[], None] | None = None
         # Captured at stream-subscribe time so stop_stream can release
         # without needing the registry reference back.
-        self._stream_key: Optional[tuple[str, str, str]] = None
+        self._stream_key: tuple[str, str, str] | None = None
         # M5: index of the bar where a halt was detected. ``None``
         # means the card is not halted. The render layer reads
         # ``halt_index`` to paint the vertical-bar glyph + grey
         # treatment. Independent of FSM state so callers can leave
         # a card in LIVE while flagging a halt mid-session.
-        self._halt_index: Optional[int] = None
+        self._halt_index: int | None = None
 
     # --- read-only properties -----------------------------------------
     @property
@@ -257,7 +258,7 @@ class CardController:
         return self._state
 
     @property
-    def binding(self) -> Optional["CardBinding"]:
+    def binding(self) -> CardBinding | None:
         """Current binding (or ``None`` for an empty slot)."""
         return self._binding
 
@@ -267,12 +268,12 @@ class CardController:
         return self._token
 
     @property
-    def stream_key(self) -> Optional[tuple[str, str, str]]:
+    def stream_key(self) -> tuple[str, str, str] | None:
         """Return the ``(src, ticker, interval)`` of the active stream, or None."""
         return self._stream_key
 
     @property
-    def halt_index(self) -> Optional[int]:
+    def halt_index(self) -> int | None:
         """Bar-index of the detected halt, or ``None`` if not halted.
 
         M5: render layer reads this to draw the vertical-bar glyph
@@ -287,7 +288,7 @@ class CardController:
         return self._halt_index is not None
 
     # --- transitions --------------------------------------------------
-    def bind(self, binding: "CardBinding | None") -> None:
+    def bind(self, binding: CardBinding | None) -> None:
         """Replace the held binding. Resets state to IDLE, bumps token,
         and tears down any active stream subscription.
 
@@ -424,7 +425,8 @@ class CardController:
                 from ...constants import is_intraday as _is_intraday
                 is_intraday = _is_intraday  # type: ignore[assignment]
             except Exception:  # noqa: BLE001
-                is_intraday = lambda _i: True  # type: ignore[assignment]
+                def is_intraday(_i):
+                    return True  # type: ignore[assignment]
         try:
             if not is_intraday(itv):
                 return
@@ -454,7 +456,7 @@ class CardController:
 
         def _factory(src_: str, ticker_: str, interval_: str,
                      dispatch: Callable[[str, Any], None]
-                     ) -> Optional[Callable[[], None]]:
+                     ) -> Callable[[], None] | None:
             try:
                 from ...streaming import STREAM_SOURCES
             except Exception:  # noqa: BLE001

@@ -50,10 +50,10 @@ from __future__ import annotations
 
 import logging
 import tkinter as tk
+from collections.abc import Callable
 from tkinter import ttk
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any
 
-from ..indicators.base import factory_by_kind_id
 from ..scanner.fields import all_fields, get_field
 from ..scanner.model import (
     ALL_OPERATORS,
@@ -78,7 +78,7 @@ LOG = logging.getLogger(__name__)
 
 
 # Interval picker values — kept in sync with the rest of the toolbar.
-_INTERVALS: Tuple[str, ...] = ("1m", "2m", "5m", "15m", "30m", "1h", "1d", "1wk", "1mo")
+_INTERVALS: tuple[str, ...] = ("1m", "2m", "5m", "15m", "30m", "1h", "1d", "1wk", "1mo")
 
 #: Operators with no left-field semantic (purely structural). The left
 #: field is still required by the model (UI surfaces a fixed
@@ -93,11 +93,11 @@ _NO_LEFT_OPS = frozenset({OP_INSIDE_BAR, OP_OUTSIDE_BAR, OP_NR7})
 
 
 def _compute_flow_rows(
-    widths: List[int],
+    widths: list[int],
     budget: int,
     *,
     pad: int = 6,
-) -> List[Tuple[int, int]]:
+) -> list[tuple[int, int]]:
     """Return ``[(row, col), ...]`` placements for a flow / wrap layout.
 
     Greedy first-fit: place each child on the current row until adding
@@ -124,7 +124,7 @@ def _compute_flow_rows(
     """
     if budget <= 0:
         budget = 1
-    out: List[Tuple[int, int]] = []
+    out: list[tuple[int, int]] = []
     row = 0
     col = 0
     used = 0
@@ -168,8 +168,8 @@ class _FieldRefPicker(ttk.Frame):
         self,
         master: tk.Misc,
         *,
-        ref: Optional[FieldRef] = None,
-        on_change: Optional[Callable[[], None]] = None,
+        ref: FieldRef | None = None,
+        on_change: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(master)
         self._on_change = on_change
@@ -191,7 +191,7 @@ class _FieldRefPicker(ttk.Frame):
         # ----- value widgets (built lazily by _rebuild_value_pane) -----------
         self._value_pane = ttk.Frame(self)
         self._value_pane.grid(row=0, column=1, sticky="nw")
-        self._param_widgets: Dict[str, tk.Variable] = {}
+        self._param_widgets: dict[str, tk.Variable] = {}
         self._output_var = tk.StringVar()
         self._field_id_var = tk.StringVar()
         self._literal_var = tk.StringVar()
@@ -201,15 +201,15 @@ class _FieldRefPicker(ttk.Frame):
         # in the indicator-branch flow layout (indicator combo, each param
         # wrap, optional output combo). Empty for non-indicator branches —
         # those use a single row=0 layout that doesn't need wrapping.
-        self._flow_children: List[tk.Widget] = []
+        self._flow_children: list[tk.Widget] = []
         # Pending after_id for the debounced reflow callback. Tracked so
         # ``_rebuild_value_pane`` can cancel before destroying children
         # (avoids the callback running against destroyed widgets).
-        self._reflow_after_id: Optional[str] = None
+        self._reflow_after_id: str | None = None
         # Cache the Toplevel reference so ``_on_destroy`` can unbind even
         # if ``winfo_toplevel`` becomes unsafe by then.
-        self._toplevel_for_reflow: Optional[tk.Misc] = None
-        self._toplevel_bind_id: Optional[str] = None
+        self._toplevel_for_reflow: tk.Misc | None = None
+        self._toplevel_bind_id: str | None = None
 
         self._rebuild_value_pane()
 
@@ -394,7 +394,7 @@ class _FieldRefPicker(ttk.Frame):
             self._fire()
 
     def _commit_indicator(self) -> None:
-        params: Dict[str, Any] = {}
+        params: dict[str, Any] = {}
         spec = get_field(self._ref.id, kind="indicator")
         if spec is None:
             return
@@ -418,7 +418,7 @@ class _FieldRefPicker(ttk.Frame):
 
     # -- helpers --------------------------------------------------------------
 
-    def _build_param_widget(self, pdef: Any, *, col: int) -> Optional[ttk.Frame]:
+    def _build_param_widget(self, pdef: Any, *, col: int) -> ttk.Frame | None:
         """Build one parameter wrap (label + widget); return the wrap.
 
         The wrap is gridded at ``(row=0, column=col)`` for the initial
@@ -444,7 +444,7 @@ class _FieldRefPicker(ttk.Frame):
             cb.bind("<<ComboboxSelected>>", lambda _e: self._commit_indicator())
         elif pdef.kind in ("int", "float"):
             var = tk.StringVar(value=_format_number(seed))
-            kwargs: Dict[str, Any] = {"textvariable": var, "width": 6}
+            kwargs: dict[str, Any] = {"textvariable": var, "width": 6}
             kwargs["from_"] = pdef.min if pdef.min is not None else -1e12
             kwargs["to"]    = pdef.max if pdef.max is not None else  1e12
             kwargs["increment"] = pdef.step if pdef.step is not None \
@@ -464,7 +464,7 @@ class _FieldRefPicker(ttk.Frame):
 
     # -- adaptive flow layout ------------------------------------------------
 
-    def _on_toplevel_configure(self, event: Optional[Any] = None) -> None:
+    def _on_toplevel_configure(self, event: Any | None = None) -> None:
         """Debounced ``<Configure>`` handler bound to the Toplevel.
 
         Filters out descendant configures (Tk's ``<Configure>`` only
@@ -538,8 +538,8 @@ class _FieldRefPicker(ttk.Frame):
 
         # Measure each child's required width with a fresh idletasks
         # pass so spinbox/combobox widths are correct.
-        widths: List[int] = []
-        live_children: List[tk.Widget] = []
+        widths: list[int] = []
+        live_children: list[tk.Widget] = []
         for w in self._flow_children:
             try:
                 if not w.winfo_exists():
@@ -553,7 +553,7 @@ class _FieldRefPicker(ttk.Frame):
         if not live_children:
             return
         placements = _compute_flow_rows(widths, budget=budget, pad=6)
-        for w, (row, col) in zip(live_children, placements):
+        for w, (row, col) in zip(live_children, placements, strict=False):
             try:
                 w.grid_configure(
                     row=row, column=col,
@@ -564,7 +564,7 @@ class _FieldRefPicker(ttk.Frame):
             except tk.TclError:
                 pass
 
-    def _on_destroy(self, _event: Optional[Any] = None) -> None:
+    def _on_destroy(self, _event: Any | None = None) -> None:
         """Tear down pending callbacks + Toplevel binding on destroy.
 
         Without the unbind, the Toplevel keeps a reference to the
@@ -605,7 +605,7 @@ class _FieldRefPicker(ttk.Frame):
 _TRANSITION_OPS_FOR_UI = frozenset({OP_CROSSES_ABOVE, OP_CROSSES_BELOW})
 
 #: Mode dropdown options, in the order they appear in the UI.
-_LOOKBACK_MODES_FULL: Tuple[str, ...] = (
+_LOOKBACK_MODES_FULL: tuple[str, ...] = (
     WITHIN_LAST_MODE_ANY,
     WITHIN_LAST_MODE_ALL,
     WITHIN_LAST_MODE_EXACTLY,
@@ -614,7 +614,7 @@ _LOOKBACK_MODES_FULL: Tuple[str, ...] = (
 #: "every bar in the window is a cross" is not a meaningful trader
 #: pattern. ``exactly`` stays — "the cross fired exactly N bars ago"
 #: IS meaningful.
-_LOOKBACK_MODES_FOR_TRANSITION: Tuple[str, ...] = (
+_LOOKBACK_MODES_FOR_TRANSITION: tuple[str, ...] = (
     WITHIN_LAST_MODE_ANY,
     WITHIN_LAST_MODE_EXACTLY,
 )
@@ -646,9 +646,9 @@ class _LookbackCluster(ttk.Frame):
         self,
         master: tk.Misc,
         *,
-        node: Union[Condition, Group],
-        on_change: Optional[Callable[[], None]] = None,
-        op: Optional[str] = None,
+        node: Condition | Group,
+        on_change: Callable[[], None] | None = None,
+        op: str | None = None,
     ) -> None:
         super().__init__(master)
         self._node = node
@@ -702,7 +702,7 @@ class _LookbackCluster(ttk.Frame):
     # -- internals ------------------------------------------------------------
 
     @staticmethod
-    def _modes_for_op(op: Optional[str]) -> Tuple[str, ...]:
+    def _modes_for_op(op: str | None) -> tuple[str, ...]:
         if op in _TRANSITION_OPS_FOR_UI:
             return _LOOKBACK_MODES_FOR_TRANSITION
         return _LOOKBACK_MODES_FULL
@@ -758,8 +758,8 @@ class _ConditionFrame(ttk.Frame):
         master: tk.Misc,
         *,
         cond: Condition,
-        on_change: Optional[Callable[[], None]] = None,
-        on_delete: Optional[Callable[["_ConditionFrame"], None]] = None,
+        on_change: Callable[[], None] | None = None,
+        on_delete: Callable[[_ConditionFrame], None] | None = None,
         default_interval: str = "5m",
     ) -> None:
         super().__init__(master, padding=(4, 2))
@@ -809,7 +809,7 @@ class _ConditionFrame(ttk.Frame):
         # Per-op named-params row.
         self._params_frame = ttk.Frame(self)
         self._params_frame.grid(row=0, column=3, padx=(0, 6), sticky="nw")
-        self._param_widgets: Dict[str, Any] = {}
+        self._param_widgets: dict[str, Any] = {}
         self._build_params_row()
 
         # Look-back cluster: [bars: N ▾mode]. Sits between the per-op
@@ -862,7 +862,7 @@ class _ConditionFrame(ttk.Frame):
                     1 if kind == "int" else 1.0
                 )
                 var = tk.StringVar(value=_format_number(seed))
-                kwargs: Dict[str, Any] = {
+                kwargs: dict[str, Any] = {
                     "textvariable": var, "width": 6,
                     "from_": -1e12, "to": 1e12,
                     "increment": 1 if kind == "int" else 0.1,
@@ -895,7 +895,7 @@ class _ConditionFrame(ttk.Frame):
         if new_op == self.cond.op or new_op not in OPERATOR_PARAM_SCHEMA:
             return
         # Build fresh params from the new schema's defaults.
-        new_params: Dict[str, Any] = {}
+        new_params: dict[str, Any] = {}
         for name, kind in OPERATOR_PARAM_SCHEMA[new_op]:
             new_params[name] = (
                 FieldRef.literal(0.0) if kind == "field" else
@@ -925,7 +925,7 @@ class _ConditionFrame(ttk.Frame):
             self._fire()
 
     def _commit_params(self) -> None:
-        new_params: Dict[str, Any] = {}
+        new_params: dict[str, Any] = {}
         for name, (kind, widget) in self._param_widgets.items():
             if kind == "field":
                 new_params[name] = widget.get()
@@ -967,8 +967,8 @@ class _GroupFrame(ttk.Frame):
         master: tk.Misc,
         *,
         group: Group,
-        on_change: Optional[Callable[[], None]] = None,
-        on_delete: Optional[Callable[["_GroupFrame"], None]] = None,
+        on_change: Callable[[], None] | None = None,
+        on_delete: Callable[[_GroupFrame], None] | None = None,
         default_interval: str = "5m",
         is_root: bool = False,
     ) -> None:
@@ -979,7 +979,7 @@ class _GroupFrame(ttk.Frame):
         self._on_delete = on_delete
         self._default_interval = default_interval
         self._is_root = is_root
-        self._child_frames: List[Union[_GroupFrame, _ConditionFrame]] = []
+        self._child_frames: list[_GroupFrame | _ConditionFrame] = []
 
         self._build()
 
@@ -1140,7 +1140,7 @@ class _GroupFrame(ttk.Frame):
         self._update_combinator_visibility()
         self._fire()
 
-    def _remove_child_widget(self, widget: Union["_GroupFrame", "_ConditionFrame"]) -> None:
+    def _remove_child_widget(self, widget: _GroupFrame | _ConditionFrame) -> None:
         target_id = (widget.group.id if isinstance(widget, _GroupFrame)
                      else widget.cond.id)
         self.group.children = [
@@ -1181,15 +1181,15 @@ class BlockEditor(ttk.Frame):
         self,
         master: tk.Misc,
         *,
-        root: Optional[Group] = None,
-        on_change: Optional[Callable[[], None]] = None,
+        root: Group | None = None,
+        on_change: Callable[[], None] | None = None,
         default_interval: str = "5m",
     ) -> None:
         super().__init__(master)
         self._on_change = on_change
         self._default_interval = default_interval
         self._root_group: Group = root or Group(combinator="and", children=[])
-        self._root_frame: Optional[_GroupFrame] = None
+        self._root_frame: _GroupFrame | None = None
         self._render_root()
 
     # -- public API -----------------------------------------------------------

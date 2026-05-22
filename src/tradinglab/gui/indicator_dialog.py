@@ -428,7 +428,7 @@ class IndicatorDialog(tk.Toplevel):
     # ------------------------------------------------------------------
 
     def _apply_theme(self) -> None:
-        """Repaint Toplevel + every ``tk.Frame`` / ``tk.Canvas`` descendant.
+        """Repaint Toplevel + every ``tk.Frame`` / ``tk.Canvas`` / ``tk.Label`` descendant.
 
         Mirrors the parent app's window theme step. ttk widgets
         (Buttons, Combobox, Checkbutton, Radiobutton, Label, Entry,
@@ -437,6 +437,12 @@ class IndicatorDialog(tk.Toplevel):
         ``tk.Frame`` / ``tk.Canvas`` widgets used for layout chrome
         keep their default light backgrounds otherwise, producing a
         bright dialog over a dark app — what the user reported.
+
+        Plain ``tk.Label`` widgets (drag handles, help icons, swatch
+        captions) likewise keep their default light bg + black fg
+        unless we paint them. Each label receives the theme bg/fg
+        unless tagged with ``_preserve_fg = True`` (icons whose
+        colour carries meaning — e.g. the blue help glyph).
 
         Idempotent + safe to call from a torn-down state.
         """
@@ -447,6 +453,7 @@ class IndicatorDialog(tk.Toplevel):
         bg = theme.get("win_bg")
         if not bg:
             return
+        fg = theme.get("text", "#000000")
         try:
             self.configure(background=bg)
         except tk.TclError:
@@ -455,9 +462,6 @@ class IndicatorDialog(tk.Toplevel):
         def _walk(w: tk.Widget) -> None:
             for child in w.winfo_children():
                 cls = child.__class__
-                # Only repaint plain-Tk container/canvas widgets.
-                # ttk widgets are themed globally; touching their bg
-                # here would be a no-op or trigger a TclError.
                 # Skip widgets explicitly tagged as theme-exempt
                 # (e.g. color swatches whose ``bg`` IS the data the
                 # user is looking at — see ``_rebuild_color_buttons``).
@@ -468,6 +472,19 @@ class IndicatorDialog(tk.Toplevel):
                         child.configure(background=bg)
                     except tk.TclError:
                         pass
+                elif cls is tk.Label:
+                    # Audit ``indicator-dialog-label-theme``: plain
+                    # tk.Label widgets need explicit bg/fg in dark
+                    # mode — they don't inherit from ttk.Style.
+                    try:
+                        child.configure(background=bg)
+                    except tk.TclError:
+                        pass
+                    if not getattr(child, "_preserve_fg", False):
+                        try:
+                            child.configure(foreground=fg)
+                        except tk.TclError:
+                            pass
                 _walk(child)
 
         try:
@@ -850,11 +867,16 @@ class IndicatorDialog(tk.Toplevel):
             width=24,
         )
         row.kind_combo.pack(side="left", padx=(4, 8))
-        # Help icon — opens per-indicator documentation
+        # Help icon — opens per-indicator documentation. The blue
+        # foreground colour is signal (it visually marks the icon as
+        # interactive), so we keep it intact in dark mode — the
+        # theme walker honors ``_preserve_fg``. Audit
+        # ``indicator-dialog-label-theme``.
         help_label = tk.Label(
             top, text="\u24d8", foreground="#58a6ff", cursor="hand2",
             font=("TkDefaultFont", 10),
         )
+        help_label._preserve_fg = True  # type: ignore[attr-defined]
         help_label.pack(side="left", padx=(6, 0))
         help_label.bind(
             "<Button-1>",
@@ -2183,8 +2205,9 @@ class IndicatorDialog(tk.Toplevel):
             doc_path = None
         if doc_path is None or not doc_path.is_file():
             # Fallback: show the acronym tooltip text
-            from .indicator_acronyms import explain_kind_id
             from tkinter import messagebox
+
+            from .indicator_acronyms import explain_kind_id
             text = explain_kind_id(kind_id)
             messagebox.showinfo(f"About {kind_display}", text, parent=self)
             return

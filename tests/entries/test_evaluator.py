@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, time as dtime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from datetime import time as dtime
 from typing import Any, Dict, List, Optional
 
 import pytest
@@ -56,17 +57,17 @@ def _strategy(
     name: str = "test",
     direction: Direction = Direction.LONG,
     trigger_kind: TriggerKind = TriggerKind.MARKET,
-    price: Optional[float] = None,
-    stop_price: Optional[float] = None,
-    scanner_id: Optional[str] = None,
+    price: float | None = None,
+    stop_price: float | None = None,
+    scanner_id: str | None = None,
     qty: float = 100.0,
     universe_symbols=("AAPL",),
-    universe_scanner_id: Optional[str] = None,
+    universe_scanner_id: str | None = None,
     universe_from_chart: bool = False,
     on_fill_exit_ids=(),
     cooldown_secs: int = 0,
     max_per_symbol: int = 1,
-    max_total: Optional[int] = None,
+    max_total: int | None = None,
     arm_window_start: str = "00:00",
     arm_window_end: str = "23:59",
     block_on_open: bool = True,
@@ -515,7 +516,7 @@ class _FakeScanResult:
 
 class _FakeScanRunner:
     def __init__(self):
-        self._subs: List = []
+        self._subs: list = []
 
     def subscribe(self, callback):
         self._subs.append(callback)
@@ -598,7 +599,7 @@ class TestScannerAlert:
 
 
 class _FakeExitStorage:
-    def __init__(self, lib: Dict[str, Any]):
+    def __init__(self, lib: dict[str, Any]):
         self._lib = lib
 
     def load(self, sid):
@@ -607,7 +608,7 @@ class _FakeExitStorage:
 
 class _FakeExitEvaluator:
     def __init__(self):
-        self.attached: List = []
+        self.attached: list = []
 
     def attach_strategy(self, position_id, strategy):
         self.attached.append((position_id, strategy))
@@ -620,7 +621,7 @@ class TestOnFillBind:
         ev.set_strategies([s])
         ev.arm(s.id)
 
-        modal_calls: List = []
+        modal_calls: list = []
         ev.subscribe_modal_request(lambda pid, strat: modal_calls.append((pid, strat)))
 
         ts = datetime(2024, 1, 15, 10, 0, tzinfo=timezone.utc)
@@ -828,7 +829,7 @@ class _CapturingSink:
     """Minimal :class:`EntrySignalSink` that just records the signal."""
 
     def __init__(self) -> None:
-        self.signals: List[EntrySignal] = []
+        self.signals: list[EntrySignal] = []
         self._n = 0
 
     def submit(self, signal):

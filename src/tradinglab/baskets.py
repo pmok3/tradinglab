@@ -40,8 +40,8 @@ Future work (out of scope for the current sandbox preload feature):
 from __future__ import annotations
 
 import csv
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Dict, List
 
 # Snapshot date for the QQQ list below. Surface this in the UI so a
 # trader can tell at a glance whether the cached basket is stale.
@@ -82,7 +82,7 @@ _QQQ_2026_05_04: tuple = (
 )
 
 
-def qqq_symbols() -> List[str]:
+def qqq_symbols() -> list[str]:
     """Return the snapshot list of Nasdaq-100 constituents.
 
     Returns a fresh list each call so callers can mutate freely.
@@ -125,7 +125,7 @@ def _load_symbols_csv(
     *,
     label: str,
     munge_dots: bool = True,
-) -> List[str]:
+) -> list[str]:
     """Read the ``Symbol`` column from a basket CSV.
 
     Shared by :func:`sp500_symbols`, :func:`nyse_symbols`, and
@@ -144,7 +144,7 @@ def _load_symbols_csv(
             f"{label} constituent list not found at {path}. "
             f"Run from a checkout that contains the tools/ directory."
         )
-    syms: List[str] = []
+    syms: list[str] = []
     with path.open(encoding="utf-8") as fh:
         reader = csv.DictReader(fh)
         for row in reader:
@@ -156,7 +156,7 @@ def _load_symbols_csv(
     return syms
 
 
-def sp500_symbols() -> List[str]:
+def sp500_symbols() -> list[str]:
     """Return the S&P 500 constituent symbols from ``tools/sp500.csv``.
 
     Mirrors the ticker-munging done by the existing
@@ -170,7 +170,7 @@ def sp500_symbols() -> List[str]:
     return _load_symbols_csv(_sp500_csv_path(), label="S&P 500")
 
 
-def nyse_symbols() -> List[str]:
+def nyse_symbols() -> list[str]:
     """Return NYSE-proper (Big Board) common-stock symbols.
 
     Reads ``tools/nyse.csv`` — a normalized 4-column snapshot
@@ -190,7 +190,7 @@ def nyse_symbols() -> List[str]:
     return _load_symbols_csv(_exchange_csv_path("nyse.csv"), label="NYSE")
 
 
-def nasdaq_symbols() -> List[str]:
+def nasdaq_symbols() -> list[str]:
     """Return NASDAQ-listed common-stock symbols.
 
     Same shape as :func:`nyse_symbols`; reads ``tools/nasdaq.csv``
@@ -207,7 +207,7 @@ def nasdaq_symbols() -> List[str]:
 # Keyed registry of built-in baskets. The GUI uses this to populate
 # the "Universe" radio in the prepare-universe dialog. Each value is
 # a zero-arg callable returning a fresh ``List[str]``.
-BUILTIN_BASKETS: Dict[str, Callable[[], List[str]]] = {
+BUILTIN_BASKETS: dict[str, Callable[[], list[str]]] = {
     "sp500": sp500_symbols,
     "qqq": qqq_symbols,
     "nyse": nyse_symbols,
@@ -217,7 +217,7 @@ BUILTIN_BASKETS: Dict[str, Callable[[], List[str]]] = {
 
 # Display labels for the GUI. Kept separate from ``BUILTIN_BASKETS``
 # so renaming a label doesn't churn the manifest ID space.
-BUILTIN_BASKET_LABELS: Dict[str, str] = {
+BUILTIN_BASKET_LABELS: dict[str, str] = {
     "sp500": "S&P 500",
     "qqq": "Nasdaq-100 (QQQ)",
     "nyse": "NYSE — all common stocks",
@@ -230,7 +230,7 @@ BUILTIN_BASKET_LABELS: Dict[str, str] = {
 # the module-level constants. SP500 ships from a Wikipedia-derived
 # CSV without a baked-in date, so it's intentionally absent here —
 # the dialog skips the suffix when a key is missing.
-BUILTIN_BASKET_REFRESHED_DATES: Dict[str, str] = {
+BUILTIN_BASKET_REFRESHED_DATES: dict[str, str] = {
     "qqq": QQQ_LAST_REFRESHED,
     "nyse": NYSE_LAST_REFRESHED,
     "nasdaq": NASDAQ_LAST_REFRESHED,

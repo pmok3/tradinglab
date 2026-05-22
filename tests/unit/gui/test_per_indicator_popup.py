@@ -13,17 +13,16 @@ import pytest
 tk = pytest.importorskip("tkinter")
 ttk = pytest.importorskip("tkinter.ttk")
 
+from tradinglab.gui.indicator_dialog import IndicatorDialog  # noqa: E402
 from tradinglab.gui.per_indicator_dialog import (  # noqa: E402
     _PerIndicatorDialog,
     open_per_indicator_dialog,
 )
-from tradinglab.gui.indicator_dialog import IndicatorDialog  # noqa: E402
 from tradinglab.indicators.base import LineStyle  # noqa: E402
 from tradinglab.indicators.config import (  # noqa: E402
     IndicatorConfig,
     IndicatorManager,
 )
-
 
 # Pytest fixture pattern matches ``tests/unit/gui/test_overlay_legend.py``.
 
@@ -252,7 +251,7 @@ class TestLifecycle:
         dlg = open_per_indicator_dialog(root_with_manager, cfg.id)
         assert dlg is not None
         dlg._on_close()
-        assert getattr(root_with_manager, "_indicator_dialog") is sentinel, (
+        assert root_with_manager._indicator_dialog is sentinel, (
             "popup close must leave the main manager-dialog singleton "
             "slot untouched")
 

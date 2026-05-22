@@ -20,8 +20,8 @@ import pytest
 
 from tradinglab.data import normalize as norm_mod
 from tradinglab.data.normalize import (
-    CandleArrays,
     _PREBUILT_ARRAYS_MAX,
+    CandleArrays,
     pop_prebuilt_arrays,
     stash_arrays,
 )
@@ -36,7 +36,7 @@ def _clear_prebuilt_arrays():
     norm_mod._PREBUILT_ARRAYS.clear()
 
 
-def _make_candles(n: int = 3) -> List[Candle]:
+def _make_candles(n: int = 3) -> list[Candle]:
     """Build a small synthetic list of ``Candle`` objects."""
     base = datetime(2024, 3, 7, 14, 30, tzinfo=timezone.utc)
     return [
@@ -124,7 +124,7 @@ def test_stash_eviction_at_max_capacity():
     overflow = 5
     total = _PREBUILT_ARRAYS_MAX + overflow
 
-    lists: List[List[Candle]] = []
+    lists: list[list[Candle]] = []
     for i in range(total):
         lst = _make_candles(2)
         lists.append(lst)

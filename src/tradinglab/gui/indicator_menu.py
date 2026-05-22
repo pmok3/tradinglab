@@ -19,7 +19,8 @@ method lives on ChartApp.
 from __future__ import annotations
 
 import tkinter as tk
-from typing import Any, Dict, Iterable, Optional
+from collections.abc import Iterable
+from typing import Any
 
 from ..constants import LIGHT_THEME
 from ..indicators.config import IndicatorConfig
@@ -31,15 +32,17 @@ class IndicatorMenuMixin:
     def _on_menu_add_indicator(
         self,
         kind_id: str,
-        params: Dict[str, Any],
-        scopes: Optional[Iterable[str]] = None,
+        params: dict[str, Any],
+        scopes: Iterable[str] | None = None,
     ) -> None:
         """Quick-add a built-in indicator by ``kind_id`` with given params.
 
         ``scopes`` selects which charts the indicator renders on. Allowed
         values are members of ``indicators.config.SCOPES`` (currently
         ``"main"``, ``"compare"``, ``"drilldown"``). When ``None`` the
-        ``IndicatorConfig`` default (``{"main"}``) is kept.
+        ``IndicatorConfig`` default (``DEFAULT_SCOPES``: ``"main"`` +
+        ``"drilldown"``) is kept so the indicator follows drill-down
+        out of the box.
         """
         from ..indicators.base import factory_by_kind_id
         from ..indicators.config import SCOPES as _ALLOWED_SCOPES
@@ -64,7 +67,7 @@ class IndicatorMenuMixin:
             except Exception:  # noqa: BLE001
                 pass
             return
-        cfg_kwargs: Dict[str, Any] = dict(
+        cfg_kwargs: dict[str, Any] = dict(
             kind_id=kind_id,
             kind_version=int(getattr(cls, "kind_version", 1)),
             display_name=str(display),
@@ -90,7 +93,7 @@ class IndicatorMenuMixin:
             pass
 
     def _populate_indicator_preset_menu(
-        self, menu: "tk.Menu", action: str,
+        self, menu: tk.Menu, action: str,
     ) -> None:
         """Rebuild a Load / Delete Preset cascade from the manager's
         current preset list. Called via ``postcommand`` on each open

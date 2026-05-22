@@ -18,6 +18,7 @@ Moves the theme application pipeline out of `app.py` while keeping `ChartApp._th
 - Resolve `light` / `dark` palettes via `constants.resolve_theme`.
 - Apply theme colors to the root window, figure, axes, ttk styles, treeview row tags, hardcoded overlay artists, and classic Tk menus.
 - `_apply_overlay_artists` walks the matplotlib overlays whose colours are baked into the artist at construction (and therefore wouldn't pick up a theme change automatically): hover annotation, crosshair lines, cursor-crosshair price labels, OHLCV readout, typing-preview text, and the **live-price overlay** (`gui/live_price_overlay.LivePriceOverlay.apply_theme`). Adding a new always-on chart overlay typically requires a new branch here so theme toggles propagate immediately rather than waiting for the next `_render`.
+- `_apply_menubar_theme` sets `disabledforeground=theme["text_disabled"]` on the menubar and every cascade submenu (in addition to the bg/fg/active triple). Without this the OS-default Win32 disabled-text style (etched/embossed) renders the greyed "Highlight Flat HA Candles" entry as blurry/illegible on dark backgrounds. Audit `menu-disabled-fg`.
 - Persist sparse `theme_overrides` payloads to `settings.json`.
 - Notify `ChartApp` callbacks after each apply so dialogs, overlay legends, notebook tabs, ChartStack, and other owner-managed surfaces can repaint too.
 

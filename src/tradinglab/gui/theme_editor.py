@@ -31,8 +31,11 @@ schemes:
   amber text + grid, classic terminal aesthetic). Applied to the
   ``dark`` palette + activates dark mode.
 
-Buttons (right-aligned footer): **Reset** (wipes both modes),
-**Close** (or ESC).
+Buttons (right-aligned footer): **Reset all** (wipes both modes),
+**Save and Close** (commits the live overrides + closes), **Cancel**
+(reverts to the snapshot taken at dialog open + closes). ESC and
+the window close button both route to Cancel so users can't lose
+their pre-edit state by accident. Audit ``theme-editor-save-cancel``.
 
 Live preview
 ============
@@ -40,8 +43,10 @@ Live preview
 Every color pick / preset application goes through
 ``ChartApp.set_theme_override`` (or ``clear_theme_overrides`` /
 ``replace_theme_overrides``), which in turn calls ``_apply_theme`` so
-the whole UI repaints immediately. No "Apply" button is needed — the
-dialog acts as a live theme console.
+the whole UI repaints immediately. Save and Close keeps everything
+applied; Cancel restores the snapshot via ``replace_theme_overrides``
+and the matching ``dark_var`` value so the chart returns to the
+pre-edit state.
 
 Geometry
 ========
@@ -51,9 +56,10 @@ Persisted via ``attach_persistent_geometry(self, "dlg.theme_editor",
 
 from __future__ import annotations
 
+import copy
 import tkinter as tk
 from tkinter import colorchooser, ttk
-from typing import TYPE_CHECKING, Dict
+from typing import TYPE_CHECKING
 
 from ..constants import CUSTOMIZABLE_THEME_KEYS, DEFAULT_THEMES
 from ._modal_keys import bind_modal_keys
@@ -72,7 +78,7 @@ if TYPE_CHECKING:
 #: that are NOT customizable (spine, watermark, tooltip_*, etc.) keep
 #: their defaults — that's by design: only the 6 keys in
 #: ``CUSTOMIZABLE_THEME_KEYS`` get the Bloomberg treatment.
-_BLOOMBERG_DARK: Dict[str, str] = {
+_BLOOMBERG_DARK: dict[str, str] = {
     "win_bg": "#000000",
     "ax_bg": "#0a0a0a",
     "text": "#ffb000",
@@ -101,11 +107,15 @@ class ThemeEditorDialog(tk.Toplevel):
 
     Opened from ``View → Theme…``. The dialog mutates the parent app's
     ``_theme_overrides`` via ``set_theme_override`` /
-    ``clear_theme_overrides`` / ``replace_theme_overrides`` — there's
-    no internal draft state.
+    ``clear_theme_overrides`` / ``replace_theme_overrides`` so changes
+    preview live. A snapshot of ``_theme_overrides`` plus the initial
+    ``dark_var`` value is captured at construction; **Cancel** restores
+    both via ``replace_theme_overrides`` + ``dark_var.set``, while
+    **Save and Close** just closes (everything was already applied
+    live + persisted by the controller).
     """
 
-    def __init__(self, parent: "ChartApp") -> None:
+    def __init__(self, parent: ChartApp) -> None:
         super().__init__(parent)
         self.title("Theme Editor")
         try:
@@ -123,14 +133,27 @@ class ThemeEditorDialog(tk.Toplevel):
                 pass
         self.minsize(440, 260)
 
-        self._swatch_buttons: Dict[str, Dict[str, tk.Button]] = {
+        self._swatch_buttons: dict[str, dict[str, tk.Button]] = {
             "light": {},
             "dark": {},
         }
 
+        # Capture pre-edit state for Cancel revert. Deepcopy the
+        # overrides dict so subsequent mutations via the parent setters
+        # don't leak into the snapshot.
+        try:
+            self._overrides_initial: dict[str, dict[str, str]] = copy.deepcopy(
+                self._parent_app._theme_overrides)
+        except Exception:  # noqa: BLE001
+            self._overrides_initial = {"light": {}, "dark": {}}
+        try:
+            self._dark_initial: bool = bool(self._parent_app.dark_var.get())
+        except Exception:  # noqa: BLE001
+            self._dark_initial = False
+
         self._build_layout()
-        bind_modal_keys(self, cancel=self._on_close, primary=self._on_close)
-        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        bind_modal_keys(self, cancel=self._on_cancel, primary=self._on_save_and_close)
+        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
 
     # ------------------------------------------------------------------
     # Layout
@@ -157,20 +180,23 @@ class ThemeEditorDialog(tk.Toplevel):
         # Presets strip.
         preset_frame = ttk.LabelFrame(outer, text="Presets", padding=6)
         preset_frame.pack(fill="x", pady=(10, 0))
-        for idx, (label, mode, _ovr, _) in enumerate(_PRESETS):
+        for idx, (label, _mode, _ovr, _) in enumerate(_PRESETS):
             ttk.Button(
                 preset_frame, text=label,
                 command=lambda i=idx: self._on_apply_preset(i),
             ).grid(row=0, column=idx, padx=(0 if idx == 0 else 4, 0),
                    sticky="w")
 
-        # Footer.
+        # Footer. Cancel is packed first so it lands rightmost (Windows
+        # convention — matches every other dialog in the app).
         footer = ttk.Frame(outer)
         footer.pack(fill="x", pady=(10, 0))
-        ttk.Button(footer, text="Close", command=self._on_close).pack(
+        ttk.Button(footer, text="Cancel", command=self._on_cancel).pack(
             side="right", padx=(4, 0))
+        ttk.Button(footer, text="Save and Close",
+                   command=self._on_save_and_close).pack(side="right")
         ttk.Button(footer, text="Reset all",
-                   command=self._on_reset).pack(side="right")
+                   command=self._on_reset).pack(side="left")
 
     def _build_mode_section(
         self, parent: tk.Widget, mode: str, col: int,
@@ -272,14 +298,50 @@ class ThemeEditorDialog(tk.Toplevel):
             pass
         self._refresh_swatches()
 
-    def _on_close(self) -> None:
+    def _on_save_and_close(self) -> None:
+        """Commit the live state (overrides already applied) and close."""
         try:
             self.destroy()
         except tk.TclError:
             pass
 
+    def _on_cancel(self) -> None:
+        """Restore the pre-edit snapshot and close.
 
-def open_theme_editor(parent: "ChartApp") -> ThemeEditorDialog:
+        Reverts both the override dict (via ``replace_theme_overrides``)
+        and the active light/dark mode (via ``dark_var.set``) to the
+        values captured in ``__init__``, then calls ``_apply_theme`` so
+        the chart repaints. Suppresses any Tcl errors from torn-down
+        widgets — the close path must never block destroy.
+        """
+        try:
+            self._parent_app.replace_theme_overrides(
+                copy.deepcopy(self._overrides_initial))
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if hasattr(self._parent_app, "dark_var"):
+                if bool(self._parent_app.dark_var.get()) != self._dark_initial:
+                    self._parent_app.dark_var.set(self._dark_initial)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            self._parent_app._apply_theme()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            self.destroy()
+        except tk.TclError:
+            pass
+
+    # Legacy alias kept for compatibility with any external bind that
+    # still targets ``_on_close``. New code should call
+    # :meth:`_on_save_and_close` or :meth:`_on_cancel` explicitly.
+    def _on_close(self) -> None:  # pragma: no cover - alias
+        self._on_save_and_close()
+
+
+def open_theme_editor(parent: ChartApp) -> ThemeEditorDialog:
     """Open or focus the singleton-ish ThemeEditorDialog for ``parent``.
 
     Stashes a reference at ``parent._theme_editor_dialog`` so repeated

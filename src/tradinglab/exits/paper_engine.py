@@ -56,7 +56,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..core.thread_guard import require_tk_thread
 from ..positions.model import PositionSide
@@ -140,19 +140,19 @@ class PaperOrder:
     kind: PaperOrderKind
     side: OrderSide
     qty: float
-    price: Optional[float] = None
-    limit_price: Optional[float] = None
+    price: float | None = None
+    limit_price: float | None = None
     label: str = ""
-    extra: Dict[str, Any] = field(default_factory=dict)
+    extra: dict[str, Any] = field(default_factory=dict)
 
     # ------------------------------------------------------------------
     # Entries-v1 additions (defaults preserve exits-v1 behavior).
     # ------------------------------------------------------------------
     target_kind: OrderTargetKind = OrderTargetKind.EXISTING_POSITION
-    symbol: Optional[str] = None
-    pending_position_id: Optional[str] = None
-    position_side: Optional[PositionSide] = None  # for PENDING_ENTRY
-    strategy_id: Optional[str] = None
+    symbol: str | None = None
+    pending_position_id: str | None = None
+    position_side: PositionSide | None = None  # for PENDING_ENTRY
+    strategy_id: str | None = None
     on_fill_exit_ids: tuple = field(default_factory=tuple)
 
 
@@ -164,7 +164,7 @@ class Fill:
     position_id: str
     qty: float
     price: float
-    bar_ts: Optional[datetime]
+    bar_ts: datetime | None
     reason: str
     label: str
 
@@ -189,13 +189,13 @@ class PaperBrokerEngine:
         self._slippage_bps = float(slippage_bps)
         # Insertion order = FIFO submission order. Python dicts preserve
         # insertion order which is exactly the semantics we need.
-        self._working: Dict[str, PaperOrder] = {}
+        self._working: dict[str, PaperOrder] = {}
         # Symbol-keyed index of pending-entry orders. Populated on
         # submit() when target_kind=PENDING_ENTRY; cleared on fill /
         # cancel. Lets ``on_bar_for_pending(symbol, ...)`` find candidate
         # orders without scanning the full working set.
-        self._pending_by_symbol: Dict[str, List[str]] = {}
-        self._stats: Dict[str, int] = {
+        self._pending_by_symbol: dict[str, list[str]] = {}
+        self._stats: dict[str, int] = {
             "working": 0,
             "submitted": 0,
             "filled": 0,
@@ -205,11 +205,11 @@ class PaperBrokerEngine:
 
     # ---- queries ----------------------------------------------------
 
-    def working_orders(self) -> List[PaperOrder]:
+    def working_orders(self) -> list[PaperOrder]:
         """Snapshot of currently working orders, FIFO order."""
         return list(self._working.values())
 
-    def working_orders_for_position(self, position_id: str) -> List[PaperOrder]:
+    def working_orders_for_position(self, position_id: str) -> list[PaperOrder]:
         """Snapshot of currently working orders for ``position_id``.
 
         Only returns orders with ``target_kind=EXISTING_POSITION`` (the
@@ -222,7 +222,7 @@ class PaperBrokerEngine:
             and o.target_kind == OrderTargetKind.EXISTING_POSITION
         ]
 
-    def pending_orders_for_symbol(self, symbol: str) -> List[PaperOrder]:
+    def pending_orders_for_symbol(self, symbol: str) -> list[PaperOrder]:
         """Snapshot of pending-entry orders watching ``symbol``."""
         sym = (symbol or "").upper()
         return [
@@ -231,7 +231,7 @@ class PaperBrokerEngine:
             if oid in self._working
         ]
 
-    def stats(self) -> Dict[str, int]:
+    def stats(self) -> dict[str, int]:
         """Counts of working / submitted / filled / cancelled / rejected.
 
         ``working`` is the size of the in-flight set right now;
@@ -348,7 +348,7 @@ class PaperBrokerEngine:
         bar: Bar,
         *,
         is_close: bool,
-    ) -> List[Fill]:
+    ) -> list[Fill]:
         """Evaluate every working order for ``position_id`` against ``bar``.
 
         Orders are processed in FIFO submission order. Each fill is
@@ -368,7 +368,7 @@ class PaperBrokerEngine:
         """
         del is_close  # currently informational; both bar phases fill the same way
 
-        fills: List[Fill] = []
+        fills: list[Fill] = []
         # Snapshot ids first: the working dict mutates as we fill.
         order_ids = [
             oid for oid, o in self._working.items()
@@ -412,7 +412,7 @@ class PaperBrokerEngine:
         bar: Bar,
         *,
         is_close: bool,
-    ) -> List[Fill]:
+    ) -> list[Fill]:
         """Evaluate pending-entry orders for ``symbol`` against ``bar``.
 
         Mirrors :meth:`on_bar` but for orders with
@@ -440,7 +440,7 @@ class PaperBrokerEngine:
         if not order_ids:
             return []
 
-        fills: List[Fill] = []
+        fills: list[Fill] = []
         for oid in order_ids:
             order = self._working.get(oid)
             if order is None:  # pragma: no cover — defensive
@@ -514,7 +514,7 @@ class PaperBrokerEngine:
         else:
             raise ValueError(f"unknown target_kind: {order.target_kind!r}")
 
-    def _try_fill(self, order: PaperOrder, bar: Bar) -> Optional[Fill]:
+    def _try_fill(self, order: PaperOrder, bar: Bar) -> Fill | None:
         if order.kind == PaperOrderKind.MARKET:
             return self._fill_market(order, bar)
         if order.kind == PaperOrderKind.LIMIT:
@@ -537,7 +537,7 @@ class PaperBrokerEngine:
             label=order.label,
         )
 
-    def _fill_limit(self, order: PaperOrder, bar: Bar) -> Optional[Fill]:
+    def _fill_limit(self, order: PaperOrder, bar: Bar) -> Fill | None:
         limit = float(order.price)  # type: ignore[arg-type]
         if order.side == OrderSide.SELL:
             if bar.high < limit:
@@ -557,7 +557,7 @@ class PaperBrokerEngine:
             label=order.label,
         )
 
-    def _fill_stop(self, order: PaperOrder, bar: Bar) -> Optional[Fill]:
+    def _fill_stop(self, order: PaperOrder, bar: Bar) -> Fill | None:
         stop = float(order.price)  # type: ignore[arg-type]
         if order.side == OrderSide.SELL:
             if bar.low > stop:
@@ -582,7 +582,7 @@ class PaperBrokerEngine:
             label=order.label,
         )
 
-    def _fill_stop_limit(self, order: PaperOrder, bar: Bar) -> Optional[Fill]:
+    def _fill_stop_limit(self, order: PaperOrder, bar: Bar) -> Fill | None:
         stop = float(order.price)  # type: ignore[arg-type]
         limit = float(order.limit_price)  # type: ignore[arg-type]
         if order.side == OrderSide.SELL:

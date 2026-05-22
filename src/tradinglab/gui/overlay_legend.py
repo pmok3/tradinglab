@@ -53,8 +53,9 @@ Design notes
 from __future__ import annotations
 
 import tkinter as tk
+from collections.abc import Callable
 from tkinter import ttk
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from ..indicators.config import IndicatorConfig, IndicatorManager
@@ -88,16 +89,16 @@ class OverlayLegend(ttk.Frame):
         self,
         master: tk.Misc,
         *,
-        manager: "IndicatorManager",
-        theme: Dict[str, Any],
-        on_row_dblclick: Optional[RowDblClickCallback] = None,
-        on_row_context_menu: Optional[RowContextMenuCallback] = None,
+        manager: IndicatorManager,
+        theme: dict[str, Any],
+        on_row_dblclick: RowDblClickCallback | None = None,
+        on_row_context_menu: RowContextMenuCallback | None = None,
     ) -> None:
         super().__init__(master, padding=(2, 1))
         self._manager = manager
         self._theme = dict(theme) if theme else {}
-        self._rows: List[ttk.Frame] = []
-        self._buttons_by_id: Dict[int, ttk.Button] = {}
+        self._rows: list[ttk.Frame] = []
+        self._buttons_by_id: dict[int, ttk.Button] = {}
         self._placed = False
         # Optional callbacks for user gestures on a row. The row
         # container, swatch, and label all bind to these (the
@@ -105,8 +106,8 @@ class OverlayLegend(ttk.Frame):
         # deliberately do NOT bind <Double-Button-1> on the button
         # itself — a quick double-click on the eye would otherwise
         # toggle twice AND fire the dblclick handler).
-        self._on_row_dblclick: Optional[RowDblClickCallback] = on_row_dblclick
-        self._on_row_context_menu: Optional[RowContextMenuCallback] = on_row_context_menu
+        self._on_row_dblclick: RowDblClickCallback | None = on_row_dblclick
+        self._on_row_context_menu: RowContextMenuCallback | None = on_row_context_menu
         # Axes the legend currently anchors to. Set via
         # :meth:`reposition_for_axes` so a single legend can move with
         # its panel across re-renders (figure.clear() destroys axes
@@ -116,7 +117,7 @@ class OverlayLegend(ttk.Frame):
 
     # ---- public API ---------------------------------------------------
 
-    def refresh(self, overlay_configs: List["IndicatorConfig"]) -> None:
+    def refresh(self, overlay_configs: list[IndicatorConfig]) -> None:
         """Rebuild rows for the supplied overlay configs.
 
         Pass an empty list to hide the legend entirely. The list MAY
@@ -155,7 +156,7 @@ class OverlayLegend(ttk.Frame):
             except tk.TclError:
                 pass
 
-    def apply_theme(self, theme: Dict[str, Any]) -> None:
+    def apply_theme(self, theme: dict[str, Any]) -> None:
         """Update the swatch outline color when the chart theme changes."""
         if theme:
             self._theme = dict(theme)
@@ -220,7 +221,7 @@ class OverlayLegend(ttk.Frame):
 
     # ---- internals ----------------------------------------------------
 
-    def _build_row(self, cfg: "IndicatorConfig") -> None:
+    def _build_row(self, cfg: IndicatorConfig) -> None:
         try:
             row = ttk.Frame(self, padding=(2, 0))
         except tk.TclError:
@@ -318,7 +319,7 @@ class OverlayLegend(ttk.Frame):
         except Exception:  # noqa: BLE001
             pass
 
-    def _color_for(self, cfg: "IndicatorConfig") -> str:
+    def _color_for(self, cfg: IndicatorConfig) -> str:
         """Pick a representative color for the row's swatch.
 
         Order: cfg's first style override → factory's default style →
@@ -362,8 +363,8 @@ class OverlayLegend(ttk.Frame):
 
 
 def collect_overlay_configs(
-    manager: "IndicatorManager", scope: str, interval: str,
-) -> List["IndicatorConfig"]:
+    manager: IndicatorManager, scope: str, interval: str,
+) -> list[IndicatorConfig]:
     """Return every overlay-class config for ``(scope, interval)``.
 
     Mirrors :func:`indicators.render.applicable_overlay_configs` but
@@ -373,7 +374,7 @@ def collect_overlay_configs(
     """
     from ..indicators.config import factory_by_kind_id
 
-    out: List["IndicatorConfig"] = []
+    out: list[IndicatorConfig] = []
     for cfg in manager.list():
         if getattr(cfg, "unknown", False):
             continue

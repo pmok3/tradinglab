@@ -22,10 +22,9 @@ import datetime as _dt
 from types import SimpleNamespace
 from typing import List
 
+import matplotlib
 import numpy as np
 import pytest
-
-import matplotlib
 
 matplotlib.use("Agg")  # headless — must precede pyplot
 import matplotlib.pyplot as plt  # noqa: E402
@@ -38,7 +37,6 @@ from tradinglab.rendering import (  # noqa: E402
     darker_shade,
     draw_candlesticks,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -53,9 +51,9 @@ def _candle(o, h, l_, c, *, t=None, session="regular") -> Candle:
     )
 
 
-def _uptrend_candles(n: int = 6) -> List[Candle]:
+def _uptrend_candles(n: int = 6) -> list[Candle]:
     """Strong uptrend → most bars qualify as bull-flat-bottom under HA."""
-    out: List[Candle] = []
+    out: list[Candle] = []
     t0 = _dt.datetime(2024, 1, 2, 9, 30)
     for i in range(n):
         o = 100.0 + i
@@ -403,19 +401,20 @@ def test_helper_empty_candles_returns_none():
 # ---------------------------------------------------------------------------
 
 
-def test_settings_default_is_on():
-    """Per the feature design, the highlight defaults to ON when the
-    setting has never been written. We verify the default arg of the
-    BooleanVar construction by reading the source — the actual ``tk``
-    call site needs a Tk root."""
+def test_settings_default_is_off():
+    """The highlight defaults to OFF when the setting has never been
+    written. Previously this defaulted ON, but the cross-hatched
+    overlay was distracting for users who didn't explicitly opt in.
+    We verify the default arg of the BooleanVar construction by
+    reading the source — the actual ``tk`` call site needs a Tk root."""
     import inspect
 
     from tradinglab import app as app_mod
     src = inspect.getsource(app_mod.ChartApp.__init__)
     # The line we care about is:
-    #     value=bool(_settings.get("highlight_ha_flat", True))
-    assert '"highlight_ha_flat", True' in src, (
-        "Highlight Flat HA Candles default must be ON (True)"
+    #     value=bool(_settings.get("highlight_ha_flat", False))
+    assert '"highlight_ha_flat", False' in src, (
+        "Highlight Flat HA Candles default must be OFF (False)"
     )
 
 
@@ -424,6 +423,7 @@ def test_view_menu_lists_highlight_ha_flat():
     canonical label ``Highlight Flat HA Candles`` and routes the
     ``command`` to the toggle handler."""
     import inspect
+
     from tradinglab import app as app_mod
     src = inspect.getsource(app_mod.ChartApp._build_menubar)
     assert "Highlight Flat HA Candles" in src
@@ -444,7 +444,7 @@ def test_menu_state_sync_helper_exists():
     from tradinglab.app import ChartApp
     assert hasattr(ChartApp, "_sync_highlight_ha_flat_menu_state"), (
         "ChartApp must expose _sync_highlight_ha_flat_menu_state")
-    assert callable(getattr(ChartApp, "_sync_highlight_ha_flat_menu_state"))
+    assert callable(ChartApp._sync_highlight_ha_flat_menu_state)
 
 
 def test_ha_toggle_handler_syncs_menu_state():
@@ -453,6 +453,7 @@ def test_ha_toggle_handler_syncs_menu_state():
     highlight menu entry. Source-level check — exercising the
     handler proper needs a Tk root."""
     import inspect
+
     from tradinglab import app as app_mod
     src = inspect.getsource(app_mod.ChartApp._on_menu_toggle_heikin_ashi)
     assert "_sync_highlight_ha_flat_menu_state" in src, (
@@ -466,6 +467,7 @@ def test_init_syncs_menu_state_at_startup():
     HA preference at app launch (otherwise the entry would always
     start in tk's default 'normal' state regardless of HA mode)."""
     import inspect
+
     from tradinglab import app as app_mod
     src = inspect.getsource(app_mod.ChartApp.__init__)
     assert "_sync_highlight_ha_flat_menu_state" in src, (

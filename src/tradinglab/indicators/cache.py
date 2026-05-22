@@ -38,7 +38,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import OrderedDict
-from typing import Any, Dict, List, NamedTuple, Optional, Tuple
+from typing import Any, NamedTuple
 
 import numpy as np
 
@@ -59,13 +59,13 @@ class _Entry(NamedTuple):
     return-as-is (equal), incremental ``inc_step`` (grew), and full
     recompute (shrunk / id collision / no incremental support).
     """
-    result: Dict[str, np.ndarray]
-    candles: List[Candle]
-    state: Optional[Dict[str, Any]]
+    result: dict[str, np.ndarray]
+    candles: list[Candle]
+    state: dict[str, Any] | None
     prev_len: int
 
 
-def _candles_fingerprint(candles: Optional[List[Candle]]) -> Optional[Tuple[Any, ...]]:
+def _candles_fingerprint(candles: list[Candle] | None) -> tuple[Any, ...] | None:
     """Content-based fingerprint that survives list-identity changes.
 
     Returns ``None`` for empty/falsy input so callers know to fall
@@ -89,7 +89,7 @@ def _candles_fingerprint(candles: Optional[List[Candle]]) -> Optional[Tuple[Any,
     )
 
 
-def config_hash(kind_id: str, params: Dict[str, Any]) -> str:
+def config_hash(kind_id: str, params: dict[str, Any]) -> str:
     """Stable hash of a config's compute-affecting fields.
 
     Style/visibility/scope/intervals do NOT participate — they affect
@@ -122,19 +122,19 @@ class IndicatorCache:
         self._capacity = capacity
         # Insertion-ordered OrderedDict; ``move_to_end`` on hit makes
         # this a textbook LRU.
-        self._store: "OrderedDict[Tuple[int, str], _Entry]" = OrderedDict()
+        self._store: OrderedDict[tuple[int, str], _Entry] = OrderedDict()
         # Fingerprint-keyed fallback store. Same entry objects as
         # ``_store``; the fingerprint key survives list-recreate.
-        self._fp_store: "OrderedDict[Tuple[Tuple[Any, ...], str], _Entry]" = (
+        self._fp_store: OrderedDict[tuple[tuple[Any, ...], str], _Entry] = (
             OrderedDict())
         # Per-candles ``Bars`` memo. Same id-recycle + fingerprint
         # pattern as the indicator store. Bounded to ``capacity``
         # entries (one per candle list typically corresponds to many
         # indicator entries, so this stays small).
-        self._bars_store: "OrderedDict[int, Tuple[Any, List[Candle]]]" = (
+        self._bars_store: OrderedDict[int, tuple[Any, list[Candle]]] = (
             OrderedDict())
         self._bars_fp_store: (
-            "OrderedDict[Tuple[Any, ...], Tuple[Any, List[Candle]]]"
+            OrderedDict[tuple[Any, ...], tuple[Any, list[Candle]]]
         ) = OrderedDict()
 
     # ---- queries ----
@@ -154,7 +154,7 @@ class IndicatorCache:
 
     def _record_entry(
         self,
-        candles: List[Candle],
+        candles: list[Candle],
         hash_key: str,
         entry: _Entry,
     ) -> None:
@@ -170,7 +170,7 @@ class IndicatorCache:
             self._fp_store.move_to_end(fp_key)
             self._trim_fp_store()
 
-    def get(self, candles: List[Candle], hash_key: str) -> Optional[Dict[str, np.ndarray]]:
+    def get(self, candles: list[Candle], hash_key: str) -> dict[str, np.ndarray] | None:
         """Return cached result for (candles, hash_key) or None.
 
         Tries the id-keyed store first (back-ref verified to defend
@@ -210,9 +210,9 @@ class IndicatorCache:
 
     def put(
         self,
-        candles: List[Candle],
+        candles: list[Candle],
         hash_key: str,
-        result: Dict[str, np.ndarray],
+        result: dict[str, np.ndarray],
     ) -> None:
         """Public put: cache ``result`` with no incremental state.
 
@@ -227,7 +227,7 @@ class IndicatorCache:
 
     # ---- invalidation ----
 
-    def invalidate_for_candles(self, candles: List[Candle]) -> int:
+    def invalidate_for_candles(self, candles: list[Candle]) -> int:
         """Drop every entry whose candles object is ``candles``.
 
         Used when the underlying data is mutated in place such that
@@ -277,7 +277,7 @@ class IndicatorCache:
 
     # ---- Bars view memo ----
 
-    def bars_for(self, candles: List[Candle]):
+    def bars_for(self, candles: list[Candle]):
         """Return a memoized :class:`Bars` view for ``candles``.
 
         Same id-recycle guard + fingerprint fallback as the indicator
@@ -339,10 +339,10 @@ class IndicatorCache:
 
     def get_or_compute(
         self,
-        candles: List[Candle],
+        candles: list[Candle],
         hash_key: str,
         compute_fn,
-    ) -> Dict[str, np.ndarray]:
+    ) -> dict[str, np.ndarray]:
         """Cache-aware wrapper around a compute callable.
 
         ``compute_fn() -> Dict[str, ndarray]`` is invoked only on miss
@@ -360,11 +360,11 @@ class IndicatorCache:
 
     def get_or_compute_incremental(
         self,
-        candles: List[Candle],
+        candles: list[Candle],
         hash_key: str,
         indicator: Any,
         bars: Any,
-    ) -> Dict[str, np.ndarray]:
+    ) -> dict[str, np.ndarray]:
         """Cache-aware compute with the incremental-protocol hook.
 
         Decision tree on the entry keyed by ``(id(candles), hash_key)``:
@@ -449,9 +449,9 @@ class IndicatorCache:
         # is that ``inc_init`` and ``compute_arr`` produce equivalent
         # arrays for the same input; using ``inc_init`` here avoids
         # the rare drift risk and saves one compute pass).
-        state: Optional[Dict[str, Any]] = None
+        state: dict[str, Any] | None = None
         inc_init = getattr(indicator, "inc_init", None)
-        result: Optional[Dict[str, np.ndarray]] = None
+        result: dict[str, np.ndarray] | None = None
         if callable(inc_init):
             try:
                 init_state = inc_init(bars)

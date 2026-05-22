@@ -4,9 +4,6 @@ from __future__ import annotations
 import pytest
 
 from tests.smoke.test_smoke_full import (
-    check_g0_sandbox_replay_integration,
-    check_g1_sandbox_phase1c,
-    check_g2_sandbox_open_universe,
     check_b5_sandbox_save_load,
     check_b6_sandbox_auto_cycle,
     check_b7_sandbox_multitf_context,
@@ -41,6 +38,9 @@ from tests.smoke.test_smoke_full import (
     check_b40_sandbox_watchlist_uses_replay_clock,
     check_f0_backtest_kernel,
     check_f1_session_reproducibility,
+    check_g0_sandbox_replay_integration,
+    check_g1_sandbox_phase1c,
+    check_g2_sandbox_open_universe,
 )
 
 _CHECKS = [

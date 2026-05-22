@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass, field
-from datetime import datetime, time as dtime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
+from datetime import time as dtime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -36,7 +37,6 @@ from tradinglab.exits.spec import Bar
 from tradinglab.positions.model import Position
 from tradinglab.positions.tracker import PositionTracker
 
-
 # ---------------------------------------------------------------------------
 # Test sink
 # ---------------------------------------------------------------------------
@@ -58,11 +58,11 @@ class _RecordingSink:
     """
 
     def __init__(self) -> None:
-        self.submitted: List[ExitSignal] = []
-        self.cancelled_ids: List[str] = []
-        self.cancel_all_calls: List[str] = []
+        self.submitted: list[ExitSignal] = []
+        self.cancelled_ids: list[str] = []
+        self.cancel_all_calls: list[str] = []
         self._next = 0
-        self._working: Dict[str, str] = {}  # order_id -> position_id
+        self._working: dict[str, str] = {}  # order_id -> position_id
         self.raise_on_submit: bool = False
         self.raise_on_submit_message: str = "sink failure"
 
@@ -91,7 +91,7 @@ class _RecordingSink:
                 n += 1
         return n
 
-    def working_order_ids_for_position(self, position_id: str) -> List[str]:
+    def working_order_ids_for_position(self, position_id: str) -> list[str]:
         return [oid for oid, pid in self._working.items() if pid == position_id]
 
 
@@ -151,13 +151,13 @@ def _open_short(tracker: PositionTracker, *, symbol: str = "AAPL", qty: float = 
     )
 
 
-def _bar(o: float, h: float, l: float, c: float, *, ts: Optional[datetime] = None) -> Bar:
+def _bar(o: float, h: float, l: float, c: float, *, ts: datetime | None = None) -> Bar:
     return Bar(open=o, high=h, low=l, close=c, volume=0.0, date=ts)
 
 
-def _make_strategy(legs: List[ExitLeg], *, eod_kill: bool = False,
+def _make_strategy(legs: list[ExitLeg], *, eod_kill: bool = False,
                     eod_offset_min: int = 5,
-                    oco_groups: Optional[List[OCOGroup]] = None) -> ExitStrategy:
+                    oco_groups: list[OCOGroup] | None = None) -> ExitStrategy:
     return ExitStrategy(
         name="test",
         legs=legs,
@@ -189,8 +189,8 @@ def _limit_leg(price: float, *, label: str = "target") -> ExitLeg:
 
 
 def _trailing_leg(*, trail_pct: float, basis: TrailBasis = TrailBasis.CLOSE,
-                   activation_unit: Optional[ActivationUnit] = None,
-                   activation_value: Optional[float] = None,
+                   activation_unit: ActivationUnit | None = None,
+                   activation_value: float | None = None,
                    label: str = "trail") -> ExitLeg:
     return ExitLeg(
         label=label,
@@ -817,7 +817,7 @@ def test_attach_strategy_requires_tk_thread(tracker: PositionTracker,
     strat = _make_strategy([_market_leg()])
     audit = AuditLog()
     evaluator = ExitEvaluator(tracker=tracker, sink=sink, audit=audit)
-    captured: List[BaseException] = []
+    captured: list[BaseException] = []
 
     def worker() -> None:
         try:
@@ -841,7 +841,7 @@ def test_on_bar_requires_tk_thread(tracker: PositionTracker,
     audit = AuditLog()
     evaluator = ExitEvaluator(tracker=tracker, sink=sink, audit=audit)
     evaluator.attach_strategy(pos.id, _make_strategy([_market_leg()]))
-    captured: List[BaseException] = []
+    captured: list[BaseException] = []
 
     def worker() -> None:
         try:
@@ -865,7 +865,7 @@ def test_panic_flatten_requires_tk_thread(tracker: PositionTracker,
     audit = AuditLog()
     evaluator = ExitEvaluator(tracker=tracker, sink=sink, audit=audit)
     evaluator.attach_strategy(pos.id, _make_strategy([_market_leg()]))
-    captured: List[BaseException] = []
+    captured: list[BaseException] = []
 
     def worker() -> None:
         try:
@@ -998,10 +998,10 @@ def test_indicator_trigger_evidence_appears_in_audit(
     """An INDICATOR trigger with `within_last_bars=N` writes per-leaf
     `MatchEvidence` into the ``fire`` audit record's ``meta``."""
     from tradinglab.scanner.model import (
+        WITHIN_LAST_MODE_ANY,
         Condition,
         FieldRef,
         Group,
-        WITHIN_LAST_MODE_ANY,
     )
 
     pos = _open_long(tracker, symbol="AAPL")

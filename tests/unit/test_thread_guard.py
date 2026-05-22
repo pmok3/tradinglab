@@ -31,7 +31,7 @@ def test_decorated_method_runs_on_main_thread():
 
 def test_decorated_method_raises_off_thread():
     h = _Holder()
-    err: List[Exception] = []
+    err: list[Exception] = []
 
     def worker() -> None:
         try:
@@ -53,7 +53,7 @@ def test_check_disabled_context_bypasses():
         with tk_thread_check_disabled():
             return h.m(5)
 
-    out: List[int] = []
+    out: list[int] = []
     t = threading.Thread(target=lambda: out.append(worker()))
     t.start()
     t.join()
@@ -64,7 +64,7 @@ def test_check_disabled_restores_check_after_exit():
     h = _Holder()
     with tk_thread_check_disabled():
         # Off-thread: should succeed inside the with-block.
-        ok: List[bool] = []
+        ok: list[bool] = []
 
         def worker() -> None:
             try:
@@ -78,7 +78,7 @@ def test_check_disabled_restores_check_after_exit():
         t.join()
         assert ok == [True]
     # After the with-block: check is back on.
-    err: List[Exception] = []
+    err: list[Exception] = []
 
     def worker2() -> None:
         try:

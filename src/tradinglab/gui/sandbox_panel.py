@@ -19,7 +19,7 @@ from __future__ import annotations
 import tkinter as tk
 from datetime import datetime, timezone
 from tkinter import ttk
-from typing import Any, Dict, Optional
+from typing import Any
 
 _MS_PER_DAY = 86_400_000
 
@@ -27,7 +27,7 @@ _MS_PER_DAY = 86_400_000
 def _proximity_notice(
     earnings_tag: str,
     dividend_tag: str,
-    prox: Dict[str, Any],
+    prox: dict[str, Any],
     submit_ts_s: int,
 ) -> str:
     """Build the human-readable pre-trade proximity notice.
@@ -442,7 +442,7 @@ class SandboxPanel(ttk.Frame):
             except Exception:  # noqa: BLE001
                 pass
 
-    def _open_post_trade_modal(self, post_trade: Any) -> Optional[str]:
+    def _open_post_trade_modal(self, post_trade: Any) -> str | None:
         """Callback handed to the controller: opens the mandatory review modal.
 
         Audit ``mandatory-journal-skip``: when the user has opted

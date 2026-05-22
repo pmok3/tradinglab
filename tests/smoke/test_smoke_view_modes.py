@@ -14,7 +14,6 @@ from tests.smoke.test_smoke_full import (
     check_b69_color_only_toggles_use_glyph_repaint,
 )
 
-
 _CHECKS = [
     check_b35b_highlight_ha_flat_overlay_toggle,
     check_b69_color_only_toggles_use_glyph_repaint,

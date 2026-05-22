@@ -16,9 +16,9 @@ from tradinglab.models import Candle
 
 
 def _intraday_candles(days: int = 3, seed: int = 9,
-                      include_pre: bool = True) -> List[Candle]:
+                      include_pre: bool = True) -> list[Candle]:
     rng = random.Random(seed)
-    out: List[Candle] = []
+    out: list[Candle] = []
     base_day = dt.date(2024, 3, 4)
     for d in range(days):
         day = base_day + dt.timedelta(days=d)

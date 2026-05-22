@@ -32,7 +32,6 @@ valid bundle — the recipient just sees less detail.
 """
 from __future__ import annotations
 
-import io
 import json
 import platform
 import re
@@ -40,7 +39,7 @@ import sys
 import zipfile
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any
 
 #: How many recent daily log files (``status-YYYY-MM-DD.log``) to
 #: include. 14 covers the typical "I noticed this last week" reporting
@@ -144,7 +143,7 @@ def _read_and_redact(path: Path) -> bytes:
     return redacted.encode("utf-8")
 
 
-def _redact(value: Any, *, key_hint: Optional[str] = None) -> Any:
+def _redact(value: Any, *, key_hint: str | None = None) -> Any:
     """Walk ``value`` and replace credential-shaped leaves with marker.
 
     Recurses into dicts and lists; primitives pass through unless the
@@ -160,7 +159,7 @@ def _redact(value: Any, *, key_hint: Optional[str] = None) -> Any:
     return value
 
 
-def _load_sanitised_settings() -> Dict[str, Any]:
+def _load_sanitised_settings() -> dict[str, Any]:
     """Return an in-memory settings snapshot with secrets redacted.
 
     Reads from the on-disk file (not the in-memory store) so the bundle
@@ -180,7 +179,7 @@ def _load_sanitised_settings() -> Dict[str, Any]:
     return _redact(raw)
 
 
-def _build_manifest() -> Dict[str, Any]:
+def _build_manifest() -> dict[str, Any]:
     """Collect the version / runtime metadata block for the bundle."""
     try:
         from . import _version
@@ -198,7 +197,7 @@ def _build_manifest() -> Dict[str, Any]:
     }
 
 
-def _enumerate_logs(log_dir: Path, *, limit: int) -> List[Path]:
+def _enumerate_logs(log_dir: Path, *, limit: int) -> list[Path]:
     """Return the newest-first list of ``status-*.log`` files in ``log_dir``."""
     try:
         candidates = [
@@ -214,7 +213,7 @@ def _enumerate_logs(log_dir: Path, *, limit: int) -> List[Path]:
     return candidates[:limit]
 
 
-def _enumerate_crash_files(log_dir: Path) -> List[Path]:
+def _enumerate_crash_files(log_dir: Path) -> list[Path]:
     """Return all ``crash-*.txt`` dumps under the logs dir (newest first).
 
     Crash dumps are tiny (typically <2 KB) so we include all of them,
@@ -232,7 +231,7 @@ def _enumerate_crash_files(log_dir: Path) -> List[Path]:
     return candidates
 
 
-def build_diagnostic_bundle(out_path: Any, *, log_dir_override: Optional[Path] = None) -> Dict[str, Any]:
+def build_diagnostic_bundle(out_path: Any, *, log_dir_override: Path | None = None) -> dict[str, Any]:
     """Build a diagnostic zip bundle at ``out_path`` and return a summary.
 
     Returns a dict with keys ``path`` (str), ``logs`` (count of log

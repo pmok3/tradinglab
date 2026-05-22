@@ -34,7 +34,6 @@ import argparse
 import secrets
 import sys
 import urllib.parse
-from typing import Optional
 
 from .credentials import get_credentials
 from .schwab_auth import (
@@ -46,7 +45,7 @@ from .schwab_auth import (
 
 
 def build_authorize_url(
-    app_key: str, redirect_uri: str, *, state: Optional[str] = None,
+    app_key: str, redirect_uri: str, *, state: str | None = None,
 ) -> str:
     """Construct the Schwab consent URL the user opens in a browser.
 
@@ -83,7 +82,7 @@ def extract_code(redirect_url: str) -> str:
     return code_list[0]
 
 
-def extract_state(redirect_url: str) -> Optional[str]:
+def extract_state(redirect_url: str) -> str | None:
     """Return ``state`` from the redirected URL, or ``None`` if absent.
 
     ``None`` is returned (rather than raised) so callers can decide
@@ -111,7 +110,7 @@ def exchange_code_for_tokens(
     })
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="One-time Schwab OAuth login. "
                     "Writes ~/.tradinglab/tokens/schwab.json.")

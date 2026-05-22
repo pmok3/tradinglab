@@ -27,7 +27,8 @@ ignored.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Mapping, Optional, Sequence
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from matplotlib.axes import Axes
@@ -43,7 +44,7 @@ _DOWN_COLOR = "#ef5350"
 _FLAT_COLOR = "#6b7280"
 
 
-def _theme_text_color(theme: Optional[Mapping[str, str]]) -> Optional[str]:
+def _theme_text_color(theme: Mapping[str, str] | None) -> str | None:
     """Pull the foreground text color from a theme palette mapping.
 
     Returns ``None`` when ``theme`` is missing the ``text`` key (or
@@ -59,7 +60,7 @@ def _theme_text_color(theme: Optional[Mapping[str, str]]) -> Optional[str]:
     return None
 
 
-def _theme_ax_bg(theme: Optional[Mapping[str, str]]) -> Optional[str]:
+def _theme_ax_bg(theme: Mapping[str, str] | None) -> str | None:
     """Pull the axes background color from a theme palette mapping.
 
     Returns ``None`` when ``theme`` is missing the ``ax_bg`` key.
@@ -79,10 +80,10 @@ def _theme_ax_bg(theme: Optional[Mapping[str, str]]) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 def draw_card_placeholder(
-    ax: "Axes",
-    binding: "CardBinding | None",
+    ax: Axes,
+    binding: CardBinding | None,
     *,
-    theme: Optional[Mapping[str, str]] = None,
+    theme: Mapping[str, str] | None = None,
 ) -> None:
     """Render the empty-slot placeholder: centred symbol text only.
 
@@ -124,7 +125,7 @@ def draw_card_placeholder(
 # Tint API
 # ---------------------------------------------------------------------------
 
-def apply_card_tint(ax: "Axes", color: Optional[str]) -> None:
+def apply_card_tint(ax: Axes, color: str | None) -> None:
     """Paint a colored border around a card by coloring its axes spines.
 
     Passing ``None`` clears the tint (hides spines again). The
@@ -156,8 +157,8 @@ def _direction_color(open_: float, close: float) -> str:
 
 
 def _draw_candles(
-    ax: "Axes",
-    bars: Sequence["Bar"],
+    ax: Axes,
+    bars: Sequence[Bar],
     xs: Sequence[float],
 ) -> None:
     """Draw OHLC candles (wicks + bodies) for every bar.
@@ -184,7 +185,7 @@ def _draw_candles(
     body_patches: list[Rectangle] = []
     body_colors: list[str] = []
 
-    for x, b in zip(xs, bars):
+    for x, b in zip(xs, bars, strict=False):
         o = float(b.open)
         h = float(b.high)
         lo = float(b.low)
@@ -226,12 +227,12 @@ def _draw_candles(
 
 
 def draw_card_candles(
-    ax: "Axes",
-    bars: "list[Bar]",
+    ax: Axes,
+    bars: list[Bar],
     *,
-    binding: "CardBinding | None" = None,
-    tint: Optional[str] = None,
-    theme: Optional[Mapping[str, str]] = None,
+    binding: CardBinding | None = None,
+    tint: str | None = None,
+    theme: Mapping[str, str] | None = None,
     **_ignored_legacy_kwargs: object,
 ) -> None:
     """Render the card body as daily OHLC candlesticks + header text.

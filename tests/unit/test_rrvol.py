@@ -16,7 +16,6 @@ from tradinglab.indicators.rrvol import RRVOL
 from tradinglab.indicators.rvol import RVOL
 from tradinglab.models import Candle
 
-
 # ----------------------------------------------------------------------
 # Fixtures
 # ----------------------------------------------------------------------
@@ -30,10 +29,10 @@ def _reset_registry():
 
 
 def _intraday_candles(n_days: int = 25, bars_per_day: int = 30,
-                      seed: int = 7, vol_scale: float = 1.0) -> List[Candle]:
+                      seed: int = 7, vol_scale: float = 1.0) -> list[Candle]:
     """Synthesize ``n_days`` regular sessions of 5m bars."""
     rng = random.Random(seed)
-    out: List[Candle] = []
+    out: list[Candle] = []
     base = 100.0
     for d in range(n_days):
         # Skip weekends — keep date arithmetic simple.
@@ -55,9 +54,9 @@ def _intraday_candles(n_days: int = 25, bars_per_day: int = 30,
 
 
 def _daily_candles(n: int = 50, seed: int = 11,
-                   vol_scale: float = 1.0) -> List[Candle]:
+                   vol_scale: float = 1.0) -> list[Candle]:
     rng = random.Random(seed)
-    out: List[Candle] = []
+    out: list[Candle] = []
     base = 100.0
     for i in range(n):
         ts = dt.datetime(2024, 1, 2) + dt.timedelta(days=i)
@@ -221,7 +220,7 @@ def test_each_mode_runs_end_to_end(mode):
 
 
 def test_cache_miss_schedules_provider():
-    calls: List[tuple] = []
+    calls: list[tuple] = []
     rd.set_provider(lambda s, sym, iv: calls.append((s, sym, iv)))
     bars = Bars.from_candles(_intraday_candles(n_days=15))
     with render_context(interval="5m", source="yfinance", primary_symbol="AMD"):

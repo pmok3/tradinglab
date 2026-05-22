@@ -27,19 +27,18 @@ with ``Configure Credentials…`` in the same menu.
 from __future__ import annotations
 
 import tkinter as tk
+from collections.abc import Callable
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
-from typing import Callable, List, Optional, Tuple
 
 from ._modal_keys import bind_modal_keys
 from .colors import MUTED_GREY
 
-
 # Shape of one root row in the in-dialog model.
-RootRow = Tuple[str, str]  # (name, path)
+RootRow = tuple[str, str]  # (name, path)
 
 
-def _load_roots_from_settings() -> Tuple[bool, List[RootRow]]:
+def _load_roots_from_settings() -> tuple[bool, list[RootRow]]:
     """Read the current ``local_data`` setting into (enabled, roots).
 
     Falls back to ``(False, [])`` when the key is missing or malformed
@@ -51,7 +50,7 @@ def _load_roots_from_settings() -> Tuple[bool, List[RootRow]]:
         return False, []
     enabled = bool(cfg.get("enabled"))
     raw_roots = cfg.get("roots") or []
-    roots: List[RootRow] = []
+    roots: list[RootRow] = []
     if isinstance(raw_roots, list):
         for entry in raw_roots:
             if not isinstance(entry, dict):
@@ -63,7 +62,7 @@ def _load_roots_from_settings() -> Tuple[bool, List[RootRow]]:
     return enabled, roots
 
 
-def _save_roots_to_settings(enabled: bool, roots: List[RootRow]) -> None:
+def _save_roots_to_settings(enabled: bool, roots: list[RootRow]) -> None:
     """Persist ``(enabled, roots)`` under the ``local_data`` settings key."""
     from .. import settings as _settings
     payload = {
@@ -102,7 +101,7 @@ def _refresh_data_registry() -> None:
     register_local_sources()
 
 
-def _validate_root_name(name: str) -> Optional[str]:
+def _validate_root_name(name: str) -> str | None:
     """Validate a BYOD root name. Returns ``None`` if valid, else an error string.
 
     Rules:
@@ -136,7 +135,7 @@ class LocalDataDialog(tk.Toplevel):
         self,
         parent: tk.Misc,
         *,
-        on_changed: Optional[Callable[[], None]] = None,
+        on_changed: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(parent)
         self.title("Configure Local Data")
@@ -148,7 +147,7 @@ class LocalDataDialog(tk.Toplevel):
         self._on_changed = on_changed
         enabled, roots = _load_roots_from_settings()
         self._enabled_var = tk.BooleanVar(value=enabled)
-        self._roots: List[RootRow] = list(roots)
+        self._roots: list[RootRow] = list(roots)
 
         self._build_widgets()
         bind_modal_keys(self, cancel=self._on_cancel, primary=self._on_save)
@@ -231,7 +230,7 @@ class LocalDataDialog(tk.Toplevel):
         for name, path in self._roots:
             self._tree.insert("", "end", values=(name, path))
 
-    def _selected_index(self) -> Optional[int]:
+    def _selected_index(self) -> int | None:
         sel = self._tree.selection()
         if not sel:
             return None
@@ -295,15 +294,19 @@ class LocalDataDialog(tk.Toplevel):
 
     # ---- save / cancel -------------------------------------------------
 
-    def _validate_before_save(self) -> Optional[str]:
+    def _validate_before_save(self) -> str | None:
         """Return ``None`` if valid, else an error message to show."""
         if not self._enabled_var.get():
             return None  # Empty config is fine when disabled.
-        # Check each path resolves to a real directory.
+        # Each path must resolve to a real directory OR a real zip
+        # file (audit ``local-source-zip``).
         for name, path in self._roots:
             p = Path(path)
-            if not p.is_dir():
-                return f"Root {name!r}: path {path!r} is not a directory."
+            if p.is_dir():
+                continue
+            if p.is_file() and p.suffix.lower() == ".zip":
+                continue
+            return f"Root {name!r}: path {path!r} is not a folder or .zip file."
         # Uniqueness already enforced on add/edit.
         return None
 
@@ -340,7 +343,7 @@ class LocalDataDialog(tk.Toplevel):
 
 def _prompt_for_root(
     parent: tk.Misc, *, initial_name: str, initial_path: str,
-) -> Optional[Tuple[str, str]]:
+) -> tuple[str, str] | None:
     """Modal prompt for a single (name, path) pair. Returns None on cancel."""
     win = tk.Toplevel(parent)
     win.title("Local Data Root")
@@ -358,13 +361,30 @@ def _prompt_for_root(
     name_entry = ttk.Entry(frm, width=28, textvariable=name_var)
     name_entry.grid(row=0, column=1, columnspan=2, sticky="we", pady=2)
 
-    ttk.Label(frm, text="Folder:").grid(row=1, column=0, sticky="e", padx=(0, 6), pady=2)
+    ttk.Label(frm, text="Folder/Zip:").grid(row=1, column=0, sticky="e", padx=(0, 6), pady=2)
     path_var = tk.StringVar(value=initial_path)
     path_entry = ttk.Entry(frm, width=44, textvariable=path_var)
     path_entry.grid(row=1, column=1, sticky="we", pady=2)
 
     def _browse() -> None:
-        chosen = filedialog.askdirectory(parent=win, mustexist=True)
+        # Audit ``local-source-zip``: the user can pick either a
+        # folder root (the original BYOD shape) or a zip archive
+        # produced by Export Bars to CSV.
+        from tkinter import messagebox as _mb
+        choice = _mb.askyesno(
+            "Local Data Root",
+            "Pick a folder?\n\nYes = folder of subfolders\n"
+            "No = single .zip archive produced by Export Bars to CSV",
+            parent=win,
+        )
+        if choice:
+            chosen = filedialog.askdirectory(parent=win, mustexist=True)
+        else:
+            chosen = filedialog.askopenfilename(
+                parent=win,
+                title="Select a zip archive",
+                filetypes=[("ZIP archive", "*.zip"), ("All files", "*.*")],
+            )
         if chosen:
             path_var.set(chosen)
 
@@ -373,10 +393,12 @@ def _prompt_for_root(
     ttk.Label(
         frm,
         text=(
-            "The chosen folder's subfolders become source-selector "
-            "entries.\n"
-            "Inside each subfolder: <TICKER>_<INTERVAL>.csv with "
-            "strict canonical schema.\nSee docs/LOCAL_DATA.md."
+            "Folder roots: subfolders become source-selector entries; "
+            "files inside are <TICKER>_<INTERVAL>.csv.\n"
+            "Zip roots: top-level directories inside the archive become "
+            "source-selector entries — drop a file produced by "
+            "Export Bars to CSV here to load it back without unzipping.\n"
+            "See docs/LOCAL_DATA.md."
         ),
         foreground=MUTED_GREY,
         wraplength=420,
@@ -396,10 +418,15 @@ def _prompt_for_root(
             err_var.set(name_err)
             return
         if not path:
-            err_var.set("Folder is required.")
+            err_var.set("Folder or zip is required.")
             return
-        if not Path(path).is_dir():
-            err_var.set(f"Not a directory: {path}")
+        pth = Path(path)
+        if pth.is_file() and pth.suffix.lower() == ".zip":
+            pass  # zip-as-root accepted
+        elif pth.is_dir():
+            pass  # folder accepted
+        else:
+            err_var.set(f"Not a folder or .zip file: {path}")
             return
         result["value"] = (name, path)
         win.destroy()
@@ -420,7 +447,7 @@ def _prompt_for_root(
 
 
 def open_local_data_dialog(
-    parent: tk.Misc, *, on_changed: Optional[Callable[[], None]] = None,
+    parent: tk.Misc, *, on_changed: Callable[[], None] | None = None,
 ) -> LocalDataDialog:
     """Convenience opener used by ``Tools → Configure Local Data…``."""
     return LocalDataDialog(parent, on_changed=on_changed)

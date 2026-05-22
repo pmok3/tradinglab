@@ -40,7 +40,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 from tkinter import ttk
-from typing import Any, Deque, Dict, List, Optional
+from typing import Any
 
 _BAR_TRUNCATE_AT = 140  # characters before ellipsis-truncating the bar
 _HISTORY_MAXLEN = 2000
@@ -140,18 +140,18 @@ class StatusLog:
         self,
         string_var: tk.StringVar,
         *,
-        tk_root: Optional[Any] = None,
+        tk_root: Any | None = None,
         max_history: int = _HISTORY_MAXLEN,
-        log_dir: Optional[Path] = None,
+        log_dir: Path | None = None,
         also_stdout: bool = True,
         retention_days: int = _LOG_RETENTION_DAYS,
     ) -> None:
         self._var = string_var
         self._tk_root = tk_root
-        self._history: Deque[StatusEntry] = deque(maxlen=max_history)
+        self._history: deque[StatusEntry] = deque(maxlen=max_history)
         self._log_dir = log_dir if log_dir is not None else _default_log_dir()
         self._also_stdout = also_stdout
-        self._log_path: Optional[Path] = None
+        self._log_path: Path | None = None
         # Best-effort retention sweep — one shot at construction so a
         # long-running app doesn't accumulate years of daily log files.
         # Silent failure preserves the existing "logging never blocks
@@ -172,7 +172,7 @@ class StatusLog:
     def error(self, msg: str) -> None:
         self._emit("ERROR", msg)
 
-    def history(self) -> List[StatusEntry]:
+    def history(self) -> list[StatusEntry]:
         """Snapshot of the in-memory ring buffer (oldest → newest)."""
         return list(self._history)
 
@@ -269,7 +269,7 @@ class StatusHistoryWindow(tk.Toplevel):
     #: Mapping of filter-combobox labels to the set of accepted levels.
     #: Keys are the user-visible strings; values are ``None`` (accept
     #: everything) or a frozenset of level names to keep.
-    _LEVEL_FILTERS: Dict[str, Optional[frozenset]] = {
+    _LEVEL_FILTERS: dict[str, frozenset | None] = {
         "All": None,
         "WARN+": frozenset({"WARN", "ERROR"}),
         "ERROR only": frozenset({"ERROR"}),
@@ -278,9 +278,9 @@ class StatusHistoryWindow(tk.Toplevel):
     def __init__(self, master, status_log: StatusLog) -> None:
         super().__init__(master)
         self._status_log = status_log
-        self._after_job: Optional[str] = None
+        self._after_job: str | None = None
         self._last_count = -1
-        self._last_filter: Optional[str] = None
+        self._last_filter: str | None = None
         self.title("Status History")
         # Geometry persistence: previous size/position restored if the
         # user has opened this window before, otherwise fall back to
@@ -368,7 +368,7 @@ class StatusHistoryWindow(tk.Toplevel):
         except Exception:  # noqa: BLE001
             pass
 
-    def _selected_level_filter(self) -> Optional[frozenset]:
+    def _selected_level_filter(self) -> frozenset | None:
         """Return the level-set for the current combobox selection."""
         try:
             label = self._level_filter_var.get()

@@ -2,8 +2,9 @@
 
 ## Purpose
 The dialog opened by **Tools → Configure Local Data…**. Lets the user
-manage BYOD (Bring Your Own Data) roots — folders on disk whose
-subfolders become entries in the source-selector combobox.
+manage BYOD (Bring Your Own Data) roots — folders on disk **or zip
+archives** whose subfolders (or top-level zip directories) become
+entries in the source-selector combobox.
 
 ## Public API
 - `LocalDataDialog(parent, *, on_changed=None)` — Toplevel dialog
@@ -48,8 +49,14 @@ subfolders become entries in the source-selector combobox.
   ambiguous.
 - **Per-root path must exist at save time**. Validation runs before
   `_save_roots_to_settings` and blocks the save with a messagebox if
-  any configured root path is not a directory. (If `enabled=False`,
-  validation is skipped — a disabled config with stale paths is fine.)
+  any configured root path is neither a directory nor a `.zip` file.
+  (If `enabled=False`, validation is skipped — a disabled config with
+  stale paths is fine.)
+- **Zip-as-root** (audit `local-source-zip`). `_prompt_for_root.
+  _browse` asks the user whether they're picking a folder or a `.zip`
+  file. When the chosen path is a zip, `discover_subsources` walks
+  the archive's top-level directories and builds `make_local_zip_fetcher`
+  fetchers — no extraction needed.
 - **Add / Edit launches a modal sub-dialog**. `_prompt_for_root` runs a
   `wait_window` so the user can't interact with the parent until they
   commit or cancel the row edit.
@@ -63,8 +70,8 @@ subfolders become entries in the source-selector combobox.
 
 ## Invariants
 - A successfully-saved root list always satisfies: every name is
-  alphanumeric+underscore, every path is a directory at save time, every
-  name is unique within the list.
+  alphanumeric+underscore, every path is a directory or `.zip` file at
+  save time, every name is unique within the list.
 - After `_on_save`, either both the settings AND the data registry
   reflect the new roots, OR the settings reflect them but the registry
   refresh failed with a visible error message (the dialog still

@@ -25,9 +25,10 @@ long-term caches — so there is no memory-leak risk.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Mapping, Optional
+from typing import Any
 
 import numpy as np
 
@@ -61,7 +62,7 @@ class CandleArrays:
 # would hand stale arrays to a different list that happened to reuse the
 # freed id. (This caused AMD's pair-aligned daily candles to receive SPY's
 # arrays, producing SPY's y-axis range on AMD's price panel.)
-_PREBUILT_ARRAYS: Dict[int, tuple] = {}
+_PREBUILT_ARRAYS: dict[int, tuple] = {}
 
 # Defense in depth: if the pop-and-consume protocol ever breaks (e.g. a
 # caller fetches data but never hands it to ``_build_series_safe``), the
@@ -71,7 +72,7 @@ _PREBUILT_ARRAYS: Dict[int, tuple] = {}
 _PREBUILT_ARRAYS_MAX = 32
 
 
-def stash_arrays(candles: List[Candle], arrays: CandleArrays) -> None:
+def stash_arrays(candles: list[Candle], arrays: CandleArrays) -> None:
     """Register pre-extracted arrays for ``candles``; see module docstring."""
     # Store (candles_ref, arrays) so pop can verify identity. The ref keeps
     # the list alive, so its id can't be reused by another list while the
@@ -87,7 +88,7 @@ def stash_arrays(candles: List[Candle], arrays: CandleArrays) -> None:
         _PREBUILT_ARRAYS.pop(oldest, None)
 
 
-def pop_prebuilt_arrays(candles: List[Candle]) -> Optional[CandleArrays]:
+def pop_prebuilt_arrays(candles: list[Candle]) -> CandleArrays | None:
     """Retrieve + remove the stashed arrays for ``candles`` (or None).
 
     Verifies identity: if the stashed entry was registered for a DIFFERENT
@@ -118,8 +119,8 @@ def candles_from_dataframe(
     df: Any,
     *,
     interval: str,
-    ohlcv_cols: Optional[Mapping[str, str]] = None,
-) -> List[Candle]:
+    ohlcv_cols: Mapping[str, str] | None = None,
+) -> list[Candle]:
     """Vectorized DataFrame → ``List[Candle]``.
 
     Pulls OHLCV columns out with a single ``.to_numpy()`` per column
@@ -173,7 +174,7 @@ def candles_from_dataframe(
 
     intraday = is_intraday(interval)
     n = len(dts)
-    candles: List[Candle] = [None] * n  # type: ignore[list-item]
+    candles: list[Candle] = [None] * n  # type: ignore[list-item]
     if intraday:
         # Per-bar session tag. classify_session is a ~3-cmp function so
         # even a Python loop is cheap here; a fully vectorized version
@@ -248,7 +249,7 @@ def candles_from_json_rows(
     interval: str,
     keymap: Mapping[str, str],
     ts_unit: str,
-) -> List[Candle]:
+) -> list[Candle]:
     """Generic vendor-JSON → ``List[Candle]`` mapper.
 
     Designed for vendors that return aggregates as a JSON array of
@@ -312,7 +313,7 @@ def candles_from_json_rows(
     volumes = np.empty(n, dtype=np.float64)
 
     intraday = is_intraday(interval)
-    candles: List[Candle] = [None] * n  # type: ignore[list-item]
+    candles: list[Candle] = [None] * n  # type: ignore[list-item]
 
     for i, row in enumerate(rows):
         dt = _coerce_timestamp(row[k_ts], ts_unit)

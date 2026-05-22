@@ -15,7 +15,7 @@ focus ring.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from .controller import CardController
 from .render import draw_card_placeholder
@@ -32,15 +32,15 @@ class CardWidget:
 
     def __init__(
         self,
-        owner_panel: "ChartStackPanel",
+        owner_panel: ChartStackPanel,
         slot_index: int,
-        ax: "Axes",
+        ax: Axes,
     ) -> None:
         self.owner_panel = owner_panel
         self.slot_index = int(slot_index)
         self.ax = ax
         self.controller = CardController(slot_index, owner_app=getattr(owner_panel, "owner", None))
-        self.binding: Optional["CardBinding"] = None
+        self.binding: CardBinding | None = None
         self._focused = False
 
     @property
@@ -48,7 +48,7 @@ class CardWidget:
         """Return the Axes' figure-coordinate bbox (cached lazily by mpl)."""
         return self.ax.get_position()
 
-    def set_binding(self, binding: "CardBinding | None") -> None:
+    def set_binding(self, binding: CardBinding | None) -> None:
         """Update the held binding + redraw the placeholder.
 
         M2 will replace ``draw_card_placeholder`` with the real

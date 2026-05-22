@@ -25,7 +25,7 @@ class _SpyResp:
     def __init__(self, body: bytes = b'{"version": "0.1.0"}', status: int = 200) -> None:
         self._body = body
         self.status = status
-        self.read_calls: List[int] = []
+        self.read_calls: list[int] = []
 
     def read(self, n: int = -1) -> bytes:
         self.read_calls.append(n)
@@ -33,7 +33,7 @@ class _SpyResp:
             return self._body
         return self._body[:n]
 
-    def __enter__(self) -> "_SpyResp":
+    def __enter__(self) -> _SpyResp:
         return self
 
     def __exit__(self, *_a: Any) -> None:

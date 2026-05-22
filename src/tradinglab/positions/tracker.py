@@ -35,11 +35,10 @@ bypass via :func:`tradinglab.core.thread_guard.tk_thread_check_disabled`.
 from __future__ import annotations
 
 import logging
-import threading
 import uuid
 from collections import deque
+from collections.abc import Callable
 from datetime import datetime, timezone
-from typing import Callable, Deque, Dict, Iterable, List, Optional, Tuple
 
 from ..core.thread_guard import require_tk_thread
 from .model import (
@@ -59,22 +58,22 @@ class PositionTracker:
     """Single source of truth for open positions during a session."""
 
     def __init__(self) -> None:
-        self._positions: Dict[str, Position] = {}
-        self._subscribers: List[Subscriber] = []
-        self._pending_events: Deque[Tuple[PositionEvent, Position]] = deque()
+        self._positions: dict[str, Position] = {}
+        self._subscribers: list[Subscriber] = []
+        self._pending_events: deque[tuple[PositionEvent, Position]] = deque()
         self._dispatching: bool = False
 
     # ---- queries -----------------------------------------------------
 
-    def get(self, position_id: str) -> Optional[Position]:
+    def get(self, position_id: str) -> Position | None:
         return self._positions.get(position_id)
 
-    def list_open(self) -> List[Position]:
+    def list_open(self) -> list[Position]:
         return [p for p in self._positions.values() if p.is_open]
 
     def list_open_for(
-        self, symbol: str, side: Optional[PositionSide] = None,
-    ) -> List[Position]:
+        self, symbol: str, side: PositionSide | None = None,
+    ) -> list[Position]:
         sym = (symbol or "").upper()
         out = [
             p for p in self._positions.values()
@@ -116,10 +115,10 @@ class PositionTracker:
         qty: float,
         price: float,
         source: PositionSource,
-        ts: Optional[datetime] = None,
-        strategy_id: Optional[str] = None,
-        extra: Optional[Dict] = None,
-        position_id: Optional[str] = None,
+        ts: datetime | None = None,
+        strategy_id: str | None = None,
+        extra: dict | None = None,
+        position_id: str | None = None,
     ) -> Position:
         if qty <= 0:
             raise ValueError("qty must be > 0")
@@ -162,8 +161,8 @@ class PositionTracker:
         position_id: str,
         qty: float,
         price: float,
-        ts: Optional[datetime] = None,
-        meta: Optional[Dict] = None,
+        ts: datetime | None = None,
+        meta: dict | None = None,
     ) -> Position:
         """Apply an exit fill (closing or partially closing the position).
 
@@ -218,11 +217,11 @@ class PositionTracker:
         side: PositionSide,
         qty: float,
         price: float,
-        ts: Optional[datetime] = None,
+        ts: datetime | None = None,
         source: PositionSource = "sandbox",
-        strategy_id: Optional[str] = None,
-        position_id: Optional[str] = None,
-        fill_meta: Optional[Dict] = None,
+        strategy_id: str | None = None,
+        position_id: str | None = None,
+        fill_meta: dict | None = None,
     ) -> Position:
         """Mint a brand-new :class:`Position` from a paper-engine entry fill.
 
@@ -274,7 +273,7 @@ class PositionTracker:
             extra={},
         )
         self._positions[pid] = pos
-        meta: Dict = dict(fill_meta or {})
+        meta: dict = dict(fill_meta or {})
         meta["side"] = side
         meta["source"] = source
         if strategy_id is not None:
@@ -291,10 +290,10 @@ class PositionTracker:
         self,
         symbol: str,
         price: float,
-        ts: Optional[datetime] = None,
+        ts: datetime | None = None,
         *,
         bar_close: bool = False,
-    ) -> List[Position]:
+    ) -> list[Position]:
         """Update last_price + watermarks for all open positions on ``symbol``.
 
         ``bar_close=True`` increments :attr:`Position.bars_held` by one
@@ -304,7 +303,7 @@ class PositionTracker:
             return []
         sym = (symbol or "").upper()
         when = ts or _now()
-        affected: List[Position] = []
+        affected: list[Position] = []
         for pos in self._positions.values():
             if not pos.is_open or pos.symbol.upper() != sym:
                 continue
@@ -366,10 +365,10 @@ class PositionTracker:
         self,
         position_id: str,
         *,
-        qty_open: Optional[float] = None,
-        avg_entry_price: Optional[float] = None,
-        last_price: Optional[float] = None,
-        meta: Optional[Dict] = None,
+        qty_open: float | None = None,
+        avg_entry_price: float | None = None,
+        last_price: float | None = None,
+        meta: dict | None = None,
     ) -> Position:
         """Manually edit a paper position (e.g. broker-side qty correction).
 
@@ -407,7 +406,7 @@ class PositionTracker:
         return pos
 
     @require_tk_thread
-    def remove(self, position_id: str) -> Optional[Position]:
+    def remove(self, position_id: str) -> Position | None:
         """Drop a position from the registry (used at session end / cleanup)."""
         return self._positions.pop(position_id, None)
 

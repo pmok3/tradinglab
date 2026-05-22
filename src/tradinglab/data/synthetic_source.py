@@ -10,7 +10,6 @@ from __future__ import annotations
 import math
 import random
 from datetime import datetime, timedelta
-from typing import List, Optional
 
 from ..constants import (
     classify_session,
@@ -21,7 +20,7 @@ from ..constants import (
 from ..models import Candle
 
 
-def fetch_synthetic_data(ticker: str = "AMD", interval: str = "1d") -> Optional[List[Candle]]:
+def fetch_synthetic_data(ticker: str = "AMD", interval: str = "1d") -> list[Candle] | None:
     """Generate a synthetic random-walk OHLCV history for testing.
 
     For intraday intervals the generator emits bars across the full
@@ -47,7 +46,7 @@ def fetch_synthetic_data(ticker: str = "AMD", interval: str = "1d") -> Optional[
 
 def fetch_synthetic_stream_bootstrap(
     ticker: str = "AMD", interval: str = "1d",
-) -> Optional[List[Candle]]:
+) -> list[Candle] | None:
     """Seed history for the synthetic-stream source.
 
     Re-uses :func:`fetch_synthetic_data` for the bulk of the walk, then
@@ -88,7 +87,7 @@ def _step(rng: random.Random, price: float, vol_scale: float) -> tuple:
 
 def _gen_intraday(rng, base_price, interval, step_min, days):
     """Generate intraday bars from 04:00→20:00 ET, 5 days per week, ``days`` total."""
-    candles: List[Candle] = []
+    candles: list[Candle] = []
     price = base_price
     # Start ``days`` business days ago at 04:00 ET.
     end = datetime.now().replace(hour=20, minute=0, second=0, microsecond=0)
@@ -121,7 +120,7 @@ def _gen_daily(rng, base_price, interval, count):
     """Generate ``count`` daily/weekly/monthly bars ending today."""
     step = {"1d": timedelta(days=1), "1wk": timedelta(weeks=1),
             "1mo": timedelta(days=30)}.get(interval, timedelta(days=1))
-    candles: List[Candle] = []
+    candles: list[Candle] = []
     price = base_price
     t = datetime.now().replace(hour=16, minute=0, second=0, microsecond=0)
     t -= step * count

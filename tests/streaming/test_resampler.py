@@ -17,7 +17,6 @@ from tradinglab.streaming.resampler import (
     supported_intervals,
 )
 
-
 # --- helpers ---------------------------------------------------------------
 
 

@@ -154,10 +154,10 @@ def test_section_order_top_to_bottom():
     ]
     indices = [DIALOGS_SRC.find(needle) for needle in order]
     assert all(i > 0 for i in indices), (
-        f"Missing section markers: {[(n, i) for n, i in zip(order, indices) if i <= 0]}")
+        f"Missing section markers: {[(n, i) for n, i in zip(order, indices, strict=False) if i <= 0]}")
     assert indices == sorted(indices), (
         f"Section order is wrong. Indices: "
-        f"{list(zip(order, indices))}")
+        f"{list(zip(order, indices, strict=False))}")
 
 
 # ---------------------------------------------------------------------------

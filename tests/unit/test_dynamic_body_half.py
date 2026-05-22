@@ -24,7 +24,6 @@ from types import SimpleNamespace
 
 import pytest
 
-
 from tradinglab.models import Candle
 from tradinglab.rendering import (
     _BODY_HALF,

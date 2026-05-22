@@ -13,20 +13,16 @@ from __future__ import annotations
 import tkinter as tk
 from copy import deepcopy
 from tkinter import filedialog, messagebox, simpledialog, ttk
-from typing import TYPE_CHECKING, Dict, Optional
+from typing import TYPE_CHECKING
 
 from ..constants import (
     BUILTIN_STARTUP_DEFAULTS,
-    CUSTOMIZABLE_THEME_KEYS,
     INTERVAL_PERIODS,
     STARTUP_DEFAULT_KEYS,
 )
 from ..data import DATA_SOURCES
 from ..watchlists import (
     WatchlistManager,
-)
-from ..watchlists import (
-    export_to_file as _export_watchlists_to_file,
 )
 from ..watchlists import (
     import_from_file as _import_watchlists_from_file,
@@ -44,7 +40,7 @@ WORKER_COUNT_MAX = 64
 
 
 def _prompt_string(parent: tk.Misc, title: str, prompt: str,
-                   initial: str = "") -> Optional[str]:
+                   initial: str = "") -> str | None:
     """Thin wrapper around :func:`simpledialog.askstring` for test seams."""
     return simpledialog.askstring(title, prompt, initialvalue=initial,
                                   parent=parent)
@@ -55,7 +51,7 @@ def _prompt_string(parent: tk.Misc, title: str, prompt: str,
 class _SettingsDialog(tk.Toplevel):
     """Modal-ish dialog for editing worker-pool size and other settings."""
 
-    def __init__(self, parent: "ChartApp") -> None:
+    def __init__(self, parent: ChartApp) -> None:
         super().__init__(parent)
         self.title("Settings")
         self.transient(parent)
@@ -360,7 +356,7 @@ class _SettingsDialog(tk.Toplevel):
         # just tell the next ``ChartApp.__init__`` what to seed the Tk
         # vars with. Use "Use current chart" to capture the running
         # session's selections in one click.
-        self._startup_vars: Dict[str, tk.StringVar] = {}
+        self._startup_vars: dict[str, tk.StringVar] = {}
         startup_frame = ttk.LabelFrame(
             frm, text="Startup parameters", padding=8)
         startup_frame.grid(row=4, column=0, columnspan=2, sticky="ew",
@@ -403,7 +399,7 @@ class _SettingsDialog(tk.Toplevel):
         # quick-access button that opens the dedicated editor so users
         # who reach for Settings out of habit can still get there in
         # one click.
-        self._swatch_buttons: Dict[str, Dict[str, tk.Button]] = {
+        self._swatch_buttons: dict[str, dict[str, tk.Button]] = {
             "light": {},
             "dark": {},
         }
@@ -452,7 +448,7 @@ class _SettingsDialog(tk.Toplevel):
         btns = ttk.Frame(frm)
         btns.grid(row=8, column=0, columnspan=2, pady=(12, 0), sticky="e")
         ttk.Button(btns, text="Cancel", command=self._on_cancel).pack(side=tk.RIGHT, padx=4)
-        ttk.Button(btns, text="OK", command=self._on_ok).pack(side=tk.RIGHT)
+        ttk.Button(btns, text="Save and Close", command=self._on_ok).pack(side=tk.RIGHT)
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)
         bind_modal_keys(self, cancel=self._on_cancel, primary=self._on_ok)
 
@@ -907,12 +903,12 @@ class _SettingsDialog(tk.Toplevel):
 class _WatchlistDialog(tk.Toplevel):
     """CRUD + import/export dialog for named watchlists."""
 
-    def __init__(self, parent: "ChartApp") -> None:
+    def __init__(self, parent: ChartApp) -> None:
         super().__init__(parent)
         self.title("Watchlists")
         self.transient(parent)
         self._parent_app = parent
-        self._mgr: Optional[WatchlistManager] = parent._watchlists
+        self._mgr: WatchlistManager | None = parent._watchlists
         # Geometry persistence — this is a power-user dialog; users
         # frequently resize it to see more rows in the symbols pane.
         try:
@@ -1078,7 +1074,7 @@ class _WatchlistDialog(tk.Toplevel):
         self._on_select_name()
         self._update_pin_buttons()
 
-    def _selected_name(self) -> Optional[str]:
+    def _selected_name(self) -> str | None:
         sel = self._names.selection()
         if not sel:
             return None

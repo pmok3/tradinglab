@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any
 
 #: Maximum number of MRU entries kept per kind. The File submenu is
 #: rendered with up to this many entries; older paths fall off the end
@@ -51,7 +51,7 @@ def _storage_path() -> Path:
     return app_data_dir() / _FILENAME
 
 
-def _read_raw() -> Dict[str, Any]:
+def _read_raw() -> dict[str, Any]:
     """Return the on-disk MRU dict, or ``{}`` on any failure."""
     try:
         with _storage_path().open("r", encoding="utf-8") as f:
@@ -63,12 +63,12 @@ def _read_raw() -> Dict[str, Any]:
     return raw
 
 
-def _coerce_list(raw: Dict[str, Any], key: str) -> List[str]:
+def _coerce_list(raw: dict[str, Any], key: str) -> list[str]:
     """Extract a ``List[str]`` slot from the loaded MRU dict."""
     val = raw.get(key)
     if not isinstance(val, list):
         return []
-    out: List[str] = []
+    out: list[str] = []
     seen: set = set()
     for entry in val:
         if not isinstance(entry, str):
@@ -82,7 +82,7 @@ def _coerce_list(raw: Dict[str, Any], key: str) -> List[str]:
     return out
 
 
-def _write(d: Dict[str, List[str]]) -> bool:
+def _write(d: dict[str, list[str]]) -> bool:
     """Atomically persist the MRU dict; return True on success."""
     from .core.io_helpers import atomic_write_json
     try:
@@ -96,7 +96,7 @@ def _write(d: Dict[str, List[str]]) -> bool:
 # Public API
 # ---------------------------------------------------------------------------
 
-def list_recent(kind: str) -> List[str]:
+def list_recent(kind: str) -> list[str]:
     """Return the MRU path list for ``kind`` (oldest entries elided).
 
     ``kind`` is ``"configs"`` or ``"watchlists"``. Unknown kinds return
@@ -106,7 +106,7 @@ def list_recent(kind: str) -> List[str]:
     return _coerce_list(_read_raw(), kind)
 
 
-def push_recent(kind: str, path: Any) -> List[str]:
+def push_recent(kind: str, path: Any) -> list[str]:
     """Record ``path`` as the most-recently-used entry for ``kind``.
 
     De-duplicates against existing entries (case-sensitive string
@@ -128,7 +128,7 @@ def push_recent(kind: str, path: Any) -> List[str]:
     raw[kind] = current
     # Preserve any other slots we don't recognise — future-proof against
     # an older build seeing a newer file.
-    out: Dict[str, List[str]] = {}
+    out: dict[str, list[str]] = {}
     for k, v in raw.items():
         if k == kind:
             out[k] = current
@@ -139,7 +139,7 @@ def push_recent(kind: str, path: Any) -> List[str]:
     return current
 
 
-def clear_recent(kind: Optional[str] = None) -> None:
+def clear_recent(kind: str | None = None) -> None:
     """Wipe the MRU list for ``kind`` (or all kinds when ``kind=None``).
 
     Used by the "Clear recent" menu entries; not exercised by the rest
@@ -156,7 +156,7 @@ def clear_recent(kind: Optional[str] = None) -> None:
     _write(out)
 
 
-def remove_recent(kind: str, path: Any) -> List[str]:
+def remove_recent(kind: str, path: Any) -> list[str]:
     """Drop ``path`` from the MRU list for ``kind``.
 
     Used when a load attempt fails because the file no longer exists,
@@ -173,7 +173,7 @@ def remove_recent(kind: str, path: Any) -> List[str]:
     if pruned == current:
         return current
     raw[kind] = pruned
-    out: Dict[str, List[str]] = {}
+    out: dict[str, list[str]] = {}
     for k, v in raw.items():
         if k == kind:
             out[k] = pruned

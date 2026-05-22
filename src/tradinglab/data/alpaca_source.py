@@ -28,7 +28,7 @@ import logging
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..models import Candle
 from ._http import MAX_RESPONSE_BYTES, credentialed_opener
@@ -46,8 +46,8 @@ _ALPACA_KEYMAP = {
 
 
 def candles_from_alpaca_response(
-    payload: Dict[str, Any], *, interval: str,
-) -> List[Candle]:
+    payload: dict[str, Any], *, interval: str,
+) -> list[Candle]:
     """Map a parsed Alpaca ``/bars`` response to candles."""
     if isinstance(payload, list):
         rows = payload
@@ -75,8 +75,8 @@ _ALPACA_BASE = "https://data.alpaca.markets"
 
 def fetch_alpaca_data(
     ticker: str = "AAPL", interval: str = "1d",
-    *, lookback_days: Optional[int] = None,
-) -> Optional[List[Candle]]:
+    *, lookback_days: int | None = None,
+) -> list[Candle] | None:
     """``DataFetcher``-compatible Alpaca fetcher.
 
     Returns ``None`` on any error. Default lookback windows match
@@ -106,7 +106,7 @@ def fetch_alpaca_data(
 def _http_get_bars(
     ticker: str, timeframe: str, start: datetime, end: datetime,
     creds: AlpacaCredentials,
-) -> Dict[str, Any]:  # pragma: no cover - network path
+) -> dict[str, Any]:  # pragma: no cover - network path
     params = {
         "timeframe": timeframe,
         "start": start.isoformat().replace("+00:00", "Z"),

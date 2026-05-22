@@ -30,7 +30,6 @@ from tradinglab import settings as _settings
 from tradinglab.gui.chartstack import dpi as _dpi
 from tradinglab.gui.chartstack import settings_adapter as _adapter
 
-
 # ---------------------------------------------------------------------------
 # DPI helpers
 # ---------------------------------------------------------------------------

@@ -32,7 +32,7 @@ per-bar Python attribute access.
 
 from __future__ import annotations
 
-from typing import List, Optional, Sequence, Tuple
+from collections.abc import Sequence
 
 import numpy as np
 
@@ -42,10 +42,10 @@ from ..models import Candle
 # --- Time-of-day keying -----------------------------------------------------
 
 #: Wall-clock key for cross-session bucketing. ``(hour, minute)``.
-TodKey = Tuple[int, int]
+TodKey = tuple[int, int]
 
 
-def tod_key(c: Candle) -> Optional[TodKey]:
+def tod_key(c: Candle) -> TodKey | None:
     """Return ``(hour, minute)`` for ``c`` or ``None`` if unparsable.
 
     Uses the candle's stored datetime as-is (assumed exchange-local).
@@ -78,7 +78,7 @@ def tod_key_np(bars: Bars) -> np.ndarray:
 
 def session_groups(
     candles: Sequence[Candle], *, regular_only: bool = True,
-) -> List[List[int]]:
+) -> list[list[int]]:
     """Group candle indices by calendar trading day.
 
     Returns a list of per-session lists of indices. Sessions are
@@ -91,9 +91,9 @@ def session_groups(
     skipped bars do NOT split a session in two — only the date
     boundary does — they are simply omitted from the bucket.
     """
-    out: List[List[int]] = []
+    out: list[list[int]] = []
     cur_day = None
-    cur_bucket: Optional[List[int]] = None
+    cur_bucket: list[int] | None = None
     for i, c in enumerate(candles):
         if getattr(c, "is_gap", False):
             continue
@@ -113,7 +113,7 @@ def session_groups(
 
 def session_groups_np(
     bars: Bars, *, regular_only: bool = True,
-) -> List[np.ndarray]:
+) -> list[np.ndarray]:
     """Vectorised :func:`session_groups`.
 
     Returns a list of int64 ndarrays of admitted indices, one per
@@ -150,7 +150,7 @@ def is_intraday(candles: Sequence[Candle]) -> bool:
     helper, both VWAP and the RVOL family stay in lock-step on the
     intraday/daily boundary.
     """
-    deltas: List[float] = []
+    deltas: list[float] = []
     prev_dt = None
     for c in candles:
         if getattr(c, "is_gap", False):

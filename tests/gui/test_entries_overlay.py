@@ -313,7 +313,7 @@ def test_renderer_clear_drops_artist_refs():
 
 def test_renderer_set_enabled_triggers_redraw_callback():
     ev, _t, eng = _evaluator()
-    fired: List[bool] = []
+    fired: list[bool] = []
     overlay = EntriesOverlay(
         evaluator=ev, paper_engine=eng,
         request_redraw=lambda: fired.append(True),

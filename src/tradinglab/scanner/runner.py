@@ -63,10 +63,11 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any
 
 from ..core.bars_buffer import BarsBuffer
 from ..models import Candle
@@ -92,13 +93,13 @@ class MatchRow:
     """One row in a scan's result table for the current tick."""
 
     symbol: str
-    matched: Optional[bool]               # True / False / None (insufficient data)
-    values: Dict[str, Optional[float]]    # condition_id → LHS field value
-    rank_value: Optional[float]           # scan.rank_by, or None
+    matched: bool | None               # True / False / None (insufficient data)
+    values: dict[str, float | None]    # condition_id → LHS field value
+    rank_value: float | None           # scan.rank_by, or None
     is_new: bool                          # edge-triggered: was not matched on prior tick
-    error: Optional[str] = None           # symbol-level evaluation error, if any
+    error: str | None = None           # symbol-level evaluation error, if any
     is_forming: bool = False              # this row is from a forming (in-progress) bar; never sets is_new
-    evidence: List[MatchEvidence] = field(default_factory=list)
+    evidence: list[MatchEvidence] = field(default_factory=list)
     """Per-leaf within-last-N-bars match evidence collected during evaluation.
 
     Each entry pins the node (Condition or Group) that fired, how many
@@ -118,10 +119,10 @@ class ScanResult:
     tick_id: int
     timestamp: datetime
     interval: str
-    rows: List[MatchRow] = field(default_factory=list)
-    new_rows: List[MatchRow] = field(default_factory=list)
+    rows: list[MatchRow] = field(default_factory=list)
+    new_rows: list[MatchRow] = field(default_factory=list)
 
-    def matched_rows(self) -> List[MatchRow]:
+    def matched_rows(self) -> list[MatchRow]:
         return [r for r in self.rows if r.matched is True]
 
 
@@ -142,14 +143,14 @@ class MatchHistory:
     runner's concern.
     """
 
-    last_matched_tick: Dict[str, int] = field(default_factory=dict)
-    last_matched: Dict[str, bool] = field(default_factory=dict)
+    last_matched_tick: dict[str, int] = field(default_factory=dict)
+    last_matched: dict[str, bool] = field(default_factory=dict)
 
     def update(
         self,
         symbol: str,
         tick_id: int,
-        matched: Optional[bool],
+        matched: bool | None,
         *,
         forming: bool = False,
     ) -> bool:
@@ -203,7 +204,7 @@ def _evaluate_one_scan_in_ctx(
     # mutate ``ctx.evidence``. Empty when no look-back walk fired.
     evidence = list(ctx.evidence)
 
-    values: Dict[str, Optional[float]] = {}
+    values: dict[str, float | None] = {}
     for cond in leaves:
         if not cond.enabled:
             continue
@@ -212,7 +213,7 @@ def _evaluate_one_scan_in_ctx(
         except Exception:  # noqa: BLE001
             values[cond.id] = None
 
-    rank_value: Optional[float] = None
+    rank_value: float | None = None
     if scan.rank_by is not None:
         try:
             rank_value = evaluate_field(scan.rank_by, ctx)
@@ -231,10 +232,10 @@ def _evaluate_one_scan_in_ctx(
 def _evaluate_one_symbol(
     scan: ScanDefinition,
     symbol: str,
-    candles: List[Candle],
+    candles: list[Candle],
     interval: str,
-    leaves: List[Condition],
-    memos: Dict[str, IndicatorMemo],
+    leaves: list[Condition],
+    memos: dict[str, IndicatorMemo],
 ) -> MatchRow:
     """Build a context for one symbol and evaluate the scan + per-leaf values."""
     if not candles:
@@ -255,13 +256,13 @@ def _evaluate_one_symbol(
 
 def run_scan_sync(
     scan: ScanDefinition,
-    candles_by_symbol: Mapping[str, List[Candle]],
+    candles_by_symbol: Mapping[str, list[Candle]],
     *,
     interval: str,
     tick_id: int,
-    history: Optional[MatchHistory] = None,
-    memos: Optional[Dict[str, IndicatorMemo]] = None,
-    timestamp: Optional[datetime] = None,
+    history: MatchHistory | None = None,
+    memos: dict[str, IndicatorMemo] | None = None,
+    timestamp: datetime | None = None,
 ) -> ScanResult:
     """Evaluate ``scan`` over every symbol synchronously. No threads.
 
@@ -308,8 +309,8 @@ def run_scan_sync(
 
 def _filter_universe(
     scan: ScanDefinition,
-    candles_by_symbol: Mapping[str, List[Candle]],
-) -> List[str]:
+    candles_by_symbol: Mapping[str, list[Candle]],
+) -> list[str]:
     """Apply ``scan.universe_filter`` to the available symbol set."""
     uf = scan.universe_filter
     available = set(candles_by_symbol.keys())
@@ -345,7 +346,7 @@ def _default_workers() -> int:
 # low without affecting close (RVOL, ATR, key-bar all care). List
 # replacement (id changes) and length growth are detected by the
 # first two fields alone. Empty lists fingerprint to all-zeros.
-_Fingerprint = Tuple[int, int, int, float, float, float, float, float]
+_Fingerprint = tuple[int, int, int, float, float, float, float, float]
 
 
 def _fingerprint(candles: Sequence[Candle]) -> _Fingerprint:
@@ -414,9 +415,9 @@ class ScanRunner:
 
     def __init__(
         self,
-        max_workers: Optional[int] = None,
+        max_workers: int | None = None,
         *,
-        bars_registry: Optional[Any] = None,
+        bars_registry: Any | None = None,
     ) -> None:
         """Construct a runner.
 
@@ -434,15 +435,15 @@ class ScanRunner:
         local-state path is used and behavior is unchanged.
         """
         self.max_workers = max_workers if max_workers is not None else _default_workers()
-        self._executor: Optional[ThreadPoolExecutor] = None
-        self._histories: Dict[str, MatchHistory] = {}
+        self._executor: ThreadPoolExecutor | None = None
+        self._histories: dict[str, MatchHistory] = {}
         # Local-state path: per-symbol cached state. Populated lazily
         # in ``_reconcile`` and reused / rebuilt per fingerprint logic.
         # Only used when ``self._bars_registry is None``; the registry
         # path leaves this dict empty.
-        self._states: Dict[str, _SymbolState] = {}
+        self._states: dict[str, _SymbolState] = {}
         self._bars_registry = bars_registry
-        self._stats: Dict[str, int] = {
+        self._stats: dict[str, int] = {
             "memo_builds":      0,
             "memo_reuses":      0,
             "buffer_rebuilds":  0,
@@ -458,7 +459,7 @@ class ScanRunner:
         # callback receives ``(scan_id, ScanResult)`` per scan that
         # produced ``new_rows`` (edge-triggered: forming-bar matches
         # never trigger). See ``subscribe`` / ``_dispatch_to_subscribers``.
-        self._subscribers: List[Callable[[str, ScanResult], None]] = []
+        self._subscribers: list[Callable[[str, ScanResult], None]] = []
 
     # -- executor lifecycle --------------------------------------------------
 
@@ -483,7 +484,7 @@ class ScanRunner:
             self._histories[scan_id] = h
         return h
 
-    def reset_history(self, scan_id: Optional[str] = None) -> None:
+    def reset_history(self, scan_id: str | None = None) -> None:
         """Clear match history for one scan, or all if ``scan_id`` is None."""
         if scan_id is None:
             self._histories.clear()
@@ -493,8 +494,8 @@ class ScanRunner:
     # -- subscriber API -----------------------------------------------------
 
     def subscribe(
-        self, callback: "Callable[[str, ScanResult], None]",
-    ) -> "Callable[[], None]":
+        self, callback: Callable[[str, ScanResult], None],
+    ) -> Callable[[], None]:
         """Register ``callback`` to be invoked on every match-producing run.
 
         The callback is invoked once per scan that produced at least one
@@ -522,7 +523,7 @@ class ScanRunner:
         return _unsub
 
     def _dispatch_to_subscribers(
-        self, results: "Dict[str, ScanResult]",
+        self, results: dict[str, ScanResult],
     ) -> None:
         """Fan out :class:`ScanResult` values to subscribers.
 
@@ -559,7 +560,7 @@ class ScanRunner:
     # Alias preserved for callers that just want to drop indicator caches.
     clear_memos = invalidate_all
 
-    def stats(self) -> Dict[str, int]:
+    def stats(self) -> dict[str, int]:
         """Shallow copy of per-symbol reconcile counters."""
         return dict(self._stats)
 
@@ -583,7 +584,7 @@ class ScanRunner:
     def _reconcile(
         self, symbol: str, candles: Sequence[Candle], interval: str,
         *, forming: bool = False,
-    ) -> Optional[EvaluationContext]:
+    ) -> EvaluationContext | None:
         """Update the cached state for ``symbol`` and return a ready context.
 
         Two modes:
@@ -730,14 +731,14 @@ class ScanRunner:
 
     def run(
         self,
-        scans: List[ScanDefinition],
-        candles_by_symbol: Mapping[str, List[Candle]],
+        scans: list[ScanDefinition],
+        candles_by_symbol: Mapping[str, list[Candle]],
         *,
         interval: str,
         tick_id: int,
-        timestamp: Optional[datetime] = None,
+        timestamp: datetime | None = None,
         last_bar_forming: bool = False,
-    ) -> Dict[str, ScanResult]:
+    ) -> dict[str, ScanResult]:
         """Evaluate every scan against the universe. Returns ``{scan_id: result}``.
 
         ``last_bar_forming`` (default False) marks this tick as a
@@ -766,17 +767,17 @@ class ScanRunner:
             return {}
         ts = timestamp or datetime.now(timezone.utc)
 
-        results: Dict[str, ScanResult] = {
+        results: dict[str, ScanResult] = {
             s.id: ScanResult(scan_id=s.id, tick_id=tick_id, timestamp=ts,
                              interval=interval)
             for s in scans
         }
         # Pre-compute per-scan leaf lists (cheap; reused across symbols).
-        leaves_by_scan: Dict[str, List[Condition]] = {
+        leaves_by_scan: dict[str, list[Condition]] = {
             s.id: s.all_conditions() for s in scans
         }
         # Pre-compute per-scan filtered universes.
-        universes_by_scan: Dict[str, List[str]] = {
+        universes_by_scan: dict[str, list[str]] = {
             s.id: _filter_universe(s, candles_by_symbol) for s in scans
         }
 
@@ -793,7 +794,7 @@ class ScanRunner:
         # will read against. In registry mode, ``candles_by_symbol`` is
         # consulted only for universe membership — the actual bars come
         # from the registry's per-(sym, interval) buffer.
-        ctx_by_symbol: Dict[str, EvaluationContext] = {}
+        ctx_by_symbol: dict[str, EvaluationContext] = {}
         for sym in universe_union:
             candles = candles_by_symbol.get(sym, [])
             if self._bars_registry is None and not candles:
@@ -803,7 +804,7 @@ class ScanRunner:
                 ctx_by_symbol[sym] = ctx
 
         # Per-symbol membership in each scan (cheap precompute).
-        scans_for_symbol: Dict[str, List[ScanDefinition]] = {sym: [] for sym in universe_union}
+        scans_for_symbol: dict[str, list[ScanDefinition]] = {sym: [] for sym in universe_union}
         for scan in scans:
             for sym in universes_by_scan[scan.id]:
                 scans_for_symbol[sym].append(scan)
@@ -812,10 +813,10 @@ class ScanRunner:
         # shared context, return ``{scan_id: MatchRow}``.
         def _evaluate_symbol(
             sym: str,
-            ctx: Optional[EvaluationContext],
-            wanted_scans: List[ScanDefinition],
-        ) -> Dict[str, MatchRow]:
-            out: Dict[str, MatchRow] = {}
+            ctx: EvaluationContext | None,
+            wanted_scans: list[ScanDefinition],
+        ) -> dict[str, MatchRow]:
+            out: dict[str, MatchRow] = {}
             for scan in wanted_scans:
                 if ctx is None:
                     out[scan.id] = _empty_row(sym)

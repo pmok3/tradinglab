@@ -74,7 +74,7 @@ Output
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, List
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -126,7 +126,7 @@ def _empty_result(n: int) -> KeyBarArrays:
     )
 
 
-def _baselines_intraday(candles: List["Candle"]) -> "tuple[np.ndarray, np.ndarray]":
+def _baselines_intraday(candles: list[Candle]) -> tuple[np.ndarray, np.ndarray]:
     """Return (atr_tod_array, rvol_tod_array) for an intraday candle list."""
     # Imported lazily to avoid an import cycle at module load.
     from ..indicators.atr import ATR
@@ -141,7 +141,7 @@ def _baselines_intraday(candles: List["Candle"]) -> "tuple[np.ndarray, np.ndarra
 
 def _baselines_non_intraday(
     highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, vols: np.ndarray,
-) -> "tuple[np.ndarray, np.ndarray]":
+) -> tuple[np.ndarray, np.ndarray]:
     """Daily/weekly/monthly fallback: plain rolling 20-bar means.
 
     * baseline TR = mean of TR over the last L bars (inclusive of i).
@@ -169,7 +169,7 @@ def _baselines_non_intraday(
     return atr_arr, rvol_arr
 
 
-def compute_key_bar_arrays(candles: List["Candle"]) -> KeyBarArrays:
+def compute_key_bar_arrays(candles: list[Candle]) -> KeyBarArrays:
     """Compute the full per-bar key-bar derivation set.
 
     Pure function over a candle list. Safe to call from worker threads.
@@ -223,7 +223,7 @@ def _is_intraday_np(timestamps: np.ndarray, session: np.ndarray) -> bool:
     if n < 2:
         return False
     deltas: list[float] = []
-    prev_dt: "np.datetime64 | None" = None
+    prev_dt: np.datetime64 | None = None
     for i in range(n):
         sess_i = session[i]
         if sess_i == "gap":
@@ -243,7 +243,7 @@ def _is_intraday_np(timestamps: np.ndarray, session: np.ndarray) -> bool:
     return median < 23 * 3600
 
 
-def _bars_np_to_candles(b: "Any") -> List["Candle"]:
+def _bars_np_to_candles(b: Any) -> list[Candle]:
     """Reconstruct a ``List[Candle]`` from a :class:`BarsNp` snapshot.
 
     Only invoked on the intraday branch of :func:`compute_key_bar_arrays_np`
@@ -258,7 +258,7 @@ def _bars_np_to_candles(b: "Any") -> List["Candle"]:
         return []
     ts = b.timestamps.astype("datetime64[us]").astype(object)
     sess = b.session
-    out: List[_Candle] = []
+    out: list[_Candle] = []
     for i in range(n):
         out.append(_Candle(
             date=ts[i],
@@ -349,7 +349,7 @@ def _kb_kernel(
     )
 
 
-def compute_key_bar_arrays_np(b: "Any") -> KeyBarArrays:
+def compute_key_bar_arrays_np(b: Any) -> KeyBarArrays:
     """BarsNp-native key-bar derivation (avoids candle round-trip on daily+).
 
     *b* is duck-typed against :class:`tradinglab.scanner.fields.BarsNp`

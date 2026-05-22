@@ -35,7 +35,6 @@ from __future__ import annotations
 import threading
 import tkinter as tk
 from tkinter import ttk
-from typing import Dict, List, Optional, Tuple
 
 from ..data import DATA_SOURCES
 from ..watchlists import (
@@ -60,7 +59,7 @@ _ADD_TAB_LABEL = "+"
 _EMPTY_TAB_LABEL = "(no pins)"
 _RESERVED_WATCHLIST_NAMES = {_ADD_TAB_LABEL, _EMPTY_TAB_LABEL}
 
-_WL_COLUMNS: Tuple[Tuple[str, int, str], ...] = (
+_WL_COLUMNS: tuple[tuple[str, int, str], ...] = (
     ("ticker", 80, "w"), ("last", 80, "center"),
     ("change", 80, "center"), ("change_pct", 70, "center"),
     # "Next Earn" surfaces the nearest forward earnings date from
@@ -168,12 +167,12 @@ class WatchlistTabMixin:
         sub = ttk.Notebook(container)
         sub.pack(fill=tk.BOTH, expand=True)
         self._watchlist_subnotebook = sub
-        self._watchlist_sub_frames: Dict[str, ttk.Frame] = {}
-        self._watchlist_trees: Dict[str, ttk.Treeview] = {}
-        self._watchlist_sort_by_name: Dict[
-            str, Tuple[Optional[str], bool]] = {}
+        self._watchlist_sub_frames: dict[str, ttk.Frame] = {}
+        self._watchlist_trees: dict[str, ttk.Treeview] = {}
+        self._watchlist_sort_by_name: dict[
+            str, tuple[str | None, bool]] = {}
         # Placeholder frame for the empty-pin state.
-        self._watchlist_empty_frame: Optional[ttk.Frame] = None
+        self._watchlist_empty_frame: ttk.Frame | None = None
         sub.bind("<<NotebookTabChanged>>",
                  self._on_watchlist_subtab_changed)
         sub.bind("<Button-3>", self._on_watchlist_subtab_right_click)
@@ -190,7 +189,7 @@ class WatchlistTabMixin:
         if sub is None:
             return
         mgr = getattr(self, "_watchlists", None)
-        pinned: List[str] = mgr.pinned_names() if mgr is not None else []
+        pinned: list[str] = mgr.pinned_names() if mgr is not None else []
 
         current = ""
         try:
@@ -488,8 +487,8 @@ class WatchlistTabMixin:
             self._adding_watchlist = False
 
     def _prompt_pick_unpinned_watchlist(
-        self, names: List[str]
-    ) -> Optional[str]:
+        self, names: list[str]
+    ) -> str | None:
         """Modal listbox picker. Returns the selected name or None.
 
         Exposed as its own method so smoke tests can stub it out.
@@ -519,7 +518,7 @@ class WatchlistTabMixin:
         lb.selection_set(0)
         lb.pack(padx=12, pady=4, fill="both", expand=True)
 
-        result: Dict[str, Optional[str]] = {"name": None}
+        result: dict[str, str | None] = {"name": None}
 
         def _ok(_event=None):
             sel = lb.curselection()
@@ -701,7 +700,7 @@ class WatchlistTabMixin:
         return (True, 0.0)
 
     # ---- repaint ------------------------------------------------------
-    def _populate_watchlist_tab(self, name: Optional[str] = None) -> None:
+    def _populate_watchlist_tab(self, name: str | None = None) -> None:
         """Repaint the Treeview for pinned watchlist ``name`` (or the
         currently-selected sub-tab when ``name`` is ``None``).
 
@@ -813,7 +812,7 @@ class WatchlistTabMixin:
             pass
 
     # ---- ticker helpers ----------------------------------------------
-    def _watchlist_tickers(self, name: Optional[str] = None) -> List[str]:
+    def _watchlist_tickers(self, name: str | None = None) -> list[str]:
         """Return ticker list for pinned watchlist ``name`` (current
         sub-tab when ``name`` is ``None``).
         """
@@ -835,7 +834,7 @@ class WatchlistTabMixin:
         except Exception:  # noqa: BLE001
             return []
 
-    def _pinned_ticker_union(self) -> List[str]:
+    def _pinned_ticker_union(self) -> list[str]:
         """Return deduped union of tickers across all pinned watchlists.
 
         Used by the preload pipeline so a ticker shared by several
@@ -844,7 +843,7 @@ class WatchlistTabMixin:
         mgr = getattr(self, "_watchlists", None)
         if mgr is None:
             return []
-        seen: List[str] = []
+        seen: list[str] = []
         dedup: set = set()
         for name in mgr.pinned_names():
             wl = mgr.get(name)
@@ -857,7 +856,7 @@ class WatchlistTabMixin:
         return seen
 
     # ---- event handlers ----------------------------------------------
-    def _ensure_active_watchlist_for_cycle(self) -> Optional[str]:
+    def _ensure_active_watchlist_for_cycle(self) -> str | None:
         """Guarantee a non-empty active pinned watchlist for Space-cycle.
 
         Returns the name of the watchlist whose tickers should be used,
@@ -1155,7 +1154,7 @@ class WatchlistTabMixin:
             except Exception:  # noqa: BLE001
                 pass
 
-    def _sandbox_watchlist_clock(self) -> Tuple[bool, Optional[int], Optional[object]]:
+    def _sandbox_watchlist_clock(self) -> tuple[bool, int | None, object | None]:
         """Return ``(sandbox_active, clock_ts, session_date)``.
 
         Watchlist preloads use this to slice fetched series to the
@@ -1357,8 +1356,8 @@ class WatchlistTabMixin:
                 pass
 
     def _preload_one_last(self, ticker: str,
-                          src: Optional[str] = None,
-                          itv: Optional[str] = None) -> None:
+                          src: str | None = None,
+                          itv: str | None = None) -> None:
         try:
             # Resolve src/itv on the main thread when not provided by
             # the caller. Workers that hit this branch may deadlock on
@@ -1381,7 +1380,7 @@ class WatchlistTabMixin:
                 # so Last reflects the historical moment, not today's
                 # live close (look-ahead bias).
                 sb_active, sb_ts, _sb_date = self._sandbox_watchlist_clock()
-                last_close: Optional[float] = None
+                last_close: float | None = None
                 if sb_active and sb_ts is not None:
                     for c in cs:
                         try:
@@ -1432,7 +1431,7 @@ class WatchlistTabMixin:
                 pass
 
     def _preload_one_daily(self, ticker: str,
-                           src: Optional[str] = None) -> None:
+                           src: str | None = None) -> None:
         try:
             if src is None:
                 try:
@@ -1569,7 +1568,7 @@ class WatchlistTabMixin:
                 <= minutes
                 < self._WATCHLIST_POLL_RTH_CLOSE_MIN)
 
-    def _watchlist_poll_effective_delay_ms(self) -> Optional[int]:
+    def _watchlist_poll_effective_delay_ms(self) -> int | None:
         """Resolve the next poll-tick delay in milliseconds.
 
         Returns ``None`` when polling is disabled

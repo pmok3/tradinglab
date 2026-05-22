@@ -23,7 +23,6 @@ import pytest
 
 from tradinglab import paths
 
-
 _ENV_VARS = (
     "TRADINGLAB_DATA_DIR",
     "TRADINGLAB_CACHE_DIR",

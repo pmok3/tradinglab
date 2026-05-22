@@ -48,9 +48,10 @@ from __future__ import annotations
 
 import logging
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 from dataclasses import field as dc_field
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any
 
 import numpy as np
 
@@ -87,7 +88,6 @@ from .model import (
     OP_OUTSIDE_BAR,
     OP_WITHIN_PCT,
     WITHIN_LAST_MODE_ALL,
-    WITHIN_LAST_MODE_ANY,
     WITHIN_LAST_MODE_EXACTLY,
     Condition,
     FieldRef,
@@ -105,7 +105,7 @@ LOG = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def _freeze_params(p: Mapping[str, Any]) -> Tuple[Tuple[str, Any], ...]:
+def _freeze_params(p: Mapping[str, Any]) -> tuple[tuple[str, Any], ...]:
     """Hashable, deterministic key for an indicator's params dict."""
     return tuple(sorted((str(k), v) for k, v in (p or {}).items()))
 
@@ -142,23 +142,23 @@ class IndicatorMemo:
     recompute via :meth:`get` on the next access.
     """
 
-    candles: List[Candle]
-    cache: Dict[Tuple[str, Tuple[Tuple[str, Any], ...]], Dict[str, np.ndarray]] = (
+    candles: list[Candle]
+    cache: dict[tuple[str, tuple[tuple[str, Any], ...]], dict[str, np.ndarray]] = (
         dc_field(default_factory=dict)
     )
-    errors: Dict[str, str] = dc_field(default_factory=dict)
+    errors: dict[str, str] = dc_field(default_factory=dict)
     # Lazy ``Bars`` view shared across all indicators on this symbol.
     # Built once on first ``get`` call so N indicators share one column
     # extraction. Stays ``None`` if no indicator is ever requested.
-    _bars: Optional[Any] = dc_field(default=None, repr=False)
+    _bars: Any | None = dc_field(default=None, repr=False)
     # Retained instances (one per cache key) so incremental advance
     # can call back into them across ticks.
-    _instances: Dict[Tuple[str, Tuple[Tuple[str, Any], ...]], Any] = dc_field(
+    _instances: dict[tuple[str, tuple[tuple[str, Any], ...]], Any] = dc_field(
         default_factory=dict, repr=False,
     )
     # Per-key incremental state. Populated by ``get`` for indicators
     # that implement ``inc_init``; advanced by :meth:`advance_for_append`.
-    _inc_states: Dict[Tuple[str, Tuple[Tuple[str, Any], ...]], Dict[str, Any]] = dc_field(
+    _inc_states: dict[tuple[str, tuple[tuple[str, Any], ...]], dict[str, Any]] = dc_field(
         default_factory=dict, repr=False,
     )
 
@@ -168,7 +168,7 @@ class IndicatorMemo:
             self._bars = Bars.from_candles(self.candles)
         return self._bars
 
-    def get(self, kind_id: str, params: Mapping[str, Any]) -> Dict[str, np.ndarray]:
+    def get(self, kind_id: str, params: Mapping[str, Any]) -> dict[str, np.ndarray]:
         key = (kind_id, _freeze_params(params))
         cached = self.cache.get(key)
         if cached is not None:
@@ -212,7 +212,7 @@ class IndicatorMemo:
         new_bars: Any,
         *,
         prev_len: int,
-        stats_sink: Optional[Dict[str, int]] = None,
+        stats_sink: dict[str, int] | None = None,
     ) -> None:
         """Advance every cached indicator by ``len(new_bars) - prev_len`` closed bars.
 
@@ -285,10 +285,10 @@ class EvaluationContext:
     symbol: str
     interval: str
     bars: BarsNp
-    candles: List[Candle]
+    candles: list[Candle]
     current_index: int
     memo: IndicatorMemo = dc_field(default_factory=lambda: IndicatorMemo(candles=[]))
-    bars_registry: Optional[Any] = None
+    bars_registry: Any | None = None
     # ``True`` if the bar at ``current_index`` is still forming (intra-bar
     # tick before bar close). The within-last-N-bars walk uses this to
     # skip transition operators (``crosses_above`` / ``crosses_below``)
@@ -304,7 +304,7 @@ class EvaluationContext:
     # ``within_last_bars > 0`` that evaluates True). Callers that want
     # evidence reset this list before evaluating a Scan; callers that
     # ignore evidence pay only the cost of the empty-list append guard.
-    evidence: List[MatchEvidence] = dc_field(default_factory=list)
+    evidence: list[MatchEvidence] = dc_field(default_factory=list)
 
 
 # Transition operators — gated by the forming-bar skip rule when the
@@ -316,11 +316,11 @@ _TRANSITION_OPS = frozenset({OP_CROSSES_ABOVE, OP_CROSSES_BELOW})
 def make_context(
     symbol: str,
     interval: str,
-    candles: List[Candle],
-    current_index: Optional[int] = None,
-    memo: Optional[IndicatorMemo] = None,
-    bars: Optional[BarsNp] = None,
-    bars_registry: Optional[Any] = None,
+    candles: list[Candle],
+    current_index: int | None = None,
+    memo: IndicatorMemo | None = None,
+    bars: BarsNp | None = None,
+    bars_registry: Any | None = None,
     is_forming: bool = False,
 ) -> EvaluationContext:
     """Construct a fresh context with snapshot + memo.
@@ -389,7 +389,7 @@ def make_context(
 # ---------------------------------------------------------------------------
 
 
-def _coerce_float(v: Any) -> Optional[float]:
+def _coerce_float(v: Any) -> float | None:
     """Best-effort conversion to a finite Python float; None on failure/NaN/inf."""
     if v is None:
         return None
@@ -412,7 +412,7 @@ def _is_nan_like(x: Any) -> bool:
 
 def evaluate_field_at(
     ref: FieldRef, ctx: EvaluationContext, index: int
-) -> Optional[float]:
+) -> float | None:
     """Resolve ``ref`` at the given bar index. Returns ``None`` for OOB / NaN.
 
     Cross-interval semantics: if ``ref.interval`` is non-null and
@@ -505,7 +505,7 @@ def _strip_interval(ref: FieldRef) -> FieldRef:
 
 def _sub_context_for_interval(
     ctx: EvaluationContext, interval: str
-) -> Optional[EvaluationContext]:
+) -> EvaluationContext | None:
     """Build a sibling context against the bars/memo for ``interval``.
 
     Pulls the :class:`BarsView` for ``(ctx.symbol, interval)`` from
@@ -538,7 +538,7 @@ def _sub_context_for_interval(
     return sub_ctx
 
 
-def evaluate_field(ref: FieldRef, ctx: EvaluationContext) -> Optional[float]:
+def evaluate_field(ref: FieldRef, ctx: EvaluationContext) -> float | None:
     """Resolve ``ref`` at the context's current index."""
     return evaluate_field_at(ref, ctx, ctx.current_index)
 
@@ -548,7 +548,7 @@ def evaluate_field(ref: FieldRef, ctx: EvaluationContext) -> Optional[float]:
 # ---------------------------------------------------------------------------
 
 
-def evaluate_condition(cond: Condition, ctx: EvaluationContext) -> Optional[bool]:
+def evaluate_condition(cond: Condition, ctx: EvaluationContext) -> bool | None:
     """Evaluate a single Condition. Returns True / False / None.
 
     Disabled conditions return ``None``; the parent group's filter
@@ -604,7 +604,7 @@ def _evaluate_condition_at(
     index: int,
     *,
     _in_lookback_walk: bool = False,
-) -> Optional[bool]:
+) -> bool | None:
     """Operator-dispatch body for :func:`evaluate_condition`, parametrized by index.
 
     Same semantics as the public ``evaluate_condition`` for the
@@ -684,7 +684,7 @@ def _evaluate_condition_at(
         lookback = int(p["lookback"])
         if lookback < 1 or i - lookback < 0:
             return None
-        vals: List[Optional[float]] = [
+        vals: list[float | None] = [
             evaluate_field_at(cond.left, ctx, j) for j in range(i - lookback, i + 1)
         ]
         if any(v is None for v in vals):
@@ -715,7 +715,7 @@ def _evaluate_condition_at(
         cur = evaluate_field_at(cond.left, ctx, i)
         if cur is None:
             return None
-        prior_vals: List[Optional[float]] = [
+        prior_vals: list[float | None] = [
             evaluate_field_at(cond.left, ctx, j) for j in range(i - n, i)
         ]
         if any(v is None for v in prior_vals):
@@ -771,7 +771,7 @@ def _evaluate_condition_at(
 # ---------------------------------------------------------------------------
 
 
-def evaluate_group(grp: Group, ctx: EvaluationContext) -> Optional[bool]:
+def evaluate_group(grp: Group, ctx: EvaluationContext) -> bool | None:
     """Tri-valued AND/OR over enabled children. Empty group → None.
 
     When ``grp.within_last_bars > 0``, the entire subtree is re-evaluated
@@ -795,7 +795,7 @@ def _evaluate_group_at(
     index: int,
     *,
     _in_lookback_walk: bool = False,
-) -> Optional[bool]:
+) -> bool | None:
     """Body of :func:`evaluate_group`, parametrized by bar index.
 
     Recurses into children with the same ``index`` so a Group-level
@@ -810,7 +810,7 @@ def _evaluate_group_at(
     "current" for the purpose of this evaluation), so per-Condition
     look-back composes naturally with per-Group look-back.
     """
-    results: List[Optional[bool]] = []
+    results: list[bool | None] = []
     for child in grp.children:
         if not getattr(child, "enabled", True):
             continue  # skip disabled — not the same as None
@@ -848,7 +848,7 @@ def _evaluate_child_condition_at(
     index: int,
     *,
     _in_lookback_walk: bool,
-) -> Optional[bool]:
+) -> bool | None:
     """Evaluate a Condition child of a Group at ``index``.
 
     Honors the child's own disabled / cross-interval / within-last
@@ -884,7 +884,7 @@ def _evaluate_child_group_at(
     index: int,
     *,
     _in_lookback_walk: bool,
-) -> Optional[bool]:
+) -> bool | None:
     """Evaluate a Group child of a parent Group walk at ``index``."""
     if not grp.enabled:
         return None
@@ -955,8 +955,8 @@ def _walk_lookback_condition(
     cond: Condition,
     ctx: EvaluationContext,
     *,
-    anchor_index: Optional[int] = None,
-) -> Optional[bool]:
+    anchor_index: int | None = None,
+) -> bool | None:
     """Walk the look-back window for a Condition. See module docstring.
 
     ``anchor_index`` defaults to ``ctx.current_index``; pass an
@@ -972,7 +972,7 @@ def _walk_lookback_condition(
         session_lo = find_session_open_index(ctx.bars, hi)
         lo = max(lo, session_lo)
 
-    def eval_at(j: int) -> Optional[bool]:
+    def eval_at(j: int) -> bool | None:
         return _evaluate_condition_at(cond, ctx, j, _in_lookback_walk=True)
 
     if mode == WITHIN_LAST_MODE_EXACTLY:
@@ -1018,8 +1018,8 @@ def _walk_lookback_group(
     grp: Group,
     ctx: EvaluationContext,
     *,
-    anchor_index: Optional[int] = None,
-) -> Optional[bool]:
+    anchor_index: int | None = None,
+) -> bool | None:
     """Walk the look-back window for a Group. See module docstring.
 
     Same shape as :func:`_walk_lookback_condition` but with
@@ -1034,7 +1034,7 @@ def _walk_lookback_group(
         session_lo = find_session_open_index(ctx.bars, hi)
         lo = max(lo, session_lo)
 
-    def eval_at(j: int) -> Optional[bool]:
+    def eval_at(j: int) -> bool | None:
         return _evaluate_group_at(grp, ctx, j, _in_lookback_walk=True)
 
     if mode == WITHIN_LAST_MODE_EXACTLY:
@@ -1072,7 +1072,7 @@ def _walk_lookback_group(
     return False
 
 
-def evaluate_scan(scan: ScanDefinition, ctx: EvaluationContext) -> Optional[bool]:
+def evaluate_scan(scan: ScanDefinition, ctx: EvaluationContext) -> bool | None:
     """Evaluate a full scan against one symbol/interval context."""
     return evaluate_group(scan.root, ctx)
 
@@ -1085,8 +1085,8 @@ def evaluate_scan(scan: ScanDefinition, ctx: EvaluationContext) -> Optional[bool
 def validate_scan(
     scan: ScanDefinition,
     *,
-    bars_registry: Optional[Any] = None,
-) -> List[str]:
+    bars_registry: Any | None = None,
+) -> list[str]:
     """Return a list of human-readable validation errors. Empty = OK.
 
     Walks every Condition in the tree and validates its left field plus
@@ -1103,7 +1103,7 @@ def validate_scan(
 
     Pure: doesn't touch any candles or memo.
     """
-    errs: List[str] = []
+    errs: list[str] = []
     primary = scan.primary_interval
     for cond in scan.all_conditions():
         try:

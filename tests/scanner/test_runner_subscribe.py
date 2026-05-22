@@ -8,7 +8,7 @@ from typing import List, Tuple
 
 import pytest
 
-from tradinglab.scanner.runner import ScanResult, ScanRunner, MatchRow
+from tradinglab.scanner.runner import MatchRow, ScanResult, ScanRunner
 
 
 def _result(scan_id: str, tick_id: int, *, rows=None, new_rows=None) -> ScanResult:
@@ -44,7 +44,7 @@ class TestSubscribeAPI:
     def test_dispatch_only_when_new_rows(self):
         runner = ScanRunner()
         try:
-            received: List[Tuple[str, ScanResult]] = []
+            received: list[tuple[str, ScanResult]] = []
             runner.subscribe(lambda sid, res: received.append((sid, res)))
 
             # Empty result (no new_rows) -> no dispatch.
@@ -115,7 +115,7 @@ class TestSubscribeAPI:
         (not on a worker thread)."""
         runner = ScanRunner()
         try:
-            seen_thread: List[int] = []
+            seen_thread: list[int] = []
             runner.subscribe(lambda sid, res: seen_thread.append(threading.get_ident()))
             row = _row()
             res = {"s": _result("s", 1, rows=[row], new_rows=[row])}

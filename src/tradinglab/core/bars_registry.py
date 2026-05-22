@@ -35,8 +35,9 @@ so per-key access is naturally serialised by the GUI-thread caller.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Sequence, Tuple
+from typing import Any
 
 from ..data.multi_interval_cache import MultiIntervalCache
 from ..models import Candle
@@ -48,7 +49,7 @@ from .bars_buffer import BarsBuffer
 # the registry's reuse / rebuild semantics match what the runner does
 # in its local-state path. ``(id_of_list, n, ts_ns, open, high, low,
 # close, volume)``.
-_Fingerprint = Tuple[int, int, int, float, float, float, float, float]
+_Fingerprint = tuple[int, int, int, float, float, float, float, float]
 
 
 def _fingerprint(candles: Sequence[Candle]) -> _Fingerprint:
@@ -95,11 +96,11 @@ class BarsView:
 
     bars: Bars
     memo: IndicatorMemo
-    fingerprint: Tuple[Any, ...]
+    fingerprint: tuple[Any, ...]
     buffer: BarsBuffer
 
 
-_Key = Tuple[str, str]
+_Key = tuple[str, str]
 
 
 class BarsRegistry:
@@ -132,9 +133,9 @@ class BarsRegistry:
         :meth:`MultiIntervalCache.set_bars`.
         """
         self._cache: MultiIntervalCache = multi_interval_cache
-        self._memos: Dict[_Key, IndicatorMemo] = {}
-        self._fingerprints: Dict[_Key, _Fingerprint] = {}
-        self._stats: Dict[str, int] = {
+        self._memos: dict[_Key, IndicatorMemo] = {}
+        self._fingerprints: dict[_Key, _Fingerprint] = {}
+        self._stats: dict[str, int] = {
             "views_built": 0,
             "memos_reused": 0,
             "memos_rebuilt": 0,
@@ -142,7 +143,7 @@ class BarsRegistry:
 
     # ------------------------------------------------------------------ public
 
-    def get_view(self, symbol: str, interval: str) -> Optional[BarsView]:
+    def get_view(self, symbol: str, interval: str) -> BarsView | None:
         """Return a :class:`BarsView` for ``(symbol, interval)``.
 
         Returns ``None`` if the cache has no buffer for the key yet
@@ -192,7 +193,7 @@ class BarsRegistry:
         self._stats["views_built"] += 1
         return BarsView(bars=bars, memo=memo, fingerprint=fp, buffer=buf)
 
-    def invalidate(self, symbol: str, interval: Optional[str] = None) -> None:
+    def invalidate(self, symbol: str, interval: str | None = None) -> None:
         """Drop cached memo(s) for ``symbol`` (and optionally just one interval).
 
         ``interval=None`` drops every memo for the symbol across all
@@ -221,13 +222,13 @@ class BarsRegistry:
         self._memos.clear()
         self._fingerprints.clear()
 
-    def stats(self) -> Dict[str, int]:
+    def stats(self) -> dict[str, int]:
         """Return a shallow copy of the diagnostic counters."""
         return dict(self._stats)
 
     # --------------------------------------------------------------- internals
 
-    def _cache_candles(self, symbol: str, interval: str) -> Optional[Sequence[Candle]]:
+    def _cache_candles(self, symbol: str, interval: str) -> Sequence[Candle] | None:
         """Pull the parallel candle list from the underlying cache.
 
         :class:`MultiIntervalCache` maintains a private

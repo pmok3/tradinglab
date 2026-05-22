@@ -41,10 +41,9 @@ import os
 import tempfile
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from .models import Candle
-
 
 _CACHE_SUFFIX = ".jsonl"
 
@@ -67,7 +66,7 @@ def _path_for(source: str, ticker: str, interval: str) -> Path:
     return _cache_dir() / f"{source}__{safe_ticker}__{interval}{_CACHE_SUFFIX}"
 
 
-def _candle_to_dict(c: Candle) -> Dict[str, Any]:
+def _candle_to_dict(c: Candle) -> dict[str, Any]:
     """Serialise one candle to a JSON-safe primitive dict.
 
     NaN floats (gap candles) are emitted as ``null`` so the file stays
@@ -91,7 +90,7 @@ def _candle_to_dict(c: Candle) -> Dict[str, Any]:
     }
 
 
-def _candle_from_dict(d: Dict[str, Any]) -> Optional[Candle]:
+def _candle_from_dict(d: dict[str, Any]) -> Candle | None:
     """Inverse of :func:`_candle_to_dict`. Returns ``None`` on bad shape.
 
     ``null`` price fields rehydrate to ``math.nan`` so gap candles
@@ -164,7 +163,7 @@ def is_no_persist(source: str) -> bool:
     return source in _NO_PERSIST
 
 
-def load(source: str, ticker: str, interval: str) -> Optional[List[Candle]]:
+def load(source: str, ticker: str, interval: str) -> list[Candle] | None:
     """Return cached candles or ``None`` if the file is missing/corrupt.
 
     Returns ``None`` immediately for sources marked via
@@ -181,7 +180,7 @@ def load(source: str, ticker: str, interval: str) -> Optional[List[Candle]]:
     path = _path_for(source, ticker, interval)
     if not path.exists():
         return None
-    candles: List[Candle] = []
+    candles: list[Candle] = []
     try:
         with path.open("r", encoding="utf-8") as f:
             for raw_line in f:
@@ -203,7 +202,7 @@ def load(source: str, ticker: str, interval: str) -> Optional[List[Candle]]:
     return candles if candles else None
 
 
-def save(source: str, ticker: str, interval: str, candles: List[Candle]) -> None:
+def save(source: str, ticker: str, interval: str, candles: list[Candle]) -> None:
     """Atomically persist ``candles`` keyed by (source, ticker, interval).
 
     No-op for sources marked via :func:`mark_no_persist` (BYOD); CSV
@@ -239,8 +238,8 @@ def save(source: str, ticker: str, interval: str, candles: List[Candle]) -> None
 
 
 def merge_candles(
-    old: Optional[List[Candle]], new: Optional[List[Candle]],
-) -> List[Candle]:
+    old: list[Candle] | None, new: list[Candle] | None,
+) -> list[Candle]:
     """Merge two candle lists by ``date``, newer wins on overlap.
 
     ``new`` overwrites ``old`` where their ``date`` keys overlap (so a
@@ -273,7 +272,7 @@ def merge_candles(
         return list(new)
 
 
-def list_entries() -> List[tuple[str, str, str]]:
+def list_entries() -> list[tuple[str, str, str]]:
     """List every ``(source, ticker, interval)`` tuple currently on disk.
 
     Walks the cache directory and reverse-parses each
@@ -286,7 +285,7 @@ def list_entries() -> List[tuple[str, str, str]]:
     legacy ``.pkl`` files awaiting first-launch purge) are silently
     ignored.
     """
-    out: List[tuple[str, str, str]] = []
+    out: list[tuple[str, str, str]] = []
     try:
         for entry in _cache_dir().iterdir():
             if not entry.is_file() or entry.suffix.lower() != _CACHE_SUFFIX:

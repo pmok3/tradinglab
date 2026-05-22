@@ -43,9 +43,10 @@ import contextlib
 import dataclasses
 import datetime as _dt
 import tkinter as tk
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any
 
 import numpy as _np
 
@@ -79,7 +80,7 @@ def _silent_tcl(*extra_excs: type[BaseException]):
         pass
 
 
-def _candles_match(a: List[Any], b: List[Any]) -> bool:
+def _candles_match(a: list[Any], b: list[Any]) -> bool:
     """Cheap fingerprint compare for register_ticker idempotency.
 
     Length + first/last bar timestamps + last close. Catches the
@@ -110,9 +111,9 @@ class SandboxMemento:
     legitimate failure boundary — ``_render`` during teardown — keeps
     its narrowly-scoped guard.
     """
-    primary: List[Any]
-    compare: List[Any]
-    candles: List[Any]
+    primary: list[Any]
+    compare: list[Any]
+    candles: list[Any]
     ticker: str
     compare_ticker: str
     compare_on: bool
@@ -130,7 +131,7 @@ class SandboxMemento:
     confirmed_compare_ticker: str = ""
 
     @classmethod
-    def capture(cls, app: Any) -> "SandboxMemento":
+    def capture(cls, app: Any) -> SandboxMemento:
         return cls(
             primary=list(getattr(app, "_primary", []) or []),
             compare=list(getattr(app, "_compare", []) or []),
@@ -169,15 +170,15 @@ class SandboxController(EventsControllerMixin):
     """Active-session orchestrator. One instance per :class:`ChartApp`."""
 
     app: Any
-    engine: Optional[SandboxEngine] = None
-    spec: Optional[SessionSpec] = None
+    engine: SandboxEngine | None = None
+    spec: SessionSpec | None = None
     interval: str = "5m"
-    focus_symbol: Optional[str] = None
-    full_candles_by_symbol: Dict[str, List[Any]] = field(default_factory=dict)
-    visible_candles_by_symbol: Dict[str, List[Any]] = field(default_factory=dict)
-    bars_by_symbol: Dict[str, Any] = field(default_factory=dict)
+    focus_symbol: str | None = None
+    full_candles_by_symbol: dict[str, list[Any]] = field(default_factory=dict)
+    visible_candles_by_symbol: dict[str, list[Any]] = field(default_factory=dict)
+    bars_by_symbol: dict[str, Any] = field(default_factory=dict)
     active: bool = False
-    _memento: Optional[SandboxMemento] = None
+    _memento: SandboxMemento | None = None
     _next_order_seq: int = 0
 
     # Phase 1c-redux: open-universe session metadata. ``session_date``
@@ -186,15 +187,15 @@ class SandboxController(EventsControllerMixin):
     # window the reference ticker was trimmed to. ``reference_symbol``
     # is the master-clock anchor and cannot be re-loaded mid-session
     # (the timeline is frozen at ``start_session`` time).
-    session_date: Optional[_dt.date] = None
+    session_date: _dt.date | None = None
     lookback_days: int = 1
-    reference_symbol: Optional[str] = None
+    reference_symbol: str | None = None
 
     # Phase 1c: tag store + post-trade callback + screenshot dir.
     tag_store: TagStore = field(default_factory=TagStore)
-    _post_trade_callback: Optional[Callable[[PostTradeReview], Optional[str]]] = None
-    session_id: Optional[str] = None
-    screenshot_dir: Optional[Path] = None
+    _post_trade_callback: Callable[[PostTradeReview], str | None] | None = None
+    session_id: str | None = None
+    screenshot_dir: Path | None = None
     _post_trade_count_seen: int = 0
 
     # Phase 1d: extended-hours filter + blind / auto-cycle. When
@@ -210,15 +211,15 @@ class SandboxController(EventsControllerMixin):
     include_extended: bool = False
     auto_cycle: bool = False
     blind: bool = False
-    _eligible_dates: List[_dt.date] = field(default_factory=list)
+    _eligible_dates: list[_dt.date] = field(default_factory=list)
     _cycle_index: int = 0
-    _raw_full_candles: Dict[str, List[Any]] = field(default_factory=dict)
-    _archived_fills: List[Any] = field(default_factory=list)
-    _archived_pre_trades: List[PreTradeEntry] = field(default_factory=list)
-    _archived_post_trades: List[PostTradeReview] = field(default_factory=list)
-    _archived_equity: List[Any] = field(default_factory=list)
-    _archived_cash_adjustments: List[Any] = field(default_factory=list)
-    _archived_quantity_adjustments: List[Any] = field(default_factory=list)
+    _raw_full_candles: dict[str, list[Any]] = field(default_factory=dict)
+    _archived_fills: list[Any] = field(default_factory=list)
+    _archived_pre_trades: list[PreTradeEntry] = field(default_factory=list)
+    _archived_post_trades: list[PostTradeReview] = field(default_factory=list)
+    _archived_equity: list[Any] = field(default_factory=list)
+    _archived_cash_adjustments: list[Any] = field(default_factory=list)
+    _archived_quantity_adjustments: list[Any] = field(default_factory=list)
 
     # Phase 1d-multitf: daily-context series for higher-timeframe
     # display while the master clock ticks intraday. ``daily_full_by_symbol``
@@ -231,8 +232,8 @@ class SandboxController(EventsControllerMixin):
     # rendered* interval (None = sandbox.interval, intraday); set by
     # the chart layer when the user toggles to ``"1d"``.
     daily_lookback_bars: int = 100
-    display_interval: Optional[str] = None
-    daily_full_by_symbol: Dict[str, List[Any]] = field(default_factory=dict)
+    display_interval: str | None = None
+    daily_full_by_symbol: dict[str, list[Any]] = field(default_factory=dict)
     # Phase 1d-multitf-2: user-selected intraday display intervals
     # (smallest = primary tick interval, others are aggregated from
     # primary on the fly). Always contains ``self.interval`` as the
@@ -240,12 +241,12 @@ class SandboxController(EventsControllerMixin):
     # multiple of ``self.interval`` (validated at start_session). The
     # toolbar interval combobox is restricted to this list (+ "1d"
     # if daily context is registered) while the session is active.
-    display_intervals: Tuple[str, ...] = ()
+    display_intervals: tuple[str, ...] = ()
     # Cached "session date of clock.now_ts" at the start of the most
     # recent next_bar; updated each tick. Used by the chart layer to
     # detect when the daily-context series should be re-installed
     # because the master clock crossed midnight.
-    _last_clock_session_date: Optional[_dt.date] = None
+    _last_clock_session_date: _dt.date | None = None
 
     # Events feature: per-symbol raw event bundles fetched at session
     # start / register_ticker time. Stored as opaque ``Any`` because
@@ -254,7 +255,7 @@ class SandboxController(EventsControllerMixin):
     # :func:`tradinglab.events.gating.events_visible_for`. Empty
     # by default; populated by the app's events-prefetch path which
     # writes via :meth:`set_event_bundle`.
-    _raw_full_events: Dict[str, Any] = field(default_factory=dict)
+    _raw_full_events: dict[str, Any] = field(default_factory=dict)
     _events_fetch_token: int = 0
 
     # M5 (ChartStack lockstep): per-tick subscribers fired
@@ -266,7 +267,7 @@ class SandboxController(EventsControllerMixin):
     # read the controller's :attr:`visible_candles_by_symbol` map
     # directly. Returns a ``release()`` callable for clean
     # unregistration; cleared on ``end_session``.
-    _card_subscribers: List[Callable[[], None]] = field(default_factory=list)
+    _card_subscribers: list[Callable[[], None]] = field(default_factory=list)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -323,7 +324,7 @@ class SandboxController(EventsControllerMixin):
 
     def set_post_trade_callback(
         self,
-        cb: Optional[Callable[[PostTradeReview], Optional[str]]],
+        cb: Callable[[PostTradeReview], str | None] | None,
     ) -> None:
         """Register (or clear) the callback that gathers the user's
         post-trade review text.
@@ -345,16 +346,16 @@ class SandboxController(EventsControllerMixin):
         session_date: _dt.date,
         interval: str,
         reference_symbol: str,
-        reference_candles: List[Any],
+        reference_candles: list[Any],
         lookback_days: int = 1,
-        screenshot_dir: Optional[Path] = None,
+        screenshot_dir: Path | None = None,
         include_extended: bool = False,
         auto_cycle: bool = False,
         blind: bool = False,
-        eligible_dates: Optional[List[_dt.date]] = None,
+        eligible_dates: list[_dt.date] | None = None,
         daily_lookback_bars: int = 100,
-        daily_reference_candles: Optional[List[Any]] = None,
-        display_intervals: Optional[Sequence[str]] = None,
+        daily_reference_candles: list[Any] | None = None,
+        display_intervals: Sequence[str] | None = None,
     ) -> None:
         """Begin a sandbox session anchored on a single reference ticker.
 
@@ -399,9 +400,9 @@ class SandboxController(EventsControllerMixin):
         # entry must be an integer multiple of primary so aggregation
         # is well-defined.
         if display_intervals is None:
-            canonical_intervals: Tuple[str, ...] = (interval,)
+            canonical_intervals: tuple[str, ...] = (interval,)
         else:
-            seen: List[str] = []
+            seen: list[str] = []
             for itv in display_intervals:
                 if itv not in seen:
                     seen.append(itv)
@@ -570,8 +571,8 @@ class SandboxController(EventsControllerMixin):
     def register_ticker(
         self,
         symbol: str,
-        candles: List[Any],
-    ) -> List[Any]:
+        candles: list[Any],
+    ) -> list[Any]:
         """Add ``symbol`` to the active session at the current clock.
 
         Returns the per-symbol *visible* candle list — callers install
@@ -632,7 +633,7 @@ class SandboxController(EventsControllerMixin):
         self.engine.register_bars(symbol, bars)
         self.full_candles_by_symbol[symbol] = list(trimmed)
         self.bars_by_symbol[symbol] = bars
-        visible: List[Any] = []
+        visible: list[Any] = []
         self.visible_candles_by_symbol[symbol] = visible
         # Catch up: append every full-list entry whose ts is <= now_ts.
         self._sync_visible_for_symbol(symbol)
@@ -645,7 +646,7 @@ class SandboxController(EventsControllerMixin):
             pass
         return visible
 
-    def end_session(self) -> Optional[SessionResult]:
+    def end_session(self) -> SessionResult | None:
         """Tear down. Returns final SessionResult or None if not active.
 
         In auto-cycle mode the returned result merges all archived
@@ -678,7 +679,7 @@ class SandboxController(EventsControllerMixin):
             pass
         return result
 
-    def result(self) -> Optional[SessionResult]:
+    def result(self) -> SessionResult | None:
         """Merged SessionResult covering every cycle (and the current).
 
         Single-cycle sessions return the engine's own result unchanged
@@ -736,11 +737,11 @@ class SandboxController(EventsControllerMixin):
 
         # 1) Auto-flatten open positions at the last bar's close.
         last_ts = int(self.engine.clock.now_ts)
-        last_close_by_symbol: Dict[str, float] = {}
+        last_close_by_symbol: dict[str, float] = {}
         for sym, bs in self.bars_by_symbol.items():
             if len(bs.close) > 0:
                 last_close_by_symbol[sym] = float(bs.close[-1])
-        flattens = self.engine.flatten_all_at_close(
+        self.engine.flatten_all_at_close(
             last_bar_ts=last_ts,
             prices=last_close_by_symbol,
         )
@@ -1078,7 +1079,7 @@ class SandboxController(EventsControllerMixin):
             with _silent_tcl():
                 panel.refresh()
 
-    def aggregated_visible_for(self, symbol: str, target_interval: str) -> List[Any]:
+    def aggregated_visible_for(self, symbol: str, target_interval: str) -> list[Any]:
         """Aggregate the visible primary candles for ``symbol`` to ``target_interval``.
 
         Used by the multi-interval display path. ``target_interval``
@@ -1226,7 +1227,7 @@ class SandboxController(EventsControllerMixin):
         symbol: str,
         side: str,
         quantity: float,
-        pre_trade_data: Dict[str, Any],
+        pre_trade_data: dict[str, Any],
     ) -> str:
         """Queue an order with a mandatory pre-trade journal entry.
 
@@ -1293,10 +1294,10 @@ class SandboxController(EventsControllerMixin):
     # Inspection helpers (for the SandboxPanel / smoke)
     # ------------------------------------------------------------------
 
-    def positions_snapshot(self) -> List[Dict[str, Any]]:
+    def positions_snapshot(self) -> list[dict[str, Any]]:
         if self.engine is None:
             return []
-        out: List[Dict[str, Any]] = []
+        out: list[dict[str, Any]] = []
         for sym, pos in self.engine.portfolio.positions.items():
             if pos.quantity == 0.0:
                 continue
@@ -1313,12 +1314,12 @@ class SandboxController(EventsControllerMixin):
             return 0.0
         return float(self.engine.portfolio.cash)
 
-    def clock_ts(self) -> Optional[int]:
+    def clock_ts(self) -> int | None:
         if self.engine is None or self.engine.clock.index < 0:
             return None
         return int(self.engine.clock.now_ts)
 
-    def tickers(self) -> List[str]:
+    def tickers(self) -> list[str]:
         return list(self.full_candles_by_symbol.keys())
 
     # ------------------------------------------------------------------
@@ -1328,7 +1329,7 @@ class SandboxController(EventsControllerMixin):
     def register_daily_for(
         self,
         symbol: str,
-        daily_candles: List[Any],
+        daily_candles: list[Any],
     ) -> None:
         """Lazy-attach a per-symbol raw daily series for 1d-context display.
 
@@ -1341,7 +1342,7 @@ class SandboxController(EventsControllerMixin):
             return
         self.daily_full_by_symbol[symbol] = list(daily_candles)
 
-    def current_session_date(self) -> Optional[_dt.date]:
+    def current_session_date(self) -> _dt.date | None:
         """Return the *date* of the master clock's current bar (UTC).
 
         Used to gate which daily bars are visible: bars with a
@@ -1355,7 +1356,7 @@ class SandboxController(EventsControllerMixin):
         return _dt.datetime.fromtimestamp(
             int(ts), tz=_dt.timezone.utc).date()
 
-    def daily_visible_for(self, symbol: str) -> List[Any]:
+    def daily_visible_for(self, symbol: str) -> list[Any]:
         """Return the daily-bar slice for ``symbol`` visible at the
         current master-clock time.
 
@@ -1376,7 +1377,7 @@ class SandboxController(EventsControllerMixin):
         cur = self.current_session_date()
         if cur is None:
             return []
-        out: List[Any] = []
+        out: list[Any] = []
         for c in full:
             d = getattr(c, "date", None)
             if d is None:
@@ -1532,7 +1533,7 @@ class SandboxController(EventsControllerMixin):
             self._capture_screenshot(f"{ref_id}_post.png")
         self._post_trade_count_seen = len(all_post)
 
-    def _capture_screenshot(self, filename: str) -> Optional[Path]:
+    def _capture_screenshot(self, filename: str) -> Path | None:
         """Save the current chart figure to ``screenshot_dir / filename``.
 
         No-op if no screenshot dir was configured (smoke / headless).

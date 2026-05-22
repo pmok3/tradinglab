@@ -32,7 +32,6 @@ from tradinglab.drawings import DrawingStore, make_hline_drawing
 from tradinglab.gui.interaction import InteractionMixin
 from tradinglab.models import Candle
 
-
 # ---------------------------------------------------------------------------
 # Harness
 # ---------------------------------------------------------------------------
@@ -112,11 +111,11 @@ class _FakeAxes:
 
 @dataclass(eq=False)
 class _FakeEvent:
-    inaxes: Optional[_FakeAxes] = None
-    x: Optional[float] = None
-    y: Optional[float] = None
-    xdata: Optional[float] = None
-    ydata: Optional[float] = None
+    inaxes: _FakeAxes | None = None
+    x: float | None = None
+    y: float | None = None
+    xdata: float | None = None
+    ydata: float | None = None
     button: int = 1
     dblclick: bool = False
     key: str = ""
@@ -222,7 +221,7 @@ class _InteractionHarness:
     def __init__(self, *,
                  ticker: str = "AAPL",
                  interval: str = "5m",
-                 drawings: Optional[DrawingStore] = None,
+                 drawings: DrawingStore | None = None,
                  candles=None) -> None:
         self._canvas = _FakeCanvas()
         self._drawings = drawings if drawings is not None else \

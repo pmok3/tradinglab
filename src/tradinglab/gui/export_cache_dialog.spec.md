@@ -3,11 +3,11 @@
 ## Purpose
 The dialog opened by **Tools → Export Bars to CSV…**. Enumerates every
 `(source, ticker, interval)` tuple currently in the disk cache and
-writes the user's selected subset to `<destination>/<SOURCE>/<TICKER>_<INTERVAL>.csv`
-in the strict canonical schema. Symmetric companion to
-`gui/local_data_dialog.py` — the destination folder can be dropped
-straight into Configure Local Data to load back the same bars on
-another machine.
+writes the user's selected subset to a single zip archive
+(`<SOURCE>/<TICKER>_<INTERVAL>.csv` as arcname) in the strict canonical
+schema. Symmetric companion to `gui/local_data_dialog.py` — unzip the
+archive and drop the resulting folder into Configure Local Data to
+load back the same bars on another machine. Audit `local-export-zip`.
 
 ## Public API
 - `ExportCacheDialog(parent)` — Toplevel dialog modal to `parent`.
@@ -25,7 +25,8 @@ another machine.
 
 ## Dependencies
 - Internal: `tradinglab.disk_cache.list_entries`, `tradinglab.disk_cache.load`,
-  `tradinglab.data.local_export.export_entries`,
+  `tradinglab.data.local_export.export_entries_zip`,
+  `tradinglab.data.local_export.default_zip_filename`,
   `._modal_keys.bind_modal_keys`, `.colors.MUTED_GREY`.
 - External: `tkinter`, `tkinter.ttk`, `tkinter.filedialog`,
   `tkinter.messagebox`.

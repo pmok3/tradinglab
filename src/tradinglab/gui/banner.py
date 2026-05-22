@@ -53,7 +53,6 @@ from __future__ import annotations
 import tkinter as tk
 from pathlib import Path
 from tkinter import ttk
-from typing import Optional
 
 _SENTINEL_FILENAME = ".first_run_dismissed"
 
@@ -117,7 +116,7 @@ class FirstRunBannerMixin:
 
     # Slot for the banner widget so ``_dismiss_first_run_banner`` can
     # destroy it. Set to ``None`` once the user has dismissed.
-    _first_run_banner: Optional[ttk.Frame] = None
+    _first_run_banner: ttk.Frame | None = None
     # IntVar bound to the "Don't show again" checkbox; created in
     # ``_build_first_run_banner``. Default value 0 (unchecked) so a
     # user who hits the close button doesn't accidentally silence the
@@ -127,9 +126,9 @@ class FirstRunBannerMixin:
     # ``_dismiss_first_run_banner`` directly); the dismiss handler
     # then defaults to the legacy "always persist" behavior so
     # existing stubs keep working.
-    _banner_dont_show_var: Optional[tk.IntVar] = None
+    _banner_dont_show_var: tk.IntVar | None = None
 
-    def _maybe_show_first_run_banner(self, parent: Optional[tk.Misc] = None) -> None:
+    def _maybe_show_first_run_banner(self, parent: tk.Misc | None = None) -> None:
         """Display the banner if this is a first launch.
 
         Args:
@@ -143,7 +142,7 @@ class FirstRunBannerMixin:
         self._build_first_run_banner(target)  # type: ignore[arg-type]
 
     def _force_show_first_run_banner(self,
-                                     parent: Optional[tk.Misc] = None) -> None:
+                                     parent: tk.Misc | None = None) -> None:
         """Re-show the banner regardless of the sentinel (Help menu hook)."""
         clear_dismissal_sentinel()
         if self._first_run_banner is not None:

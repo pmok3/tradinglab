@@ -23,7 +23,6 @@ from tradinglab.exits.spec import Bar
 from tradinglab.positions.model import Position
 from tradinglab.positions.tracker import PositionTracker
 
-
 # ---------------------------------------------------------------------------
 # Minimal recording sink (mirrors test_evaluator.py)
 # ---------------------------------------------------------------------------
@@ -31,9 +30,9 @@ from tradinglab.positions.tracker import PositionTracker
 
 class _RecordingSink:
     def __init__(self) -> None:
-        self.submitted: List[ExitSignal] = []
+        self.submitted: list[ExitSignal] = []
         self._next = 0
-        self._working: Dict[str, str] = {}
+        self._working: dict[str, str] = {}
 
     def submit(self, signal: ExitSignal) -> str:
         oid = f"order-{self._next}"
@@ -56,7 +55,7 @@ class _RecordingSink:
                 n += 1
         return n
 
-    def working_order_ids_for_position(self, position_id: str) -> List[str]:
+    def working_order_ids_for_position(self, position_id: str) -> list[str]:
         return [oid for oid, pid in self._working.items() if pid == position_id]
 
 
@@ -106,7 +105,7 @@ def _open_short(tracker: PositionTracker, *, qty: float = 100.0, price: float = 
     return tracker.open(symbol="X", side="short", qty=qty, price=price, source="sandbox")
 
 
-def _bar(o: float, h: float, l: float, c: float, *, ts: Optional[datetime] = None) -> Bar:
+def _bar(o: float, h: float, l: float, c: float, *, ts: datetime | None = None) -> Bar:
     return Bar(open=o, high=h, low=l, close=c, volume=0.0, date=ts)
 
 
@@ -130,7 +129,7 @@ def _chandelier_leg(
     )
 
 
-def _strategy(legs: List[ExitLeg], oco: Optional[List[OCOGroup]] = None) -> ExitStrategy:
+def _strategy(legs: list[ExitLeg], oco: list[OCOGroup] | None = None) -> ExitStrategy:
     return ExitStrategy(name="chand", legs=legs, oco_groups=oco or [])
 
 

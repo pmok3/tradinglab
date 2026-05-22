@@ -30,14 +30,14 @@ import tradinglab.indicators  # noqa: F401  -- registers indicators
 from tradinglab.models import Candle
 from tradinglab.scanner import storage as _scan_storage
 from tradinglab.scanner.model import (
-    Condition,
-    FieldRef,
-    Group,
     OP_CROSSES_ABOVE,
     OP_GT,
     OP_HOLDING_ABOVE,
     OP_IS_RISING,
     RANK_DIR_DESC,
+    Condition,
+    FieldRef,
+    Group,
     ScanDefinition,
 )
 from tradinglab.scanner.runner import ScanRunner
@@ -49,10 +49,10 @@ def _candle(minute: int, close: float, volume: int = 1000) -> Candle:
                   low=close - 0.5, close=close, volume=volume)
 
 
-def _series(closes: List[float], volumes: List[int] | None = None
-            ) -> List[Candle]:
+def _series(closes: list[float], volumes: list[int] | None = None
+            ) -> list[Candle]:
     vols = volumes if volumes is not None else [1000] * len(closes)
-    return [_candle(i * 5, c, v) for i, (c, v) in enumerate(zip(closes, vols))]
+    return [_candle(i * 5, c, v) for i, (c, v) in enumerate(zip(closes, vols, strict=False))]
 
 
 def _build_complex_scan() -> ScanDefinition:

@@ -25,7 +25,6 @@ Public surface:
 from __future__ import annotations
 
 import datetime as _dt
-from typing import List
 
 from ..models import Candle
 
@@ -62,10 +61,10 @@ def divides_evenly(primary: str, target: str) -> bool:
 
 
 def aggregate(
-    primary_candles: List[Candle],
+    primary_candles: list[Candle],
     primary_interval: str,
     target_interval: str,
-) -> List[Candle]:
+) -> list[Candle]:
     """Aggregate ``primary_candles`` (at ``primary_interval``) up to ``target_interval``.
 
     Returns a fresh list of :class:`Candle`. Buckets are anchored on
@@ -96,7 +95,7 @@ def aggregate(
             f"{tm} not divisible by {pm}"
         )
 
-    out: List[Candle] = []
+    out: list[Candle] = []
     bucket_start: _dt.datetime | None = None
     bucket_open = bucket_high = bucket_low = bucket_close = 0.0
     bucket_vol = 0

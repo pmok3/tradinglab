@@ -12,10 +12,10 @@ import pytest
 
 from tradinglab.scanner import storage
 from tradinglab.scanner.model import (
+    OP_GT,
     Condition,
     FieldRef,
     Group,
-    OP_GT,
     ScanDefinition,
 )
 

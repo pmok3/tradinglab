@@ -26,7 +26,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Literal
 
 PositionSide = Literal["long", "short"]
 PositionSource = Literal["sandbox", "manual"]
@@ -61,8 +61,8 @@ class Position:
     low_watermark: float = 0.0   # min last_price seen since open
     last_price: float = 0.0
     bars_held: int = 0
-    strategy_id: Optional[str] = None
-    extra: Dict[str, Any] = field(default_factory=dict)
+    strategy_id: str | None = None
+    extra: dict[str, Any] = field(default_factory=dict)
 
     @property
     def is_open(self) -> bool:
@@ -85,7 +85,7 @@ class Position:
             return (self.last_price - self.avg_entry_price) * self.qty_open
         return (self.avg_entry_price - self.last_price) * self.qty_open
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "symbol": self.symbol,
@@ -105,7 +105,7 @@ class Position:
         }
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "Position":
+    def from_dict(cls, d: dict[str, Any]) -> Position:
         return cls(
             id=str(d["id"]),
             symbol=str(d["symbol"]),
@@ -134,9 +134,9 @@ class PositionEvent:
     ts: datetime
     qty: float = 0.0
     price: float = 0.0
-    meta: Dict[str, Any] = field(default_factory=dict)
+    meta: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "position_id": self.position_id,
             "kind": self.kind.value,
@@ -147,7 +147,7 @@ class PositionEvent:
         }
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "PositionEvent":
+    def from_dict(cls, d: dict[str, Any]) -> PositionEvent:
         return cls(
             position_id=str(d["position_id"]),
             kind=PositionEventKind(d["kind"]),

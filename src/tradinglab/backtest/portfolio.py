@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Dict, List, Mapping, Tuple
 
 from .orders import Fill, Side
 
@@ -23,8 +23,8 @@ class Position:
 @dataclass
 class Portfolio:
     cash: float
-    positions: Dict[str, Position] = field(default_factory=dict)
-    equity_curve: List[Tuple[int, float]] = field(default_factory=list)
+    positions: dict[str, Position] = field(default_factory=dict)
+    equity_curve: list[tuple[int, float]] = field(default_factory=list)
 
     def get_or_create(self, symbol: str) -> Position:
         pos = self.positions.get(symbol)

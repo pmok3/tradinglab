@@ -16,7 +16,6 @@ import pytest
 from tradinglab.indicators.base import LineStyle
 from tradinglab.indicators.config import IndicatorConfig, IndicatorManager
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

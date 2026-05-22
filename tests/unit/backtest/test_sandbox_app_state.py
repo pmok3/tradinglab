@@ -33,7 +33,6 @@ import pytest
 
 from tradinglab.backtest.sandbox_app import SandboxAppController
 
-
 # ---------------------------------------------------------------------------
 # Fixtures and fakes
 # ---------------------------------------------------------------------------
@@ -50,7 +49,7 @@ class _RecordingVar:
 
     def __init__(self, value: Any = "") -> None:
         self._value = value
-        self.history: List[Any] = [value]
+        self.history: list[Any] = [value]
 
     def get(self) -> Any:
         return self._value
@@ -62,7 +61,7 @@ class _RecordingVar:
 
 class _RecordingStatus:
     def __init__(self) -> None:
-        self.calls: List[tuple[str, str]] = []
+        self.calls: list[tuple[str, str]] = []
 
     def info(self, msg: str) -> None:
         self.calls.append(("info", msg))

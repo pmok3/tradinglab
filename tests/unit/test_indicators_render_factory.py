@@ -19,9 +19,7 @@ from typing import Any
 
 import pytest
 
-
 from tradinglab.indicators import render as _render
-
 
 # --- factory_by_kind_id wrapper -----------------------------------------
 

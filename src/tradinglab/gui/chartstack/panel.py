@@ -22,14 +22,15 @@ burst ticks don't pile up.
 from __future__ import annotations
 
 import tkinter as tk
+from collections.abc import Callable
 from tkinter import ttk
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import TYPE_CHECKING, Any
 
 from . import dpi as _dpi
 from . import owner_state as _owner_state
 from . import settings_adapter as _adapter
 from .alerts import AlertEngine, AlertResult, AlertTier
-from .binding import BindingMode, CardBinding, resolve_bindings
+from .binding import CardBinding, resolve_bindings
 from .card import CardWidget
 from .controller import SubscriptionRegistry
 from .render import draw_card_placeholder, draw_card_sparkline
@@ -75,7 +76,7 @@ def _bars_from_candles(candles: object, maxlen: int) -> list[Bar]:
     return out
 
 
-def _bar_from_event_bar(evt_bar: object) -> Optional[Bar]:
+def _bar_from_event_bar(evt_bar: object) -> Bar | None:
     """Adapt a single event-side bar (``Candle`` from a stream) to a ``Bar``.
 
     Returns ``None`` when fields are missing / unparseable so the
@@ -116,13 +117,13 @@ class ChartStackPanel(ttk.Frame):
         master: tk.Misc,
         *,
         owner: object | None = None,
-        geometry_store: "GeometryStore | None" = None,
+        geometry_store: GeometryStore | None = None,
     ) -> None:
         super().__init__(master)
         self.owner = owner
         self.geometry_store = geometry_store
 
-        self._on_card_promote_callback: Optional[Callable[[str], None]] = None
+        self._on_card_promote_callback: Callable[[str], None] | None = None
         self._mpl_cids: list[int] = []
         self._visible = True
 
@@ -139,7 +140,7 @@ class ChartStackPanel(ttk.Frame):
         # status-bar warning the first time the cap bit.
         cap = _dpi.card_count_cap(self)
         if n > cap:
-            self._card_count_capped_from: Optional[int] = n
+            self._card_count_capped_from: int | None = n
             n = cap
         else:
             self._card_count_capped_from = None
@@ -186,7 +187,7 @@ class ChartStackPanel(ttk.Frame):
         self._bbox_bgs: dict[int, Any] = {}
         # `after_idle` coalescer: dirty slot set + scheduled job id.
         self._dirty_slots: set[int] = set()
-        self._idle_flush_after: Optional[str] = None
+        self._idle_flush_after: str | None = None
         # Track ChartApp's `after()` jobs so we can release them on destroy.
         self._after_jobs: set[str] = set()
         # M4: per-card border tints. Maps slot_index → "#RRGGBB" or
@@ -207,8 +208,8 @@ class ChartStackPanel(ttk.Frame):
         # ``_sandbox_pre_pins`` is the snapshot taken at attach
         # time so detach can restore.
         self._sandbox: Any = None
-        self._sandbox_subscription_release: Optional[Callable[[], None]] = None
-        self._sandbox_pre_pins: Optional[list[object]] = None
+        self._sandbox_subscription_release: Callable[[], None] | None = None
+        self._sandbox_pre_pins: list[object] | None = None
 
         # M6: four-tier alert engine. One engine per panel; its
         # per-card state (PMH edge, prev unrealized P&L, tier-3
@@ -218,7 +219,7 @@ class ChartStackPanel(ttk.Frame):
         # when to update the tint vs. leave it alone.
         self._alert_engine = AlertEngine()
         self._slot_alert_tier: dict[int, AlertTier] = {}
-        self._slot_alert_badge: dict[int, Optional[str]] = {}
+        self._slot_alert_badge: dict[int, str | None] = {}
 
         # Theme palette resolved from :func:`apply_theme`. ``None``
         # until the owner cascades a theme dict in (typically
@@ -227,7 +228,7 @@ class ChartStackPanel(ttk.Frame):
         # — ``_render_card_sparkline``, ``draw_card_placeholder``
         # — can pick up the right text / facecolor without round-
         # tripping through ``apply_theme`` on every flush.
-        self._theme_palette: Optional[dict[str, str]] = None
+        self._theme_palette: dict[str, str] | None = None
 
         # Click-to-promote: hit-test mpl button-press against each Axes.
         # mpl_connect returns a CID; we stash it for clean disconnect on
@@ -266,7 +267,7 @@ class ChartStackPanel(ttk.Frame):
         ``_drain_stream_queue``).
         """
         bindings = self._resolve()
-        for card, binding in zip(self._cards, bindings):
+        for card, binding in zip(self._cards, bindings, strict=False):
             # Reset the cache when the binding changes so we don't
             # paint stale bars from the previous symbol.
             prev = card.binding.symbol if card.binding is not None else None
@@ -396,7 +397,7 @@ class ChartStackPanel(ttk.Frame):
         self._evaluate_alerts_for_slot(slot_index)
         self._schedule_idle_flush()
 
-    def set_card_tint(self, slot_index: int, color: Optional[str]) -> None:
+    def set_card_tint(self, slot_index: int, color: str | None) -> None:
         """Set or clear the per-card border tint.
 
         M4 establishes this hook; the M6 alert engine will drive it
@@ -471,7 +472,7 @@ class ChartStackPanel(ttk.Frame):
                 continue
             self._evaluate_alerts_for_slot(card.slot_index)
 
-    def _apply_alert_result(self, slot_index: int, result: "AlertResult") -> None:
+    def _apply_alert_result(self, slot_index: int, result: AlertResult) -> None:
         """Persist result + drive the tint/badge surfaces."""
         cur_tier = self._slot_alert_tier.get(slot_index, AlertTier.NONE)
         cur_badge = self._slot_alert_badge.get(slot_index)
@@ -526,7 +527,7 @@ class ChartStackPanel(ttk.Frame):
 
     def _events_context_for(
         self, symbol: str
-    ) -> tuple[Optional[int], bool]:
+    ) -> tuple[int | None, bool]:
         """Pull (days-to-next-earnings, ex-div-today) from the owner.
 
         ChartApp keeps an ``_events_cache: dict[str, EventBundle]``
@@ -927,12 +928,12 @@ class ChartStackPanel(ttk.Frame):
 
     # Public callback hook (settable; fires on click-to-promote).
     @property
-    def on_card_promote(self) -> Optional[Callable[[str], None]]:
+    def on_card_promote(self) -> Callable[[str], None] | None:
         """Callback fired when a card is promoted to the main chart."""
         return self._on_card_promote_callback
 
     @on_card_promote.setter
-    def on_card_promote(self, cb: Optional[Callable[[str], None]]) -> None:
+    def on_card_promote(self, cb: Callable[[str], None] | None) -> None:
         self._on_card_promote_callback = cb
 
     # ----------------------------------------------------------- destroy --
@@ -1056,7 +1057,7 @@ class ChartStackPanel(ttk.Frame):
         """
         return {}
 
-    def _render_card_sparkline(self, card: "CardWidget", bars: list) -> None:
+    def _render_card_sparkline(self, card: CardWidget, bars: list) -> None:
         """Render a card body as daily OHLC candlesticks.
 
         Thin wrapper over :func:`draw_card_candles` (formerly
@@ -1076,7 +1077,7 @@ class ChartStackPanel(ttk.Frame):
             kw["halted_at"] = None
         draw_card_sparkline(card.ax, bars, binding=card.binding, **kw)
 
-    def _invalidate_bbox_caches(self, slot_index: Optional[int] = None) -> None:
+    def _invalidate_bbox_caches(self, slot_index: int | None = None) -> None:
         """Drop blit backgrounds (full or single slot).
 
         Called after any operation that mutates artist layout

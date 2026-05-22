@@ -34,13 +34,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import numpy as np
-
 if TYPE_CHECKING:  # pragma: no cover — typing only
     from .fields import BarsNp
 
 
-def find_session_open_index(bars: "BarsNp", current_index: int) -> int:
+def find_session_open_index(bars: BarsNp, current_index: int) -> int:
     """Return the lowest index sharing the same UTC date as bar ``current_index``.
 
     For intraday bars: walks back through today's bars and returns the

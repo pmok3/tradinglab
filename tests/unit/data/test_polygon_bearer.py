@@ -31,7 +31,7 @@ from tradinglab.data import _http, polygon_source
 from tradinglab.data.credentials import PolygonCredentials
 
 
-def _fake_resp(payload: Dict[str, Any]) -> Any:
+def _fake_resp(payload: dict[str, Any]) -> Any:
     """Build a fake urllib response object with a ``read(n)`` method."""
     body = json.dumps(payload).encode("utf-8")
 
@@ -49,7 +49,7 @@ def _fake_resp(payload: Dict[str, Any]) -> Any:
             self._pos += len(out)
             return out
 
-        def __enter__(self) -> "_Resp":
+        def __enter__(self) -> _Resp:
             return self
 
         def __exit__(self, *_args: Any) -> None:
@@ -60,7 +60,7 @@ def _fake_resp(payload: Dict[str, Any]) -> Any:
 
 def test_url_does_not_contain_apikey_query_param() -> None:
     creds = PolygonCredentials(api_key="SECRET-KEY-12345")
-    captured: List[str] = []
+    captured: list[str] = []
 
     fake_opener = mock.MagicMock()
 
@@ -90,7 +90,7 @@ def test_url_does_not_contain_apikey_query_param() -> None:
 
 def test_bearer_header_is_set_with_api_key() -> None:
     creds = PolygonCredentials(api_key="SECRET-KEY-12345")
-    captured_headers: List[Dict[str, str]] = []
+    captured_headers: list[dict[str, str]] = []
 
     def _capture_open(req: Any, *a: Any, **kw: Any) -> Any:
         captured_headers.append(dict(req.headers))
@@ -132,14 +132,14 @@ def test_polygon_uses_credentialed_opener() -> None:
 def test_response_read_is_capped() -> None:
     """The fetcher must pass MAX_RESPONSE_BYTES to ``resp.read(n)``."""
     creds = PolygonCredentials(api_key="x")
-    read_calls: List[int] = []
+    read_calls: list[int] = []
 
     class _SpyResp:
         def read(self, n: int = -1) -> bytes:
             read_calls.append(n)
             return b'{"results": []}'
 
-        def __enter__(self) -> "_SpyResp":
+        def __enter__(self) -> _SpyResp:
             return self
 
         def __exit__(self, *_a: Any) -> None:

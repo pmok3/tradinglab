@@ -48,13 +48,13 @@ from __future__ import annotations
 import json
 import logging
 import threading
-import time
 import urllib.request
+from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any
 
-from ..models import Candle
 from ..data._http import MAX_RESPONSE_BYTES, credentialed_opener
+from ..models import Candle
 from .base import StreamCallback
 from .schwab_aggregator import (
     MinuteBarBuilder,
@@ -80,7 +80,7 @@ USER_PREFERENCE_URL = "https://api.schwabapi.com/trader/v1/userPreference"
 
 def fetch_streamer_info(  # pragma: no cover - network path
     access_token: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Return the ``streamerInfo[0]`` dict from /userPreference.
 
     Schwab's streamer URL and customer/correl IDs are *per user*, so
@@ -104,8 +104,8 @@ def fetch_streamer_info(  # pragma: no cover - network path
 
 
 def build_login_request(
-    streamer_info: Dict[str, Any], access_token: str, request_id: int = 0,
-) -> Dict[str, Any]:
+    streamer_info: dict[str, Any], access_token: str, request_id: int = 0,
+) -> dict[str, Any]:
     """Construct the LOGIN admin request for Schwab's streamer.
 
     Reference: https://developer.schwab.com/streamer-api → ADMIN.LOGIN
@@ -125,9 +125,9 @@ def build_login_request(
 
 
 def build_subs_request(
-    service: str, symbols: List[str], fields: List[str],
-    streamer_info: Dict[str, Any], request_id: int,
-) -> Dict[str, Any]:
+    service: str, symbols: list[str], fields: list[str],
+    streamer_info: dict[str, Any], request_id: int,
+) -> dict[str, Any]:
     """Construct a SUBS / ADD request for a given service.
 
     Schwab uses ``SUBS`` to replace the entire subscription set and
@@ -195,7 +195,7 @@ class SchwabStreamSource:
     """
 
     def __init__(
-        self, *, seed_lookup: Optional[Callable[[str, str], Optional[float]]] = None,
+        self, *, seed_lookup: Callable[[str, str], float | None] | None = None,
     ) -> None:
         # Optional injectable lookup that returns the most-recent
         # close from REST history for seeding new subscriptions. The
@@ -205,9 +205,9 @@ class SchwabStreamSource:
         self._seed_lookup = seed_lookup
 
         self._lock = threading.RLock()
-        self._subs: Dict[str, List[_Subscription]] = {}
+        self._subs: dict[str, list[_Subscription]] = {}
         self._symbols_subscribed: set[str] = set()
-        self._connection: Optional[_Connection] = None
+        self._connection: _Connection | None = None
 
     def subscribe(
         self, ticker: str, interval: str, on_event: StreamCallback,
@@ -285,7 +285,7 @@ class SchwabStreamSource:
 
     # --- internal: dispatchers called from the connection thread ---
 
-    def _dispatch_levelone(self, symbol: str, decoded: Dict[str, Any]) -> None:
+    def _dispatch_levelone(self, symbol: str, decoded: dict[str, Any]) -> None:
         now = datetime.now()
         with self._lock:
             subs = list(self._subs.get(symbol.upper(), ()))
@@ -300,7 +300,7 @@ class SchwabStreamSource:
             for kind, candle in events:
                 _safe_invoke(sub.callback, kind, candle)
 
-    def _dispatch_chart_equity(self, symbol: str, decoded: Dict[str, Any]) -> None:
+    def _dispatch_chart_equity(self, symbol: str, decoded: dict[str, Any]) -> None:
         candle = chart_equity_to_candle(decoded)
         if candle is None:
             return
@@ -346,15 +346,15 @@ class _Connection:
     SUBS (not ADD) on a fresh connection.
     """
 
-    def __init__(self, source: "SchwabStreamSource", creds, access_token: str) -> None:
+    def __init__(self, source: SchwabStreamSource, creds, access_token: str) -> None:
         self._source = source
         self._creds = creds
         self._access_token = access_token
-        self._streamer_info: Optional[Dict[str, Any]] = None
+        self._streamer_info: dict[str, Any] | None = None
         self._ws = None
         self._stop = threading.Event()
-        self._ws_thread: Optional[threading.Thread] = None
-        self._clock_thread: Optional[threading.Thread] = None
+        self._ws_thread: threading.Thread | None = None
+        self._clock_thread: threading.Thread | None = None
         self._request_id = 0
         self._connected_subs_sent = False
         self._lock = threading.Lock()
@@ -400,7 +400,7 @@ class _Connection:
 
     # --- internal ---
 
-    def _send_json(self, obj: Dict[str, Any]) -> None:
+    def _send_json(self, obj: dict[str, Any]) -> None:
         ws = self._ws
         if ws is None:
             return
@@ -409,7 +409,7 @@ class _Connection:
         except Exception:
             LOG.exception("schwab-stream: send failed")
 
-    def _send_subs(self, symbols: List[str]) -> None:
+    def _send_subs(self, symbols: list[str]) -> None:
         info = self._streamer_info
         assert info is not None
         self._request_id += 1
@@ -484,7 +484,7 @@ class _Connection:
                 break
             self._handle_message(msg)
 
-    def _read_one(self) -> Optional[Dict[str, Any]]:  # pragma: no cover - network
+    def _read_one(self) -> dict[str, Any] | None:  # pragma: no cover - network
         ws = self._ws
         if ws is None:
             return None
@@ -497,7 +497,7 @@ class _Connection:
             LOG.warning("schwab-stream: malformed message: %r", raw[:200])
             return {}
 
-    def _handle_message(self, msg: Dict[str, Any]) -> None:
+    def _handle_message(self, msg: dict[str, Any]) -> None:
         # The Schwab streamer envelope is one of:
         #   {"data": [{"service": "...", "content": [{...}, ...]}]}
         #   {"response": [{...ack...}]}
@@ -526,7 +526,7 @@ class _Connection:
             with self._source._lock:
                 # Snapshot to avoid holding the lock across callbacks.
                 items = [(sym, list(subs)) for sym, subs in self._source._subs.items()]
-            for sym, subs in items:
+            for _sym, subs in items:
                 for sub in subs:
                     if not sub.alive:
                         continue
@@ -539,7 +539,7 @@ class _Connection:
                         _safe_invoke(sub.callback, kind, candle)
 
 
-def _is_login_ok(msg: Optional[Dict[str, Any]]) -> bool:
+def _is_login_ok(msg: dict[str, Any] | None) -> bool:
     if not msg:
         return False
     for r in msg.get("response") or ():

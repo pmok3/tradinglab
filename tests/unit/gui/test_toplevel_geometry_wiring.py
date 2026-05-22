@@ -25,7 +25,6 @@ from pathlib import Path
 
 import pytest
 
-
 # Source files known to host a Toplevel that must persist geometry.
 # (path, expected_geometry_key) — key matches the
 # ``attach_persistent_geometry`` call in the source.

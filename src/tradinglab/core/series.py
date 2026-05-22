@@ -6,8 +6,6 @@ could be a headless report formatter).
 """
 from __future__ import annotations
 
-from typing import Dict, List, Optional
-
 import numpy as np
 
 from ..data import pop_prebuilt_arrays
@@ -37,7 +35,7 @@ class SeriesArrays:
     __slots__ = ("opens", "highs", "lows", "closes", "volumes",
                  "_candles", "_format_date", "_tooltip_cache", "n", "_bars")
 
-    def __init__(self, candles: List[Candle], format_date) -> None:
+    def __init__(self, candles: list[Candle], format_date) -> None:
         n = len(candles)
         self.n = n
         self.opens = np.fromiter((c.open for c in candles), dtype=float, count=n)
@@ -52,11 +50,11 @@ class SeriesArrays:
         # built one (avoiding a second extraction).
         self._bars = None
         self._format_date = format_date
-        self._tooltip_cache: Dict[int, str] = {}
+        self._tooltip_cache: dict[int, str] = {}
 
     @classmethod
-    def from_arrays(cls, candles: List[Candle], format_date,
-                    arrays) -> "SeriesArrays":
+    def from_arrays(cls, candles: list[Candle], format_date,
+                    arrays) -> SeriesArrays:
         """Construct from pre-extracted numpy arrays (see ``data/normalize``)."""
         self = cls.__new__(cls)
         self.n = len(candles)
@@ -73,7 +71,7 @@ class SeriesArrays:
         return self
 
     @classmethod
-    def from_bars(cls, bars, format_date) -> "SeriesArrays":
+    def from_bars(cls, bars, format_date) -> SeriesArrays:
         """Construct directly from an existing :class:`Bars` view.
 
         Zero-copy: the underlying numpy arrays are shared. Used by the
@@ -127,7 +125,7 @@ class SeriesArrays:
         return t
 
 
-def build_series_safe(candles: List[Candle], format_date) -> Optional[SeriesArrays]:
+def build_series_safe(candles: list[Candle], format_date) -> SeriesArrays | None:
     """Build a ``SeriesArrays`` off the main thread, swallowing errors.
 
     Called from fetch / disk-load worker threads so the main thread's

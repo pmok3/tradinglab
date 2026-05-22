@@ -44,7 +44,8 @@ display name ``"Chandelier Stops"`` and the stable ``kind_id =
 
 from __future__ import annotations
 
-from typing import ClassVar, Dict, List, Mapping, Tuple
+from collections.abc import Mapping
+from typing import ClassVar
 
 import numpy as np
 
@@ -94,7 +95,7 @@ class ChandelierStops:
     kind_version: ClassVar[int] = 1
     overlay: ClassVar[bool] = True
 
-    params_schema: ClassVar[Tuple[ParamDef, ...]] = (
+    params_schema: ClassVar[tuple[ParamDef, ...]] = (
         ParamDef("lookback", "int",
                  default=_DEFAULT_LOOKBACK, min=1, max=500, step=1,
                  description="Lookback (highest-high / lowest-low window)"),
@@ -110,7 +111,7 @@ class ChandelierStops:
                  description="ATR kernel"),
     )
 
-    default_style: ClassVar[Dict[str, LineStyle]] = {
+    default_style: ClassVar[dict[str, LineStyle]] = {
         "long_stop":  LineStyle(color=_DEFAULT_LONG_COLOR,  width=1.4),
         "short_stop": LineStyle(color=_DEFAULT_SHORT_COLOR, width=1.4),
     }
@@ -124,7 +125,7 @@ class ChandelierStops:
         "short_stop": "stair_line",
     }
 
-    reference_levels: ClassVar[Tuple[float, ...]] = ()
+    reference_levels: ClassVar[tuple[float, ...]] = ()
 
     def __init__(
         self,
@@ -166,7 +167,7 @@ class ChandelierStops:
         ma_tag = "" if self.ma_type == _DEFAULT_MA_TYPE else f",{self.ma_type}"
         return f"CHAND({L},{A},{m}{ma_tag})"
 
-    def compute_arr(self, bars: Bars) -> Dict[str, np.ndarray]:
+    def compute_arr(self, bars: Bars) -> dict[str, np.ndarray]:
         n = len(bars)
         if n == 0:
             empty = np.full(0, np.nan, dtype=np.float64)
@@ -193,5 +194,5 @@ class ChandelierStops:
         )
         return {"long_stop": long_stop, "short_stop": short_stop}
 
-    def compute(self, candles: List[Candle]) -> Dict[str, np.ndarray]:
+    def compute(self, candles: list[Candle]) -> dict[str, np.ndarray]:
         return self.compute_arr(Bars.from_candles(candles))

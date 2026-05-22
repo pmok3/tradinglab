@@ -17,7 +17,7 @@ from __future__ import annotations
 import tkinter as tk
 from dataclasses import dataclass
 from tkinter import messagebox, ttk
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Any
 
 from ..exits.model import (
     ActivationUnit,
@@ -41,7 +41,7 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
-_TRIGGER_KIND_CHOICES: Tuple[Tuple[TriggerKind, str], ...] = (
+_TRIGGER_KIND_CHOICES: tuple[tuple[TriggerKind, str], ...] = (
     (TriggerKind.MARKET,        "Market"),
     (TriggerKind.LIMIT,         "Limit"),
     (TriggerKind.STOP,          "Stop"),
@@ -55,30 +55,30 @@ _TRIGGER_KIND_CHOICES: Tuple[Tuple[TriggerKind, str], ...] = (
 _TRIGGER_KIND_LABEL = {k: lbl for k, lbl in _TRIGGER_KIND_CHOICES}
 _TRIGGER_KIND_BY_LABEL = {lbl: k for k, lbl in _TRIGGER_KIND_CHOICES}
 
-_TRAIL_UNIT_CHOICES: Tuple[Tuple[TrailUnit, str], ...] = (
+_TRAIL_UNIT_CHOICES: tuple[tuple[TrailUnit, str], ...] = (
     (TrailUnit.PERCENT, "Percent"),
     (TrailUnit.DOLLAR,  "Dollar"),
     (TrailUnit.ATR,     "ATR"),
 )
 
-_ACTIVATION_UNIT_CHOICES: Tuple[Tuple[ActivationUnit, str], ...] = (
+_ACTIVATION_UNIT_CHOICES: tuple[tuple[ActivationUnit, str], ...] = (
     (ActivationUnit.PERCENT,    "Percent"),
     (ActivationUnit.DOLLAR,     "Dollar"),
     (ActivationUnit.R_MULTIPLE, "R-multiple"),
 )
 
-_TRAIL_BASIS_CHOICES: Tuple[Tuple[TrailBasis, str], ...] = (
+_TRAIL_BASIS_CHOICES: tuple[tuple[TrailBasis, str], ...] = (
     (TrailBasis.INTRABAR, "Intrabar"),
     (TrailBasis.CLOSE,    "Close-only"),
 )
 
-_CHANDELIER_MA_TYPE_CHOICES: Tuple[str, ...] = ("RMA", "SMA", "EMA", "WMA")
+_CHANDELIER_MA_TYPE_CHOICES: tuple[str, ...] = ("RMA", "SMA", "EMA", "WMA")
 
-_INDICATOR_INTERVAL_CHOICES: Tuple[str, ...] = (
+_INDICATOR_INTERVAL_CHOICES: tuple[str, ...] = (
     "(position)", "1m", "5m", "15m", "30m", "1h", "1d",
 )
 
-_OCO_CANCEL_ON_CHOICES: Tuple[str, ...] = ("full_closeout", "any_fire")
+_OCO_CANCEL_ON_CHOICES: tuple[str, ...] = ("full_closeout", "any_fire")
 
 
 # ---------------------------------------------------------------------------
@@ -124,11 +124,11 @@ class _FieldSpec:
     label: str
     kind: str
     width: int = 8
-    choices: Optional[Tuple[Any, ...]] = None
+    choices: tuple[Any, ...] | None = None
     separator: bool = False
 
 
-_FIELD_SPECS_BY_KIND: Dict[TriggerKind, Tuple[_FieldSpec, ...]] = {
+_FIELD_SPECS_BY_KIND: dict[TriggerKind, tuple[_FieldSpec, ...]] = {
     TriggerKind.LIMIT: (
         _FieldSpec("price",         "price:",   "float", width=10),
         _FieldSpec("offset_pct",    "offset%:", "float", width=8),
@@ -184,7 +184,7 @@ class _BracketDialog(tk.Toplevel):
             self.grab_set()
         except tk.TclError:
             pass
-        self.result: Optional[Dict[str, Any]] = None
+        self.result: dict[str, Any] | None = None
         # Geometry persistence: bracket dialog opens at a small fixed
         # size by default but users may resize on small screens.
         try:
@@ -385,8 +385,8 @@ class _TriggerRow(ttk.Frame):
         self._params_frame = ttk.Frame(self)
         self._params_frame.pack(fill="x", padx=2, pady=(2, 0))
         # Vars per kind (held to keep them alive)
-        self._param_vars: Dict[str, tk.Variable] = {}
-        self._block_editor: Optional[BlockEditor] = None
+        self._param_vars: dict[str, tk.Variable] = {}
+        self._block_editor: BlockEditor | None = None
         self._render_params()
 
     @property
@@ -394,7 +394,7 @@ class _TriggerRow(ttk.Frame):
         return self._trigger
 
     @property
-    def block_editor(self) -> Optional[BlockEditor]:
+    def block_editor(self) -> BlockEditor | None:
         return self._block_editor
 
     def _on_kind_changed(self) -> None:
@@ -438,7 +438,7 @@ class _TriggerRow(ttk.Frame):
         for spec in specs:
             self._render_field(spec)
 
-    def _render_field(self, spec: "_FieldSpec") -> None:
+    def _render_field(self, spec: _FieldSpec) -> None:
         """Render one schema-described field into ``_params_frame``."""
         label_text = (
             f"| {spec.label}" if spec.separator and spec.label else spec.label
@@ -544,7 +544,7 @@ class _TriggerRow(ttk.Frame):
         self,
         attr: str,
         var: tk.StringVar,
-        choices: Tuple[Tuple[Any, str], ...],
+        choices: tuple[tuple[Any, str], ...],
     ) -> None:
         label = var.get()
         if label == "(none)":
@@ -636,7 +636,7 @@ class _TriggerRow(ttk.Frame):
         self,
         attr: str,
         var: tk.StringVar,
-        choices: Tuple[Tuple[Any, str], ...],
+        choices: tuple[tuple[Any, str], ...],
     ) -> None:
         label = var.get()
         for value, lbl in choices:

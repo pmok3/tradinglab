@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import tkinter as tk
 from tkinter import ttk
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ._modal_keys import bind_modal_keys
 from .colors import WARN_AMBER
@@ -31,14 +31,14 @@ class PreTradeFormDialog(tk.Toplevel):
         symbol: str,
         default_side: str = "buy",
         default_size: float = 1.0,
-        setup_tags: Optional[List[str]] = None,
+        setup_tags: list[str] | None = None,
         *,
         notice: str = "",
-        suggested_tags: Optional[List[str]] = None,
+        suggested_tags: list[str] | None = None,
     ):
         super().__init__(app)
         self.app = app
-        self.result: Optional[Dict[str, Any]] = None
+        self.result: dict[str, Any] | None = None
         self._symbol = symbol
 
         self.title(f"Pre-Trade Form — {symbol}")
@@ -170,7 +170,7 @@ class PreTradeFormDialog(tk.Toplevel):
             self._error_var.set("Thesis is mandatory.")
             return
         target_raw = self._target_var.get().strip()
-        target: Optional[float] = None
+        target: float | None = None
         if target_raw:
             try:
                 target = float(target_raw)

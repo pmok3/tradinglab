@@ -87,7 +87,7 @@ def _scrub_pickle_litter() -> None:
     if not cache_dir.is_dir():
         return
     for t in _TEST_TICKERS:
-        for p in cache_dir.glob(f"yfinance__{t}__*.pkl"):
+        for p in cache_dir.glob(f"yfinance__{t}__*.jsonl"):
             try:
                 p.unlink()
             except Exception:  # noqa: BLE001

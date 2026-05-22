@@ -16,8 +16,10 @@ from ..indicators import render as _ind_render
 from ..models import Candle
 from ..rendering import (
     bar_geometry,
-    safe_remove as _safe_remove,
     vol_geometry,
+)
+from ..rendering import (
+    safe_remove as _safe_remove,
 )
 
 

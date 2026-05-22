@@ -49,7 +49,7 @@ Warmup
 
 from __future__ import annotations
 
-from typing import ClassVar, Dict, List, Tuple
+from typing import ClassVar
 
 import numpy as np
 
@@ -65,16 +65,16 @@ from .sessions import (
 )
 from .wilder import true_range as _true_range
 
-_DEFAULT_COLOR_BY_MA: Dict[str, str] = {
+_DEFAULT_COLOR_BY_MA: dict[str, str] = {
     "RMA": "#ffbb78",
     "SMA": "#8c564b",
     "EMA": "#17becf",
     "WMA": "#e377c2",
 }
 
-ATR_MODES: Tuple[str, ...] = ("rolling", "tod")
-_ATR_TOD_AGGREGATORS: Tuple[str, ...] = ("mean", "median")
-_ATR_TOD_SESSION_FILTERS: Tuple[str, ...] = (
+ATR_MODES: tuple[str, ...] = ("rolling", "tod")
+_ATR_TOD_AGGREGATORS: tuple[str, ...] = ("mean", "median")
+_ATR_TOD_SESSION_FILTERS: tuple[str, ...] = (
     "regular_only", "regular_plus_premarket", "extended",
 )
 
@@ -103,7 +103,7 @@ class ATR:
 
     kind_id: ClassVar[str] = "atr"
     kind_version: ClassVar[int] = 2
-    params_schema: ClassVar[Tuple[ParamDef, ...]] = (
+    params_schema: ClassVar[tuple[ParamDef, ...]] = (
         ParamDef("length", "int", default=_LENGTH_DEFAULT_SENTINEL,
                  min=2, max=2000, step=1,
                  description="Length"),
@@ -120,10 +120,10 @@ class ATR:
                  choices=_ATR_TOD_AGGREGATORS,
                  description="Aggregator"),
     )
-    default_style: ClassVar[Dict[str, LineStyle]] = {
+    default_style: ClassVar[dict[str, LineStyle]] = {
         "atr": LineStyle(color=_DEFAULT_COLOR_BY_MA["RMA"], width=1.4),
     }
-    reference_levels: ClassVar[Tuple[float, ...]] = ()
+    reference_levels: ClassVar[tuple[float, ...]] = ()
     overlay = False
 
     def __init__(
@@ -168,7 +168,7 @@ class ATR:
         else:
             self.name = f"ATR-{self.ma_type}({self.length})"
 
-    def compute_arr(self, bars: Bars) -> Dict[str, np.ndarray]:
+    def compute_arr(self, bars: Bars) -> dict[str, np.ndarray]:
         n = len(bars)
         out = np.full(n, np.nan, dtype=np.float64)
         if n < 2:
@@ -183,10 +183,10 @@ class ATR:
         # mode == "tod" — session bucketing path.
         return self._compute_tod_arr(bars, tr)
 
-    def compute(self, candles: List[Candle]) -> Dict[str, np.ndarray]:
+    def compute(self, candles: list[Candle]) -> dict[str, np.ndarray]:
         return self.compute_arr(Bars.from_candles(candles))
 
-    def _compute_tod_arr(self, bars: Bars, tr: np.ndarray) -> Dict[str, np.ndarray]:
+    def _compute_tod_arr(self, bars: Bars, tr: np.ndarray) -> dict[str, np.ndarray]:
         n = len(bars)
         out = np.full(n, np.nan, dtype=np.float64)
 
@@ -204,9 +204,9 @@ class ATR:
 
         tk = tod_key_np(bars)
 
-        per_session: List[Dict[int, float]] = []
+        per_session: list[dict[int, float]] = []
         for grp in groups:
-            keyed: Dict[int, float] = {}
+            keyed: dict[int, float] = {}
             for idx in grp:
                 if not admit_mask[idx]:
                     continue

@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import math
 from datetime import datetime
-from typing import ClassVar, Dict, List, Optional, Tuple
+from typing import ClassVar
 
 import numpy as np
 
@@ -39,12 +39,12 @@ from ..core.bars import Bars
 from ..models import Candle
 from .base import LineStyle, ParamDef
 
-_PRICE_SOURCES: Tuple[str, ...] = ("typical", "close", "ohlc4")
-_BANDS_CHOICES: Tuple[str, ...] = ("off", "1σ", "2σ", "both")
+_PRICE_SOURCES: tuple[str, ...] = ("typical", "close", "ohlc4")
+_BANDS_CHOICES: tuple[str, ...] = ("off", "1σ", "2σ", "both")
 
 # Output keys, in the order they are emitted (also drives default
 # style ordering for color-cycling).
-_OUTPUT_KEYS: Tuple[str, ...] = ("avwap", "upper1", "lower1", "upper2", "lower2")
+_OUTPUT_KEYS: tuple[str, ...] = ("avwap", "upper1", "lower1", "upper2", "lower2")
 
 
 class AnchoredVWAP:
@@ -52,7 +52,7 @@ class AnchoredVWAP:
 
     kind_id: ClassVar[str] = "avwap"
     kind_version: ClassVar[int] = 1
-    params_schema: ClassVar[Tuple[ParamDef, ...]] = (
+    params_schema: ClassVar[tuple[ParamDef, ...]] = (
         ParamDef(
             "anchor_ts", "str", default="",
             description="Anchor",
@@ -68,7 +68,7 @@ class AnchoredVWAP:
             description="Bands",
         ),
     )
-    default_style: ClassVar[Dict[str, LineStyle]] = {
+    default_style: ClassVar[dict[str, LineStyle]] = {
         "avwap": LineStyle(color="#8c564b", width=1.6),
         "upper1": LineStyle(color="#4393c3", width=1.0),
         "lower1": LineStyle(color="#4393c3", width=1.0),
@@ -100,9 +100,9 @@ class AnchoredVWAP:
 
     # --- public --------------------------------------------------------
 
-    def compute_arr(self, bars: Bars) -> Dict[str, np.ndarray]:
+    def compute_arr(self, bars: Bars) -> dict[str, np.ndarray]:
         n = len(bars)
-        out: Dict[str, np.ndarray] = {
+        out: dict[str, np.ndarray] = {
             k: np.full(n, np.nan, dtype=np.float64) for k in _OUTPUT_KEYS
         }
         if n == 0:
@@ -180,7 +180,7 @@ class AnchoredVWAP:
 
         return out
 
-    def compute(self, candles: List[Candle]) -> Dict[str, np.ndarray]:
+    def compute(self, candles: list[Candle]) -> dict[str, np.ndarray]:
         return self.compute_arr(Bars.from_candles(candles))
 
 
@@ -213,7 +213,7 @@ def _strip_tz(dt: datetime) -> datetime:
         return dt.replace(tzinfo=None)
 
 
-def _parse_anchor(s: str) -> Optional[datetime]:
+def _parse_anchor(s: str) -> datetime | None:
     """Parse an ISO-8601 anchor string. Returns None on blank/invalid."""
     if not s:
         return None
@@ -232,8 +232,8 @@ def _parse_anchor(s: str) -> Optional[datetime]:
 
 
 def _find_start_index(
-    candles: List[Candle], anchor_dt: Optional[datetime],
-) -> Optional[int]:
+    candles: list[Candle], anchor_dt: datetime | None,
+) -> int | None:
     """Return the index of the first eligible bar at/after the anchor.
 
     "Eligible" means non-gap, regular-session. When ``anchor_dt`` is
@@ -257,7 +257,7 @@ def _find_start_index(
     return None
 
 
-def first_eligible_anchor_ts(candles: List[Candle]) -> str:
+def first_eligible_anchor_ts(candles: list[Candle]) -> str:
     """Return the ISO timestamp of the first eligible bar, or ``""``.
 
     Used by :class:`tradinglab.app.ChartApp` to materialize a real

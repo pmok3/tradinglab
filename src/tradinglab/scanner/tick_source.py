@@ -37,10 +37,10 @@ from __future__ import annotations
 import logging
 import queue
 import threading
-import time
-from dataclasses import dataclass, field
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Callable, Dict, List, Mapping, Optional, Protocol, Sequence
+from typing import Protocol
 
 from ..models import Candle
 
@@ -70,7 +70,7 @@ class Tick:
     """
 
     tick_id: int
-    candles_by_symbol: Mapping[str, List[Candle]]
+    candles_by_symbol: Mapping[str, list[Candle]]
     forming: bool
     timestamp: datetime
 
@@ -89,7 +89,7 @@ class TickSource(Protocol):
     def start(self) -> None: ...
     def stop(self) -> None: ...
     def subscribe(self, callback: TickCallback) -> None: ...
-    def latest_candles_by_symbol(self) -> Mapping[str, List[Candle]]: ...
+    def latest_candles_by_symbol(self) -> Mapping[str, list[Candle]]: ...
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +97,7 @@ class TickSource(Protocol):
 # ---------------------------------------------------------------------------
 
 
-FetchFn = Callable[[Sequence[str]], Mapping[str, List[Candle]]]
+FetchFn = Callable[[Sequence[str]], Mapping[str, list[Candle]]]
 
 
 class PollingTickSource:
@@ -126,17 +126,17 @@ class PollingTickSource:
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ) -> None:
         self._fetch_fn = fetch_fn
-        self._symbols: List[str] = list(symbols)
+        self._symbols: list[str] = list(symbols)
         self.interval_s = float(interval_s)
         self.forming = bool(forming)
         self._clock = clock
 
-        self._subs: List[TickCallback] = []
+        self._subs: list[TickCallback] = []
         self._lock = threading.RLock()
         self._stop_evt = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._tick_id = 0
-        self._latest: Dict[str, List[Candle]] = {}
+        self._latest: dict[str, list[Candle]] = {}
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -153,7 +153,7 @@ class PollingTickSource:
 
     def stop(self) -> None:
         self._stop_evt.set()
-        t: Optional[threading.Thread]
+        t: threading.Thread | None
         with self._lock:
             t = self._thread
             self._thread = None
@@ -173,7 +173,7 @@ class PollingTickSource:
             except ValueError:
                 pass
 
-    def latest_candles_by_symbol(self) -> Mapping[str, List[Candle]]:
+    def latest_candles_by_symbol(self) -> Mapping[str, list[Candle]]:
         with self._lock:
             return dict(self._latest)
 
@@ -202,7 +202,7 @@ class PollingTickSource:
         if data is None:
             return
         # Snapshot the data dict so subscribers see a stable view.
-        snapshot: Dict[str, List[Candle]] = {
+        snapshot: dict[str, list[Candle]] = {
             sym: list(candles) for sym, candles in data.items()
         }
         with self._lock:
@@ -252,7 +252,7 @@ class QueuedTickSource:
         maxsize: int = 0,
     ) -> None:
         self._upstream = upstream
-        self._queue: "queue.Queue[Tick]" = queue.Queue(maxsize=maxsize)
+        self._queue: queue.Queue[Tick] = queue.Queue(maxsize=maxsize)
         self._maxsize = maxsize
         self._dropped = 0
         upstream.subscribe(self._on_tick)
@@ -272,12 +272,12 @@ class QueuedTickSource:
         # Most callers should use ``drain`` instead.
         self._upstream.subscribe(callback)
 
-    def latest_candles_by_symbol(self) -> Mapping[str, List[Candle]]:
+    def latest_candles_by_symbol(self) -> Mapping[str, list[Candle]]:
         return self._upstream.latest_candles_by_symbol()
 
     # -- consumer-side drain -------------------------------------------------
 
-    def drain(self, timeout: Optional[float] = None) -> Optional[Tick]:
+    def drain(self, timeout: float | None = None) -> Tick | None:
         """Pop one tick. ``timeout=None`` returns immediately (None if empty)."""
         try:
             if timeout is None:
@@ -286,9 +286,9 @@ class QueuedTickSource:
         except queue.Empty:
             return None
 
-    def drain_all(self) -> List[Tick]:
+    def drain_all(self) -> list[Tick]:
         """Pop every queued tick (FIFO). Empty list if nothing pending."""
-        out: List[Tick] = []
+        out: list[Tick] = []
         while True:
             try:
                 out.append(self._queue.get_nowait())

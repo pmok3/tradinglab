@@ -17,7 +17,8 @@ from __future__ import annotations
 
 import json
 import tkinter as tk
-from datetime import datetime, time as dtime, timezone
+from datetime import datetime, timezone
+from datetime import time as dtime
 from pathlib import Path
 from typing import List, Optional
 from unittest.mock import patch
@@ -41,7 +42,6 @@ from tradinglab.entries.signals import EntryPaperSink
 from tradinglab.exits.paper_engine import PaperBrokerEngine
 from tradinglab.gui.entries_tab import EntriesTab, _format_audit_record
 from tradinglab.positions.tracker import PositionTracker
-
 
 # ---------------------------------------------------------------------------
 # Test fixtures
@@ -83,7 +83,7 @@ def _strategy(name: str = "test", *, direction=Direction.LONG) -> EntryStrategy:
     )
 
 
-def _make_evaluator(audit: Optional[AuditLog] = None) -> EntryEvaluator:
+def _make_evaluator(audit: AuditLog | None = None) -> EntryEvaluator:
     tracker = PositionTracker()
     engine = PaperBrokerEngine(tracker)
     sink = EntryPaperSink(engine)
@@ -387,7 +387,7 @@ def test_apply_theme_light_paints_text_widgets(root):
     """Mirror of the dark-mode test: light palette restores the
     light-mode colours after a prior dark-mode call.
     """
-    from tradinglab.constants import LIGHT_THEME, DARK_THEME
+    from tradinglab.constants import DARK_THEME, LIGHT_THEME
     tab = _make_tab(root)
     try:
         tab._apply_theme(DARK_THEME)

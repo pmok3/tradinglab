@@ -43,7 +43,7 @@ from tradinglab.positions.tracker import PositionTracker
 
 class _RecordingSink:
     def __init__(self) -> None:
-        self.submitted: List[ExitSignal] = []
+        self.submitted: list[ExitSignal] = []
         self._counter = 0
 
     def submit(self, signal: ExitSignal) -> str:
@@ -58,7 +58,7 @@ class _RecordingSink:
     def cancel_all_for_position(self, position_id: str) -> int:
         return 0
 
-    def working_order_ids_for_position(self, position_id: str) -> List[str]:
+    def working_order_ids_for_position(self, position_id: str) -> list[str]:
         return []
 
 

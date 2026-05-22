@@ -40,8 +40,8 @@ convenience predicate for that).
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Iterable, List, Optional, Sequence
 
 from ..models import Candle
 
@@ -56,9 +56,9 @@ class FundamentalFilter:
     only consulted when the volume criterion is active.
     """
 
-    min_avg_volume_millions: Optional[float] = None
-    min_close: Optional[float] = None
-    max_close: Optional[float] = None
+    min_avg_volume_millions: float | None = None
+    min_close: float | None = None
+    max_close: float | None = None
     lookback_days: int = 20
 
 
@@ -113,9 +113,9 @@ def passes_fundamental_filter(
 
 def filter_symbols(
     symbols: Iterable[str],
-    bars_lookup: "callable",  # type: ignore[valid-type]
+    bars_lookup: callable,  # type: ignore[valid-type]
     spec: FundamentalFilter,
-) -> List[str]:
+) -> list[str]:
     """Apply the filter to an iterable of symbols.
 
     ``bars_lookup(symbol) -> Optional[List[Candle]]`` is injected so
@@ -127,7 +127,7 @@ def filter_symbols(
     interleaves the lookup with progress reporting and so calls
     :func:`passes_fundamental_filter` directly.
     """
-    out: List[str] = []
+    out: list[str] = []
     if not is_filter_active(spec):
         return [s for s in symbols]
     for sym in symbols:

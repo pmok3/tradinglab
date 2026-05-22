@@ -21,12 +21,13 @@ All limits are optional; ``None`` means "no constraint".
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from datetime import time as dtime
 
 # Type-only import to avoid an entries -> core -> entries cycle at runtime.
-from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:  # pragma: no cover
     from ..entries.signals import EntrySignal
@@ -54,7 +55,7 @@ class RiskBlock:
 
     gate: str
     reason: str
-    meta: Dict[str, Any] = field(default_factory=dict)
+    meta: dict[str, Any] = field(default_factory=dict)
 
 
 class RiskGate(Protocol):
@@ -62,11 +63,11 @@ class RiskGate(Protocol):
 
     def check(
         self,
-        signal: "EntrySignal",
+        signal: EntrySignal,
         *,
-        tracker: "PositionTracker",
+        tracker: PositionTracker,
         clock: Callable[[], datetime],
-    ) -> Optional[RiskBlock]:
+    ) -> RiskBlock | None:
         """Return :class:`RiskBlock` to refuse, or ``None`` to allow."""
         ...
 
@@ -77,11 +78,11 @@ class AllowAllRiskGate:
 
     def check(
         self,
-        signal: "EntrySignal",
+        signal: EntrySignal,
         *,
-        tracker: "PositionTracker",
+        tracker: PositionTracker,
         clock: Callable[[], datetime],
-    ) -> Optional[RiskBlock]:
+    ) -> RiskBlock | None:
         return None
 
 
@@ -95,19 +96,19 @@ class DefaultRiskGate:
     self-explanatory message.
     """
 
-    daily_loss_limit: Optional[float] = None  # negative number, e.g. -500.0
-    max_concurrent: Optional[int] = None
-    max_position_notional: Optional[float] = None
-    no_new_entries_after: Optional[dtime] = None  # local clock cutoff
-    per_symbol_max_notional: Optional[float] = None
+    daily_loss_limit: float | None = None  # negative number, e.g. -500.0
+    max_concurrent: int | None = None
+    max_position_notional: float | None = None
+    no_new_entries_after: dtime | None = None  # local clock cutoff
+    per_symbol_max_notional: float | None = None
 
     def check(
         self,
-        signal: "EntrySignal",
+        signal: EntrySignal,
         *,
-        tracker: "PositionTracker",
+        tracker: PositionTracker,
         clock: Callable[[], datetime],
-    ) -> Optional[RiskBlock]:
+    ) -> RiskBlock | None:
         # 1. daily_loss_limit (negative threshold)
         if self.daily_loss_limit is not None:
             total_pnl = sum(
@@ -205,7 +206,7 @@ class DefaultRiskGate:
         return None
 
 
-def _ref_price(signal: "EntrySignal") -> float:
+def _ref_price(signal: EntrySignal) -> float:
     """Pick the best price reference from a signal for notional math.
 
     Order of preference: explicit ``price`` (LIMIT / STOP_LIMIT), then

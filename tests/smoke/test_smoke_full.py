@@ -23,6 +23,12 @@ lives in ``tests/smoke/conftest.py``.
 """
 from __future__ import annotations
 
+import math
+import sys
+import time
+from collections import OrderedDict
+from datetime import datetime, timedelta
+
 # Re-export helpers at module scope so existing references inside
 # ``check_*`` functions keep working without rewriting 128 callsites.
 from tests.smoke._helpers import (  # noqa: F401  (used inside check_* fns)
@@ -38,14 +44,6 @@ from tests.smoke._helpers import (  # noqa: F401  (used inside check_* fns)
     _scroll,
     _stub_yfinance,
 )
-
-
-import math
-import sys
-import time
-from collections import OrderedDict
-from datetime import datetime, timedelta
-
 
 # ------------------------------------------------------------------- Groups --
 
@@ -107,7 +105,7 @@ def check_30_render_topology(app) -> None:
     assert "price" in kinds, f"no 'price' kind in ax map, got {kinds}"
     assert "volume" in kinds, f"no 'volume' kind in ax map, got {kinds}"
     # 3-tuple shape
-    for ax, v in app._ax_candle_map.items():
+    for _ax, v in app._ax_candle_map.items():
         assert len(v) == 3, f"_ax_candle_map value must be 3-tuple, got {v!r}"
     print(f"  [OK] §6/§7 render topology: {len(app._ax_candle_map)} axes, "
           f"kinds={kinds}")
@@ -221,7 +219,7 @@ def check_50_compare_mode(app) -> None:
 
 def check_60_pair_filter_align(app) -> None:
     """spec §7.2/§7.3 — pair filter + align produces equal-length lists."""
-    from tradinglab.core.pairing import apply_pair_filter_and_align, align_pair
+    from tradinglab.core.pairing import align_pair, apply_pair_filter_and_align
     p = _fake_candles(20, start_price=100, session_pattern="regular")
     c = _fake_candles(25, start_price=200, session_pattern="regular")
     out_p, out_c = apply_pair_filter_and_align(p, c, "5m", False)
@@ -887,10 +885,11 @@ def check_d10_poll_tick_offloads_fetch_to_executor(app) -> None:
     fetcher's sleep time. After the fetch resolves, the result
     should propagate to ``_primary`` via the prefetch hand-off path.
     """
+    import datetime as dt
     import time as _t
+
     import tradinglab.data as _data_pkg
     from tradinglab.models import Candle
-    import datetime as dt
 
     src = app.source_var.get()
     prev_fetcher = _data_pkg.DATA_SOURCES.get(src)
@@ -1013,9 +1012,10 @@ def check_d12_companion_prefetch_warms_cache(app) -> None:
     ``_ensure_prefetched``. Asserts the wiring without racing the real
     thread pool (executor behavior is covered by check_d10).
     """
+    import datetime as dt
+
     import tradinglab.data as _data_pkg
     from tradinglab.models import Candle
-    import datetime as dt
 
     src = app.source_var.get()
     prev_fetcher = _data_pkg.DATA_SOURCES.get(src)
@@ -1576,10 +1576,13 @@ def check_d1_log_price_scale(app) -> None:
 
 def check_d14_theme_overrides(app) -> None:
     """Customizable theme overrides merge, persist, and reset cleanly."""
-    from tradinglab.constants import (
-        CUSTOMIZABLE_THEME_KEYS, DEFAULT_THEMES, LIGHT_THEME, resolve_theme,
-    )
     from tradinglab import settings as _settings
+    from tradinglab.constants import (
+        CUSTOMIZABLE_THEME_KEYS,
+        DEFAULT_THEMES,
+        LIGHT_THEME,
+        resolve_theme,
+    )
 
     assert len(CUSTOMIZABLE_THEME_KEYS) == 6, \
         f"expected 6 customizable keys, got {len(CUSTOMIZABLE_THEME_KEYS)}"
@@ -1765,13 +1768,14 @@ def check_d15_pin_kicks_preload(app) -> None:
 
 def check_d16_startup_defaults(app) -> None:
     """Settings -> 'Startup parameters' merge, validate, persist, reset."""
+    from tradinglab import settings as _settings
+    from tradinglab.app import _INTERVALS
     from tradinglab.constants import (
-        BUILTIN_STARTUP_DEFAULTS, STARTUP_DEFAULT_KEYS,
+        BUILTIN_STARTUP_DEFAULTS,
+        STARTUP_DEFAULT_KEYS,
         resolve_startup_defaults,
     )
-    from tradinglab import settings as _settings
     from tradinglab.data import DATA_SOURCES
-    from tradinglab.app import _INTERVALS
 
     # 5 keys, all present in the builtin map.
     assert len(STARTUP_DEFAULT_KEYS) == 5, \
@@ -1869,7 +1873,8 @@ def check_d17_double_click_drilldown_to_5m(app) -> None:
     blocking fetch.
     """
     import types
-    from datetime import datetime, timedelta
+    from datetime import timedelta
+
     from tradinglab import data as _data_pkg
     from tradinglab.models import Candle
 
@@ -2128,7 +2133,8 @@ def check_d60_drilldown_works_in_heikin_ashi_mode(app) -> None:
         works via the panel-state fallback path.
     """
     import types
-    from datetime import datetime, timedelta
+    from datetime import timedelta
+
     from tradinglab import data as _data_pkg
     from tradinglab.models import Candle
 
@@ -2281,9 +2287,8 @@ def check_d18_display_timezone(app) -> None:
       * `settings.set("display_tz", ...)` round-trips.
       * `app.set_display_tz()` updates the live attr and persists.
     """
-    from tradinglab.formatting import format_dt
     from tradinglab import settings as _settings
-    from datetime import datetime
+    from tradinglab.formatting import format_dt
     try:
         from zoneinfo import ZoneInfo
     except ImportError:
@@ -2359,7 +2364,8 @@ def check_d20_drilldown_persists_across_ticker_change(app) -> None:
       3. Explicit interval/source change clears the lock.
     """
     import types
-    from datetime import datetime, timedelta
+    from datetime import timedelta
+
     from tradinglab import data as _data_pkg
     from tradinglab.models import Candle
 
@@ -2474,7 +2480,8 @@ def check_d20_drilldown_persists_across_ticker_change(app) -> None:
         )
 
         # --- Case 3: explicit interval change clears the lock ----------
-        app._on_explicit_axis_change.__self__  # sanity: bound method exists
+        assert app._on_explicit_axis_change.__self__ is app, \
+            "sanity: _on_explicit_axis_change should be a bound method on app"
         app._on_explicit_axis_change()         # currently on 5m → reload
         # The handler clears _drilldown_day BEFORE _load_data, so even
         # though we're still on 5m the lock is gone.
@@ -3271,9 +3278,10 @@ def check_d23_perf_h3_h6_m2_m4(app) -> None:
     M4: ``_trim_full_cache`` evicts non-pinned tickers first; pinned
         tickers survive even when older.
     """
-    from tradinglab.models import Candle
-    from datetime import datetime, timedelta
     import time as _time
+    from datetime import timedelta
+
+    from tradinglab.models import Candle
 
     # ---- H3: pan_setup_blit fingerprint reuse ----
     if hasattr(app, "_pan_setup_blit"):
@@ -3436,7 +3444,8 @@ def check_d30_drilldown_ylim_no_deferred_render_race(app) -> None:
     3. Drilling down and asserting ylim immediately reflects the
        clicked day's price range — without any pump/click.
     """
-    from datetime import datetime, timedelta
+    from datetime import timedelta
+
     from tradinglab.models import Candle
 
     src = app.source_var.get()
@@ -3601,7 +3610,8 @@ def check_d32_interaction_sequence_matrix(app) -> None:
     scroll-zoom, pan-drag, and back-to-back drill+hover combos. Adding a
     new interaction primitive should add a row here.
     """
-    from datetime import datetime, timedelta
+    from datetime import timedelta
+
     from tradinglab.models import Candle
 
     src = app.source_var.get()
@@ -3856,9 +3866,11 @@ def check_d34_compare_toggle_after_drilldown_ylim(app) -> None:
     day, enables compare, and asserts the compare price ylim
     actually contains the compare candles visible in that day.
     """
-    from datetime import datetime, timedelta
-    from tradinglab.models import Candle
+    from datetime import timedelta
+
     import numpy as np
+
+    from tradinglab.models import Candle
 
     src = app.source_var.get()
     primary_t = "ZDR1A"
@@ -4026,7 +4038,7 @@ def check_d34_compare_toggle_after_drilldown_ylim(app) -> None:
                 src_lo = src
                 for t in (primary_t, compare_t):
                     for iv in ("1d", "5m"):
-                        for f in p.glob(f"{src_lo}__{t}__{iv}.pkl"):
+                        for f in p.glob(f"{src_lo}__{t}__{iv}.jsonl"):
                             try:
                                 f.unlink()
                             except Exception:  # noqa: BLE001
@@ -4062,9 +4074,11 @@ def check_d53_compare_off_during_drilldown_ylim(app) -> None:
     compare-on branch (locked in by d34). The primary panel is correctly
     Y-framed on the first frame after toggle, no click required.
     """
-    from datetime import datetime, timedelta
-    from tradinglab.models import Candle
+    from datetime import timedelta
+
     import numpy as np
+
+    from tradinglab.models import Candle
 
     src = app.source_var.get()
     primary_t = "ZDR1A"
@@ -4218,7 +4232,7 @@ def check_d53_compare_off_during_drilldown_ylim(app) -> None:
                 p = Path(base) / "tradinglab"
                 for t in (primary_t, compare_t):
                     for iv in ("1d", "5m"):
-                        for f in p.glob(f"{src}__{t}__{iv}.pkl"):
+                        for f in p.glob(f"{src}__{t}__{iv}.jsonl"):
                             try:
                                 f.unlink()
                             except Exception:  # noqa: BLE001
@@ -4258,6 +4272,7 @@ def check_d35_config_import_export_round_trip(app) -> None:
     import json
     import tempfile
     from pathlib import Path
+
     from tradinglab import settings as _settings
 
     # Snapshot original store so we can fully restore it at the end.
@@ -4350,7 +4365,8 @@ def check_d36_watchlist_explicit_save(app) -> None:
     """
     import tempfile
     from pathlib import Path
-    from tradinglab.watchlists import WatchlistManager, Watchlist
+
+    from tradinglab.watchlists import Watchlist, WatchlistManager
 
     tmp_dir = Path(tempfile.mkdtemp(prefix="tradinglab_wl_"))
     cfg_path = tmp_dir / "wl.json"
@@ -4451,7 +4467,7 @@ def check_d37_status_bar(app) -> None:
       * ``StatusHistoryWindow`` opens without exceptions, populates rows
         from the live history, and closes cleanly.
     """
-    from tradinglab.status import StatusEntry, StatusLog, StatusHistoryWindow
+    from tradinglab.status import StatusEntry, StatusHistoryWindow, StatusLog
 
     assert hasattr(app, "_status"), "app must expose _status"
     assert isinstance(app._status, StatusLog), \
@@ -4520,28 +4536,39 @@ def check_d39_indicators_phase1(app) -> None:
     loader smoke. Does NOT exercise rendering (Phase 2) or persistence
     integration (Phase 3) — those land in later check_* functions.
     """
-    import math
     import os
     import shutil
     import tempfile
     import textwrap
+    from datetime import datetime, timedelta
     from pathlib import Path
+
     import numpy as np
 
     from tradinglab.indicators import (
-        INDICATORS, BollingerBands, EMA, RSI, SMA,
-        LineStyle, ParamDef, factory_by_kind_id, kind_id_for,
+        EMA,
+        INDICATORS,
+        RSI,
+        SMA,
+        BollingerBands,
+        LineStyle,
+        ParamDef,
+        factory_by_kind_id,
+        kind_id_for,
         register_indicator,
     )
-    from tradinglab.indicators.config import (
-        IndicatorConfig, IndicatorManager, DEFAULT_SCOPES, SCOPES,
-    )
     from tradinglab.indicators.cache import IndicatorCache, config_hash
+    from tradinglab.indicators.config import (
+        DEFAULT_SCOPES,
+        SCOPES,
+        IndicatorConfig,
+        IndicatorManager,
+    )
     from tradinglab.indicators.loader import (
-        DiscoveryResult, discover_user_indicators,
+        DiscoveryResult,
+        discover_user_indicators,
     )
     from tradinglab.models import Candle
-    from datetime import datetime, timedelta
 
     # Build a deterministic 100-bar synthetic series.
     base_dt = datetime(2024, 1, 2, 9, 30)
@@ -4571,7 +4598,7 @@ def check_d39_indicators_phase1(app) -> None:
             assert isinstance(p, ParamDef)
             assert p.kind in {"int", "float", "bool", "str", "choice"}
         assert isinstance(cls.default_style, dict) and cls.default_style
-        for k, ls in cls.default_style.items():
+        for _k, ls in cls.default_style.items():
             assert isinstance(ls, LineStyle)
     # BB has both length and num_std.
     bb_keys = {p.name for p in BollingerBands.params_schema}
@@ -4831,9 +4858,12 @@ def check_d38_drilldown_race_and_coverage(app) -> None:
     deadline-reset-on-second-click / reuse-in-flight-prefetch /
     close-mid-fetch.
     """
-    from tradinglab import data as _data_pkg, disk_cache
+    from datetime import date as _date_t
+    from datetime import timedelta
+
+    from tradinglab import data as _data_pkg
+    from tradinglab import disk_cache
     from tradinglab.models import Candle
-    from datetime import datetime, timedelta, date as _date_t
 
     src = app.source_var.get()
     original = _data_pkg.DATA_SOURCES[src]
@@ -5276,29 +5306,35 @@ def check_d40_smoke_cache_isolation(app) -> None:
     """
     import os
     from pathlib import Path
+
     from tradinglab import disk_cache
     from tradinglab.models import Candle
-    from datetime import datetime
 
     override = os.environ.get("TRADINGLAB_CACHE_DIR")
     assert override, (
         "smoke harness must set TRADINGLAB_CACHE_DIR before the app "
         "imports disk_cache (otherwise tests pollute LOCALAPPDATA)"
     )
-    assert Path(disk_cache._cache_dir()).resolve() == Path(override).resolve(), (
+    # paths._resolve_root() precedence: TRADINGLAB_DATA_DIR > TRADINGLAB_CACHE_DIR.
+    # Some CI workflows (release.yml) intentionally set both so other
+    # subdirs (logs/, events/) also land in a tempdir. Honour that by
+    # accepting either env var as the expected cache root.
+    data_override = os.environ.get("TRADINGLAB_DATA_DIR")
+    expected_root = Path(data_override or override).resolve()
+    assert Path(disk_cache._cache_dir()).resolve() == expected_root, (
         f"disk_cache._cache_dir()={disk_cache._cache_dir()!r} should honor "
-        f"TRADINGLAB_CACHE_DIR={override!r}"
+        f"TRADINGLAB_DATA_DIR={data_override!r} > TRADINGLAB_CACHE_DIR={override!r}"
     )
 
     real_cache = Path(os.path.expandvars(r"%LOCALAPPDATA%\tradinglab"))
-    sentinel_name = "yfinance___SMOKE_SENTINEL___1d.pkl"
+    sentinel_name = "yfinance___SMOKE_SENTINEL___1d.jsonl"
 
     cands = [Candle(date=datetime(2024, 1, 2, 9, 30), open=1.0, high=1.0,
                     low=1.0, close=1.0, volume=1, session="regular")]
     disk_cache.save("yfinance", "_SMOKE_SENTINEL_", "1d", cands)
 
-    # The sentinel must land in the override dir, NOT the real cache.
-    in_override = Path(override) / sentinel_name
+    # The sentinel must land in the resolved root, NOT the real cache.
+    in_override = expected_root / sentinel_name
     in_real = real_cache / sentinel_name
     try:
         assert in_override.exists(), (
@@ -5330,7 +5366,7 @@ def check_d41_indicator_menu_add_routes(app) -> None:
     mgr = app._indicator_manager
     before = list(mgr.list())
     try:
-        for kid in (k for k in (m for m in mgr.list()) if False):
+        for _kid in (k for k in (m for m in mgr.list()) if False):
             pass  # placeholder to keep linter happy
         try:
             mgr.clear()
@@ -5384,7 +5420,10 @@ def check_d42_indicator_scope_picker(app) -> None:
             (("main",),                    {"main"}),
             (("compare",),                 {"compare"}),
             (("main", "compare"),          {"main", "compare"}),
-            (None,                         {"main"}),  # default unchanged
+            # scopes=None → IndicatorConfig DEFAULT_SCOPES, which now
+            # includes "drilldown" so a 1d indicator carries forward
+            # into the 5m drill-down view. See indicators/config.py.
+            (None,                         {"main", "drilldown"}),
         ]
         for scopes_in, scopes_out in cases:
             try:
@@ -5455,7 +5494,8 @@ def check_d44_locator_handles_tz_mixed_candles(app) -> None:
     Per ``core/pairing.spec.md`` the project policy is to normalize
     such mixes by stripping tzinfo on the lone-aware side.
     """
-    from datetime import datetime, timezone, timedelta
+    from datetime import timedelta, timezone
+
     from tradinglab.models import Candle
 
     base_aware = datetime(2024, 1, 2, 9, 30, tzinfo=timezone.utc)
@@ -5518,7 +5558,8 @@ def check_d45_prepost_toggle_rescales_drilldown(app) -> None:
     drill-down so ``_zoom_primary_to_date`` recomputes lo/hi against
     the freshly-filtered ``_primary``.
     """
-    from datetime import datetime, timedelta
+    from datetime import timedelta
+
     from tradinglab import data as _data_pkg
     from tradinglab.models import Candle
 
@@ -5785,9 +5826,10 @@ def check_d47_cache_stale_session_aware(app) -> None:
     drive the staleness function deterministically across the
     boundary cases that mattered.
     """
+    from datetime import timezone
+
     from tradinglab import app as appmod
     from tradinglab.models import Candle
-    from datetime import datetime, timezone
 
     # Build a synthetic candle dated "now" so timestamp arithmetic is
     # well-defined; we override time.time() so the actual wall clock
@@ -5872,7 +5914,8 @@ def check_d48_indicator_dialog(app) -> None:
     Exercises the dialog purely programmatically (no menubar click)
     so the test is independent of menu wiring and headless-safe."""
     from tradinglab.gui.indicator_dialog import (
-        IndicatorDialog, open_indicator_dialog,
+        IndicatorDialog,
+        open_indicator_dialog,
     )
     from tradinglab.indicators.config import IndicatorConfig
 
@@ -6043,9 +6086,10 @@ def check_d49_indicator_render_integration(app) -> None:
       * Scope filter: scope={'compare'} only → primary slot has no
         artists for that config.
     """
+    from datetime import timedelta
+
     from tradinglab.indicators.config import IndicatorConfig
     from tradinglab.models import Candle
-    from datetime import datetime, timedelta
 
     mgr = app._indicator_manager
     saved = list(mgr.list())
@@ -6196,10 +6240,11 @@ def check_d54_indicator_reorder(app) -> None:
     events on Windows CI are unreliable. The keyboard ``Alt+↑/↓``
     binding goes through the same ``_move_row_by_keyboard`` path the
     user hits, exercising the dialog → manager handoff."""
+    from datetime import timedelta
+
     from tradinglab.gui.indicator_dialog import open_indicator_dialog
     from tradinglab.indicators.config import IndicatorConfig
     from tradinglab.models import Candle
-    from datetime import datetime, timedelta
 
     mgr = app._indicator_manager
     saved = list(mgr.list())
@@ -6401,6 +6446,7 @@ def check_d55_indicator_preset_menu(app) -> None:
       preset is cleared when its preset is removed.
     """
     import tkinter as tk
+
     from tradinglab.indicators.config import IndicatorConfig
 
     mgr = app._indicator_manager
@@ -6454,7 +6500,7 @@ def check_d55_indicator_preset_menu(app) -> None:
                 continue
         assert ind_menu is not None, "Indicators cascade not found"
 
-        def _find_cascade(parent: "tk.Menu", label: str) -> "tk.Menu":
+        def _find_cascade(parent: tk.Menu, label: str) -> tk.Menu:
             iend = parent.index("end")
             for i in range(int(iend) + 1):
                 try:
@@ -6590,7 +6636,6 @@ def check_d56_ema_seeding_alignment(app) -> None:
     every reference platform (TradingView / ThinkOrSwim / TA-Lib) for
     the first ~3*length bars on every fresh series.
     """
-    import math
     from datetime import datetime, timedelta
 
     import numpy as np
@@ -6698,21 +6743,21 @@ def check_d57_performance_view_equity_csv_export(app) -> None:
     closes goes empty even when the file exists on disk.
     """
     import csv as _csv
-    import math
     import tempfile
     from datetime import datetime, timezone
     from pathlib import Path
 
     from tradinglab.backtest.journal import (
-        PostTradeReview, PreTradeEntry,
+        PostTradeReview,
+        PreTradeEntry,
     )
     from tradinglab.backtest.performance import (
         CSV_COLUMNS,
+        build_trade_rows,
         realized_pnl_curve,
         screenshot_filenames,
         trade_rows_to_tsv,
         write_trade_rows_csv,
-        build_trade_rows,
     )
     from tradinglab.backtest.session import SessionResult, SessionSpec
     from tradinglab.gui import performance_view as _pv_mod
@@ -6953,11 +6998,14 @@ def check_d58_anchored_vwap(app) -> None:
     H. **Dump/load round-trip**: ``manager.dump`` + ``load`` preserve
        ``anchor_ts`` byte-identically.
     """
-    from datetime import datetime, timedelta, timezone
+    from datetime import timedelta, timezone
+
     import numpy as np
 
     from tradinglab.indicators.avwap import (
-        AnchoredVWAP, first_eligible_anchor_ts, _strip_tz,
+        AnchoredVWAP,
+        _strip_tz,
+        first_eligible_anchor_ts,
     )
     from tradinglab.indicators.config import IndicatorConfig, IndicatorManager
     from tradinglab.models import Candle
@@ -7389,13 +7437,14 @@ def check_d59_relative_volume(app) -> None:
        returns ok=False on '1d' with a non-empty reason; True on '5m'.
     """
     import time
-    from datetime import datetime, timedelta
+    from datetime import timedelta
+
     import numpy as np
 
-    from tradinglab.indicators.rvol import RVOL
+    from tradinglab.indicators import render as _ind_render
     from tradinglab.indicators.base import factory_is_available_for
     from tradinglab.indicators.config import IndicatorConfig, IndicatorManager
-    from tradinglab.indicators import render as _ind_render
+    from tradinglab.indicators.rvol import RVOL
     from tradinglab.models import Candle
 
     def mk(dt, v, sess="regular"):
@@ -7669,9 +7718,10 @@ def check_d51_hover_indicator_readout(app) -> None:
         update) suppresses that indicator from the hover readout on
         the next render.
     """
+    from datetime import timedelta
+
     from tradinglab.indicators.config import IndicatorConfig
     from tradinglab.models import Candle
-    from datetime import datetime, timedelta
 
     mgr = app._indicator_manager
     saved = list(mgr.list())
@@ -8052,14 +8102,25 @@ def check_f0_backtest_kernel(app) -> None:
     The check operates entirely on synthetic data — no Tk render, no
     yfinance, no disk cache.
     """
-    from datetime import datetime, timezone, timedelta
+    from datetime import timedelta, timezone
+
+    import numpy as np
+
     from tradinglab.backtest import (
-        BarSeries, Clock, Fill, Order, Portfolio, PreTradeEntry,
-        SandboxEngine, SessionSpec, Side, apply_fills, from_candles,
+        BarSeries,
+        Clock,
+        Fill,
+        Order,
+        Portfolio,
+        PreTradeEntry,
+        SandboxEngine,
+        SessionSpec,
+        Side,
+        apply_fills,
+        from_candles,
     )
     from tradinglab.backtest.bars import _clear_cache_for_tests
     from tradinglab.models import Candle
-    import numpy as np
 
     _clear_cache_for_tests()
 
@@ -8260,10 +8321,11 @@ def check_g0_sandbox_replay_integration(app) -> None:
     clock-based timestamps, byte-uniform memento restore.
     """
     import datetime as dt
-    from tradinglab.models import Candle
-    from tradinglab.backtest.replay import SandboxController
-    from tradinglab.backtest.session import SessionSpec, ENGINE_VERSION
+
     from tradinglab.backtest.bars import _clear_cache_for_tests
+    from tradinglab.backtest.replay import SandboxController
+    from tradinglab.backtest.session import ENGINE_VERSION, SessionSpec
+    from tradinglab.models import Candle
 
     _clear_cache_for_tests()
 
@@ -8484,17 +8546,23 @@ def check_g1_sandbox_phase1c(app) -> None:
     import shutil
     import tempfile
     from pathlib import Path
-    from tradinglab.models import Candle
+
+    from tradinglab.backtest.bars import _clear_cache_for_tests
     from tradinglab.backtest.deck import (
-        DeckEntry, build_eligible_deck, shuffle_deck, draw_one,
+        DeckEntry,
+        build_eligible_deck,
+        draw_one,
         filter_candles_to_session,
+        shuffle_deck,
     )
     from tradinglab.backtest.replay import SandboxController
     from tradinglab.backtest.session import (
-        SessionSpec, SessionResult, ENGINE_VERSION,
+        ENGINE_VERSION,
+        SessionResult,
+        SessionSpec,
     )
     from tradinglab.backtest.tags import TagStore
-    from tradinglab.backtest.bars import _clear_cache_for_tests
+    from tradinglab.models import Candle
 
     # ---- 1. Deck construction + determinism --------------------------
     def synth_day(symbol: str, base: float, day: dt.date, n: int):
@@ -8720,10 +8788,11 @@ def check_g2_sandbox_open_universe(app) -> None:
         ``_load_data_async`` callback in flight is dropped as stale).
     """
     import datetime as dt
-    from tradinglab.models import Candle
-    from tradinglab.backtest.replay import SandboxController
-    from tradinglab.backtest.session import SessionSpec, ENGINE_VERSION
+
     from tradinglab.backtest.bars import _clear_cache_for_tests
+    from tradinglab.backtest.replay import SandboxController
+    from tradinglab.backtest.session import ENGINE_VERSION, SessionSpec
+    from tradinglab.models import Candle
 
     _clear_cache_for_tests()
 
@@ -8858,16 +8927,21 @@ def check_b5_sandbox_save_load(app) -> None:
     import json
     import tempfile
     from pathlib import Path
-    from tradinglab.models import Candle
-    from tradinglab.backtest.replay import SandboxController
-    from tradinglab.backtest.session import SessionSpec, ENGINE_VERSION, SessionResult
+
     from tradinglab.backtest.bars import _clear_cache_for_tests
-    from tradinglab.backtest.persistence import (
-        SESSION_FILE_FORMAT, SESSION_FILE_VERSION, save_session, load_session,
-    )
     from tradinglab.backtest.performance import (
-        build_setup_aggregates, build_trade_rows,
+        build_setup_aggregates,
+        build_trade_rows,
     )
+    from tradinglab.backtest.persistence import (
+        SESSION_FILE_FORMAT,
+        SESSION_FILE_VERSION,
+        load_session,
+        save_session,
+    )
+    from tradinglab.backtest.replay import SandboxController
+    from tradinglab.backtest.session import ENGINE_VERSION, SessionResult, SessionSpec
+    from tradinglab.models import Candle
 
     _clear_cache_for_tests()
 
@@ -9042,15 +9116,18 @@ def check_b8_sandbox_dialog_lazy_fetch(app) -> None:
         gracefully (no crash, returns False, status string left as
         the empty-cache hint).
     """
-    from datetime import date as _date, datetime as _datetime, timezone as _tz
+    from datetime import date as _date
+    from datetime import datetime as _datetime
+    from datetime import timezone as _tz
+
     from tradinglab.gui.sandbox_dialog import SandboxStartDialog
 
-    cache: Dict[str, List[_date]] = {"5m": []}
+    cache: dict[str, list[_date]] = {"5m": []}
 
-    def provider(itv: str) -> List[_date]:
+    def provider(itv: str) -> list[_date]:
         return list(cache.get(itv, []))
 
-    fetch_calls: List[str] = []
+    fetch_calls: list[str] = []
 
     def fetcher(itv: str) -> bool:
         fetch_calls.append(itv)
@@ -9103,7 +9180,7 @@ def check_b8_sandbox_dialog_lazy_fetch(app) -> None:
     # 2) Without fetch_provider: empty cache -> ensure() returns False.
     cache2 = {"5m": []}
 
-    def provider2(itv: str) -> List[_date]:
+    def provider2(itv: str) -> list[_date]:
         return list(cache2.get(itv, []))
 
     dlg2 = SandboxStartDialog(
@@ -9219,13 +9296,16 @@ def check_b10_sandbox_multi_interval(app) -> None:
         tuple back.
     """
     import datetime as dt
-    from tradinglab.models import Candle
+
     from tradinglab.backtest.aggregation import (
-        divides_evenly, aggregate, interval_minutes,
+        aggregate,
+        divides_evenly,
+        interval_minutes,
     )
-    from tradinglab.backtest.replay import SandboxController
-    from tradinglab.backtest.session import SessionSpec, ENGINE_VERSION
     from tradinglab.backtest.bars import _clear_cache_for_tests
+    from tradinglab.backtest.replay import SandboxController
+    from tradinglab.backtest.session import ENGINE_VERSION, SessionSpec
+    from tradinglab.models import Candle
 
     _clear_cache_for_tests()
 
@@ -9436,10 +9516,11 @@ def check_b11_sandbox_full_session_xlim(app) -> None:
          is None and ``_preserve_xlim_on_render`` is False.
     """
     import datetime as dt
-    from tradinglab.models import Candle
-    from tradinglab.backtest.replay import SandboxController
-    from tradinglab.backtest.session import SessionSpec, ENGINE_VERSION
+
     from tradinglab.backtest.bars import _clear_cache_for_tests
+    from tradinglab.backtest.replay import SandboxController
+    from tradinglab.backtest.session import ENGINE_VERSION, SessionSpec
+    from tradinglab.models import Candle
 
     _clear_cache_for_tests()
 
@@ -9574,10 +9655,11 @@ def check_b12_sandbox_compare_per_tick_refresh(app) -> None:
       C. With compare OFF, ``next_bar`` only refreshes "primary".
     """
     import datetime as dt
-    from tradinglab.models import Candle
-    from tradinglab.backtest.replay import SandboxController
-    from tradinglab.backtest.session import SessionSpec, ENGINE_VERSION
+
     from tradinglab.backtest.bars import _clear_cache_for_tests
+    from tradinglab.backtest.replay import SandboxController
+    from tradinglab.backtest.session import ENGINE_VERSION, SessionSpec
+    from tradinglab.models import Candle
 
     _clear_cache_for_tests()
 
@@ -9730,12 +9812,13 @@ def check_b13_sandbox_clock_tz_alignment(app) -> None:
          panel refresh — clock string updates without a manual tick.
     """
     import datetime as dt
-    from tradinglab.models import Candle
-    from tradinglab.backtest.replay import SandboxController
-    from tradinglab.backtest.session import SessionSpec, ENGINE_VERSION
-    from tradinglab.backtest.bars import _clear_cache_for_tests
-    from tradinglab.gui.sandbox_panel import SandboxPanel
     import tkinter as tk
+
+    from tradinglab.backtest.bars import _clear_cache_for_tests
+    from tradinglab.backtest.replay import SandboxController
+    from tradinglab.backtest.session import ENGINE_VERSION, SessionSpec
+    from tradinglab.gui.sandbox_panel import SandboxPanel
+    from tradinglab.models import Candle
     try:
         from zoneinfo import ZoneInfo
     except ImportError:
@@ -9889,6 +9972,7 @@ def _b1x_make_bars(seed_offset: float = 0.0,
     boilerplate small while preserving deterministic content.
     """
     import datetime as _dt
+
     from tradinglab.models import Candle as _Candle
     out = []
     days = [_dt.date(2024, 6, start_day + d) for d in range(n_days)]
@@ -9908,7 +9992,7 @@ def _b1x_make_bars(seed_offset: float = 0.0,
 
 
 def _b1x_default_spec():
-    from tradinglab.backtest.session import SessionSpec, ENGINE_VERSION
+    from tradinglab.backtest.session import ENGINE_VERSION, SessionSpec
     return SessionSpec(
         deck_seed=1, tickers=(), start_clock_iso="",
         slippage_bps=0.0, commission=0.0,
@@ -9975,8 +10059,8 @@ def check_b14_sandbox_visible_list_identity_stable(app) -> None:
     every cached layer. Validates id() stability across the full
     operation set (next_bar, set_focus, idempotent re-register).
     """
-    from tradinglab.backtest.replay import SandboxController
     from tradinglab.backtest.bars import _clear_cache_for_tests
+    from tradinglab.backtest.replay import SandboxController
     _clear_cache_for_tests()
     ref_bars, days = _b1x_make_bars(0.0)
     cmp_bars, _ = _b1x_make_bars(5.0)
@@ -10026,9 +10110,10 @@ def check_b15_sandbox_master_clock_frozen(app) -> None:
     Bars beyond the timeline never become visible.
     """
     import datetime as _dt
-    from tradinglab.models import Candle
-    from tradinglab.backtest.replay import SandboxController
+
     from tradinglab.backtest.bars import _clear_cache_for_tests
+    from tradinglab.backtest.replay import SandboxController
+    from tradinglab.models import Candle
     _clear_cache_for_tests()
     ref_bars, days = _b1x_make_bars(0.0)
     # EXT extends 50 bars past REF's last ts.
@@ -10086,8 +10171,9 @@ def check_b16_sandbox_lookback_boundary_exact(app) -> None:
     Lookback floor (date >= session_day - lookback_days) holds.
     """
     import datetime as _dt
-    from tradinglab.backtest.replay import SandboxController
+
     from tradinglab.backtest.bars import _clear_cache_for_tests
+    from tradinglab.backtest.replay import SandboxController
     _clear_cache_for_tests()
     ref_bars, days = _b1x_make_bars(0.0, n_days=4, start_day=3)
     snap = _b1x_capture_state(app)
@@ -10149,8 +10235,9 @@ def check_b17_sandbox_memento_full_restore(app) -> None:
     pre-state must match post-end. Calling end_session twice is safe.
     """
     import datetime as _dt
-    from tradinglab.backtest.replay import SandboxController
+
     from tradinglab.backtest.bars import _clear_cache_for_tests
+    from tradinglab.backtest.replay import SandboxController
     _clear_cache_for_tests()
     ref_bars, days = _b1x_make_bars(0.0)
     snap = _b1x_capture_state(app)
@@ -10235,8 +10322,8 @@ def check_b18_sandbox_reentrancy_guards(app) -> None:
     * After end, ``next_bar`` returns False; ``register_ticker`` is
       rejected.
     """
-    from tradinglab.backtest.replay import SandboxController
     from tradinglab.backtest.bars import _clear_cache_for_tests
+    from tradinglab.backtest.replay import SandboxController
     _clear_cache_for_tests()
     ref_bars, days = _b1x_make_bars(0.0)
     snap = _b1x_capture_state(app)
@@ -10298,8 +10385,8 @@ def check_b19_sandbox_end_of_session_boundary(app) -> None:
     grow the visible list. ``result()`` returns a well-formed
     SessionResult. xlim target is unchanged on exhaustion.
     """
-    from tradinglab.backtest.replay import SandboxController
     from tradinglab.backtest.bars import _clear_cache_for_tests
+    from tradinglab.backtest.replay import SandboxController
     _clear_cache_for_tests()
     # Tiny series: 2 days × 4 bars = 8 timeline bars. Lookback 1 → 4
     # pre-session bars revealed at start; 4 ticks left to exhaust.
@@ -10354,8 +10441,8 @@ def check_b20_sandbox_session_restart_state_cleanup(app) -> None:
     Defends against AttributeError-on-restart class of bugs and
     multi-session xlim/panel/controller leakage.
     """
-    from tradinglab.backtest.replay import SandboxController
     from tradinglab.backtest.bars import _clear_cache_for_tests
+    from tradinglab.backtest.replay import SandboxController
     _clear_cache_for_tests()
     ref1, days1 = _b1x_make_bars(0.0, n_days=3, n_per_day=8, start_day=3)
     ref2, days2 = _b1x_make_bars(20.0, n_days=3, n_per_day=10, start_day=10)
@@ -10418,10 +10505,11 @@ def check_b21_sandbox_right_arrow_entry_suppression(app) -> None:
     Tk focused widget is an Entry / Combobox / Text so users can edit
     thesis fields without ticking the clock.
     """
-    from tradinglab.backtest.replay import SandboxController
-    from tradinglab.backtest.bars import _clear_cache_for_tests
-    from tradinglab.gui.sandbox_panel import SandboxPanel
     import tkinter as tk
+
+    from tradinglab.backtest.bars import _clear_cache_for_tests
+    from tradinglab.backtest.replay import SandboxController
+    from tradinglab.gui.sandbox_panel import SandboxPanel
     _clear_cache_for_tests()
     ref_bars, days = _b1x_make_bars(0.0)
     snap = _b1x_capture_state(app)
@@ -10503,8 +10591,8 @@ def check_b22_sandbox_compare_mid_session_toggle_and_swap(app) -> None:
     correct identity-stable list, label var tracks state, and the
     OFF window does not mutate ``app._compare``.
     """
-    from tradinglab.backtest.replay import SandboxController
     from tradinglab.backtest.bars import _clear_cache_for_tests
+    from tradinglab.backtest.replay import SandboxController
     _clear_cache_for_tests()
     ref_bars, days = _b1x_make_bars(0.0)
     cmp1, _ = _b1x_make_bars(5.0)
@@ -10577,8 +10665,8 @@ def check_b23_sandbox_invalidate_focused_panels_contract(app) -> None:
     in O(k) per tick. The contract (focus + compare invalidate cadence)
     is unchanged — only the method name moved.
     """
-    from tradinglab.backtest.replay import SandboxController
     from tradinglab.backtest.bars import _clear_cache_for_tests
+    from tradinglab.backtest.replay import SandboxController
     _clear_cache_for_tests()
     ref_bars, days = _b1x_make_bars(0.0)
     cmp_bars, _ = _b1x_make_bars(5.0)
@@ -10642,8 +10730,8 @@ def check_b24_sandbox_watermark_tracks_focus(app) -> None:
     otherwise the watermark stays stuck on whatever ticker was active
     at app startup. Memento must restore the pre-session values on end.
     """
-    from tradinglab.backtest.replay import SandboxController
     from tradinglab.backtest.bars import _clear_cache_for_tests
+    from tradinglab.backtest.replay import SandboxController
     _clear_cache_for_tests()
     ref_bars, days = _b1x_make_bars(0.0)
     nvda_bars, _ = _b1x_make_bars(5.0)
@@ -10711,6 +10799,7 @@ def check_b25_sandbox_blind_random_seed(app) -> None:
     User-pinned non-zero seeds are preserved as-is for reproducible draws.
     """
     import datetime as _date_mod
+
     from tradinglab.gui.sandbox_dialog import SandboxStartDialog
     eligible = [_date_mod.date(2024, 6, d) for d in (3, 4, 5, 6, 7, 10, 11, 12)]
 
@@ -10814,10 +10903,11 @@ def check_b26_sandbox_compare_does_not_pan_primary(app) -> None:
          the same xlim as primary across ticks.
     """
     import datetime as dt
-    from tradinglab.models import Candle
-    from tradinglab.backtest.replay import SandboxController
-    from tradinglab.backtest.session import SessionSpec, ENGINE_VERSION
+
     from tradinglab.backtest.bars import _clear_cache_for_tests
+    from tradinglab.backtest.replay import SandboxController
+    from tradinglab.backtest.session import ENGINE_VERSION, SessionSpec
+    from tradinglab.models import Candle
 
     _clear_cache_for_tests()
 
@@ -10951,9 +11041,10 @@ def check_b27_indicator_dialog_dark_mode(app) -> None:
          container frame matches the dark bg (regression: rows
          added later kept default light bg).
     """
-    from tradinglab.gui.indicator_dialog import open_indicator_dialog
-    from tradinglab.constants import resolve_theme
     import tkinter as tk
+
+    from tradinglab.constants import resolve_theme
+    from tradinglab.gui.indicator_dialog import open_indicator_dialog
 
     pre_dark = bool(app.dark_var.get())
     pre_dlg_open = getattr(app, "_indicator_dialog", None) is not None
@@ -11073,11 +11164,12 @@ def check_b28_sandbox_indicator_survives_tick(app) -> None:
          no-op left the stale entry behind).
     """
     import datetime as dt
-    from tradinglab.models import Candle
-    from tradinglab.backtest.replay import SandboxController
-    from tradinglab.backtest.session import SessionSpec, ENGINE_VERSION
+
     from tradinglab.backtest.bars import _clear_cache_for_tests
+    from tradinglab.backtest.replay import SandboxController
+    from tradinglab.backtest.session import ENGINE_VERSION, SessionSpec
     from tradinglab.indicators.config import IndicatorConfig
+    from tradinglab.models import Candle
 
     _clear_cache_for_tests()
 
@@ -11218,9 +11310,10 @@ def check_b29_aggregation_matches_recompute(app) -> None:
       C. Volume sums match per bucket.
     """
     import datetime as dt
-    from tradinglab.models import Candle
+
     from tradinglab.backtest.aggregation import aggregate
     from tradinglab.backtest.bars import _clear_cache_for_tests
+    from tradinglab.models import Candle
 
     _clear_cache_for_tests()
 
@@ -11252,7 +11345,7 @@ def check_b29_aggregation_matches_recompute(app) -> None:
         f"from-scratch {len(from_scratch)}")
 
     # ---- B + C. per-bucket OHLCV matches -----------------------------------
-    for idx, (s_bar, f_bar) in enumerate(zip(streaming_results, from_scratch)):
+    for idx, (s_bar, f_bar) in enumerate(zip(streaming_results, from_scratch, strict=False)):
         assert s_bar.open == f_bar.open, (
             f"B: bucket[{idx}] open mismatch: {s_bar.open} != {f_bar.open}")
         assert s_bar.high == f_bar.high, (
@@ -11288,10 +11381,11 @@ def check_b30_ticker_switching_mid_session(app) -> None:
          unchanged).
     """
     import datetime as dt
-    from tradinglab.models import Candle
-    from tradinglab.backtest.replay import SandboxController
-    from tradinglab.backtest.session import SessionSpec, ENGINE_VERSION
+
     from tradinglab.backtest.bars import _clear_cache_for_tests
+    from tradinglab.backtest.replay import SandboxController
+    from tradinglab.backtest.session import ENGINE_VERSION, SessionSpec
+    from tradinglab.models import Candle
 
     _clear_cache_for_tests()
 
@@ -11369,8 +11463,8 @@ def check_b31_register_ticker_idempotency_and_rejection(app) -> None:
       (0), otherwise they proceed to dict key usage which works in
       Python but produces a non-string key — also documented.
     """
-    from tradinglab.backtest.replay import SandboxController
     from tradinglab.backtest.bars import _clear_cache_for_tests
+    from tradinglab.backtest.replay import SandboxController
 
     _clear_cache_for_tests()
 
@@ -11463,15 +11557,19 @@ def check_b32_save_load_mid_session_roundtrip(app) -> None:
       C. Equity curve length matches.
       D. JSON file is valid and envelope has correct format/version.
     """
-    import tempfile
     import json
+    import tempfile
     from pathlib import Path
-    from tradinglab.backtest.replay import SandboxController
-    from tradinglab.backtest.session import SessionSpec, ENGINE_VERSION
+
     from tradinglab.backtest.bars import _clear_cache_for_tests
     from tradinglab.backtest.persistence import (
-        save_session, load_session, SESSION_FILE_FORMAT, SESSION_FILE_VERSION,
+        SESSION_FILE_FORMAT,
+        SESSION_FILE_VERSION,
+        load_session,
+        save_session,
     )
+    from tradinglab.backtest.replay import SandboxController
+    from tradinglab.backtest.session import ENGINE_VERSION, SessionSpec
 
     _clear_cache_for_tests()
 
@@ -11559,9 +11657,9 @@ def check_b33_engine_determinism(app) -> None:
       B. Focus symbol matches.
       C. Clock timestamp matches.
     """
-    from tradinglab.backtest.replay import SandboxController
-    from tradinglab.backtest.session import SessionSpec, ENGINE_VERSION
     from tradinglab.backtest.bars import _clear_cache_for_tests
+    from tradinglab.backtest.replay import SandboxController
+    from tradinglab.backtest.session import ENGINE_VERSION, SessionSpec
 
     _clear_cache_for_tests()
 
@@ -11622,7 +11720,7 @@ def check_b33_engine_determinism(app) -> None:
     # ---- A. visible candles identical ----------------------------------
     assert len(vis1) == len(vis2), (
         f"A: visible lengths differ: {len(vis1)} vs {len(vis2)}")
-    for i, (c1, c2) in enumerate(zip(vis1, vis2)):
+    for i, (c1, c2) in enumerate(zip(vis1, vis2, strict=False)):
         assert c1.date == c2.date, f"A: bar[{i}] date mismatch"
         assert c1.open == c2.open, f"A: bar[{i}] open mismatch"
         assert c1.high == c2.high, f"A: bar[{i}] high mismatch"
@@ -11658,9 +11756,9 @@ def check_b34_set_display_interval_state_machine(app) -> None:
       D. Switching to an interval NOT in display_intervals returns
          False and display_interval is unchanged (clean rejection).
     """
-    from tradinglab.backtest.replay import SandboxController
-    from tradinglab.backtest.session import SessionSpec, ENGINE_VERSION
     from tradinglab.backtest.bars import _clear_cache_for_tests
+    from tradinglab.backtest.replay import SandboxController
+    from tradinglab.backtest.session import ENGINE_VERSION, SessionSpec
 
     _clear_cache_for_tests()
 
@@ -11745,7 +11843,7 @@ def check_b35_dark_theme_menubar_painting(app) -> None:
          light theme's win_bg value.
       C. The dark and light win_bg values are different (sanity).
     """
-    from tradinglab.constants import LIGHT_THEME, DARK_THEME
+    from tradinglab.constants import DARK_THEME, LIGHT_THEME
 
     pre_dark = app.dark_var.get()
     try:
@@ -11842,7 +11940,7 @@ def check_b35a_dark_theme_cascade_tabs_and_check_indicator(app) -> None:
       E. Sanity: dark and light values for ``selectcolor`` /
          ``ax_bg`` are different (catches a no-op cascade).
     """
-    from tradinglab.constants import LIGHT_THEME, DARK_THEME
+    from tradinglab.constants import DARK_THEME, LIGHT_THEME
 
     pre_dark = bool(app.dark_var.get())
     try:
@@ -12278,12 +12376,15 @@ def check_b70_keltner_channels(app) -> None:
          :meth:`IndicatorManager.to_dict`, hydrate fresh manager via
          :meth:`load_dict`, both survive with their params intact.
     """
-    import numpy as _np
     import datetime as _dt
+
+    import numpy as _np
+
     from tradinglab.indicators import INDICATORS, KeltnerChannels
     from tradinglab.indicators.base import factory_by_kind_id
     from tradinglab.indicators.config import (
-        IndicatorConfig, IndicatorManager,
+        IndicatorConfig,
+        IndicatorManager,
     )
     from tradinglab.models import Candle
 
@@ -12326,7 +12427,7 @@ def check_b70_keltner_channels(app) -> None:
         # Some entries may have an "unavailable" suffix; ensure ours is
         # the bare label (intraday + daily are both OK for KC).
         assert "Keltner Channels" in values, (
-            f"'Keltner Channels' missing from displayed dropdown values"
+            "'Keltner Channels' missing from displayed dropdown values"
         )
     finally:
         try:
@@ -12472,12 +12573,15 @@ def check_b71_macd(app) -> None:
          params survive intact and ``make_indicator()`` returns an
          :class:`MACD` instance with the recorded values.
     """
-    import numpy as _np
     import datetime as _dt
+
+    import numpy as _np
+
     from tradinglab.indicators import INDICATORS, MACD
     from tradinglab.indicators.base import factory_by_kind_id
     from tradinglab.indicators.config import (
-        IndicatorConfig, IndicatorManager,
+        IndicatorConfig,
+        IndicatorManager,
     )
     from tradinglab.indicators.macd import classify_histogram
     from tradinglab.models import Candle
@@ -12657,21 +12761,27 @@ def check_b72_chandelier_stops(app) -> None:
          a long position attached to a chandelier exit fires on a
          drop bar; the journal records the order at the stop level.
     """
-    import numpy as _np
     import datetime as _dt
+
+    import numpy as _np
+
+    from tradinglab.exits.audit import AuditLog
+    from tradinglab.exits.evaluator import ExitEvaluator
+    from tradinglab.exits.model import (
+        CURRENT_SCHEMA_VERSION,
+        ExitLeg,
+        ExitStrategy,
+        ExitTrigger,
+        TriggerKind,
+        migrate,
+    )
+    from tradinglab.exits.signals import ExitSignal
+    from tradinglab.exits.spec import Bar
     from tradinglab.indicators import INDICATORS, ChandelierStops
     from tradinglab.indicators.base import factory_by_kind_id
     from tradinglab.indicators.ma_kernels import MA_TYPES
-    from tradinglab.exits.model import (
-        CURRENT_SCHEMA_VERSION,
-        ExitLeg, ExitStrategy, ExitTrigger, TriggerKind, migrate,
-    )
-    from tradinglab.exits.evaluator import ExitEvaluator
-    from tradinglab.exits.audit import AuditLog
-    from tradinglab.exits.signals import ExitSignal
-    from tradinglab.exits.spec import Bar
-    from tradinglab.positions.tracker import PositionTracker
     from tradinglab.models import Candle
+    from tradinglab.positions.tracker import PositionTracker
 
     # --- A: registry ---------------------------------------------------
     assert "Chandelier Stops" in INDICATORS, (
@@ -12837,8 +12947,9 @@ def check_b36_lookback_trading_days_not_calendar(app) -> None:
          consume one of the lookback slots).
     """
     import datetime as dt
-    from tradinglab.models import Candle
+
     from tradinglab.backtest.deck import filter_candles_to_session
+    from tradinglab.models import Candle
 
     def mk(date: dt.date, hh: int, mm: int, session: str = "regular") -> Candle:
         ts = dt.datetime(date.year, date.month, date.day, hh, mm,
@@ -12928,8 +13039,8 @@ def check_b37_sandbox_compare_survives_focus_swap(app) -> None:
       E. Multiple consecutive focus swaps don't progressively erode
          compare state.
     """
-    from tradinglab.backtest.replay import SandboxController
     from tradinglab.backtest.bars import _clear_cache_for_tests
+    from tradinglab.backtest.replay import SandboxController
     _clear_cache_for_tests()
     ref_bars, days = _b1x_make_bars(0.0)
     pri_bars, _ = _b1x_make_bars(2.5)
@@ -13050,9 +13161,9 @@ def check_b38_sandbox_compare_change_routing(app) -> None:
          and calling ``_load_data`` actually swaps the compare slot
          (this is the path typing + watchlist cycling go through).
     """
-    from tradinglab.backtest.replay import SandboxController
-    from tradinglab.backtest.bars import _clear_cache_for_tests
     from tradinglab.app import _DEFAULT_COMPARE
+    from tradinglab.backtest.bars import _clear_cache_for_tests
+    from tradinglab.backtest.replay import SandboxController
     _clear_cache_for_tests()
     ref_bars, days = _b1x_make_bars(0.0)
     pri_bars, _ = _b1x_make_bars(2.5)
@@ -13203,11 +13314,12 @@ def check_b7_sandbox_multitf_context(app) -> None:
         than the sandbox's own intraday interval or ``"1d"``.
     """
     import datetime as dt
-    from tradinglab.models import Candle
-    from tradinglab.backtest.replay import SandboxController
-    from tradinglab.backtest.deck import build_eligible_dates
-    from tradinglab.backtest.session import SessionSpec, ENGINE_VERSION
+
     from tradinglab.backtest.bars import _clear_cache_for_tests
+    from tradinglab.backtest.deck import build_eligible_dates
+    from tradinglab.backtest.replay import SandboxController
+    from tradinglab.backtest.session import ENGINE_VERSION, SessionSpec
+    from tradinglab.models import Candle
 
     _clear_cache_for_tests()
 
@@ -13354,10 +13466,11 @@ def check_b6_sandbox_auto_cycle(app) -> None:
         views see the full session.
     """
     import datetime as dt
-    from tradinglab.models import Candle
-    from tradinglab.backtest.replay import SandboxController
-    from tradinglab.backtest.session import SessionSpec, ENGINE_VERSION
+
     from tradinglab.backtest.bars import _clear_cache_for_tests
+    from tradinglab.backtest.replay import SandboxController
+    from tradinglab.backtest.session import ENGINE_VERSION, SessionSpec
+    from tradinglab.models import Candle
 
     _clear_cache_for_tests()
 
@@ -13498,10 +13611,17 @@ def check_f1_session_reproducibility(app) -> None:
     Phase 2 leaderboard/walk-forward analysis ever depends on it.
     """
     import json
-    from datetime import datetime, timezone, timedelta
+    from datetime import timedelta, timezone
+
     from tradinglab.backtest import (
-        BarSeries, Order, PreTradeEntry, SandboxEngine, SessionSpec,
-        SessionResult, Side, from_candles,
+        BarSeries,
+        Order,
+        PreTradeEntry,
+        SandboxEngine,
+        SessionResult,
+        SessionSpec,
+        Side,
+        from_candles,
     )
     from tradinglab.backtest.bars import _clear_cache_for_tests
     from tradinglab.models import Candle
@@ -13607,9 +13727,10 @@ def check_b40_sandbox_watchlist_uses_replay_clock(app) -> None:
          the worker pool refills.
     """
     import datetime as _dt
+
     from tradinglab import data as _data_pkg
-    from tradinglab.backtest.replay import SandboxController
     from tradinglab.backtest.bars import _clear_cache_for_tests
+    from tradinglab.backtest.replay import SandboxController
     from tradinglab.models import Candle
     _clear_cache_for_tests()
 
@@ -13803,7 +13924,8 @@ def check_b41_indicator_intervals_per_instance(app) -> None:
          means render-everywhere" inversion).
     """
     from tradinglab.gui.indicator_dialog import (
-        open_indicator_dialog, _ALL_INTERVALS,
+        _ALL_INTERVALS,
+        open_indicator_dialog,
     )
     from tradinglab.indicators.config import IndicatorConfig
 
@@ -13915,12 +14037,13 @@ def check_b42_indicator_color_palette(app) -> None:
       G. Bollinger Bands (3 outputs: middle/upper/lower) gets three
          distinct color buttons, each independently overridable.
     """
-    from tradinglab.gui.indicator_dialog import open_indicator_dialog
     from tradinglab.gui.color_palette import (
-        HexColorPalette, _HONEYCOMB_COLORS,
+        _HONEYCOMB_COLORS,
+        HexColorPalette,
     )
-    from tradinglab.indicators.config import IndicatorConfig
+    from tradinglab.gui.indicator_dialog import open_indicator_dialog
     from tradinglab.indicators.base import LineStyle
+    from tradinglab.indicators.config import IndicatorConfig
 
     mgr = app._indicator_manager
     mgr.clear()
@@ -14111,14 +14234,18 @@ def check_b43_bollinger_bands_ema(app) -> None:
          on a non-flat input (proves the dropdown actually drives
          compute, not just metadata).
     """
+    import datetime as _dt
+
     import numpy as _np
+
     from tradinglab.indicators import (
-        INDICATORS, BollingerBands, EMA,
+        EMA,
+        INDICATORS,
+        BollingerBands,
     )
     from tradinglab.indicators.base import factory_by_kind_id
     from tradinglab.indicators.config import IndicatorConfig
     from tradinglab.models import Candle
-    import datetime as _dt
 
     # --- A: registry ---------------------------------------------------
     assert "Bollinger Bands (EMA)" not in INDICATORS, (
@@ -14258,9 +14385,11 @@ def check_b44_bollinger_separate_std_window(app) -> None:
       I. ``name`` includes the σ-decoupling tag only when std_length
          differs.
     """
-    import numpy as _np
     import datetime as _dt
-    from tradinglab.indicators import BollingerBands, EMA
+
+    import numpy as _np
+
+    from tradinglab.indicators import EMA, BollingerBands
     from tradinglab.indicators.config import IndicatorConfig
     from tradinglab.models import Candle
 
@@ -14388,8 +14517,10 @@ def check_b45_vwap_session_anchored(app) -> None:
       L. Sandbox-style incremental feed produces the same final values
          as a one-shot compute (determinism / replay equivalence).
     """
-    import numpy as _np
     import datetime as _dt
+
+    import numpy as _np
+
     from tradinglab.indicators import INDICATORS, VWAP
     from tradinglab.indicators.config import IndicatorConfig
     from tradinglab.models import Candle
@@ -14632,11 +14763,14 @@ def check_b46_smi_stochastic_momentum_index(app) -> None:
       L. Sandbox replay parity: incremental compute on prefixes
          agrees with one-shot compute on the post-warmup region.
     """
-    import numpy as _np
     import datetime as _dt
+
+    import numpy as _np
+
     from tradinglab.indicators import INDICATORS, SMI
     from tradinglab.indicators.config import (
-        IndicatorConfig, IndicatorManager,
+        IndicatorConfig,
+        IndicatorManager,
     )
     from tradinglab.models import Candle
 
@@ -14929,8 +15063,10 @@ def check_b47_indicator_pane_yfit_after_click(app) -> None:
       C. The fix path: ``_autoscale_indicator_pane`` exists and walks
          ``_panel_state`` to find the right state.
     """
+    from datetime import timedelta
+
     import numpy as _np
-    from datetime import datetime, timedelta
+
     from tradinglab.indicators.config import IndicatorConfig
     from tradinglab.models import Candle
 
@@ -15079,11 +15215,14 @@ def check_b48_adx_average_directional_index(app) -> None:
       L. Sandbox replay parity: incremental compute on prefixes
          agrees with one-shot compute on the post-warmup region.
     """
-    import numpy as _np
     import datetime as _dt
-    from tradinglab.indicators import INDICATORS, ADX
+
+    import numpy as _np
+
+    from tradinglab.indicators import ADX, INDICATORS
     from tradinglab.indicators.config import (
-        IndicatorConfig, IndicatorManager,
+        IndicatorConfig,
+        IndicatorManager,
     )
     from tradinglab.models import Candle
 
@@ -15371,9 +15510,11 @@ def check_b49_atr_average_true_range(app) -> None:
          of ADX compute against the same bars used in b48 yields the
          same first-finite indices.
     """
-    import numpy as _np
     import datetime as _dt
-    from tradinglab.indicators import INDICATORS, ATR, ADX
+
+    import numpy as _np
+
+    from tradinglab.indicators import ADX, ATR, INDICATORS
     from tradinglab.indicators.base import factory_by_kind_id
     from tradinglab.indicators.config import IndicatorConfig
     from tradinglab.models import Candle
@@ -15683,8 +15824,10 @@ def check_b50_lrsi_laguerre_rsi(app) -> None:
          (3) Toggling show_reference_lines=False tears down both
              axhlines; marker tuple becomes ().
     """
-    import numpy as _np
     import datetime as _dt
+
+    import numpy as _np
+
     from tradinglab.indicators import INDICATORS, LRSI
     from tradinglab.indicators.config import IndicatorConfig
     from tradinglab.models import Candle
@@ -15930,8 +16073,12 @@ def check_b60_events_protocol_registry(app) -> None:
     """
     from tradinglab import events as _events_pkg
     from tradinglab.events import (
-        EVENT_SOURCES, EarningsRecord, DividendRecord, EventBundle,
-        register_event_source, fetch_synthetic_events,
+        EVENT_SOURCES,
+        DividendRecord,
+        EarningsRecord,
+        EventBundle,
+        fetch_synthetic_events,
+        register_event_source,
     )
 
     # Registry shape.
@@ -15991,9 +16138,15 @@ def check_b61_engine_corporate_action_phase(app) -> None:
     * ``ENGINE_VERSION`` is unchanged ("sandbox-1d") — the additive
       fields don't bump the version per the user-confirmed decision.
     """
-    from datetime import datetime, timezone, timedelta
+    from datetime import timedelta, timezone
+
     from tradinglab.backtest import (
-        Order, PreTradeEntry, SandboxEngine, SessionSpec, Side, from_candles,
+        Order,
+        PreTradeEntry,
+        SandboxEngine,
+        SessionSpec,
+        Side,
+        from_candles,
     )
     from tradinglab.backtest.actions import CorporateAction
     from tradinglab.backtest.bars import _clear_cache_for_tests
@@ -16129,7 +16282,9 @@ def check_b62_events_blind_redaction(app) -> None:
     modulo the eps_actual NaN-masking defence in depth.
     """
     from tradinglab.events import (
-        EarningsRecord, DividendRecord, EventBundle,
+        DividendRecord,
+        EarningsRecord,
+        EventBundle,
         events_visible_for,
     )
     from tradinglab.events.gating import ForwardEarningsBadge
@@ -16229,9 +16384,12 @@ def check_b63_events_master_timeline_frozen(app) -> None:
     A dividend on a non-trading day must still produce an adjustment
     on the next available bar, not a synthetic clock tick.
     """
-    from datetime import datetime, timezone, timedelta
+    from datetime import timedelta, timezone
+
     from tradinglab.backtest import (
-        SandboxEngine, SessionSpec, from_candles,
+        SandboxEngine,
+        SessionSpec,
+        from_candles,
     )
     from tradinglab.backtest.actions import CorporateAction
     from tradinglab.backtest.bars import _clear_cache_for_tests
@@ -16302,6 +16460,7 @@ def check_b64_save_load_proximity_and_adjustments(app) -> None:
       ``ENGINE_VERSION`` at ``"sandbox-1d"`` per the locked decision.
     """
     import json
+
     from tradinglab.backtest import PreTradeEntry, SessionResult, SessionSpec
     from tradinglab.backtest.actions import CashAdjustment, QuantityAdjustment
 
@@ -16402,8 +16561,9 @@ def check_b65_events_cache_disk_roundtrip(app) -> None:
     """
     import os
     from pathlib import Path
-    from tradinglab.events import EarningsRecord, DividendRecord, EventBundle
-    from tradinglab.events.cache import load, save, merge_bundle
+
+    from tradinglab.events import DividendRecord, EarningsRecord, EventBundle
+    from tradinglab.events.cache import load, merge_bundle, save
 
     bundle_a = EventBundle(
         symbol="CACHE",
@@ -16565,9 +16725,15 @@ def check_b67_events_provider_drift_determinism(app) -> None:
     of the upstream event provider's payload.
     """
     import json
-    from datetime import datetime, timezone, timedelta
+    from datetime import timedelta, timezone
+
     from tradinglab.backtest import (
-        Order, PreTradeEntry, SandboxEngine, SessionSpec, Side, from_candles,
+        Order,
+        PreTradeEntry,
+        SandboxEngine,
+        SessionSpec,
+        Side,
+        from_candles,
     )
     from tradinglab.backtest.actions import CorporateAction
     from tradinglab.backtest.bars import _clear_cache_for_tests
@@ -16669,14 +16835,15 @@ def check_b68_volume_tod_shading(app) -> None:
        round-trips the value through :mod:`settings` and a
        :func:`defaults.reload` makes ``get`` reflect the new value.
     """
-    from datetime import datetime, timezone, timedelta
+    from datetime import timedelta, timezone
+
     from tradinglab import defaults as _defaults_mod
     from tradinglab import settings as _settings_mod
-    from tradinglab.models import Candle
     from tradinglab.gui.volume_tod_overlay import (
-        compute_volume_tod_patches,
         VolumeTodPatch,
+        compute_volume_tod_patches,
     )
+    from tradinglab.models import Candle
 
     # ---- Build 21 daily bars + a matching 5m intraday list for day 20 ----
     # Daily bar dates are noon UTC = 08:00 ET (deliberately before 09:30
@@ -16817,9 +16984,11 @@ def check_b68_volume_tod_shading(app) -> None:
 
 def check_e0_disk_cache_persist(app) -> None:
     """Disk cache is written on fetch and read back on next session."""
-    from tradinglab import disk_cache, data as _data_pkg
+    from datetime import timedelta
+
+    from tradinglab import data as _data_pkg
+    from tradinglab import disk_cache
     from tradinglab.models import Candle
-    from datetime import datetime, timedelta
 
     # Counter-wrapped fetcher producing fresh-dated bars so the
     # staleness check in _load_data sees them as current.
@@ -16851,7 +17020,7 @@ def check_e0_disk_cache_persist(app) -> None:
         _pump(app, 0.5)
         assert calls["n"] >= 1, "fresh ticker should hit the fetcher"
         assert disk_cache._path_for(*key).exists(), (
-            ".pkl file should exist after successful fetch")
+            ".jsonl file should exist after successful fetch")
         assert key in app._full_cache, (
             "memory cache should have the fetched entry")
 
@@ -16886,9 +17055,10 @@ def check_d24_n7_async_load_offloads_to_executor(app) -> None:
     by pre-warming `_full_cache` and asserting no executor submission
     happens on a second call.
     """
+    from datetime import timedelta
+
     from tradinglab import data as _data_pkg
     from tradinglab.models import Candle
-    from datetime import datetime, timedelta
 
     # API sanity.
     assert hasattr(app, "_load_data_async"), (
@@ -17150,6 +17320,7 @@ def check_d26_scroll_zoom_invert_setting(app) -> None:
     opposite zoom — same factor magnitude, opposite direction.
     """
     import types
+
     from tradinglab import settings as _settings_pkg
 
     app.compare_var.set(False)
@@ -17442,8 +17613,8 @@ def check_d62_overlay_legend_eye_toggles(app) -> None:
         OverlayLegend,
         collect_overlay_configs,
     )
-    from tradinglab.indicators.config import IndicatorConfig
     from tradinglab.indicators.base import LineStyle
+    from tradinglab.indicators.config import IndicatorConfig
 
     legend = getattr(app, "_overlay_legend", None)
     assert isinstance(legend, OverlayLegend), (
@@ -17599,7 +17770,7 @@ def check_d28_data_readout_strip(app) -> None:
     # Pick a known bar with a deterministic direction and update.
     candles = app._primary
     assert len(candles) >= 5, "need a few bars to test"
-    from tradinglab.constants import BULL_COLOR, BEAR_COLOR
+    from tradinglab.constants import BEAR_COLOR, BULL_COLOR
 
     offset = app._ax_candle_map[ax_p][2]
 
@@ -17909,11 +18080,12 @@ def check_d29_price_axes_top_headroom(app) -> None:
     - flat slice (lo == hi) keeps a finite, non-degenerate ylim.
     - volume kind is unchanged (still ``[0, 1.1*max]``).
     """
-    from tradinglab.core.viewport import y_limits_for_slice
-    from tradinglab.core.series import SeriesArrays
-    from tradinglab.models import Candle
-    from datetime import datetime, timedelta
     import math
+    from datetime import timedelta
+
+    from tradinglab.core.series import SeriesArrays
+    from tradinglab.core.viewport import y_limits_for_slice
+    from tradinglab.models import Candle
 
     bars = []
     t = datetime(2026, 1, 5, 9, 30)
@@ -18007,9 +18179,9 @@ def check_bxx_splash_and_bundles(app) -> None:
     )
     from tradinglab.backtest.session import ENGINE_VERSION
     from tradinglab.gui.splash import (
-        NullSplashController,
         STAGE_READY,
         STAGE_SETTINGS,
+        NullSplashController,
         make_splash,
     )
 
@@ -18336,6 +18508,7 @@ def check_d80_horizontal_lines(app) -> None:
         import matplotlib
         matplotlib.use("Agg", force=False)
         from matplotlib.figure import Figure  # noqa: WPS433
+
         from tradinglab.drawings.render import (  # noqa: WPS433
             DRAWING_LABEL_GID_PREFIX,
             render_drawings,
@@ -18581,8 +18754,8 @@ def main() -> int:
         except Exception:  # noqa: BLE001
             pass
         try:
-            from pathlib import Path
             import os
+            from pathlib import Path
             test_tickers = (
                 "AAA", "BBB", "CCC", "DDD", "XYZ", "ZXCV", "WXYZ",
                 "SOLO", "PREFETCHA", "PREFETCHB", "XXA", "XXB",
@@ -18592,7 +18765,7 @@ def main() -> int:
             cache_dir = Path(os.environ.get("LOCALAPPDATA", "")) / "tradinglab"
             if cache_dir.is_dir():
                 for t in test_tickers:
-                    for p in cache_dir.glob(f"yfinance__{t}__*.pkl"):
+                    for p in cache_dir.glob(f"yfinance__{t}__*.jsonl"):
                         try:
                             p.unlink()
                         except Exception:  # noqa: BLE001

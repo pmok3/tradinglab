@@ -21,10 +21,10 @@ import pytest
 import tradinglab.indicators  # noqa: F401  -- registers indicators
 from tradinglab.models import Candle
 from tradinglab.scanner.model import (
+    OP_GT,
     Condition,
     FieldRef,
     Group,
-    OP_GT,
     ScanDefinition,
 )
 
@@ -60,7 +60,7 @@ def _candle(epoch_minute: int, close: float) -> Candle:
                   low=close - 0.5, close=close, volume=1000)
 
 
-def _bars(closes: List[float]) -> List[Candle]:
+def _bars(closes: list[float]) -> list[Candle]:
     return [_candle(i * 5, c) for i, c in enumerate(closes)]
 
 

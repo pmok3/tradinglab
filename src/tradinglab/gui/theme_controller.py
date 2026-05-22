@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import contextlib
 import tkinter as tk
+from collections.abc import Callable
 from tkinter import ttk
-from typing import Callable, Dict, List, Optional
 
 from .. import settings as _settings
 from ..constants import (
@@ -41,23 +41,23 @@ class ThemeController:
         self._root = root
         self._figure = figure
         self._canvas = canvas
-        self._theme: Dict[str, str] = {}
+        self._theme: dict[str, str] = {}
         self._theme_overrides = self._load_theme_overrides()
-        self._change_callbacks: List[Callable[[Dict[str, str]], None]] = []
+        self._change_callbacks: list[Callable[[dict[str, str]], None]] = []
 
     @property
-    def theme(self) -> Dict[str, str]:
+    def theme(self) -> dict[str, str]:
         return self._theme
 
     @property
-    def overrides(self) -> Dict[str, Dict[str, str]]:
+    def overrides(self) -> dict[str, dict[str, str]]:
         return self._theme_overrides
 
     def bind_plot(self, *, figure=None, canvas=None) -> None:
         self._figure = figure
         self._canvas = canvas
 
-    def on_change(self, callback: Callable[[Dict[str, str]], None]) -> None:
+    def on_change(self, callback: Callable[[dict[str, str]], None]) -> None:
         self._change_callbacks.append(callback)
 
     def _is_dark_mode(self) -> bool:
@@ -142,7 +142,7 @@ class ThemeController:
         bear_bg = theme.get("bear_row_bg", BEAR_COLOR)
         bull_fg = theme.get("bull_row_fg", theme["text"])
         bear_fg = theme.get("bear_row_fg", theme["text"])
-        trees: List = []
+        trees: list = []
         trees.extend(getattr(root, "_watchlist_trees", {}).values())
         trees.append(getattr(root, "_primary_table", None))
         trees.append(getattr(root, "_compare_table", None))
@@ -215,18 +215,26 @@ class ThemeController:
             theme = LIGHT_THEME
         bg = theme.get("win_bg", "#f0f0f0")
         fg = theme.get("text", "#111111")
+        # Foreground for disabled menu entries (e.g. the gated
+        # "Highlight Flat HA Candles" entry when HA is off). Picking a
+        # muted grey from the palette avoids the Windows-default
+        # etched/embossed disabled-text style that looks blurry on
+        # dark backgrounds. Falls back to ``fg`` for older palettes
+        # that don't carry the key. Audit ``menu-disabled-fg``.
+        fg_disabled = theme.get("text_disabled", fg)
         opts = dict(
             background=bg,
             foreground=fg,
             activebackground=fg,
             activeforeground=bg,
             selectcolor=fg,
+            disabledforeground=fg_disabled,
         )
         for menu in [mb, *getattr(root, "_menubar_submenus", [])]:
             with _silent_tcl():
                 menu.configure(**opts)
 
-    def _load_theme_overrides(self) -> Dict[str, Dict[str, str]]:
+    def _load_theme_overrides(self) -> dict[str, dict[str, str]]:
         """Load the ``theme_overrides`` dict from settings.json, defensively."""
         try:
             raw = _settings.get("theme_overrides", {}) or {}
@@ -235,7 +243,7 @@ class ThemeController:
         if not isinstance(raw, dict):
             raw = {}
         allowed_keys = {k for k, _ in CUSTOMIZABLE_THEME_KEYS}
-        out: Dict[str, Dict[str, str]] = {"light": {}, "dark": {}}
+        out: dict[str, dict[str, str]] = {"light": {}, "dark": {}}
         for mode in ("light", "dark"):
             mode_raw = raw.get(mode, {})
             if not isinstance(mode_raw, dict):
@@ -268,7 +276,7 @@ class ThemeController:
         self._save_theme_overrides()
         self.apply(self._is_dark_mode())
 
-    def clear_theme_overrides(self, mode: Optional[str] = None) -> None:
+    def clear_theme_overrides(self, mode: str | None = None) -> None:
         """Wipe overrides for one mode or both and re-theme."""
         if mode in ("light", "dark"):
             self._theme_overrides.setdefault(mode, {}).clear()
@@ -278,7 +286,7 @@ class ThemeController:
         self._save_theme_overrides()
         self.apply(self._is_dark_mode())
 
-    def replace_theme_overrides(self, overrides: Dict[str, Dict[str, str]]) -> None:
+    def replace_theme_overrides(self, overrides: dict[str, dict[str, str]]) -> None:
         """Replace the entire override dict and re-theme."""
         self._theme_overrides.clear()
         self._theme_overrides.update(

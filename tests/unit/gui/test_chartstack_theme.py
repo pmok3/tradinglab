@@ -88,8 +88,8 @@ def test_apply_theme_recolors_non_right_aligned_text_artists(root):
     try:
         # Force a card to draw a non-empty render so we have left + right text.
         from tradinglab.gui.chartstack.binding import CardBinding
-        from tradinglab.gui.chartstack.series_cache import Bar
         from tradinglab.gui.chartstack.render import draw_card_candles
+        from tradinglab.gui.chartstack.series_cache import Bar
         bars = [Bar(ts=i, open=100.0 + i, high=101.0 + i, low=99.0 + i,
                     close=100.5 + i, volume=1000.0, session="regular")
                 for i in range(5)]

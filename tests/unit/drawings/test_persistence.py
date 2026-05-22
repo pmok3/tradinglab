@@ -16,7 +16,6 @@ from tradinglab.drawings import (
 )
 from tradinglab.drawings import store as store_mod
 
-
 # ---------------------------------------------------------------
 # Fixture: redirect drawings_file_path() to a tmp file.
 # ---------------------------------------------------------------

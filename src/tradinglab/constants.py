@@ -73,6 +73,11 @@ LIGHT_THEME: dict = {
     "pre_shade": "#4a6fa5",
     "post_shade": "#c07a2e",
     "crosshair": "#555555",
+    # Foreground for disabled menu/button text. Picked from the GitHub
+    # "muted" greys so the disabled label still reads against either
+    # palette without the Windows-default etched/embossed look that
+    # appears blurry on dark backgrounds. Audit ``menu-disabled-fg``.
+    "text_disabled": "#8b949e",
 }
 
 #: Sentinel key returned as the first row of :func:`build_ttk_style_spec`.
@@ -160,6 +165,37 @@ def build_ttk_style_spec(theme: dict) -> list:
                           ("hover", spine)],
               foreground=[("active", fg), ("pressed", fg),
                           ("hover", fg)])),
+        # ttk container widgets that were previously falling back to
+        # the OS default palette (which renders light-grey on dark
+        # mode). Without these, the Entries / Watchlist tabs and any
+        # other panel that uses ``ttk.LabelFrame`` / ``ttk.PanedWindow``
+        # / ``ttk.Scrollbar`` look unthemed in dark mode. Audit
+        # ``ttk-container-dark``.
+        ("TLabelframe",
+         dict(background=bg, bordercolor=spine),
+         {}),
+        ("TLabelframe.Label",
+         dict(background=bg, foreground=fg),
+         {}),
+        ("TPanedwindow",
+         dict(background=bg),
+         {}),
+        # ``TPanedwindow`` separator widget used by the clam theme.
+        # Painting the sash with the ``spine`` colour gives a subtle
+        # but visible divider line.
+        ("Sash",
+         dict(background=spine, sashthickness=4),
+         {}),
+        ("TScrollbar",
+         dict(background=ax_bg, troughcolor=bg,
+              bordercolor=spine, arrowcolor=fg),
+         dict(background=[("active", spine), ("pressed", spine)],
+              arrowcolor=[("active", fg), ("pressed", fg)])),
+        ("TSpinbox",
+         dict(fieldbackground=ax_bg, background=ax_bg,
+              foreground=fg, arrowcolor=fg, insertcolor=fg),
+         dict(fieldbackground=[("readonly", ax_bg)],
+              foreground=[("readonly", fg)])),
     ]
 
 
@@ -198,6 +234,9 @@ DARK_THEME: dict = {
     "pre_shade": "#8ab4f8",
     "post_shade": "#e8a95c",
     "crosshair": "#ffffff",
+    # Foreground for disabled menu/button text. See ``LIGHT_THEME``
+    # comment — dark-palette counterpart from the GitHub "muted" greys.
+    "text_disabled": "#6e7681",
 }
 
 
@@ -284,8 +323,8 @@ _STARTUP_THEME_CHOICES = ("light", "dark")
 
 def resolve_startup_defaults(
     overrides: dict | None, *,
-    intervals: "list | tuple | set | None" = None,
-    sources: "list | tuple | set | None" = None,
+    intervals: list | tuple | set | None = None,
+    sources: list | tuple | set | None = None,
 ) -> dict:
     """Merge sparse ``overrides`` over :data:`BUILTIN_STARTUP_DEFAULTS`.
 

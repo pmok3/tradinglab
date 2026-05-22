@@ -31,7 +31,6 @@ from tradinglab.exits.spec import (
 )
 from tradinglab.positions.model import Position
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

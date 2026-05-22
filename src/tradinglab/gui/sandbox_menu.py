@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import tkinter as tk
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any
 
 from ..data import DATA_SOURCES
 from ..models import Candle
@@ -75,7 +75,7 @@ class SandboxMenuMixin:
         # for. (Could be lifted in Phase 2.)
         sandbox_intervals = ["1m", "2m", "5m", "15m", "30m", "1h"]
 
-        def _eligible_dates_at(itv: str) -> List[Any]:
+        def _eligible_dates_at(itv: str) -> list[Any]:
             """Eligibility provider for the dialog. Cache-only — no fetch.
 
             Returns empty list if SPY isn't cached at this interval; the
@@ -137,7 +137,7 @@ class SandboxMenuMixin:
         # prepared universes. Lazy import keeps app.py's eager import
         # graph cheap; the failure mode is swallowed here so a bad
         # manifest dir never blocks Start.
-        def _manifest_provider() -> List[Any]:
+        def _manifest_provider() -> list[Any]:
             try:
                 from ..preload import manifest as _man
                 return _man.load_all()
@@ -211,7 +211,7 @@ class SandboxMenuMixin:
         # bars during the session. Failure here degrades gracefully —
         # the sandbox still starts, just without 1d-toggle data
         # (rubber-duck blocker — daily fetch must not block intraday).
-        daily_ref_candles: List[Candle] = []
+        daily_ref_candles: list[Candle] = []
         if daily_lookback_bars > 0:
             daily_key = (src, reference_symbol, "1d")
             cached_daily = self._full_cache.get(daily_key)

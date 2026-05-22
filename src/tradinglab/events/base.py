@@ -19,8 +19,8 @@ To add a new provider:
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional
 
 # ---------------------------------------------------------------------------
 # Record types
@@ -132,8 +132,8 @@ class EventBundle:
     zone (past prints) cached indefinitely.
     """
     symbol: str
-    earnings: List[EarningsRecord] = field(default_factory=list)
-    dividends: List[DividendRecord] = field(default_factory=list)
+    earnings: list[EarningsRecord] = field(default_factory=list)
+    dividends: list[DividendRecord] = field(default_factory=list)
     fetched_at: int = 0
 
     def __post_init__(self) -> None:
@@ -149,13 +149,13 @@ class EventBundle:
 # EventBundle (possibly with empty lists) on success, or None on
 # failure. Treating provider errors, empty frames, and import failures
 # identically mirrors :data:`data.base.DataFetcher`.
-EventFetcher = Callable[[str], Optional[EventBundle]]
+EventFetcher = Callable[[str], EventBundle | None]
 
 
 # Global registry. Populated by submodules at import time. Dict order
 # mirrors :data:`data.base.DATA_SOURCES`; the first entry is the
 # default selection for ``defaults.get("events_source")``.
-EVENT_SOURCES: Dict[str, EventFetcher] = {}
+EVENT_SOURCES: dict[str, EventFetcher] = {}
 
 
 def register_event_source(name: str, fetcher: EventFetcher) -> None:

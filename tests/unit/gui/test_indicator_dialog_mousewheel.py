@@ -26,7 +26,6 @@ import pytest
 
 from tradinglab.indicators.config import IndicatorManager
 
-
 # ---------------------------------------------------------------------------
 # Fixtures (matches test_indicator_dialog_save_cancel.py)
 # ---------------------------------------------------------------------------

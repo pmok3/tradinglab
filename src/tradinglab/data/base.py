@@ -17,20 +17,20 @@ To add a new provider:
 
 from __future__ import annotations
 
-from typing import Callable, Dict, List, Optional
+from collections.abc import Callable
 
 from ..models import Candle
 
 # A source fetcher takes (ticker, interval) and returns candles or None
 # on failure (import error, network error, empty result — all treated
 # equivalently by the app).
-DataFetcher = Callable[[str, str], Optional[List[Candle]]]
+DataFetcher = Callable[[str, str], list[Candle] | None]
 
 
 # Global registry. Populated by submodules at import time. The dict
 # preserves insertion order — the UI uses the first entry as the
 # default selection.
-DATA_SOURCES: Dict[str, DataFetcher] = {}
+DATA_SOURCES: dict[str, DataFetcher] = {}
 
 
 def register_source(name: str, fetcher: DataFetcher) -> None:

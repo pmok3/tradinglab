@@ -46,13 +46,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from .core.io_helpers import atomic_write_json
 
 # In-process state.
-_store: Dict[str, Any] = {}
-_loaded_path: Optional[Path] = None
+_store: dict[str, Any] = {}
+_loaded_path: Path | None = None
 _dirty: bool = False
 
 
@@ -65,12 +65,12 @@ def _is_comment_key(key: str) -> bool:
 # In-memory CRUD (kept compatible with the old API)
 # ---------------------------------------------------------------------------
 
-def load() -> Dict[str, Any]:
+def load() -> dict[str, Any]:
     """Return a shallow copy of the in-memory store."""
     return dict(_store)
 
 
-def save(settings: Dict[str, Any]) -> None:
+def save(settings: dict[str, Any]) -> None:
     """Replace the in-memory store wholesale.
 
     Kept for compatibility with code that did read-modify-write before.
@@ -158,7 +158,7 @@ def export_to_file(path: Any, *, include_comments: bool = False) -> bool:
     return True
 
 
-def loaded_path() -> Optional[Path]:
+def loaded_path() -> Path | None:
     """Return the path of the most recently loaded/exported config, or None."""
     return _loaded_path
 

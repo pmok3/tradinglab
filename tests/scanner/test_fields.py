@@ -16,9 +16,9 @@ import pytest
 
 from tradinglab.models import Candle
 from tradinglab.scanner.fields import (
-    BarsNp,
     INDICATORS_RESETTING_DAILY,
     SCANNABLE_INDICATORS,
+    BarsNp,
     all_fields,
     builtin_compute,
     condition_uses_daily_reset_field,
@@ -29,7 +29,6 @@ from tradinglab.scanner.fields import (
 )
 from tradinglab.scanner.model import Condition, FieldRef, Group
 
-
 # ---------------------------------------------------------------------------
 # Synthetic candle helpers
 # ---------------------------------------------------------------------------
@@ -38,9 +37,9 @@ from tradinglab.scanner.model import Condition, FieldRef, Group
 def _make_candles(n: int, *, base: float = 100.0, step: float = 1.0,
                   start: datetime = datetime(2026, 5, 4, 9, 30, tzinfo=timezone.utc),
                   interval_min: int = 5,
-                  session: str = "regular") -> List[Candle]:
+                  session: str = "regular") -> list[Candle]:
     """Linearly trending candle list. ``close[i] = base + i*step``."""
-    out: List[Candle] = []
+    out: list[Candle] = []
     for i in range(n):
         ts = start + timedelta(minutes=i * interval_min)
         c = base + i * step
@@ -261,17 +260,19 @@ def test_allowlist_is_subset_of_all_known_kinds():
     # imported lazily) — just that the allowlist itself is consistent.
     for kind_id, outputs in SCANNABLE_INDICATORS.items():
         assert outputs, f"empty output list for {kind_id!r}"
-        for key, dtype in outputs:
+        for _key, dtype in outputs:
             assert dtype in ("numeric", "bool")
 
 import math
 
 
 def _bars_from_ohlc(opens, highs, lows, closes):
-    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+    from datetime import datetime as _dt
+    from datetime import timedelta as _td
+    from datetime import timezone as _tz
     start = _dt(2026, 5, 4, 9, 30, tzinfo=_tz.utc)
     out = []
-    for i, (o, h, l, c) in enumerate(zip(opens, highs, lows, closes)):
+    for i, (o, h, l, c) in enumerate(zip(opens, highs, lows, closes, strict=False)):
         out.append(Candle(date=start + _td(minutes=5 * i),
                           open=o, high=h, low=l, close=c,
                           volume=1000, session="regular"))

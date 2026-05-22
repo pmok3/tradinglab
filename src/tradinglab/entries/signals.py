@@ -42,18 +42,14 @@ from __future__ import annotations
 import logging
 import threading
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
-    Dict,
-    List,
     Literal,
-    Optional,
     Protocol,
-    Tuple,
 )
 
 from ..exits.model import OrderSide
@@ -113,14 +109,14 @@ class EntrySignal:
     side: OrderSide
     position_side: Literal["long", "short"]
     qty: float
-    price: Optional[float] = None
-    limit_price: Optional[float] = None
-    on_fill_exit_ids: Tuple[str, ...] = ()
+    price: float | None = None
+    limit_price: float | None = None
+    on_fill_exit_ids: tuple[str, ...] = ()
     label: str = ""
-    extra: Dict[str, Any] = field(default_factory=dict)
+    extra: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def new(cls, **kwargs: Any) -> "EntrySignal":
+    def new(cls, **kwargs: Any) -> EntrySignal:
         """Construct with an auto-assigned id."""
         return cls(id=uuid.uuid4().hex, **kwargs)
 
@@ -145,7 +141,7 @@ class EntrySignalSink(Protocol):
 
     def working_order_ids_for_pending_position(
         self, pending_position_id: str
-    ) -> List[str]: ...
+    ) -> list[str]: ...
 
 
 # ---------------------------------------------------------------------------
@@ -166,17 +162,17 @@ class EntryPaperSink:
     pending-orders index and fill machinery.
     """
 
-    def __init__(self, engine: "PaperBrokerEngine") -> None:
+    def __init__(self, engine: PaperBrokerEngine) -> None:
         self._engine = engine
-        self._signal_to_order: Dict[str, str] = {}
-        self._order_to_signal: Dict[str, str] = {}
+        self._signal_to_order: dict[str, str] = {}
+        self._order_to_signal: dict[str, str] = {}
         # pending_position_id -> list of paper order ids (typically just one,
         # but we list-it for symmetry with the exits sink).
-        self._working_by_pending_pos: Dict[str, List[str]] = {}
+        self._working_by_pending_pos: dict[str, list[str]] = {}
         # symbol (uppercased) -> list of paper order ids, kept here so we
         # can answer cancel_all_pending_for_symbol after the engine has
         # already fired/cancelled an entry (engine purges its index).
-        self._working_by_symbol: Dict[str, List[str]] = {}
+        self._working_by_symbol: dict[str, list[str]] = {}
 
     def submit(self, signal: EntrySignal) -> str:
         from ..exits.paper_engine import (  # local import to avoid cycle
@@ -238,14 +234,14 @@ class EntryPaperSink:
 
     def working_order_ids_for_pending_position(
         self, pending_position_id: str
-    ) -> List[str]:
+    ) -> list[str]:
         """Snapshot of working paper order ids for a given pending id.
 
         Read-only — safe from any thread.
         """
         return list(self._working_by_pending_pos.get(pending_position_id, []))
 
-    def working_order_ids_for_symbol(self, symbol: str) -> List[str]:
+    def working_order_ids_for_symbol(self, symbol: str) -> list[str]:
         return list(self._working_by_symbol.get(symbol.upper(), []))
 
     def on_fill(self, order_id: str) -> None:
@@ -285,7 +281,7 @@ class EntryManualSignalEvent:
     """Event published by :class:`EntryManualSink` to subscribers."""
 
     kind: str  # "submitted", "cancelled", "ack-fill"
-    signal: Optional[EntrySignal]
+    signal: EntrySignal | None
     order_id: str
 
 
@@ -302,12 +298,12 @@ class EntryManualSink:
     responsible for marshalling onto the Tk thread before drawing.
     """
 
-    def __init__(self, *, audit: Optional["AuditLog"] = None) -> None:
+    def __init__(self, *, audit: AuditLog | None = None) -> None:
         self._audit = audit
-        self._working_by_symbol: Dict[str, List[str]] = {}
-        self._working_by_pending_pos: Dict[str, List[str]] = {}
-        self._signals_by_id: Dict[str, EntrySignal] = {}
-        self._subscribers: List[Callable[[EntryManualSignalEvent], None]] = []
+        self._working_by_symbol: dict[str, list[str]] = {}
+        self._working_by_pending_pos: dict[str, list[str]] = {}
+        self._signals_by_id: dict[str, EntrySignal] = {}
+        self._subscribers: list[Callable[[EntryManualSignalEvent], None]] = []
         self._lock = threading.Lock()
 
     def subscribe(
@@ -425,10 +421,10 @@ class EntryManualSink:
 
     def working_order_ids_for_pending_position(
         self, pending_position_id: str
-    ) -> List[str]:
+    ) -> list[str]:
         return list(self._working_by_pending_pos.get(pending_position_id, []))
 
-    def working_order_ids_for_symbol(self, symbol: str) -> List[str]:
+    def working_order_ids_for_symbol(self, symbol: str) -> list[str]:
         return list(self._working_by_symbol.get(symbol.upper(), []))
 
     def _drop_index(self, signal: EntrySignal, order_id: str) -> None:

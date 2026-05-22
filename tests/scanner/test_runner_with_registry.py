@@ -20,22 +20,21 @@ from tradinglab.core.bars_registry import BarsRegistry
 from tradinglab.data.multi_interval_cache import MultiIntervalCache
 from tradinglab.models import Candle
 from tradinglab.scanner.model import (
+    OP_GT,
     Condition,
     FieldRef,
     Group,
-    OP_GT,
     ScanDefinition,
     UniverseFilter,
 )
 from tradinglab.scanner.runner import ScanRunner
 
-
 # --- helpers ---------------------------------------------------------------
 
 
-def _candles(closes: List[float],
+def _candles(closes: list[float],
              start: datetime = datetime(2026, 5, 4, 9, 30),
-             interval_min: int = 5) -> List[Candle]:
+             interval_min: int = 5) -> list[Candle]:
     out = []
     for i, c in enumerate(closes):
         out.append(Candle(
@@ -60,7 +59,7 @@ def _scan_close_gt(threshold: float, *, name: str = "test",
     )
 
 
-def _make_registry_with(symbol: str, candles: List[Candle], interval: str = "5m") -> BarsRegistry:
+def _make_registry_with(symbol: str, candles: list[Candle], interval: str = "5m") -> BarsRegistry:
     cache = MultiIntervalCache()
     cache.set_bars(symbol, interval, candles)
     return BarsRegistry(cache)

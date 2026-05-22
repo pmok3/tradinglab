@@ -54,7 +54,13 @@ Collections without rebuilding formatters/locators.
   **right** edge (TradingView/Sierra convention). `setup_indicator_pane_axes`
   uses a pixel-aware `MaxNLocator` subclass capping `nbins` to
   `pane_height_px // 28`. `setup_volume_axes` caps at `nbins=3` and prunes
-  upper tick; `setup_price_axes` prunes lower tick (`hspace=0` collision).
+  **both** the upper tick (collides with the bottom-most price tick on the
+  pane above; `hspace=0`) AND the lower tick (which is always `0` because
+  volume ylims are pinned to `(0.0, vmax * 1.1)` — `0` is visually obvious
+  from a bar reaching the pane's bottom edge, and the label collided with
+  whatever indicator pane the user placed below volume). Audit
+  ``volume-axis-prune-both``. `setup_price_axes` prunes lower tick only
+  (`hspace=0` collision with the price/volume boundary).
 - Geometry helpers `bar_geometry`, `vol_geometry` and an optional
   `body_half: Optional[float]` on `draw_candlesticks`/`draw_volume` support
   the H1 stream-tick fastpath. Module constants `_DENSE_PX_PER_BAR_THRESHOLD

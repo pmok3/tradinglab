@@ -41,7 +41,6 @@ import platform
 import sys
 import traceback
 from pathlib import Path
-from typing import Optional
 
 _CRASH_PREFIX = "crash-"
 _CRASH_SUFFIX = ".txt"
@@ -62,7 +61,7 @@ def _logs_dir_or_fallback() -> Path:
 
 
 def _write_crash_file(exc_type, exc_value, exc_tb,
-                      *, when: Optional[datetime.datetime] = None) -> Path:
+                      *, when: datetime.datetime | None = None) -> Path:
     """Serialize the exception triple to a fresh crash file. Return the path."""
     when = when or datetime.datetime.now()
     stamp = when.strftime("%Y-%m-%dT%H-%M-%S")
@@ -70,7 +69,7 @@ def _write_crash_file(exc_type, exc_value, exc_tb,
     path = out_dir / f"{_CRASH_PREFIX}{stamp}{_CRASH_SUFFIX}"
 
     lines = []
-    lines.append(f"TradingLab crash report")
+    lines.append("TradingLab crash report")
     lines.append(f"Timestamp: {when.isoformat()}")
     try:
         from .._version import version_string

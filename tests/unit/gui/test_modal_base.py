@@ -263,7 +263,7 @@ def test_dark_theme_hook_is_called_when_parent_supports_it(root) -> None:
     def fake_hook(top):
         called.append(top)
 
-    setattr(root, "apply_dark_theme_to", fake_hook)
+    root.apply_dark_theme_to = fake_hook
     dlg = _DemoModal(root, title="x", geometry_key="dlg.demo")
     assert called and called[0] is dlg
     dlg.destroy()

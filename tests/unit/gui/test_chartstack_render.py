@@ -16,12 +16,11 @@ import matplotlib
 
 matplotlib.use("Agg")
 
+import pytest
 from matplotlib.collections import LineCollection, PatchCollection
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.patches import Rectangle
-
-import pytest
 
 from tradinglab.gui.chartstack import render as R
 from tradinglab.gui.chartstack.binding import CardBinding
@@ -32,7 +31,6 @@ from tradinglab.gui.chartstack.render import (
     draw_card_sparkline,
 )
 from tradinglab.gui.chartstack.series_cache import Bar
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

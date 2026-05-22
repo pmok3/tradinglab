@@ -22,7 +22,6 @@ from __future__ import annotations
 import datetime as _dt
 import math
 import random
-from typing import Optional
 
 from .base import DividendRecord, EarningsRecord, EventBundle
 
@@ -33,7 +32,7 @@ def _midnight_ms(d: _dt.date) -> int:
     return int((_dt.datetime(d.year, d.month, d.day) - _EPOCH).total_seconds() * 1000)
 
 
-def fetch_synthetic_events(ticker: str) -> Optional[EventBundle]:
+def fetch_synthetic_events(ticker: str) -> EventBundle | None:
     """Return a deterministic :class:`EventBundle` for ``ticker``.
 
     Never returns ``None`` in the synthetic generator — by contract

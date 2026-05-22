@@ -17,7 +17,6 @@ from tradinglab.gui.indicator_dialog import (
     _spinbox_width_for,
 )
 
-
 # ---------------------------------------------------------------- combo widths
 
 

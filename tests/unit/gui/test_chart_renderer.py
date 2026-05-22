@@ -22,6 +22,7 @@ import datetime as _dt
 from typing import Any, List
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pytest
@@ -40,7 +41,7 @@ def _candle(i: int, *, gap: bool = False) -> Candle:
     )
 
 
-def _candles(n: int) -> List[Candle]:
+def _candles(n: int) -> list[Candle]:
     return [_candle(i) for i in range(n)]
 
 
@@ -300,8 +301,9 @@ class TestAutoscaleSlotY:
             "candles": candles, "price_ax": price_ax, "vol_ax": vol_ax,
         }
         # Series getter returns a SeriesArrays-like with .high/.low/.volume.
-        import numpy as np
         from types import SimpleNamespace
+
+        import numpy as np
 
         def _getter(c):
             return SimpleNamespace(

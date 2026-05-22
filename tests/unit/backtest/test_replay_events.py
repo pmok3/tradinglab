@@ -18,7 +18,6 @@ import pytest
 from tradinglab.backtest.replay_events import EventsControllerMixin
 from tradinglab.events.base import DividendRecord, EarningsRecord, EventBundle
 
-
 # ---------------------------------------------------------------------------
 # Fakes
 # ---------------------------------------------------------------------------

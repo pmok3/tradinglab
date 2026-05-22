@@ -72,7 +72,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import font as tkfont
 from tkinter import messagebox, ttk
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from ._modal_base import BaseModalDialog
 from .colors import INFO_BLUE, MUTED_GREY
@@ -80,7 +80,7 @@ from .colors import INFO_BLUE, MUTED_GREY
 #: Stable preferred order for the sidebar list. Docs not in this list
 #: are appended in alphabetical order so newly-added bundled .md files
 #: show up automatically without a code change.
-_DOC_ORDER: Tuple[str, ...] = (
+_DOC_ORDER: tuple[str, ...] = (
     "ONBOARDING.md",
     "WATCHLISTS.md",
     "CUSTOM_INDICATORS.md",
@@ -91,7 +91,7 @@ _DOC_ORDER: Tuple[str, ...] = (
 
 #: Human-readable display titles for known docs. Anything not in this
 #: map falls back to the filename (stripped of ``.md``).
-_DOC_TITLES: Dict[str, str] = {
+_DOC_TITLES: dict[str, str] = {
     "ONBOARDING.md": "Getting Started",
     "WATCHLISTS.md": "Watchlists Guide",
     "CUSTOM_INDICATORS.md": "Custom Indicators Guide",
@@ -105,7 +105,7 @@ _DOC_TITLES: Dict[str, str] = {
 
 #: Tag base names emitted into the ``tk.Text`` widget. Tests assert
 #: against this set so the renderer contract is stable.
-TAG_NAMES: Tuple[str, ...] = (
+TAG_NAMES: tuple[str, ...] = (
     "h1", "h2", "h3", "h4",
     "para", "bullet", "numbered", "blockquote",
     "code_block", "inline_code",
@@ -119,7 +119,7 @@ TAG_NAMES: Tuple[str, ...] = (
 # ---------------------------------------------------------------------------
 
 
-def _theme_palette(dark: bool) -> Dict[str, str]:
+def _theme_palette(dark: bool) -> dict[str, str]:
     """Return bg/fg/code colours for the active theme.
 
     Returned keys: ``bg``, ``fg``, ``muted``, ``code_bg``, ``code_fg``,
@@ -225,7 +225,7 @@ def _apply_inline_markup(text_widget, line: str, base_tag: str) -> None:
         text_widget.insert("end", line[pos:], (base_tag,))
 
 
-def render_markdown_into_text(text_widget, md_text: str) -> List[str]:
+def render_markdown_into_text(text_widget, md_text: str) -> list[str]:
     """Render ``md_text`` into a ``tk.Text`` widget using semantic tags.
 
     The caller is responsible for configuring tag fonts/colors
@@ -243,7 +243,7 @@ def render_markdown_into_text(text_widget, md_text: str) -> List[str]:
       tag (h1..h4, bullet, numbered, blockquote, hr, para) and then
       run through :func:`_apply_inline_markup`.
     """
-    emitted: List[str] = []
+    emitted: list[str] = []
     in_code = False
     lines = md_text.splitlines()
 
@@ -335,7 +335,7 @@ def render_markdown_into_text(text_widget, md_text: str) -> List[str]:
 # ---------------------------------------------------------------------------
 
 
-def _discover_doc_files() -> List[Path]:
+def _discover_doc_files() -> list[Path]:
     """Return the list of bundled ``.md`` docs in ``docs/``.
 
     Falls back to an empty list when resource resolution fails (e.g.
@@ -351,11 +351,11 @@ def _discover_doc_files() -> List[Path]:
         return []
     if not docs_root.is_dir():
         return []
-    found: Dict[str, Path] = {}
+    found: dict[str, Path] = {}
     for entry in docs_root.iterdir():
         if entry.is_file() and entry.suffix.lower() == ".md":
             found[entry.name] = entry
-    ordered: List[Path] = []
+    ordered: list[Path] = []
     for name in _DOC_ORDER:
         if name in found:
             ordered.append(found.pop(name))
@@ -397,7 +397,7 @@ class DocViewerDialog(BaseModalDialog):
         self,
         parent: tk.Misc,
         *,
-        initial_path: Optional[Path] = None,
+        initial_path: Path | None = None,
     ) -> None:
         super().__init__(
             parent,
@@ -409,8 +409,15 @@ class DocViewerDialog(BaseModalDialog):
         )
         self._dark = _is_parent_dark(parent)
         self._palette = _theme_palette(self._dark)
-        self._docs: List[Path] = _discover_doc_files()
-        self._current_path: Optional[Path] = None
+        self._docs: list[Path] = _discover_doc_files()
+        self._current_path: Path | None = None
+        # Stash widgets that need live retinting on theme toggle. Audit
+        # ``doc-viewer-live-repaint``: prior revisions captured the
+        # palette once at construction and never repainted, so toggling
+        # dark mode while the viewer was open (or singleton-reopening
+        # after the toggle) showed stale light-mode chrome.
+        self._theme_tk_frames: list[tk.Widget] = []
+        self._theme_tk_labels: list[tk.Widget] = []
 
         self.configure(bg=self._palette["bg"])
         self._build_layout()
@@ -459,10 +466,17 @@ class DocViewerDialog(BaseModalDialog):
         pal = self._palette
         outer = tk.Frame(self, bg=pal["bg"])
         outer.pack(fill="both", expand=True)
+        self._theme_tk_frames.append(outer)
+        # Slot keys tag each widget so ``_apply_theme`` can pull the
+        # right colour from the palette (some Frames sit on the main
+        # bg, others on the sidebar bg). Audit ``doc-viewer-live-repaint``.
+        outer._dv_bg_key = "bg"  # type: ignore[attr-defined]
 
         # Top toolbar row: title label + "Open externally" + Close.
         top = tk.Frame(outer, bg=pal["bg"])
         top.pack(fill="x", side="top", padx=8, pady=(8, 4))
+        self._theme_tk_frames.append(top)
+        top._dv_bg_key = "bg"  # type: ignore[attr-defined]
 
         self._title_var = tk.StringVar(value="")
         title_label = tk.Label(
@@ -473,6 +487,9 @@ class DocViewerDialog(BaseModalDialog):
             anchor="w",
         )
         title_label.pack(side="left", fill="x", expand=True)
+        self._theme_tk_labels.append(title_label)
+        title_label._dv_bg_key = "bg"  # type: ignore[attr-defined]
+        title_label._dv_fg_key = "fg"  # type: ignore[attr-defined]
 
         external_btn = ttk.Button(
             top, text="Open Externally…",
@@ -490,6 +507,8 @@ class DocViewerDialog(BaseModalDialog):
         # Sidebar (left).
         side = tk.Frame(body, bg=pal["sidebar_bg"], width=200)
         side.pack_propagate(False)
+        self._theme_tk_frames.append(side)
+        side._dv_bg_key = "sidebar_bg"  # type: ignore[attr-defined]
         side_lbl = tk.Label(
             side, text="Documents",
             bg=pal["sidebar_bg"], fg=pal["sidebar_fg"],
@@ -497,6 +516,9 @@ class DocViewerDialog(BaseModalDialog):
             anchor="w",
         )
         side_lbl.pack(fill="x", padx=8, pady=(8, 4))
+        self._theme_tk_labels.append(side_lbl)
+        side_lbl._dv_bg_key = "sidebar_bg"  # type: ignore[attr-defined]
+        side_lbl._dv_fg_key = "sidebar_fg"  # type: ignore[attr-defined]
         self._sidebar = tk.Listbox(
             side,
             activestyle="dotbox",
@@ -515,6 +537,8 @@ class DocViewerDialog(BaseModalDialog):
 
         # Text pane (right) with scrollbar.
         right = tk.Frame(body, bg=pal["bg"])
+        self._theme_tk_frames.append(right)
+        right._dv_bg_key = "bg"  # type: ignore[attr-defined]
         self._text = tk.Text(
             right,
             wrap="word",
@@ -615,6 +639,81 @@ class DocViewerDialog(BaseModalDialog):
             font=tkfont.Font(family=mono_family, size=9),
             foreground=pal["fg"], spacing3=0,
         )
+
+    # ------------------------------------------------------------------
+    # Live theme repaint (audit: doc-viewer-live-repaint)
+    # ------------------------------------------------------------------
+    def _apply_theme(self) -> None:
+        """Re-detect dark mode and repaint all themed widgets.
+
+        Called when the parent ChartApp toggles the theme while the
+        viewer is open, and also when the singleton is re-shown
+        (``open_doc_viewer``) after a hidden theme toggle.
+
+        Light/dark detection still flows through ``_is_parent_dark`` —
+        if the parent has been destroyed the call no-ops and we keep
+        the stale palette.
+        """
+        try:
+            new_dark = _is_parent_dark(self._parent_ref)
+        except Exception:  # noqa: BLE001
+            return
+        if new_dark == self._dark and self._palette is not None:
+            # No change — still safe to re-tag (Tk is idempotent) but
+            # skip the walk for the fast path.
+            return
+        self._dark = new_dark
+        self._palette = _theme_palette(new_dark)
+        pal = self._palette
+
+        # Toplevel + the tracked tk.Frame/tk.Label widgets.
+        try:
+            self.configure(bg=pal["bg"])
+        except tk.TclError:
+            return
+        for frame in list(self._theme_tk_frames):
+            try:
+                if not frame.winfo_exists():
+                    continue
+                key = getattr(frame, "_dv_bg_key", "bg")
+                frame.configure(bg=pal.get(key, pal["bg"]))
+            except tk.TclError:
+                pass
+        for lbl in list(self._theme_tk_labels):
+            try:
+                if not lbl.winfo_exists():
+                    continue
+                bg_key = getattr(lbl, "_dv_bg_key", "bg")
+                fg_key = getattr(lbl, "_dv_fg_key", "fg")
+                lbl.configure(
+                    bg=pal.get(bg_key, pal["bg"]),
+                    fg=pal.get(fg_key, pal["fg"]),
+                )
+            except tk.TclError:
+                pass
+
+        # Sidebar listbox.
+        try:
+            if self._sidebar.winfo_exists():
+                self._sidebar.configure(
+                    bg=pal["sidebar_bg"], fg=pal["sidebar_fg"],
+                    selectbackground=pal["sidebar_sel_bg"],
+                    selectforeground=pal["sidebar_sel_fg"],
+                )
+        except (tk.TclError, AttributeError):
+            pass
+
+        # Text widget + every renderer tag — _configure_tags is
+        # idempotent and reads the (now-updated) self._palette.
+        try:
+            if self._text.winfo_exists():
+                self._text.configure(
+                    bg=pal["bg"], fg=pal["fg"],
+                    insertbackground=pal["fg"],
+                )
+                self._configure_tags()
+        except (tk.TclError, AttributeError):
+            pass
 
     # ------------------------------------------------------------------
     # Sidebar
@@ -770,10 +869,10 @@ class DocViewerDialog(BaseModalDialog):
 
 def open_doc_viewer(
     parent: tk.Misc,
-    path: Optional[os.PathLike] = None,
+    path: os.PathLike | None = None,
     *,
-    title: Optional[str] = None,
-) -> Optional[DocViewerDialog]:
+    title: str | None = None,
+) -> DocViewerDialog | None:
     """Open or focus the singleton-ish doc viewer for ``parent``.
 
     Repeated invocations raise the existing dialog instead of
@@ -785,14 +884,14 @@ def open_doc_viewer(
 
     Returns the dialog instance or ``None`` if construction failed.
     """
-    target_path: Optional[Path] = None
+    target_path: Path | None = None
     if path is not None:
         try:
             target_path = Path(path)
         except Exception:  # noqa: BLE001
             target_path = None
 
-    existing: Optional[DocViewerDialog] = getattr(parent, "_doc_viewer_dialog", None)
+    existing: DocViewerDialog | None = getattr(parent, "_doc_viewer_dialog", None)
     if existing is not None:
         try:
             if existing.winfo_exists():
@@ -801,6 +900,14 @@ def open_doc_viewer(
                         existing._load_doc(target_path)
                     except Exception:  # noqa: BLE001
                         pass
+                # If the parent theme changed while the singleton was
+                # hidden, repaint before raising — otherwise the user
+                # sees the stale (e.g. light) palette on a dark app.
+                # Audit ``doc-viewer-live-repaint``.
+                try:
+                    existing._apply_theme()
+                except Exception:  # noqa: BLE001
+                    pass
                 existing.deiconify()
                 existing.lift()
                 existing.focus_set()

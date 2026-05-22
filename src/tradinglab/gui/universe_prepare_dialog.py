@@ -20,12 +20,12 @@ later sandbox session can reference the universe without re-fetching.
 
 from __future__ import annotations
 
-import datetime as _dt
 import queue as _queue
 import threading
 import tkinter as tk
+from collections.abc import Callable
 from tkinter import ttk
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any
 
 from .. import baskets as _baskets
 from .. import disk_cache as _disk_cache
@@ -45,7 +45,7 @@ from .colors import MUTED_GREY
 # ---------------------------------------------------------------------------
 
 _DEFAULT_INTRADAY_INTERVAL = "5m"
-_DEFAULT_INTRADAY_CHOICES: Tuple[str, ...] = ("1m", "2m", "5m", "15m", "30m", "60m")
+_DEFAULT_INTRADAY_CHOICES: tuple[str, ...] = ("1m", "2m", "5m", "15m", "30m", "60m")
 _DAILY_INTERVAL = "1d"
 
 # ---------------------------------------------------------------------------
@@ -66,7 +66,7 @@ _EST_BYTES_PER_DAILY_OP = 140_000
 
 # Per-radio metadata cached at dialog-load time so resolving NYSE /
 # NASDAQ size doesn't pay the CSV-parse cost on every keystroke.
-_BASKET_SIZE_CACHE: Dict[str, int] = {}
+_BASKET_SIZE_CACHE: dict[str, int] = {}
 
 
 def _basket_size(kind: str) -> int:
@@ -92,9 +92,9 @@ def _basket_size(kind: str) -> int:
 def compute_run_estimate(
     *,
     symbol_count: int,
-    intervals: Tuple[str, ...],
+    intervals: tuple[str, ...],
     daily_interval: str = _DAILY_INTERVAL,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Pure-function ETA + size estimator for the dialog footer.
 
     Splits intervals into "daily" (cheap, ~0.6 s/op) and "intraday"
@@ -178,8 +178,8 @@ class UniversePrepareDialog(tk.Toplevel):
         app: Any,
         *,
         source_name: str,
-        fetcher: Callable[[str, str], Optional[List[Candle]]],
-        on_finished: Optional[Callable[[Optional[_manifest.UniverseManifest]], None]] = None,
+        fetcher: Callable[[str, str], list[Candle] | None],
+        on_finished: Callable[[_manifest.UniverseManifest | None], None] | None = None,
     ) -> None:
         super().__init__(app)
         self.app = app
@@ -218,15 +218,15 @@ class UniversePrepareDialog(tk.Toplevel):
         # Worker / queue state. ``_worker`` is None except while a run
         # is in progress.
         self._cancel_event = threading.Event()
-        self._event_queue: "_queue.Queue[_service.ProgressEvent]" = _queue.Queue()
-        self._worker: Optional[threading.Thread] = None
-        self._poll_after_id: Optional[str] = None
-        self._saved_manifest: Optional[_manifest.UniverseManifest] = None
+        self._event_queue: _queue.Queue[_service.ProgressEvent] = _queue.Queue()
+        self._worker: threading.Thread | None = None
+        self._poll_after_id: str | None = None
+        self._saved_manifest: _manifest.UniverseManifest | None = None
 
         # The plan (symbols + intervals + manifest meta) for the run
         # in progress. Captured at Start so a Watchlist rename
         # mid-preload doesn't desync the manifest.
-        self._run_plan: Optional[Dict[str, Any]] = None
+        self._run_plan: dict[str, Any] | None = None
         # When a fundamental filter pre-pass runs, this tracks the
         # number of symbols that matched. ``-1`` means "no filter
         # was applied this run". Used by ``_on_worker_finished`` to
@@ -267,7 +267,7 @@ class UniversePrepareDialog(tk.Toplevel):
     # ---- result accessor ----
 
     @property
-    def result(self) -> Optional[_manifest.UniverseManifest]:
+    def result(self) -> _manifest.UniverseManifest | None:
         """Manifest written on success, or None if cancelled / failed."""
         return self._saved_manifest
 
@@ -482,7 +482,7 @@ class UniversePrepareDialog(tk.Toplevel):
         self._cancel_btn = ttk.Button(btn_frame, text="Close", command=self._on_close_request)
         self._cancel_btn.grid(row=0, column=1)
 
-    def _available_watchlists(self) -> List[str]:
+    def _available_watchlists(self) -> list[str]:
         wm = getattr(self.app, "_watchlists", None)
         if wm is None:
             return []
@@ -530,7 +530,7 @@ class UniversePrepareDialog(tk.Toplevel):
             else:
                 count = _basket_size(kind)
             intraday = (self._intraday_var.get() or "").strip()
-            intervals: List[str] = []
+            intervals: list[str] = []
             if intraday:
                 intervals.append(intraday)
             if self._include_daily_var.get() and _DAILY_INTERVAL not in intervals:
@@ -563,7 +563,7 @@ class UniversePrepareDialog(tk.Toplevel):
     # Resolve plan
     # -----------------------------------------------------------------
 
-    def _resolve_plan(self) -> Optional[Dict[str, Any]]:
+    def _resolve_plan(self) -> dict[str, Any] | None:
         """Translate the form into a runnable plan.
 
         Returns a dict ``{uid, name, kind, source, intervals, symbols,
@@ -585,7 +585,7 @@ class UniversePrepareDialog(tk.Toplevel):
         if flt_spec is None:
             return None  # _parse_filter_form already set the status
 
-        intervals: List[str] = [intraday]
+        intervals: list[str] = [intraday]
         if self._include_daily_var.get() and _DAILY_INTERVAL not in intervals:
             intervals.append(_DAILY_INTERVAL)
         # When the fundamental filter is active we must fetch 1d bars
@@ -622,7 +622,7 @@ class UniversePrepareDialog(tk.Toplevel):
 
         # De-dupe while preserving order.
         seen: set = set()
-        deduped: List[str] = []
+        deduped: list[str] = []
         for s in symbols:
             s2 = (s or "").strip().upper()
             if s2 and s2 not in seen:
@@ -639,14 +639,14 @@ class UniversePrepareDialog(tk.Toplevel):
             "filter": flt_spec if is_filter_active(flt_spec) else None,
         }
 
-    def _parse_filter_form(self) -> Optional[FundamentalFilter]:
+    def _parse_filter_form(self) -> FundamentalFilter | None:
         """Build a :class:`FundamentalFilter` from the four StringVars.
 
         Returns ``None`` (with status set) on parse failure.
         Otherwise returns a (possibly all-None) spec — caller uses
         :func:`is_filter_active` to know whether to run the pre-pass.
         """
-        def _opt_float(raw: str, label: str) -> Tuple[bool, Optional[float]]:
+        def _opt_float(raw: str, label: str) -> tuple[bool, float | None]:
             s = (raw or "").strip()
             if not s:
                 return (True, None)
@@ -758,14 +758,14 @@ class UniversePrepareDialog(tk.Toplevel):
         self._worker.start()
         self._poll_after_id = self.after(50, self._drain_events)
 
-    def _worker_main(self, plan: Dict[str, Any]) -> None:
+    def _worker_main(self, plan: dict[str, Any]) -> None:
         """Runs on the worker thread. Pure I/O + queue.put — no Tk."""
         def _emit(ev: _service.ProgressEvent) -> None:
             self._event_queue.put(ev)
 
         # ---- Phase 1: optional fundamental filter pre-pass ---------
-        flt: Optional[FundamentalFilter] = plan.get("filter")
-        symbols: Tuple[str, ...] = plan["symbols"]
+        flt: FundamentalFilter | None = plan.get("filter")
+        symbols: tuple[str, ...] = plan["symbols"]
         if flt is not None and is_filter_active(flt):
             matched = self._run_filter_prepass(symbols, plan["source"], flt)
             if self._cancel_event.is_set():
@@ -827,10 +827,10 @@ class UniversePrepareDialog(tk.Toplevel):
 
     def _run_filter_prepass(
         self,
-        symbols: Tuple[str, ...],
+        symbols: tuple[str, ...],
         source: str,
         spec: FundamentalFilter,
-    ) -> List[str]:
+    ) -> list[str]:
         """Parallel-fetch 1d bars per symbol and apply the filter.
 
         Cache-first: disk_cache.load(...) hits avoid the network. On a
@@ -848,15 +848,15 @@ class UniversePrepareDialog(tk.Toplevel):
         """
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        matched: List[str] = []
-        pass_map: Dict[str, bool] = {}
+        matched: list[str] = []
+        pass_map: dict[str, bool] = {}
         total = len(symbols)
         max_workers = max(1, min(4, total))
 
-        def _check_one(sym: str) -> Tuple[str, bool]:
+        def _check_one(sym: str) -> tuple[str, bool]:
             if self._cancel_event.is_set():
                 return (sym, False)
-            bars: Optional[List[Candle]] = None
+            bars: list[Candle] | None = None
             try:
                 bars = _disk_cache.load(source, sym, _DAILY_INTERVAL)
             except Exception:  # noqa: BLE001
@@ -1090,7 +1090,7 @@ class UniversePrepareDialog(tk.Toplevel):
         self._progress.configure(value=self._progress["maximum"])
         self._notify_finished(self._saved_manifest)
 
-    def _notify_finished(self, man: Optional[_manifest.UniverseManifest]) -> None:
+    def _notify_finished(self, man: _manifest.UniverseManifest | None) -> None:
         if self._on_finished is None:
             return
         try:
@@ -1204,6 +1204,6 @@ class _FilterPhaseDone:
 
     __slots__ = ("matched_symbols", "total")
 
-    def __init__(self, *, matched_symbols: List[str], total: int) -> None:
+    def __init__(self, *, matched_symbols: list[str], total: int) -> None:
         self.matched_symbols = list(matched_symbols)
         self.total = int(total)

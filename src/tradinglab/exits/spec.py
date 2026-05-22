@@ -52,9 +52,10 @@ Out of scope (for this module)
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, time
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any
 
 from ..positions.model import Position
 from .model import (
@@ -105,7 +106,7 @@ class Bar:
     low: float
     close: float
     volume: float = 0.0
-    date: Optional[datetime] = None
+    date: datetime | None = None
 
 
 @dataclass
@@ -119,10 +120,10 @@ class TriggerState:
 
     armed: bool = True
     # Trailing-stop fields:
-    hwm: Optional[float] = None     # highest favorable price observed
-    lwm: Optional[float] = None     # lowest favorable price observed (shorts)
+    hwm: float | None = None     # highest favorable price observed
+    lwm: float | None = None     # lowest favorable price observed (shorts)
     activated: bool = False         # activation gate passed?
-    trail_price: Optional[float] = None  # current armed stop price
+    trail_price: float | None = None  # current armed stop price
     # Chandelier-stop fields (entry-anchored rolling window, Camp B):
     #
     # * ``chandelier_rolling_high`` / ``chandelier_rolling_low`` track
@@ -143,15 +144,15 @@ class TriggerState:
     #   delta surfaced on the most recent fire: positive value in
     #   dollars per share = trader got worse than stop. Zero when the
     #   stop was touched cleanly within the bar.
-    chandelier_rolling_high: Optional[float] = None
-    chandelier_rolling_low: Optional[float] = None
+    chandelier_rolling_high: float | None = None
+    chandelier_rolling_low: float | None = None
     chandelier_window_count: int = 0
-    chandelier_stop: Optional[float] = None
-    chandelier_atr_state: Optional[Dict[str, Any]] = None
-    chandelier_frozen_params: Optional[Dict[str, Any]] = None
+    chandelier_stop: float | None = None
+    chandelier_atr_state: dict[str, Any] | None = None
+    chandelier_frozen_params: dict[str, Any] | None = None
     chandelier_realized_slippage: float = 0.0
     # General:
-    last_evaluated_bar_ts: Optional[datetime] = None
+    last_evaluated_bar_ts: datetime | None = None
     fire_count: int = 0
 
 
@@ -169,7 +170,7 @@ class Decision:
     reason: str = ""
     # For stop-limit: the limit price for the order body, distinct
     # from the stop trigger price.
-    limit_price: Optional[float] = None
+    limit_price: float | None = None
     # Within-last-N-bars look-back evidence collected by the engine
     # walk during INDICATOR triggers. Each entry is a
     # :class:`scanner.model.MatchEvidence` describing a node that
@@ -177,7 +178,7 @@ class Decision:
     # and on decisions whose triggers don't use a within-last walk.
     # Typed loosely (``List[Any]``) here to avoid pulling
     # scanner.model into the spec module's import surface.
-    evidence: List[Any] = field(default_factory=list)
+    evidence: list[Any] = field(default_factory=list)
 
 
 def _no_fire(reason: str = "") -> Decision:
@@ -194,7 +195,7 @@ def resolve_price(
     position: Position,
     *,
     use_stop_limit: bool = False,
-) -> Optional[float]:
+) -> float | None:
     """Resolve an absolute trigger price from
     ``price | offset_pct | offset_dollar``.
 
@@ -380,8 +381,8 @@ def evaluate_stop_limit(trigger: ExitTrigger, position: Position, bar: Bar) -> D
 
 def compute_initial_risk_per_share(
     position: Position,
-    paired_stop_price: Optional[float],
-) -> Optional[float]:
+    paired_stop_price: float | None,
+) -> float | None:
     """R-multiple denominator: ``|entry - paired_stop|``.
 
     Returns ``None`` if no paired stop was given (caller should fall
@@ -400,8 +401,8 @@ def update_trail_state(
     bar: Bar,
     *,
     is_close: bool,
-    atr_value: Optional[float] = None,
-    paired_stop_price: Optional[float] = None,
+    atr_value: float | None = None,
+    paired_stop_price: float | None = None,
 ) -> None:
     """Update HWM/LWM, activation, and trail_price *in place* on ``state``.
 
@@ -515,8 +516,8 @@ def recompute_hwm_from_history(
     position: Position,
     bars: Sequence[Bar],
     *,
-    atr_values: Optional[Sequence[Optional[float]]] = None,
-    paired_stop_price: Optional[float] = None,
+    atr_values: Sequence[float | None] | None = None,
+    paired_stop_price: float | None = None,
 ) -> None:
     """Reseed ``state.hwm`` (longs) / ``state.lwm`` (shorts) from a
     sequence of historical bars.
@@ -609,7 +610,7 @@ def evaluate_time_of_day(
 # the exit rule share a single source of truth.
 
 
-def freeze_chandelier_params(trigger: ExitTrigger) -> Dict[str, Any]:
+def freeze_chandelier_params(trigger: ExitTrigger) -> dict[str, Any]:
     """Build the frozen-params dict from a fresh chandelier trigger.
 
     Called by the evaluator once at activation. The result is stashed
@@ -634,12 +635,12 @@ def freeze_chandelier_params(trigger: ExitTrigger) -> Dict[str, Any]:
 
 
 def _update_chandelier_atr(
-    state: "TriggerState",
+    state: TriggerState,
     bar: Bar,
     *,
     atr_period: int,
     ma_type: str,
-) -> Optional[float]:
+) -> float | None:
     """Advance the running ATR by one bar; return the current ATR value
     (or ``None`` while warming up).
 
@@ -673,7 +674,7 @@ def _update_chandelier_atr(
     tr = max(hl, hpc, lpc)
     s["prev_close"] = float(bar.close)
 
-    history: List[float] = s["tr_history"]
+    history: list[float] = s["tr_history"]
     history.append(tr)
     if len(history) > int(atr_period):
         # Keep only the most recent atr_period values for the running
@@ -877,8 +878,8 @@ def _trail_offset_abs(
     unit: TrailUnit,
     value: float,
     anchor_price: float,
-    atr_value: Optional[float],
-) -> Optional[float]:
+    atr_value: float | None,
+) -> float | None:
     """Convert (unit, value) → absolute offset in dollars.
 
     Returns ``None`` if the unit is ATR but no atr_value was provided.
@@ -899,7 +900,7 @@ def _activation_satisfied(
     value: float,
     position: Position,
     peak_price: float,
-    paired_stop_price: Optional[float],
+    paired_stop_price: float | None,
 ) -> bool:
     """Has the position's peak excursion crossed the activation threshold?"""
     if unit == ActivationUnit.PERCENT:

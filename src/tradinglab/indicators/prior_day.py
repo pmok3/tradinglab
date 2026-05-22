@@ -37,7 +37,7 @@ Warmup:
 
 from __future__ import annotations
 
-from typing import ClassVar, Dict, List, Tuple
+from typing import ClassVar
 
 import numpy as np
 
@@ -61,7 +61,7 @@ class PriorDayHLC:
 
     kind_id: ClassVar[str] = "prior_day_hlc"
     kind_version: ClassVar[int] = 2
-    params_schema: ClassVar[Tuple[ParamDef, ...]] = (
+    params_schema: ClassVar[tuple[ParamDef, ...]] = (
         ParamDef("show_high", "bool", default=True,
                  description="Prior Day High"),
         ParamDef("show_low", "bool", default=True,
@@ -69,7 +69,7 @@ class PriorDayHLC:
         ParamDef("show_close", "bool", default=True,
                  description="Prior Day Close"),
     )
-    default_style: ClassVar[Dict[str, LineStyle]] = {
+    default_style: ClassVar[dict[str, LineStyle]] = {
         "prior_day_high":  LineStyle(color="#26a69a", width=1.2),   # teal
         "prior_day_low":   LineStyle(color="#ef5350", width=1.2),   # salmon
         "prior_day_close": LineStyle(color="#9e9e9e", width=1.0),   # gray
@@ -96,7 +96,7 @@ class PriorDayHLC:
         """Only available on intraday intervals."""
         return intraday_only(interval)
 
-    def compute_arr(self, bars: Bars) -> Dict[str, np.ndarray]:
+    def compute_arr(self, bars: Bars) -> dict[str, np.ndarray]:
         n = len(bars)
         pdh = np.full(n, np.nan, dtype=np.float64)
         pdl = np.full(n, np.nan, dtype=np.float64)
@@ -147,5 +147,5 @@ class PriorDayHLC:
 
         return result
 
-    def compute(self, candles: List[Candle]) -> Dict[str, np.ndarray]:
+    def compute(self, candles: list[Candle]) -> dict[str, np.ndarray]:
         return self.compute_arr(Bars.from_candles(candles))

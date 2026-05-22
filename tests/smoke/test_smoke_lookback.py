@@ -29,15 +29,14 @@ from tradinglab.scanner.engine import (
     make_context,
 )
 from tradinglab.scanner.model import (
+    OP_GT,
+    WITHIN_LAST_MODE_ANY,
+    WITHIN_LAST_MODE_EXACTLY,
     Condition,
     FieldRef,
     Group,
     MatchEvidence,
-    OP_GT,
-    WITHIN_LAST_MODE_ANY,
-    WITHIN_LAST_MODE_EXACTLY,
 )
-
 
 # ---------------------------------------------------------------------------
 # Model round-trip
@@ -142,8 +141,8 @@ def test_invalid_within_last_mode_raises():
 
 
 def _ramp_candles(n: int, *, base: float = 100.0,
-                  start: datetime = datetime(2024, 1, 15, 9, 30)) -> List[Candle]:
-    out: List[Candle] = []
+                  start: datetime = datetime(2024, 1, 15, 9, 30)) -> list[Candle]:
+    out: list[Candle] = []
     for i in range(n):
         c = base + i  # strictly increasing closes
         out.append(Candle(
@@ -153,7 +152,7 @@ def _ramp_candles(n: int, *, base: float = 100.0,
     return out
 
 
-def _make_ctx(candles: List[Candle], *, current_index: int,
+def _make_ctx(candles: list[Candle], *, current_index: int,
               interval: str = "5m", symbol: str = "AAPL"
               ) -> EvaluationContext:
     return make_context(

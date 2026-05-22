@@ -28,9 +28,10 @@ from __future__ import annotations
 
 import datetime as _dt
 import logging
-from dataclasses import dataclass, field
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Iterable, List, Optional, Sequence
+from typing import Any
 
 from ..colors import CAUTION_YELLOW, ERROR_RED, INFO_BLUE, WARN_AMBER
 from . import settings_adapter as _adapter
@@ -82,12 +83,12 @@ class AlertResult:
     """Stable identifiers of every rule that fired (for logging /
     tests / a future audit panel). Order is firing order."""
 
-    badge: Optional[str] = None
+    badge: str | None = None
     """Optional short-text badge for the header row (used by
     Tier-4 for `T-1` / `EX-DIV`)."""
 
     @property
-    def color(self) -> Optional[str]:
+    def color(self) -> str | None:
         return _TIER_COLOR.get(self.tier)
 
     @property
@@ -105,7 +106,7 @@ _NO_ALERT = AlertResult(tier=AlertTier.NONE)
 # ---------------------------------------------------------------------------
 
 
-def _close(bar: Any) -> Optional[float]:
+def _close(bar: Any) -> float | None:
     """Best-effort close getter (handles attr-bars + dict-bars + None)."""
     if bar is None:
         return None
@@ -118,7 +119,7 @@ def _close(bar: Any) -> Optional[float]:
         return None
 
 
-def _high(bar: Any) -> Optional[float]:
+def _high(bar: Any) -> float | None:
     h = getattr(bar, "high", None)
     if h is None and isinstance(bar, dict):
         h = bar.get("high")
@@ -128,7 +129,7 @@ def _high(bar: Any) -> Optional[float]:
         return None
 
 
-def _low(bar: Any) -> Optional[float]:
+def _low(bar: Any) -> float | None:
     lo = getattr(bar, "low", None)
     if lo is None and isinstance(bar, dict):
         lo = bar.get("low")
@@ -138,7 +139,7 @@ def _low(bar: Any) -> Optional[float]:
         return None
 
 
-def _volume(bar: Any) -> Optional[float]:
+def _volume(bar: Any) -> float | None:
     v = getattr(bar, "volume", None)
     if v is None and isinstance(bar, dict):
         v = bar.get("volume")
@@ -148,7 +149,7 @@ def _volume(bar: Any) -> Optional[float]:
         return None
 
 
-def _session(bar: Any) -> Optional[str]:
+def _session(bar: Any) -> str | None:
     s = getattr(bar, "session", None)
     if s is None and isinstance(bar, dict):
         s = bar.get("session")
@@ -157,7 +158,7 @@ def _session(bar: Any) -> Optional[str]:
     return None
 
 
-def _regular_bars(bars: Sequence[Any]) -> List[Any]:
+def _regular_bars(bars: Sequence[Any]) -> list[Any]:
     """Return only the regular-session subset (filters out pre/post)."""
     return [b for b in bars if _session(b) in (None, "regular", "rth")]
 
@@ -168,7 +169,7 @@ def evaluate_tier1_rvol_spike(
     interval_minutes: int,
     rvol_1m_threshold: float,
     rvol_5m_threshold: float,
-) -> Optional[str]:
+) -> str | None:
     """Tier-1: relative-volume spike on the most recent regular bar.
 
     Compares the last bar's volume to a rolling 20-bar mean.
@@ -199,7 +200,7 @@ def evaluate_tier1_atr_expansion(
     bars: Sequence[Any],
     *,
     atr_threshold: float,
-) -> Optional[str]:
+) -> str | None:
     """Tier-1: last bar's true range ≥ ``atr_threshold`` × ATR(14).
 
     Uses simple Wilder-style averaging on the trailing 14 regular bars.
@@ -208,7 +209,7 @@ def evaluate_tier1_atr_expansion(
     regs = _regular_bars(bars)
     if len(regs) < 15:
         return None
-    trs: List[float] = []
+    trs: list[float] = []
     prev_close = _close(regs[-16]) if len(regs) >= 16 else _close(regs[-15])
     for b in regs[-15:]:
         h = _high(b)
@@ -235,7 +236,7 @@ def evaluate_tier1_atr_expansion(
 
 def evaluate_tier2_pmh_pml_break(
     bars: Sequence[Any],
-) -> Optional[str]:
+) -> str | None:
     """Tier-2: first regular-session close above pre-market high
     (or below pre-market low).
 
@@ -277,7 +278,7 @@ def evaluate_tier2_pmh_pml_break(
 
 def evaluate_tier2_new_scanner_edge(
     scanner_row: Any,
-) -> Optional[str]:
+) -> str | None:
     """Tier-2: scanner edge first detected this tick.
 
     ``scanner_row`` is a :class:`MatchRow` (or any object with
@@ -298,7 +299,7 @@ def evaluate_tier3_stop_proximity(
     *,
     position: Any,
     atr_window: float,
-) -> Optional[str]:
+) -> str | None:
     """Tier-3: last price within ``atr_window`` × ATR(14) of the
     position's protective stop. Long stop is below entry; short
     stop is above. Requires both ``stop_price`` on the position
@@ -316,7 +317,7 @@ def evaluate_tier3_stop_proximity(
     if last_c is None:
         return None
     # Reuse the simple ATR calculation from the tier-1 path.
-    trs: List[float] = []
+    trs: list[float] = []
     prev_close = _close(regs[-16]) if len(regs) >= 16 else _close(regs[0])
     for b in regs[-14:]:
         h = _high(b)
@@ -343,8 +344,8 @@ def evaluate_tier3_stop_proximity(
 def evaluate_tier3_pnl_zero_cross(
     *,
     position: Any,
-    prev_unrealized: Optional[float],
-) -> Optional[str]:
+    prev_unrealized: float | None,
+) -> str | None:
     """Tier-3: unrealized P&L crossed zero this tick.
 
     ``prev_unrealized`` is the previous-tick reading kept by the
@@ -369,7 +370,7 @@ def evaluate_tier3_pnl_zero_cross(
 def evaluate_tier3_mae_one_r(
     *,
     position: Any,
-) -> Optional[str]:
+) -> str | None:
     """Tier-3: max adverse excursion meets or exceeds 1R.
 
     Reads ``position.mae`` (already 1R-normalized by the position
@@ -397,8 +398,8 @@ def evaluate_tier3_mae_one_r(
 
 def evaluate_tier4_earnings_t1(
     *,
-    days_to_earnings: Optional[int],
-) -> Optional[str]:
+    days_to_earnings: int | None,
+) -> str | None:
     """Tier-4: earnings within one trading day."""
     if days_to_earnings is None:
         return None
@@ -413,7 +414,7 @@ def evaluate_tier4_earnings_t1(
 def evaluate_tier4_exdiv_today(
     *,
     is_exdiv_today: bool,
-) -> Optional[str]:
+) -> str | None:
     """Tier-4: today is ex-dividend day."""
     return "tier4_exdiv_today" if bool(is_exdiv_today) else None
 
@@ -423,7 +424,7 @@ def evaluate_tier4_exdiv_today(
 # ---------------------------------------------------------------------------
 
 
-def _time_of_day_factor(now_utc: _dt.datetime) -> Optional[float]:
+def _time_of_day_factor(now_utc: _dt.datetime) -> float | None:
     """Return the multiplier to apply to Tier-1 thresholds.
 
     * 09:30:00–09:35:00 ET → ``None`` (alerts off, every move is
@@ -491,8 +492,8 @@ class AlertEngine:
     def __init__(
         self,
         *,
-        clock: Optional[Callable[[], _dt.datetime]] = None,
-        play_chime: Optional[Callable[[], None]] = None,
+        clock: Callable[[], _dt.datetime] | None = None,
+        play_chime: Callable[[], None] | None = None,
     ) -> None:
         # ``clock`` returns a tz-aware UTC datetime. Default uses
         # ``datetime.now(timezone.utc)``; tests inject a frozen
@@ -500,7 +501,7 @@ class AlertEngine:
         self._clock = clock or (lambda: _dt.datetime.now(_dt.timezone.utc))
         # ``play_chime`` is monkeypatched in tests to count calls.
         self._play_chime = play_chime or _play_chime
-        self._chime_times: List[float] = []
+        self._chime_times: list[float] = []
         self._prev_pmh_break: dict[int, bool] = {}
         self._prev_pml_break: dict[int, bool] = {}
         self._prev_unrealized: dict[int, float] = {}
@@ -510,7 +511,7 @@ class AlertEngine:
 
     # -- public API ----------------------------------------------------
 
-    def reset(self, slot_index: Optional[int] = None) -> None:
+    def reset(self, slot_index: int | None = None) -> None:
         """Clear per-card / global state.
 
         ``slot_index`` clears just one slot (used on binding swap);
@@ -537,9 +538,9 @@ class AlertEngine:
         interval_minutes: int = 5,
         position: Any = None,
         scanner_row: Any = None,
-        days_to_earnings: Optional[int] = None,
+        days_to_earnings: int | None = None,
         is_exdiv_today: bool = False,
-        now_utc: Optional[_dt.datetime] = None,
+        now_utc: _dt.datetime | None = None,
     ) -> AlertResult:
         """Evaluate all four tiers for one card and play any chimes.
 
@@ -548,9 +549,9 @@ class AlertEngine:
         the card's tint + header badge.
         """
         now = now_utc if now_utc is not None else self._clock()
-        rule_ids: List[str] = []
+        rule_ids: list[str] = []
         max_tier = AlertTier.NONE
-        badge: Optional[str] = None
+        badge: str | None = None
 
         # --- Tier 4 (badge-only; always evaluated, no audio) ------
         for rid in (

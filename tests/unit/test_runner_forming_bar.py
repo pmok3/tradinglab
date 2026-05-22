@@ -25,22 +25,21 @@ from typing import List
 import tradinglab.indicators  # noqa: F401
 from tradinglab.models import Candle
 from tradinglab.scanner.model import (
+    OP_GT,
     Condition,
     FieldRef,
     Group,
-    OP_GT,
     ScanDefinition,
     UniverseFilter,
 )
 from tradinglab.scanner.runner import MatchHistory, ScanRunner
 
-
 # ----- helpers ---------------------------------------------------------------
 
 
-def _candles(n: int, *, start_close: float = 100.0) -> List[Candle]:
+def _candles(n: int, *, start_close: float = 100.0) -> list[Candle]:
     base = datetime(2026, 5, 4, 9, 30, tzinfo=timezone.utc)
-    out: List[Candle] = []
+    out: list[Candle] = []
     for i in range(n):
         c = start_close + i
         out.append(Candle(

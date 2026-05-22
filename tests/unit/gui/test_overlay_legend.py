@@ -295,7 +295,7 @@ def _row_descendants(row_frame):
 def test_legend_dblclick_callback_fires_with_config_id(root, manager):
     """A `<Double-Button-1>` binding on a row routes to
     ``on_row_dblclick(config_id)`` exactly once."""
-    received: List[int] = []
+    received: list[int] = []
     legend = OverlayLegend(
         root, manager=manager,
         theme={"text": "#fff", "spine": "#888"},
@@ -355,7 +355,7 @@ def test_legend_dblclick_sets_hand_cursor(root, manager):
 def test_legend_context_menu_callback_fires_with_screen_coords(root, manager):
     """A `<Button-3>` (right-click) on a row invokes
     ``on_row_context_menu(config_id, x_root, y_root)``."""
-    received: List[tuple] = []
+    received: list[tuple] = []
     legend = OverlayLegend(
         root, manager=manager,
         theme={"text": "#fff", "spine": "#888"},

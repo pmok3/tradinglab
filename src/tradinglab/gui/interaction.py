@@ -348,8 +348,8 @@ class InteractionMixin:
         (e.g. start-pan, release, start-pan again).
         """
         # Build a fingerprint of the current artist topology in one walk.
-        fp_ids: List[int] = []
-        artists: List[Any] = []
+        fp_ids: list[int] = []
+        artists: list[object] = []
         for axx in self._figure.axes:
             for coll in list(axx.collections):
                 fp_ids.append(id(coll))
@@ -443,8 +443,8 @@ class InteractionMixin:
         if self._pan_bg is None:
             self._pan_setup_blit()
             return
-        fp_ids: List[int] = []
-        artists: List[Any] = []
+        fp_ids: list[int] = []
+        artists: list[object] = []
         for axx in self._figure.axes:
             for coll in list(axx.collections):
                 fp_ids.append(id(coll))
@@ -1509,11 +1509,28 @@ class InteractionMixin:
     def _format_price_for_label(self, ax, value) -> str:
         """Format ``value`` for the floating price badge.
 
-        Prefer the axis's installed major formatter so the label matches
-        on-axis ticks (linear ScalarFormatter or log _fmt_price). Falls
-        back to a fixed 2-decimal format when the formatter is unavailable
-        or returns an empty string for arbitrary values.
+        For price axes we force a fixed 2-decimal format with thousands
+        separators so the badge reads as ``172.50`` / ``1,247.83`` etc.,
+        regardless of what the axis tick formatter is rendering (some
+        log-axis formatters truncate trailing zeros which made AMD's
+        ``$172.5`` lose its second decimal). For volume axes we keep the
+        major formatter's ``format_data_short`` so the badge matches
+        the on-axis ticks (e.g. ``1.2M``). Other panes (custom indicator
+        axes) fall through to the axis formatter and finally a 2-decimal
+        fallback. Audit ``hover-price-2-decimals``.
         """
+        kind = None
+        try:
+            entry = self._ax_candle_map.get(ax)
+            if entry is not None:
+                kind = entry[1]
+        except Exception:  # noqa: BLE001
+            kind = None
+        if kind == "price":
+            try:
+                return f"{float(value):,.2f}"
+            except Exception:  # noqa: BLE001
+                return ""
         try:
             fmt = ax.yaxis.get_major_formatter()
             # ScalarFormatter exposes format_data_short which works for

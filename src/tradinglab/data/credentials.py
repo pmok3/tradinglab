@@ -34,9 +34,9 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, Optional
 
 LOG = logging.getLogger(__name__)
 
@@ -48,9 +48,9 @@ LOG = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class SchwabCredentials:
-    app_key: Optional[str] = None
-    app_secret: Optional[str] = None
-    redirect_uri: Optional[str] = None
+    app_key: str | None = None
+    app_secret: str | None = None
+    redirect_uri: str | None = None
 
     def is_configured(self) -> bool:
         return bool(self.app_key) and bool(self.app_secret)
@@ -58,8 +58,8 @@ class SchwabCredentials:
 
 @dataclass(frozen=True)
 class AlpacaCredentials:
-    api_key_id: Optional[str] = None
-    api_secret_key: Optional[str] = None
+    api_key_id: str | None = None
+    api_secret_key: str | None = None
     feed: str = "iex"
 
     def is_configured(self) -> bool:
@@ -68,7 +68,7 @@ class AlpacaCredentials:
 
 @dataclass(frozen=True)
 class PolygonCredentials:
-    api_key: Optional[str] = None
+    api_key: str | None = None
 
     def is_configured(self) -> bool:
         return bool(self.api_key)
@@ -97,7 +97,7 @@ class Credentials:
 # ---------------------------------------------------------------------------
 
 
-def _parse_dotenv(text: str) -> Dict[str, str]:
+def _parse_dotenv(text: str) -> dict[str, str]:
     """Parse the small dotenv subset we support.
 
     Rules:
@@ -112,7 +112,7 @@ def _parse_dotenv(text: str) -> Dict[str, str]:
     Malformed lines are logged at WARNING and skipped — we never raise
     here; a typo in a non-essential vendor key shouldn't crash startup.
     """
-    out: Dict[str, str] = {}
+    out: dict[str, str] = {}
     for lineno, raw in enumerate(text.splitlines(), start=1):
         line = raw.strip()
         if not line or line.startswith("#"):
@@ -173,9 +173,9 @@ def _candidate_dotenv_paths() -> Iterable[Path]:
     yield cwd / ".env.local"
 
 
-def _load_dotenv_files() -> Dict[str, str]:
+def _load_dotenv_files() -> dict[str, str]:
     """Merge all known dotenv files. Later files override earlier."""
-    merged: Dict[str, str] = {}
+    merged: dict[str, str] = {}
     for path in _candidate_dotenv_paths():
         if not path.is_file():
             continue
@@ -188,7 +188,7 @@ def _load_dotenv_files() -> Dict[str, str]:
     return merged
 
 
-def _resolve(name: str, file_values: Dict[str, str]) -> Optional[str]:
+def _resolve(name: str, file_values: dict[str, str]) -> str | None:
     """``os.environ`` wins over the file. Empty strings → None."""
     val = os.environ.get(name)
     if val is None:
@@ -204,7 +204,7 @@ def _resolve(name: str, file_values: Dict[str, str]) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
-_cache: Optional[Credentials] = None
+_cache: Credentials | None = None
 
 
 def get_credentials() -> Credentials:

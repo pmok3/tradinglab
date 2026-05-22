@@ -34,7 +34,6 @@ from tradinglab.gui.banner import (
     write_dismissal_sentinel,
 )
 
-
 _SENTINEL_NAME = ".first_run_dismissed"
 
 

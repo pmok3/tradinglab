@@ -57,7 +57,7 @@ def test_symbol_normalization_to_upper():
 
 
 def test_provider_invoked_on_miss_only_once_until_resolved():
-    calls: List[tuple] = []
+    calls: list[tuple] = []
 
     def provider(source: str, symbol: str, interval: str) -> None:
         calls.append((source, symbol, interval))
@@ -136,7 +136,7 @@ def test_clear_resets_everything():
 def test_concurrent_set_and_get_no_crash():
     """Smoke-level concurrency check: parallel writers don't crash readers."""
     barrier = threading.Barrier(8)
-    errors: List[Exception] = []
+    errors: list[Exception] = []
 
     def worker(i: int) -> None:
         try:

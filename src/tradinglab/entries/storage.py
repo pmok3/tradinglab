@@ -18,7 +18,7 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from ..core.io_helpers import atomic_write_json
 from ..disk_cache import _cache_dir
@@ -59,7 +59,7 @@ class BrokenStrategy:
 
     path: Path
     error: str
-    raw_json: Optional[str] = None
+    raw_json: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -67,14 +67,14 @@ class BrokenStrategy:
 # ---------------------------------------------------------------------------
 
 
-def _path_for(strategy_id: str, *, root: Optional[Path] = None) -> Path:
+def _path_for(strategy_id: str, *, root: Path | None = None) -> Path:
     if not strategy_id:
         raise ValueError("strategy_id must be non-empty")
     base = root if root is not None else storage_dir()
     return base / f"{strategy_id}.json"
 
 
-def _index_path(*, root: Optional[Path] = None) -> Path:
+def _index_path(*, root: Path | None = None) -> Path:
     base = root if root is not None else storage_dir()
     return base / _INDEX_NAME
 
@@ -95,7 +95,7 @@ def _atomic_write_json(path: Path, obj: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _load_index(*, root: Optional[Path] = None) -> Dict[str, str]:
+def _load_index(*, root: Path | None = None) -> dict[str, str]:
     p = _index_path(root=root)
     if not p.exists():
         return {}
@@ -109,13 +109,13 @@ def _load_index(*, root: Optional[Path] = None) -> Dict[str, str]:
     return {}
 
 
-def _save_index(index: Dict[str, str], *, root: Optional[Path] = None) -> None:
+def _save_index(index: dict[str, str], *, root: Path | None = None) -> None:
     _atomic_write_json(_index_path(root=root), dict(sorted(index.items())))
 
 
-def _refresh_index(*, root: Optional[Path] = None) -> Dict[str, str]:
+def _refresh_index(*, root: Path | None = None) -> dict[str, str]:
     base = root if root is not None else storage_dir()
-    out: Dict[str, str] = {}
+    out: dict[str, str] = {}
     for entry in base.iterdir():
         if entry.name == _INDEX_NAME:
             continue
@@ -138,7 +138,7 @@ def _refresh_index(*, root: Optional[Path] = None) -> Dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
-def save(strategy: EntryStrategy, *, root: Optional[Path] = None) -> Path:
+def save(strategy: EntryStrategy, *, root: Path | None = None) -> Path:
     """Validate + write a strategy. Refuses to write invalid strategies.
 
     Returns the on-disk path. Updates ``_index.json``.
@@ -158,7 +158,7 @@ def save(strategy: EntryStrategy, *, root: Optional[Path] = None) -> Path:
 
 
 def load(
-    strategy_id: str, *, root: Optional[Path] = None,
+    strategy_id: str, *, root: Path | None = None,
 ) -> EntryStrategy:
     """Load and parse one strategy by id. Raises :class:`FileNotFoundError`."""
     path = _path_for(strategy_id, root=root)
@@ -170,8 +170,8 @@ def load(
 
 
 def load_all(
-    *, root: Optional[Path] = None,
-) -> Tuple[List[EntryStrategy], List[BrokenStrategy]]:
+    *, root: Path | None = None,
+) -> tuple[list[EntryStrategy], list[BrokenStrategy]]:
     """Load every strategy in the directory.
 
     Returns a pair ``(good, broken)``. Files whose JSON is malformed,
@@ -181,8 +181,8 @@ def load_all(
     """
     base = root if root is not None else storage_dir()
     base.mkdir(parents=True, exist_ok=True)
-    good: List[EntryStrategy] = []
-    broken: List[BrokenStrategy] = []
+    good: list[EntryStrategy] = []
+    broken: list[BrokenStrategy] = []
     for entry in sorted(base.iterdir()):
         if entry.name == _INDEX_NAME:
             continue
@@ -220,7 +220,7 @@ def load_all(
     return good, broken
 
 
-def delete(strategy_id: str, *, root: Optional[Path] = None) -> bool:
+def delete(strategy_id: str, *, root: Path | None = None) -> bool:
     """Delete the strategy file + index entry. Returns True if removed."""
     path = _path_for(strategy_id, root=root)
     removed = False
@@ -253,7 +253,7 @@ def export_to_path(
 def import_from_path(
     src: Path,
     *,
-    root: Optional[Path] = None,
+    root: Path | None = None,
     on_id_collision: str = "rename",
 ) -> EntryStrategy:
     """Load + validate a strategy from an arbitrary path, then save it.

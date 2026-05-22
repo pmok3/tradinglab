@@ -30,17 +30,16 @@ insufficient data; the engine propagates that as tri-valued ``None``.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
+from typing import Any
 
 import numpy as np
 
-from ..core.bars import Bars, _to_naive_utc
+from ..core.bars import Bars
 from ..core.heikin_ashi import ha_arrays
 from ..indicators.base import INDICATORS, ParamDef, factory_by_kind_id
-from ..models import Candle
-from .model import FIELD_KIND_BUILTIN, FIELD_KIND_INDICATOR, FieldRef
+from .model import FIELD_KIND_INDICATOR, FieldRef
 
 # ---------------------------------------------------------------------------
 # OHLCV NumPy view
@@ -63,7 +62,7 @@ DTYPE_NUMERIC = "numeric"
 DTYPE_BOOL    = "bool"
 
 # Built-in compute signature: (bars, current_index, params) -> float|None.
-BuiltinCompute = Callable[[BarsNp, int, Mapping[str, Any]], Optional[float]]
+BuiltinCompute = Callable[[BarsNp, int, Mapping[str, Any]], float | None]
 
 
 @dataclass(frozen=True)
@@ -93,10 +92,10 @@ class FieldSpec:
     label: str
     kind: str
     dtype: str = DTYPE_NUMERIC
-    params_schema: Tuple[ParamDef, ...] = ()
-    output_keys: Tuple[str, ...] = ("",)
+    params_schema: tuple[ParamDef, ...] = ()
+    output_keys: tuple[str, ...] = ("",)
     default_output_key: str = ""
-    builtin_compute: Optional[BuiltinCompute] = None
+    builtin_compute: BuiltinCompute | None = None
     description: str = ""
     # ``True`` if the field's value is anchored to the current session
     # (resets every market open) — e.g. VWAP, HOD/LOD, time-of-day RVOL.
@@ -114,7 +113,7 @@ class FieldSpec:
 # ---------------------------------------------------------------------------
 
 
-def _at(arr: np.ndarray, i: int) -> Optional[float]:
+def _at(arr: np.ndarray, i: int) -> float | None:
     """Return ``arr[i]`` as a Python float, or ``None`` for OOB / NaN."""
     if i < 0 or i >= arr.size:
         return None
@@ -124,14 +123,14 @@ def _at(arr: np.ndarray, i: int) -> Optional[float]:
     return float(v)
 
 
-def _b_close (b: BarsNp, i: int, p: Mapping[str, Any]) -> Optional[float]: return _at(b.close,  i)
-def _b_open  (b: BarsNp, i: int, p: Mapping[str, Any]) -> Optional[float]: return _at(b.open,   i)
-def _b_high  (b: BarsNp, i: int, p: Mapping[str, Any]) -> Optional[float]: return _at(b.high,   i)
-def _b_low   (b: BarsNp, i: int, p: Mapping[str, Any]) -> Optional[float]: return _at(b.low,    i)
-def _b_volume(b: BarsNp, i: int, p: Mapping[str, Any]) -> Optional[float]: return _at(b.volume, i)
+def _b_close (b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None: return _at(b.close,  i)
+def _b_open  (b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None: return _at(b.open,   i)
+def _b_high  (b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None: return _at(b.high,   i)
+def _b_low   (b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None: return _at(b.low,    i)
+def _b_volume(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None: return _at(b.volume, i)
 
 
-def _b_pct_change(b: BarsNp, i: int, p: Mapping[str, Any]) -> Optional[float]:
+def _b_pct_change(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:
     """Percentage change of close vs previous bar's close, in percent."""
     if i < 1 or i >= b.close.size:
         return None
@@ -142,7 +141,7 @@ def _b_pct_change(b: BarsNp, i: int, p: Mapping[str, Any]) -> Optional[float]:
     return float((cur - prev) / prev * 100.0)
 
 
-def _b_gap_pct(b: BarsNp, i: int, p: Mapping[str, Any]) -> Optional[float]:
+def _b_gap_pct(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:
     """Open-vs-prior-close gap in percent.
 
     Defined as ``(open[i] - close[i-1]) / close[i-1] * 100``. For
@@ -159,7 +158,7 @@ def _b_gap_pct(b: BarsNp, i: int, p: Mapping[str, Any]) -> Optional[float]:
     return float((o - prev) / prev * 100.0)
 
 
-def _today_mask(b: BarsNp, i: int) -> Optional[np.ndarray]:
+def _today_mask(b: BarsNp, i: int) -> np.ndarray | None:
     """Boolean mask of bars sharing the same calendar date as ``b[i]``."""
     if i < 0 or i >= b.timestamps.size:
         return None
@@ -172,7 +171,7 @@ def _today_mask(b: BarsNp, i: int) -> Optional[np.ndarray]:
     return mask
 
 
-def _b_hod(b: BarsNp, i: int, p: Mapping[str, Any]) -> Optional[float]:
+def _b_hod(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:
     mask = _today_mask(b, i)
     if mask is None or not mask.any():
         return None
@@ -181,7 +180,7 @@ def _b_hod(b: BarsNp, i: int, p: Mapping[str, Any]) -> Optional[float]:
     return float(h.max()) if h.size else None
 
 
-def _b_lod(b: BarsNp, i: int, p: Mapping[str, Any]) -> Optional[float]:
+def _b_lod(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:
     mask = _today_mask(b, i)
     if mask is None or not mask.any():
         return None
@@ -190,7 +189,7 @@ def _b_lod(b: BarsNp, i: int, p: Mapping[str, Any]) -> Optional[float]:
     return float(lo.min()) if lo.size else None
 
 
-def _b_time_of_day(b: BarsNp, i: int, p: Mapping[str, Any]) -> Optional[float]:
+def _b_time_of_day(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:
     """Minutes since UTC midnight at the current bar's timestamp."""
     if i < 0 or i >= b.timestamps.size:
         return None
@@ -200,7 +199,7 @@ def _b_time_of_day(b: BarsNp, i: int, p: Mapping[str, Any]) -> Optional[float]:
     return float(delta // 60)
 
 
-def _b_bars_since_open(b: BarsNp, i: int, p: Mapping[str, Any]) -> Optional[float]:
+def _b_bars_since_open(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:
     """Number of bars elapsed since the first regular-session bar of today.
 
     The first regular-session bar of today returns 0; the next returns
@@ -239,12 +238,12 @@ def _b_bars_since_open(b: BarsNp, i: int, p: Mapping[str, Any]) -> Optional[floa
 # additionally store the array's ``data.tobytes`` length so a recycled
 # id can't return a stale entry. A small LRU cap keeps memory bounded.
 
-from ._bars_cache import BarsKeyedCache
+from ._bars_cache import BarsKeyedCache  # noqa: E402
 
-_ha_cache: BarsKeyedCache[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = BarsKeyedCache(max_size=64)
+_ha_cache: BarsKeyedCache[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = BarsKeyedCache(max_size=64)
 
 
-def _ha_for(b: BarsNp) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def _ha_for(b: BarsNp) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Return cached or freshly-computed HA arrays for ``b``."""
     return _ha_cache.get_or_compute(
         b,
@@ -253,23 +252,23 @@ def _ha_for(b: BarsNp) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     )
 
 
-def _b_ha_open(b: BarsNp, i: int, p: Mapping[str, Any]) -> Optional[float]:
+def _b_ha_open(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:
     return _at(_ha_for(b)[0], i)
 
 
-def _b_ha_high(b: BarsNp, i: int, p: Mapping[str, Any]) -> Optional[float]:
+def _b_ha_high(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:
     return _at(_ha_for(b)[1], i)
 
 
-def _b_ha_low(b: BarsNp, i: int, p: Mapping[str, Any]) -> Optional[float]:
+def _b_ha_low(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:
     return _at(_ha_for(b)[2], i)
 
 
-def _b_ha_close(b: BarsNp, i: int, p: Mapping[str, Any]) -> Optional[float]:
+def _b_ha_close(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:
     return _at(_ha_for(b)[3], i)
 
 
-def _b_ha_color(b: BarsNp, i: int, p: Mapping[str, Any]) -> Optional[float]:
+def _b_ha_color(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:
     """+1.0 if HA bar is bullish (HA_C >= HA_O), -1.0 if bearish, None on NaN."""
     ha_o, _hh, _hl, ha_c = _ha_for(b)
     if i < 0 or i >= ha_c.size:
@@ -285,7 +284,7 @@ def _ha_flat_eps(price: float) -> float:
     return max(1e-9, abs(price) * 1e-9)
 
 
-def _b_ha_flat_top(b: BarsNp, i: int, p: Mapping[str, Any]) -> Optional[float]:
+def _b_ha_flat_top(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:
     """1.0 iff HA_High[i] == HA_Open[i] (no upper wick → bearish continuation)."""
     ha_o, ha_h, _hl, _hc = _ha_for(b)
     if i < 0 or i >= ha_h.size:
@@ -296,7 +295,7 @@ def _b_ha_flat_top(b: BarsNp, i: int, p: Mapping[str, Any]) -> Optional[float]:
     return 1.0 if abs(h - o) <= _ha_flat_eps(o) else 0.0
 
 
-def _b_ha_flat_bottom(b: BarsNp, i: int, p: Mapping[str, Any]) -> Optional[float]:
+def _b_ha_flat_bottom(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:
     """1.0 iff HA_Low[i] == HA_Open[i] (no lower wick → bullish continuation)."""
     ha_o, _hh, ha_l, _hc = _ha_for(b)
     if i < 0 or i >= ha_l.size:
@@ -307,7 +306,7 @@ def _b_ha_flat_bottom(b: BarsNp, i: int, p: Mapping[str, Any]) -> Optional[float
     return 1.0 if abs(o - lo) <= _ha_flat_eps(o) else 0.0
 
 
-def _ha_streak_signed(b: BarsNp, i: int) -> Optional[int]:
+def _ha_streak_signed(b: BarsNp, i: int) -> int | None:
     """Length of the run of same-color HA bars ending at i; positive bull, negative bear."""
     ha_o, _hh, _hl, ha_c = _ha_for(b)
     if i < 0 or i >= ha_c.size:
@@ -330,12 +329,12 @@ def _ha_streak_signed(b: BarsNp, i: int) -> Optional[int]:
     return n if bull else -n
 
 
-def _b_ha_streak(b: BarsNp, i: int, p: Mapping[str, Any]) -> Optional[float]:
+def _b_ha_streak(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:
     s = _ha_streak_signed(b, i)
     return None if s is None else float(s)
 
 
-def _ha_flat_run(b: BarsNp, i: int, *, want_top: bool) -> Optional[int]:
+def _ha_flat_run(b: BarsNp, i: int, *, want_top: bool) -> int | None:
     """Count consecutive flat-top (or flat-bottom) bars ending at i."""
     ha_o, ha_h, ha_l, _hc = _ha_for(b)
     if i < 0 or i >= ha_h.size:
@@ -354,12 +353,12 @@ def _ha_flat_run(b: BarsNp, i: int, *, want_top: bool) -> Optional[int]:
     return n
 
 
-def _b_ha_flat_top_streak(b: BarsNp, i: int, p: Mapping[str, Any]) -> Optional[float]:
+def _b_ha_flat_top_streak(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:
     n = _ha_flat_run(b, i, want_top=True)
     return None if n is None else float(n)
 
 
-def _b_ha_flat_bottom_streak(b: BarsNp, i: int, p: Mapping[str, Any]) -> Optional[float]:
+def _b_ha_flat_bottom_streak(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:
     n = _ha_flat_run(b, i, want_top=False)
     return None if n is None else float(n)
 
@@ -382,14 +381,13 @@ def _b_ha_flat_bottom_streak(b: BarsNp, i: int, p: Mapping[str, Any]) -> Optiona
 # (:func:`_ha_flat_eps`) the chart overlay uses, so the chart and the
 # scanner classify every bar identically.
 
-from ..core.ha_flat import (
+from ..core.ha_flat import (  # noqa: E402
     HA_FLAT_BEAR,
     HA_FLAT_BULL,
-    HA_FLAT_NONE,
     HA_FLAT_UNKNOWN,
     HAFlatArrays,
 )
-from ..core.ha_flat import (
+from ..core.ha_flat import (  # noqa: E402
     compute_ha_flat_arrays_np as _compute_ha_flat_np,
 )
 
@@ -407,7 +405,7 @@ def _ha_flat_for(b: BarsNp) -> HAFlatArrays:
 
 def _b_ha_flat_bottom_bull(
     b: BarsNp, i: int, p: Mapping[str, Any]
-) -> Optional[float]:
+) -> float | None:
     """1.0 iff bar ``i`` is a bull HA candle with no lower wick (strong up)."""
     res = _ha_flat_for(b)
     if i < 0 or i >= res.signed.size:
@@ -420,7 +418,7 @@ def _b_ha_flat_bottom_bull(
 
 def _b_ha_flat_top_bear(
     b: BarsNp, i: int, p: Mapping[str, Any]
-) -> Optional[float]:
+) -> float | None:
     """1.0 iff bar ``i`` is a bear HA candle with no upper wick (strong down)."""
     res = _ha_flat_for(b)
     if i < 0 or i >= res.signed.size:
@@ -433,7 +431,7 @@ def _b_ha_flat_top_bear(
 
 def _b_ha_flat_strong(
     b: BarsNp, i: int, p: Mapping[str, Any]
-) -> Optional[float]:
+) -> float | None:
     """+1 bull-flat-bottom / -1 bear-flat-top / 0 neither; None during warm-up."""
     res = _ha_flat_for(b)
     if i < 0 or i >= res.signed.size:
@@ -456,8 +454,8 @@ def _b_ha_flat_strong(
 # arrays per ``id(BarsNp)`` (BarsNp is per-tick-immutable so this is
 # safe under the same single-tick-snapshot rules used by the HA cache).
 
-from ..core.key_bar import KeyBarArrays
-from ..core.key_bar import compute_key_bar_arrays_np as _compute_kb_np
+from ..core.key_bar import KeyBarArrays  # noqa: E402
+from ..core.key_bar import compute_key_bar_arrays_np as _compute_kb_np  # noqa: E402
 
 _kb_cache: BarsKeyedCache[KeyBarArrays] = BarsKeyedCache(max_size=64)
 
@@ -466,7 +464,7 @@ def _kb_for(b: BarsNp) -> KeyBarArrays:
     return _kb_cache.get_or_compute(b, _compute_kb_np)
 
 
-def _kb_at_int8(arr: np.ndarray, i: int) -> Optional[float]:
+def _kb_at_int8(arr: np.ndarray, i: int) -> float | None:
     if i < 0 or i >= arr.size:
         return None
     v = int(arr[i])
@@ -476,7 +474,7 @@ def _kb_at_int8(arr: np.ndarray, i: int) -> Optional[float]:
     return float(v)
 
 
-def _kb_at_int64(arr: np.ndarray, i: int) -> Optional[float]:
+def _kb_at_int64(arr: np.ndarray, i: int) -> float | None:
     if i < 0 or i >= arr.size:
         return None
     v = int(arr[i])
@@ -485,45 +483,45 @@ def _kb_at_int64(arr: np.ndarray, i: int) -> Optional[float]:
     return float(v)
 
 
-def _b_key_bar(b: BarsNp, i: int, p: Mapping[str, Any]) -> Optional[float]:
+def _b_key_bar(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:
     return _kb_at_int8(_kb_for(b).signed, i)
 
 
-def _b_key_bar_bull(b: BarsNp, i: int, p: Mapping[str, Any]) -> Optional[float]:
+def _b_key_bar_bull(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:
     s = _kb_at_int8(_kb_for(b).signed, i)
     if s is None:
         return None
     return 1.0 if s == 1.0 else 0.0
 
 
-def _b_key_bar_bear(b: BarsNp, i: int, p: Mapping[str, Any]) -> Optional[float]:
+def _b_key_bar_bear(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:
     s = _kb_at_int8(_kb_for(b).signed, i)
     if s is None:
         return None
     return 1.0 if s == -1.0 else 0.0
 
 
-def _b_bars_since_bull_kb(b: BarsNp, i: int, p: Mapping[str, Any]) -> Optional[float]:
+def _b_bars_since_bull_kb(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:
     return _kb_at_int64(_kb_for(b).bars_since_bull, i)
 
 
-def _b_bars_since_bear_kb(b: BarsNp, i: int, p: Mapping[str, Any]) -> Optional[float]:
+def _b_bars_since_bear_kb(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:
     return _kb_at_int64(_kb_for(b).bars_since_bear, i)
 
 
-def _b_last_bull_kb_high(b: BarsNp, i: int, p: Mapping[str, Any]) -> Optional[float]:
+def _b_last_bull_kb_high(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:
     return _at(_kb_for(b).last_bull_high, i)
 
 
-def _b_last_bull_kb_low(b: BarsNp, i: int, p: Mapping[str, Any]) -> Optional[float]:
+def _b_last_bull_kb_low(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:
     return _at(_kb_for(b).last_bull_low, i)
 
 
-def _b_last_bear_kb_high(b: BarsNp, i: int, p: Mapping[str, Any]) -> Optional[float]:
+def _b_last_bear_kb_high(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:
     return _at(_kb_for(b).last_bear_high, i)
 
 
-def _b_last_bear_kb_low(b: BarsNp, i: int, p: Mapping[str, Any]) -> Optional[float]:
+def _b_last_bear_kb_low(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:
     return _at(_kb_for(b).last_bear_low, i)
 
 
@@ -531,7 +529,7 @@ def _b_last_bear_kb_low(b: BarsNp, i: int, p: Mapping[str, Any]) -> Optional[flo
 # Built-in catalog
 # ---------------------------------------------------------------------------
 
-_BUILTINS: Tuple[FieldSpec, ...] = (
+_BUILTINS: tuple[FieldSpec, ...] = (
     FieldSpec(id="close",  label="Close",  kind="builtin",
               builtin_compute=_b_close,  description="Closing price"),
     FieldSpec(id="open",   label="Open",   kind="builtin",
@@ -649,7 +647,7 @@ _BUILTINS: Tuple[FieldSpec, ...] = (
 # Indicators not in this dict are NOT surfaced to the scanner. Adding a
 # new indicator to the chart does NOT automatically add it here — that's
 # intentional: indicator authors must opt their indicator into scanning.
-SCANNABLE_INDICATORS: Dict[str, Tuple[Tuple[str, str], ...]] = {
+SCANNABLE_INDICATORS: dict[str, tuple[tuple[str, str], ...]] = {
     "sma":  (("sma",  DTYPE_NUMERIC),),
     "ema":  (("ema",  DTYPE_NUMERIC),),
     "rsi":  (("rsi",  DTYPE_NUMERIC),),
@@ -689,21 +687,21 @@ SCANNABLE_INDICATORS: Dict[str, Tuple[Tuple[str, str], ...]] = {
 # ``avwap`` (anchored VWAP) is also not in this set: the anchor can be
 # arbitrary (not necessarily session-open), and we don't want to falsely
 # clamp a multi-day-anchored AVWAP to today only.
-INDICATORS_RESETTING_DAILY: Tuple[str, ...] = (
+INDICATORS_RESETTING_DAILY: tuple[str, ...] = (
     "vwap",
     "rvol",
     "rrvol",
 )
 
 
-def _indicator_field_specs() -> List[FieldSpec]:
+def _indicator_field_specs() -> list[FieldSpec]:
     """Project the allowlist over the live indicator registry.
 
     Indicators present in the allowlist but not in ``INDICATORS`` (e.g.
     not yet imported) are skipped silently. Indicators present in
     ``INDICATORS`` but not in the allowlist are not surfaced.
     """
-    out: List[FieldSpec] = []
+    out: list[FieldSpec] = []
     for kind_id, outputs in SCANNABLE_INDICATORS.items():
         entry = factory_by_kind_id(kind_id)
         if entry is None:
@@ -748,7 +746,7 @@ def _indicator_field_specs() -> List[FieldSpec]:
 # ---------------------------------------------------------------------------
 
 
-def all_fields() -> List[FieldSpec]:
+def all_fields() -> list[FieldSpec]:
     """Return every scannable field, builtins first, then indicators.
 
     Computed lazily on each call so newly registered indicators appear
@@ -757,7 +755,7 @@ def all_fields() -> List[FieldSpec]:
     return list(_BUILTINS) + _indicator_field_specs()
 
 
-def get_field(field_id: str, *, kind: str = "") -> Optional[FieldSpec]:
+def get_field(field_id: str, *, kind: str = "") -> FieldSpec | None:
     """Look up a :class:`FieldSpec` by its stable id.
 
     ``kind`` may be ``"builtin"`` or ``"indicator"`` to disambiguate in
@@ -808,7 +806,7 @@ def validate_field_ref(ref: FieldRef) -> None:
             )
 
 
-def builtin_compute(field_id: str) -> Optional[BuiltinCompute]:
+def builtin_compute(field_id: str) -> BuiltinCompute | None:
     """Return the compute callable for a builtin field id, or ``None``."""
     for spec in _BUILTINS:
         if spec.id == field_id:

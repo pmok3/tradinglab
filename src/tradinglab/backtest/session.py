@@ -18,7 +18,7 @@ default=...)`` produces stable bytes.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 from .actions import CashAdjustment, QuantityAdjustment
 from .journal import PostTradeReview, PreTradeEntry
@@ -49,16 +49,16 @@ class SessionSpec:
       start so the saved session re-plays the same cycle order.
     """
     deck_seed: int
-    tickers: Tuple[str, ...]
+    tickers: tuple[str, ...]
     start_clock_iso: str
     slippage_bps: float
     commission: float
     engine_version: str = ENGINE_VERSION
-    setup_tags: Tuple[str, ...] = ()
+    setup_tags: tuple[str, ...] = ()
     starting_cash: float = 100_000.0
     include_extended: bool = False
     auto_cycle: bool = False
-    cycle_dates: Tuple[str, ...] = ()
+    cycle_dates: tuple[str, ...] = ()
     # Phase: sandbox universe preload + strict-offline seal.
     # ``universe_id`` is the manifest ID this session was anchored on
     # (e.g. ``"sp500"``, ``"qqq"``, ``"watchlist:Mega Caps"``); empty
@@ -72,10 +72,10 @@ class SessionSpec:
     # to back-compat-safe empty / False so old saved sessions round
     # -trip cleanly.
     universe_id: str = ""
-    universe_symbols: Tuple[str, ...] = ()
+    universe_symbols: tuple[str, ...] = ()
     strict_offline: bool = False
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "deck_seed": int(self.deck_seed),
             "tickers": list(self.tickers),
@@ -94,7 +94,7 @@ class SessionSpec:
         }
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "SessionSpec":
+    def from_dict(cls, d: dict[str, Any]) -> SessionSpec:
         return cls(
             deck_seed=int(d["deck_seed"]),
             tickers=tuple(d.get("tickers") or ()),
@@ -117,10 +117,10 @@ class SessionSpec:
 class SessionResult:
     """The full output of one engine run."""
     spec: SessionSpec
-    fills: List[Fill] = field(default_factory=list)
-    pre_trades: List[PreTradeEntry] = field(default_factory=list)
-    post_trades: List[PostTradeReview] = field(default_factory=list)
-    equity_curve: List[Tuple[int, float]] = field(default_factory=list)
+    fills: list[Fill] = field(default_factory=list)
+    pre_trades: list[PreTradeEntry] = field(default_factory=list)
+    post_trades: list[PostTradeReview] = field(default_factory=list)
+    equity_curve: list[tuple[int, float]] = field(default_factory=list)
     final_cash: float = 0.0
     # Corporate-action records applied by the engine while the session
     # was running. Persisted alongside fills so a loaded session can
@@ -129,12 +129,12 @@ class SessionResult:
     # EarningsRecord / DividendRecord data. See backtest/actions.py.
     # Additive default-empty so existing sandbox-1d saves load cleanly
     # — no ENGINE_VERSION bump required.
-    cash_adjustments: List[CashAdjustment] = field(default_factory=list)
-    quantity_adjustments: List[QuantityAdjustment] = field(default_factory=list)
+    cash_adjustments: list[CashAdjustment] = field(default_factory=list)
+    quantity_adjustments: list[QuantityAdjustment] = field(default_factory=list)
 
     # ---- serialisation -------------------------------------------------
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "spec": self.spec.to_dict(),
             "fills": [_fill_to_dict(f) for f in self.fills],
@@ -147,7 +147,7 @@ class SessionResult:
         }
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "SessionResult":
+    def from_dict(cls, d: dict[str, Any]) -> SessionResult:
         return cls(
             spec=SessionSpec.from_dict(d["spec"]),
             fills=[_fill_from_dict(x) for x in d.get("fills") or ()],
@@ -162,7 +162,7 @@ class SessionResult:
 
 # ---- field-level helpers (kept private; called from to_dict/from_dict) -----
 
-def _fill_to_dict(f: Fill) -> Dict[str, Any]:
+def _fill_to_dict(f: Fill) -> dict[str, Any]:
     return {
         "order_id": str(f.order_id),
         "symbol": str(f.symbol),
@@ -175,7 +175,7 @@ def _fill_to_dict(f: Fill) -> Dict[str, Any]:
     }
 
 
-def _fill_from_dict(d: Dict[str, Any]) -> Fill:
+def _fill_from_dict(d: dict[str, Any]) -> Fill:
     return Fill(
         order_id=str(d["order_id"]),
         symbol=str(d["symbol"]),
@@ -188,7 +188,7 @@ def _fill_from_dict(d: Dict[str, Any]) -> Fill:
     )
 
 
-def _pre_to_dict(p: PreTradeEntry) -> Dict[str, Any]:
+def _pre_to_dict(p: PreTradeEntry) -> dict[str, Any]:
     return {
         "order_id": str(p.order_id),
         "ts": int(p.ts),
@@ -209,7 +209,7 @@ def _pre_to_dict(p: PreTradeEntry) -> Dict[str, Any]:
     }
 
 
-def _pre_from_dict(d: Dict[str, Any]) -> PreTradeEntry:
+def _pre_from_dict(d: dict[str, Any]) -> PreTradeEntry:
     target = d.get("target")
     return PreTradeEntry(
         order_id=str(d["order_id"]),
@@ -231,7 +231,7 @@ def _pre_from_dict(d: Dict[str, Any]) -> PreTradeEntry:
     )
 
 
-def _post_to_dict(p: PostTradeReview) -> Dict[str, Any]:
+def _post_to_dict(p: PostTradeReview) -> dict[str, Any]:
     return {
         "symbol": str(p.symbol),
         "entry_ts": int(p.entry_ts),
@@ -252,7 +252,7 @@ def _post_to_dict(p: PostTradeReview) -> Dict[str, Any]:
     }
 
 
-def _post_from_dict(d: Dict[str, Any]) -> PostTradeReview:
+def _post_from_dict(d: dict[str, Any]) -> PostTradeReview:
     ref = d.get("ref_pre_trade_id")
     return PostTradeReview(
         symbol=str(d["symbol"]),
@@ -273,7 +273,7 @@ def _post_from_dict(d: Dict[str, Any]) -> PostTradeReview:
     )
 
 
-def _cash_adj_to_dict(a: CashAdjustment) -> Dict[str, Any]:
+def _cash_adj_to_dict(a: CashAdjustment) -> dict[str, Any]:
     return {
         "ts": int(a.ts),
         "symbol": str(a.symbol),
@@ -284,7 +284,7 @@ def _cash_adj_to_dict(a: CashAdjustment) -> Dict[str, Any]:
     }
 
 
-def _cash_adj_from_dict(d: Dict[str, Any]) -> CashAdjustment:
+def _cash_adj_from_dict(d: dict[str, Any]) -> CashAdjustment:
     return CashAdjustment(
         ts=int(d["ts"]),
         symbol=str(d["symbol"]),
@@ -295,7 +295,7 @@ def _cash_adj_from_dict(d: Dict[str, Any]) -> CashAdjustment:
     )
 
 
-def _qty_adj_to_dict(a: QuantityAdjustment) -> Dict[str, Any]:
+def _qty_adj_to_dict(a: QuantityAdjustment) -> dict[str, Any]:
     return {
         "ts": int(a.ts),
         "symbol": str(a.symbol),
@@ -307,7 +307,7 @@ def _qty_adj_to_dict(a: QuantityAdjustment) -> Dict[str, Any]:
     }
 
 
-def _qty_adj_from_dict(d: Dict[str, Any]) -> QuantityAdjustment:
+def _qty_adj_from_dict(d: dict[str, Any]) -> QuantityAdjustment:
     return QuantityAdjustment(
         ts=int(d["ts"]),
         symbol=str(d["symbol"]),

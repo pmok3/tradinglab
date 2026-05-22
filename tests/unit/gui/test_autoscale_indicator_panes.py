@@ -34,7 +34,7 @@ def _load_method():
 class _StubAx:
     def __init__(self, xlim=(0.0, 100.0)):
         self._xlim = xlim
-        self.set_ylim_calls: List[tuple] = []
+        self.set_ylim_calls: list[tuple] = []
 
     def get_xlim(self):
         return self._xlim
@@ -53,7 +53,7 @@ class _StubLine:
 
 class _StubApp:
     def __init__(self, *, panel_state=None):
-        self._panel_state: Dict[str, Any] = panel_state or {}
+        self._panel_state: dict[str, Any] = panel_state or {}
 
 
 def test_helper_is_noop_when_slot_missing():

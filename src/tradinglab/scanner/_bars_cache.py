@@ -29,8 +29,9 @@ cluster (``id(b)``) with one implementation.
 from __future__ import annotations
 
 from collections import OrderedDict
+from collections.abc import Callable, Hashable
 from threading import Lock
-from typing import Any, Callable, Generic, Hashable, Tuple, TypeVar
+from typing import Any, Generic, TypeVar
 
 V = TypeVar("V")
 
@@ -47,7 +48,7 @@ class BarsKeyedCache(Generic[V]):
     __slots__ = ("_data", "_lock", "_max_size")
 
     def __init__(self, max_size: int = 64) -> None:
-        self._data: "OrderedDict[Tuple[int, Hashable], Tuple[Any, V]]" = OrderedDict()
+        self._data: OrderedDict[tuple[int, Hashable], tuple[Any, V]] = OrderedDict()
         self._lock = Lock()
         self._max_size = int(max_size)
 

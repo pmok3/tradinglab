@@ -33,19 +33,19 @@ class _CountingSleep:
     """``sleep_fn`` that records each call and is otherwise inert."""
 
     def __init__(self) -> None:
-        self.calls: List[float] = []
+        self.calls: list[float] = []
 
     def __call__(self, _evt: threading.Event, secs: float) -> None:
         self.calls.append(secs)
 
 
-def _no_l1(_src: str, _sym: str, _itv: str) -> Optional[List[Candle]]:
+def _no_l1(_src: str, _sym: str, _itv: str) -> list[Candle] | None:
     return None
 
 
 def _merge_newer_wins(
-    _old: Optional[List[Candle]], new: Optional[List[Candle]],
-) -> List[Candle]:
+    _old: list[Candle] | None, new: list[Candle] | None,
+) -> list[Candle]:
     return list(new or [])
 
 
@@ -60,8 +60,8 @@ class _InMemDisk:
         self.store[(src, sym, itv)] = list(candles)
 
 
-def _fetcher_always_returns_one() -> Tuple[callable, List[Tuple[str, str]]]:
-    calls: List[Tuple[str, str]] = []
+def _fetcher_always_returns_one() -> tuple[callable, list[tuple[str, str]]]:
+    calls: list[tuple[str, str]] = []
 
     def fetch(sym, itv):
         calls.append((sym, itv))
@@ -82,7 +82,7 @@ def test_rate_limit_sleep_fires_after_every_fetched_outcome() -> None:
     fetch, _calls = _fetcher_always_returns_one()
     sleep = _CountingSleep()
     disk = _InMemDisk()
-    events: List[ProgressEvent] = []
+    events: list[ProgressEvent] = []
 
     result = preload_universe(
         ["AAPL", "MSFT", "GOOG"], ["5m"],
@@ -222,7 +222,7 @@ def test_failed_outcome_does_not_add_post_op_sleep() -> None:
     disk = _InMemDisk()
 
     def fetch_always_raises(_sym, _itv):
-        raise IOError("upstream down")
+        raise OSError("upstream down")
 
     preload_universe(
         ["AAPL"], ["5m"],

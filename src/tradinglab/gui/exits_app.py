@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import logging
 import tkinter as tk
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -64,13 +64,13 @@ class ExitsAppMixin:
         from .exits_overlay import ExitsOverlay
         from .exits_tab import ExitsTab
 
-        self._audit_log: Optional[AuditLog] = None
-        self._position_tracker: Optional[PositionTracker] = None
-        self._paper_engine: Optional[PaperBrokerEngine] = None
-        self._paper_sink: Optional[PaperBrokerSink] = None
-        self._exit_evaluator: Optional[ExitEvaluator] = None
-        self._exits_tab: Optional[ExitsTab] = None
-        self._exits_overlay: Optional[ExitsOverlay] = None
+        self._audit_log: AuditLog | None = None
+        self._position_tracker: PositionTracker | None = None
+        self._paper_engine: PaperBrokerEngine | None = None
+        self._paper_sink: PaperBrokerSink | None = None
+        self._exit_evaluator: ExitEvaluator | None = None
+        self._exits_tab: ExitsTab | None = None
+        self._exits_overlay: ExitsOverlay | None = None
         self._exits_dialog = None  # lazy modeless singleton
 
         try:

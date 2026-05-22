@@ -28,9 +28,10 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any
 
 from ..scanner.model import Group as ConditionGroup
 
@@ -152,13 +153,13 @@ def _utcnow_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-def _as_float_opt(v: Any) -> Optional[float]:
+def _as_float_opt(v: Any) -> float | None:
     if v is None:
         return None
     return float(v)
 
 
-def _as_str_opt(v: Any) -> Optional[str]:
+def _as_str_opt(v: Any) -> str | None:
     if v is None:
         return None
     return str(v)
@@ -183,12 +184,12 @@ class SizingRule:
     """
 
     kind: SizingKind = SizingKind.FIXED_QTY
-    qty: Optional[float] = None
-    notional: Optional[float] = None
+    qty: float | None = None
+    notional: float | None = None
     share_rounding: ShareRounding = ShareRounding.DOWN
 
-    def to_dict(self) -> Dict[str, Any]:
-        out: Dict[str, Any] = {
+    def to_dict(self) -> dict[str, Any]:
+        out: dict[str, Any] = {
             "kind": self.kind.value,
             "share_rounding": self.share_rounding.value,
         }
@@ -199,7 +200,7 @@ class SizingRule:
         return out
 
     @classmethod
-    def from_dict(cls, d: Mapping[str, Any]) -> "SizingRule":
+    def from_dict(cls, d: Mapping[str, Any]) -> SizingRule:
         if not isinstance(d, Mapping):
             raise TypeError(f"SizingRule.from_dict expects mapping, got {type(d).__name__}")
         kind_str = d.get("kind", SizingKind.FIXED_QTY.value)
@@ -235,8 +236,8 @@ class Universe:
     :func:`validate_strategy` enforces XOR on save / load / arm.
     """
 
-    symbols: Tuple[str, ...] = field(default_factory=tuple)
-    scanner_id: Optional[str] = None
+    symbols: tuple[str, ...] = field(default_factory=tuple)
+    scanner_id: str | None = None
     from_attached_chart: bool = False
 
     def __post_init__(self) -> None:
@@ -250,8 +251,8 @@ class Universe:
             and not self.from_attached_chart
         )
 
-    def to_dict(self) -> Dict[str, Any]:
-        out: Dict[str, Any] = {}
+    def to_dict(self) -> dict[str, Any]:
+        out: dict[str, Any] = {}
         if self.symbols:
             out["symbols"] = list(self.symbols)
         if self.scanner_id:
@@ -261,7 +262,7 @@ class Universe:
         return out
 
     @classmethod
-    def from_dict(cls, d: Mapping[str, Any]) -> "Universe":
+    def from_dict(cls, d: Mapping[str, Any]) -> Universe:
         if not isinstance(d, Mapping):
             raise TypeError(f"Universe.from_dict expects mapping, got {type(d).__name__}")
         syms_raw = d.get("symbols", ())
@@ -303,23 +304,23 @@ class EntryTrigger:
     kind: TriggerKind = TriggerKind.MARKET
 
     # Price family (LIMIT / STOP / STOP_LIMIT)
-    price: Optional[float] = None
-    stop_price: Optional[float] = None
+    price: float | None = None
+    stop_price: float | None = None
 
     # Indicator
-    condition: Optional[ConditionGroup] = None
-    interval: Optional[str] = None
+    condition: ConditionGroup | None = None
+    interval: str | None = None
     evaluate_intrabar: bool = False
 
     # Scanner alert
-    scanner_id: Optional[str] = None
+    scanner_id: str | None = None
 
     # Common
     time_in_force: TimeInForce = TimeInForce.DAY
     label: str = ""
 
-    def to_dict(self) -> Dict[str, Any]:
-        out: Dict[str, Any] = {
+    def to_dict(self) -> dict[str, Any]:
+        out: dict[str, Any] = {
             "id": self.id,
             "kind": self.kind.value,
             "time_in_force": self.time_in_force.value,
@@ -336,7 +337,7 @@ class EntryTrigger:
         return out
 
     @classmethod
-    def from_dict(cls, d: Mapping[str, Any]) -> "EntryTrigger":
+    def from_dict(cls, d: Mapping[str, Any]) -> EntryTrigger:
         if not isinstance(d, Mapping):
             raise TypeError(f"EntryTrigger.from_dict expects mapping, got {type(d).__name__}")
         kind_str = d.get("kind", TriggerKind.MARKET.value)
@@ -373,14 +374,14 @@ class CreatedWith:
     version: str = "0.0.0"
     template: bool = False  # True for prepackaged templates
 
-    def to_dict(self) -> Dict[str, Any]:
-        out: Dict[str, Any] = {"app": self.app, "version": self.version}
+    def to_dict(self) -> dict[str, Any]:
+        out: dict[str, Any] = {"app": self.app, "version": self.version}
         if self.template:
             out["template"] = True
         return out
 
     @classmethod
-    def from_dict(cls, d: Mapping[str, Any]) -> "CreatedWith":
+    def from_dict(cls, d: Mapping[str, Any]) -> CreatedWith:
         return cls(
             app=str(d.get("app", "tradinglab")),
             version=str(d.get("version", "0.0.0")),
@@ -406,13 +407,13 @@ class EntryStrategy:
     universe: Universe = field(default_factory=Universe)
     trigger: EntryTrigger = field(default_factory=EntryTrigger)
     sizing: SizingRule = field(default_factory=SizingRule)
-    on_fill_exit_ids: Tuple[str, ...] = field(default_factory=tuple)
+    on_fill_exit_ids: tuple[str, ...] = field(default_factory=tuple)
 
     # Persistent config / lifecycle gates
     enabled: bool = True
     cooldown_secs: int = 0
     max_fires_per_session_per_symbol: int = 1
-    max_fires_per_session_total: Optional[int] = None
+    max_fires_per_session_total: int | None = None
     position_already_open_policy: PositionAlreadyOpenPolicy = (
         PositionAlreadyOpenPolicy.BLOCK
     )
@@ -425,14 +426,14 @@ class EntryStrategy:
     created_with: CreatedWith = field(default_factory=CreatedWith)
     created_at: str = field(default_factory=_utcnow_iso)
     updated_at: str = field(default_factory=_utcnow_iso)
-    extra: Dict[str, Any] = field(default_factory=dict)
+    extra: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         # Coerce list -> tuple defensively (callers may pass a list).
         if not isinstance(self.on_fill_exit_ids, tuple):
             self.on_fill_exit_ids = tuple(self.on_fill_exit_ids)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "name": self.name,
@@ -457,7 +458,7 @@ class EntryStrategy:
         }
 
     @classmethod
-    def from_dict(cls, d: Mapping[str, Any]) -> "EntryStrategy":
+    def from_dict(cls, d: Mapping[str, Any]) -> EntryStrategy:
         if not isinstance(d, Mapping):
             raise TypeError(f"EntryStrategy.from_dict expects mapping, got {type(d).__name__}")
         version = int(d.get("schema_version", CURRENT_SCHEMA_VERSION))
@@ -528,7 +529,7 @@ class EntryStrategy:
 _HHMM_RE = __import__("re").compile(r"^[0-2][0-9]:[0-5][0-9]$")
 
 
-def validate_strategy(strategy: EntryStrategy) -> List[str]:
+def validate_strategy(strategy: EntryStrategy) -> list[str]:
     """Return human-readable error strings; empty list = valid.
 
     Called on save (storage write), on load (BrokenStrategy detection),
@@ -549,7 +550,7 @@ def validate_strategy(strategy: EntryStrategy) -> List[str]:
     - Lifecycle: ``cooldown_secs >= 0``, ``max_fires_per_session_per_symbol >= 1``,
       arm window times match HH:MM and start <= end.
     """
-    errs: List[str] = []
+    errs: list[str] = []
     if not strategy.name.strip():
         errs.append("strategy name is empty")
 
@@ -630,8 +631,8 @@ def validate_strategy(strategy: EntryStrategy) -> List[str]:
     return errs
 
 
-def _validate_trigger(t: EntryTrigger) -> List[str]:
-    errs: List[str] = []
+def _validate_trigger(t: EntryTrigger) -> list[str]:
+    errs: list[str] = []
     if t.kind == TriggerKind.LIMIT:
         if t.price is None or t.price <= 0:
             errs.append("LIMIT trigger requires price > 0")
@@ -653,8 +654,8 @@ def _validate_trigger(t: EntryTrigger) -> List[str]:
     return errs
 
 
-def _validate_sizing(s: SizingRule) -> List[str]:
-    errs: List[str] = []
+def _validate_sizing(s: SizingRule) -> list[str]:
+    errs: list[str] = []
     if s.kind == SizingKind.FIXED_QTY:
         if s.qty is None or s.qty <= 0:
             errs.append("FIXED_QTY sizing requires qty > 0")
@@ -669,7 +670,7 @@ def _validate_sizing(s: SizingRule) -> List[str]:
 # ---------------------------------------------------------------------------
 
 
-def migrate(d: Mapping[str, Any], *, from_version: int) -> Dict[str, Any]:
+def migrate(d: Mapping[str, Any], *, from_version: int) -> dict[str, Any]:
     """Migrate an older-schema dict to the current schema.
 
     No migrations exist for v1; this is scaffolding for future versions.

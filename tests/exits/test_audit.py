@@ -16,7 +16,6 @@ from tradinglab.core.thread_guard import (
 from tradinglab.exits import audit as audit_mod
 from tradinglab.exits.audit import KNOWN_KINDS, AuditLog
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

@@ -5,18 +5,16 @@ replay/backtest layer when simulating a compare pair.
 """
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
-
 from ..constants import is_intraday
 from ..models import Candle
 
 
 def apply_pair_filter(
-    primary_raw: Optional[List[Candle]],
-    compare_raw: Optional[List[Candle]],
+    primary_raw: list[Candle] | None,
+    compare_raw: list[Candle] | None,
     interval: str,
     extended_hours: bool,
-) -> Tuple[List[Candle], List[Candle]]:
+) -> tuple[list[Candle], list[Candle]]:
     """Return ``(primary, compare)`` filtered for the current settings.
 
     Coordinates extended-hours across the pair: the toggle only *takes
@@ -41,7 +39,7 @@ def apply_pair_filter(
         if not (primary_has_ext and compare_has_ext):
             want_extended = False
 
-    def _filter(cs: Optional[List[Candle]]) -> List[Candle]:
+    def _filter(cs: list[Candle] | None) -> list[Candle]:
         if not cs:
             return []
         if want_extended:
@@ -79,9 +77,9 @@ def _normalize_pairing_key(d):
 
 
 def align_pair(
-    primary: List[Candle],
-    compare: List[Candle],
-) -> Tuple[List[Candle], List[Candle]]:
+    primary: list[Candle],
+    compare: list[Candle],
+) -> tuple[list[Candle], list[Candle]]:
     """Timestamp-align two candle series.
 
     Produces two equal-length lists whose i-th entries share the same
@@ -107,8 +105,8 @@ def align_pair(
     by_c = {_k(c.date): c for c in compare if lo_day <= c.date.date() <= hi_day}
     merged = sorted(set(by_p) | set(by_c))
 
-    out_p: List[Candle] = []
-    out_c: List[Candle] = []
+    out_p: list[Candle] = []
+    out_c: list[Candle] = []
     for d in merged:
         out_p.append(by_p.get(d) or Candle.gap(d))
         out_c.append(by_c.get(d) or Candle.gap(d))
@@ -116,11 +114,11 @@ def align_pair(
 
 
 def apply_pair_filter_and_align(
-    primary_raw: Optional[List[Candle]],
-    compare_raw: Optional[List[Candle]],
+    primary_raw: list[Candle] | None,
+    compare_raw: list[Candle] | None,
     interval: str,
     extended_hours: bool,
-) -> Tuple[List[Candle], List[Candle]]:
+) -> tuple[list[Candle], list[Candle]]:
     """Pair-filter, then timestamp-align in compare mode."""
     primary, compare = apply_pair_filter(
         primary_raw, compare_raw, interval, extended_hours,

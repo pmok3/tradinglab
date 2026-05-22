@@ -100,7 +100,7 @@ def test_apply_fill_partial_short_records_realized_pnl(tracker):
 def test_apply_fill_full_close_emits_strategy_unbind_when_attached(tracker):
     p = tracker.open(symbol="AAPL", side="long", qty=100, price=175, source="manual")
     tracker.bind_strategy(p.id, "s-1")
-    events: List[PositionEvent] = []
+    events: list[PositionEvent] = []
     tracker.subscribe(lambda ev, pos: events.append(ev))
     tracker.apply_fill(position_id=p.id, qty=100, price=180)
     kinds = [e.kind for e in events]
@@ -175,7 +175,7 @@ def test_mark_negative_price_silent_noop(tracker):
 
 def test_bind_strategy_sets_strategy_id_and_emits_event(tracker):
     p = tracker.open(symbol="AAPL", side="long", qty=10, price=175, source="manual")
-    events: List[PositionEvent] = []
+    events: list[PositionEvent] = []
     tracker.subscribe(lambda ev, pos: events.append(ev))
     tracker.bind_strategy(p.id, "s-1")
     assert p.strategy_id == "s-1"
@@ -185,7 +185,7 @@ def test_bind_strategy_sets_strategy_id_and_emits_event(tracker):
 def test_bind_strategy_idempotent_no_event(tracker):
     p = tracker.open(symbol="AAPL", side="long", qty=10, price=175, source="manual")
     tracker.bind_strategy(p.id, "s-1")
-    events: List[PositionEvent] = []
+    events: list[PositionEvent] = []
     tracker.subscribe(lambda ev, pos: events.append(ev))
     tracker.bind_strategy(p.id, "s-1")
     assert events == []
@@ -194,7 +194,7 @@ def test_bind_strategy_idempotent_no_event(tracker):
 def test_unbind_strategy_clears_id_and_emits(tracker):
     p = tracker.open(symbol="AAPL", side="long", qty=10, price=175, source="manual")
     tracker.bind_strategy(p.id, "s-1")
-    events: List[PositionEvent] = []
+    events: list[PositionEvent] = []
     tracker.subscribe(lambda ev, pos: events.append(ev))
     tracker.unbind_strategy(p.id, reason="user")
     assert p.strategy_id is None
@@ -211,7 +211,7 @@ def test_bind_strategy_rejects_empty_id(tracker):
 
 def test_edit_manual_position_updates_fields_and_emits(tracker):
     p = tracker.open(symbol="AAPL", side="long", qty=10, price=175, source="manual")
-    events: List[PositionEvent] = []
+    events: list[PositionEvent] = []
     tracker.subscribe(lambda ev, pos: events.append(ev))
     tracker.edit(p.id, qty_open=8, avg_entry_price=176.0)
     assert p.qty_open == 8
@@ -235,7 +235,7 @@ def test_edit_rejects_negative_qty(tracker):
 
 def test_subscriber_modifying_subscriber_list_does_not_crash(tracker):
     """A subscriber removing itself mid-dispatch must not break iteration."""
-    seen: List[str] = []
+    seen: list[str] = []
 
     def sub_a(ev: PositionEvent, pos: Position) -> None:
         seen.append("a")
@@ -253,7 +253,7 @@ def test_subscriber_modifying_subscriber_list_does_not_crash(tracker):
 
 def test_nested_mutation_in_subscriber_is_re_entrancy_safe(tracker):
     """A subscriber that triggers another mutation queues the nested event."""
-    nested_kinds: List[str] = []
+    nested_kinds: list[str] = []
 
     p = tracker.open(symbol="AAPL", side="long", qty=10, price=175, source="manual")
     tracker.bind_strategy(p.id, "s-1")
@@ -276,7 +276,7 @@ def test_nested_mutation_in_subscriber_is_re_entrancy_safe(tracker):
 
 
 def test_subscriber_exception_does_not_kill_other_subscribers(tracker):
-    seen: List[str] = []
+    seen: list[str] = []
 
     def good(ev, pos):
         seen.append(ev.kind.value)
@@ -291,7 +291,7 @@ def test_subscriber_exception_does_not_kill_other_subscribers(tracker):
 
 
 def test_unsubscribe_callable_returned_by_subscribe(tracker):
-    seen: List[str] = []
+    seen: list[str] = []
     unsub = tracker.subscribe(lambda ev, pos: seen.append(ev.kind.value))
     tracker.open(symbol="A", side="long", qty=1, price=100, source="manual")
     assert seen == ["open"]
@@ -303,7 +303,7 @@ def test_unsubscribe_callable_returned_by_subscribe(tracker):
 # ---- Tk-thread invariant ---------------------------------------------------
 
 def test_open_from_worker_thread_raises(tracker):
-    err: List[Exception] = []
+    err: list[Exception] = []
 
     def worker() -> None:
         try:
@@ -318,8 +318,8 @@ def test_open_from_worker_thread_raises(tracker):
 
 
 def test_mutation_under_check_disabled_works_off_thread(tracker):
-    err: List[Exception] = []
-    ok: List[Position] = []
+    err: list[Exception] = []
+    ok: list[Position] = []
 
     def worker() -> None:
         try:

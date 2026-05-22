@@ -18,8 +18,6 @@ are private helpers used only inside this module.
 
 from __future__ import annotations
 
-from typing import Optional
-
 import numpy as np
 
 from ..constants import is_intraday
@@ -269,7 +267,7 @@ def _make_adaptive_x_locator_class():
 
 
 # Cached class — built on first use, reused for every render.
-_ADAPTIVE_X_LOCATOR_CLS: Optional[type] = None
+_ADAPTIVE_X_LOCATOR_CLS: type | None = None
 
 
 def _adaptive_x_locator_class():

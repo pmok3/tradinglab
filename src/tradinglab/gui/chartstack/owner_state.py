@@ -18,10 +18,11 @@ Each helper:
 
 from __future__ import annotations
 
-from typing import Any, Iterable, List, Mapping, Optional
+from collections.abc import Iterable, Mapping
+from typing import Any
 
 
-def scanner_symbols(owner: Any) -> List[str]:
+def scanner_symbols(owner: Any) -> list[str]:
     """Flatten every active ``ScanResult`` into a deduped symbol list.
 
     Reads ``owner._scan_last_results`` (the dict ``ChartApp`` keeps
@@ -35,7 +36,7 @@ def scanner_symbols(owner: Any) -> List[str]:
     results = getattr(owner, "_scan_last_results", None) or {}
     if not isinstance(results, Mapping):
         return []
-    out: List[str] = []
+    out: list[str] = []
     seen: set[str] = set()
     for _scan_id, scan_result in results.items():
         rows: Iterable[Any]
@@ -69,7 +70,7 @@ def scanner_symbols(owner: Any) -> List[str]:
     return out
 
 
-def scanner_row_for(owner: Any, symbol: str) -> Optional[Any]:
+def scanner_row_for(owner: Any, symbol: str) -> Any | None:
     """Return the first matching ``MatchRow`` for ``symbol`` across all scans.
 
     Used by the alert engine to evaluate Tier-2's "new scanner edge"
@@ -94,7 +95,7 @@ def scanner_row_for(owner: Any, symbol: str) -> Optional[Any]:
     return None
 
 
-def open_position_symbols(owner: Any) -> List[str]:
+def open_position_symbols(owner: Any) -> list[str]:
     """Return open-position symbols, ordered by descending abs(unrealized P&L).
 
     Reads ``owner._sandbox.positions_snapshot()`` (sandbox mode) or
@@ -104,7 +105,7 @@ def open_position_symbols(owner: Any) -> List[str]:
     with ``.get``; the live tracker returns ``Position`` instances
     so we read attributes.
     """
-    rows: List[Any] = []
+    rows: list[Any] = []
     # Sandbox takes precedence when present and active.
     sb = getattr(owner, "_sandbox", None)
     if sb is not None:
@@ -132,7 +133,7 @@ def open_position_symbols(owner: Any) -> List[str]:
             return 0.0
 
     rows.sort(key=_pnl, reverse=True)
-    out: List[str] = []
+    out: list[str] = []
     seen: set[str] = set()
     for r in rows:
         sym = r.get("symbol") if isinstance(r, dict) else getattr(r, "symbol", None)
@@ -146,7 +147,7 @@ def open_position_symbols(owner: Any) -> List[str]:
     return out
 
 
-def open_position_for(owner: Any, symbol: str) -> Optional[Any]:
+def open_position_for(owner: Any, symbol: str) -> Any | None:
     """Return the position object/dict matching ``symbol``, or ``None``.
 
     Sandbox snapshots are dicts; the live tracker hands back

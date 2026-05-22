@@ -22,10 +22,10 @@ ttk = pytest.importorskip("tkinter.ttk")
 
 from tradinglab.constants import CUSTOMIZABLE_THEME_KEYS, DEFAULT_THEMES
 from tradinglab.gui.theme_editor import (
-    ThemeEditorDialog,
-    open_theme_editor,
     _BLOOMBERG_DARK,
     _PRESETS,
+    ThemeEditorDialog,
+    open_theme_editor,
 )
 
 

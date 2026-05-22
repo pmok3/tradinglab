@@ -53,7 +53,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from ..core.io_helpers import atomic_write_json
 from ._http import MAX_RESPONSE_BYTES, credentialed_opener
@@ -94,7 +94,7 @@ def token_cache_path() -> Path:
     return _td() / "schwab.json"
 
 
-def load_token_cache(path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
+def load_token_cache(path: Path | None = None) -> dict[str, Any] | None:
     """Read the cache file. Returns ``None`` if missing or unparseable."""
     p = path or token_cache_path()
     if not p.is_file():
@@ -106,7 +106,7 @@ def load_token_cache(path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
         return None
 
 
-def save_token_cache(data: Dict[str, Any], path: Optional[Path] = None) -> None:
+def save_token_cache(data: dict[str, Any], path: Path | None = None) -> None:
     """Persist ``data`` atomically. Sets mode 0600 on POSIX."""
     p = path or token_cache_path()
     payload = dict(data)
@@ -127,7 +127,7 @@ def save_token_cache(data: Dict[str, Any], path: Optional[Path] = None) -> None:
 # ---------------------------------------------------------------------------
 
 
-def is_access_token_fresh(cache: Dict[str, Any], *, now: Optional[float] = None) -> bool:
+def is_access_token_fresh(cache: dict[str, Any], *, now: float | None = None) -> bool:
     """True iff ``cache.access_token`` is set and not within the skew of expiry."""
     if not cache or not cache.get("access_token"):
         return False
@@ -139,7 +139,7 @@ def is_access_token_fresh(cache: Dict[str, Any], *, now: Optional[float] = None)
     return now + ACCESS_TOKEN_REFRESH_SKEW_SEC < exp
 
 
-def is_refresh_token_alive(cache: Dict[str, Any], *, now: Optional[float] = None) -> bool:
+def is_refresh_token_alive(cache: dict[str, Any], *, now: float | None = None) -> bool:
     """True iff there's any usable refresh token in the cache.
 
     We treat a missing ``refresh_token_expires_at`` as alive, because
@@ -160,8 +160,8 @@ def is_refresh_token_alive(cache: Dict[str, Any], *, now: Optional[float] = None
 
 
 def build_token_cache(
-    response: Dict[str, Any], *, now: Optional[float] = None,
-) -> Dict[str, Any]:
+    response: dict[str, Any], *, now: float | None = None,
+) -> dict[str, Any]:
     """Translate Schwab's /oauth/token response into our cache schema.
 
     Schwab returns ``{"access_token", "refresh_token", "expires_in",
@@ -190,13 +190,13 @@ def build_token_cache(
 
 def _basic_auth_header(creds: SchwabCredentials) -> str:
     """Schwab requires app_key:app_secret in HTTP Basic auth on token POSTs."""
-    raw = f"{creds.app_key}:{creds.app_secret}".encode("utf-8")
+    raw = f"{creds.app_key}:{creds.app_secret}".encode()
     return "Basic " + base64.b64encode(raw).decode("ascii")
 
 
 def _post_token(  # pragma: no cover - network path; exercised via integration
-    creds: SchwabCredentials, body: Dict[str, str],
-) -> Dict[str, Any]:
+    creds: SchwabCredentials, body: dict[str, str],
+) -> dict[str, Any]:
     data = urllib.parse.urlencode(body).encode("utf-8")
     req = urllib.request.Request(
         TOKEN_URL, data=data, method="POST",
@@ -213,7 +213,7 @@ def _post_token(  # pragma: no cover - network path; exercised via integration
 def refresh_access_token(
     creds: SchwabCredentials, refresh_token: str,
     *, _post=None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Exchange a refresh token for a new access token.
 
     Returns the raw Schwab response dict. ``_post`` is an injection
@@ -234,9 +234,9 @@ def refresh_access_token(
 
 
 def get_access_token(
-    creds: SchwabCredentials, *, path: Optional[Path] = None,
-    _now: Optional[float] = None, _post=None,
-) -> Optional[str]:
+    creds: SchwabCredentials, *, path: Path | None = None,
+    _now: float | None = None, _post=None,
+) -> str | None:
     """Return a valid access token, refreshing the cache if needed.
 
     Behavior:

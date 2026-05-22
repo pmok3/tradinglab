@@ -30,7 +30,6 @@ from tradinglab.exits.model import (
     TriggerKind,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -155,6 +154,7 @@ def test_e2e_bracket_fires_via_sandbox_tick_loop(app):
     tick.
     """
     from datetime import datetime, timedelta
+
     from tradinglab.models import Candle
 
     _clear_exits_storage()

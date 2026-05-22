@@ -13,14 +13,23 @@ the matching exporter (`data/local_export.py`).
   Optional[List[Candle]]` callable. Errors return `None` and are logged
   via the module logger; the function NEVER raises (preserves the
   `data/base.py` contract).
+- `make_local_zip_fetcher(zip_path: Path, source_subdir: str) -> DataFetcher`
+  — variant that reads from inside a zip archive (audit
+  `local-source-zip`). Resolves
+  `<source_subdir>/<TICKER>_<INTERVAL>.csv` inside the archive using
+  forward slashes (PKZIP spec). Same `None`-on-error contract.
 - `discover_subsources(root_path, root_name) -> list[(combobox_key,
-  subdir_path, fetcher)]` — walks `root_path`, returns one tuple per
-  top-level subdirectory with the combobox key `f"{root_name}-{subdir}"`.
-  Hidden directories (starting with `.`) are skipped silently. Sorted
-  alphabetically.
+  subdir_path, fetcher)]` — walks `root_path`. Two shapes are
+  supported: (1) a **directory** root yields one tuple per top-level
+  subdirectory; (2) a **zip-file** root yields one tuple per top-level
+  directory prefix inside the archive (each gets a
+  `make_local_zip_fetcher` fetcher). Hidden / `__MACOSX/` entries are
+  skipped silently. Sorted alphabetically. Non-zip files and missing
+  paths yield an empty list.
 - `list_symbols(root: Path) -> list[(ticker, interval)]` — preview
   helper used by the Configure Local Data dialog; ignores non-`.csv`
-  files silently.
+  files silently. Directory-mode only — zip preview is not yet
+  surfaced in the dialog.
 - `CANONICAL_HEADER` — the six-tuple `("timestamp", "open", "high",
   "low", "close", "volume")` enforced verbatim.
 - `LocalDataError` — internal exception raised by the strict parser;
@@ -31,7 +40,8 @@ the matching exporter (`data/local_export.py`).
 ## Dependencies
 - Internal: `..constants.classify_session`, `..constants.is_intraday`,
   `..models.Candle`, `.base.DataFetcher`.
-- External: `csv` (stdlib), `datetime.datetime.fromisoformat` (stdlib).
+- External: `csv` (stdlib), `zipfile` (stdlib),
+  `datetime.datetime.fromisoformat` (stdlib).
 - No pandas / no numpy. Hot path is pure Python `csv.reader`.
 
 ## Design Decisions

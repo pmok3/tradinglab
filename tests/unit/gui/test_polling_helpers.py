@@ -22,7 +22,6 @@ import pytest
 
 from tradinglab.gui import polling as _polling
 
-
 ET = ZoneInfo("America/New_York")
 
 

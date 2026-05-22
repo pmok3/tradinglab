@@ -36,7 +36,7 @@ Public API
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, List, Tuple
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -49,7 +49,7 @@ def ha_arrays(
     high: np.ndarray,
     low: np.ndarray,
     close: np.ndarray,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Return Heikin-Ashi (open, high, low, close) arrays.
 
     All four inputs must be 1-D arrays of equal length. Values are
@@ -89,7 +89,7 @@ def ha_arrays(
     return ha_o, ha_h, ha_l, ha_c
 
 
-def heikin_ashi_candles(candles: "List[Candle]") -> "List[Candle]":
+def heikin_ashi_candles(candles: list[Candle]) -> list[Candle]:
     """Return a parallel candle list with HA OHLC but original metadata.
 
     Used by the renderer when the View → Heikin-Ashi Candles toggle is
@@ -111,7 +111,7 @@ def heikin_ashi_candles(candles: "List[Candle]") -> "List[Candle]":
         return []
     bars = Bars.from_candles(candles)
     ha_o, ha_h, ha_l, ha_c = ha_arrays(bars.open, bars.high, bars.low, bars.close)
-    out: List["Candle"] = []
+    out: list[Candle] = []
     for i, src in enumerate(candles):
         if src.is_gap:
             # Preserve gap placeholders verbatim.

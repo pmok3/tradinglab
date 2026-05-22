@@ -42,7 +42,6 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import List, Optional, Tuple
 
 from ..models import Candle
 
@@ -61,7 +60,7 @@ _SUPPORTED_INTERVALS: dict[str, int] = {
 }
 
 
-def supported_intervals() -> Tuple[str, ...]:
+def supported_intervals() -> tuple[str, ...]:
     """Return the tuple of target intervals this module can resample to."""
     return tuple(_SUPPORTED_INTERVALS.keys())
 
@@ -135,7 +134,7 @@ class BarResampler:
         self,
         target_interval: str,
         *,
-        session_open_time: Tuple[int, int] = (9, 30),
+        session_open_time: tuple[int, int] = (9, 30),
     ) -> None:
         if target_interval not in _SUPPORTED_INTERVALS:
             raise ValueError(
@@ -167,7 +166,7 @@ class BarResampler:
         """Drop all in-progress bucket state. Next tick seeds fresh."""
         self._reset_state()
 
-    def current_forming(self) -> Optional[Candle]:
+    def current_forming(self) -> Candle | None:
         """Return the current in-progress higher-interval bar, if any.
 
         Returns ``None`` before the first tick (or after :meth:`reset`).
@@ -181,7 +180,7 @@ class BarResampler:
 
     def on_1m_tick(
         self, candle: Candle, *, forming: bool
-    ) -> List[BarEvent]:
+    ) -> list[BarEvent]:
         """Feed one 1m candle into the resampler. Returns events to emit.
 
         ``forming=True`` means the same 1m timestamp may receive
@@ -198,7 +197,7 @@ class BarResampler:
           ``candle``.
         """
         bucket_start = self._bucket_start_for(candle.date)
-        events: List[BarEvent] = []
+        events: list[BarEvent] = []
 
         # First tick ever — seed the bucket.
         if self._bucket_start is None:
@@ -228,7 +227,7 @@ class BarResampler:
     # --------------------------------------------------------------- internals
 
     def _reset_state(self) -> None:
-        self._bucket_start: Optional[datetime] = None
+        self._bucket_start: datetime | None = None
         self._locked_count: int = 0
         self._locked_open: float = 0.0
         self._locked_high: float = 0.0
@@ -237,7 +236,7 @@ class BarResampler:
         self._locked_volume: float = 0.0
         self._locked_session_counts: Counter = Counter()
         self._locked_last_session: str = "regular"
-        self._pending_1m: Optional[Candle] = None
+        self._pending_1m: Candle | None = None
 
     def _seed_bucket(self, bucket_start: datetime) -> None:
         self._bucket_start = bucket_start
@@ -319,7 +318,7 @@ class BarResampler:
         self._locked_last_session = c.session
         self._locked_count += 1
 
-    def _build_effective(self) -> Tuple[Candle, int]:
+    def _build_effective(self) -> tuple[Candle, int]:
         """Produce the bucket's current Candle + minute count.
 
         Combines the locked aggregate with the in-progress 1m (if

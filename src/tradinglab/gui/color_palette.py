@@ -35,12 +35,11 @@ from __future__ import annotations
 import math
 import tkinter as tk
 from tkinter import colorchooser, ttk
-from typing import List, Optional, Tuple
 
 # 19-swatch honeycomb laid out as: index 0 = center; indices 1-6 =
 # ring 1 in CW order starting at axial (1, 0); indices 7-18 = ring 2
 # in CW order starting at axial (2, 0).
-_HONEYCOMB_COLORS: Tuple[str, ...] = (
+_HONEYCOMB_COLORS: tuple[str, ...] = (
     # Center
     "#ffffff",
     # Ring 1 — six pure hues at full saturation, anchored at red (E)
@@ -63,7 +62,7 @@ _HONEYCOMB_COLORS: Tuple[str, ...] = (
 
 # Six grayscale swatches drawn as a row beneath the honeycomb so the
 # user can pick a neutral without leaving the palette.
-_GRAYSCALE_COLORS: Tuple[str, ...] = (
+_GRAYSCALE_COLORS: tuple[str, ...] = (
     "#000000", "#333333", "#666666", "#999999", "#cccccc", "#ffffff",
 )
 
@@ -72,7 +71,7 @@ _GRAYSCALE_COLORS: Tuple[str, ...] = (
 _HEX_RADIUS = 22
 
 
-def _axial_to_pixel(q: int, r: int, size: float) -> Tuple[float, float]:
+def _axial_to_pixel(q: int, r: int, size: float) -> tuple[float, float]:
     """Flat-top axial → pixel.
 
     See https://www.redblobgames.com/grids/hexagons/#hex-to-pixel —
@@ -83,7 +82,7 @@ def _axial_to_pixel(q: int, r: int, size: float) -> Tuple[float, float]:
     return x, y
 
 
-def _ring_axials(n: int) -> List[Tuple[int, int]]:
+def _ring_axials(n: int) -> list[tuple[int, int]]:
     """Axial coords of the cells that make up ring ``n``.
 
     ``n == 0`` returns the center; otherwise walks 6n cells CW
@@ -95,7 +94,7 @@ def _ring_axials(n: int) -> List[Tuple[int, int]]:
     # ring step traverses ``n`` cells in a direction before turning.
     # Ordering chosen so the 12 cells of ring 2 are adjacent in pairs.
     dirs = [(-1, +1), (-1, 0), (0, -1), (+1, -1), (+1, 0), (0, +1)]
-    cells: List[Tuple[int, int]] = []
+    cells: list[tuple[int, int]] = []
     q, r = n, 0
     for dq, dr in dirs:
         for _ in range(n):
@@ -105,10 +104,10 @@ def _ring_axials(n: int) -> List[Tuple[int, int]]:
     return cells
 
 
-def _hex_polygon_points(cx: float, cy: float, size: float) -> List[float]:
+def _hex_polygon_points(cx: float, cy: float, size: float) -> list[float]:
     """Return the 12-element flattened (x, y) point list for a flat-top
     hexagon centered at ``(cx, cy)`` with circumradius ``size``."""
-    pts: List[float] = []
+    pts: list[float] = []
     for k in range(6):
         ang = math.radians(60.0 * k)
         pts.append(cx + size * math.cos(ang))
@@ -129,12 +128,12 @@ class HexColorPalette(tk.Toplevel):
         self.title(title)
         self.transient(parent)
         self.resizable(False, False)
-        self.result: Optional[str] = None
+        self.result: str | None = None
         self._initial: str = self._normalise(initial)
         # ``_cell_items`` maps (canvas_id, color_hex) so we can
         # re-stroke the highlight when the user moves the cursor and
         # re-stroke the previously selected cell on click.
-        self._cell_items: List[Tuple[int, str]] = []
+        self._cell_items: list[tuple[int, str]] = []
         self._build_ui()
         # Geometry persistence — if a position was stored from a prior
         # open, use it; otherwise center on parent (legacy default).
@@ -202,8 +201,8 @@ class HexColorPalette(tk.Toplevel):
         # and (-1, +2) and similar give the y extremes. Compute over
         # all cells to be safe.
         all_cells = (_ring_axials(0) + _ring_axials(1) + _ring_axials(2))
-        xs: List[float] = []
-        ys: List[float] = []
+        xs: list[float] = []
+        ys: list[float] = []
         for q, r in all_cells:
             x, y = _axial_to_pixel(q, r, size)
             xs.append(x)
@@ -328,7 +327,7 @@ class HexColorPalette(tk.Toplevel):
 
 
 def pick_color(parent: tk.Misc, initial: str = "#888888",
-               title: str = "Pick a color") -> Optional[str]:
+               title: str = "Pick a color") -> str | None:
     """Open the hex color palette modally and return the chosen color.
 
     Returns ``None`` if the user cancels (Esc / Cancel / WM close).

@@ -25,9 +25,9 @@ from tradinglab.indicators.smi import SMI
 from tradinglab.models import Candle
 
 
-def _make_candles(n: int, seed: int = 42) -> List[Candle]:
+def _make_candles(n: int, seed: int = 42) -> list[Candle]:
     rng = random.Random(seed)
-    out: List[Candle] = []
+    out: list[Candle] = []
     base = 100.0
     t0 = dt.datetime(2024, 1, 2, 9, 30)
     for i in range(n):

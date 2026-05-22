@@ -48,16 +48,14 @@ the main thread via the supplied ``after_fn`` (typically
 from __future__ import annotations
 
 import json
-import os
-import sys
 import threading
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import time as _time
-from typing import Callable, Optional
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -154,11 +152,11 @@ def _is_rth_now() -> bool:
 
 
 _cache_lock = threading.Lock()
-_cached_result: Optional[UpdateResult] = None
+_cached_result: UpdateResult | None = None
 _cached_at: float = 0.0
 
 
-def _cached_if_fresh() -> Optional[UpdateResult]:
+def _cached_if_fresh() -> UpdateResult | None:
     with _cache_lock:
         if _cached_result is None:
             return None

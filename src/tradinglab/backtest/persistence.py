@@ -37,7 +37,7 @@ import json
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from .session import SessionResult
 
@@ -55,7 +55,7 @@ class LoadedSession:
     result: SessionResult
     saved_at: str
     session_id: str
-    screenshot_dir: Optional[Path] = None
+    screenshot_dir: Path | None = None
 
 
 def save_session(
@@ -63,7 +63,7 @@ def save_session(
     result: SessionResult,
     *,
     session_id: str = "",
-    screenshot_dir: Optional[Path] = None,
+    screenshot_dir: Path | None = None,
 ) -> Path:
     """Write ``result`` to ``json_path`` plus an optional screenshots copy.
 
@@ -80,7 +80,7 @@ def save_session(
     path = Path(json_path).resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    envelope: Dict[str, Any] = {
+    envelope: dict[str, Any] = {
         "format": SESSION_FILE_FORMAT,
         "version": SESSION_FILE_VERSION,
         "saved_at": _dt.datetime.now(_dt.timezone.utc).replace(microsecond=0).isoformat(),

@@ -41,10 +41,9 @@ import os
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from .base import DividendRecord, EarningsRecord, EventBundle
-
 
 _CACHE_SUFFIX = ".json"
 
@@ -87,7 +86,7 @@ def _float_or_nan(v: Any) -> float:
         return math.nan
 
 
-def _earnings_to_dict(r: EarningsRecord) -> Dict[str, Any]:
+def _earnings_to_dict(r: EarningsRecord) -> dict[str, Any]:
     return {
         "ts": int(r.ts),
         "symbol": str(r.symbol or ""),
@@ -100,7 +99,7 @@ def _earnings_to_dict(r: EarningsRecord) -> Dict[str, Any]:
     }
 
 
-def _earnings_from_dict(d: Dict[str, Any]) -> Optional[EarningsRecord]:
+def _earnings_from_dict(d: dict[str, Any]) -> EarningsRecord | None:
     if not isinstance(d, dict):
         return None
     try:
@@ -119,7 +118,7 @@ def _earnings_from_dict(d: Dict[str, Any]) -> Optional[EarningsRecord]:
     )
 
 
-def _dividend_to_dict(r: DividendRecord) -> Dict[str, Any]:
+def _dividend_to_dict(r: DividendRecord) -> dict[str, Any]:
     amt = _float_or_null(r.amount)
     return {
         "ex_ts": int(r.ex_ts),
@@ -134,7 +133,7 @@ def _dividend_to_dict(r: DividendRecord) -> Dict[str, Any]:
     }
 
 
-def _dividend_from_dict(d: Dict[str, Any]) -> Optional[DividendRecord]:
+def _dividend_from_dict(d: dict[str, Any]) -> DividendRecord | None:
     if not isinstance(d, dict):
         return None
     try:
@@ -154,7 +153,7 @@ def _dividend_from_dict(d: Dict[str, Any]) -> Optional[DividendRecord]:
     )
 
 
-def _bundle_to_dict(b: EventBundle) -> Dict[str, Any]:
+def _bundle_to_dict(b: EventBundle) -> dict[str, Any]:
     return {
         "schema": 1,
         "symbol": str(b.symbol or ""),
@@ -164,7 +163,7 @@ def _bundle_to_dict(b: EventBundle) -> Dict[str, Any]:
     }
 
 
-def _bundle_from_dict(d: Dict[str, Any]) -> Optional[EventBundle]:
+def _bundle_from_dict(d: dict[str, Any]) -> EventBundle | None:
     if not isinstance(d, dict):
         return None
     # Require at least one canonical bundle key; otherwise an
@@ -194,7 +193,7 @@ def _bundle_from_dict(d: Dict[str, Any]) -> Optional[EventBundle]:
     )
 
 
-def load(source: str, ticker: str) -> Optional[EventBundle]:
+def load(source: str, ticker: str) -> EventBundle | None:
     """Return the cached bundle for ``(source, ticker)`` or ``None``.
 
     Corrupt / malformed JSON is treated as a cache miss, never raised
@@ -241,8 +240,8 @@ def save(source: str, ticker: str, bundle: EventBundle) -> None:
 
 
 def merge_bundle(
-    old: Optional[EventBundle],
-    new: Optional[EventBundle],
+    old: EventBundle | None,
+    new: EventBundle | None,
 ) -> EventBundle:
     """Merge two bundles. The new bundle wins on overlapping keys.
 

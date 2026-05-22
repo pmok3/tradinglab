@@ -32,7 +32,7 @@ import logging
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from ..models import Candle
 from ._http import MAX_RESPONSE_BYTES, credentialed_opener
@@ -50,8 +50,8 @@ _POLYGON_KEYMAP = {
 
 
 def candles_from_polygon_response(
-    payload: Dict[str, Any], *, interval: str,
-) -> List[Candle]:
+    payload: dict[str, Any], *, interval: str,
+) -> list[Candle]:
     """Map a parsed Polygon ``/aggs`` response to candles."""
     if isinstance(payload, list):
         rows = payload
@@ -68,7 +68,7 @@ def candles_from_polygon_response(
 
 
 # Our interval → Polygon's (multiplier, timespan).
-_INTERVAL_TO_POLYGON: Dict[str, Tuple[int, str]] = {
+_INTERVAL_TO_POLYGON: dict[str, tuple[int, str]] = {
     "1m": (1, "minute"), "5m": (5, "minute"),
     "15m": (15, "minute"), "30m": (30, "minute"),
     "1h": (1, "hour"),
@@ -81,8 +81,8 @@ _POLYGON_BASE = "https://api.polygon.io"
 
 def fetch_polygon_data(
     ticker: str = "AAPL", interval: str = "1d",
-    *, lookback_days: Optional[int] = None,
-) -> Optional[List[Candle]]:
+    *, lookback_days: int | None = None,
+) -> list[Candle] | None:
     """``DataFetcher``-compatible Polygon fetcher.
 
     Returns ``None`` on any error.
@@ -108,9 +108,9 @@ def fetch_polygon_data(
 
 
 def _http_get_aggs(
-    ticker: str, timeframe: Tuple[int, str], start: str, end: str,
+    ticker: str, timeframe: tuple[int, str], start: str, end: str,
     creds: PolygonCredentials,
-) -> Dict[str, Any]:  # pragma: no cover - network path
+) -> dict[str, Any]:  # pragma: no cover - network path
     multiplier, timespan = timeframe
     url = (
         f"{_POLYGON_BASE}/v2/aggs/ticker/{urllib.parse.quote(ticker)}"

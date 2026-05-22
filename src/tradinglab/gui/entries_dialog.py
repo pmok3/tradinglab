@@ -38,19 +38,15 @@ from __future__ import annotations
 
 import logging
 import tkinter as tk
+from collections.abc import Callable, Sequence
 from tkinter import ttk
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from ..entries.model import (
-    CreatedWith,
     Direction,
     EntryStrategy,
-    EntryTrigger,
     PositionAlreadyOpenPolicy,
     ShareRounding,
     SizingKind,
-    SizingRule,
-    TimeInForce,
     TriggerKind,
     Universe,
     validate_strategy,
@@ -69,7 +65,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-_TRIGGER_KIND_CHOICES: Tuple[Tuple[TriggerKind, str], ...] = (
+_TRIGGER_KIND_CHOICES: tuple[tuple[TriggerKind, str], ...] = (
     (TriggerKind.MARKET,        "Market"),
     (TriggerKind.LIMIT,         "Limit"),
     (TriggerKind.STOP,          "Stop"),
@@ -80,7 +76,7 @@ _TRIGGER_KIND_CHOICES: Tuple[Tuple[TriggerKind, str], ...] = (
 _TRIGGER_KIND_LABEL = {k: lbl for k, lbl in _TRIGGER_KIND_CHOICES}
 _TRIGGER_KIND_BY_LABEL = {lbl: k for k, lbl in _TRIGGER_KIND_CHOICES}
 
-_SIZING_KIND_CHOICES: Tuple[Tuple[SizingKind, str], ...] = (
+_SIZING_KIND_CHOICES: tuple[tuple[SizingKind, str], ...] = (
     (SizingKind.FIXED_QTY,      "Fixed Qty"),
     (SizingKind.FIXED_NOTIONAL, "Fixed Notional ($)"),
 )
@@ -89,19 +85,19 @@ _SIZING_KIND_BY_LABEL = {lbl: k for k, lbl in _SIZING_KIND_CHOICES}
 
 _DIRECTION_CHOICES = (Direction.LONG, Direction.SHORT)
 
-_ROUNDING_CHOICES: Tuple[Tuple[ShareRounding, str], ...] = (
+_ROUNDING_CHOICES: tuple[tuple[ShareRounding, str], ...] = (
     (ShareRounding.DOWN,    "Round down"),
     (ShareRounding.NEAREST, "Round nearest"),
 )
 _ROUNDING_BY_LABEL = {lbl: r for r, lbl in _ROUNDING_CHOICES}
 
-_POLICY_CHOICES: Tuple[Tuple[PositionAlreadyOpenPolicy, str], ...] = (
+_POLICY_CHOICES: tuple[tuple[PositionAlreadyOpenPolicy, str], ...] = (
     (PositionAlreadyOpenPolicy.BLOCK, "Block"),
     (PositionAlreadyOpenPolicy.STACK, "Stack"),
 )
 _POLICY_BY_LABEL = {lbl: p for p, lbl in _POLICY_CHOICES}
 
-_INDICATOR_INTERVAL_CHOICES: Tuple[str, ...] = (
+_INDICATOR_INTERVAL_CHOICES: tuple[str, ...] = (
     "1m", "5m", "15m", "30m", "1h", "1d",
 )
 
@@ -118,10 +114,10 @@ class EntriesDialog(tk.Toplevel):
         self,
         master: tk.Misc,
         *,
-        strategy: Optional[EntryStrategy] = None,
+        strategy: EntryStrategy | None = None,
         exit_strategies: Sequence[ExitStrategy] = (),
-        on_save: Optional[Callable[[EntryStrategy], None]] = None,
-        on_cancel: Optional[Callable[[], None]] = None,
+        on_save: Callable[[EntryStrategy], None] | None = None,
+        on_cancel: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(master)
         self.title("Edit Entry Strategy")
@@ -140,7 +136,7 @@ class EntriesDialog(tk.Toplevel):
 
         self._on_save = on_save
         self._on_cancel = on_cancel
-        self._exit_strategies: List[ExitStrategy] = list(exit_strategies)
+        self._exit_strategies: list[ExitStrategy] = list(exit_strategies)
 
         # Deep-clone the incoming strategy so unsaved edits don't bleed
         # back into the caller's library snapshot.
@@ -152,17 +148,17 @@ class EntriesDialog(tk.Toplevel):
             self._is_new = False
 
         # Per-field error labels (populated by _on_validate / _on_save).
-        self._field_errors: Dict[str, tk.StringVar] = {}
-        self._block_editor: Optional[BlockEditor] = None
+        self._field_errors: dict[str, tk.StringVar] = {}
+        self._block_editor: BlockEditor | None = None
         # Per-kind param widget container — rebuilt when trigger kind
         # changes.
-        self._trigger_params: Optional[ttk.Frame] = None
-        self._trigger_param_vars: Dict[str, tk.Variable] = {}
+        self._trigger_params: ttk.Frame | None = None
+        self._trigger_param_vars: dict[str, tk.Variable] = {}
         # Universe per-mode widgets — rebuilt when universe radio changes.
-        self._universe_params: Optional[ttk.Frame] = None
-        self._universe_vars: Dict[str, tk.Variable] = {}
+        self._universe_params: ttk.Frame | None = None
+        self._universe_vars: dict[str, tk.Variable] = {}
         # Exit-id checkbox vars (held to keep tk vars alive).
-        self._exit_id_vars: Dict[str, tk.BooleanVar] = {}
+        self._exit_id_vars: dict[str, tk.BooleanVar] = {}
 
         self._build_layout()
         self._load_into_widgets()
@@ -182,7 +178,7 @@ class EntriesDialog(tk.Toplevel):
         return self._draft
 
     @property
-    def block_editor(self) -> Optional[BlockEditor]:
+    def block_editor(self) -> BlockEditor | None:
         """The embedded BlockEditor (only when trigger.kind == INDICATOR)."""
         return self._block_editor
 
@@ -191,7 +187,7 @@ class EntriesDialog(tk.Toplevel):
         return self._is_new
 
     @property
-    def exit_strategy_ids_selected(self) -> Tuple[str, ...]:
+    def exit_strategy_ids_selected(self) -> tuple[str, ...]:
         return tuple(
             sid for sid, var in self._exit_id_vars.items() if bool(var.get())
         )
@@ -244,7 +240,7 @@ class EntriesDialog(tk.Toplevel):
         canvas.bind("<Leave>",
                     lambda _e: canvas.unbind_all("<MouseWheel>"))
 
-        sections: Tuple[Tuple[str, Callable[[tk.Misc], ttk.Frame]], ...] = (
+        sections: tuple[tuple[str, Callable[[tk.Misc], ttk.Frame]], ...] = (
             ("Identity",        self._build_identity_tab),
             ("Universe",        self._build_universe_tab),
             ("Trigger",         self._build_trigger_tab),
@@ -252,7 +248,7 @@ class EntriesDialog(tk.Toplevel):
             ("On-fill exits",   self._build_exits_tab),
             ("Lifecycle",       self._build_lifecycle_tab),
         )
-        self._section_frames: Dict[str, ttk.LabelFrame] = {}
+        self._section_frames: dict[str, ttk.LabelFrame] = {}
         for title, builder in sections:
             lf = ttk.LabelFrame(form, text=title, padding=4)
             lf.pack(fill="x", expand=False, padx=2, pady=(4, 0))
@@ -557,7 +553,7 @@ class EntriesDialog(tk.Toplevel):
             return
 
     def _render_price_field(
-        self, attr: str, current: Optional[float], *, label: str = "Price:",
+        self, attr: str, current: float | None, *, label: str = "Price:",
     ) -> None:
         row = ttk.Frame(self._trigger_params)
         row.pack(fill="x", pady=(2, 0))
@@ -676,7 +672,7 @@ class EntriesDialog(tk.Toplevel):
             ("Arm window end (HH:MM):",          "arm_window_end",
              self._draft.arm_window_end),
         ]
-        self._lifecycle_vars: Dict[str, tk.StringVar] = {}
+        self._lifecycle_vars: dict[str, tk.StringVar] = {}
         for r, (label, key, value) in enumerate(rows):
             ttk.Label(f, text=label).grid(row=r, column=0, sticky="w", pady=2)
             v = tk.StringVar(value=value)
@@ -892,7 +888,7 @@ class EntriesDialog(tk.Toplevel):
     # Validate / Save / Cancel
     # ------------------------------------------------------------------
 
-    def _on_validate(self) -> List[str]:
+    def _on_validate(self) -> list[str]:
         errors = list(validate_strategy(self._draft))
         self._render_inline_errors(errors)
         if errors:
@@ -901,7 +897,7 @@ class EntriesDialog(tk.Toplevel):
             self._status_var.set("Valid ✓")
         return errors
 
-    def _render_inline_errors(self, errors: List[str]) -> None:
+    def _render_inline_errors(self, errors: list[str]) -> None:
         # Map error tokens to the nearest field-error label.
         for var in self._field_errors.values():
             var.set("")

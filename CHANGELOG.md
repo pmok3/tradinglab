@@ -28,6 +28,115 @@ All notable changes to this project will be documented here. Format roughly foll
 
 ### Fixed
 
+- **CI lint + smoke pipelines restored to green.** The `ruff>=0.4`
+  pin in `pyproject.toml` was unbounded and CI auto-resolved to
+  ruff 0.15.13, which promoted ~3,890 `UP006` / `UP035` / `UP045` /
+  `UP037` / `UP007` violations to errors plus surfaced ~150 long-
+  dormant `E701` / `E702` / `E741` style hits. Sprint: (a) pinned
+  ruff to `>=0.15,<0.16` so the toolchain is reproducible, (b) ran
+  `ruff --fix --unsafe-fixes` to modernize typing across 150+ source
+  + test files (`Dict[X]` → `dict[X]`, `Optional[X]` → `X | None`,
+  `Union[X, Y]` → `X | Y`, quoted annotations unquoted), (c) added
+  `UP035` and `B017` to the `tests/**` per-file-ignores, (d) added
+  `E701` / `E702` / `E741` to the global `ignore` list (these are
+  codebase style conventions, not bugs — `l = low` in OHLC contexts
+  and one-line `cur_h = np.nan; cur_l = np.nan` inits), (e) added
+  the missing `logger = logging.getLogger(__name__)` to `app.py`
+  (two `logger.exception` calls in `_redraw_live_price_overlay` /
+  `_update_live_price_overlay_for_slot` were latent
+  `NameError`-bait), (f) restored two pruned typing imports in
+  `gui/interaction.py` by rewriting `List[int]` / `List[Any]` to
+  `list[int]` / `list[object]`. Smoke-test fixes: refreshed
+  `.pkl` → `.jsonl` sentinel filename pins in
+  `tests/smoke/test_smoke_full.py` (3 sites) and
+  `tests/smoke/conftest.py` for the C1 security migration from
+  pickle to JSON cache; widened the d40 cache-isolation assertion
+  to honour the `TRADINGLAB_DATA_DIR > TRADINGLAB_CACHE_DIR`
+  precedence used by `release.yml`; updated the d42 indicator scope
+  picker pin to `{'main', 'drilldown'}` (matching the new
+  `DEFAULT_SCOPES` so 1d-added indicators carry forward into
+  drill-down by default); made the `test_field_ref_picker_reflow`
+  block-editor tests xvfb-robust by stubbing `winfo_width()` rather
+  than relying on `geometry()` taking effect under headless Linux.
+  Audit `ci-red-sprint-2026-05-22`.
+- **Volume y-axis no longer renders a `0` tick label.** The volume
+  pane's locator now uses `prune="lower"` so the bottom tick is
+  omitted; zero-volume bars remain visually obvious as a flat
+  baseline without the `0` label colliding with whatever indicator
+  pane lives directly underneath. Audit `volume-axis-zero-tick`.
+- **Documentation viewer now follows dark/light theme.** The
+  built-in doc viewer (`gui/doc_viewer.py`) previously cached its
+  palette at construction time and never repainted on theme toggle,
+  so the markdown body, search bar, and TOC stayed light-mode-only.
+  `_build_layout` now tags every `tk.Frame` / `tk.Label` with the
+  palette slot it consumes, and a new `_apply_theme()` method
+  walks them on every theme switch (including singleton re-opens).
+  Audit `doc-viewer-live-theme`.
+- **Manage Indicators dialog labels and icons follow dark theme.**
+  Extended `_apply_theme` in `gui/indicator_dialog.py` to walk
+  `tk.Label` widgets and re-tint their bg/fg from the active
+  palette. The help-icon "ⓘ" label keeps its blue accent via the
+  new `_preserve_fg=True` tag so it stays recognisable across
+  both themes. Audit `indicator-dialog-labels-theme`.
+- **Export Bars to CSV is now a single zip file.** `File →
+  Export Bars to CSV…` (also reachable from Tools) writes a single
+  `tradinglab-export-YYYY-MM-DD.zip` (default name editable in the
+  Save As… picker) containing per-source CSVs at arcname
+  `<SOURCE>/<TICKER>_<INTERVAL>.csv` — saves disk space versus the
+  prior folder dump and produces a single file users can share.
+  Audit `csv-export-zip`. See `data/local_export.spec.md`.
+- **Local data sources accept zip archives as roots.** The BYOD
+  `File → Configure Local Data…` browser now offers a "folder vs.
+  zip" choice; either root shape feeds the same source-discovery
+  pipeline. Inside the zip, each top-level directory becomes one
+  registered source (named `<root-name>-<subdir>`), and the
+  fetcher reads CSVs directly from the archive without unzipping.
+  Round-trip with the new zip-export is now fully sealed (export
+  → share → import without unzipping). Audit `local-source-zip`.
+  See `data/local_source.spec.md`, `gui/local_data_dialog.spec.md`,
+  `docs/LOCAL_DATA.md`.
+- **Entries / Watchlist tabs honour dark theme.** Added
+  `TLabelframe`, `TLabelframe.Label`, `TPanedwindow`, `Sash`,
+  `TScrollbar`, and `TSpinbox` to `build_ttk_style_spec` —
+  previously these ttk widget classes fell back to OS-default
+  light-grey palette under dark mode, leaving the Entries tab's
+  `Strategies` / `Audit (tail)` / `Stats` frames + the Watchlist
+  scrollbar unthemed. Audit `ttk-container-dark`.
+- **"Highlight Flat HA Candles" menu entry default is now OFF and
+  no longer renders blurry under dark mode.** The default for
+  `highlight_ha_flat` was flipped from `True` to `False` so
+  first-launch users see plain HA candles without the cross-hatched
+  overlay. Separately, `gui/theme_controller._apply_menubar_theme`
+  now sets `disabledforeground=theme["text_disabled"]` on the
+  menubar and every cascade, replacing the Windows-default
+  etched/embossed disabled-text style (which looked blurry against
+  the dark window background) with a clean GitHub-muted grey
+  (`#8b949e` light, `#6e7681` dark). Audits `ha-flat-default-off`
+  and `menu-disabled-fg`.
+- **Theme Editor gains a Save and Close / Cancel pair.** The
+  Theme Editor (`File → Theme…`) previously had a single Close
+  button — accidental ESC / window-close still committed any
+  in-flight palette edits because every pick applies live.
+  `__init__` now `deepcopy`s `_theme_overrides` + snapshots
+  `dark_var`; the footer is **[Reset all] … [Save and Close]
+  [Cancel]**; ESC and window-close route to Cancel which
+  re-applies the snapshot via `replace_theme_overrides`. Audit
+  `theme-editor-save-cancel`.
+- **Settings dialog primary button renamed to "Save and Close".**
+  The Settings dialog `OK` button (`gui/dialogs.py`) is now
+  `Save and Close` to match the dialog-button-paradigm sweep used
+  elsewhere (Watchlists, Configure Local Data, Configure
+  Credentials, Manage Indicators). Behaviour unchanged. Audit
+  `dialog-button-paradigms`.
+- **Hover price badge keeps 2-decimal precision on price panes.**
+  The matplotlib log-axis `_fmt_price` formatter trimmed trailing
+  zeros so `$172.50` rendered as `$172.5` (and other tickers'
+  hover badges lost their second decimal too). `gui/interaction.py
+  ::_format_price_for_label` is now kind-aware via
+  `_ax_candle_map.get(ax)`: price axes force `f"{v:,.2f}"`,
+  volume axes keep the major formatter's `format_data_short` so
+  on-tick `1.2M` / `987K` parity is preserved. Audit
+  `hover-price-2-decimals`.
 - **Ctrl+H / Alt+H drawing placement now fires even when the cursor
   cache is stale.** `_on_alt_h_placement` previously no-op'd when
   `_last_cursor_px` was `None` (the user hadn't moved the mouse over

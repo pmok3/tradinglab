@@ -15,8 +15,8 @@ from tradinglab.drawings import (  # noqa: E402
     render_drawings,
 )
 from tradinglab.drawings.render import (  # noqa: E402
-    DRAWING_GID_PREFIX,
     _LINESTYLE_MAP,
+    DRAWING_GID_PREFIX,
     drawing_id_from_gid,
 )
 

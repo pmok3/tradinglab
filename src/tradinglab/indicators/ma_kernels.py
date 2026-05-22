@@ -21,14 +21,12 @@ re-importing each kernel individually.
 
 from __future__ import annotations
 
-from typing import Tuple
-
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
 
 from .wilder import wilder_smooth_avg as _wilder_smooth_avg
 
-MA_TYPES: Tuple[str, ...] = ("SMA", "EMA", "WMA", "RMA")
+MA_TYPES: tuple[str, ...] = ("SMA", "EMA", "WMA", "RMA")
 
 
 def _first_valid(arr: np.ndarray) -> int:

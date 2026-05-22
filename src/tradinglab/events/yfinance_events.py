@@ -22,7 +22,6 @@ lists into one :class:`EventBundle`. Everything else is in
 from __future__ import annotations
 
 import datetime as _dt
-from typing import Optional
 
 from .base import EventBundle
 from .normalize import normalize_actions_df, normalize_earnings_df
@@ -30,7 +29,7 @@ from .normalize import normalize_actions_df, normalize_earnings_df
 _EPOCH_UTC = _dt.datetime(1970, 1, 1, tzinfo=_dt.timezone.utc)
 
 
-def fetch_yfinance_events(ticker: str) -> Optional[EventBundle]:
+def fetch_yfinance_events(ticker: str) -> EventBundle | None:
     """Fetch earnings + dividends + splits for ``ticker`` via yfinance.
 
     Returns ``None`` on import failure, network error, or empty

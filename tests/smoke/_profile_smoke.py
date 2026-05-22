@@ -11,14 +11,14 @@ No test file changes; safe to keep around as a utility.
 """
 from __future__ import annotations
 
-import time
 import sys
-from typing import Callable, List, Tuple
+import time
+from collections.abc import Callable
+from typing import List, Tuple
 
 import tests.smoke.test_smoke_full as smoke
 
-
-_TIMINGS: List[Tuple[str, float]] = []
+_TIMINGS: list[tuple[str, float]] = []
 
 
 def _wrap(name: str, fn: Callable) -> Callable:

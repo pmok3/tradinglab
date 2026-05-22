@@ -33,11 +33,6 @@ from tradinglab.scanner.engine import (
     validate_scan,
 )
 from tradinglab.scanner.model import (
-    Condition,
-    FieldRef,
-    Group,
-    ScanDefinition,
-    UniverseFilter,
     OP_BETWEEN,
     OP_CROSSES_ABOVE,
     OP_CROSSES_BELOW,
@@ -57,8 +52,12 @@ from tradinglab.scanner.model import (
     OP_NR7,
     OP_OUTSIDE_BAR,
     OP_WITHIN_PCT,
+    Condition,
+    FieldRef,
+    Group,
+    ScanDefinition,
+    UniverseFilter,
 )
-
 
 # Indicators register on import — no explicit init needed.
 
@@ -68,18 +67,18 @@ from tradinglab.scanner.model import (
 # ---------------------------------------------------------------------------
 
 
-def _candles(closes: List[float], *,
-             opens: List[float] = None,
-             highs: List[float] = None,
-             lows: List[float] = None,
-             vols: List[int] = None,
+def _candles(closes: list[float], *,
+             opens: list[float] = None,
+             highs: list[float] = None,
+             lows: list[float] = None,
+             vols: list[int] = None,
              session: str = "regular",
              start: datetime = datetime(2026, 5, 4, 9, 30, tzinfo=timezone.utc),
-             interval_min: int = 5) -> List[Candle]:
+             interval_min: int = 5) -> list[Candle]:
     n = len(closes)
     opens  = opens or [c - 0.5 for c in closes]
-    highs  = highs or [max(o, c) + 1.0 for o, c in zip(opens, closes)]
-    lows   = lows  or [min(o, c) - 1.0 for o, c in zip(opens, closes)]
+    highs  = highs or [max(o, c) + 1.0 for o, c in zip(opens, closes, strict=False)]
+    lows   = lows  or [min(o, c) - 1.0 for o, c in zip(opens, closes, strict=False)]
     vols   = vols  or [1000 + i for i in range(n)]
     out = []
     for i in range(n):

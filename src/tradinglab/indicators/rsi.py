@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import ClassVar, Dict, List, Tuple
+from typing import ClassVar
 
 import numpy as np
 
@@ -21,11 +21,11 @@ class RSI:
 
     kind_id: ClassVar[str] = "rsi"
     kind_version: ClassVar[int] = 1
-    params_schema: ClassVar[Tuple[ParamDef, ...]] = (
+    params_schema: ClassVar[tuple[ParamDef, ...]] = (
         ParamDef("length", "int", default=14, min=2, max=2000, step=1,
                  description="Length"),
     )
-    default_style: ClassVar[Dict[str, LineStyle]] = {
+    default_style: ClassVar[dict[str, LineStyle]] = {
         "rsi": LineStyle(color="#d62728", width=1.4),
     }
 
@@ -37,7 +37,7 @@ class RSI:
         self.length = length
         self.name = f"RSI({length})"
 
-    def compute_arr(self, bars: Bars) -> Dict[str, np.ndarray]:
+    def compute_arr(self, bars: Bars) -> dict[str, np.ndarray]:
         closes = bars.close
         n = self.length
         out = np.full_like(closes, np.nan)
@@ -66,6 +66,6 @@ class RSI:
             out[i] = _rsi_from(avg_gain, avg_loss)
         return {"rsi": out}
 
-    def compute(self, candles: List[Candle]) -> Dict[str, np.ndarray]:
+    def compute(self, candles: list[Candle]) -> dict[str, np.ndarray]:
         return self.compute_arr(Bars.from_candles(candles))
 

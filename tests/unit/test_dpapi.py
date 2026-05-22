@@ -34,7 +34,6 @@ import pytest
 
 from tradinglab import _dpapi
 
-
 _REQUIRES_DPAPI = pytest.mark.skipif(
     not _dpapi.is_available(),
     reason="DPAPI is Windows-only; Crypt32.dll not available on this platform",

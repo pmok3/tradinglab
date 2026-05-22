@@ -45,7 +45,7 @@ class Candle:
         return self.session == "gap"
 
     @classmethod
-    def gap(cls, date: datetime) -> "Candle":
+    def gap(cls, date: datetime) -> Candle:
         """Return a gap placeholder for ``date`` — NaN prices, zero volume."""
         nan = math.nan
         return cls(date=date, open=nan, high=nan, low=nan, close=nan,

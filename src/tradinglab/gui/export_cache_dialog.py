@@ -3,10 +3,11 @@
 Opened via ``Tools → Export Bars to CSV…``. Lists every
 ``(source, ticker, interval)`` tuple currently in the disk cache as a
 checkable Treeview (all checked by default). The user picks a
-destination folder; each selected entry is written to
-``<destination>/<SOURCE>/<TICKER>_<INTERVAL>.csv`` in the strict
-canonical schema, so the same folder dropped into Configure Local Data
-yields a perfect round-trip.
+destination zip file (default name ``tradinglab-export-YYYY-MM-DD.zip``);
+each selected entry becomes a member
+``<SOURCE>/<TICKER>_<INTERVAL>.csv`` inside the archive, in the strict
+canonical schema — so unzipping the archive and pointing Configure
+Local Data at that folder yields a perfect round-trip.
 
 Empty-cache case: the dialog opens, shows a friendly "no cached data
 yet" message, and disables Export.
@@ -19,13 +20,12 @@ from __future__ import annotations
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
-from typing import List, Optional, Tuple
 
 from ._modal_keys import bind_modal_keys
 from .colors import MUTED_GREY
 
 
-def _load_cache_index() -> List[Tuple[str, str, str]]:
+def _load_cache_index() -> list[tuple[str, str, str]]:
     """Return ``[(source, ticker, interval), ...]`` for every cached entry."""
     from .. import disk_cache
     return disk_cache.list_entries()
@@ -54,11 +54,11 @@ class ExportCacheDialog(tk.Toplevel):
         self.resizable(True, True)
         self.minsize(560, 420)
 
-        self._entries: List[Tuple[str, str, str]] = _load_cache_index()
+        self._entries: list[tuple[str, str, str]] = _load_cache_index()
         self._selected: dict[str, bool] = {
             self._key(s, t, i): True for s, t, i in self._entries
         }
-        self._destination: Optional[Path] = None
+        self._destination: Path | None = None
 
         self._build_widgets()
         bind_modal_keys(self, cancel=self._on_cancel, primary=self._on_export)
@@ -99,11 +99,11 @@ class ExportCacheDialog(tk.Toplevel):
             outer,
             text=(
                 f"{len(self._entries)} cached entries. Uncheck any you "
-                "don't want to include, then pick a destination folder. "
-                "Files will be written as "
-                "<destination>/<source>/<TICKER>_<INTERVAL>.csv.\n"
-                "Drop the destination folder into Configure Local Data "
-                "to load it back."
+                "don't want to include, then pick a destination zip "
+                "file. Each entry becomes "
+                "<SOURCE>/<TICKER>_<INTERVAL>.csv inside the zip.\n"
+                "Unzip the archive into a folder and drop that folder "
+                "into Configure Local Data to load it back."
             ),
             foreground=MUTED_GREY,
             wraplength=520,
@@ -149,7 +149,7 @@ class ExportCacheDialog(tk.Toplevel):
         # Destination row.
         dest_frame = ttk.Frame(outer)
         dest_frame.pack(fill="x", pady=(8, 0))
-        ttk.Label(dest_frame, text="Destination:").pack(side="left")
+        ttk.Label(dest_frame, text="Zip file:").pack(side="left")
         self._dest_var = tk.StringVar(value="(not chosen)")
         ttk.Label(
             dest_frame, textvariable=self._dest_var, foreground=MUTED_GREY,
@@ -213,10 +213,24 @@ class ExportCacheDialog(tk.Toplevel):
         self._refresh_tree()
 
     def _on_browse(self) -> None:
-        chosen = filedialog.askdirectory(parent=self, mustexist=True)
+        # Audit ``local-export-zip``: replaced the legacy directory
+        # picker with a save-as zip picker. The default filename is
+        # date-stamped so back-to-back exports don't silently
+        # overwrite each other.
+        from ..data.local_export import default_zip_filename
+        chosen = filedialog.asksaveasfilename(
+            parent=self,
+            defaultextension=".zip",
+            filetypes=[("ZIP archive", "*.zip"), ("All files", "*.*")],
+            initialfile=default_zip_filename(),
+            title="Save exported bars as…",
+        )
         if not chosen:
             return
-        self._destination = Path(chosen)
+        path = Path(chosen)
+        if path.suffix.lower() != ".zip":
+            path = path.with_suffix(".zip")
+        self._destination = path
         self._dest_var.set(str(self._destination))
 
     # ---- export action --------------------------------------------------
@@ -226,7 +240,7 @@ class ExportCacheDialog(tk.Toplevel):
             self.destroy()
             return
         if self._destination is None:
-            self._status_var.set("Pick a destination folder first.")
+            self._status_var.set("Pick a zip file first.")
             return
         selected = [
             (s, t, i) for (s, t, i) in self._entries
@@ -236,7 +250,7 @@ class ExportCacheDialog(tk.Toplevel):
             self._status_var.set("Nothing selected.")
             return
 
-        from ..data.local_export import export_entries
+        from ..data.local_export import export_entries_zip
 
         # Load candles per entry as we go — keeps memory bounded for
         # very large caches (one entry materialised at a time).
@@ -249,7 +263,7 @@ class ExportCacheDialog(tk.Toplevel):
                     yield (source, ticker, interval, candles)
 
         try:
-            results = export_entries(_iter(), self._destination)
+            results = export_entries_zip(_iter(), self._destination)
         except Exception as e:  # noqa: BLE001
             messagebox.showerror(
                 "Export Bars to CSV", f"Export failed: {e}", parent=self,
@@ -258,7 +272,10 @@ class ExportCacheDialog(tk.Toplevel):
 
         ok = sum(1 for *_p, n, err in results if err is None)
         fail = len(results) - ok
-        msg = f"Exported {ok} of {len(results)} entries to {self._destination}."
+        msg = (
+            f"Exported {ok} of {len(results)} entries to "
+            f"{self._destination}."
+        )
         if fail:
             sample_errs = [f"{s}/{t}/{i}: {err}" for s, t, i, _n, err in results if err][:5]
             msg += f"\n\n{fail} failed:\n - " + "\n - ".join(sample_errs)

@@ -22,7 +22,6 @@ from tradinglab.data.local_export import (
 from tradinglab.data.local_source import make_local_fetcher
 from tradinglab.models import Candle
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -31,10 +30,10 @@ from tradinglab.models import Candle
 _ET = timezone(timedelta(hours=-4))
 
 
-def _make_candles(n: int = 5, *, start: datetime | None = None) -> List[Candle]:
+def _make_candles(n: int = 5, *, start: datetime | None = None) -> list[Candle]:
     """Generate ``n`` synthetic intraday Candles, 5 minutes apart."""
     start = start or datetime(2024, 3, 15, 9, 30, tzinfo=_ET)
-    out: List[Candle] = []
+    out: list[Candle] = []
     for i in range(n):
         ts = start + timedelta(minutes=5 * i)
         out.append(Candle(
@@ -130,7 +129,7 @@ class TestRoundTrip:
         loaded = fetch("AAPL", "5m")
         assert loaded is not None
         assert len(loaded) == len(original)
-        for a, b in zip(original, loaded):
+        for a, b in zip(original, loaded, strict=False):
             assert a.date == b.date
             assert a.open == b.open
             assert a.high == b.high

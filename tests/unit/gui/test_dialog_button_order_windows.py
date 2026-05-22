@@ -124,13 +124,23 @@ def test_pre_trade_dialog_footer_order_windows():
 
 
 def test_dialogs_settings_ok_cancel_order_windows():
-    """The shared ``dialogs.py`` Settings OK/Cancel pair must be
-    ``[OK] [Cancel]``."""
+    """The shared ``dialogs.py`` Settings affirmative/Cancel pair must
+    be ``[Save and Close] [Cancel]``.
+
+    ``dialogs.py`` hosts two dialogs (``_SettingsDialog`` and
+    ``_WatchlistDialog``) that both end up with a ``Save and Close``
+    button after the fix-8 rename; restrict the scan to the
+    ``_SettingsDialog`` slice so we only check the dialog the user
+    actually opens via ``File → Settings``.
+    """
     src = _read_source("dialogs.py")
-    order = _pack_order(src, ["OK", "Cancel"])
-    assert order == ["OK", "Cancel"], (
-        f"dialogs.py settings OK/Cancel order is {order!r}; expected "
-        "Windows convention [OK] [Cancel].")
+    start = src.find("class _SettingsDialog")
+    end = src.find("class _WatchlistDialog", start)
+    body = src[start:end] if start != -1 and end != -1 else src
+    order = _pack_order(body, ["Save and Close", "Cancel"])
+    assert order == ["Save and Close", "Cancel"], (
+        f"dialogs.py settings Save and Close/Cancel order is {order!r}; "
+        "expected Windows convention [Save and Close] [Cancel].")
 
 
 def test_credentials_dialog_save_cancel_order_windows():
@@ -174,7 +184,7 @@ def test_modal_base_editor_footer_order_windows():
         ("sandbox_dialog.py", "Start"),
         ("sandbox_review_dialog.py", "OK"),
         ("pre_trade_dialog.py", "Submit"),
-        ("dialogs.py", "OK"),
+        ("dialogs.py", "Save and Close"),
         ("credentials_dialog.py", "Save & Close"),
     ],
 )

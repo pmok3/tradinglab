@@ -76,11 +76,19 @@ by `ChartApp._build_ui`.
 - Crosshair: `_update_crosshair`, `_update_crosshair_pixels`
   (revives after re-render using cached pixel coords).
 - Price value label: `_format_price_for_label(ax, value)` —
-  delegates to axis's installed major formatter (preferring
-  `format_data_short`; fallback `f"{v:,.2f}"`). Animated `Text`
-  per **price OR volume** axes, stored in
-  `self._price_label_artists[ax]`. Anchored axes-fraction x=0
-  via blended transform; opaque round bbox occludes y-tick labels.
+  **kind-aware** branch using `self._ax_candle_map.get(ax)[1]`. For
+  price axes it returns `f"{value:,.2f}"` (forced 2-decimal with
+  thousands separator) so the badge stays at the user-expected
+  precision even when the matplotlib formatter would otherwise
+  truncate trailing zeros (e.g. `$172.50` rendering as `$172.5`).
+  For volume and indicator axes it delegates to the axis's
+  installed major formatter (`format_data_short` first, then
+  `fmt(value, None)`, then a `f"{v:,.2f}"` fallback) so
+  on-axis-tick parity is preserved. Audit
+  `hover-price-2-decimals`. Animated `Text` per **price OR
+  volume** axes, stored in `self._price_label_artists[ax]`.
+  Anchored axes-fraction x=0 via blended transform; opaque round
+  bbox occludes y-tick labels.
 - Time label: `_format_time_for_label(ax, xdata)` — single
   annotation `self._time_label_artist` on the figure-bottom
   axes. Intraday → `YYYY-MM-DD HH:MM` (via

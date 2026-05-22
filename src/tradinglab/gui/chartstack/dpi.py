@@ -19,7 +19,7 @@ panel keeps its existing 5-card ceiling.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 # A 4K monitor at 24" is ~184 PPI; at 32" it's ~140 PPI. Use the
 # common "Hi-DPI" threshold of 144 PPI which excludes regular 1080p

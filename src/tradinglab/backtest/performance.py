@@ -29,7 +29,6 @@ import datetime as _dt
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 from .journal import PostTradeReview, PreTradeEntry
 from .session import SessionResult
@@ -47,7 +46,7 @@ class TradeRow:
     table under an "(unattributed)" bucket.
     """
     post: PostTradeReview
-    pre: Optional[PreTradeEntry] = None
+    pre: PreTradeEntry | None = None
 
     @property
     def setup_tag(self) -> str:
@@ -73,7 +72,7 @@ class TradeRow:
         return 0 if self.pre is None else int(self.pre.conviction)
 
     @property
-    def target(self) -> Optional[float]:
+    def target(self) -> float | None:
         return None if self.pre is None else self.pre.target
 
 
@@ -125,7 +124,7 @@ class ProximityAggregate:
     expectancy: float
 
 
-def build_trade_rows(result: SessionResult) -> List[TradeRow]:
+def build_trade_rows(result: SessionResult) -> list[TradeRow]:
     """Pair each closed trade with its opening pre-trade entry.
 
     Pairing key is ``post.ref_pre_trade_id == pre.order_id``. Each
@@ -135,10 +134,10 @@ def build_trade_rows(result: SessionResult) -> List[TradeRow]:
     Performance View's "trade table" displays trades in close-time
     order by default.
     """
-    pre_by_id: Dict[str, PreTradeEntry] = {
+    pre_by_id: dict[str, PreTradeEntry] = {
         str(p.order_id): p for p in result.pre_trades
     }
-    rows: List[TradeRow] = []
+    rows: list[TradeRow] = []
     for post in result.post_trades:
         pre = None
         if post.ref_pre_trade_id:
@@ -147,7 +146,7 @@ def build_trade_rows(result: SessionResult) -> List[TradeRow]:
     return rows
 
 
-def build_setup_aggregates(rows: List[TradeRow]) -> List[SetupAggregate]:
+def build_setup_aggregates(rows: list[TradeRow]) -> list[SetupAggregate]:
     """Group ``rows`` by setup tag and compute per-group stats.
 
     Rows with no setup tag (either no pre-trade match or an empty
@@ -157,11 +156,11 @@ def build_setup_aggregates(rows: List[TradeRow]) -> List[SetupAggregate]:
     frequently-used setups first, ties broken stably so the same
     SessionResult always yields the same ordering.
     """
-    by_tag: Dict[str, List[TradeRow]] = {}
+    by_tag: dict[str, list[TradeRow]] = {}
     for r in rows:
         by_tag.setdefault(r.setup_tag, []).append(r)
 
-    out: List[SetupAggregate] = []
+    out: list[SetupAggregate] = []
     for tag, group in by_tag.items():
         n = len(group)
         wins_list = [float(r.post.pnl) for r in group if r.is_win]
@@ -191,7 +190,7 @@ def build_setup_aggregates(rows: List[TradeRow]) -> List[SetupAggregate]:
     return out
 
 
-def build_proximity_aggregates(rows: List[TradeRow]) -> List[ProximityAggregate]:
+def build_proximity_aggregates(rows: list[TradeRow]) -> list[ProximityAggregate]:
     """Group ``rows`` by event-proximity tag and compute per-group stats.
 
     A trade contributes to one row per non-empty proximity tag it
@@ -203,9 +202,9 @@ def build_proximity_aggregates(rows: List[TradeRow]) -> List[ProximityAggregate]
     count, then alphabetical) so the Performance View renders setups
     and proximities with identical UX.
     """
-    by_tag: Dict[str, List[TradeRow]] = {}
+    by_tag: dict[str, list[TradeRow]] = {}
     for r in rows:
-        tags: List[str] = []
+        tags: list[str] = []
         if r.pre is not None:
             et = str(getattr(r.pre, "earnings_proximity_tag", "") or "").strip()
             dt = str(getattr(r.pre, "dividend_proximity_tag", "") or "").strip()
@@ -218,7 +217,7 @@ def build_proximity_aggregates(rows: List[TradeRow]) -> List[ProximityAggregate]
         for tag in tags:
             by_tag.setdefault(tag, []).append(r)
 
-    out: List[ProximityAggregate] = []
+    out: list[ProximityAggregate] = []
     for tag, group in by_tag.items():
         n = len(group)
         wins_list = [float(r.post.pnl) for r in group if r.is_win]
@@ -266,7 +265,7 @@ __all__ = (
 
 # ---- equity-curve helper --------------------------------------------------
 
-def realized_pnl_curve(result: SessionResult) -> List[Tuple[int, float]]:
+def realized_pnl_curve(result: SessionResult) -> list[tuple[int, float]]:
     """Sample cumulative *closed-trade* P&L at the equity-curve timestamps.
 
     Anchored at ``result.spec.starting_cash`` (NOT ``equity_curve[0]`` —
@@ -286,7 +285,7 @@ def realized_pnl_curve(result: SessionResult) -> List[Tuple[int, float]]:
         ((int(p.exit_ts), float(p.pnl)) for p in result.post_trades),
         key=lambda x: x[0],
     )
-    out: List[Tuple[int, float]] = []
+    out: list[tuple[int, float]] = []
     j = 0
     cum = 0.0
     n = len(closes)
@@ -303,7 +302,7 @@ def realized_pnl_curve(result: SessionResult) -> List[Tuple[int, float]]:
 
 def screenshot_filenames(
     row: TradeRow, *, index: int,
-) -> Tuple[Optional[str], Optional[str]]:
+) -> tuple[str | None, str | None]:
     """Return ``(pre_filename, post_filename)`` for a row.
 
     Mirrors ``replay.py``'s capture convention:
@@ -316,11 +315,11 @@ def screenshot_filenames(
       lines up with what ``SandboxController._capture_screenshot``
       wrote at session time.
     """
-    pre_name: Optional[str] = None
+    pre_name: str | None = None
     if row.pre is not None and row.pre.order_id:
         pre_name = f"{row.pre.order_id}_pre.png"
     ref = row.post.ref_pre_trade_id or f"close-{int(index):04d}"
-    post_name: Optional[str] = f"{ref}_post.png"
+    post_name: str | None = f"{ref}_post.png"
     return pre_name, post_name
 
 
@@ -333,7 +332,7 @@ def _iso_utc(ts: int) -> str:
         return ""
 
 
-CSV_COLUMNS: Tuple[str, ...] = (
+CSV_COLUMNS: tuple[str, ...] = (
     "order_id",
     "entry_ts", "entry_iso",
     "exit_ts", "exit_iso",
@@ -352,7 +351,7 @@ CSV_COLUMNS: Tuple[str, ...] = (
 def trade_row_to_csv_record(
     row: TradeRow, *, index: int,
     pre_rel: str = "", post_rel: str = "",
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """Render one row as the CSV column dict (all values stringified)."""
     post = row.post
     pre = row.pre
@@ -388,7 +387,7 @@ def trade_row_to_csv_record(
     }
 
 
-def trade_rows_to_tsv(rows: List[TradeRow]) -> str:
+def trade_rows_to_tsv(rows: list[TradeRow]) -> str:
     """Render rows as TSV (header + body) for clipboard paste.
 
     Screenshot columns are omitted — the clipboard is meant for
@@ -404,10 +403,10 @@ def trade_rows_to_tsv(rows: List[TradeRow]) -> str:
 
 
 def write_trade_rows_csv(
-    rows: List[TradeRow],
+    rows: list[TradeRow],
     *,
     csv_path: Path,
-    screenshot_dir: Optional[Path] = None,
+    screenshot_dir: Path | None = None,
 ) -> Path:
     """Write ``rows`` to ``csv_path`` as UTF-8 CSV with headers.
 
@@ -436,7 +435,7 @@ def write_trade_rows_csv(
     sibling_dir = csv_dir / sibling_name
     src_dir = Path(screenshot_dir) if screenshot_dir is not None else None
 
-    records: List[Dict[str, str]] = []
+    records: list[dict[str, str]] = []
     for i, row in enumerate(rows):
         pre_name, post_name = screenshot_filenames(row, index=i)
         pre_rel = ""

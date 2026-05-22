@@ -18,7 +18,6 @@ import pytest
 from tradinglab.watchlists.manager import WatchlistManager
 from tradinglab.watchlists.storage import Watchlist, normalize_tickers
 
-
 # ---------------------------------------------------------------------------
 # 1. normalize_tickers — drops blanks, uppercases, dedupes, preserves order.
 # ---------------------------------------------------------------------------

@@ -22,12 +22,11 @@ from tradinglab.entries.model import (
     validate_strategy,
 )
 from tradinglab.scanner.model import (
+    OP_GT,
     Condition,
     FieldRef,
     Group,
-    OP_GT,
 )
-
 
 # ---------- helpers ----------
 

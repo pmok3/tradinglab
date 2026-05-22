@@ -38,7 +38,7 @@ Public API
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -119,7 +119,7 @@ def compute_ha_flat_arrays_np(
     return _classify(ha_o, ha_h, ha_l, ha_c)
 
 
-def compute_ha_flat_arrays(candles: List["Candle"]) -> HAFlatArrays:
+def compute_ha_flat_arrays(candles: list[Candle]) -> HAFlatArrays:
     """Candle-list variant. Pure function; safe from worker threads.
 
     Matches the calling shape of :func:`core.key_bar.compute_key_bar_arrays`
@@ -147,7 +147,6 @@ def _classify(
     ha_c: np.ndarray,
 ) -> HAFlatArrays:
     """Pure derivation step shared by both public entry points."""
-    n = ha_o.size
     finite = (
         np.isfinite(ha_o) & np.isfinite(ha_h)
         & np.isfinite(ha_l) & np.isfinite(ha_c)

@@ -23,7 +23,7 @@ within the current session, resetting at each new day).
 
 from __future__ import annotations
 
-from typing import ClassVar, Dict, List, Tuple
+from typing import ClassVar
 
 import numpy as np
 
@@ -32,7 +32,7 @@ from ..models import Candle
 from .base import LineStyle, ParamDef
 from .sessions import is_intraday_np, session_groups_np
 
-_PRICE_SOURCES: Tuple[str, ...] = ("typical", "close", "ohlc4")
+_PRICE_SOURCES: tuple[str, ...] = ("typical", "close", "ohlc4")
 
 
 class VWAP:
@@ -44,14 +44,14 @@ class VWAP:
 
     kind_id: ClassVar[str] = "vwap"
     kind_version: ClassVar[int] = 1
-    params_schema: ClassVar[Tuple[ParamDef, ...]] = (
+    params_schema: ClassVar[tuple[ParamDef, ...]] = (
         ParamDef(
             "price_source", "choice", default="typical",
             choices=_PRICE_SOURCES,
             description="Price source",
         ),
     )
-    default_style: ClassVar[Dict[str, LineStyle]] = {
+    default_style: ClassVar[dict[str, LineStyle]] = {
         "vwap": LineStyle(color="#9467bd", width=1.6),
     }
 
@@ -68,7 +68,7 @@ class VWAP:
 
     # --- public --------------------------------------------------------
 
-    def compute_arr(self, bars: Bars) -> Dict[str, np.ndarray]:
+    def compute_arr(self, bars: Bars) -> dict[str, np.ndarray]:
         n = len(bars)
         out = np.full(n, np.nan, dtype=np.float64)
         if n == 0:
@@ -101,7 +101,7 @@ class VWAP:
             out[grp] = vw
         return {"vwap": out}
 
-    def compute(self, candles: List[Candle]) -> Dict[str, np.ndarray]:
+    def compute(self, candles: list[Candle]) -> dict[str, np.ndarray]:
         return self.compute_arr(Bars.from_candles(candles))
 
 

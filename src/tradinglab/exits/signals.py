@@ -29,15 +29,12 @@ from __future__ import annotations
 import logging
 import threading
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
-    Dict,
-    List,
-    Optional,
     Protocol,
 )
 
@@ -100,13 +97,13 @@ class ExitSignal:
     kind: ExitOrderKind
     side: OrderSide
     qty: float
-    price: Optional[float] = None
-    limit_price: Optional[float] = None
+    price: float | None = None
+    limit_price: float | None = None
     label: str = ""
-    extra: Dict[str, Any] = field(default_factory=dict)
+    extra: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def new(cls, **kwargs: Any) -> "ExitSignal":
+    def new(cls, **kwargs: Any) -> ExitSignal:
         """Construct with an auto-assigned id."""
         return cls(id=uuid.uuid4().hex, **kwargs)
 
@@ -129,7 +126,7 @@ class ExitSignalSink(Protocol):
 
     def cancel_all_for_position(self, position_id: str) -> int: ...
 
-    def working_order_ids_for_position(self, position_id: str) -> List[str]: ...
+    def working_order_ids_for_position(self, position_id: str) -> list[str]: ...
 
 
 # ---------------------------------------------------------------------------
@@ -145,17 +142,17 @@ class PaperBrokerSink:
     does. The sink is a pure translator + lookup layer.
     """
 
-    def __init__(self, engine: "PaperBrokerEngine") -> None:
+    def __init__(self, engine: PaperBrokerEngine) -> None:
         self._engine = engine
         # Forward map: ExitSignal.id -> paper order id
-        self._signal_to_order: Dict[str, str] = {}
+        self._signal_to_order: dict[str, str] = {}
         # Reverse map: paper order id -> ExitSignal.id (for working_order_ids)
-        self._order_to_signal: Dict[str, str] = {}
+        self._order_to_signal: dict[str, str] = {}
         # Per-position working signal ids — kept here (not just on the
         # engine) so the sink can answer working_order_ids_for_position
         # even after the engine has filled/cancelled, where the engine's
         # internal mapping would have removed the entry.
-        self._working_by_position: Dict[str, List[str]] = {}
+        self._working_by_position: dict[str, list[str]] = {}
 
     @require_tk_thread
     def submit(self, signal: ExitSignal) -> str:
@@ -205,7 +202,7 @@ class PaperBrokerSink:
         self._working_by_position.pop(position_id, None)
         return n
 
-    def working_order_ids_for_position(self, position_id: str) -> List[str]:
+    def working_order_ids_for_position(self, position_id: str) -> list[str]:
         """Snapshot of working paper order ids for a given position.
 
         Read-only — safe from any thread.
@@ -238,7 +235,7 @@ class ManualSignalEvent:
     """
 
     kind: str  # "submitted", "cancelled", "ack-fill"
-    signal: Optional[ExitSignal]
+    signal: ExitSignal | None
     order_id: str
 
 
@@ -254,11 +251,11 @@ class ManualPaperSink:
     is responsible for marshalling onto the Tk thread before drawing.
     """
 
-    def __init__(self, *, audit: Optional["AuditLog"] = None) -> None:
+    def __init__(self, *, audit: AuditLog | None = None) -> None:
         self._audit = audit
-        self._working_by_position: Dict[str, List[str]] = {}
-        self._signals_by_id: Dict[str, ExitSignal] = {}
-        self._subscribers: List[Callable[[ManualSignalEvent], None]] = []
+        self._working_by_position: dict[str, list[str]] = {}
+        self._signals_by_id: dict[str, ExitSignal] = {}
+        self._subscribers: list[Callable[[ManualSignalEvent], None]] = []
         self._lock = threading.Lock()
 
     def subscribe(
@@ -359,7 +356,7 @@ class ManualPaperSink:
         self._emit(ManualSignalEvent(kind="ack-fill", signal=signal, order_id=order_id))
         return True
 
-    def working_order_ids_for_position(self, position_id: str) -> List[str]:
+    def working_order_ids_for_position(self, position_id: str) -> list[str]:
         return list(self._working_by_position.get(position_id, []))
 
 
@@ -381,7 +378,7 @@ class SchwabTraderSink:
     implemented.
     """
 
-    def __init__(self, *, audit: Optional["AuditLog"] = None) -> None:
+    def __init__(self, *, audit: AuditLog | None = None) -> None:
         self._audit = audit
 
     @require_tk_thread
@@ -410,5 +407,5 @@ class SchwabTraderSink:
             "SchwabTraderSink: cancel_all_for_position not implemented."
         )
 
-    def working_order_ids_for_position(self, position_id: str) -> List[str]:
+    def working_order_ids_for_position(self, position_id: str) -> list[str]:
         return []

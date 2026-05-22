@@ -21,10 +21,11 @@ import dataclasses
 import json
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any
 
 from ..core.io_helpers import atomic_write_json
 from ..disk_cache import _cache_dir
@@ -66,7 +67,7 @@ class BrokenStrategy:
     id: str
     name: str
     reason: str
-    raw_json: Dict[str, Any] = field(default_factory=dict)
+    raw_json: dict[str, Any] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -140,7 +141,7 @@ def _load_path(path: Path) -> ExitStrategy:
     return _from_raw(raw, path)
 
 
-def _read_json(path: Path) -> Dict[str, Any]:
+def _read_json(path: Path) -> dict[str, Any]:
     try:
         with path.open("r", encoding="utf-8") as fh:
             d = json.load(fh)
@@ -151,7 +152,7 @@ def _read_json(path: Path) -> Dict[str, Any]:
     return d
 
 
-def _from_raw(d: Dict[str, Any], path: Path) -> ExitStrategy:
+def _from_raw(d: dict[str, Any], path: Path) -> ExitStrategy:
     version = int(d.get("schema_version", CURRENT_SCHEMA_VERSION))
     if version > CURRENT_SCHEMA_VERSION:
         raise ValueError(
@@ -164,7 +165,7 @@ def _from_raw(d: Dict[str, Any], path: Path) -> ExitStrategy:
         raise ValueError(f"strategy {path} failed to deserialize: {e}") from e
 
 
-def load_all() -> Tuple[List[ExitStrategy], List[BrokenStrategy]]:
+def load_all() -> tuple[list[ExitStrategy], list[BrokenStrategy]]:
     """Load every strategy in :func:`exit_strategies_dir`.
 
     Returns ``(strategies, broken)``:
@@ -180,8 +181,8 @@ def load_all() -> Tuple[List[ExitStrategy], List[BrokenStrategy]]:
     crashed mid-write or the disk was full. The atomic-write path
     makes this very rare.
     """
-    strategies: List[ExitStrategy] = []
-    broken: List[BrokenStrategy] = []
+    strategies: list[ExitStrategy] = []
+    broken: list[BrokenStrategy] = []
 
     d = exit_strategies_dir()
     if not d.exists():
@@ -242,7 +243,7 @@ def delete(strategy_id: str) -> bool:
         return False
 
 
-def find_by_name(name: str) -> Optional[ExitStrategy]:
+def find_by_name(name: str) -> ExitStrategy | None:
     """Case-insensitive name lookup; returns the first match (broken excluded)."""
     target = (name or "").strip().lower()
     if not target:
@@ -285,10 +286,8 @@ def _make_unique_name(base: str, existing_names: set) -> str:
 
 def import_strategy(
     src_path: Path,
-    on_collision: Optional[
-        Callable[[ExitStrategy, ExitStrategy], CollisionDecision]
-    ] = None,
-) -> Optional[ExitStrategy]:
+    on_collision: Callable[[ExitStrategy, ExitStrategy], CollisionDecision] | None = None,
+) -> ExitStrategy | None:
     """Import a strategy from ``src_path`` into the local library.
 
     Two collision dimensions, checked in order:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 
 @dataclass(frozen=True)
@@ -17,7 +16,7 @@ class PreTradeEntry:
     thesis: str
     conviction: int
     size: float
-    target: Optional[float] = None
+    target: float | None = None
     notes: str = ""
     # Earnings/dividends feature: proximity context captured at
     # submit-order time so the post-session performance analysis can
@@ -75,5 +74,5 @@ class PostTradeReview:
     mfe: float
     mae_pct: float
     mfe_pct: float
-    ref_pre_trade_id: Optional[str] = None
+    ref_pre_trade_id: str | None = None
     user_review: str = ""

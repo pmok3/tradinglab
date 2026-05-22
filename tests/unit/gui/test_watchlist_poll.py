@@ -19,7 +19,8 @@ the pure scheduling logic in isolation.
 from __future__ import annotations
 
 import datetime as _dt
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable
+from typing import Any, Dict, List, Optional, Tuple
 from unittest.mock import patch
 
 import pytest
@@ -27,7 +28,6 @@ import pytest
 from tradinglab import defaults as _d
 from tradinglab.gui.watchlist_tab import WatchlistTabMixin
 from tradinglab.models import Candle
-
 
 # ---------------------------------------------------------------------------
 # Test harness
@@ -44,7 +44,7 @@ class _StubVar:
 
 class _StubExecutor:
     def __init__(self) -> None:
-        self.submitted: List[Tuple[Callable[..., Any], Tuple[Any, ...]]] = []
+        self.submitted: list[tuple[Callable[..., Any], tuple[Any, ...]]] = []
 
     def submit(self, fn, *args, **kwargs):
         self.submitted.append((fn, args))
@@ -65,24 +65,24 @@ class _Harness(WatchlistTabMixin):
     call the methods under test.
     """
 
-    def __init__(self, *, tickers: Optional[List[str]] = None,
+    def __init__(self, *, tickers: list[str] | None = None,
                  sandbox: bool = False, stale: bool = False) -> None:
         self._executor = _StubExecutor()
-        self._full_cache: Dict[tuple, List[Candle]] = {}
-        self._watchlist_snapshot: Dict[str, Dict[str, Any]] = {}
+        self._full_cache: dict[tuple, list[Candle]] = {}
+        self._watchlist_snapshot: dict[str, dict[str, Any]] = {}
         self._watchlist_preload_inflight: set = set()
-        self._watchlist_poll_job: Optional[str] = None
-        self._events_cache: Dict[str, Any] = {}
+        self._watchlist_poll_job: str | None = None
+        self._events_cache: dict[str, Any] = {}
         self.source_var = _StubVar("yfinance")
         self.interval_var = _StubVar("5m")
         self._tickers = list(tickers or ["AAPL", "INTC"])
         self._sandbox = sandbox
         self._stale = stale
-        self.after_calls: List[Tuple[int, Callable[..., Any]]] = []
+        self.after_calls: list[tuple[int, Callable[..., Any]]] = []
         self.refresh_called: int = 0
 
     # ---- mixin-required stubs ----
-    def _pinned_ticker_union(self) -> List[str]:
+    def _pinned_ticker_union(self) -> list[str]:
         return list(self._tickers)
 
     def _cache_is_stale(self, cached, itv) -> bool:  # noqa: ARG002

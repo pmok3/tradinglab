@@ -1,8 +1,6 @@
 """Pure math for computing y-limits and virtualized render ranges."""
 from __future__ import annotations
 
-from typing import Optional, Tuple
-
 import numpy as np
 
 from .series import SeriesArrays
@@ -13,7 +11,7 @@ RENDER_BUFFER_MULTIPLIER = 3
 def y_limits_for_slice(
     series: SeriesArrays, kind: str, start: int, end: int,
     *, log: bool = False,
-) -> Optional[Tuple[float, float]]:
+) -> tuple[float, float] | None:
     """Compute (ymin, ymax) with padding for the visible slice of a series.
 
     ``kind`` is ``"price"`` (use high/low envelope + 5% pad) or ``"volume"``
@@ -68,9 +66,9 @@ def y_limits_for_slice(
 
 def remap_window_by_time(
     prev_dates,
-    prev_xlim: Tuple[float, float],
+    prev_xlim: tuple[float, float],
     new_dates,
-) -> Optional[Tuple[int, int]]:
+) -> tuple[int, int] | None:
     """Remap a bar-index xlim from ``prev_dates`` to ``new_dates`` by time.
 
     Used by ticker-switch reloads: the user is viewing bars
@@ -136,7 +134,7 @@ def remap_window_by_time(
 def compute_render_range(
     visible_lo: int, visible_hi: int, n: int,
     min_size: int, max_size: int,
-) -> Tuple[int, int]:
+) -> tuple[int, int]:
     """Compute a ``[start, end)`` slice centered on the visible window.
 
     The rendered range is ``visible_count * RENDER_BUFFER_MULTIPLIER`` wide

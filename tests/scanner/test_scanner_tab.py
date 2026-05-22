@@ -32,14 +32,13 @@ from tradinglab.gui.scanner_tab import (
     _ScanSubTab,
 )
 from tradinglab.scanner.model import (
+    OP_GT,
     Condition,
     FieldRef,
     Group,
-    OP_GT,
     ScanDefinition,
 )
 from tradinglab.scanner.runner import MatchRow, ScanResult
-
 
 # ---------------------------------------------------------------------------
 # Helpers

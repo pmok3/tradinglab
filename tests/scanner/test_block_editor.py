@@ -12,19 +12,19 @@ The editor is a thin Tk view over the model layer. Tests focus on:
 from __future__ import annotations
 
 import tkinter as tk
-import pytest
 
+import pytest
 
 import tradinglab.indicators  # noqa: F401  -- registers indicators
 from tradinglab.gui.scanner_block_editor import BlockEditor
 from tradinglab.scanner.model import (
-    Condition,
-    FieldRef,
-    Group,
     OP_BETWEEN,
     OP_GT,
     OP_INSIDE_BAR,
     OP_IS_RISING,
+    Condition,
+    FieldRef,
+    Group,
 )
 
 
@@ -292,7 +292,8 @@ def test_combinator_appears_when_second_condition_added(root):
 def _frame_kinds(group_frame):
     """Return a list like ['cond', 'cond', 'group'] in render order."""
     from tradinglab.gui.scanner_block_editor import (
-        _ConditionFrame, _GroupFrame,
+        _ConditionFrame,
+        _GroupFrame,
     )
     out = []
     for f in group_frame._child_frames:
@@ -368,7 +369,7 @@ def test_compute_flow_rows_wraps_when_budget_tight():
     # Stronger invariants: every row's sum of widths+pad <= budget,
     # except possibly a row containing a single oversize widget.
     by_row: dict = {}
-    for w, (r, _c) in zip([100, 100, 100, 100], placements):
+    for w, (r, _c) in zip([100, 100, 100, 100], placements, strict=False):
         by_row.setdefault(r, 0)
         by_row[r] += w + 6
     for r, total in by_row.items():
@@ -462,10 +463,26 @@ def test_field_ref_picker_records_flow_children_for_smi(root):
 def test_field_ref_picker_reflow_wraps_when_narrow(root):
     """A narrow Toplevel forces multi-row layout for RVOL params."""
     root.geometry("400x300")
-    root.update_idletasks()
+    # Under xvfb/headless Linux, ``update_idletasks`` doesn't always
+    # process the synthetic Configure event from ``geometry()`` so
+    # ``winfo_width`` can keep reporting the screen-default width. Do
+    # a full ``update()`` and then assert (or stub) the width before
+    # invoking the reflow so the test is deterministic across display
+    # backends.
+    root.update()
     picker = _make_indicator_picker(root, "rvol")
     try:
-        picker._reflow_value_pane()
+        # Force the toplevel reference and a stable measured width.
+        # The reflow reads ``self._toplevel_for_reflow.winfo_width()``;
+        # by stubbing it we make the test exercise the layout logic
+        # rather than the windowing system.
+        picker._toplevel_for_reflow = root
+        original_winfo_width = root.winfo_width
+        root.winfo_width = lambda: 400  # type: ignore[method-assign]
+        try:
+            picker._reflow_value_pane()
+        finally:
+            root.winfo_width = original_winfo_width  # type: ignore[method-assign]
         rows = sorted(
             int(w.grid_info().get("row", 0))
             for w in picker._flow_children
@@ -482,10 +499,16 @@ def test_field_ref_picker_reflow_wraps_when_narrow(root):
 def test_field_ref_picker_reflow_single_row_when_wide(root):
     """A wide Toplevel keeps RVOL params on row 0."""
     root.geometry("3000x600")
-    root.update_idletasks()
+    root.update()
     picker = _make_indicator_picker(root, "rvol")
     try:
-        picker._reflow_value_pane()
+        picker._toplevel_for_reflow = root
+        original_winfo_width = root.winfo_width
+        root.winfo_width = lambda: 3000  # type: ignore[method-assign]
+        try:
+            picker._reflow_value_pane()
+        finally:
+            root.winfo_width = original_winfo_width  # type: ignore[method-assign]
         rows = [
             int(w.grid_info().get("row", 0))
             for w in picker._flow_children

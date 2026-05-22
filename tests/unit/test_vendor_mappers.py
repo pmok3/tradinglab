@@ -17,7 +17,6 @@ from tradinglab.data import (
     candles_from_schwab_response,
 )
 
-
 # ---------------------------------------------------------------------------
 # candles_from_json_rows — generic mapper
 # ---------------------------------------------------------------------------

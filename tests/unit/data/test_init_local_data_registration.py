@@ -7,8 +7,8 @@ the disk-cache opt-out is wired correctly via :mod:`disk_cache`.
 """
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator
 
 import pytest
 

@@ -41,7 +41,7 @@ of an already-warmed series adds another ``length-1`` of warmup).
 
 from __future__ import annotations
 
-from typing import ClassVar, Dict, List, Tuple
+from typing import ClassVar
 
 import numpy as np
 
@@ -68,11 +68,11 @@ class ADX:
 
     kind_id: ClassVar[str] = "adx"
     kind_version: ClassVar[int] = 1
-    params_schema: ClassVar[Tuple[ParamDef, ...]] = (
+    params_schema: ClassVar[tuple[ParamDef, ...]] = (
         ParamDef("length", "int", default=14, min=2, max=2000, step=1,
                  description="Length"),
     )
-    default_style: ClassVar[Dict[str, LineStyle]] = {
+    default_style: ClassVar[dict[str, LineStyle]] = {
         # +DI green (bull direction), -DI red (bear direction), ADX
         # blue (the de-signed trend-strength magnitude).
         "plus_di":  LineStyle(color="#2ca02c", width=1.2),
@@ -81,7 +81,7 @@ class ADX:
     }
 
     #: Horizontal guide line at 25 (canonical "trending" threshold).
-    reference_levels: ClassVar[Tuple[float, ...]] = (25.0,)
+    reference_levels: ClassVar[tuple[float, ...]] = (25.0,)
 
     overlay = False  # draw in its own pane
 
@@ -93,7 +93,7 @@ class ADX:
 
     # --- public --------------------------------------------------------
 
-    def compute_arr(self, bars: Bars) -> Dict[str, np.ndarray]:
+    def compute_arr(self, bars: Bars) -> dict[str, np.ndarray]:
         n = len(bars)
         plus_di_out  = np.full(n, np.nan, dtype=np.float64)
         minus_di_out = np.full(n, np.nan, dtype=np.float64)
@@ -182,5 +182,5 @@ class ADX:
         return {"plus_di": plus_di_out, "minus_di": minus_di_out,
                 "adx": adx_out}
 
-    def compute(self, candles: List[Candle]) -> Dict[str, np.ndarray]:
+    def compute(self, candles: list[Candle]) -> dict[str, np.ndarray]:
         return self.compute_arr(Bars.from_candles(candles))

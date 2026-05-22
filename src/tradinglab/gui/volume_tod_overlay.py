@@ -74,17 +74,11 @@ gate.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import (
     Any,
-    Dict,
-    Iterable,
-    List,
-    Mapping,
-    Optional,
-    Sequence,
-    Tuple,
 )
 
 from matplotlib.axes import Axes
@@ -129,7 +123,7 @@ def _et_zoneinfo():
         return None
 
 
-def _candle_date_key(c: Candle) -> Optional[date]:
+def _candle_date_key(c: Candle) -> date | None:
     """Return the day-resolution key matching :mod:`events.render`'s convention.
 
     Uses **UTC date** for tz-aware datetimes (yfinance disk pickles
@@ -155,7 +149,7 @@ def _candle_date_key(c: Candle) -> Optional[date]:
     return d.date()
 
 
-def _candle_et_minute_of_day(c: Candle) -> Optional[int]:
+def _candle_et_minute_of_day(c: Candle) -> int | None:
     """Return ``hour*60 + minute`` in ET for one candle's bar-open time.
 
     yfinance disk pickles preserve ``America/New_York``-aware datetimes,
@@ -177,7 +171,7 @@ def _candle_et_minute_of_day(c: Candle) -> Optional[int]:
     return d.hour * 60 + d.minute
 
 
-def _epoch_ms_to_et_minute(epoch_ms: int) -> Optional[int]:
+def _epoch_ms_to_et_minute(epoch_ms: int) -> int | None:
     """Convert UTC epoch-ms to an ET minute-of-day (0..1439).
 
     Returns ``None`` when ``ZoneInfo`` / tzdata isn't available — the
@@ -194,7 +188,7 @@ def _epoch_ms_to_et_minute(epoch_ms: int) -> Optional[int]:
     return dt.hour * 60 + dt.minute
 
 
-def _bar_base_color(c: Candle) -> Tuple[float, float, float, float]:
+def _bar_base_color(c: Candle) -> tuple[float, float, float, float]:
     """Return the bar's native body fill colour (mirrors vol_geometry).
 
     Replicates the colour resolution in
@@ -237,7 +231,7 @@ class VolumeTodPatch:
     filled_height: float
     has_intraday: bool
     is_session_pre_open: bool
-    base_color: Tuple[float, float, float, float]
+    base_color: tuple[float, float, float, float]
     median_height: float = 0.0
 
 
@@ -248,8 +242,8 @@ class VolumeTodArtists:
     Stashed on ``panel_state[slot]['vol_tod_artists']`` so the next
     ``_reset_slot_artists`` can clear them in one pass.
     """
-    artists: List[Any] = field(default_factory=list)
-    patches: List[VolumeTodPatch] = field(default_factory=list)
+    artists: list[Any] = field(default_factory=list)
+    patches: list[VolumeTodPatch] = field(default_factory=list)
 
 
 def clear_volume_tod_artists(artists: Sequence[Any]) -> None:
@@ -267,7 +261,7 @@ def clear_volume_tod_artists(artists: Sequence[Any]) -> None:
 
 def _group_intraday_by_et_date(
     intraday: Sequence[Candle], *, rth_only: bool,
-) -> Dict[date, List[Tuple[int, float]]]:
+) -> dict[date, list[tuple[int, float]]]:
     """Build ``{et_date: [(minute_of_day, volume), ...]}``.
 
     Lists are kept in chronological order (matches the input order,
@@ -275,7 +269,7 @@ def _group_intraday_by_et_date(
     filtered when ``rth_only`` is True; "gap" placeholder bars are
     always filtered.
     """
-    out: Dict[date, List[Tuple[int, float]]] = {}
+    out: dict[date, list[tuple[int, float]]] = {}
     for c in intraday:
         if c.is_gap:
             continue
@@ -292,8 +286,8 @@ def _group_intraday_by_et_date(
 
 
 def _realized_at_tod(
-    day_bars: Sequence[Tuple[int, float]], cutoff_minute: int,
-) -> Tuple[float, float]:
+    day_bars: Sequence[tuple[int, float]], cutoff_minute: int,
+) -> tuple[float, float]:
     """Return ``(realized_vol, full_day_vol)`` for one trading day.
 
     ``cutoff_minute`` is the reference time-of-day in ET minutes-of-day.
@@ -356,7 +350,7 @@ def compute_volume_tod_patches(
     rth_only: bool = True,
     median_lookback_days: int = 20,
     sandbox_active: bool = False,
-) -> List[VolumeTodPatch]:
+) -> list[VolumeTodPatch]:
     """Build one :class:`VolumeTodPatch` per non-gap daily bar in slice.
 
     The math layer is purely functional — no Tk, no matplotlib, no app
@@ -408,7 +402,7 @@ def compute_volume_tod_patches(
 
     # Full-day volume array (parallel to ``candles``) so the median
     # tick can scan backwards without reissuing the grouping pass.
-    full_day_vols: List[float] = []
+    full_day_vols: list[float] = []
     for c in candles:
         if c.is_gap:
             full_day_vols.append(0.0)
@@ -427,7 +421,7 @@ def compute_volume_tod_patches(
     else:
         cutoff = int(ref_minute)
 
-    out: List[VolumeTodPatch] = []
+    out: list[VolumeTodPatch] = []
     for idx in range(slice_start, slice_end):
         c = candles[idx]
         if c.is_gap:
@@ -533,11 +527,11 @@ def draw_volume_tod_patches(
     if ax_v is None or not patches:
         return out
 
-    solid_verts: List[Any] = []
-    solid_colors: List[Any] = []
-    outline_verts: List[Any] = []
-    outline_colors: List[Any] = []
-    median_segments: List[Any] = []
+    solid_verts: list[Any] = []
+    solid_colors: list[Any] = []
+    outline_verts: list[Any] = []
+    outline_colors: list[Any] = []
+    median_segments: list[Any] = []
 
     median_color = _color_from_theme(theme)
 
@@ -617,7 +611,7 @@ def draw_volume_tod_patches(
     return out
 
 
-def _color_from_theme(theme: Mapping[str, Any]) -> Tuple[float, float, float, float]:
+def _color_from_theme(theme: Mapping[str, Any]) -> tuple[float, float, float, float]:
     """Resolve a neutral text-like colour from the active theme."""
     if isinstance(theme, dict):
         for key in ("axis_text", "spine", "text"):
@@ -631,15 +625,15 @@ def _color_from_theme(theme: Mapping[str, Any]) -> Tuple[float, float, float, fl
 
 
 def _with_alpha(
-    rgba: Tuple[float, float, float, float], alpha: float,
-) -> Tuple[float, float, float, float]:
+    rgba: tuple[float, float, float, float], alpha: float,
+) -> tuple[float, float, float, float]:
     """Return ``rgba`` with its alpha channel replaced."""
     return (rgba[0], rgba[1], rgba[2], float(alpha))
 
 
 def patches_should_suppress_default_fill(
     patches: Iterable[VolumeTodPatch],
-) -> Dict[int, bool]:
+) -> dict[int, bool]:
     """Return ``{bar_index: True}`` for bars whose default volume fill
     must be hidden so the overlay's solid+outline can paint cleanly.
 
@@ -650,7 +644,7 @@ def patches_should_suppress_default_fill(
     bars where the overlay degrades (missing intraday → keep the
     default solid bar).
     """
-    out: Dict[int, bool] = {}
+    out: dict[int, bool] = {}
     for p in patches:
         if p.has_intraday and not p.is_session_pre_open:
             out[int(p.bar_index)] = True

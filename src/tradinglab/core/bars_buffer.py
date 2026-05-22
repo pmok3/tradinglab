@@ -48,7 +48,7 @@ The buffer itself takes no locks.
 
 from __future__ import annotations
 
-from typing import Iterable, Optional, Sequence
+from collections.abc import Iterable, Sequence
 
 import numpy as np
 
@@ -94,7 +94,7 @@ class BarsBuffer:
     # ---------------------------------------------------------------- ctors
 
     @classmethod
-    def from_candles(cls, candles: Sequence[Candle]) -> "BarsBuffer":
+    def from_candles(cls, candles: Sequence[Candle]) -> BarsBuffer:
         """Pre-populated buffer matching ``Bars.from_candles`` semantics."""
         n = len(candles)
         # Pick a capacity that comfortably holds n; round up to a power of 2
@@ -177,7 +177,7 @@ class BarsBuffer:
 
     # ----------------------------------------------------------------- view
 
-    def view(self, candles: Optional[Sequence[Candle]] = None) -> Bars:
+    def view(self, candles: Sequence[Candle] | None = None) -> Bars:
         """Return a frozen ``Bars`` over the populated prefix.
 
         ``candles`` is the matching source list to attach as a back-

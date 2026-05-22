@@ -45,9 +45,9 @@ from __future__ import annotations
 
 import logging
 import tkinter as tk
+from collections.abc import Callable
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
-from typing import Callable, Dict, List, Optional, Tuple
 
 from ..exits import storage as _exits_storage
 from ..exits.model import (
@@ -75,7 +75,6 @@ from .exits_dialog_widgets import (  # noqa: E402
     _BracketDialog,
     _LegFrame,
     _OCOGroupRow,
-    _TriggerRow,
 )
 
 # ---------------------------------------------------------------------------
@@ -86,8 +85,8 @@ from .exits_dialog_widgets import (  # noqa: E402
 def open_exits_dialog(
     app: tk.Misc,
     *,
-    on_library_changed: Optional[Callable[[], None]] = None,
-) -> "ExitsDialog":
+    on_library_changed: Callable[[], None] | None = None,
+) -> ExitsDialog:
     """Open or re-focus the singleton Edit Exit Strategies dialog.
 
     Stores the instance on ``app._exits_dialog``. ``on_library_changed``
@@ -142,8 +141,8 @@ def make_bracket_strategy(
     position's average entry price (resolved by the evaluator at fire
     time).
     """
-    target_offsets: Dict[str, Optional[float]] = {"offset_pct": None, "offset_dollar": None}
-    stop_offsets: Dict[str, Optional[float]] = {"offset_pct": None, "offset_dollar": None}
+    target_offsets: dict[str, float | None] = {"offset_pct": None, "offset_dollar": None}
+    stop_offsets: dict[str, float | None] = {"offset_pct": None, "offset_dollar": None}
     if target_unit == "percent":
         target_offsets["offset_pct"] = float(target_value)
     elif target_unit == "dollar":
@@ -194,7 +193,7 @@ class ExitsDialog(tk.Toplevel):
         self,
         master: tk.Misc,
         *,
-        on_library_changed: Optional[Callable[[], None]] = None,
+        on_library_changed: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(master)
         self.title("Edit Exit Strategies")
@@ -213,12 +212,12 @@ class ExitsDialog(tk.Toplevel):
         self._on_library_changed = on_library_changed
 
         # Library state
-        self._library: List[ExitStrategy] = []
-        self._broken: List[_exits_storage.BrokenStrategy] = []
+        self._library: list[ExitStrategy] = []
+        self._broken: list[_exits_storage.BrokenStrategy] = []
         # Currently-edited strategy (clone of library entry, or None)
-        self._draft: Optional[ExitStrategy] = None
+        self._draft: ExitStrategy | None = None
         # Per-leg-id frame map (cleared on rebuild)
-        self._leg_frames: Dict[str, "_LegFrame"] = {}
+        self._leg_frames: dict[str, _LegFrame] = {}
         # Inline-validation cache: leg_id -> bool (is duplicate in OCO)
         self._oco_dup_legs: set = set()
 
@@ -231,16 +230,16 @@ class ExitsDialog(tk.Toplevel):
     # ----- Public test/UX hooks -----
 
     @property
-    def draft(self) -> Optional[ExitStrategy]:
+    def draft(self) -> ExitStrategy | None:
         """Snapshot of the currently-edited strategy (read-only view)."""
         return self._draft
 
     @property
-    def library(self) -> Tuple[ExitStrategy, ...]:
+    def library(self) -> tuple[ExitStrategy, ...]:
         return tuple(self._library)
 
     @property
-    def broken(self) -> Tuple[_exits_storage.BrokenStrategy, ...]:
+    def broken(self) -> tuple[_exits_storage.BrokenStrategy, ...]:
         return tuple(self._broken)
 
     def refresh_library(self) -> None:
@@ -254,7 +253,7 @@ class ExitsDialog(tk.Toplevel):
         self._broken = list(broken)
         self._populate_library_listbox()
 
-    def load_strategy_into_editor(self, strategy: Optional[ExitStrategy]) -> None:
+    def load_strategy_into_editor(self, strategy: ExitStrategy | None) -> None:
         """Clone ``strategy`` into the editor, or clear the editor."""
         if strategy is None:
             self._draft = None
@@ -264,7 +263,7 @@ class ExitsDialog(tk.Toplevel):
             self._draft = ExitStrategy.from_dict(strategy.to_dict())
         self._rebuild_editor()
 
-    def get_draft(self) -> Optional[ExitStrategy]:
+    def get_draft(self) -> ExitStrategy | None:
         """Return the currently-edited strategy (live, not a copy)."""
         return self._draft
 
@@ -565,7 +564,7 @@ class ExitsDialog(tk.Toplevel):
             return
         self._draft.legs = [l for l in self._draft.legs if l.id != leg_id]
         # Also drop the leg from any OCO groups (and drop now-empty groups).
-        new_groups: List[OCOGroup] = []
+        new_groups: list[OCOGroup] = []
         for g in self._draft.oco_groups:
             remaining = tuple(x for x in g.leg_ids if x != leg_id)
             if len(remaining) >= 2:
@@ -632,19 +631,19 @@ class ExitsDialog(tk.Toplevel):
         if self._draft is None:
             self._oco_dup_legs = set()
             return
-        seen: Dict[str, int] = {}
+        seen: dict[str, int] = {}
         for g in self._draft.oco_groups:
             for lid in g.leg_ids:
                 seen[lid] = seen.get(lid, 0) + 1
         self._oco_dup_legs = {lid for lid, n in seen.items() if n > 1}
 
     @property
-    def oco_duplicate_leg_ids(self) -> Tuple[str, ...]:
+    def oco_duplicate_leg_ids(self) -> tuple[str, ...]:
         return tuple(sorted(self._oco_dup_legs))
 
     # ----- Validate / Save -----
 
-    def _on_validate(self) -> List[str]:
+    def _on_validate(self) -> list[str]:
         if self._draft is None:
             self._status_var.set("No strategy loaded")
             return ["no strategy"]

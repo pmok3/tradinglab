@@ -35,7 +35,6 @@ import os
 import sys
 import tkinter as tk
 from tkinter import messagebox, ttk
-from typing import Dict, Optional
 
 from ._modal_keys import bind_modal_keys
 from .colors import MUTED_GREY
@@ -182,8 +181,8 @@ class CredentialsDialog(tk.Toplevel):
         self.grab_set()
         self.resizable(False, False)
 
-        self._entries: Dict[str, tk.Entry] = {}
-        self._show_vars: Dict[str, tk.BooleanVar] = {}
+        self._entries: dict[str, tk.Entry] = {}
+        self._show_vars: dict[str, tk.BooleanVar] = {}
         self._build_widgets()
         self._populate_from_environment()
         bind_modal_keys(self, cancel=self._on_cancel, primary=self._on_save)
@@ -296,8 +295,8 @@ class CredentialsDialog(tk.Toplevel):
                 entry.delete(0, tk.END)
                 entry.insert(0, current)
 
-    def _collect(self) -> Dict[str, str]:
-        out: Dict[str, str] = {}
+    def _collect(self) -> dict[str, str]:
+        out: dict[str, str] = {}
         for env_name, entry in self._entries.items():
             value = entry.get().strip()
             if value:
@@ -382,7 +381,7 @@ class CredentialsDialog(tk.Toplevel):
         self.destroy()
 
 
-def open_credentials_dialog(parent: tk.Misc) -> Optional[CredentialsDialog]:
+def open_credentials_dialog(parent: tk.Misc) -> CredentialsDialog | None:
     """Open the credentials dialog as a modal child of ``parent``.
 
     Returns the :class:`CredentialsDialog` instance (or ``None`` if

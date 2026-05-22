@@ -19,8 +19,8 @@ def _intraday_session(
     base: float = 100.0,
     range_: float = 1.0,
     step_min: int = 5,
-) -> List[Candle]:
-    out: List[Candle] = []
+) -> list[Candle]:
+    out: list[Candle] = []
     p = base
     t0 = _dt.datetime.combine(day, _dt.time(9, 30))
     for i in range(n_bars):
@@ -32,8 +32,8 @@ def _intraday_session(
     return out
 
 
-def _multi_session_intraday(n_sessions: int, **bar_kwargs) -> List[Candle]:
-    bars: List[Candle] = []
+def _multi_session_intraday(n_sessions: int, **bar_kwargs) -> list[Candle]:
+    bars: list[Candle] = []
     day = _dt.date(2026, 1, 5)
     sess_count = 0
     while sess_count < n_sessions:
@@ -112,7 +112,7 @@ def test_tod_intraday_emits_finite_after_warmup_with_constant_range():
 def test_tod_non_intraday_falls_back_to_rolling_20_mean_of_tr():
     """Daily-bar fallback: ATR ToD = simple 20-bar mean of TR."""
     base = _dt.date(2026, 1, 5)
-    bars: List[Candle] = []
+    bars: list[Candle] = []
     p = 100.0
     for i in range(40):
         bars.append(Candle(
@@ -144,7 +144,7 @@ def test_tod_aggregator_median_differs_from_mean_when_outlier_present():
             days.append(d)
             sessions_added += 1
         d += _dt.timedelta(days=1)
-    bars: List[Candle] = []
+    bars: list[Candle] = []
     for idx, day in enumerate(days):
         rng = 5.0 if idx == 4 else 1.0  # session 4 = outlier
         bars.extend(_intraday_session(day, n_bars=12, range_=rng))

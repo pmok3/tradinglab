@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import datetime as _dt
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import pytest
 
@@ -26,7 +27,6 @@ from tradinglab.preload.service import (
     _run_one,
     preload_universe,
 )
-
 
 # ---------------------------------------------------------------------------
 # Test doubles
@@ -50,12 +50,12 @@ class FakeFetcher:
       a ``threading.Event`` mid-flight.
     """
 
-    returns: Optional[List[Candle]] = None
-    raises: Optional[BaseException] = None
-    side_effect: Optional[Callable[[str, str, int], None]] = None
-    calls: List[Tuple[str, str]] = field(default_factory=list)
+    returns: list[Candle] | None = None
+    raises: BaseException | None = None
+    side_effect: Callable[[str, str, int], None] | None = None
+    calls: list[tuple[str, str]] = field(default_factory=list)
 
-    def __call__(self, sym: str, itv: str) -> Optional[List[Candle]]:
+    def __call__(self, sym: str, itv: str) -> list[Candle] | None:
         self.calls.append((sym, itv))
         if self.side_effect is not None:
             self.side_effect(sym, itv, len(self.calls))
@@ -73,24 +73,24 @@ class FakeDiskCache:
     candles`` entries to simulate disk-cache hits.
     """
 
-    prefill: Dict[Tuple[str, str, str], List[Candle]] = field(
+    prefill: dict[tuple[str, str, str], list[Candle]] = field(
         default_factory=dict)
-    reads: List[Tuple[str, str, str]] = field(default_factory=list)
-    saves: List[Tuple[str, str, str, List[Candle]]] = field(
+    reads: list[tuple[str, str, str]] = field(default_factory=list)
+    saves: list[tuple[str, str, str, list[Candle]]] = field(
         default_factory=list)
-    _store: Dict[Tuple[str, str, str], List[Candle]] = field(init=False)
+    _store: dict[tuple[str, str, str], list[Candle]] = field(init=False)
 
     def __post_init__(self) -> None:
         self._store = {k: list(v) for k, v in self.prefill.items()}
 
     def load(
         self, source: str, sym: str, itv: str,
-    ) -> Optional[List[Candle]]:
+    ) -> list[Candle] | None:
         self.reads.append((source, sym, itv))
         return list(self._store.get((source, sym, itv), []))
 
     def save(
-        self, source: str, sym: str, itv: str, candles: List[Candle],
+        self, source: str, sym: str, itv: str, candles: list[Candle],
     ) -> None:
         self.saves.append((source, sym, itv, list(candles)))
         self._store[(source, sym, itv)] = list(candles)
@@ -102,8 +102,8 @@ def _no_sleep(_evt: threading.Event, _s: float) -> None:
 
 
 def _newer_wins_merge(
-    old: Optional[List[Candle]], new: Optional[List[Candle]],
-) -> List[Candle]:
+    old: list[Candle] | None, new: list[Candle] | None,
+) -> list[Candle]:
     """Simplest valid merge for the service contract: just take ``new``.
 
     Production uses a timestamp-keyed dedupe; the service only needs the
@@ -121,9 +121,8 @@ def _call_run_one(
     *,
     fetcher: FakeFetcher,
     disk: FakeDiskCache,
-    l1_check: Optional[Callable[[str, str, str],
-                                Optional[List[Candle]]]] = None,
-    cancel: Optional[threading.Event] = None,
+    l1_check: Callable[[str, str, str], list[Candle] | None] | None = None,
+    cancel: threading.Event | None = None,
     max_retries: int = 3,
 ) -> IntervalOutcome:
     return _run_one(
@@ -149,9 +148,9 @@ def test_run_one_l1_disk_fetch_ladder() -> None:
     fetcher_a = FakeFetcher(returns=[_candle()])
     disk_a = FakeDiskCache()
     l1_hit = [_candle(), _candle(datetime(2024, 1, 2, 9, 35))]
-    l1_calls: List[Tuple[str, str, str]] = []
+    l1_calls: list[tuple[str, str, str]] = []
 
-    def l1_check_a(src: str, sym: str, itv: str) -> Optional[List[Candle]]:
+    def l1_check_a(src: str, sym: str, itv: str) -> list[Candle] | None:
         l1_calls.append((src, sym, itv))
         return l1_hit
 
@@ -170,7 +169,7 @@ def test_run_one_l1_disk_fetch_ladder() -> None:
         ("yfinance", "AAPL", "5m"): [_candle()],
     })
 
-    def l1_miss(src: str, sym: str, itv: str) -> Optional[List[Candle]]:
+    def l1_miss(src: str, sym: str, itv: str) -> list[Candle] | None:
         return None  # L1 miss
 
     outcome_b = _call_run_one(
@@ -213,9 +212,9 @@ def test_retry_budget_exhaustion() -> None:
     the ``loaded_per_symbol`` entry for it must be the empty tuple
     (loaded-count == 0).
     """
-    fetcher = FakeFetcher(raises=IOError("network down"))
+    fetcher = FakeFetcher(raises=OSError("network down"))
     disk = FakeDiskCache()  # empty -> ladder falls through to fetch
-    events: List[ProgressEvent] = []
+    events: list[ProgressEvent] = []
 
     result = preload_universe(
         ["AAPL"], ["5m"],
@@ -263,11 +262,11 @@ def test_cancellation_between_retries() -> None:
             cancel.set()
 
     fetcher = FakeFetcher(
-        raises=IOError("transient"),
+        raises=OSError("transient"),
         side_effect=flip_on_first_call,
     )
     disk = FakeDiskCache()  # empty -> falls through to fetch
-    events: List[ProgressEvent] = []
+    events: list[ProgressEvent] = []
 
     result = preload_universe(
         ["AAPL"], ["5m"],
@@ -356,7 +355,7 @@ def test_build_from_loaded_drops_empty_interval_symbols() -> None:
     tuple is empty — strict-offline gating cannot let a symbol with
     no actual bars sneak into the manifest.
     """
-    per_symbol: Dict[str, Tuple[str, ...]] = {
+    per_symbol: dict[str, tuple[str, ...]] = {
         "AAPL": ("5m", "1d"),
         "MSFT": (),            # loaded nothing -> must be dropped
         "NVDA": ("5m",),

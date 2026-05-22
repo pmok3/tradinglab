@@ -40,7 +40,7 @@ Warmup
 
 from __future__ import annotations
 
-from typing import ClassVar, Dict, List, Tuple
+from typing import ClassVar
 
 import numpy as np
 
@@ -50,7 +50,7 @@ from .base import LineStyle, ParamDef
 from .ma_kernels import MA_TYPES, apply_ma
 from .wilder import true_range as _true_range
 
-KELTNER_METHODS: Tuple[str, ...] = ("atr", "original")
+KELTNER_METHODS: tuple[str, ...] = ("atr", "original")
 
 
 # Constructor defaults — also used by the name-rendering logic to
@@ -68,13 +68,13 @@ _DEFAULT_METHOD = "atr"
 # leaves ``ma_type`` at the sentinel, the constructor picks the
 # method-appropriate default at hydration time.
 _MA_TYPE_DEFAULT_SENTINEL = "__keltner_default__"
-_DEFAULT_MA_TYPE_BY_METHOD: Dict[str, str] = {
+_DEFAULT_MA_TYPE_BY_METHOD: dict[str, str] = {
     "atr": "EMA",
     "original": "SMA",
 }
 
 
-_DEFAULT_COLOR_BY_MA: Dict[str, str] = {
+_DEFAULT_COLOR_BY_MA: dict[str, str] = {
     "SMA": "#1f77b4",  # blue
     "EMA": "#ff7f0e",  # orange (KC's signature TradingView hue)
     "WMA": "#9467bd",  # purple
@@ -90,7 +90,7 @@ class KeltnerChannels:
 
     kind_id: ClassVar[str] = "keltner"
     kind_version: ClassVar[int] = 1
-    params_schema: ClassVar[Tuple[ParamDef, ...]] = (
+    params_schema: ClassVar[tuple[ParamDef, ...]] = (
         ParamDef("length", "int", default=_DEFAULT_LENGTH, min=2, max=2000,
                  step=1, description="Length"),
         ParamDef("multiplier", "float", default=_DEFAULT_MULTIPLIER, min=0.1,
@@ -105,12 +105,12 @@ class KeltnerChannels:
                  choices=KELTNER_METHODS,
                  description="atr | original"),
     )
-    default_style: ClassVar[Dict[str, LineStyle]] = {
+    default_style: ClassVar[dict[str, LineStyle]] = {
         "middle": LineStyle(color=_DEFAULT_COLOR_BY_MA["EMA"], width=1.2),
         "upper":  LineStyle(color=_DEFAULT_COLOR_BY_MA["EMA"], width=1.0),
         "lower":  LineStyle(color=_DEFAULT_COLOR_BY_MA["EMA"], width=1.0),
     }
-    reference_levels: ClassVar[Tuple[float, ...]] = ()
+    reference_levels: ClassVar[tuple[float, ...]] = ()
     overlay: ClassVar[bool] = True
 
     def __init__(
@@ -198,10 +198,11 @@ class KeltnerChannels:
     # Compute
     # ------------------------------------------------------------------
 
-    def compute_arr(self, bars: Bars) -> Dict[str, np.ndarray]:
+    def compute_arr(self, bars: Bars) -> dict[str, np.ndarray]:
         closes = bars.close
         n = closes.size
-        empty = lambda: np.full(n, np.nan, dtype=np.float64)
+        def empty():
+            return np.full(n, np.nan, dtype=np.float64)
         middle, upper, lower = empty(), empty(), empty()
         if n == 0:
             return {"middle": middle, "upper": upper, "lower": lower}
@@ -229,5 +230,5 @@ class KeltnerChannels:
         lower[:] = mid - self.multiplier * atr
         return {"middle": middle, "upper": upper, "lower": lower}
 
-    def compute(self, candles: List[Candle]) -> Dict[str, np.ndarray]:
+    def compute(self, candles: list[Candle]) -> dict[str, np.ndarray]:
         return self.compute_arr(Bars.from_candles(candles))

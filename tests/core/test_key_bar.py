@@ -14,14 +14,13 @@ from tradinglab.core.key_bar import (
     KEY_BAR_BULL,
     KEY_BAR_NONE,
     KEY_BAR_UNKNOWN,
-    KeyBarArrays,
     LOOKBACK_BARS_NON_INTRADAY,
     RVOL_THRESHOLD,
     TR_THRESHOLD,
+    KeyBarArrays,
     compute_key_bar_arrays,
 )
 from tradinglab.models import Candle
-
 
 # ---------- intraday fixtures ------------------------------------------------
 
@@ -35,8 +34,8 @@ def _intraday_session(
     body_frac: float = 0.5,
     bull: bool = True,
     volume: int = 1000,
-) -> List[Candle]:
-    out: List[Candle] = []
+) -> list[Candle]:
+    out: list[Candle] = []
     p = base_price
     t0 = _dt.datetime.combine(day, _dt.time(9, 30))
     for i in range(n_bars):
@@ -56,10 +55,10 @@ def _intraday_session(
 
 
 def _calm_then_event(*, body_frac: float, range_mult: float,
-                    vol_mult: float, bull: bool) -> List[Candle]:
+                    vol_mult: float, bull: bool) -> list[Candle]:
     """8 calm sessions of 12 bars each, then a 9th session whose
     bar #5 has the requested ``range``/``body_frac``/``volume`` profile."""
-    bars: List[Candle] = []
+    bars: list[Candle] = []
     day = _dt.date(2026, 1, 5)
     sessions_added = 0
     while sessions_added < 8:
@@ -184,7 +183,7 @@ def test_bars_since_and_last_extremes_propagate_forward():
 def test_non_intraday_uses_rolling_20bar_means():
     """Daily fallback: a wide+heavy bar after 25 calm bars should fire."""
     base = _dt.date(2026, 1, 5)
-    bars: List[Candle] = []
+    bars: list[Candle] = []
     for i in range(25):
         bars.append(Candle(
             date=_dt.datetime.combine(

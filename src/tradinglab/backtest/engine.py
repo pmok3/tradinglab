@@ -25,8 +25,8 @@ doesn't change.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Dict, List, Mapping, Optional
 
 import numpy as np
 
@@ -56,7 +56,7 @@ class _OpenTradeCursor:
     quantity: float                # signed; mirrors Position.quantity
     mae_price: float               # worst price seen against the position
     mfe_price: float               # best price seen for the position
-    ref_pre_trade_id: Optional[str] = None
+    ref_pre_trade_id: str | None = None
 
 
 def _bars_fingerprint(bars: BarSeries) -> tuple:
@@ -81,7 +81,7 @@ def _action_fingerprint(a: CorporateAction) -> tuple:
 @dataclass
 class SandboxEngine:
     spec: SessionSpec
-    bars_by_symbol: Dict[str, BarSeries]
+    bars_by_symbol: dict[str, BarSeries]
     # Phase 1c-redux: explicit master timeline (calendar-clock model).
     # When ``None`` the timeline is built from the union of every
     # symbol's timestamps (legacy path — used by the f1 reproducibility
@@ -90,17 +90,17 @@ class SandboxEngine:
     # at construction; symbols registered later via :meth:`register_bars`
     # do NOT extend it. Per the design critique: a master timeline that
     # mutates mid-session breaks ``clock.index`` semantics.
-    master_timeline: Optional[np.ndarray] = None
+    master_timeline: np.ndarray | None = None
 
     # ---- mutable state (filled in __post_init__) -----------------------
     clock: Clock = field(init=False)
     portfolio: Portfolio = field(init=False)
-    pending_orders: List[Order] = field(default_factory=list)
-    fills: List[Fill] = field(default_factory=list)
-    pre_trades: List[PreTradeEntry] = field(default_factory=list)
-    post_trades: List[PostTradeReview] = field(default_factory=list)
-    _open_trades: Dict[str, _OpenTradeCursor] = field(default_factory=dict)
-    _pending_pre_by_order: Dict[str, PreTradeEntry] = field(default_factory=dict)
+    pending_orders: list[Order] = field(default_factory=list)
+    fills: list[Fill] = field(default_factory=list)
+    pre_trades: list[PreTradeEntry] = field(default_factory=list)
+    post_trades: list[PostTradeReview] = field(default_factory=list)
+    _open_trades: dict[str, _OpenTradeCursor] = field(default_factory=dict)
+    _pending_pre_by_order: dict[str, PreTradeEntry] = field(default_factory=dict)
     # Corporate-action queues, keyed by symbol. The full per-symbol
     # list is stored verbatim and never mutated post-register; the
     # drained-set guards against double-application. This separation
@@ -109,10 +109,10 @@ class SandboxEngine:
     # path that re-builds the engine for the next eligible date.
     # Output records produced by application live in
     # :attr:`cash_adjustments` / :attr:`quantity_adjustments`.
-    _pending_actions_by_symbol: Dict[str, List[CorporateAction]] = field(default_factory=dict)
+    _pending_actions_by_symbol: dict[str, list[CorporateAction]] = field(default_factory=dict)
     _applied_action_keys: set = field(default_factory=set)
-    cash_adjustments: List[CashAdjustment] = field(default_factory=list)
-    quantity_adjustments: List[QuantityAdjustment] = field(default_factory=list)
+    cash_adjustments: list[CashAdjustment] = field(default_factory=list)
+    quantity_adjustments: list[QuantityAdjustment] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.master_timeline is not None:
@@ -164,7 +164,7 @@ class SandboxEngine:
     def register_corporate_actions(
         self,
         symbol: str,
-        actions: List[CorporateAction],
+        actions: list[CorporateAction],
     ) -> int:
         """Queue ``actions`` to be applied to ``symbol``'s position at the
         engine's corporate-action tick phase.
@@ -199,7 +199,7 @@ class SandboxEngine:
     def submit_order(
         self,
         order: Order,
-        pre_trade: Optional[PreTradeEntry] = None,
+        pre_trade: PreTradeEntry | None = None,
     ) -> None:
         """Queue an order for the next tick. Optionally attach a journal entry.
 
@@ -243,9 +243,9 @@ class SandboxEngine:
         self._mark_to_market(idx_by_symbol, ts)
         return True
 
-    def _index_by_symbol_at(self, ts: int) -> Dict[str, int]:
+    def _index_by_symbol_at(self, ts: int) -> dict[str, int]:
         """Per-symbol bar index at ``ts`` (or absent if symbol has no bar)."""
-        out: Dict[str, int] = {}
+        out: dict[str, int] = {}
         for sym, bs in self.bars_by_symbol.items():
             i = bs.index_for_ts(ts)
             if i is not None:
@@ -481,7 +481,7 @@ class SandboxEngine:
         the new leg has no fresh user-submitted thesis.
         """
         sym = fill.symbol
-        ref_id: Optional[str] = None
+        ref_id: str | None = None
         if link_pre_trade:
             pre = self._pending_pre_by_order.pop(fill.order_id, None)
             if pre is not None:
@@ -549,7 +549,7 @@ class SandboxEngine:
         prices: Mapping[str, float],
         *,
         order_id_prefix: str = "auto-flat",
-    ) -> List[Fill]:
+    ) -> list[Fill]:
         """Synthesise market-close fills for every open position.
 
         Used by the auto-cycle path (Phase 1d): when the master clock
@@ -571,7 +571,7 @@ class SandboxEngine:
         Pending market orders that never filled are silently dropped
         (cancelled) — they were aimed at bars that no longer exist.
         """
-        new_fills: List[Fill] = []
+        new_fills: list[Fill] = []
         # Drop pending-but-unfilled orders: their target bars are gone.
         if self.pending_orders:
             for o in self.pending_orders:

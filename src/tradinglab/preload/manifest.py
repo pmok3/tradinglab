@@ -35,7 +35,7 @@ import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from .. import disk_cache
 from ..core.io_helpers import atomic_write_json
@@ -87,10 +87,10 @@ class SymbolEntry:
     at the moment the *latest* of those interval fetches completed.
     """
     symbol: str
-    intervals: Tuple[str, ...]
+    intervals: tuple[str, ...]
     last_fetched: float
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "symbol": str(self.symbol),
             "intervals": list(self.intervals),
@@ -98,7 +98,7 @@ class SymbolEntry:
         }
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "SymbolEntry":
+    def from_dict(cls, d: dict[str, Any]) -> SymbolEntry:
         return cls(
             symbol=str(d["symbol"]),
             intervals=tuple(d.get("intervals") or ()),
@@ -125,15 +125,15 @@ class UniverseManifest:
     name: str
     kind: str
     source: str
-    intervals: Tuple[str, ...]
-    symbols: Tuple[SymbolEntry, ...]
+    intervals: tuple[str, ...]
+    symbols: tuple[SymbolEntry, ...]
     prepared_at: float
 
-    def symbol_set(self) -> "frozenset[str]":
+    def symbol_set(self) -> frozenset[str]:
         """Frozenset of symbol strings for O(1) membership testing."""
         return frozenset(e.symbol for e in self.symbols)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "id": str(self.id),
             "name": str(self.name),
@@ -146,7 +146,7 @@ class UniverseManifest:
         }
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "UniverseManifest":
+    def from_dict(cls, d: dict[str, Any]) -> UniverseManifest:
         return cls(
             id=str(d["id"]),
             name=str(d.get("name") or d["id"]),
@@ -174,8 +174,8 @@ class CoverageReport:
     """
     target_date: _dt.date
     interval: str
-    covered: Tuple[str, ...]
-    missing: Tuple[str, ...]
+    covered: tuple[str, ...]
+    missing: tuple[str, ...]
 
     @property
     def covered_count(self) -> int:
@@ -209,8 +209,8 @@ def coverage_for_date(
     Lightweight callers can probe ``len(manifest.symbols) > 500`` as
     the threshold.
     """
-    covered: List[str] = []
-    missing: List[str] = []
+    covered: list[str] = []
+    missing: list[str] = []
     for entry in manifest.symbols:
         candles = disk_cache.load(
             manifest.source, entry.symbol, interval) or []
@@ -251,7 +251,7 @@ def save(manifest: UniverseManifest) -> Path:
     return path
 
 
-def load(uid: str) -> Optional[UniverseManifest]:
+def load(uid: str) -> UniverseManifest | None:
     """Load one manifest by ID; returns None on missing / corrupt."""
     path = _path_for(uid)
     if not path.exists():
@@ -263,13 +263,13 @@ def load(uid: str) -> Optional[UniverseManifest]:
         return None
 
 
-def load_all() -> List[UniverseManifest]:
+def load_all() -> list[UniverseManifest]:
     """Enumerate every manifest, freshest-first by ``prepared_at``.
 
     Corrupt files are skipped silently (matching the cache layer's
     "corrupt cache is non-fatal" contract).
     """
-    out: List[UniverseManifest] = []
+    out: list[UniverseManifest] = []
     d = _universes_dir()
     for p in sorted(d.glob("*.json")):
         try:
@@ -308,9 +308,9 @@ def build_from_loaded(
     name: str,
     kind: str,
     source: str,
-    intervals: Tuple[str, ...],
-    per_symbol: Dict[str, Tuple[str, ...]],
-    previous: Optional[UniverseManifest] = None,
+    intervals: tuple[str, ...],
+    per_symbol: dict[str, tuple[str, ...]],
+    previous: UniverseManifest | None = None,
 ) -> UniverseManifest:
     """Construct a manifest from preload-service output.
 
@@ -340,7 +340,7 @@ def build_from_loaded(
     """
     now = time.time()
 
-    merged: Dict[str, set] = {}
+    merged: dict[str, set] = {}
     if previous is not None:
         for entry in previous.symbols:
             merged[entry.symbol] = set(entry.intervals)

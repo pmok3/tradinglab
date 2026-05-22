@@ -23,9 +23,9 @@ from tradinglab.indicators.sessions import (
 from tradinglab.models import Candle
 
 
-def _intraday_candles(days: int = 3, per_day: int = 78, seed: int = 7) -> List[Candle]:
+def _intraday_candles(days: int = 3, per_day: int = 78, seed: int = 7) -> list[Candle]:
     rng = random.Random(seed)
-    out: List[Candle] = []
+    out: list[Candle] = []
     base_day = dt.date(2024, 1, 2)
     for d in range(days):
         day = base_day + dt.timedelta(days=d)
@@ -43,8 +43,8 @@ def _intraday_candles(days: int = 3, per_day: int = 78, seed: int = 7) -> List[C
     return out
 
 
-def _daily_candles(n: int = 50) -> List[Candle]:
-    out: List[Candle] = []
+def _daily_candles(n: int = 50) -> list[Candle]:
+    out: list[Candle] = []
     base = dt.datetime(2023, 1, 3)
     for i in range(n):
         out.append(Candle(
@@ -62,7 +62,7 @@ def test_session_groups_np_matches_candle(regular_only):
     py_groups = session_groups(candles, regular_only=regular_only)
     np_groups = session_groups_np(bars, regular_only=regular_only)
     assert len(py_groups) == len(np_groups)
-    for a, b in zip(py_groups, np_groups):
+    for a, b in zip(py_groups, np_groups, strict=False):
         np.testing.assert_array_equal(np.asarray(a, dtype=np.int64), b)
 
 

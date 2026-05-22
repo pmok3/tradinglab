@@ -10,7 +10,7 @@ formatters) is not rebuilt on every pan re-render.
 from __future__ import annotations
 
 import colorsys
-from typing import List, Mapping, Optional, Tuple
+from collections.abc import Mapping
 
 from matplotlib.colors import to_rgba
 
@@ -19,7 +19,7 @@ from .formatting import fmt_volume
 from .models import Candle
 
 
-def brighter_shade(rgba: Tuple[float, float, float, float], *, dark_mode: bool) -> Tuple[float, float, float, float]:
+def brighter_shade(rgba: tuple[float, float, float, float], *, dark_mode: bool) -> tuple[float, float, float, float]:
     """Return a fully-saturated, theme-aware accent variant of ``rgba``.
 
     Used by the *Highlight Flat HA Candles* overlay to derive a bright
@@ -53,8 +53,8 @@ def brighter_shade(rgba: Tuple[float, float, float, float], *, dark_mode: bool) 
 
 
 def darker_shade(
-    rgba: Tuple[float, float, float, float], *, dark_mode: bool,
-) -> Tuple[float, float, float, float]:
+    rgba: tuple[float, float, float, float], *, dark_mode: bool,
+) -> tuple[float, float, float, float]:
     """Return a theme-aware darker variant of ``rgba``.
 
     Companion to :func:`brighter_shade`. Used by
@@ -161,8 +161,8 @@ def _bar_rgba(c: Candle) -> tuple:
 
 
 def bar_geometry(
-    c: Candle, x: float, body_half: Optional[float] = None,
-) -> Tuple[Tuple, Tuple, tuple]:
+    c: Candle, x: float, body_half: float | None = None,
+) -> tuple[tuple, tuple, tuple]:
     """Return ``(wick_segment, body_verts, color_rgba)`` for a single candle.
 
     Used by both :func:`draw_candlesticks` (slice rebuild) and
@@ -196,8 +196,8 @@ def bar_geometry(
 
 
 def vol_geometry(
-    c: Candle, x: float, body_half: Optional[float] = None,
-) -> Tuple[Tuple, tuple]:
+    c: Candle, x: float, body_half: float | None = None,
+) -> tuple[tuple, tuple]:
     """Return ``(vol_verts, color_rgba)`` for a single candle's volume bar.
 
     ``body_half`` matches :func:`bar_geometry`. Passing the same
@@ -216,14 +216,14 @@ def vol_geometry(
 
 def draw_candlesticks(
     ax,
-    candles: List[Candle],
+    candles: list[Candle],
     x_offset: int = 0,
     start: int = 0,
-    end: Optional[int] = None,
-    hollow_indices: Optional["set[int]"] = None,
-    flat_overlay: Optional[Mapping[str, object]] = None,
-    body_half: Optional[float] = None,
-) -> Tuple[object, object]:
+    end: int | None = None,
+    hollow_indices: set[int] | None = None,
+    flat_overlay: Mapping[str, object] | None = None,
+    body_half: float | None = None,
+) -> tuple[object, object]:
     """Build and attach wick + body Collections for ``candles[start:end]``.
 
     Bars are drawn at X = ``i + x_offset`` where ``i`` is the **global**
@@ -286,11 +286,11 @@ def draw_candlesticks(
     if end <= start:
         return None, None
 
-    wick_segments: List = []
-    wick_colors: List = []
-    body_polys: List = []
-    colors: List = []
-    src_indices: List[int] = []
+    wick_segments: list = []
+    wick_colors: list = []
+    body_polys: list = []
+    colors: list = []
+    src_indices: list[int] = []
     for src_i in range(start, end):
         c = candles[src_i]
         if c.is_gap:
@@ -353,7 +353,7 @@ def draw_candlesticks(
     if has_hollow:
         face_list = []
         line_widths = []
-        for src_i, base_color in zip(src_indices, colors):
+        for src_i, base_color in zip(src_indices, colors, strict=False):
             if src_i in hollow_indices:
                 # RGBA with alpha=0 keeps the path-data-aware hit testing
                 # while rendering nothing inside the body.
@@ -392,7 +392,7 @@ def draw_candlesticks(
     # vertex data from the body polygons we just built so the overlay
     # geometry is byte-identical (no risk of sub-pixel drift between
     # body and hatch).
-    flat_hatches: List = []
+    flat_hatches: list = []
     has_flat = False
     if flat_overlay:
         bull_idx_set = set(flat_overlay.get("bull_indices") or ())
@@ -404,10 +404,10 @@ def draw_candlesticks(
             bull_idx_set -= set(hollow_indices)
             bear_idx_set -= set(hollow_indices)
         bull_polys = [
-            v for v, i in zip(body_polys, src_indices) if i in bull_idx_set
+            v for v, i in zip(body_polys, src_indices, strict=False) if i in bull_idx_set
         ]
         bear_polys = [
-            v for v, i in zip(body_polys, src_indices) if i in bear_idx_set
+            v for v, i in zip(body_polys, src_indices, strict=False) if i in bear_idx_set
         ]
         if bull_polys:
             bull_color = to_rgba(flat_overlay.get("bull_color") or "#000000")
@@ -452,11 +452,11 @@ def draw_candlesticks(
 
 def draw_volume(
     ax,
-    candles: List[Candle],
+    candles: list[Candle],
     x_offset: int = 0,
     start: int = 0,
-    end: Optional[int] = None,
-    body_half: Optional[float] = None,
+    end: int | None = None,
+    body_half: float | None = None,
 ) -> object:
     """Build and attach a volume-bar Collection for ``candles[start:end]``.
 
@@ -477,9 +477,9 @@ def draw_volume(
     if end <= start:
         return None
 
-    polys: List = []
-    colors: List = []
-    src_indices: List[int] = []
+    polys: list = []
+    colors: list = []
+    src_indices: list[int] = []
     for src_i in range(start, end):
         c = candles[src_i]
         if c.is_gap:
@@ -506,14 +506,14 @@ def draw_volume(
 
 def draw_session_shading(
     ax,
-    candles: List[Candle],
+    candles: list[Candle],
     x_offset: int = 0,
     start: int = 0,
-    end: Optional[int] = None,
+    end: int | None = None,
     pre_color: str = "#4a6fa5",
     post_color: str = "#c07a2e",
     intraday: bool = False,
-) -> List[object]:
+) -> list[object]:
     """Paint soft vertical bands behind consecutive pre/post-market bars.
 
     Pre- and post-market sessions get different hues so the user can tell
@@ -554,7 +554,7 @@ def draw_session_shading(
     if end <= start:
         return []
 
-    artists: List[object] = []
+    artists: list[object] = []
     trans = blended_transform_factory(ax.transData, ax.transAxes)
     color_for = {"pre": pre_color, "post": post_color}
 
@@ -681,9 +681,17 @@ def setup_volume_axes(ax) -> None:
     ax.grid(True, linestyle="--", alpha=0.3)
     ax.margins(x=0)
     ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _pos: fmt_volume(v)))
-    # Drop the top-most volume tick so it doesn't collide with the bottom-most
-    # price tick on the price chart that sits directly above (hspace=0).
-    ax.yaxis.set_major_locator(MaxNLocator(nbins=3, prune="upper"))
+    # Drop BOTH the bottom-most (always 0 — volume y-limits are
+    # ``(0.0, vmax * 1.1)``) and top-most volume ticks. The top tick is
+    # pruned because it sits next to the bottom-most price tick of the
+    # price chart directly above (hspace=0). The bottom-0 tick is
+    # pruned because it sits next to the top-most tick of whichever
+    # indicator pane the user has placed below the volume pane (RSI /
+    # ATR / RVOL / etc.), and "0" on volume is visually obvious from
+    # the bar reaching the pane's bottom edge — labelling it added
+    # nothing but boundary-collision noise. Audit
+    # ``volume-axis-prune-both``.
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=3, prune="both"))
     # Right-side y-axis (TradingView / Sierra Chart convention).
     ax.yaxis.tick_right()
     ax.yaxis.set_label_position("right")

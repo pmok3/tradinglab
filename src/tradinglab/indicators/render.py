@@ -26,8 +26,9 @@ return-shape contract.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any
 
 import numpy as np
 
@@ -64,8 +65,8 @@ def factory_by_kind_id(kind_id):
         )
         return None
     return pair[1]
-from .cache import IndicatorCache, config_hash
-from .config import IndicatorConfig, IndicatorManager, effective_pane_group
+from .cache import IndicatorCache, config_hash  # noqa: E402
+from .config import IndicatorConfig, IndicatorManager, effective_pane_group  # noqa: E402
 
 # --- Layout -------------------------------------------------------------
 
@@ -89,7 +90,7 @@ def compute_layout(
     num_lower_panes: int,
     fig_height_in: float,
     dpi: float = 100.0,
-) -> Tuple[List[float], bool]:
+) -> tuple[list[float], bool]:
     """Return ``(height_ratios, can_add_more)`` for one slot.
 
     ``num_lower_panes`` is ``1`` (volume) + the count of applicable
@@ -105,7 +106,7 @@ def compute_layout(
     """
     n = max(1, int(num_lower_panes))
     n_ind = n - 1  # excluding the volume pane.
-    ratios: List[float] = (
+    ratios: list[float] = (
         [PRICE_UNIT, VOLUME_UNIT] + [INDICATOR_UNIT] * n_ind
     )
     total = sum(ratios)
@@ -132,18 +133,18 @@ class PanelIndicatorState:
     """
 
     # config_id -> {output_key: Line2D} on the price axis (overlays).
-    overlay_lines: Dict[int, Dict[str, Any]] = field(default_factory=dict)
+    overlay_lines: dict[int, dict[str, Any]] = field(default_factory=dict)
     # config_id -> Axes (lower pane) for non-overlay indicators.
-    panes: Dict[int, Any] = field(default_factory=dict)
+    panes: dict[int, Any] = field(default_factory=dict)
     # config_id -> {output_key: Line2D} on the per-config lower pane.
-    pane_lines: Dict[int, Dict[str, Any]] = field(default_factory=dict)
+    pane_lines: dict[int, dict[str, Any]] = field(default_factory=dict)
     # Snapshot of which config_ids appeared on this slot the last time
     # we rendered. Used to detect stale lines that need removing.
-    last_config_ids: Tuple[int, ...] = ()
+    last_config_ids: tuple[int, ...] = ()
 
-    def all_artists(self) -> List[Any]:
+    def all_artists(self) -> list[Any]:
         """Flat list of every Line2D currently held — for blit-anim sets."""
-        out: List[Any] = []
+        out: list[Any] = []
         for lines in self.overlay_lines.values():
             out.extend(lines.values())
         for lines in self.pane_lines.values():
@@ -176,9 +177,9 @@ def _safe_remove_line(ln: Any) -> None:
 
 def applicable_non_overlay_configs(
     manager: IndicatorManager, scope: str, interval: str,
-) -> List[IndicatorConfig]:
+) -> list[IndicatorConfig]:
     """Return non-overlay configs that should render in this slot."""
-    out: List[IndicatorConfig] = []
+    out: list[IndicatorConfig] = []
     for cfg in manager.applicable(scope, interval):
         if cfg.unknown:
             continue
@@ -192,7 +193,7 @@ def applicable_non_overlay_configs(
 
 def applicable_pane_groups(
     manager: IndicatorManager, scope: str, interval: str,
-) -> List[List[IndicatorConfig]]:
+) -> list[list[IndicatorConfig]]:
     """Group non-overlay configs by ``pane_group`` for shared-pane rendering.
 
     Each entry in the returned list is one **lower pane** worth of
@@ -208,8 +209,8 @@ def applicable_pane_groups(
     The total number of lower panes the slot needs is therefore
     ``1 (volume) + len(applicable_pane_groups(...))``.
     """
-    groups: List[List[IndicatorConfig]] = []
-    by_key: Dict[str, List[IndicatorConfig]] = {}
+    groups: list[list[IndicatorConfig]] = []
+    by_key: dict[str, list[IndicatorConfig]] = {}
     for cfg in applicable_non_overlay_configs(manager, scope, interval):
         # Params-aware: the unified RVOL / RRVOL indicators toggle
         # between "rvol" and "rvol_z" pane groups based on z_score.
@@ -233,7 +234,7 @@ def applicable_pane_groups(
 
 def applicable_overlay_configs(
     manager: IndicatorManager, scope: str, interval: str,
-) -> List[IndicatorConfig]:
+) -> list[IndicatorConfig]:
     """Configs for ``(scope, interval)`` whose kind is an overlay.
 
     Skips configs whose ``kind_id`` no longer maps to a registered
@@ -242,7 +243,7 @@ def applicable_overlay_configs(
     plugin" doesn't pollute the status bar but still surfaces in the
     log file when diagnosed.
     """
-    out: List[IndicatorConfig] = []
+    out: list[IndicatorConfig] = []
     for cfg in manager.applicable(scope, interval):
         if cfg.unknown:
             continue
@@ -259,7 +260,7 @@ def applicable_overlay_configs(
     return out
 
 
-def _build_gap_mask(candles: Sequence[Candle]) -> Optional[np.ndarray]:
+def _build_gap_mask(candles: Sequence[Candle]) -> np.ndarray | None:
     """Return a boolean mask of gap entries, or None if no gaps."""
     mask = np.fromiter(
         (bool(getattr(c, "is_gap", False)) for c in candles),
@@ -273,7 +274,7 @@ def _build_gap_mask(candles: Sequence[Candle]) -> Optional[np.ndarray]:
 def _resolve_reference_levels(
     cfg: IndicatorConfig,
     factory: Any,
-) -> Tuple[float, ...]:
+) -> tuple[float, ...]:
     """Resolve the reference-axhline levels for a pane indicator.
 
     Source of truth, in order:
@@ -309,7 +310,7 @@ def _resolve_reference_levels(
             raw = getattr(factory, "reference_levels", None)
     if not raw:
         return ()
-    out: List[float] = []
+    out: list[float] = []
     for v in raw:
         try:
             f = float(v)
@@ -324,9 +325,9 @@ def _resolve_reference_levels(
 def _compute_for_config(
     cfg: IndicatorConfig,
     candles: Sequence[Candle],
-    gap_mask: Optional[np.ndarray],
+    gap_mask: np.ndarray | None,
     cache: IndicatorCache,
-) -> Optional[Dict[str, np.ndarray]]:
+) -> dict[str, np.ndarray] | None:
     """Return cached/freshly-computed output dict; NaN-padded for gaps.
 
     Returns ``None`` if the indicator class is missing (unknown
@@ -359,7 +360,7 @@ def _compute_for_config(
     # protocol does NOT apply here — the non-gap mask can vary between
     # renders (compare-mode alignment) so ``inc_step`` over the
     # nongap-subset has no stable ``prev_len`` semantics.
-    nongap_candles = [c for c, g in zip(candles, gap_mask) if not g]
+    nongap_candles = [c for c, g in zip(candles, gap_mask, strict=False) if not g]
     if not nongap_candles:
         return None
     raw_h = config_hash(
@@ -374,7 +375,7 @@ def _compute_for_config(
     except Exception:  # noqa: BLE001
         return None
     nongap_idx = np.flatnonzero(~gap_mask)
-    padded: Dict[str, np.ndarray] = {}
+    padded: dict[str, np.ndarray] = {}
     for key, arr in raw_out.items():
         a = np.asarray(arr, dtype=float)
         if a.shape[0] != nongap_idx.shape[0]:
@@ -386,13 +387,13 @@ def _compute_for_config(
     return padded
 
 
-def _resolve_style(cfg: IndicatorConfig, output_key: str) -> Tuple[str, float]:
+def _resolve_style(cfg: IndicatorConfig, output_key: str) -> tuple[str, float]:
     """Return ``(color_hex, line_width)`` for one output of one config."""
     cls = factory_by_kind_id(cfg.kind_id)
     default = {}
     if cls is not None:
         default = dict(getattr(cls, "default_style", {}) or {})
-    cfg_style: Dict[str, Any] = dict(getattr(cfg, "style", {}) or {})
+    cfg_style: dict[str, Any] = dict(getattr(cfg, "style", {}) or {})
     spec = cfg_style.get(output_key) or default.get(output_key)
     if spec is None:
         return "#1f77b4", 1.2
@@ -403,7 +404,7 @@ def _resolve_style(cfg: IndicatorConfig, output_key: str) -> Tuple[str, float]:
 
 def _draw_histogram(
     ax_lower: Any,
-    existing: Dict[str, Any],
+    existing: dict[str, Any],
     key: str,
     x: np.ndarray,
     arr: np.ndarray,
@@ -441,7 +442,7 @@ def _draw_histogram(
     # We only honor it as the "rising-above-zero" anchor; the other
     # three classes derive from the default palette to keep the
     # 4-class TradingView contrast intact.
-    cfg_style: Dict[str, Any] = dict(getattr(cfg, "style", {}) or {})
+    cfg_style: dict[str, Any] = dict(getattr(cfg, "style", {}) or {})
     spec = cfg_style.get(key)
     if spec is not None:
         override = getattr(spec, "color", None)
@@ -521,7 +522,7 @@ def render_for_slot(
     """
     overlays = applicable_overlay_configs(manager, scope, interval)
     pane_groups = applicable_pane_groups(manager, scope, interval)
-    panes: List[IndicatorConfig] = [c for grp in pane_groups for c in grp]
+    panes: list[IndicatorConfig] = [c for grp in pane_groups for c in grp]
     n = len(candles)
     gap_mask = _build_gap_mask(candles) if n else None
     x = np.arange(n, dtype=float) + float(offset) if n else np.zeros(0)
@@ -556,7 +557,7 @@ def render_for_slot(
             continue
         z = 4.0 + 0.01 * i
         cls_ov = factory_by_kind_id(cfg.kind_id)
-        out_kinds_ov: Dict[str, str] = (
+        out_kinds_ov: dict[str, str] = (
             dict(getattr(cls_ov, "output_kinds", {}) or {}) if cls_ov else {}
         )
         for key, arr in out.items():
@@ -594,7 +595,7 @@ def render_for_slot(
     # Non-overlay panes — iterated by group so multiple configs can
     # share one Axes (``pane_group`` field). Each group consumes one
     # axes from ``pane_axes`` (caller must size accordingly).
-    for ax_lower, group in zip(pane_axes, pane_groups):
+    for ax_lower, group in zip(pane_axes, pane_groups, strict=False):
         # In-pane label: "RVOL ToD(20)  •  RVOL Cum(20)" pinned to
         # the upper-left in axes coords. Lets the user identify what
         # the pane is showing without expanding the side legend.
@@ -647,9 +648,9 @@ def render_for_slot(
         # Reference levels: union (deduped, ordered) across every
         # config in this group, so a shared pane gets one set of
         # dashes covering the strictest thresholds requested.
-        ref_levels: Tuple[float, ...] = ()
+        ref_levels: tuple[float, ...] = ()
         seen: set = set()
-        merged: List[float] = []
+        merged: list[float] = []
         for cfg in group:
             factory = factory_by_kind_id(cfg.kind_id)
             for lvl in _resolve_reference_levels(cfg, factory) or ():
@@ -698,7 +699,7 @@ def render_for_slot(
                 state.pane_lines.pop(cfg.id, None)
                 continue
             cls = factory_by_kind_id(cfg.kind_id)
-            out_kinds: Dict[str, str] = (
+            out_kinds: dict[str, str] = (
                 dict(getattr(cls, "output_kinds", {}) or {}) if cls else {}
             )
             for key, arr in out.items():
@@ -760,8 +761,8 @@ def autoscale_pane_y(ax_lower: Any, lines: Iterable[Any], lo: int, hi: int) -> N
     are read via that attribute so the underlying y values participate
     in autoscale just like Line2D ``get_ydata()``.
     """
-    mins: List[float] = []
-    maxs: List[float] = []
+    mins: list[float] = []
+    maxs: list[float] = []
     for ln in lines:
         y = getattr(ln, "_sc_y_data", None)
         if y is None:

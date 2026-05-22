@@ -22,14 +22,13 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from tradinglab.models import Candle
-from tradinglab.rendering import darker_shade
 from tradinglab.gui.volume_tod_overlay import (
     VolumeTodPatch,
     compute_volume_tod_patches,
     patches_should_suppress_default_fill,
 )
-
+from tradinglab.models import Candle
+from tradinglab.rendering import darker_shade
 
 # ---------------------------------------------------------------------- helpers
 

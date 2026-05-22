@@ -43,7 +43,7 @@ index 3 onward the LRSI is published.
 
 from __future__ import annotations
 
-from typing import ClassVar, Dict, List, Tuple
+from typing import ClassVar
 
 import numpy as np
 
@@ -66,8 +66,8 @@ class LRSI:
     #: (drawn as axhlines by the render layer); they never enter the
     #: indicator's compute path, so the entries/exits/scanner trigger
     #: form hides them. See :data:`tradinglab.scanner.fields._build_indicator_specs`.
-    TRIGGER_RELEVANT_PARAMS: ClassVar[Tuple[str, ...]] = ("gamma",)
-    params_schema: ClassVar[Tuple[ParamDef, ...]] = (
+    TRIGGER_RELEVANT_PARAMS: ClassVar[tuple[str, ...]] = ("gamma",)
+    params_schema: ClassVar[tuple[ParamDef, ...]] = (
         ParamDef("gamma", "float", default=0.5, min=0.0, max=0.999, step=0.01,
                  description="γ (damping)"),
         ParamDef("oversold", "int", default=15, min=0, max=100, step=1,
@@ -77,7 +77,7 @@ class LRSI:
         ParamDef("show_reference_lines", "bool", default=True,
                  description="Reference lines"),
     )
-    default_style: ClassVar[Dict[str, LineStyle]] = {
+    default_style: ClassVar[dict[str, LineStyle]] = {
         # Olive: distinct from RSI (default blue) so a chart with both
         # indicators is readable; matches LRSI's convention of being
         # the "smarter cousin" of RSI.
@@ -91,7 +91,7 @@ class LRSI:
     # the render layer reads from the instance in preference to the
     # class. Class-level default is empty so static introspection
     # of LRSI without instantiation correctly reports "no levels".
-    reference_levels: ClassVar[Tuple[float, ...]] = ()
+    reference_levels: ClassVar[tuple[float, ...]] = ()
 
     def __init__(
         self,
@@ -112,14 +112,14 @@ class LRSI:
         self.oversold = int(oversold)
         self.overbought = int(overbought)
         self.show_reference_lines = bool(show_reference_lines)
-        self.reference_levels: Tuple[float, ...] = (
+        self.reference_levels: tuple[float, ...] = (
             (float(self.oversold), float(self.overbought))
             if self.show_reference_lines
             else ()
         )
         self.name = f"LRSI({self.gamma:g})"
 
-    def compute_arr(self, bars: Bars) -> Dict[str, np.ndarray]:
+    def compute_arr(self, bars: Bars) -> dict[str, np.ndarray]:
         n = len(bars)
         out = np.full(n, np.nan, dtype=np.float64)
         if n == 0:
@@ -182,5 +182,5 @@ class LRSI:
                 out[i] = 100.0 * (cu / denom)
         return {"lrsi": out}
 
-    def compute(self, candles: List[Candle]) -> Dict[str, np.ndarray]:
+    def compute(self, candles: list[Candle]) -> dict[str, np.ndarray]:
         return self.compute_arr(Bars.from_candles(candles))

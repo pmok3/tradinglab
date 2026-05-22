@@ -36,7 +36,12 @@ described below.
 
 ## Directory layout
 
-A "root" is a folder containing one or more **source subfolders**.
+A "root" is one of:
+
+1. A **folder** containing one or more source subfolders, OR
+2. A **zip archive** containing the same layout at its top level
+   (typically a file produced by Export Bars to CSV).
+
 Each source subfolder contains flat CSV files named
 `<TICKER>_<INTERVAL>.csv`.
 
@@ -64,6 +69,11 @@ Each subfolder of the root produces one combobox entry, named
 Files inside a subfolder are flat (no nested folders). The filename
 **is** the lookup key: when the toolbar requests `AAPL` at `5m` from
 `share-2024-11-yfinance`, the app reads `<root>/yfinance/AAPL_5m.csv`.
+
+If the root is a `.zip` file instead of a folder, exactly the same
+layout applies inside the archive — the app reads the CSV bytes
+directly from the zip member at `yfinance/AAPL_5m.csv`. No need to
+unzip first.
 
 The interval token is whatever string your toolbar combobox produces —
 `1m`, `5m`, `15m`, `1h`, `1d`, etc. There is no built-in allow-list;
@@ -171,14 +181,19 @@ is checked.
 
 | Control | Purpose |
 |---|---|
-| **Destination** | Folder picker. Files write to `<destination>/<SOURCE>/<TICKER>_<INTERVAL>.csv`. |
+| **Zip file** | "Save as…" picker. Default name `tradinglab-export-YYYY-MM-DD.zip`. Output is a single deflate-compressed archive containing every selected entry as `<SOURCE>/<TICKER>_<INTERVAL>.csv`. |
 | **Select All** / **Select None** | Toggle every row at once. |
 | Row checkbox | Click the leftmost cell of a row to toggle it. |
-| **Export** | Write selected rows to the destination. Writes are atomic (temp file → `os.replace`), so a crash mid-export will not leave a half-written CSV. |
+| **Export** | Write the selected rows to the zip. Writes are atomic (temp file → `os.replace`), so a crash mid-export will not leave a half-written archive. |
 | **Cancel** | Close the dialog without writing anything. |
 
-Existing files at the destination are **overwritten** without prompt.
-Pick a fresh folder if you don't want to clobber prior exports.
+Existing files at the destination are **overwritten** without prompt —
+pick a fresh filename if you don't want to clobber prior exports.
+
+Why a zip? OHLCV CSV text compresses ~4x, which makes it easy to share
+hundreds of symbol-intervals as a single file. The archive can be
+dropped into Configure Local Data directly (see below) without
+unzipping it first.
 
 ---
 
@@ -187,18 +202,26 @@ Pick a fresh folder if you don't want to clobber prior exports.
 A common pattern is sharing your local cache between machines:
 
 1. On the **source** machine, open **Tools → Export Bars to CSV…**,
-   pick `D:\share\2024-11`, select what to share, click **Export**.
-2. Copy `D:\share\2024-11` to the **destination** machine (USB,
+   pick `D:\share\2024-11.zip` (or accept the default name), select
+   what to share, click **Export**.
+2. Copy `D:\share\2024-11.zip` to the **destination** machine (USB,
    OneDrive, wherever).
 3. On the destination, open **Tools → Configure Local Data…**, click
-   **Add**, name it `share_2024_11`, point at the folder, **Save and
-   Close**.
+   **Add**, name it `share_2024_11`, browse to the zip file (the
+   Browse dialog asks whether you're picking a folder or a zip),
+   **Save and Close**.
 4. The toolbar now exposes `share_2024_11-yfinance`,
    `share_2024_11-polygon`, etc. — load any ticker exactly like any
-   other source.
+   other source. The app reads CSVs directly from inside the zip; no
+   need to unzip.
 
 The data round-trips losslessly: the same OHLCV values that produced
 the export show up on the destination chart.
+
+> **Prefer unzipped folders?** Configure Local Data accepts either. If
+> you unzip `D:\share\2024-11.zip` into a folder of subfolders
+> (`yfinance/`, `polygon/`, …), point Configure Local Data at the
+> folder instead and the same combobox entries appear.
 
 ---
 

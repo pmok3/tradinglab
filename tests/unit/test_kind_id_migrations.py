@@ -31,7 +31,6 @@ from tradinglab.indicators.base import (
 from tradinglab.indicators.config import IndicatorConfig, LineStyle
 from tradinglab.scanner.model import FieldRef
 
-
 # (legacy_id, expected_new_id, expected_added_params)
 LEGACY_TO_NEW = [
     # plain RVOL

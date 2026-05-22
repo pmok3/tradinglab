@@ -64,7 +64,7 @@ Public API
 from __future__ import annotations
 
 import threading
-from typing import Callable, Dict, Optional, Tuple
+from collections.abc import Callable
 
 from .bars import Bars
 
@@ -73,10 +73,10 @@ from .bars import Bars
 # ----------------------------------------------------------------------
 
 _lock = threading.RLock()
-_cache: Dict[Tuple[str, str, str], Bars] = {}
-_inflight: set[Tuple[str, str, str]] = set()
-_provider: Optional[Callable[[str, str, str], None]] = None
-_on_arrival: Optional[Callable[[], None]] = None
+_cache: dict[tuple[str, str, str], Bars] = {}
+_inflight: set[tuple[str, str, str]] = set()
+_provider: Callable[[str, str, str], None] | None = None
+_on_arrival: Callable[[], None] | None = None
 _generation: int = 0
 
 
@@ -88,7 +88,7 @@ ProviderFn = Callable[[str, str, str], None]
 OnArrivalFn = Callable[[], None]
 
 
-def _norm(source: str, symbol: str, interval: str) -> Tuple[str, str, str]:
+def _norm(source: str, symbol: str, interval: str) -> tuple[str, str, str]:
     return (source.lower(), symbol.upper(), interval)
 
 
@@ -98,9 +98,9 @@ def _norm(source: str, symbol: str, interval: str) -> Tuple[str, str, str]:
 
 
 def set_provider(
-    provider: Optional[ProviderFn],
+    provider: ProviderFn | None,
     *,
-    on_arrival: Optional[OnArrivalFn] = None,
+    on_arrival: OnArrivalFn | None = None,
 ) -> None:
     """Install (or clear) the data provider + arrival callback.
 
@@ -123,7 +123,7 @@ def generation() -> int:
 
 def get_reference_bars(
     source: str, symbol: str, interval: str,
-) -> Optional[Bars]:
+) -> Bars | None:
     """Return cached :class:`Bars` for ``(source, symbol, interval)`` or ``None``.
 
     On miss, schedules a background fetch via the registered provider
@@ -132,7 +132,7 @@ def get_reference_bars(
     if not source or not symbol or not interval:
         return None
     key = _norm(source, symbol, interval)
-    provider_to_call: Optional[ProviderFn] = None
+    provider_to_call: ProviderFn | None = None
     with _lock:
         bars = _cache.get(key)
         if bars is not None:
@@ -165,7 +165,7 @@ def set_reference_bars(
     if bars is None:
         return
     key = _norm(source, symbol, interval)
-    cb: Optional[OnArrivalFn] = None
+    cb: OnArrivalFn | None = None
     global _generation
     with _lock:
         _cache[key] = bars

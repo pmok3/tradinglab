@@ -33,17 +33,16 @@ from tradinglab.indicators.cache import IndicatorCache
 from tradinglab.indicators.config import IndicatorConfig, IndicatorManager
 from tradinglab.models import Candle
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
 def _make_candles(n: int = 50, *, base: float = 100.0,
-                  with_gaps_at: tuple = ()) -> List[Candle]:
+                  with_gaps_at: tuple = ()) -> list[Candle]:
     """Make ``n`` synthetic daily candles, optionally inserting gap candles
     at the given indices (created via :meth:`Candle.gap`)."""
-    out: List[Candle] = []
+    out: list[Candle] = []
     for i in range(n):
         ts = _dt.datetime(2025, 1, 2) + _dt.timedelta(days=i)
         if i in with_gaps_at:

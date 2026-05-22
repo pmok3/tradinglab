@@ -29,7 +29,6 @@ from tradinglab.exits.spec import Bar
 from tradinglab.positions.model import Position
 from tradinglab.positions.tracker import PositionTracker
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -45,7 +44,7 @@ def _setup(
     qty: float = 100.0,
     entry: float = 100.0,
     slippage_bps: float = 0.0,
-) -> Tuple[PaperBrokerEngine, PositionTracker, Position]:
+) -> tuple[PaperBrokerEngine, PositionTracker, Position]:
     tracker = PositionTracker()
     with tk_thread_check_disabled():
         pos = tracker.open(
@@ -455,7 +454,7 @@ def test_stats_tracks_submitted_filled_cancelled_rejected():
 
 def test_submit_from_worker_thread_raises():
     engine, _t, pos = _setup()
-    err: List[Exception] = []
+    err: list[Exception] = []
 
     def worker() -> None:
         try:
@@ -473,7 +472,7 @@ def test_on_bar_from_worker_thread_raises():
     engine, _t, pos = _setup()
     with tk_thread_check_disabled():
         engine.submit(_mk_order(pos.id, kind=PaperOrderKind.MARKET))
-    err: List[Exception] = []
+    err: list[Exception] = []
 
     def worker() -> None:
         try:

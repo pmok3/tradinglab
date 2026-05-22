@@ -13,8 +13,8 @@ Phase 2 lands.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Dict, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -61,7 +61,7 @@ class BarSeries:
                     f"BarSeries.{name} must be float64; got {arr.dtype!r}"
                 )
 
-    def index_for_ts(self, ts: int) -> Optional[int]:
+    def index_for_ts(self, ts: int) -> int | None:
         """Exact-match lookup. Returns ``None`` if ``ts`` not present."""
         idx = int(np.searchsorted(self.ts, ts, side="left"))
         if 0 <= idx < len(self) and int(self.ts[idx]) == int(ts):
@@ -71,13 +71,13 @@ class BarSeries:
 
 # ---- adapter cache ----------------------------------------------------------
 
-_FROM_CANDLES_CACHE: Dict[Tuple[str, str, int, int, float, float], "BarSeries"] = {}
+_FROM_CANDLES_CACHE: dict[tuple[str, str, int, int, float, float], BarSeries] = {}
 _FROM_CANDLES_CACHE_MAX = 64
 
 
 def _content_key(
     symbol: str, timeframe: str, candles: Sequence[Candle]
-) -> Tuple[str, str, int, int, float, float]:
+) -> tuple[str, str, int, int, float, float]:
     """Cheap content fingerprint suitable for ndarray reuse.
 
     Captures (symbol, timeframe, len, last-ts-epoch, last-close,

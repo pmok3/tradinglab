@@ -29,17 +29,17 @@ from __future__ import annotations
 
 import threading
 import time
-from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable
+from dataclasses import dataclass
 
 from ..models import Candle
 
 # Type aliases — keep the long Callables readable in signatures.
-Fetcher = Callable[[str, str], Optional[List[Candle]]]
-CacheLoad = Callable[[str, str, str], Optional[List[Candle]]]
-CacheSave = Callable[[str, str, str, List[Candle]], None]
-Merger = Callable[[Optional[List[Candle]], Optional[List[Candle]]],
-                  List[Candle]]
+Fetcher = Callable[[str, str], list[Candle] | None]
+CacheLoad = Callable[[str, str, str], list[Candle] | None]
+CacheSave = Callable[[str, str, str, list[Candle]], None]
+Merger = Callable[[list[Candle] | None, list[Candle] | None],
+                  list[Candle]]
 SleepFn = Callable[[threading.Event, float], None]
 ProgressCb = Callable[["ProgressEvent"], None]
 
@@ -62,9 +62,9 @@ class IntervalOutcome:
 class SymbolOutcome:
     """All interval outcomes for one symbol."""
     symbol: str
-    intervals: Tuple[IntervalOutcome, ...]
+    intervals: tuple[IntervalOutcome, ...]
 
-    def loaded_intervals(self) -> Tuple[str, ...]:
+    def loaded_intervals(self) -> tuple[str, ...]:
         """Intervals where bars are persisted and non-empty.
 
         Used by :func:`tradinglab.preload.manifest.build_from_loaded`
@@ -80,12 +80,12 @@ class SymbolOutcome:
 @dataclass(frozen=True)
 class PreloadResult:
     """Aggregate output of one ``preload_universe`` call."""
-    per_symbol: Tuple[SymbolOutcome, ...]
+    per_symbol: tuple[SymbolOutcome, ...]
     cancelled: bool
     started_at: float
     finished_at: float
 
-    def loaded_per_symbol(self) -> Dict[str, Tuple[str, ...]]:
+    def loaded_per_symbol(self) -> dict[str, tuple[str, ...]]:
         """Map of symbol -> tuple of intervals successfully loaded.
 
         Shape matches the ``per_symbol`` parameter of
@@ -93,7 +93,7 @@ class PreloadResult:
         """
         return {so.symbol: so.loaded_intervals() for so in self.per_symbol}
 
-    def fully_loaded(self) -> Tuple[str, ...]:
+    def fully_loaded(self) -> tuple[str, ...]:
         """Symbols where every requested interval is loaded."""
         return tuple(
             so.symbol for so in self.per_symbol
@@ -103,9 +103,9 @@ class PreloadResult:
             )
         )
 
-    def failed(self) -> Tuple[Tuple[str, str, str], ...]:
+    def failed(self) -> tuple[tuple[str, str, str], ...]:
         """Tuples of (symbol, interval, error) for every failed fetch."""
-        out: List[Tuple[str, str, str]] = []
+        out: list[tuple[str, str, str]] = []
         for so in self.per_symbol:
             for io in so.intervals:
                 if io.status == "failed":
@@ -155,8 +155,8 @@ def cancellable_sleep(cancel_event: threading.Event, seconds: float) -> None:
 
 
 def preload_universe(
-    symbols: List[str],
-    intervals: List[str],
+    symbols: list[str],
+    intervals: list[str],
     *,
     source_name: str,
     fetcher: Fetcher,
@@ -165,7 +165,7 @@ def preload_universe(
     merge: Merger,
     cancel_event: threading.Event,
     progress_cb: ProgressCb,
-    l1_check: Optional[Callable[[str, str, str], Optional[List[Candle]]]] = None,
+    l1_check: Callable[[str, str, str], list[Candle] | None] | None = None,
     sleep_fn: SleepFn = cancellable_sleep,
     rate_limit_s: float = 0.6,
     max_retries: int = 3,
@@ -212,7 +212,7 @@ def preload_universe(
     total_ops = len(symbols) * len(intervals)
     progress_cb(ProgressEvent(kind="start", total=total_ops))
 
-    out_symbols: List[SymbolOutcome] = []
+    out_symbols: list[SymbolOutcome] = []
     op_index = 0
 
     cancelled = False
@@ -220,7 +220,7 @@ def preload_universe(
         if cancel_event.is_set():
             cancelled = True
             break
-        per_interval: List[IntervalOutcome] = []
+        per_interval: list[IntervalOutcome] = []
         for itv in intervals:
             if cancel_event.is_set():
                 cancelled = True
@@ -289,7 +289,7 @@ def _run_one(
     cache_save: CacheSave,
     merge: Merger,
     cancel_event: threading.Event,
-    l1_check: Optional[Callable[[str, str, str], Optional[List[Candle]]]],
+    l1_check: Callable[[str, str, str], list[Candle] | None] | None,
     sleep_fn: SleepFn,
     rate_limit_s: float,
     max_retries: int,

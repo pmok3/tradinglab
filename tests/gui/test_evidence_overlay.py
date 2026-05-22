@@ -38,7 +38,7 @@ class _FakeCandle:
     date: datetime
 
 
-def _candles(n: int, *, start: datetime, interval_min: int = 5) -> List[_FakeCandle]:
+def _candles(n: int, *, start: datetime, interval_min: int = 5) -> list[_FakeCandle]:
     return [
         _FakeCandle(date=start + timedelta(minutes=i * interval_min))
         for i in range(n)
@@ -48,7 +48,7 @@ def _candles(n: int, *, start: datetime, interval_min: int = 5) -> List[_FakeCan
 class _FakeAudit:
     """Stand-in :class:`AuditLog` with a fixed ``tail`` payload."""
 
-    def __init__(self, records: Optional[List[Dict[str, Any]]] = None):
+    def __init__(self, records: list[dict[str, Any]] | None = None):
         self._records = list(records or [])
         self.raise_on_tail = False
 
@@ -58,7 +58,7 @@ class _FakeAudit:
         return list(self._records[-n:])
 
 
-def _entry_fire_record(*, symbol: str, evidence: List[Dict[str, Any]]):
+def _entry_fire_record(*, symbol: str, evidence: list[dict[str, Any]]):
     return {
         "ts": "2024-01-15T10:40:00+00:00",
         "kind": "entry_fire",
@@ -70,7 +70,7 @@ def _entry_fire_record(*, symbol: str, evidence: List[Dict[str, Any]]):
     }
 
 
-def _exit_fire_record(*, position_id: str, evidence: List[Dict[str, Any]]):
+def _exit_fire_record(*, position_id: str, evidence: list[dict[str, Any]]):
     return {
         "ts": "2024-01-15T10:45:00+00:00",
         "kind": "fire",
@@ -340,7 +340,8 @@ def test_compute_markers_combines_entries_and_exits_sorted():
     pos = tracker.open(symbol="AAPL", side="long", qty=10, price=100,
                         source="manual")
 
-    iso_at = lambda i: (start + timedelta(minutes=i * 5)).isoformat()
+    def iso_at(i):
+        return (start + timedelta(minutes=i * 5)).isoformat()
 
     entry = _entry_fire_record(
         symbol="AAPL",
@@ -432,7 +433,7 @@ def test_overlay_redraw_creates_artists():
 
 
 def test_overlay_set_enabled_toggles_request_redraw():
-    calls: List[bool] = []
+    calls: list[bool] = []
     ov = EvidenceOverlay(
         enabled=False, request_redraw=lambda: calls.append(True)
     )

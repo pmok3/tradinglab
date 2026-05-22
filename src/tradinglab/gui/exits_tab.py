@@ -37,8 +37,9 @@ from __future__ import annotations
 
 import logging
 import tkinter as tk
+from collections.abc import Callable, Sequence
 from tkinter import messagebox, ttk
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any
 
 from ..exits import storage as _exits_storage
 from ..exits.audit import AuditLog
@@ -71,7 +72,7 @@ _TREEVIEW_HEADERS = {
 }
 
 
-def _format_audit_record(rec: Dict[str, Any]) -> str:
+def _format_audit_record(rec: dict[str, Any]) -> str:
     """Compact, human-readable one-line summary of an audit record.
 
     When the record carries within-last-N-bars look-back evidence (set
@@ -137,8 +138,8 @@ class ExitsTab(ttk.Frame):
         *,
         tracker: PositionTracker,
         evaluator: ExitEvaluator,
-        audit: Optional[AuditLog] = None,
-        on_open_dialog: Optional[Callable[[], None]] = None,
+        audit: AuditLog | None = None,
+        on_open_dialog: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(master)
         self._tracker = tracker
@@ -147,13 +148,13 @@ class ExitsTab(ttk.Frame):
         self._on_open_dialog = on_open_dialog
 
         # --- state ---
-        self._library: List[ExitStrategy] = []
-        self._broken: List[_exits_storage.BrokenStrategy] = []
+        self._library: list[ExitStrategy] = []
+        self._broken: list[_exits_storage.BrokenStrategy] = []
         self._panic_armed: bool = False
         # Attach panel: per-position widget state.
-        self._attach_rows: Dict[str, "_AttachRow"] = {}
+        self._attach_rows: dict[str, _AttachRow] = {}
         # Last-good per-position last_price for distance computation.
-        self._last_prices: Dict[str, float] = {}
+        self._last_prices: dict[str, float] = {}
 
         self._build_layout()
         self.refresh()
@@ -161,7 +162,7 @@ class ExitsTab(ttk.Frame):
     # ----- public API -----
 
     @property
-    def library(self) -> Tuple[ExitStrategy, ...]:
+    def library(self) -> tuple[ExitStrategy, ...]:
         return tuple(self._library)
 
     @property
@@ -262,7 +263,7 @@ class ExitsTab(ttk.Frame):
     # Theming
     # ------------------------------------------------------------------
 
-    def _apply_theme(self, theme: Dict[str, str]) -> None:
+    def _apply_theme(self, theme: dict[str, str]) -> None:
         """Repaint the non-ttk chrome to match the active palette.
 
         ttk.Style does NOT cover classic ``tk.Text`` widgets, so the
@@ -421,7 +422,7 @@ class ExitsTab(ttk.Frame):
             return f"{pos.avg_entry_price + sign * trig.offset_dollar:g}"
         return "—"
 
-    def _format_distance(self, current: Optional[float], trig_px: str) -> str:
+    def _format_distance(self, current: float | None, trig_px: str) -> str:
         if current is None or trig_px == "—":
             return "—"
         try:
@@ -533,7 +534,7 @@ class _AttachRow(ttk.Frame):
         master: tk.Misc,
         *,
         position: Position,
-        attached: Optional[ExitStrategy],
+        attached: ExitStrategy | None,
         library: Sequence[ExitStrategy],
         tab: ExitsTab,
     ) -> None:
@@ -573,7 +574,7 @@ class _AttachRow(ttk.Frame):
     def update(
         self,
         position: Position,
-        attached: Optional[ExitStrategy],
+        attached: ExitStrategy | None,
         library: Sequence[ExitStrategy],
     ) -> None:
         self._summary_var.set(

@@ -23,7 +23,6 @@ The manager is not thread-safe — call it from the UI thread only.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Optional
 
 from .storage import (
     Watchlist,
@@ -47,10 +46,10 @@ class WatchlistManager:
 
     def __init__(self) -> None:
         # Start empty — no auto-load. See module docstring for rationale.
-        self._items: Dict[str, Watchlist] = {}
-        self._pinned: List[str] = []
+        self._items: dict[str, Watchlist] = {}
+        self._pinned: list[str] = []
         self._dirty: bool = False
-        self._loaded_path: Optional[Path] = None
+        self._loaded_path: Path | None = None
         # Resolve the per-instance cap from the persisted tunable so
         # later mutations of the global tunable (settings reload
         # mid-session) don't surprise a manager that's already in
@@ -67,16 +66,16 @@ class WatchlistManager:
             self.MAX_PINNED = WatchlistManager.MAX_PINNED
 
     # --- reads ---------------------------------------------------------
-    def list_names(self) -> List[str]:
+    def list_names(self) -> list[str]:
         return list(self._items.keys())
 
-    def all(self) -> List[Watchlist]:
+    def all(self) -> list[Watchlist]:
         return list(self._items.values())
 
-    def get(self, name: str) -> Optional[Watchlist]:
+    def get(self, name: str) -> Watchlist | None:
         return self._items.get(name)
 
-    def pinned_names(self) -> List[str]:
+    def pinned_names(self) -> list[str]:
         """Return pinned names in UI order (left-to-right sub-tabs)."""
         return list(self._pinned)
 
@@ -85,7 +84,7 @@ class WatchlistManager:
         """True if mutations have occurred since the last load/save."""
         return self._dirty
 
-    def loaded_path(self) -> Optional[Path]:
+    def loaded_path(self) -> Path | None:
         """Most recently loaded/saved file, or None if never loaded."""
         return self._loaded_path
 
@@ -97,7 +96,7 @@ class WatchlistManager:
         self._loaded_path = None
 
     # --- writes (in-memory; mark dirty) ------------------------------
-    def create(self, name: str, tickers: Optional[List[str]] = None) -> Watchlist:
+    def create(self, name: str, tickers: list[str] | None = None) -> Watchlist:
         if name in self._items:
             raise ValueError(f"Watchlist '{name}' already exists")
         wl = Watchlist(name=name, tickers=normalize_tickers(tickers))
@@ -141,7 +140,7 @@ class WatchlistManager:
             wl.tickers.remove(t)
             self._dirty = True
 
-    def set_tickers(self, name: str, tickers: List[str]) -> None:
+    def set_tickers(self, name: str, tickers: list[str]) -> None:
         wl = self._require(name)
         wl.tickers = normalize_tickers(tickers)
         self._dirty = True
@@ -163,7 +162,7 @@ class WatchlistManager:
             self._pinned.remove(name)
             self._dirty = True
 
-    def reorder_pins(self, names: List[str]) -> None:
+    def reorder_pins(self, names: list[str]) -> None:
         if sorted(names) != sorted(self._pinned):
             raise ValueError(
                 "reorder_pins requires a permutation of the current pins")
@@ -175,10 +174,10 @@ class WatchlistManager:
     # --- bulk import (in-memory) --------------------------------------
     def import_watchlists(
         self,
-        incoming: List[Watchlist],
+        incoming: list[Watchlist],
         *,
         mode: str = "merge",
-        pinned: Optional[List[str]] = None,
+        pinned: list[str] | None = None,
     ) -> int:
         """Add / overwrite watchlists from an external file.
 

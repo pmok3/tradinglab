@@ -34,9 +34,9 @@ Design notes
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import List, Optional, Sequence
 
 import numpy as np
 
@@ -77,7 +77,7 @@ class Bars:
     volume: np.ndarray
     timestamps: np.ndarray
     session: np.ndarray
-    candles: Optional[List[Candle]] = field(default=None, repr=False, compare=False)
+    candles: list[Candle] | None = field(default=None, repr=False, compare=False)
 
     def __len__(self) -> int:
         return int(self.close.size)
@@ -87,7 +87,7 @@ class Bars:
     # ------------------------------------------------------------------
 
     @classmethod
-    def from_candles(cls, candles: Sequence[Candle]) -> "Bars":
+    def from_candles(cls, candles: Sequence[Candle]) -> Bars:
         """Single-source ``np.fromiter`` extraction. **The** OHLCV builder."""
         n = len(candles)
         if n == 0:
@@ -120,10 +120,10 @@ class Bars:
         low: np.ndarray,
         close: np.ndarray,
         volume: np.ndarray,
-        timestamps: Optional[np.ndarray] = None,
-        session: Optional[np.ndarray] = None,
-        candles: Optional[List[Candle]] = None,
-    ) -> "Bars":
+        timestamps: np.ndarray | None = None,
+        session: np.ndarray | None = None,
+        candles: list[Candle] | None = None,
+    ) -> Bars:
         """Construct from pre-extracted arrays.
 
         ``timestamps`` and ``session`` may be omitted by callers that

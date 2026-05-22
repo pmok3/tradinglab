@@ -28,9 +28,9 @@ from tradinglab.scanner._bars_cache import BarsKeyedCache
 from tradinglab.scanner.fields import BarsNp
 
 
-def _intraday_candles(n: int, *, start_hour: int = 9) -> List[Candle]:
+def _intraday_candles(n: int, *, start_hour: int = 9) -> list[Candle]:
     base = datetime(2024, 1, 8, start_hour, 30)
-    out: List[Candle] = []
+    out: list[Candle] = []
     price = 100.0
     for i in range(n):
         ts = base + timedelta(minutes=5 * i)
@@ -45,9 +45,9 @@ def _intraday_candles(n: int, *, start_hour: int = 9) -> List[Candle]:
     return out
 
 
-def _daily_candles(n: int) -> List[Candle]:
+def _daily_candles(n: int) -> list[Candle]:
     base = datetime(2023, 1, 3)
-    out: List[Candle] = []
+    out: list[Candle] = []
     price = 50.0
     for i in range(n):
         ts = base + timedelta(days=i)

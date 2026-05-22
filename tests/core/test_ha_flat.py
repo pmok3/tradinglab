@@ -21,7 +21,6 @@ from tradinglab.core.ha_flat import (
 from tradinglab.core.heikin_ashi import ha_arrays
 from tradinglab.models import Candle
 
-
 # ---------- helpers ---------------------------------------------------------
 
 
@@ -37,10 +36,10 @@ def _candle(
     )
 
 
-def _series(prices: List[tuple]) -> List[Candle]:
+def _series(prices: list[tuple]) -> list[Candle]:
     """Build a candle list from (o, h, l, c) tuples; timestamps spaced 1m apart."""
     t0 = _dt.datetime(2024, 1, 2, 9, 30)
-    out: List[Candle] = []
+    out: list[Candle] = []
     for i, (o, h, l_, c) in enumerate(prices):
         out.append(_candle(o, h, l_, c, t=t0 + _dt.timedelta(minutes=i)))
     return out
@@ -186,7 +185,7 @@ def test_doji_excluded():
 
 def test_gap_candle_unknown_does_not_poison_neighbors():
     """A gap (NaN OHLC) at index k → UNKNOWN at k; bar k+1 re-seeds."""
-    bars: List[Candle] = []
+    bars: list[Candle] = []
     t0 = _dt.datetime(2024, 1, 2, 9, 30)
     bars.append(_candle(100.0, 100.5, 99.5, 100.4, t=t0))
     bars.append(Candle.gap(t0 + _dt.timedelta(minutes=1)))

@@ -31,7 +31,6 @@ from tradinglab.gui.crash_dialog import (
     reset_for_tests,
 )
 
-
 _FILENAME_RE = re.compile(r"^crash-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.txt$")
 
 
@@ -65,7 +64,7 @@ def redirect_logs_dir(monkeypatch, tmp_path):
 
 def test_write_crash_file_filename_and_content(redirect_logs_dir, tmp_path):
     try:
-        1 / 0
+        raise ZeroDivisionError("synthetic crash for test")
     except ZeroDivisionError as exc:
         tb = exc.__traceback__
         exc_type = type(exc)

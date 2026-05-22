@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-from typing import List, Optional
-
 from ..constants import INTERVAL_PERIODS, is_intraday
 from ..models import Candle
 from .normalize import candles_from_dataframe
 
 
-def fetch_live_data(ticker: str = "AMD", interval: str = "1d") -> Optional[List[Candle]]:
+def fetch_live_data(ticker: str = "AMD", interval: str = "1d") -> list[Candle] | None:
     """Fetch OHLCV history for ``ticker`` at ``interval`` via yfinance.
 
     For intraday intervals we request ``prepost=True`` so pre- and

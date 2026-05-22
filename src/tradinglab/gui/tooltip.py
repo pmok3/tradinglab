@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import tkinter as tk
 from tkinter import ttk
-from typing import Optional
 
 _DEFAULT_DELAY_MS = 450
 _DEFAULT_WRAPLENGTH = 320
@@ -65,9 +64,9 @@ class ToolTip:
         self._text = text
         self._delay_ms = max(50, int(delay_ms))
         self._wraplength = max(80, int(wraplength))
-        self._after_id: Optional[str] = None
-        self._tip: Optional[tk.Toplevel] = None
-        self._label: Optional[ttk.Label] = None
+        self._after_id: str | None = None
+        self._tip: tk.Toplevel | None = None
+        self._label: ttk.Label | None = None
 
         widget.bind("<Enter>", self._on_enter, add="+")
         widget.bind("<Leave>", self._on_leave, add="+")

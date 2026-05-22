@@ -39,7 +39,7 @@ import datetime as _dt
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, ttk
-from typing import Any, List, Optional
+from typing import Any
 
 from ..backtest.performance import (
     ProximityAggregate,
@@ -123,7 +123,7 @@ class PerformanceView(tk.Toplevel):
 
     def __init__(self, parent: Any, result: SessionResult,
                  *, title: str = "Sandbox — Performance",
-                 screenshot_dir: Optional[Path] = None):
+                 screenshot_dir: Path | None = None):
         super().__init__(parent)
         self.title(title)
         self.transient(parent)
@@ -136,16 +136,16 @@ class PerformanceView(tk.Toplevel):
             self.geometry("1100x780")
 
         self._result = result
-        self._screenshot_dir: Optional[Path] = (
+        self._screenshot_dir: Path | None = (
             Path(screenshot_dir) if screenshot_dir is not None else None)
-        self._rows: List[TradeRow] = build_trade_rows(result)
-        self._aggs: List[SetupAggregate] = build_setup_aggregates(self._rows)
+        self._rows: list[TradeRow] = build_trade_rows(result)
+        self._aggs: list[SetupAggregate] = build_setup_aggregates(self._rows)
         # Per-proximity-tag rollup (plan.md decision 14). One row per
         # non-empty ``earnings_proximity_tag`` / ``dividend_proximity_tag``
         # value; trades with neither carry an empty-string key
         # rendered as "(no-proximity)". Sorted by descending count to
         # mirror the setup table's ordering convention.
-        self._proxs: List[ProximityAggregate] = (
+        self._proxs: list[ProximityAggregate] = (
             build_proximity_aggregates(self._rows))
         # Per-column sort state for the trade table: (column_key,
         # ascending). Toggled on every header click.
@@ -154,8 +154,8 @@ class PerformanceView(tk.Toplevel):
         # left as None when the session has no equity samples).
         self._equity_canvas = None
         self._equity_lines: dict = {}
-        self._show_mtm_var: Optional[tk.BooleanVar] = None
-        self._show_realized_var: Optional[tk.BooleanVar] = None
+        self._show_mtm_var: tk.BooleanVar | None = None
+        self._show_realized_var: tk.BooleanVar | None = None
         # Status hook from parent app (best-effort; falls back to None).
         self._status = getattr(parent, "_status", None)
 
@@ -515,7 +515,7 @@ class PerformanceView(tk.Toplevel):
         # Fallback: stringify whatever attribute we asked for.
         return lambda r: str(getattr(r.post, key, ""))
 
-    def _sorted_rows(self, key: str, ascending: bool) -> List[TradeRow]:
+    def _sorted_rows(self, key: str, ascending: bool) -> list[TradeRow]:
         keyfn = self._sort_key_fn(key)
         return sorted(self._rows, key=keyfn, reverse=not ascending)
 

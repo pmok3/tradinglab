@@ -23,7 +23,6 @@ from tradinglab.backtest.aggregation import (
 from tradinglab.backtest.session import SessionSpec
 from tradinglab.models import Candle
 
-
 # ---------------------------------------------------------------------------
 # 1. divides_evenly + interval_minutes
 # ---------------------------------------------------------------------------

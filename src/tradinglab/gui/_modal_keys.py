@@ -29,7 +29,7 @@ Either callback may be ``None`` to skip that binding.
 from __future__ import annotations
 
 import tkinter as tk
-from typing import Callable, Optional
+from collections.abc import Callable
 
 
 def _focus_is_multiline_text(root: tk.Misc) -> bool:
@@ -55,8 +55,8 @@ def _focus_is_multiline_text(root: tk.Misc) -> bool:
 def bind_modal_keys(
     toplevel: tk.Misc,
     *,
-    cancel: Optional[Callable[[], None]] = None,
-    primary: Optional[Callable[[], None]] = None,
+    cancel: Callable[[], None] | None = None,
+    primary: Callable[[], None] | None = None,
 ) -> None:
     """Wire ``<Escape>`` → ``cancel`` and ``<Return>`` → ``primary``.
 

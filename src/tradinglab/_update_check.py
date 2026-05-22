@@ -48,7 +48,7 @@ from __future__ import annotations
 import json
 import os
 import threading
-from typing import Callable, Optional
+from collections.abc import Callable
 
 ENV_URL = "TRADINGLAB_UPDATE_URL"
 DEFAULT_TIMEOUT_S = 1.5
@@ -59,7 +59,7 @@ DEFAULT_TIMEOUT_S = 1.5
 _MAX_RESPONSE_BYTES = 64 * 1024
 
 
-def _normalise_version(s: str) -> Optional[tuple]:
+def _normalise_version(s: str) -> tuple | None:
     """Parse ``MAJOR.MINOR.PATCH`` into a comparable tuple.
 
     Tolerant:
@@ -91,7 +91,7 @@ def _normalise_version(s: str) -> Optional[tuple]:
     return tuple(out)
 
 
-def compare_versions(current: str, advertised: str) -> Optional[str]:
+def compare_versions(current: str, advertised: str) -> str | None:
     """Return ``advertised`` (normalised string) if it is *newer* than
     ``current``; otherwise ``None``.
 
@@ -115,7 +115,7 @@ def compare_versions(current: str, advertised: str) -> Optional[str]:
     return None
 
 
-def _extract_version_from_payload(payload: object) -> Optional[str]:
+def _extract_version_from_payload(payload: object) -> str | None:
     """Pull a version string out of either response shape.
 
     Returns ``None`` if the payload doesn't look like one of:
@@ -132,7 +132,7 @@ def _extract_version_from_payload(payload: object) -> Optional[str]:
     return None
 
 
-def _fetch_release_info(url: str, timeout: float) -> Optional[dict]:
+def _fetch_release_info(url: str, timeout: float) -> dict | None:
     """HTTP GET ``url`` and return the parsed JSON dict.
 
     Returns ``None`` on:
@@ -178,7 +178,7 @@ def _fetch_release_info(url: str, timeout: float) -> Optional[dict]:
         return None
 
 
-def _resolve_url(explicit: Optional[str]) -> Optional[str]:
+def _resolve_url(explicit: str | None) -> str | None:
     """Return the URL to use, or ``None`` if no check should run."""
     if explicit:
         return explicit
@@ -192,7 +192,7 @@ def _check_once(
     current_version: str,
     url: str,
     timeout: float,
-) -> Optional[str]:
+) -> str | None:
     """Synchronous "do one check" used by the daemon thread.
 
     Returns the advertised version string if an update is
@@ -210,9 +210,9 @@ def _check_once(
 def start_update_check(
     callback: Callable[[str], None],
     *,
-    url: Optional[str] = None,
+    url: str | None = None,
     timeout_s: float = DEFAULT_TIMEOUT_S,
-    current_version: Optional[str] = None,
+    current_version: str | None = None,
 ) -> bool:
     """Spawn a daemon thread that runs a single update check.
 

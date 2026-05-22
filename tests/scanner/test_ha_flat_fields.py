@@ -31,7 +31,6 @@ from tradinglab.scanner.fields import (
 )
 from tradinglab.scanner.model import FieldRef
 
-
 # ---------------------------------------------------------------------------
 # Helpers — mirror the local helpers in test_fields.py for consistency
 # ---------------------------------------------------------------------------
@@ -39,8 +38,8 @@ from tradinglab.scanner.model import FieldRef
 
 def _bars_from_ohlc(opens, highs, lows, closes) -> BarsNp:
     start = datetime(2026, 5, 4, 9, 30, tzinfo=timezone.utc)
-    out: List[Candle] = []
-    for i, (o, h, l_, c) in enumerate(zip(opens, highs, lows, closes)):
+    out: list[Candle] = []
+    for i, (o, h, l_, c) in enumerate(zip(opens, highs, lows, closes, strict=False)):
         out.append(Candle(date=start + timedelta(minutes=5 * i),
                           open=o, high=h, low=l_, close=c,
                           volume=1000, session="regular"))

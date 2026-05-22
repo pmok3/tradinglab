@@ -35,8 +35,9 @@ and ``indicators.config.IndicatorManager``.
 from __future__ import annotations
 
 import inspect
-from dataclasses import dataclass, field
-from typing import Any, Callable, ClassVar, Dict, List, Mapping, NamedTuple, Optional, Protocol, Tuple
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from typing import Any, ClassVar, NamedTuple, Protocol
 
 import numpy as np
 
@@ -69,10 +70,10 @@ class ParamDef:
     name: str
     kind: str
     default: Any
-    min: Optional[float] = None
-    max: Optional[float] = None
-    step: Optional[float] = None
-    choices: Tuple[Any, ...] = ()
+    min: float | None = None
+    max: float | None = None
+    step: float | None = None
+    choices: tuple[Any, ...] = ()
     description: str = ""
 
     def __post_init__(self) -> None:
@@ -132,13 +133,13 @@ class Indicator(Protocol):
 
     kind_id: ClassVar[str]
     kind_version: ClassVar[int]
-    params_schema: ClassVar[Tuple[ParamDef, ...]]
-    default_style: ClassVar[Dict[str, LineStyle]]
+    params_schema: ClassVar[tuple[ParamDef, ...]]
+    default_style: ClassVar[dict[str, LineStyle]]
 
     name: str
     overlay: bool
 
-    def compute(self, candles: List[Candle]) -> Dict[str, np.ndarray]:
+    def compute(self, candles: list[Candle]) -> dict[str, np.ndarray]:
         ...
 
 
@@ -159,7 +160,7 @@ class Indicator(Protocol):
 # legacy ones still work unchanged.
 
 
-def compute_via_bars(indicator: Any, bars: Bars) -> Dict[str, np.ndarray]:
+def compute_via_bars(indicator: Any, bars: Bars) -> dict[str, np.ndarray]:
     """Run an indicator over a ``Bars`` view, preferring the native fast path.
 
     * If ``indicator.compute_arr(bars)`` exists, call it directly.
@@ -222,7 +223,7 @@ def intraday_only(interval: str) -> Availability:
 def factory_is_available_for(
     factory: Any,
     interval: str,
-    params: Optional[Mapping[str, Any]] = None,
+    params: Mapping[str, Any] | None = None,
 ) -> Availability:
     """Resolve a factory's interval availability to an :class:`Availability`.
 
@@ -301,11 +302,11 @@ def factory_is_available_for(
 # Display registry, keyed by human-readable name. The Add menu and
 # legend use these. For routing/persistence, look up by ``kind_id`` via
 # :func:`factory_by_kind_id`.
-INDICATORS: Dict[str, IndicatorFactory] = {}
+INDICATORS: dict[str, IndicatorFactory] = {}
 
 # kind_id → (display_name, factory). Built so persistence can survive
 # display-name changes.
-_BY_KIND_ID: Dict[str, Tuple[str, IndicatorFactory]] = {}
+_BY_KIND_ID: dict[str, tuple[str, IndicatorFactory]] = {}
 
 
 def register_indicator(name: str, factory: IndicatorFactory) -> None:
@@ -321,12 +322,12 @@ def register_indicator(name: str, factory: IndicatorFactory) -> None:
         _BY_KIND_ID[kind_id] = (name, factory)
 
 
-def factory_by_kind_id(kind_id: str) -> Optional[Tuple[str, IndicatorFactory]]:
+def factory_by_kind_id(kind_id: str) -> tuple[str, IndicatorFactory] | None:
     """Return ``(display_name, factory)`` for ``kind_id`` or ``None``."""
     return _BY_KIND_ID.get(kind_id)
 
 
-def kind_id_for(name: str) -> Optional[str]:
+def kind_id_for(name: str) -> str | None:
     """Return the ``kind_id`` for an indicator registered under ``name``."""
     f = INDICATORS.get(name)
     return getattr(f, "kind_id", None) if f else None
@@ -345,7 +346,7 @@ def kind_id_for(name: str) -> Optional[str]:
 #: never re-keyed. The merged params are inserted only when the user's
 #: persisted ``params`` dict does NOT already specify the discriminator
 #: (so a user who manually edits the JSON to override always wins).
-_KIND_ID_MIGRATIONS: Dict[str, Tuple[str, Dict[str, Any]]] = {
+_KIND_ID_MIGRATIONS: dict[str, tuple[str, dict[str, Any]]] = {
     "bbands_ema": ("bbands", {"ma_type": "EMA"}),
     "atr_sma":    ("atr",    {"ma_type": "SMA"}),
     # RVOL family collapse: 6 legacy ids → unified ``rvol`` + mode + z_score.
@@ -385,8 +386,8 @@ _LOOKBACK_DAYS_RENAME_FAMILIES: frozenset = frozenset({"rvol", "rrvol"})
 
 
 def _rename_legacy_lookback_days(
-    new_kind_id: str, params: Dict[str, Any]
-) -> Dict[str, Any]:
+    new_kind_id: str, params: dict[str, Any]
+) -> dict[str, Any]:
     """Rename ``lookback_days`` → ``length`` for the rvol/rrvol family.
 
     Pure helper. Idempotent. The rename is targeted to the unified
@@ -408,8 +409,8 @@ def _rename_legacy_lookback_days(
 
 
 def migrate_kind_id(
-    kind_id: str, params: Dict[str, Any]
-) -> Tuple[str, Dict[str, Any]]:
+    kind_id: str, params: dict[str, Any]
+) -> tuple[str, dict[str, Any]]:
     """Apply :data:`_KIND_ID_MIGRATIONS` and return ``(new_kind_id, new_params)``.
 
     Beyond the kind-id rewrite, also performs the

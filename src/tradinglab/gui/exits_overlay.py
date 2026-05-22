@@ -29,8 +29,8 @@ Color scheme (themable later; v1 hardcoded):
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional, Tuple
 
 from matplotlib.axes import Axes
 from matplotlib.lines import Line2D
@@ -89,8 +89,8 @@ def compute_overlay_lines(
     *,
     evaluator: ExitEvaluator,
     tracker: PositionTracker,
-    primary_symbol: Optional[str],
-) -> List[OverlayLine]:
+    primary_symbol: str | None,
+) -> list[OverlayLine]:
     """Walk attached strategies on the primary symbol → :class:`OverlayLine`s.
 
     Skips positions on other symbols, malformed triggers (no resolvable
@@ -103,12 +103,12 @@ def compute_overlay_lines(
     if not sym_norm:
         return []
 
-    out: List[OverlayLine] = []
+    out: list[OverlayLine] = []
     open_positions = list(tracker.list_open())
     for pos in open_positions:
         if (pos.symbol or "").strip().upper() != sym_norm:
             continue
-        strategy: Optional[ExitStrategy] = evaluator.attached_strategy(pos.id)
+        strategy: ExitStrategy | None = evaluator.attached_strategy(pos.id)
         if strategy is None:
             continue
         for leg in strategy.legs:
@@ -130,10 +130,10 @@ def _line_for_trigger(
     pos,
     leg: ExitLeg,
     trigger: ExitTrigger,
-) -> Optional[OverlayLine]:
+) -> OverlayLine | None:
     """Build a single :class:`OverlayLine` or ``None`` if N/A."""
     kind = trigger.kind
-    price: Optional[float] = None
+    price: float | None = None
     color = _COLOR_DISARMED
     label_kind: str = ""
 
@@ -215,7 +215,7 @@ class ExitsOverlay:
         *,
         evaluator: ExitEvaluator,
         tracker: PositionTracker,
-        request_redraw: Optional[Callable[[], None]] = None,
+        request_redraw: Callable[[], None] | None = None,
         enabled: bool = True,
     ) -> None:
         self._evaluator = evaluator
@@ -223,7 +223,7 @@ class ExitsOverlay:
         self._request_redraw = request_redraw or (lambda: None)
         self._enabled = bool(enabled)
         # Map position_id -> list[(line, label)] to permit per-position cleanup.
-        self._artists: Dict[str, List[Tuple[Line2D, Optional[Text]]]] = {}
+        self._artists: dict[str, list[tuple[Line2D, Text | None]]] = {}
 
         # Subscribe to position events (open / fill / close) so that
         # attaching/detaching strategies and position lifecycle changes
@@ -271,9 +271,9 @@ class ExitsOverlay:
 
     def redraw(
         self,
-        primary_ax: Optional[Axes],
-        primary_symbol: Optional[str],
-    ) -> List[OverlayLine]:
+        primary_ax: Axes | None,
+        primary_symbol: str | None,
+    ) -> list[OverlayLine]:
         """Rebuild artists on ``primary_ax`` for ``primary_symbol``.
 
         Returns the list of :class:`OverlayLine` descriptors that were
@@ -316,7 +316,7 @@ class ExitsOverlay:
         )
         # Right-edge label. Use blended (axes_x, data_y) coords so the
         # text sticks at the right margin even as xlim shifts.
-        label: Optional[Text] = None
+        label: Text | None = None
         try:
             from matplotlib.transforms import blended_transform_factory
             tr = blended_transform_factory(ax.transAxes, ax.transData)

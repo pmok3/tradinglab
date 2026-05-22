@@ -25,9 +25,10 @@ from tradinglab.exits.model import (
 from tradinglab.scanner.model import (
     Condition,
     FieldRef,
+)
+from tradinglab.scanner.model import (
     Group as ConditionGroup,
 )
-
 
 # ---------------------------------------------------------------------------
 # Trigger field defaults / construction

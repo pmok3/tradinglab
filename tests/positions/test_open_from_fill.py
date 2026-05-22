@@ -28,8 +28,8 @@ def tracker() -> PositionTracker:
 
 
 @pytest.fixture
-def collector(tracker: PositionTracker) -> List[Tuple[PositionEvent, Position]]:
-    events: List[Tuple[PositionEvent, Position]] = []
+def collector(tracker: PositionTracker) -> list[tuple[PositionEvent, Position]]:
+    events: list[tuple[PositionEvent, Position]] = []
     tracker.subscribe(lambda ev, pos: events.append((ev, pos)))
     return events
 

@@ -58,7 +58,6 @@ import os
 import shutil
 import sys
 from pathlib import Path
-from typing import Optional
 
 #: Canonical user-data folder name. Branded form (CamelCase) for
 #: Explorer / Reveal-in-Finder consistency with the app name.
@@ -218,7 +217,7 @@ _YFINANCE_TIMEZONE_DB_SIDECARS = (
 )
 
 
-def _yfinance_cache_dir() -> Optional[Path]:
+def _yfinance_cache_dir() -> Path | None:
     """Return the directory yfinance uses for its caches, or ``None``
     when ``platformdirs`` is unavailable.
 
@@ -342,7 +341,7 @@ def indicators_dir() -> Path:
     return d
 
 
-def tokens_dir(*, override: Optional[str] = None) -> Path:
+def tokens_dir(*, override: str | None = None) -> Path:
     """Return ``<app_data_dir>/tokens`` (created-if-missing).
 
     Used by :mod:`tradinglab.data.schwab_auth` for OAuth refresh-

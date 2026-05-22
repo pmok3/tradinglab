@@ -29,7 +29,6 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import List, Tuple
 
 from ..core.io_helpers import atomic_write_json
 from ..disk_cache import _cache_dir
@@ -41,17 +40,17 @@ _SUPPORTED_VERSIONS = (1, 2)
 @dataclass
 class Watchlist:
     name: str
-    tickers: List[str] = field(default_factory=list)
+    tickers: list[str] = field(default_factory=list)
 
 
-def normalize_tickers(tickers) -> List[str]:
+def normalize_tickers(tickers) -> list[str]:
     """Return ``tickers`` upper-cased, whitespace-trimmed, and de-duped.
 
     Preserves insertion order. ``None`` entries and non-truthy values
     are dropped (not coerced to the string ``"NONE"``). Remaining values
     are coerced via ``str()`` for safety on data read back from JSON.
     """
-    out: List[str] = []
+    out: list[str] = []
     for t in tickers or ():
         if t is None:
             continue
@@ -65,7 +64,7 @@ def _storage_path() -> Path:
     return _cache_dir() / "watchlists.json"
 
 
-def load_all() -> Tuple[List[Watchlist], List[str]]:
+def load_all() -> tuple[list[Watchlist], list[str]]:
     """Load all watchlists + pinned-name list from disk.
 
     Returns ``([], [])`` if the file doesn't exist or is corrupt
@@ -84,7 +83,7 @@ def load_all() -> Tuple[List[Watchlist], List[str]]:
         return [], []
     if not isinstance(raw, dict) or raw.get("version") not in _SUPPORTED_VERSIONS:
         return [], []
-    result: List[Watchlist] = []
+    result: list[Watchlist] = []
     for entry in raw.get("watchlists", []):
         if not isinstance(entry, dict):
             continue
@@ -96,7 +95,7 @@ def load_all() -> Tuple[List[Watchlist], List[str]]:
         # edited by hand.
         result.append(Watchlist(name=name, tickers=[str(t) for t in tickers]))
     raw_pinned = raw.get("pinned", [])
-    pinned: List[str] = []
+    pinned: list[str] = []
     if isinstance(raw_pinned, list):
         for n in raw_pinned:
             if isinstance(n, str) and n not in pinned:
@@ -104,7 +103,7 @@ def load_all() -> Tuple[List[Watchlist], List[str]]:
     return result, pinned
 
 
-def save_all(watchlists: List[Watchlist], pinned: List[str]) -> None:
+def save_all(watchlists: list[Watchlist], pinned: list[str]) -> None:
     """Overwrite the storage file with ``watchlists`` + ``pinned``.
 
     Writes are best-effort: an IOError is swallowed (logged by callers
@@ -130,7 +129,7 @@ def save_all(watchlists: List[Watchlist], pinned: List[str]) -> None:
 
 
 def export_to_file(
-    watchlists: List[Watchlist], path: Path, pinned: List[str] | None = None,
+    watchlists: list[Watchlist], path: Path, pinned: list[str] | None = None,
 ) -> None:
     """Write ``watchlists`` (plus optional ``pinned`` list) to ``path``.
 
@@ -146,7 +145,7 @@ def export_to_file(
         json.dump(payload, f, indent=2)
 
 
-def import_from_file(path: Path) -> Tuple[List[Watchlist], List[str]]:
+def import_from_file(path: Path) -> tuple[list[Watchlist], list[str]]:
     """Load watchlists (+ pinned names) from ``path``.
 
     Raises on unreadable / malformed input. v1 files are accepted;
@@ -158,7 +157,7 @@ def import_from_file(path: Path) -> Tuple[List[Watchlist], List[str]]:
         raw = json.load(f)
     if not isinstance(raw, dict) or raw.get("version") not in _SUPPORTED_VERSIONS:
         raise ValueError("Unrecognized watchlist file (version mismatch)")
-    result: List[Watchlist] = []
+    result: list[Watchlist] = []
     for entry in raw.get("watchlists", []):
         if not isinstance(entry, dict):
             continue
@@ -169,7 +168,7 @@ def import_from_file(path: Path) -> Tuple[List[Watchlist], List[str]]:
         # Normalize + dedupe on import so round-tripping is idempotent.
         result.append(Watchlist(name=name, tickers=normalize_tickers(tickers)))
     raw_pinned = raw.get("pinned", [])
-    pinned: List[str] = []
+    pinned: list[str] = []
     if isinstance(raw_pinned, list):
         for n in raw_pinned:
             if isinstance(n, str) and n not in pinned:

@@ -14,8 +14,8 @@ from __future__ import annotations
 import math
 import random
 import threading
+from collections.abc import Callable
 from datetime import datetime
-from typing import Callable
 
 from ..constants import (
     classify_session,

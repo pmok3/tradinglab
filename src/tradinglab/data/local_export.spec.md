@@ -8,27 +8,61 @@ can be dropped into Configure Local Data → become a new root → load
 back identical bars.
 
 ## Public API
+- `format_csv(candles: Sequence[Candle]) -> str` — pure in-memory
+  CSV formatter (no disk I/O). Used by the zip exporter and by
+  tests that want to assert on content without touching the
+  filesystem. Raises `LocalExportError` for naive timestamps.
 - `write_csv(path: Path, candles: Sequence[Candle]) -> int` — atomic
-  write of one file (`.tmp` + `os.replace`). Creates parent dirs as
-  needed. Returns rows written. Raises `LocalExportError` if any candle
-  has a naive timestamp.
+  write of one file (`.tmp` + `os.replace`). Calls `format_csv`
+  under the hood. Creates parent dirs as needed. Returns rows
+  written. Raises `LocalExportError` if any candle has a naive
+  timestamp. Retained for callers that want individual CSVs on
+  disk; the export dialog itself no longer uses this path.
 - `export_entries(entries, destination) -> list[(source, ticker,
-  interval, rows_written, error)]` — batch export driver. For each
-  input `(source, ticker, interval, candles)`, writes
-  `<destination>/<SOURCE>/<TICKER>_<INTERVAL>.csv` and returns a per-
-  entry result tuple. NEVER raises for a single bad entry; the dialog
-  reports per-row outcomes. Raises `LocalExportError` only if the
-  destination parent directory does not exist.
-- `LocalExportError` — raised by `write_csv` for invalid input.
+  interval, rows_written, error)]` — batch export driver to a
+  destination folder. For each input `(source, ticker, interval,
+  candles)`, writes `<destination>/<SOURCE>/<TICKER>_<INTERVAL>.csv`
+  and returns a per-entry result tuple. NEVER raises for a single
+  bad entry. Raises `LocalExportError` only if the destination
+  parent directory does not exist. Legacy folder-of-CSVs API;
+  retained for programmatic callers. The Export Bars to CSV
+  dialog now writes a zip exclusively.
+- `export_entries_zip(entries, zip_path) -> list[(source, ticker,
+  interval, rows_written, error)]` — zip variant. Streams each
+  entry's CSV into a single `ZIP_DEFLATED` archive at `zip_path`
+  with arcname `<SOURCE>/<TICKER>_<INTERVAL>.csv` (forward slash
+  separator per the PKZIP spec). Atomic publish via `.tmp` +
+  `os.replace`. Audit `local-export-zip`.
+- `default_zip_filename(today=None) -> str` — returns
+  `tradinglab-export-YYYY-MM-DD.zip` using local date (or the
+  injected `today` for tests). Used as the prepopulated default
+  in the Export Bars to CSV dialog.
+- `LocalExportError` — raised by `format_csv` / `write_csv` /
+  `export_entries_zip` for invalid input.
 - `ExportEntry` — frozen dataclass with `(source, ticker, interval,
   bar_count, first_ts, last_ts)`. Currently unused by the dialog
   (which renders metadata inline); reserved for future preview UI.
 
 ## Dependencies
 - Internal: `..models.Candle`.
-- External: `csv` (stdlib), `os.replace` (stdlib atomic rename).
+- External: `csv`, `io`, `zipfile` (stdlib), `os.replace`
+  (stdlib atomic rename), `datetime.date` (default-filename
+  date stamp).
 
 ## Design Decisions
+- **Zip exclusively in the dialog** (audit `local-export-zip`).
+  The Export Bars to CSV dialog now produces a single
+  deflate-compressed `.zip` rather than a folder of loose CSVs.
+  Saves transfer space (~4x on OHLCV text) and gives the user
+  one file to share / back up. The folder-mode `export_entries`
+  function is retained as a programmatic API for callers that
+  prefer per-file output.
+- **Default filename `tradinglab-export-YYYY-MM-DD.zip`**.
+  Local date, deterministic so the user knows what they're
+  producing. The dialog still shows the picker, so the user
+  can override; a missing `.zip` suffix is forced by the
+  dialog's `_on_browse` so the suffix matches the chosen
+  format filter.
 - **Atomic write per file**. Write to `path + ".tmp"` then
   `os.replace`. A crash mid-export can't leave a half-written file
   the importer would reject. Failed writes clean up the `.tmp` to

@@ -28,8 +28,9 @@ Glyph kinds match the visual taxonomy in plan.md decision 3:
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, List, Sequence
+from typing import Any
 
 # Glyph kind canonical strings (importers may match on these).
 GLYPH_EARNINGS_PAST = "E"
@@ -123,7 +124,7 @@ def _earnings_tooltip(record: Any, *, future: bool) -> str:
     nothing to leak.
     """
     when = str(getattr(record, "when", "") or "").strip()
-    lines: List[str] = []
+    lines: list[str] = []
     if future:
         lines.append(f"Earnings (upcoming) {when}".strip())
         est = float(getattr(record, "eps_estimate", math.nan))
@@ -165,7 +166,7 @@ def build_event_glyphs(
     candles: Sequence[Any],
     *,
     blind: bool = False,
-) -> List[EventGlyph]:
+) -> list[EventGlyph]:
     """Project ``view`` onto the visible ``candles`` window.
 
     Events whose calendar day matches a visible bar produce in-pane
@@ -182,7 +183,7 @@ def build_event_glyphs(
     → forward earnings (badges). Stable order means the renderer's
     z-order is determined by the iteration index, not by event ts.
     """
-    out: List[EventGlyph] = []
+    out: list[EventGlyph] = []
     if view is None:
         return out
 

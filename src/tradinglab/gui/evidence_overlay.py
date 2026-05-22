@@ -37,9 +37,10 @@ itself wraps matplotlib state.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any
 
 from matplotlib.axes import Axes
 from matplotlib.lines import Line2D
@@ -86,7 +87,7 @@ class EvidenceMarker:
 # ---------------------------------------------------------------------------
 
 
-def _parse_iso_to_utc(ts: str) -> Optional[datetime]:
+def _parse_iso_to_utc(ts: str) -> datetime | None:
     """Parse an ISO-8601 timestamp into a tz-aware UTC datetime.
 
     Returns ``None`` for empty/invalid input. Naive ISO strings are
@@ -108,7 +109,7 @@ def _parse_iso_to_utc(ts: str) -> Optional[datetime]:
     return dt.astimezone(timezone.utc)
 
 
-def _candle_timestamp_to_utc(c_ts: Any) -> Optional[datetime]:
+def _candle_timestamp_to_utc(c_ts: Any) -> datetime | None:
     """Return a UTC-aware datetime from a candle's ``date`` attribute.
 
     Candles store their open time as a ``datetime`` (per
@@ -125,8 +126,8 @@ def _candle_timestamp_to_utc(c_ts: Any) -> Optional[datetime]:
 
 
 def _find_bar_index_by_timestamp(
-    candles: List[Any], target_ts: datetime
-) -> Optional[int]:
+    candles: list[Any], target_ts: datetime
+) -> int | None:
     """Return the candle index whose timestamp matches ``target_ts``.
 
     Match is up-to-the-second equality after both sides are converted
@@ -159,12 +160,12 @@ def _format_bars_ago(bars_ago: int) -> str:
 
 
 def _evidence_records_for_symbol(
-    records: Iterable[Dict[str, Any]],
+    records: Iterable[dict[str, Any]],
     *,
     primary_symbol: str,
-    tracker: Optional[PositionTracker],
+    tracker: PositionTracker | None,
     source: str,
-) -> List[Tuple[Dict[str, Any], List[Dict[str, Any]]]]:
+) -> list[tuple[dict[str, Any], list[dict[str, Any]]]]:
     """Filter audit records to those for ``primary_symbol`` carrying evidence.
 
     Returns ``[(record, evidence_list), ...]`` for matching records.
@@ -173,7 +174,7 @@ def _evidence_records_for_symbol(
     resolves ``position_id → tracker.get(...).symbol`` (dropped if the
     position is unknown — defensive).
     """
-    out: List[Tuple[Dict[str, Any], List[Dict[str, Any]]]] = []
+    out: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
     target = primary_symbol.strip().upper()
     if not target:
         return out
@@ -212,13 +213,13 @@ def _evidence_records_for_symbol(
 
 def compute_evidence_markers(
     *,
-    primary_symbol: Optional[str],
-    primary_candles: Optional[List[Any]],
-    entries_audit: Optional[EntriesAuditLog],
-    exits_audit: Optional[ExitsAuditLog],
-    tracker: Optional[PositionTracker],
+    primary_symbol: str | None,
+    primary_candles: list[Any] | None,
+    entries_audit: EntriesAuditLog | None,
+    exits_audit: ExitsAuditLog | None,
+    tracker: PositionTracker | None,
     tail: int = _TAIL_LIMIT,
-) -> List[EvidenceMarker]:
+) -> list[EvidenceMarker]:
     """Pure-logic helper: derive evidence markers for the primary chart.
 
     Reads up to ``tail`` recent records from each provided audit log,
@@ -232,9 +233,9 @@ def compute_evidence_markers(
     if not primary_symbol or not primary_candles:
         return []
 
-    out: List[EvidenceMarker] = []
+    out: list[EvidenceMarker] = []
 
-    sources: List[Tuple[str, Optional[Any], str]] = [
+    sources: list[tuple[str, Any | None, str]] = [
         ("entry", entries_audit, _COLOR_ENTRY),
         ("exit", exits_audit, _COLOR_EXIT),
     ]
@@ -307,10 +308,10 @@ class EvidenceOverlay:
     def __init__(
         self,
         *,
-        entries_audit: Optional[EntriesAuditLog] = None,
-        exits_audit: Optional[ExitsAuditLog] = None,
-        tracker: Optional[PositionTracker] = None,
-        request_redraw: Optional[Callable[[], None]] = None,
+        entries_audit: EntriesAuditLog | None = None,
+        exits_audit: ExitsAuditLog | None = None,
+        tracker: PositionTracker | None = None,
+        request_redraw: Callable[[], None] | None = None,
         enabled: bool = True,
     ) -> None:
         self._entries_audit = entries_audit
@@ -318,7 +319,7 @@ class EvidenceOverlay:
         self._tracker = tracker
         self._request_redraw = request_redraw or (lambda: None)
         self._enabled = bool(enabled)
-        self._artists: List[Tuple[Line2D, Optional[Text]]] = []
+        self._artists: list[tuple[Line2D, Text | None]] = []
 
     # ---- public API ----
 
@@ -347,10 +348,10 @@ class EvidenceOverlay:
 
     def redraw(
         self,
-        primary_ax: Optional[Axes],
-        primary_symbol: Optional[str],
-        primary_candles: Optional[List[Any]],
-    ) -> List[EvidenceMarker]:
+        primary_ax: Axes | None,
+        primary_symbol: str | None,
+        primary_candles: list[Any] | None,
+    ) -> list[EvidenceMarker]:
         """Rebuild markers on ``primary_ax`` for ``primary_symbol``.
 
         Returns the list of :class:`EvidenceMarker` descriptors that
@@ -387,7 +388,7 @@ class EvidenceOverlay:
             alpha=0.55,
             zorder=3,
         )
-        label: Optional[Text] = None
+        label: Text | None = None
         try:
             from matplotlib.transforms import blended_transform_factory
             tr = blended_transform_factory(ax.transData, ax.transAxes)

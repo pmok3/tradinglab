@@ -18,7 +18,6 @@ from tradinglab.core.bars_buffer import BarsBuffer
 from tradinglab.data.multi_interval_cache import MultiIntervalCache
 from tradinglab.models import Candle
 
-
 # --- helpers ---------------------------------------------------------------
 
 
@@ -34,7 +33,7 @@ def _mk(
     )
 
 
-def _hist_5m(n: int = 3) -> List[Candle]:
+def _hist_5m(n: int = 3) -> list[Candle]:
     """A trivial 3-bar 5m history starting at 09:30."""
     return [
         Candle(
@@ -69,7 +68,7 @@ def test_sync_executor_first_call_returns_none_then_buffer():
 
 
 def test_async_executor_arrival_callback_fires():
-    arrived: List = []
+    arrived: list = []
     arrival_event = threading.Event()
 
     def on_arrival(sym, iv):
@@ -120,7 +119,7 @@ def test_inflight_dedup_does_not_resubmit():
 
 
 def test_failed_fetch_returns_none_clears_inflight_and_retries():
-    attempts: List = []
+    attempts: list = []
 
     def fetch(sym, iv):
         attempts.append((sym, iv))
@@ -142,7 +141,7 @@ def test_failed_fetch_returns_none_clears_inflight_and_retries():
 
 
 def test_failed_fetch_raising_clears_inflight_and_retries():
-    attempts: List = []
+    attempts: list = []
 
     def fetch(sym, iv):
         attempts.append((sym, iv))

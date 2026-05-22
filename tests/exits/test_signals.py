@@ -34,7 +34,6 @@ from tradinglab.exits.signals import (
     SchwabTraderSink,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fake paper engine — exercises PaperBrokerSink without depending on the
 # real PaperBrokerEngine class (delivered by a parallel agent).
@@ -51,11 +50,11 @@ class _FakePaperEngine:
     """
 
     def __init__(self) -> None:
-        self.submitted: List[Any] = []  # PaperOrder instances
-        self.cancelled_ids: List[str] = []
-        self.cancel_all_calls: List[str] = []
+        self.submitted: list[Any] = []  # PaperOrder instances
+        self.cancelled_ids: list[str] = []
+        self.cancel_all_calls: list[str] = []
         self._next_id = 0
-        self._known: Dict[str, Any] = {}  # order_id -> order
+        self._known: dict[str, Any] = {}  # order_id -> order
 
     def submit(self, order: Any) -> str:
         # The real engine has its own ids; we mint sequential ones
@@ -101,8 +100,8 @@ def _signal(
     kind: ExitOrderKind = ExitOrderKind.MARKET,
     side: OrderSide = OrderSide.SELL,
     qty: float = 1.0,
-    price: Optional[float] = None,
-    limit_price: Optional[float] = None,
+    price: float | None = None,
+    limit_price: float | None = None,
     position_id: str = "p1",
     leg_id: str = "l1",
     label: str = "",
@@ -225,7 +224,7 @@ def test_paper_broker_sink_methods_require_tk_thread() -> None:
     pytest.importorskip("tradinglab.exits.paper_engine")
     engine = _FakePaperEngine()
     sink = PaperBrokerSink(engine)
-    captured: List[BaseException] = []
+    captured: list[BaseException] = []
 
     def worker() -> None:
         try:
@@ -247,7 +246,7 @@ def test_paper_broker_sink_methods_require_tk_thread() -> None:
 
 def test_manual_sink_submit_emits_event() -> None:
     sink = ManualPaperSink()
-    events: List[ManualSignalEvent] = []
+    events: list[ManualSignalEvent] = []
     sink.subscribe(events.append)
 
     sig = _signal()
@@ -261,7 +260,7 @@ def test_manual_sink_submit_emits_event() -> None:
 
 def test_manual_sink_unsubscribe_handle_works() -> None:
     sink = ManualPaperSink()
-    events: List[ManualSignalEvent] = []
+    events: list[ManualSignalEvent] = []
     unsub = sink.subscribe(events.append)
     sink.submit(_signal())
     unsub()
@@ -271,7 +270,7 @@ def test_manual_sink_unsubscribe_handle_works() -> None:
 
 def test_manual_sink_subscriber_exception_is_isolated() -> None:
     sink = ManualPaperSink()
-    received: List[ManualSignalEvent] = []
+    received: list[ManualSignalEvent] = []
 
     def bad(_e: ManualSignalEvent) -> None:
         raise RuntimeError("boom")
@@ -306,7 +305,7 @@ def test_manual_sink_cancel_all_for_position() -> None:
 def test_manual_sink_acknowledge_fill_is_distinct_from_cancel(audit_root: Path) -> None:
     audit = AuditLog()
     sink = ManualPaperSink(audit=audit)
-    events: List[ManualSignalEvent] = []
+    events: list[ManualSignalEvent] = []
     sink.subscribe(events.append)
 
     sig = _signal()
@@ -330,7 +329,7 @@ def test_manual_sink_acknowledge_fill_unknown_id_returns_false() -> None:
 def test_manual_sink_audit_disabled_path(audit_root: Path) -> None:
     """Sink works without an audit log; events still emitted."""
     sink = ManualPaperSink(audit=None)
-    events: List[ManualSignalEvent] = []
+    events: list[ManualSignalEvent] = []
     sink.subscribe(events.append)
     oid = sink.submit(_signal())
     assert sink.cancel(oid) is True
@@ -339,7 +338,7 @@ def test_manual_sink_audit_disabled_path(audit_root: Path) -> None:
 
 def test_manual_sink_methods_require_tk_thread() -> None:
     sink = ManualPaperSink()
-    captured: List[BaseException] = []
+    captured: list[BaseException] = []
 
     def worker() -> None:
         try:
@@ -360,8 +359,8 @@ def test_manual_sink_working_order_ids_is_thread_safe() -> None:
     with tk_thread_check_disabled():
         sink.submit(_signal(position_id="p1"))
 
-    captured: List[BaseException] = []
-    result: List[List[str]] = []
+    captured: list[BaseException] = []
+    result: list[list[str]] = []
 
     def worker() -> None:
         try:
@@ -411,7 +410,7 @@ def test_schwab_sink_working_orders_is_empty() -> None:
 
 def test_schwab_sink_methods_require_tk_thread() -> None:
     sink = SchwabTraderSink()
-    captured: List[BaseException] = []
+    captured: list[BaseException] = []
 
     def worker() -> None:
         try:

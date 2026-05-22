@@ -31,7 +31,7 @@ class AppState:
         )
         self.highlight_ha_flat = tk.BooleanVar(
             master=master,
-            value=bool(_settings.get("highlight_ha_flat", True)),
+            value=bool(_settings.get("highlight_ha_flat", False)),
         )
         self.chartstack_visible = tk.BooleanVar(
             master=master,

@@ -30,8 +30,9 @@ splitting would produce more overhead than it saves.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from concurrent.futures import Executor, ThreadPoolExecutor
-from typing import Callable, Iterable, List, Optional, TypeVar
+from typing import TypeVar
 
 T = TypeVar("T")
 R = TypeVar("R")
@@ -39,11 +40,11 @@ R = TypeVar("R")
 
 def fetch_chunks_parallel(
     chunks: Iterable[T],
-    worker: Callable[[T], Optional[List[R]]],
+    worker: Callable[[T], list[R] | None],
     *,
-    executor: Optional[Executor] = None,
+    executor: Executor | None = None,
     max_workers: int = 4,
-) -> List[R]:
+) -> list[R]:
     """Invoke ``worker`` on every ``chunk`` concurrently, concatenate in order.
 
     ``worker`` may return ``None`` (e.g. for an empty sub-range); those
@@ -69,7 +70,7 @@ def fetch_chunks_parallel(
 
     try:
         futures = [executor.submit(worker, c) for c in chunks_list]
-        result: List[R] = []
+        result: list[R] = []
         for fut in futures:
             part = fut.result()
             if part:

@@ -15,15 +15,14 @@ Tk widget interactions are exercised end-to-end where they're tractable
 from __future__ import annotations
 
 import tkinter as tk
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator
 from unittest import mock
 
 import pytest
 
 from tradinglab import disk_cache
 from tradinglab.data import DATA_SOURCES
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -100,9 +99,9 @@ class TestRefreshDataRegistry:
         self, isolated_registry: None,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from tradinglab.gui.local_data_dialog import _refresh_data_registry
         from tradinglab import data as _data
         from tradinglab import defaults
+        from tradinglab.gui.local_data_dialog import _refresh_data_registry
         monkeypatch.setattr(_data, "register_local_sources", lambda: [])
         monkeypatch.setattr(defaults, "reload", lambda: None)
         # Must not raise on a no-op registry.

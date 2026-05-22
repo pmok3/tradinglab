@@ -36,7 +36,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any
 
 from ..core.io_helpers import atomic_write_json
 
@@ -65,7 +65,7 @@ def _resolve_default_path() -> Path:
     return app_data_dir() / "geometry.json"
 
 
-def _parse_geometry(geometry: str) -> Optional[tuple[int, int, int, int]]:
+def _parse_geometry(geometry: str) -> tuple[int, int, int, int] | None:
     """Parse ``WxH+X+Y`` (or ``WxH-X-Y``) into ``(w, h, x, y)`` or ``None``."""
     if not isinstance(geometry, str):
         return None
@@ -114,18 +114,18 @@ class GeometryStore:
     locked — see ``geometry_store.spec.md``.
     """
 
-    def __init__(self, path: Optional[Path] = None) -> None:
+    def __init__(self, path: Path | None = None) -> None:
         self._path = Path(path) if path is not None else _resolve_default_path()
-        self._windows: Dict[str, str] = {}
-        self._sashes: Dict[str, list[int]] = {}
-        self._kv: Dict[str, Any] = {}
+        self._windows: dict[str, str] = {}
+        self._sashes: dict[str, list[int]] = {}
+        self._kv: dict[str, Any] = {}
         self._dirty = False
         self._loaded = False
         # Per-widget after-IDs for debouncing. Keyed by widget id() so we
         # never collide between two widgets sharing the same logical
         # geometry key (shouldn't happen in practice, but cheap to be
         # safe).
-        self._pending_after: Dict[int, str] = {}
+        self._pending_after: dict[int, str] = {}
 
     # ----------------------------------------------------------------- I/O --
     def load(self) -> None:
@@ -151,7 +151,7 @@ class GeometryStore:
                 str(k): str(v) for k, v in windows.items() if isinstance(v, str)
             }
         if isinstance(sashes, dict):
-            cleaned: Dict[str, list[int]] = {}
+            cleaned: dict[str, list[int]] = {}
             for k, v in sashes.items():
                 if isinstance(v, list) and all(isinstance(n, int) for n in v):
                     cleaned[str(k)] = list(v)
@@ -192,7 +192,7 @@ class GeometryStore:
         self.save()
 
     # --------------------------------------------------------- raw windows --
-    def get_window(self, key: str) -> Optional[str]:
+    def get_window(self, key: str) -> str | None:
         """Return the stored geometry string for ``key`` (or ``None``)."""
         return self._windows.get(key)
 
@@ -205,7 +205,7 @@ class GeometryStore:
         self._windows[key] = geometry
         self._dirty = True
 
-    def get_sash(self, key: str) -> Optional[list[int]]:
+    def get_sash(self, key: str) -> list[int] | None:
         """Return the stored sash positions for ``key`` (or ``None``)."""
         v = self._sashes.get(key)
         return list(v) if v is not None else None
@@ -221,7 +221,7 @@ class GeometryStore:
     # ------------------------------------------------------- Tk wiring API --
     def restore_window(
         self,
-        toplevel: "tk.Misc",
+        toplevel: tk.Misc,
         key: str,
         default: str = _DEFAULT_GEOMETRY,
     ) -> str:
@@ -246,7 +246,7 @@ class GeometryStore:
             pass
         return applied
 
-    def bind_window(self, toplevel: "tk.Misc", key: str) -> None:
+    def bind_window(self, toplevel: tk.Misc, key: str) -> None:
         """Wire ``<Configure>`` so geometry changes auto-persist (debounced)."""
 
         def _on_configure(_event=None, *, _store=self, _w=toplevel, _k=key) -> None:
@@ -259,7 +259,7 @@ class GeometryStore:
 
     def restore_sash(
         self,
-        paned: "ttk.PanedWindow",
+        paned: ttk.PanedWindow,
         key: str,
         default_positions: list[int],
         *,
@@ -360,7 +360,7 @@ class GeometryStore:
         except Exception:  # noqa: BLE001
             _apply()
 
-    def bind_sash(self, paned: "ttk.PanedWindow", key: str) -> None:
+    def bind_sash(self, paned: ttk.PanedWindow, key: str) -> None:
         """Snapshot sash positions on mouse-release and persist."""
 
         def _on_release(_event=None, *, _store=self, _p=paned, _k=key) -> None:
@@ -379,7 +379,7 @@ class GeometryStore:
             pass
 
     # ----------------------------------------------------------- internals --
-    def _schedule_window_save(self, widget: "tk.Misc", key: str) -> None:
+    def _schedule_window_save(self, widget: tk.Misc, key: str) -> None:
         """Debounce ``<Configure>`` bursts; only the trailing one persists."""
         wid = id(widget)
         prev = self._pending_after.pop(wid, None)
@@ -408,7 +408,7 @@ class GeometryStore:
 
 
 # ----------------------------------------------------------- module singleton --
-_singleton: Optional[GeometryStore] = None
+_singleton: GeometryStore | None = None
 
 
 def store() -> GeometryStore:
@@ -437,7 +437,7 @@ __all__ = [
 
 
 def attach_persistent_geometry(
-    toplevel: "tk.Misc",
+    toplevel: tk.Misc,
     key: str,
     default: str = _DEFAULT_GEOMETRY,
 ) -> None:

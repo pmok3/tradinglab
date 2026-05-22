@@ -28,7 +28,7 @@ Mixin rules:
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as _np
 
@@ -38,7 +38,7 @@ class EventsControllerMixin:
 
     # Re-declared on SandboxController. Listed here so static analysers know
     # the mixin expects them on ``self``.
-    _raw_full_events: Dict[str, Any]
+    _raw_full_events: dict[str, Any]
     _events_fetch_token: int
     engine: Any
     app: Any
@@ -181,7 +181,7 @@ class EventsControllerMixin:
         lo_ms = int(timeline[0]) * 1000
         hi_ms = int(timeline[-1]) * 1000
 
-        actions: List[Any] = []
+        actions: list[Any] = []
         for d in bundle.dividends:
             ex_ts_ms = int(getattr(d, "ex_ts", 0))
             if ex_ts_ms < lo_ms or ex_ts_ms > hi_ms:
@@ -210,7 +210,7 @@ class EventsControllerMixin:
             return 0
         return self.engine.register_corporate_actions(symbol, actions)
 
-    def events_visible_for(self, symbol: str) -> Optional[Any]:
+    def events_visible_for(self, symbol: str) -> Any | None:
         """Return the gated :class:`EventsView` for ``symbol`` at the
         current clock.
 
@@ -241,7 +241,7 @@ class EventsControllerMixin:
         self,
         symbol: str,
         ts: int,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Snapshot the symbol's event-proximity context at ``ts`` for
         a :class:`PreTradeEntry`.
 
@@ -250,7 +250,7 @@ class EventsControllerMixin:
         contract is "0/'' means unknown", never raises. Forward fields
         are zeroed in blind mode.
         """
-        out: Dict[str, Any] = {
+        out: dict[str, Any] = {
             "next_earnings_ts": 0,
             "last_earnings_ts": 0,
             "last_dividend_ts": 0,
