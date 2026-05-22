@@ -18370,10 +18370,6 @@ def check_bxx_splash_and_bundles(app) -> None:
     from unittest.mock import patch as _patch
 
     from tradinglab._single_instance import single_instance_guard
-    from tradinglab._update_check import (
-        _extract_version_from_payload,
-        compare_versions,
-    )
     from tradinglab.backtest import sandbox_resume as _sandbox_resume
     from tradinglab.backtest.sandbox_resume import (
         build_metadata_from_session,
@@ -18387,6 +18383,10 @@ def check_bxx_splash_and_bundles(app) -> None:
         STAGE_SETTINGS,
         NullSplashController,
         make_splash,
+    )
+    from tradinglab.updates import (
+        _extract_version_from_payload,
+        compare_versions,
     )
 
     # --- Splash factory honours the disable env var ------------------

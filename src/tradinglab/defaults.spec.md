@@ -34,6 +34,8 @@ Each tunable has a validator so corrupt `settings.json` can't inject garbage.
 | `default_window_bars` | int | 200 | Right-edge default window size (bars). Note: a per-interval default is a known follow-up — at 5m this currently shows ~1 week of data. |
 | `startup_width_pct` | float | 0.9 | Main-window percent-of-screen fallback width when no reasonable saved geometry exists. |
 | `startup_height_pct` | float | 0.9 | Main-window percent-of-screen fallback height when no reasonable saved geometry exists. |
+| `update_check_on_startup` | bool | true | Check GitHub Releases for a newer version on startup; RTH-suppressed. |
+| `update_check_url` | str | "" | Optional update endpoint override. Empty = env var or built-in GitHub Releases endpoint. |
 | `full_cache_size` | int | 16 | LRU memory-cache size for fetched (candles, meta) tuples. |
 | `hover_throttle_ms` | int | 16 | Coalescing window for hover/crosshair updates. |
 | `scroll_zoom_factor_per_step` | float | 1.15 | Per-notch zoom factor. |
@@ -69,6 +71,8 @@ Each tunable has a validator so corrupt `settings.json` can't inject garbage.
 | `startup_defaults` | `app.py:__init__` → `constants.resolve_startup_defaults` |
 | `default_window_bars` | `app.py` `_render`, `_reset_view`, drilldown sizing |
 | `startup_width_pct` / `startup_height_pct` | `app.py:__init__` → `gui.geometry_store.compute_screen_percent_geometry` |
+| `update_check_on_startup` | `app.py:__init__` startup update-check scheduler; Settings checkbox persists it. |
+| `update_check_url` | `updates.py:_resolve_url`; Settings endpoint override persists it. |
 | `full_cache_size` | `app.py` `_FULL_CACHE_MAX` constant |
 | `hover_throttle_ms` | `gui/interaction.py` `_HOVER_THROTTLE_MS` |
 | `scroll_zoom_factor_per_step` / `_step_clamp` / `_min_bars` | `InteractionMixin._SCROLL_ZOOM_*` class attrs |

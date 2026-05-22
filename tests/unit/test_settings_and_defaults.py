@@ -203,6 +203,13 @@ def test_defaults_v_int_rejects_bool() -> None:
     assert check(None) == (False, None)
 
 
+def test_update_check_tunables_have_safe_defaults() -> None:
+    assert defaults.get("update_check_on_startup") is True
+    assert defaults.get("update_check_url") == ""
+    assert defaults.describe("update_check_on_startup")[1] == "bool"
+    assert defaults.describe("update_check_url")[1] == "str"
+
+
 def test_defaults_get_unknown_raises_and_reload_invalidates(monkeypatch: pytest.MonkeyPatch) -> None:
     """``defaults.get`` caches the validated override merge; ``reload()``
     drops the cache. Unknown keys raise ``KeyError`` so consumer typos

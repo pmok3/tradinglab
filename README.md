@@ -167,6 +167,7 @@ A starter file lives at [`config/example_config.json`](config/example_config.jso
   "startup_height_pct": 0.9,
   "scroll_zoom_invert": true,
   "display_tz": "America/Los_Angeles",
+  "update_check_on_startup": true,
   "startup_defaults": { "ticker": "NVDA", "compare": "QQQ", "theme": "dark" }
 }
 ```
@@ -207,6 +208,8 @@ A starter file lives at [`config/example_watchlists.json`](config/example_watchl
 | `default_window_bars` | `int` | `200` | Bars in the right-edge default window. |
 | `startup_width_pct` | `float` | `0.9` | Main-window percent-of-screen fallback width when no reasonable saved geometry exists. |
 | `startup_height_pct` | `float` | `0.9` | Main-window percent-of-screen fallback height when no reasonable saved geometry exists. |
+| `update_check_on_startup` | `bool` | `true` | Check GitHub Releases for updates on startup; RTH-suppressed. |
+| `update_check_url` | `str` | `""` | Optional update endpoint override. Empty = env var or built-in GitHub Releases endpoint. |
 | `price_top_pad_frac` | `float` | `0.12` | Top headroom on price axes (reserves space for the OHLCV readout). |
 | `price_bot_pad_frac` | `float` | `0.05` | Bottom padding on price axes. |
 

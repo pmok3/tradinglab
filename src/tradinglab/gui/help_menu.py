@@ -29,8 +29,9 @@ Online docs URL
 string (no online docs hand-off). Once the repo / docs site is
 public, set this to the canonical URL and the
 ``View Online Docs`` menu entry switches from "open the bundled
-markdown" to "open the URL in the system browser". Mirrors the
-:data:`tradinglab.updates.RELEASES_URL` pattern.
+markdown" to "open the URL in the system browser". The update-check
+endpoint is now always configured in :mod:`tradinglab.updates` because the
+repository has a public GitHub Releases channel.
 """
 from __future__ import annotations
 
@@ -781,7 +782,7 @@ class HelpMenuMixin:
                 parent=self,
             )
 
-        _updates.schedule_check_async(self.after, _present, force=True)
+        _updates.schedule_check_async(self.after, _present, force=False)
 
     # ---- Reset / purge ------------------------------------------------
 

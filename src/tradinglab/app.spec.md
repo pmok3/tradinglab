@@ -348,7 +348,8 @@ main():
                                         # and queues splash.close via after_idle
                                         # (first paint precedes dismiss → no blank frame).
                                         # Also queues _maybe_prompt_sandbox_resume and
-                                        # kicks start_update_check on a daemon thread.
+                                        # schedules updates.check_now on a daemon thread
+                                        # when update_check_on_startup is enabled.
     except BaseException:
         splash.close(); raise           # never leave splash above a crash dialog
 
@@ -370,7 +371,7 @@ ChartApp._on_close():
 
 `__main__.py` wraps `main()` in `single_instance_guard()`. Double-launch resolves the existing `TradingLab v…` window via `EnumWindows` (Tk class is `"Tk"` so we match on title prefix) and brings it forward.
 
-Update check (`_update_check.start_update_check`) is env-var gated by `TRADINGLAB_UPDATE_URL`. Accepts `{"version": ...}` and `{"tag_name": ...}` shapes. Hits marshal to Tk via `self.after(0, ...)` and pack an idempotent banner via `_show_update_banner` (guarded by `self._update_banner_frame`).
+Update check (`updates.schedule_check_async`) is controlled by the `update_check_on_startup` Tunable (default `True`) and uses the consolidated `updates.py` URL chain: `update_check_url` override → `TRADINGLAB_UPDATE_URL` → built-in GitHub Releases endpoint. RTH suppression and six-hour caching are enforced before any startup network call. Only `UpdateResult(status="available")` packs the idempotent `_show_update_banner` (guarded by `self._update_banner_frame`); the banner includes a Dismiss button and a `View release` button when the payload supplies a release URL.
 
 ## Testing
 ~125 smoke checks exercise this file directly or transitively. Representative anchors:

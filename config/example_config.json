@@ -8,6 +8,8 @@
   "_comment_startup_defaults": "Per-key startup overrides. Recognized keys: ticker, compare, interval, source, theme. Sparse merge over BUILTIN_STARTUP_DEFAULTS in constants.py.",
   "_comment_startup_height_pct": "Fraction of the current screen height used for the main window when no reasonable saved geometry exists.",
   "_comment_startup_width_pct": "Fraction of the current screen width used for the main window when no reasonable saved geometry exists.",
+  "_comment_update_check_on_startup": "Check GitHub Releases for a newer TradingLab version on startup. The check runs in the background and is suppressed during regular trading hours (09:30–16:00 ET).",
+  "_comment_update_check_url": "Override the GitHub Releases endpoint used for update checks. Empty = use TRADINGLAB_UPDATE_URL when set, otherwise the built-in TradingLab release endpoint.",
   "_comment_theme_overrides": "Per-theme color overrides. Sparse merge over the built-in light/dark themes. Schema: {'light': {key: '#hex', ...}, 'dark': {...}}.",
   "default_window_bars": 200,
   "display_tz": "",
@@ -17,5 +19,7 @@
   "startup_defaults": {},
   "startup_height_pct": 0.9,
   "startup_width_pct": 0.9,
+  "update_check_on_startup": true,
+  "update_check_url": "",
   "theme_overrides": {}
 }

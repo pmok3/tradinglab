@@ -24,6 +24,7 @@ import math
 import queue
 import time
 import tkinter as tk
+import webbrowser
 from collections import OrderedDict
 from collections.abc import Callable, Iterable
 from datetime import datetime
@@ -915,13 +916,16 @@ class ChartApp(
         except Exception:  # noqa: BLE001
             pass
 
-        # Background update check. No-op when no URL is configured
-        # (env var ``TRADINGLAB_UPDATE_URL`` empty); see
-        # ``_update_check.spec.md``. Daemon thread; the callback
-        # marshals onto the Tk main thread.
+        # Background update check. Default-on but RTH-suppressed and
+        # cached; Settings can disable it via ``update_check_on_startup``.
         try:
-            from ._update_check import start_update_check
-            start_update_check(self._on_update_available)
+            if bool(_defaults.get("update_check_on_startup")):
+                from . import updates as _updates
+                _updates.schedule_check_async(
+                    self.after,
+                    self._on_update_check_result,
+                    force=False,
+                )
         except Exception:  # noqa: BLE001
             pass
 
@@ -2987,6 +2991,15 @@ class ChartApp(
                 (active_src, active_ticker, active_interval)
                 if active_ticker else key
             )
+            # Pin the active ticker across ALL its intervals so the
+            # companion-prefetch pipeline doesn't LRU-evict its own
+            # warm data when a stash for an unrelated ticker overflows
+            # the cache. The 1d primary view depends on its 5m
+            # companion for the volume-TOD overlay and synthetic
+            # today-bar (see _maybe_upsample_today_daily); evicting
+            # the 5m partner breaks both features.
+            if active_ticker:
+                pinned_tickers = pinned_tickers | {active_ticker}
         except Exception:  # noqa: BLE001
             active_key = key
         self._data_ctrl.stash(
@@ -7125,25 +7138,25 @@ class ChartApp(
     def _maybe_prompt_sandbox_resume(self) -> None:
         self._sandbox_ctrl.maybe_prompt_resume(app=self)
 
-    def _on_update_available(self, new_version: str) -> None:
-        """Callback hook for the background update checker.
-
-        The check runs on a daemon thread; we marshal the banner
-        creation onto the Tk main thread via ``after(0, ...)`` so
-        all widget work happens on the main loop.
-        """
+    def _on_update_check_result(self, result: Any) -> None:
+        """Handle the async update-check result on the Tk main thread."""
         try:
-            self.after(0, lambda: self._show_update_banner(new_version))
+            if getattr(result, "status", "") != "available":
+                return
+            latest = str(getattr(result, "latest", "") or "")
+            if not latest:
+                return
+            url = str(getattr(result, "url", "") or "")
+            self._show_update_banner(latest, url=url)
         except Exception:  # noqa: BLE001
             pass
 
-    def _show_update_banner(self, new_version: str) -> None:
+    def _show_update_banner(self, new_version: str, *, url: str = "") -> None:
         """Display a passive one-line banner about an available update.
 
         Pattern mirrors :class:`FirstRunBannerMixin` — a dismissable
         ttk.Frame at the top of the window with a single-line
-        message and a close button. The banner does NOT block the
-        user; it just nudges them toward the Releases page.
+        message, optional release-link button, and a dismiss button.
 
         Idempotent: a second update notification (or a duplicate
         call from a re-run check) is silently swallowed if the
@@ -7155,11 +7168,15 @@ class ChartApp(
         try:
             frame = ttk.Frame(self, padding=(8, 4))
             frame.pack(side=tk.TOP, fill=tk.X)
+            display_version = (
+                new_version if new_version.lower().startswith("v")
+                else f"v{new_version}"
+            )
             ttk.Label(
                 frame,
                 text=(
-                    f"Update v{new_version} available "
-                    f"\u2014 Help \u2192 Check for Updates"),
+                    f"Update {display_version} available "
+                    f"— Help → Check for Updates"),
                 anchor="w",
             ).pack(side=tk.LEFT, fill=tk.X, expand=True)
 
@@ -7171,8 +7188,21 @@ class ChartApp(
                 self._update_banner_frame = None
 
             ttk.Button(
-                frame, text="\u00d7", width=3, command=_dismiss,
+                frame, text="Dismiss", command=_dismiss,
             ).pack(side=tk.RIGHT, padx=(6, 0))
+
+            if url:
+
+                def _open_release() -> None:
+                    try:
+                        webbrowser.open(url)
+                    except Exception:  # noqa: BLE001
+                        pass
+
+                ttk.Button(
+                    frame, text="View release", command=_open_release,
+                ).pack(side=tk.RIGHT, padx=(6, 0))
+
             self._update_banner_frame = frame
         except Exception:  # noqa: BLE001
             # A banner failure must never break the chart.

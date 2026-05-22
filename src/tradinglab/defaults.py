@@ -303,6 +303,16 @@ TUNABLES: tuple[Tunable, ...] = (
             "(``python -m tradinglab``) — the dev-mode launcher "
             "never builds a splash regardless of this setting.",
             _v_bool),
+    Tunable("update_check_on_startup", True, "bool",
+            "Check GitHub Releases for a newer TradingLab version on "
+            "startup. The check runs in the background and is "
+            "suppressed during regular trading hours (09:30–16:00 ET).",
+            _v_bool),
+    Tunable("update_check_url", "", "str",
+            "Override the GitHub Releases endpoint used for update "
+            "checks. Empty = use TRADINGLAB_UPDATE_URL when set, "
+            "otherwise the built-in TradingLab release endpoint.",
+            _v_str(allow_empty=True)),
 
     # Persisted worker-pool size. ``0`` is the sentinel "auto-detect
     # via ``os.cpu_count()`` (clamped to [1, 64])"; any positive

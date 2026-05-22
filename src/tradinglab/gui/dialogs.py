@@ -542,6 +542,51 @@ class _SettingsDialog(tk.Toplevel):
         ).grid(row=btn_row + 3, column=0, columnspan=2, sticky="w",
                pady=(2, 0))
 
+        # Startup update check. Default-on now that the repo has a
+        # public GitHub Releases channel; the networking layer is RTH-
+        # suppressed and cached. The URL entry is a power-user override
+        # for forks/self-hosted manifests; empty means built-in default.
+        try:
+            self._update_check_initial = bool(
+                _defaults_mod.get("update_check_on_startup"))
+        except Exception:  # noqa: BLE001
+            self._update_check_initial = True
+        try:
+            self._update_url_initial = str(
+                _defaults_mod.get("update_check_url") or "")
+        except Exception:  # noqa: BLE001
+            self._update_url_initial = ""
+        self._update_check_var = tk.BooleanVar(
+            value=self._update_check_initial)
+        self._update_url_var = tk.StringVar(
+            value=self._update_url_initial)
+        ttk.Checkbutton(
+            parent,
+            text="Check for updates on startup",
+            variable=self._update_check_var,
+        ).grid(row=btn_row + 4, column=0, columnspan=2, sticky="w",
+               pady=(8, 0))
+        ttk.Label(
+            parent,
+            text=("Runs in the background, never during regular trading "
+                  "hours, and only shows a banner when a newer release exists."),
+            foreground=MUTED_GREY, wraplength=480, justify="left",
+        ).grid(row=btn_row + 5, column=0, columnspan=2, sticky="w",
+               pady=(2, 0))
+        ttk.Label(parent, text="Update endpoint override:").grid(
+            row=btn_row + 6, column=0, sticky="w", pady=(8, 0))
+        ttk.Entry(
+            parent, textvariable=self._update_url_var, width=52,
+        ).grid(row=btn_row + 6, column=1, sticky="ew", padx=(8, 0),
+               pady=(8, 0))
+        ttk.Label(
+            parent,
+            text=("Empty = built-in GitHub Releases endpoint. Set only "
+                  "if you maintain a fork or self-hosted release manifest."),
+            foreground=MUTED_GREY, wraplength=480, justify="left",
+        ).grid(row=btn_row + 7, column=0, columnspan=2, sticky="w",
+               pady=(2, 0))
+
     def _on_capture_current_as_default(self) -> None:
         """Pull the running session's primary/compare/interval/source/
         theme into the dialog's startup-default Tk vars."""
@@ -883,6 +928,15 @@ class _SettingsDialog(tk.Toplevel):
             new_splash = bool(self._splash_var.get())
             if new_splash != self._splash_initial:
                 _settings_mod.set("splash_enabled", new_splash)
+                _defaults_mod.reload()
+            # Commit update-check startup preferences.
+            new_update_check = bool(self._update_check_var.get())
+            if new_update_check != self._update_check_initial:
+                _settings_mod.set("update_check_on_startup", new_update_check)
+                _defaults_mod.reload()
+            new_update_url = (self._update_url_var.get() or "").strip()
+            if new_update_url != self._update_url_initial:
+                _settings_mod.set("update_check_url", new_update_url)
                 _defaults_mod.reload()
             # Commit watchlist pin cap. Audit ``pinned-watchlist-cap``.
             try:
