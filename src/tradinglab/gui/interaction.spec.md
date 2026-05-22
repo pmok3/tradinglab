@@ -21,6 +21,7 @@ by `ChartApp._build_ui`.
   - `event.button == 1 and event.dblclick == True` on a drawing →
     `ChartApp._open_drawing_dialog(drawing.id)` BEFORE the
     1d-drilldown check (line over candle wins).
+  - B1 on a lower-pane indicator label → `_open_per_indicator_dialog(config_id, slot)`; B3 on the same label → `_show_legend_context_menu(...)`.
   - Double-click on a 1d candle (primary OR compare) →
     `_maybe_handle_dblclick_drilldown` → `_zoom_5m_for_date(day)`.
 - `_on_button_release(event)` — terminate pan / zoom; detect click
@@ -72,7 +73,8 @@ by `ChartApp._build_ui`.
 - Hover: `_ensure_overlay_artists`, `_dispatch_hover`,
   `_show_hover`, `_hide_hover`, `_hide_hover_only`,
   `_indicator_lines_at`, `_find_indicator_panel_for_axes`,
-  `_line_value_at`.
+  `_line_value_at`. Lower-pane indicator labels use the same hover
+  dispatch to show a `hand2` cursor while clickable.
 - Crosshair: `_update_crosshair`, `_update_crosshair_pixels`
   (revives after re-render using cached pixel coords).
 - Price value label: `_format_price_for_label(ax, value)` —

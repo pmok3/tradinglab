@@ -20,6 +20,7 @@ from tests.smoke.test_smoke_full import (
     check_b71_macd,
     check_b72_chandelier_stops,
     check_b73_per_indicator_popup,
+    check_b74_pane_indicator_label_popup,
     check_d39_indicators_phase1,
     check_d41_indicator_menu_add_routes,
     check_d42_indicator_scope_picker,
@@ -65,6 +66,7 @@ _CHECKS = [
     check_b71_macd,
     check_b72_chandelier_stops,
     check_b73_per_indicator_popup,
+    check_b74_pane_indicator_label_popup,
 ]
 
 

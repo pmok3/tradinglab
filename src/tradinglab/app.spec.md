@@ -138,6 +138,7 @@ Revert StringVar to `_confirmed_*_ticker`. Status: `Ticker '{raw}' not found. Ch
 ### Per-indicator settings popups
 - `_per_indicator_dialogs: Dict[int, _PerIndicatorDialog]` — singleton registry keyed on `IndicatorConfig.id`.
 - `OverlayLegend(on_row_dblclick=…, on_row_context_menu=…)` routes dbl-clicks to `_open_per_indicator_dialog(config_id, slot)` and B3 to `_show_legend_context_menu(...)`.
+- Lower-pane indicator labels are matplotlib `Text` artists stamped with config-id metadata; B1 opens `_open_per_indicator_dialog(config_id, slot)` and B3 reuses `_show_legend_context_menu(...)`.
 - Menu: `Edit Settings…` / `Change Color…` (single or cascade per output_key) / `Duplicate` / `Hide ↔ Show` / `Remove`. All delegates swallow exceptions defensively.
 - `_apply_theme` and `_on_close` cascade into the registry. Self-eviction via the popup's own `_on_close`.
 

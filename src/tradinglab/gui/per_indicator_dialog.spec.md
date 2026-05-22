@@ -3,7 +3,8 @@
 ## Purpose
 
 Per-indicator settings popup spawned by double-clicking an
-overlay-legend row. Lets the user edit one indicator's params /
+overlay-legend row or clicking a lower-pane indicator label. Lets
+the user edit one indicator's params /
 scopes / color / per-interval visibility without opening the
 multi-row Manage Indicators dialog. Reuses every widget the manager
 builds (`_IndicatorRow` + `_build_param_widgets` + commit /
@@ -120,8 +121,8 @@ popup can never drift from the canonical editor.
 ## Data Flow
 
 ```
-dbl-click legend pill
-  -> OverlayLegend._fire_dblclick(cfg.id)
+dbl-click legend pill OR B1-click pane label
+  -> OverlayLegend._fire_dblclick(cfg.id) OR InteractionMixin pane-label hit-test
   -> app._open_per_indicator_dialog(cfg.id, slot)
   -> open_per_indicator_dialog(app, cfg.id, slot)
        if registry[cfg.id] alive: deiconify + return

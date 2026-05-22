@@ -61,6 +61,11 @@ class InteractionMixin:
             self._pan_state = None
             self._drag_press = None
             return
+        if (event.button in (1, 3)
+                and self._maybe_handle_pane_indicator_label_click(event)):
+            self._pan_state = None
+            self._drag_press = None
+            return
         # Drawings: B1 double-click on a horizontal line opens the
         # per-line edit dialog. Gated BEFORE the drilldown check so
         # a line drawn over a candle wins (drill-down only takes
@@ -104,6 +109,97 @@ class InteractionMixin:
             self._canvas.get_tk_widget().focus_set()
         except Exception:  # noqa: BLE001
             pass
+
+    def _maybe_handle_pane_indicator_label_click(self, event) -> bool:
+        """Open pane-indicator settings when the in-pane label is clicked."""
+        label, config_id = self._pane_indicator_label_hit(event)
+        if label is None or config_id is None:
+            return False
+        slot_key = self._slot_key_for_axes(getattr(event, "inaxes", None))
+        if event.button == 1:
+            opener = getattr(self, "_open_per_indicator_dialog", None)
+            if callable(opener):
+                try:
+                    opener(int(config_id), slot_key)
+                except Exception:  # noqa: BLE001
+                    pass
+            return True
+        if event.button == 3:
+            show = getattr(self, "_show_legend_context_menu", None)
+            if callable(show):
+                x_root, y_root = self._event_root_xy(event)
+                try:
+                    show(int(config_id), slot_key, x_root, y_root)
+                except Exception:  # noqa: BLE001
+                    pass
+            return True
+        return False
+
+    def _pane_indicator_label_hit(self, event):
+        ax = getattr(event, "inaxes", None)
+        if ax is None:
+            return None, None
+        label = getattr(ax, "_sc_pane_label_artist", None)
+        if label is None:
+            return None, None
+        try:
+            if not label.get_visible():
+                return None, None
+        except Exception:  # noqa: BLE001
+            return None, None
+        config_ids = tuple(getattr(label, "_sc_pane_label_config_ids", ()) or ())
+        if not config_ids:
+            return None, None
+        hit = False
+        try:
+            hit = bool(label.contains(event)[0])
+        except Exception:  # noqa: BLE001
+            hit = False
+        if not hit:
+            try:
+                renderer = self._canvas.get_renderer()
+                bbox = label.get_window_extent(renderer)
+                hit = bool(bbox.contains(float(event.x), float(event.y)))
+            except Exception:  # noqa: BLE001
+                hit = False
+        if not hit:
+            return None, None
+        try:
+            config_id = int(config_ids[0])
+        except (TypeError, ValueError):
+            return None, None
+        return label, config_id
+
+    def _slot_key_for_axes(self, ax) -> str | None:
+        if ax is None:
+            return None
+        for slot_key, ps in getattr(self, "_panel_state", {}).items():
+            if ps.get("price_ax") is ax or ps.get("vol_ax") is ax:
+                return str(slot_key)
+            try:
+                if ax in (ps.get("ind_axes") or ()):  # indicator panes
+                    return str(slot_key)
+            except Exception:  # noqa: BLE001
+                pass
+        return None
+
+    def _event_root_xy(self, event) -> tuple[int, int]:
+        gui_event = getattr(event, "guiEvent", None)
+        try:
+            return int(gui_event.x_root), int(gui_event.y_root)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            widget = self._canvas.get_tk_widget()
+            return (
+                int(widget.winfo_rootx()) + int(event.x),
+                int(widget.winfo_rooty()) + int(event.y),
+            )
+        except Exception:  # noqa: BLE001
+            return (
+                int(getattr(event, "x", 0) or 0),
+                int(getattr(event, "y", 0) or 0),
+            )
 
     def _maybe_handle_dblclick_drilldown(self, event) -> bool:
         """Return True if a 1d→5m drill-down zoom was kicked off.
@@ -1085,6 +1181,7 @@ class InteractionMixin:
         if event.inaxes is None:
             self._hide_overlays()
             self._reset_drawing_hover_cursor()
+            self._reset_pane_label_hover_cursor()
             return
         # Drawings: hovering a horizontal line swaps the cursor to a
         # vertical double-arrow so the user knows it's hit-testable.
@@ -1092,6 +1189,10 @@ class InteractionMixin:
         # _on_button_release; this is purely a visual affordance.
         try:
             self._update_drawing_hover_cursor(event)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            self._update_pane_label_hover_cursor(event)
         except Exception:  # noqa: BLE001
             pass
         ax = event.inaxes
@@ -2105,3 +2206,33 @@ class InteractionMixin:
             pass
         self._drawing_hover_cursor_active = False
 
+    def _update_pane_label_hover_cursor(self, event) -> None:
+        """Swap to ``hand2`` while hovering a clickable indicator pane label."""
+        label, _config_id = self._pane_indicator_label_hit(event)
+        hit = label is not None
+        try:
+            widget = self._canvas.get_tk_widget()
+        except Exception:  # noqa: BLE001
+            return
+        current = getattr(self, "_pane_label_hover_cursor_active", False)
+        try:
+            if hit and not current:
+                widget.configure(cursor="hand2")
+                self._pane_label_hover_cursor_active = True
+            elif not hit and current:
+                if not getattr(self, "_drawing_hover_cursor_active", False):
+                    widget.configure(cursor="")
+                self._pane_label_hover_cursor_active = False
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _reset_pane_label_hover_cursor(self) -> None:
+        """Reset the pane-label hover cursor when leaving the axes."""
+        if not getattr(self, "_pane_label_hover_cursor_active", False):
+            return
+        try:
+            if not getattr(self, "_drawing_hover_cursor_active", False):
+                self._canvas.get_tk_widget().configure(cursor="")
+        except Exception:  # noqa: BLE001
+            pass
+        self._pane_label_hover_cursor_active = False

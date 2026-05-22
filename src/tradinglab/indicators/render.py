@@ -601,11 +601,13 @@ def render_for_slot(
         # the pane is showing without expanding the side legend.
         # Only configs that are visible contribute, so toggling a
         # config off removes it from the label too.
-        label_parts = [
-            (cfg.display_name or cfg.kind_id) for cfg in group
+        visible_label_cfgs = [
+            cfg for cfg in group
             if bool(cfg.visible) and (cfg.display_name or cfg.kind_id)
         ]
+        label_parts = [(cfg.display_name or cfg.kind_id) for cfg in visible_label_cfgs]
         label_text = "  \u2022  ".join(label_parts)
+        label_config_ids = tuple(int(cfg.id) for cfg in visible_label_cfgs)
         existing_label = getattr(ax_lower, "_sc_pane_label_artist", None)
         if label_text:
             if existing_label is None:
@@ -628,6 +630,12 @@ def render_for_slot(
                         zorder=10,
                         clip_on=False,
                     )
+                    try:
+                        artist.set_picker(True)
+                        artist._sc_pane_label_config_ids = label_config_ids
+                        artist._sc_pane_label_scope = scope
+                    except Exception:  # noqa: BLE001
+                        pass
                     ax_lower._sc_pane_label_artist = artist
                 except Exception:  # noqa: BLE001
                     pass
@@ -635,12 +643,16 @@ def render_for_slot(
                 try:
                     if existing_label.get_text() != label_text:
                         existing_label.set_text(label_text)
+                    existing_label.set_picker(True)
+                    existing_label._sc_pane_label_config_ids = label_config_ids
+                    existing_label._sc_pane_label_scope = scope
                     existing_label.set_visible(True)
                 except Exception:  # noqa: BLE001
                     pass
         else:
             if existing_label is not None:
                 try:
+                    existing_label._sc_pane_label_config_ids = ()
                     existing_label.set_visible(False)
                 except Exception:  # noqa: BLE001
                     pass

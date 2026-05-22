@@ -423,7 +423,7 @@ class TestRenderForSlot:
     def test_non_overlay_renders_in_lower_pane(self):
         candles = _make_candles(40)
         mgr = IndicatorManager()
-        mgr.add(_make_rsi_config(length=14))
+        cfg = mgr.add(_make_rsi_config(length=14))
         cache = IndicatorCache()
         state = _render.PanelIndicatorState()
         fig = plt.figure()
@@ -439,6 +439,11 @@ class TestRenderForSlot:
         cfg_id = next(iter(state.pane_lines))
         # Pane axes recorded.
         assert state.panes[cfg_id] is lower_ax
+        label = getattr(lower_ax, "_sc_pane_label_artist", None)
+        assert label is not None, "pane indicators must render an in-pane label"
+        assert label.get_picker() is True, "pane labels must be pickable/clickable"
+        assert getattr(label, "_sc_pane_label_config_ids", None) == (cfg.id,)
+        assert getattr(label, "_sc_pane_label_scope", None) == "main"
         plt.close(fig)
 
     def test_removing_config_removes_its_artists(self):

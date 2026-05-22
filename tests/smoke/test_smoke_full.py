@@ -18212,6 +18212,62 @@ def check_b73_per_indicator_popup(app) -> None:
     print("  [OK] \u00a7b73 per-indicator popup: open/singleton/row/edit/auto-close/theme/scope-split/context-menu")
 
 
+def check_b74_pane_indicator_label_popup(app) -> None:
+    """Clicking a lower-pane indicator label opens the same popup as overlays."""
+    from matplotlib.backend_bases import MouseEvent
+
+    from tradinglab.gui.per_indicator_dialog import _PerIndicatorDialog
+    from tradinglab.indicators.config import IndicatorConfig
+
+    mgr = app._indicator_manager
+    mgr.clear()
+    app._per_indicator_dialogs.clear()
+    cfg = IndicatorConfig(
+        kind_id="rsi", kind_version=1, display_name="RSI(14)",
+        params={"length": 14}, scopes=frozenset({"main"}),
+    )
+    mgr.add(cfg)
+    try:
+        app._render()
+        app._canvas.draw()
+        ps = app._panel_state.get("primary") or {}
+        axes = list(ps.get("ind_axes") or [])
+        assert axes, "adding RSI must create a lower indicator pane"
+        ax = axes[0]
+        label = getattr(ax, "_sc_pane_label_artist", None)
+        assert label is not None and label.get_visible(), (
+            "lower indicator pane must render a visible label")
+        assert label.get_picker() is True, "pane label must be pickable"
+        assert cfg.id in tuple(getattr(label, "_sc_pane_label_config_ids", ()) or ())
+
+        renderer = app._canvas.get_renderer()
+        bbox = label.get_window_extent(renderer)
+        x = (float(bbox.x0) + float(bbox.x1)) / 2.0
+        y = (float(bbox.y0) + float(bbox.y1)) / 2.0
+        ev = MouseEvent("button_press_event", app._canvas, x, y, button=1)
+        ev.inaxes = ax
+        ev.xdata, ev.ydata = ax.transData.inverted().transform((x, y))
+        ev.key = None
+        app._on_button_press(ev)
+
+        opened = _pump_until(
+            app, lambda: cfg.id in getattr(app, "_per_indicator_dialogs", {}),
+            timeout=1.0,
+        )
+        assert opened, "clicking the pane label must open a per-indicator popup"
+        dlg = app._per_indicator_dialogs.get(cfg.id)
+        assert isinstance(dlg, _PerIndicatorDialog), (
+            f"expected _PerIndicatorDialog, got {type(dlg)!r}")
+        assert dlg._origin_slot == "primary"
+        assert len(dlg._rows) == 1 and dlg._rows[0].config_id == cfg.id
+    finally:
+        mgr.clear()
+        app._render()
+        _pump(app, 0.1)
+
+    print("  [OK] \u00a7b74 pane indicator labels open per-indicator popup")
+
+
 def check_d29_price_axes_top_headroom(app) -> None:
     """Asymmetric y-padding reserves headroom above the candles so the
     top-left OHLCV readout (gui/interaction §11.6) cannot collide with
@@ -18755,6 +18811,7 @@ def _run_all_checks(app) -> None:
     check_d61_time_label_on_crosshair(app)
     check_d62_overlay_legend_eye_toggles(app)
     check_b73_per_indicator_popup(app)
+    check_b74_pane_indicator_label_popup(app)
     check_bxx_splash_and_bundles(app)
     check_d28_data_readout_strip(app)
     check_d29_price_axes_top_headroom(app)
