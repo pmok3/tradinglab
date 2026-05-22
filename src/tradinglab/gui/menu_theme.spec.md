@@ -8,9 +8,10 @@ Centralize explicit palette application for classic `tk.Menu` widgets. Windows T
 - `apply_menu_theme(menu, theme) -> None` — applies those options to a menu and recursively to every nested cascade submenu.
 
 ## Responsibilities
-- Set every classic-menu color option explicitly: `background=theme["win_bg"]`, `foreground=theme["text"]`, `activebackground=theme["grid"]`, `activeforeground=theme["text"]`, `selectcolor=theme["text"]`, and `disabledforeground=theme["text_disabled"]`.
+- Set every classic-menu color option explicitly: `background=theme["win_bg"]`, `foreground=theme["text"]`, `activebackground=theme["grid"]`, `activeforeground=theme["text"]`, `selectcolor=theme["text"]`, and `disabledforeground=theme["text"]`.
+- Keep `disabledforeground` light because Windows Tk uses that option for resting cascade-arrow indicators; `activeforeground` covers only the highlighted/hover state.
 - Set `borderwidth=0` and `relief="flat"` so Windows Tk stays on the fully-themed rendering path instead of mixing native chrome with themed entries.
-- Recursively follow `cascade` entries through their `menu` widget paths, so root menubars, top-level cascades, and nested cascades (for example View → Heikin-Ashi) all receive the same foreground. Cascade-arrow indicators inherit that foreground in dark mode.
+- Recursively follow `cascade` entries through their `menu` widget paths, so root menubars, top-level cascades, and nested cascades (for example View → Heikin-Ashi) all receive the same foreground. Cascade-arrow indicators remain light in both resting and active states in dark mode.
 
 ## Design Decisions
 - The helper is app-agnostic: it imports palette constants but never imports `tradinglab.app` or menu-builder modules.

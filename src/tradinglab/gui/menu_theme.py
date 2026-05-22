@@ -25,7 +25,8 @@ def menu_theme_options(theme: Mapping[str, str] | None) -> dict[str, object]:
         "activebackground": _palette_value(palette, "grid", bg),
         "activeforeground": fg,
         "selectcolor": fg,
-        "disabledforeground": _palette_value(palette, "text_disabled", fg),
+        # Windows Tk draws resting cascade arrows through disabledforeground.
+        "disabledforeground": fg,
         "borderwidth": 0,
         "relief": tk.FLAT,
     }

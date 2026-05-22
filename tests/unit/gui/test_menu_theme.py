@@ -41,7 +41,7 @@ def _assert_dark_menu_options(menu: tk.Menu) -> None:
     assert str(menu.cget("activebackground")).lower() == DARK_THEME["grid"]
     assert str(menu.cget("activeforeground")).lower() == DARK_THEME["text"]
     assert str(menu.cget("selectcolor")).lower() == DARK_THEME["text"]
-    assert str(menu.cget("disabledforeground")).lower() == DARK_THEME["text_disabled"]
+    assert str(menu.cget("disabledforeground")).lower() == DARK_THEME["text"]
     assert int(str(menu.cget("borderwidth"))) == 0
     assert str(menu.cget("relief")) == "flat"
 
