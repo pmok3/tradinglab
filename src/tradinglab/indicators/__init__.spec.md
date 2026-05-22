@@ -30,7 +30,7 @@ Built-ins registered at import time (display name → kind_id):
 - `"Average True Range"` → `"atr"`
 - `"Laguerre RSI"` → `"lrsi"`
 - `"RVOL"` → `"rvol"`
-- `"RRVOL (vs SPY)"` → `"rrvol"`
+- `"RRVOL"` → `"rrvol"`
 - `"Chandelier Stops"` → `"chandelier"`
 
 `WMA` and `RMA` ship as moving-average kernels (selectable via

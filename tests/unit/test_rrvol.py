@@ -256,3 +256,139 @@ def test_rrvol_z_score_length_validation():
     """``length < 2`` rejected when ``z_score=True`` (need 2+ samples)."""
     with pytest.raises(ValueError):
         RRVOL(mode="simple", length=1, z_score=True)
+
+
+# ----------------------------------------------------------------------
+# Configurable compare_symbol (audit: rrvol-compare-symbol)
+# ----------------------------------------------------------------------
+
+
+def test_default_compare_symbol_is_spy():
+    """Backward-compatible: omitting ``compare_symbol`` ⇒ SPY."""
+    ind = RRVOL(mode="simple", length=10)
+    assert getattr(ind, "compare_symbol", None) == "SPY"
+
+
+def test_compare_symbol_normalisation():
+    """Whitespace + lowercase coerced; empty falls back to SPY."""
+    assert RRVOL(compare_symbol="qqq").compare_symbol == "QQQ"
+    assert RRVOL(compare_symbol="  iwm  ").compare_symbol == "IWM"
+    assert RRVOL(compare_symbol="").compare_symbol == "SPY"
+    assert RRVOL(compare_symbol=None).compare_symbol == "SPY"
+
+
+def test_compare_symbol_in_trigger_relevant_params():
+    """Cache invalidation: switching compare_symbol MUST change the
+    config hash. Param schema membership in
+    ``RRVOL.TRIGGER_RELEVANT_PARAMS`` drives that, so guard the
+    contract here."""
+    assert "compare_symbol" in RRVOL.TRIGGER_RELEVANT_PARAMS
+
+
+def test_validate_compare_symbol_accepts_common_tickers():
+    from tradinglab.indicators.rrvol import validate_compare_symbol
+    for sym in ("SPY", "QQQ", "IWM", "DIA", "XLK", "BRK.B", "BF-A", "A"):
+        ok, msg = validate_compare_symbol(sym)
+        assert ok, f"{sym!r} rejected: {msg}"
+
+
+def test_validate_compare_symbol_normalises_before_check():
+    """Validator strips whitespace + uppercases before the regex
+    gate — so a lowercased ticker is accepted (the dialog widget's
+    StringVar may contain unnormalised user input)."""
+    from tradinglab.indicators.rrvol import validate_compare_symbol
+    assert validate_compare_symbol("spy")[0] is True
+    assert validate_compare_symbol("  qqq  ")[0] is True
+
+
+def test_validate_compare_symbol_rejects_bad_input():
+    from tradinglab.indicators.rrvol import validate_compare_symbol
+    # Empty / None
+    assert validate_compare_symbol("")[0] is False
+    assert validate_compare_symbol(None)[0] is False
+    assert validate_compare_symbol("   ")[0] is False
+    # Too long (>7 after strip)
+    assert validate_compare_symbol("ABCDEFGH")[0] is False
+    # Starts with digit
+    assert validate_compare_symbol("1SPY")[0] is False
+    # Whitespace inside
+    assert validate_compare_symbol("SP Y")[0] is False
+    # Special chars
+    assert validate_compare_symbol("SPY!")[0] is False
+    assert validate_compare_symbol("SPY/X")[0] is False
+
+
+def test_constructor_rejects_invalid_compare_symbol():
+    """``__init__`` raises on syntactically invalid input (already
+    whitespace/uppercase-coerced; empty falls back). Guards against
+    persisted-config corruption."""
+    with pytest.raises(ValueError):
+        RRVOL(compare_symbol="123ABC")
+    with pytest.raises(ValueError):
+        RRVOL(compare_symbol="ABCDEFGH")
+    with pytest.raises(ValueError):
+        RRVOL(compare_symbol="SPY!")
+
+
+def test_uses_configured_compare_symbol_for_lookup():
+    """RRVOL with ``compare_symbol='QQQ'`` looks up QQQ bars from the
+    registry, not SPY."""
+    bars = Bars.from_candles(_intraday_candles(n_days=15, seed=2))
+    rd.set_reference_bars("yfinance", "QQQ", "5m", bars)
+    with render_context(interval="5m", source="yfinance", primary_symbol="AMD"):
+        out = RRVOL(mode="simple", length=10,
+                    compare_symbol="QQQ").compute_arr(bars)["rvol"]
+    finite = out[np.isfinite(out)]
+    assert finite.size > 0
+    np.testing.assert_allclose(finite, 1.0, rtol=1e-9)
+
+
+def test_non_spy_cache_miss_schedules_correct_symbol():
+    """Cache miss with ``compare_symbol='IWM'`` schedules an IWM fetch,
+    not a SPY fetch."""
+    calls: list[tuple] = []
+    rd.set_provider(lambda s, sym, iv: calls.append((s, sym, iv)))
+    bars = Bars.from_candles(_intraday_candles(n_days=15))
+    with render_context(interval="5m", source="yfinance", primary_symbol="AMD"):
+        out = RRVOL(mode="simple", length=10,
+                    compare_symbol="IWM").compute_arr(bars)["rvol"]
+    assert np.all(np.isnan(out))
+    assert calls == [("yfinance", "IWM", "5m")]
+
+
+def test_primary_equals_compare_symbol_emits_flat_one():
+    """When primary == configured compare_symbol (regardless of which
+    one), short-circuit to ratio=1.0 with no fetch."""
+    candles = _intraday_candles(n_days=15, seed=8)
+    bars = Bars.from_candles(candles)
+    calls: list[tuple] = []
+    rd.set_provider(lambda s, sym, iv: calls.append((s, sym, iv)))
+    with render_context(interval="5m", source="yfinance", primary_symbol="QQQ"):
+        out = RRVOL(mode="simple", length=10,
+                    compare_symbol="QQQ").compute_arr(bars)["rvol"]
+    finite = out[np.isfinite(out)]
+    assert finite.size > 0
+    np.testing.assert_allclose(finite, 1.0, rtol=1e-9)
+    assert calls == []  # short-circuit ⇒ no fetch
+
+
+def test_display_name_omits_vs_suffix_for_spy_includes_for_others():
+    """Default SPY ⇒ no `vs ...` suffix; custom symbol ⇒ suffix present."""
+    spy = RRVOL(mode="simple", length=20)
+    qqq = RRVOL(mode="simple", length=20, compare_symbol="QQQ")
+    assert "vs" not in spy.name
+    assert "vs QQQ" in qqq.name
+
+
+def test_compare_symbol_round_trips_through_params_schema():
+    """Serialisation: ``compare_symbol`` appears in ``params_schema``
+    and uses the default ``'SPY'``, so legacy persisted configs missing
+    the key hydrate cleanly via ``from_dict`` defaults."""
+    schema = RRVOL.params_schema
+    pdef = next((p for p in schema if p.name == "compare_symbol"), None)
+    assert pdef is not None
+    assert pdef.kind == "str"
+    assert pdef.default == "SPY"
+    # Convenience choices must include SPY + at least one alternative.
+    assert "SPY" in pdef.choices
+    assert any(c != "SPY" for c in pdef.choices)

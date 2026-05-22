@@ -126,6 +126,33 @@ the dialog — preset persistence is via Indicators → Save Preset. Dirty
 tracking: `_mark_dirty()` fires on any commit/remove, enables Save (disabled
 when clean), appends `•` to title bar.
 
+### Save-and-Close validation hook (`_collect_save_close_errors`)
+
+Per-indicator validators get a chance to refuse the close. Before
+clearing the snapshot + tearing down, `_on_save_close` walks every row
+and dispatches by `kind_id` to a validator function defined in the
+indicator module. Currently registered:
+
+| kind_id | param | validator |
+|---|---|---|
+| `rrvol` | `compare_symbol` | `indicators.rrvol.validate_compare_symbol` (basic ticker syntax: 1-7 chars, starts with letter, A-Z 0-9 . -) |
+
+On the first error: shows `messagebox.showerror`, focuses the offending
+widget (combobox cursor moved to end), and **returns without
+teardown** so the user can fix the value in place. Audit
+`rrvol-compare-symbol`.
+
+### Free-text Combobox (`"str"` kind + non-empty `choices`)
+
+A `ParamDef` with `kind="str"` AND a non-empty `choices` tuple renders
+as an **editable** `ttk.Combobox` (`state="normal"`) seeded with the
+choices as convenience picks but allowing any free-text input. The
+debounced-commit + silent-revert pattern still applies to live edits
+— hard validation only fires on Save and Close (see above). RRVOL's
+`compare_symbol` is the only current user; the same plumbing scales
+to any future "common picks plus free-text" param. Audit
+`rrvol-compare-symbol`.
+
 ## Invariants
 
 - Only one instance per app; `open_indicator_dialog` is idempotent.

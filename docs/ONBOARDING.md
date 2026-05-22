@@ -167,7 +167,7 @@ the parameter dialog, and the persistence layer all stay in sync.
 | Trend / overlay | SMA, EMA, Bollinger Bands, Keltner Channels, VWAP, AVWAP, Chandelier Stops |
 | Momentum / oscillator | RSI, MACD, ADX, SMI, LRSI |
 | Volatility | ATR (modes: rolling RMA, time-of-day) |
-| Volume / participation | RVOL Simple Rolling, RVOL Time-of-Day, Cumulative-Day RVOL, RRVOL (vs SPY) |
+| Volume / participation | RVOL Simple Rolling, RVOL Time-of-Day, Cumulative-Day RVOL, RRVOL (relative-to-comparison-symbol) |
 
 Each indicator declares a typed parameter schema (`ParamDef`) which
 auto-generates the *Add Indicator* dialog — no per-indicator UI code.

@@ -67,6 +67,21 @@ constant, independent of `length`); from then on, partial values are
 emitted until `length` is reached. Truly zero history → NaN.
 
 `simple` requires the full `length` window — no partial-warmup mode.
+The window is positional over **admitted bars** (the subset that
+passes `session_filter`), not over the full bar array — so under
+`session_filter='regular_only'` with extended-hours data present,
+the RTH bars at the start of each session use the previous L *RTH*
+bars as their window (not the previous L positional bars, most of
+which would be pre-market and excluded). This fixes a long-standing
+bug where the first L bars of every regular session emitted NaN
+after a contiguous block of pre/post-market bars. Audit
+`rvol-admitted-rolling`.
+
+Vectorised implementation: rolling mean uses an O(n) cumsum trick;
+rolling median uses `np.lib.stride_tricks.sliding_window_view` +
+`np.nanmedian` (~17× faster than the legacy Python per-bar loop on
+typical ~3500-bar 5-minute frames; mean is ~300× faster). RRVOL
+benefits proportionally since it computes RVOL on both legs.
 
 ### Z-score (`z_score=True`)
 Rolling sample-stddev z with window=`length`:

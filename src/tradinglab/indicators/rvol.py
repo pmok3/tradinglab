@@ -187,38 +187,151 @@ def _compute_simple(
     session_filter: str,
     denominator_includes_current: bool,
 ) -> np.ndarray:
-    """``vol[i] / aggregator(vol[i-length:i])`` — universal, every interval."""
+    """Each admitted bar's volume divided by the aggregator of the
+    previous ``length`` *admitted* bars' volumes.
+
+    Operates on the dense subsequence of admitted bars (i.e. bars that
+    pass ``session_filter``) — NOT on positional bars with the others
+    NaN-masked. This is what users intuitively expect: with
+    ``session_filter='regular_only'``, the rolling baseline at 9:30am
+    of day N is "the previous ``length`` RTH bars" (which is yesterday's
+    close stack), not "the previous ``length`` wall-clock bars" — most
+    of which are NaN-masked pre-market and would otherwise force the
+    indicator to bleed NaN through the first ``length`` minutes of every
+    session. Same correctness intent, fully vectorised. Audit
+    ``rvol-admitted-rolling``.
+    """
     n = len(bars)
     out = np.full(n, np.nan, dtype=np.float64)
     if n == 0:
         return out
 
     admit_mask = session_filter_mask_np(bars, session_filter)
-    # Bars failing the filter contribute NaN so they don't drag the
-    # rolling baseline down AND don't get scored themselves.
-    vol = np.where(admit_mask, bars.volume, np.nan)
+    admit_idx = np.flatnonzero(admit_mask)
+    if admit_idx.size == 0:
+        return out
 
+    # Dense vol vector over admitted bars only. Cast to float so NaN
+    # markers from upstream (gap candles, etc.) survive.
+    admit_vol = bars.volume[admit_idx].astype(np.float64, copy=False)
     L = length
-    for i in range(n):
-        if np.isnan(vol[i]):
-            continue
-        if denominator_includes_current:
-            lo = max(0, i - L + 1)
-            hi = i + 1
-        else:
-            lo = max(0, i - L)
-            hi = i
-        if hi - lo < L:
-            continue
-        window = vol[lo:hi]
-        valid = window[~np.isnan(window)]
-        if valid.size < L:
-            continue
-        denom = _aggregate(valid, aggregator)
-        if denom <= 0.0:
-            out[i] = 0.0
-        else:
-            out[i] = float(vol[i]) / denom
+    m = admit_idx.size
+    if m == 0:
+        return out
+
+    # ---- Rolling aggregate over the *previous* L admitted bars -------
+    # Convention follows the legacy implementation:
+    #   denominator_includes_current=False (default) → window = [k-L, k)
+    #   denominator_includes_current=True            → window = [k-L+1, k]
+    #
+    # The legacy code only emitted a value when the window had *exactly*
+    # ``L`` finite (non-NaN) samples. We preserve that gate — bars
+    # within the first L-1 admitted positions of the entire history
+    # therefore remain NaN, which is the intended warmup behaviour.
+    if aggregator == "median":
+        denom = _rolling_aggregate_window_median(
+            admit_vol, L, denominator_includes_current,
+        )
+    else:
+        denom = _rolling_aggregate_window_mean(
+            admit_vol, L, denominator_includes_current,
+        )
+
+    # Numerator: this admitted bar's volume. NaN numerators (gap-candle
+    # volume) propagate to NaN, matching the legacy short-circuit.
+    num = admit_vol
+    with np.errstate(invalid="ignore", divide="ignore"):
+        rvol = np.where(
+            np.isnan(denom) | np.isnan(num),
+            np.nan,
+            np.where(denom <= 0.0, 0.0, num / denom),
+        )
+
+    # Scatter back into the full-length output.
+    out[admit_idx] = rvol
+    return out
+
+
+def _rolling_aggregate_window_mean(
+    values: np.ndarray, L: int, include_current: bool,
+) -> np.ndarray:
+    """Rolling-mean over the previous ``L`` admitted samples.
+
+    Returns NaN at positions where the window doesn't have ``L`` finite
+    samples. Vectorised via cumsum on (value, valid_count) parallel
+    arrays so NaN slots in the dense vector are honoured the same way
+    ``np.nanmean`` would (require exactly ``L`` finite values).
+
+    Drop-in equivalent of the legacy ``_aggregate(window, 'mean')`` +
+    ``valid.size < L`` gate, but O(n) instead of O(n·L) with no Python
+    loop. See module docstring "Warmup" + "Zero-denominator handling"
+    for the policy this preserves. Audit ``rvol-admitted-rolling``.
+    """
+    n = values.size
+    out = np.full(n, np.nan, dtype=np.float64)
+    if n == 0 or L < 1:
+        return out
+    finite = np.isfinite(values)
+    safe = np.where(finite, values, 0.0)
+    # Prefix sums w/ a leading 0 so window [lo, hi) = csum[hi]-csum[lo].
+    csum = np.concatenate(([0.0], np.cumsum(safe, dtype=np.float64)))
+    cnt = np.concatenate(([0], np.cumsum(finite.astype(np.int64))))
+    k = np.arange(n)
+    if include_current:
+        lo = np.maximum(0, k - L + 1)
+        hi = k + 1
+    else:
+        lo = np.maximum(0, k - L)
+        hi = k
+    win_sum = csum[hi] - csum[lo]
+    win_cnt = cnt[hi] - cnt[lo]
+    mask = win_cnt == L
+    with np.errstate(invalid="ignore", divide="ignore"):
+        mean = np.where(mask, win_sum / np.maximum(win_cnt, 1), np.nan)
+    out[mask] = mean[mask]
+    # Below-warmup or insufficient-finite positions remain NaN.
+    return out
+
+
+def _rolling_aggregate_window_median(
+    values: np.ndarray, L: int, include_current: bool,
+) -> np.ndarray:
+    """Rolling-median over the previous ``L`` admitted samples.
+
+    Stride-trick window + ``np.nanmedian`` along axis=1. Same NaN gate
+    as ``_rolling_aggregate_window_mean``: requires exactly ``L``
+    finite samples in the window, else NaN. O(n·L) but vectorised at
+    the C level, so still 10-100x faster than the legacy Python loop
+    at n≈5000, L≈20. Audit ``rvol-admitted-rolling``.
+    """
+    n = values.size
+    out = np.full(n, np.nan, dtype=np.float64)
+    if n == 0 or L < 1 or n < L:
+        return out
+    # Build a (n - L + 1, L) sliding view; row k of the view = the
+    # window ENDING at index k+L-1 INCLUSIVE.
+    view = np.lib.stride_tricks.sliding_window_view(values, L)
+    # Per-window finite count gate.
+    finite_cnt = np.sum(np.isfinite(view), axis=1)
+    gate = finite_cnt == L
+    medians = np.full(view.shape[0], np.nan, dtype=np.float64)
+    if np.any(gate):
+        # Suppress the all-NaN warning that np.nanmedian raises when a
+        # full row is NaN — we explicitly mask those out below.
+        with np.errstate(invalid="ignore"):
+            medians[gate] = np.nanmedian(view[gate], axis=1)
+    # Window k in ``view`` is values[k : k+L]; that corresponds to the
+    # output position whose lookback ends just before k+L.
+    if include_current:
+        # window ends at k (inclusive). view row j = values[j:j+L];
+        # set out[j+L-1] = medians[j].
+        end_positions = np.arange(view.shape[0]) + (L - 1)
+    else:
+        # window ends just before k (i.e. window = [k-L, k)).
+        # view row j = values[j:j+L] → out[j+L] = medians[j].
+        end_positions = np.arange(view.shape[0]) + L
+    valid = end_positions < n
+    out[end_positions[valid]] = medians[valid]
     return out
 
 

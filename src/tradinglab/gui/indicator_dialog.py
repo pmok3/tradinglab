@@ -543,9 +543,80 @@ class IndicatorDialog(tk.Toplevel):
         clears the snapshot (so the state is kept for the session)
         and tears down the dialog. To persist across sessions, the
         user should use Indicators → Save Preset.
+
+        Per-indicator on-save validators (see
+        :meth:`_collect_save_close_errors`) get a chance to refuse the
+        close. When any row reports an error, the offending widget is
+        focused, a ``messagebox.showerror`` explains the problem, and
+        the dialog stays open so the user can fix the value.
         """
+        errors = self._collect_save_close_errors()
+        if errors:
+            row, widget, message = errors[0]
+            try:
+                from tkinter import messagebox
+                messagebox.showerror(
+                    "Invalid indicator parameter",
+                    message,
+                    parent=self,
+                )
+            except tk.TclError:
+                pass
+            # Focus the offending widget so the user lands on the
+            # field with the problem. Combobox + Entry both honour
+            # focus_set; ignore failures (widget may have been
+            # destroyed between collect + present).
+            try:
+                if widget is not None:
+                    widget.focus_set()
+                    if hasattr(widget, "icursor"):
+                        try:
+                            widget.icursor("end")
+                        except tk.TclError:
+                            pass
+            except tk.TclError:
+                pass
+            return
         self._snapshot = None  # discard the revert point
         self._teardown()
+
+    def _collect_save_close_errors(
+        self,
+    ) -> list[tuple[Any, tk.Widget | None, str]]:
+        """Run per-indicator save-close validators across every row.
+
+        Returns a list of ``(row, offending_widget_or_None, message)``
+        tuples — empty when every row is acceptable. Currently the
+        only registered validator is the RRVOL compare-symbol
+        syntactic check; the pattern is extensible — add more
+        kind-id-dispatched branches as new free-text parameters
+        appear. Audit ``rrvol-compare-symbol``.
+        """
+        errors: list[tuple[Any, tk.Widget | None, str]] = []
+        rows = getattr(self, "_rows", None) or ()
+        for row in rows:
+            try:
+                kind_display = (row.kind_var.get() or "").strip()
+            except tk.TclError:
+                continue
+            kind_id = self._kinds_by_display.get(kind_display)
+            if kind_id != "rrvol":
+                continue
+            var = row.param_vars.get("compare_symbol")
+            if var is None:
+                continue
+            try:
+                raw = var.get()
+            except tk.TclError:
+                continue
+            # Defer the actual validation to the indicator module so
+            # the rule lives next to the param schema.
+            from ..indicators.rrvol import validate_compare_symbol
+            ok, msg = validate_compare_symbol(raw)
+            if not ok:
+                widget = row.param_widgets.get("compare_symbol")
+                errors.append((row, widget, msg))
+        return errors
 
     # Backward-compat alias — external code that calls ``_on_close``
     # (e.g. the per-indicator popup's ``super()._on_close()``) still
@@ -1157,6 +1228,10 @@ class IndicatorDialog(tk.Toplevel):
                 )
             elif kind in ("int", "float"):
                 widget_chars = _spinbox_width_for(p)
+            elif kind == "str" and getattr(p, "choices", ()):
+                widget_chars = max(
+                    _combo_width_for_choices(p.choices), 8,
+                )
             else:
                 widget_chars = 14
             # 4-char padding between label and widget; 4-char
@@ -1262,6 +1337,32 @@ class IndicatorDialog(tk.Toplevel):
             )
             row.param_vars[pdef.name] = var
             row.param_widgets[pdef.name] = btn
+        elif pdef.kind == "str" and getattr(pdef, "choices", ()):
+            # Editable combobox: the ``"str"`` kind with a non-empty
+            # ``choices`` tuple renders as a free-text Combobox seeded
+            # with the choices as convenience picks. Used by RRVOL's
+            # ``compare_symbol`` param so the user can either pick from
+            # SPY/QQQ/IWM/DIA/XL* sector ETFs or type any ticker the
+            # data source can resolve. Validation runs on Save and
+            # Close (see :meth:`_on_save_close`); live edits during
+            # typing follow the standard debounced-commit + silent-
+            # revert flow so a half-typed "AAP" doesn't fire a
+            # validation popup until the user actually clicks Save and
+            # Close. Audit ``rrvol-compare-symbol``.
+            var = tk.StringVar(value=str(seed))
+            cb = ttk.Combobox(
+                wrap, textvariable=var,
+                state="normal",
+                values=tuple(str(c) for c in pdef.choices),
+                width=max(_combo_width_for_choices(pdef.choices), 8),
+            )
+            cb.pack(side="left", padx=(2, 0))
+            cb.bind("<<ComboboxSelected>>",
+                    lambda _e, r=row: self._commit_now(r))
+            var.trace_add("write",
+                          lambda *_a, r=row: self._commit_debounced(r))
+            row.param_vars[pdef.name] = var
+            row.param_widgets[pdef.name] = cb
         elif pdef.kind in ("int", "float"):
             var = tk.StringVar(value=str(seed))
             kwargs: dict[str, Any] = {
