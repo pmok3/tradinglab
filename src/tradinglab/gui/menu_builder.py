@@ -68,6 +68,7 @@ class MenuBuilder:
         self._cb = callbacks
         self._menubar: tk.Menu | None = None
         self._view_menu: tk.Menu | None = None
+        self._ha_menu: tk.Menu | None = None
         self._submenus: list[tk.Menu] = []
         self._recent_config_menu: tk.Menu | None = None
         self._recent_watchlist_menu: tk.Menu | None = None
@@ -235,20 +236,30 @@ class MenuBuilder:
         menubar.add_cascade(label="Exits", menu=exits_menu)
 
         view_menu = tk.Menu(menubar, tearoff=0)
-        view_menu.add_checkbutton(
-            label="Heikin-Ashi Candles",
+        # Heikin-Ashi cascade — groups the candle-style toggle with the
+        # flat-bar overlay since the latter is meaningless without HA on.
+        # The previous flat top-level layout used a disabled-greyed entry
+        # to communicate the dependency; the cascade replaces that with a
+        # clearer hierarchy. The flat-bar entry is still gated on HA mode
+        # (see ``app._sync_highlight_ha_flat_menu_state``) — disabling
+        # it inside the cascade preserves the persisted preference across
+        # HA-off intervals. Audit ``ha-menu-cascade``.
+        ha_menu = tk.Menu(view_menu, tearoff=0)
+        ha_menu.add_checkbutton(
+            label="Show Heikin-Ashi Candles",
             onvalue=True,
             offvalue=False,
             variable=self._cb._ha_display_var,
             command=self._cb._on_menu_toggle_heikin_ashi,
         )
-        view_menu.add_checkbutton(
-            label="Highlight Flat HA Candles",
+        ha_menu.add_checkbutton(
+            label="Highlight Flat Bars",
             onvalue=True,
             offvalue=False,
             variable=self._cb._highlight_ha_flat_var,
             command=self._cb._on_menu_toggle_highlight_ha_flat,
         )
+        view_menu.add_cascade(label="Heikin-Ashi", menu=ha_menu)
         view_menu.add_checkbutton(
             label="Highlight Key Bars",
             onvalue=True,
@@ -303,6 +314,7 @@ class MenuBuilder:
 
         self._menubar = menubar
         self._view_menu = view_menu
+        self._ha_menu = ha_menu
         self._recent_config_menu = recent_config_menu
         self._recent_watchlist_menu = recent_watchlist_menu
         self._submenus = [
@@ -310,6 +322,7 @@ class MenuBuilder:
             ind_menu,
             sb_menu,
             view_menu,
+            ha_menu,
             tools_menu,
             exits_menu,
             load_preset_menu,
@@ -331,6 +344,12 @@ class MenuBuilder:
         if self._view_menu is None:
             raise RuntimeError("build() must be called before reading view_menu")
         return self._view_menu
+
+    @property
+    def ha_menu(self) -> tk.Menu:
+        if self._ha_menu is None:
+            raise RuntimeError("build() must be called before reading ha_menu")
+        return self._ha_menu
 
     @property
     def submenus(self) -> list[tk.Menu]:

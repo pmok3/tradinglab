@@ -12095,20 +12095,27 @@ def check_b35a_dark_theme_cascade_tabs_and_check_indicator(app) -> None:
 
 
 def check_b35b_highlight_ha_flat_overlay_toggle(app) -> None:
-    """View → Highlight Flat HA Candles toggle is wired end-to-end.
+    """View → Heikin-Ashi → Highlight Flat Bars toggle is wired end-to-end.
 
     User report (paraphrased): "can we have a visual indicator to
     show that a heikin ashi candle has a flat bottom or flat top?"
 
     The feature mirrors the existing ``Highlight Key Bars`` View
     toggle. Direction-aware (bull-flat-bottom + bear-flat-top); HA
-    only; defaults ON; persisted under ``"highlight_ha_flat"``.
+    only; defaults OFF (audit ``ha-flat-default-off``); persisted under
+    ``"highlight_ha_flat"``.
+
+    Audit ``ha-menu-cascade`` (2026) restructured the View menu so the
+    HA candle toggle and the flat-bar overlay live inside a single
+    ``Heikin-Ashi`` cascade — the previous flat top-level layout was
+    relying on a disabled-greyed entry to communicate the dependency.
 
     Validates:
       A. ``_highlight_ha_flat_var`` exists, is a Tk BooleanVar,
          defaults True (matching the persisted setting default).
-      B. The View menu has a ``Highlight Flat HA Candles`` entry
-         immediately after ``Heikin-Ashi Candles`` (alphabetical).
+      B. The View menu has a ``Heikin-Ashi`` cascade whose submenu
+         carries the ``Show Heikin-Ashi Candles`` + ``Highlight Flat
+         Bars`` entries in that order.
       C. The toggle handler ``_on_menu_toggle_highlight_ha_flat``
          flips the BooleanVar AND persists via ``_settings.set``.
       D. ``_ha_flat_overlay_for`` returns None when
@@ -12120,10 +12127,10 @@ def check_b35b_highlight_ha_flat_overlay_toggle(app) -> None:
          with HA + flat both on, and at least one bar qualifies.
       F. Toggling the View entry triggers ``_render`` (verified by
          confirming a render-tagged attribute mutates).
-      G. The *Highlight Flat HA Candles* menu entry is **gated on
-         HA mode**: ``state="disabled"`` when ``_ha_display_var``
-         is False, ``state="normal"`` when True. Toggling the HA
-         entry flips the gating live via
+      G. The *Highlight Flat Bars* menu entry (inside the cascade)
+         is **gated on HA mode**: ``state="disabled"`` when
+         ``_ha_display_var`` is False, ``state="normal"`` when True.
+         Toggling the HA entry flips the gating live via
          ``_sync_highlight_ha_flat_menu_state``.
     """
     import datetime as _dt
@@ -12138,7 +12145,7 @@ def check_b35b_highlight_ha_flat_overlay_toggle(app) -> None:
         "_highlight_ha_flat_var must be a Tk BooleanVar")
     pre = bool(var.get())
 
-    # B. View menu has the canonical label.
+    # B. View menu has the Heikin-Ashi cascade with the new labels.
     mb = getattr(app, "_menubar", None)
     assert mb is not None
     view_menu = None
@@ -12153,28 +12160,56 @@ def check_b35b_highlight_ha_flat_overlay_toggle(app) -> None:
         except Exception:  # noqa: BLE001
             continue
     assert view_menu is not None, "View submenu must exist"
-    labels = []
+    # Locate the Heikin-Ashi cascade inside View.
+    ha_menu = None
     m = int(view_menu.index("end") or 0)
+    for i in range(m + 1):
+        try:
+            if str(view_menu.type(i)) != "cascade":
+                continue
+            if str(view_menu.entrycget(i, "label")) == "Heikin-Ashi":
+                ha_menu = app.nametowidget(view_menu.entrycget(i, "menu"))
+                break
+        except Exception:  # noqa: BLE001
+            continue
+    assert ha_menu is not None, (
+        "View menu must carry a 'Heikin-Ashi' cascade")
+    # Collect the cascade's checkbutton labels.
+    ha_labels = []
+    k = int(ha_menu.index("end") or 0)
+    for i in range(k + 1):
+        try:
+            t = str(ha_menu.type(i))
+            if t == "checkbutton":
+                ha_labels.append(str(ha_menu.entrycget(i, "label")))
+        except Exception:  # noqa: BLE001
+            continue
+    assert "Show Heikin-Ashi Candles" in ha_labels, (
+        f"Heikin-Ashi cascade must list 'Show Heikin-Ashi Candles'; "
+        f"got {ha_labels!r}")
+    assert "Highlight Flat Bars" in ha_labels, (
+        f"Heikin-Ashi cascade must list 'Highlight Flat Bars'; "
+        f"got {ha_labels!r}")
+    # The candle toggle comes first; the highlight follows.
+    i_candles = ha_labels.index("Show Heikin-Ashi Candles")
+    i_flat = ha_labels.index("Highlight Flat Bars")
+    assert i_candles < i_flat, (
+        f"HA cascade order should be candles < flat; got {ha_labels}")
+    # The old top-level "Highlight Flat HA Candles" entry must be gone.
+    view_labels = []
     for i in range(m + 1):
         try:
             t = str(view_menu.type(i))
             if t in ("checkbutton", "command", "radiobutton"):
-                labels.append(str(view_menu.entrycget(i, "label")))
+                view_labels.append(str(view_menu.entrycget(i, "label")))
         except Exception:  # noqa: BLE001
             continue
-    assert "Highlight Flat HA Candles" in labels, (
-        f"View menu must list 'Highlight Flat HA Candles'; got {labels!r}")
-    # Alphabetical: HA candles < Highlight Flat HA Candles < Highlight Key Bars.
-    try:
-        i_ha = labels.index("Heikin-Ashi Candles")
-        i_flat = labels.index("Highlight Flat HA Candles")
-        i_key = labels.index("Highlight Key Bars")
-        assert i_ha < i_flat < i_key, (
-            f"View menu order should be HA < flat < key; got {labels}")
-    except ValueError:
-        # If the surrounding labels aren't both present this assert
-        # is non-applicable; the previous assert covers presence.
-        pass
+    assert "Highlight Flat HA Candles" not in view_labels, (
+        f"Legacy top-level 'Highlight Flat HA Candles' entry must be "
+        f"retired; got View menu labels {view_labels!r}")
+    assert "Highlight Key Bars" in view_labels, (
+        f"View menu must keep 'Highlight Key Bars' at the top level; "
+        f"got {view_labels!r}")
 
     # C. Handler flips var AND persists.
     from tradinglab import settings as _settings_mod
@@ -12251,35 +12286,36 @@ def check_b35b_highlight_ha_flat_overlay_toggle(app) -> None:
     var.set(pre)
     _settings_mod.set("highlight_ha_flat", pre)
 
-    # G. Menu entry is gated on HA mode. Find the entry index in
-    #    view_menu and assert state follows _ha_display_var.
+    # G. Menu entry is gated on HA mode. Find the "Highlight Flat Bars"
+    #    entry's index inside the HA cascade and assert state follows
+    #    _ha_display_var.
     entry_index = None
-    for i in range(m + 1):
+    for i in range(k + 1):
         try:
-            if str(view_menu.type(i)) != "checkbutton":
+            if str(ha_menu.type(i)) != "checkbutton":
                 continue
-            if str(view_menu.entrycget(i, "label")) == "Highlight Flat HA Candles":
+            if str(ha_menu.entrycget(i, "label")) == "Highlight Flat Bars":
                 entry_index = i
                 break
         except Exception:  # noqa: BLE001
             continue
     assert entry_index is not None, (
-        "Could not locate 'Highlight Flat HA Candles' entry in View menu")
+        "Could not locate 'Highlight Flat Bars' entry in HA cascade")
     pre_ha_g = bool(app._ha_display_var.get())
     try:
         # HA OFF → entry must be disabled.
         app._ha_display_var.set(False)
         app._on_menu_toggle_heikin_ashi()
-        state_off = str(view_menu.entrycget(entry_index, "state"))
+        state_off = str(ha_menu.entrycget(entry_index, "state"))
         assert state_off == "disabled", (
-            f"Highlight Flat HA Candles must be disabled when HA off; "
+            f"Highlight Flat Bars must be disabled when HA off; "
             f"got state={state_off!r}")
         # HA ON → entry must be normal/enabled.
         app._ha_display_var.set(True)
         app._on_menu_toggle_heikin_ashi()
-        state_on = str(view_menu.entrycget(entry_index, "state"))
+        state_on = str(ha_menu.entrycget(entry_index, "state"))
         assert state_on == "normal", (
-            f"Highlight Flat HA Candles must be enabled when HA on; "
+            f"Highlight Flat Bars must be enabled when HA on; "
             f"got state={state_on!r}")
     finally:
         app._ha_display_var.set(pre_ha_g)
@@ -12287,8 +12323,8 @@ def check_b35b_highlight_ha_flat_overlay_toggle(app) -> None:
             app._on_menu_toggle_heikin_ashi()
         except Exception:  # noqa: BLE001
             pass
-    print("  [OK] b35b View → Highlight Flat HA Candles toggle wired "
-          "(var, menu, handler, hatch overlay helper, persistence, HA-gating)")
+    print("  [OK] b35b View → Heikin-Ashi → Highlight Flat Bars toggle wired "
+          "(var, cascade, handler, hatch overlay helper, persistence, HA-gating)")
 
 
 def check_b69_color_only_toggles_use_glyph_repaint(app) -> None:

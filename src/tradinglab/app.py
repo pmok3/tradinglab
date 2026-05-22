@@ -459,13 +459,13 @@ class ChartApp(
             "write", lambda *_: self._sync_indicator_dialog_for_interval(),
         )
         self._build_menubar()
-        # The *Highlight Flat HA Candles* menu entry is gated on HA
-        # mode: enabled (clickable) when HA candles are displayed,
-        # disabled (greyed out) when raw OHLC candles are. The
-        # underlying BooleanVar still holds the user's preference, so
-        # the highlight re-engages automatically the moment HA comes
-        # back on. Sync the initial state here, immediately after the
-        # View menu has been built.
+        # The *Highlight Flat Bars* menu entry (View → Heikin-Ashi
+        # cascade) is gated on HA mode: enabled (clickable) when HA
+        # candles are displayed, disabled (greyed out) when raw OHLC
+        # candles are. The underlying BooleanVar still holds the user's
+        # preference, so the highlight re-engages automatically the
+        # moment HA comes back on. Sync the initial state here,
+        # immediately after the View menu has been built.
         self._sync_highlight_ha_flat_menu_state()
         # Window geometry: restored from `gui/geometry_store.py` (UI/UX
         # audit P0 #3). The prior adaptive-90% block is now the FALLBACK
@@ -3361,7 +3361,7 @@ class ChartApp(
             _settings.set("heikin_ashi", on)
         except Exception:  # noqa: BLE001
             pass
-        # Sync the *Highlight Flat HA Candles* menu entry's clickable
+        # Sync the *Highlight Flat Bars* menu entry's clickable
         # state to follow HA mode — the flat highlight is an HA-only
         # feature, and showing it as enabled while HA is off would
         # invite the user to click a control that has no visible
@@ -3396,22 +3396,23 @@ class ChartApp(
             pass
 
     def _sync_highlight_ha_flat_menu_state(self) -> None:
-        """Gate the *Highlight Flat HA Candles* menu entry on HA mode.
+        """Gate the *Highlight Flat Bars* menu entry on HA mode.
 
-        Sets the entry's ``state`` to ``"normal"`` when ``_ha_display_var``
-        is ``True`` and ``"disabled"`` (greyed out, non-clickable) when
-        it is ``False``. The underlying ``_highlight_ha_flat_var`` is
-        **not** touched — the user's preference persists across HA
-        toggles and re-engages the moment HA comes back on.
+        The entry lives inside the View → Heikin-Ashi cascade. Sets its
+        ``state`` to ``"normal"`` when ``_ha_display_var`` is ``True``
+        and ``"disabled"`` (greyed out, non-clickable) when it is
+        ``False``. The underlying ``_highlight_ha_flat_var`` is **not**
+        touched — the user's preference persists across HA toggles and
+        re-engages the moment HA comes back on.
 
         Called from :meth:`__init__` (initial state) and from
         :meth:`_on_menu_toggle_heikin_ashi` (every HA flip). Defensive:
-        silently no-ops if the View menu hasn't been built yet, if the
+        silently no-ops if the HA cascade hasn't been built yet, if the
         entry cannot be found, or if Tk has already torn down (e.g.
         during shutdown).
         """
-        view_menu = getattr(self, "_view_menu", None)
-        if view_menu is None:
+        ha_menu = getattr(self, "_ha_menu", None)
+        if ha_menu is None:
             return
         try:
             ha_on = bool(self._ha_display_var.get())
@@ -3419,19 +3420,19 @@ class ChartApp(
             return
         new_state = "normal" if ha_on else "disabled"
         try:
-            end = view_menu.index("end")
+            end = ha_menu.index("end")
             if end is None:
                 return
             for i in range(int(end) + 1):
                 try:
-                    if str(view_menu.type(i)) != "checkbutton":
+                    if str(ha_menu.type(i)) != "checkbutton":
                         continue
-                    label = str(view_menu.entrycget(i, "label"))
+                    label = str(ha_menu.entrycget(i, "label"))
                 except Exception:  # noqa: BLE001
                     continue
-                if label == "Highlight Flat HA Candles":
+                if label == "Highlight Flat Bars":
                     try:
-                        view_menu.entryconfigure(i, state=new_state)
+                        ha_menu.entryconfigure(i, state=new_state)
                     except Exception:  # noqa: BLE001
                         pass
                     return
@@ -3548,9 +3549,10 @@ class ChartApp(
         cached background holds the *previous* Collections (spec §6.3 /
         §11.2) — restoring it after a slice refill would reveal stale bars.
 
-        When the View → Heikin-Ashi Candles toggle is on, the candle
-        glyphs are drawn from a parallel HA-projected list while volume,
-        session shading, and indicators continue to use real OHLC.
+        When the View → Heikin-Ashi → Show Heikin-Ashi Candles toggle is
+        on, the candle glyphs are drawn from a parallel HA-projected list
+        while volume, session shading, and indicators continue to use
+        real OHLC.
         """
         ps = self._panel_state.get(slot)
         if not ps:
@@ -6055,8 +6057,10 @@ class ChartApp(
         the next successful save.
 
         Compatibility markers for source-level menu tests:
-        View → "Highlight Flat HA Candles" binds
-        ``_highlight_ha_flat_var`` to ``_on_menu_toggle_highlight_ha_flat``.
+        View → Heikin-Ashi → "Highlight Flat Bars" binds
+        ``_highlight_ha_flat_var`` to ``_on_menu_toggle_highlight_ha_flat``;
+        View → Heikin-Ashi → "Show Heikin-Ashi Candles" binds
+        ``_ha_display_var`` to ``_on_menu_toggle_heikin_ashi``.
         The extracted builder still owns the literal menu labels
         "Highlight Key Bars", "Download Replay Data…", and
         "Restore Default Templates…".
@@ -6065,6 +6069,7 @@ class ChartApp(
         self.config(menu=self._menu_builder.build())
         self._menubar = self._menu_builder.menubar
         self._view_menu = self._menu_builder.view_menu
+        self._ha_menu = self._menu_builder.ha_menu
         self._menubar_submenus = self._menu_builder.submenus
         self._recent_config_menu = self._menu_builder.recent_config_menu
         self._recent_watchlist_menu = self._menu_builder.recent_watchlist_menu

@@ -44,8 +44,14 @@ REQUIRED_LITERALS = (
     "Reset Zoom",
     "Snapshot Chart\u2026",
     "Clear All Drawings",
-    "Heikin-Ashi Candles",
-    "Highlight Flat HA Candles",
+    # Heikin-Ashi cascade labels (audit ``ha-menu-cascade``). The HA
+    # candle toggle and flat-bar highlight live inside the
+    # View → Heikin-Ashi submenu; the old top-level
+    # "Highlight Flat HA Candles" entry is gone (label is shorter
+    # because the cascade gives context).
+    "Heikin-Ashi",
+    "Show Heikin-Ashi Candles",
+    "Highlight Flat Bars",
     "Highlight Key Bars",
     "Download Replay Data\u2026",
     "Restore Default Templates\u2026",
@@ -66,6 +72,10 @@ FORBIDDEN_OLD_LABELS = (
     "Download replay data\u2026",
     "Restore default templates\u2026",
     "Clear list",
+    # The old top-level "Highlight Flat HA Candles" entry was retired
+    # in favour of the Heikin-Ashi cascade (audit ``ha-menu-cascade``).
+    # It must not reappear as a menu label literal.
+    "Highlight Flat HA Candles",
 )
 
 

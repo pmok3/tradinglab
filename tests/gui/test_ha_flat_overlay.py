@@ -420,13 +420,16 @@ def test_settings_default_is_off():
 
 def test_view_menu_lists_highlight_ha_flat():
     """The View menu wiring includes the new checkbutton with the
-    canonical label ``Highlight Flat HA Candles`` and routes the
-    ``command`` to the toggle handler."""
+    canonical label ``Highlight Flat Bars`` inside the
+    ``Heikin-Ashi`` cascade and routes the ``command`` to the toggle
+    handler. The ``_build_menubar`` docstring carries the source-level
+    compatibility markers (the actual ``add_checkbutton`` call lives in
+    ``gui/menu_builder.py``)."""
     import inspect
 
     from tradinglab import app as app_mod
     src = inspect.getsource(app_mod.ChartApp._build_menubar)
-    assert "Highlight Flat HA Candles" in src
+    assert "Highlight Flat Bars" in src
     assert "_on_menu_toggle_highlight_ha_flat" in src
     assert "_highlight_ha_flat_var" in src
 
@@ -487,6 +490,10 @@ def _make_menu_mock_app(*, ha_on: bool):
     """Spin up a SimpleNamespace mock that the sync helper can drive
     without instantiating a real Tk root.
 
+    The helper now gates against ``_ha_menu`` (the Heikin-Ashi cascade
+    submenu) rather than ``_view_menu`` directly — the flat-bar entry
+    lives inside the cascade after the ``ha-menu-cascade`` audit.
+
     We fake just enough of the ``tk.Menu`` surface
     (``index("end")``, ``type(i)``, ``entrycget(i, "label"|"state")``,
     ``entryconfigure(i, state=...)``) to drive the helper through
@@ -519,30 +526,32 @@ def _make_menu_mock_app(*, ha_on: bool):
                 state = kw["state"]
             self._entries[i] = (t, label, state)
 
-    menu = _FakeMenu([
-        ("checkbutton", "Heikin-Ashi Candles", "normal"),
-        ("checkbutton", "Highlight Flat HA Candles", "normal"),
-        ("checkbutton", "Highlight Key Bars", "normal"),
+    # The HA cascade carries two checkbuttons: the candle-style toggle
+    # and the flat-bar highlight. The gating helper walks this cascade
+    # (not the View menu) looking for the ``Highlight Flat Bars`` entry.
+    ha_menu = _FakeMenu([
+        ("checkbutton", "Show Heikin-Ashi Candles", "normal"),
+        ("checkbutton", "Highlight Flat Bars", "normal"),
     ])
     ns = SimpleNamespace(
-        _view_menu=menu,
+        _ha_menu=ha_menu,
         _ha_display_var=SimpleNamespace(get=lambda: ha_on),
     )
     from tradinglab.app import ChartApp
     ns._sync_highlight_ha_flat_menu_state = (
         ChartApp._sync_highlight_ha_flat_menu_state.__get__(ns)
     )
-    return ns, menu
+    return ns, ha_menu
 
 
 def test_sync_helper_disables_entry_when_ha_off():
     """HA off → entry's ``state`` becomes ``"disabled"``."""
     ns, menu = _make_menu_mock_app(ha_on=False)
     ns._sync_highlight_ha_flat_menu_state()
+    # Index 1 = "Highlight Flat Bars" inside the HA cascade.
     assert menu.entrycget(1, "state") == "disabled"
-    # Other entries untouched.
+    # Sibling "Show Heikin-Ashi Candles" entry is untouched.
     assert menu.entrycget(0, "state") == "normal"
-    assert menu.entrycget(2, "state") == "normal"
 
 
 def test_sync_helper_enables_entry_when_ha_on():
@@ -560,7 +569,7 @@ def test_sync_helper_noop_when_view_menu_missing():
     no-op rather than crash."""
     from tradinglab.app import ChartApp
     ns = SimpleNamespace(_ha_display_var=SimpleNamespace(get=lambda: True))
-    # Bind without _view_menu attribute at all.
+    # Bind without _ha_menu attribute at all.
     ChartApp._sync_highlight_ha_flat_menu_state(ns)  # should not raise
 
 
