@@ -622,7 +622,23 @@ def check_c6_bad_ticker(app) -> None:
 
 
 def check_d0_dialogs(app) -> None:
-    """Settings + Watchlist dialogs open and close cleanly."""
+    """Settings + Watchlist dialogs open and close cleanly.
+
+    macOS-latest CI deadlocks here: opening a ``tk.Toplevel`` with
+    ``transient(parent)`` and then calling ``app.update()`` blocks on
+    ``self.tk.call('update')`` because the GitHub-hosted macOS image
+    has no real display server for the WM round-trip to complete
+    against. Both `_SettingsDialog` and `_WatchlistDialog` chain
+    ``transient`` so neither side can be exercised this way on macOS.
+    The dialogs are still covered by unit tests on every platform
+    (see `tests/unit/gui/test_settings_dialog*.py` and
+    `tests/unit/gui/test_watchlist_dialog*.py`); the smoke check's
+    role is to ensure the wiring is reachable from the live app, which
+    is already validated on Windows + Linux.
+    """
+    if sys.platform == "darwin":
+        print("  [SKIP] d0: macOS Tk dialog deadlock (transient + headless)")
+        return
     s = app._open_settings_dialog()
     _pump(app, 0.1)
     if s is not None and hasattr(s, "destroy"):
