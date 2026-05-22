@@ -6534,8 +6534,9 @@ def check_d55_indicator_preset_menu(app) -> None:
             iend = parent.index("end")
             for i in range(int(iend) + 1):
                 try:
-                    if parent.type(i) == "cascade" and \
-                            parent.entrycget(i, "label") == label:
+                    entry_label = str(parent.entrycget(i, "label")).rstrip()
+                    entry_label = entry_label.removesuffix("›").rstrip()
+                    if parent.type(i) == "cascade" and entry_label == label:
                         return app.nametowidget(parent.entrycget(i, "menu"))
                 except tk.TclError:
                     continue
@@ -12163,7 +12164,9 @@ def check_b35b_highlight_ha_flat_overlay_toggle(app) -> None:
         try:
             if str(view_menu.type(i)) != "cascade":
                 continue
-            if str(view_menu.entrycget(i, "label")) == "Heikin-Ashi":
+            entry_label = str(view_menu.entrycget(i, "label")).rstrip()
+            entry_label = entry_label.removesuffix("›").rstrip()
+            if entry_label == "Heikin-Ashi":
                 ha_menu = app.nametowidget(view_menu.entrycget(i, "menu"))
                 break
         except Exception:  # noqa: BLE001

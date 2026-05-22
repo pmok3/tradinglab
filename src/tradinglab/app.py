@@ -97,6 +97,7 @@ from .gui.help_menu import HelpMenuMixin
 from .gui.indicator_menu import IndicatorMenuMixin
 from .gui.interaction import InteractionMixin
 from .gui.menu_builder import MenuBuilder
+from .gui.menu_theme import apply_menu_theme
 from .gui.named_fonts import (
     DEFAULT_UI_SCALE as _UI_SCALE_DEFAULT,
 )
@@ -6621,6 +6622,7 @@ class ChartApp(
                 label="Remove",
                 command=lambda: manager.remove(int(config_id)),
             )
+            apply_menu_theme(menu, getattr(self, "_theme", None) or LIGHT_THEME)
             try:
                 menu.tk_popup(int(x_root), int(y_root))
             finally:
