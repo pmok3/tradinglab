@@ -17808,14 +17808,26 @@ def check_d28_data_readout_strip(app) -> None:
     """
     app.compare_var.set(False)
     app.interval_var.set("5m")
+    # Clear ``_primary`` so the predicate below actually waits for the
+    # fresh READOUT_TEST load (via the yfinance stub) to install varied
+    # ``_fake_candles`` data. Without this, an earlier check
+    # (e.g. ``check_d10`` slow_fetcher / ``check_d12`` sync_fetcher) may
+    # have left flat 30-bar close=100.5 data in ``_primary`` — that
+    # passes the original ``len(_primary) >= 5`` predicate immediately
+    # on slow runners (macOS CI) and makes the "find a bar with non-
+    # zero pct" search below fail. We also tighten the size threshold
+    # to ``>= 50`` so any leftover 30-bar stub data is excluded, and
+    # widen the timeout to 5 s for macOS headroom.
+    app._primary = []
+    app._primary_raw = []
     app.ticker_var.set("READOUT_TEST")
     app._schedule_reload(delay_ms=0)
     # Wait until the 5m bars land + the readout artist exists.
     _pump_until(app,
-        lambda: getattr(app, "_primary", None) and len(app._primary) >= 5
+        lambda: getattr(app, "_primary", None) and len(app._primary) >= 50
                 and getattr(app, "_readout_artists", None)
                 and app._ax_price in app._readout_artists,
-        timeout=1.5)
+        timeout=5.0)
 
     ax_p = app._ax_price
     ax_v = app._ax_volume
