@@ -45,6 +45,25 @@ def _candles(n: int) -> list[Candle]:
     return [_candle(i) for i in range(n)]
 
 
+def _ha_flat_candles(n: int = 8) -> list[Candle]:
+    """Strong uptrend that produces bull-flat-bottom HA bars."""
+    out: list[Candle] = []
+    t0 = _dt.datetime(2025, 5, 1, 9, 30)
+    for i in range(n):
+        o = 100.0 + i
+        c = o + 1.0
+        out.append(Candle(
+            date=t0 + _dt.timedelta(minutes=i),
+            open=o,
+            high=c + 0.5,
+            low=o - 0.5,
+            close=c,
+            volume=1_000_000,
+            session="regular",
+        ))
+    return out
+
+
 # ---------------------------------------------------------------------------
 # 1. ChartRenderer construction
 # ---------------------------------------------------------------------------
@@ -185,6 +204,27 @@ class TestHaFlatOverlayFor:
         assert r.ha_flat_overlay_for(
             c, highlight_ha_flat_on=True, ha_on=False, dark_mode=False,
         ) is None
+
+    @pytest.mark.parametrize(
+        ("ha_on", "flat_on", "expect_overlay"),
+        [
+            (False, False, False),
+            (False, True, False),
+            (True, False, False),
+            (True, True, True),
+        ],
+    )
+    def test_render_gate_requires_ha_and_flat_toggle(
+        self, ha_on: bool, flat_on: bool, expect_overlay: bool,
+    ):
+        r = ChartRenderer()
+        out = r.ha_flat_overlay_for(
+            _ha_flat_candles(),
+            highlight_ha_flat_on=flat_on,
+            ha_on=ha_on,
+            dark_mode=False,
+        )
+        assert (out is not None) is expect_overlay
 
     def test_empty_returns_none(self):
         r = ChartRenderer()

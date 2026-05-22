@@ -13,7 +13,7 @@ A "marubozu-style" HA bar — body opening at the bar's extreme in the trend dir
 Dojis (`HA_close == HA_open`) never qualify.
 
 Powers two surfaces:
-1. **Chart overlay** — View → "Highlight Flat HA Candles" feeds qualifying indices into `rendering.draw_candlesticks` via the `flat_overlay` parameter (dict carrying bull/bear index sets + hatch colours + patterns). Renderer layers a cross-hatched `PolyCollection` on top of the normal body. Hatch line colour is theme-aware: `rendering.darker_shade` in light mode, `rendering.brighter_shade` in dark mode.
+1. **Chart overlay** — View → Heikin-Ashi → "Highlight Flat Bars" feeds qualifying indices into `rendering.draw_candlesticks` via the `flat_overlay` parameter (dict carrying bull/bear index sets + hatch colours + patterns). Renderer layers a cross-hatched `PolyCollection` on top of the normal body only when HA mode is also on. Hatch line colour is theme-aware: `rendering.darker_shade` in light mode, `rendering.brighter_shade` in dark mode.
 2. **Scanner / entries / exits builtins** — `ha_flat_bottom_bull`, `ha_flat_top_bear`, `ha_flat_strong` (signed) in `scanner/fields.py` reuse this compute so chart and scanner cannot disagree.
 
 ## Public API

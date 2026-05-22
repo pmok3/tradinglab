@@ -330,6 +330,21 @@ def test_helper_returns_none_when_ha_off():
     assert out is None
 
 
+@pytest.mark.parametrize(
+    ("ha_on", "flat_on", "expect_overlay"),
+    [
+        (False, False, False),
+        (False, True, False),
+        (True, False, False),
+        (True, True, True),
+    ],
+)
+def test_helper_render_gate_requires_ha_and_flat_toggle(ha_on, flat_on, expect_overlay):
+    app = _make_app_mock(ha_on=ha_on, flat_on=flat_on, dark_mode=False)
+    out = app._ha_flat_overlay_for(_uptrend_candles(8))
+    assert (out is not None) is expect_overlay
+
+
 def test_helper_returns_none_when_no_qualifying_bars():
     """No bull-flat-bottom and no bear-flat-top → helper returns None
     so the renderer skips the overlay path entirely (no allocations)."""
@@ -435,50 +450,45 @@ def test_view_menu_lists_highlight_ha_flat():
 
 
 # ---------------------------------------------------------------------------
-# Menu-entry HA-gating wiring
+# Menu-entry always-enabled wiring
 # ---------------------------------------------------------------------------
 
 
 def test_menu_state_sync_helper_exists():
     """``_sync_highlight_ha_flat_menu_state`` is the named seam the HA
-    toggle handler calls to grey out / re-enable the flat-highlight
-    menu entry. Its presence is the wiring contract: rename it and
-    the HA toggle handler must be updated in lockstep."""
+    toggle handler calls to keep the flat-highlight menu entry enabled.
+    Its presence is the wiring contract: rename it and the HA toggle
+    handler must be updated in lockstep."""
     from tradinglab.app import ChartApp
     assert hasattr(ChartApp, "_sync_highlight_ha_flat_menu_state"), (
         "ChartApp must expose _sync_highlight_ha_flat_menu_state")
     assert callable(ChartApp._sync_highlight_ha_flat_menu_state)
 
 
-def test_ha_toggle_handler_syncs_menu_state():
-    """The HA toggle handler must call the sync helper so flipping
-    HA candles immediately greys out (or re-enables) the flat
-    highlight menu entry. Source-level check — exercising the
-    handler proper needs a Tk root."""
+def test_ha_toggle_handler_normalizes_menu_state():
+    """The HA toggle handler must call the sync helper so flipping HA
+    candles cannot leave the flat-highlight menu entry disabled. The
+    helper keeps the entry clickable; rendering remains gated by HA mode.
+    Source-level check — exercising the handler proper needs a Tk root."""
     import inspect
 
     from tradinglab import app as app_mod
     src = inspect.getsource(app_mod.ChartApp._on_menu_toggle_heikin_ashi)
     assert "_sync_highlight_ha_flat_menu_state" in src, (
         "HA toggle handler must call _sync_highlight_ha_flat_menu_state "
-        "so the Highlight Flat HA Candles menu entry follows HA mode")
+        "so the Highlight Flat Bars menu entry stays enabled")
 
 
 def test_init_syncs_menu_state_at_startup():
     """``__init__`` must call the sync helper after ``_build_menubar``
-    so the menu entry's disabled/normal state matches the persisted
-    HA preference at app launch (otherwise the entry would always
-    start in tk's default 'normal' state regardless of HA mode)."""
+    so the menu entry is normalized to ``state='normal'`` at app launch."""
     import inspect
 
     from tradinglab import app as app_mod
     src = inspect.getsource(app_mod.ChartApp.__init__)
     assert "_sync_highlight_ha_flat_menu_state" in src, (
         "__init__ must call _sync_highlight_ha_flat_menu_state after "
-        "_build_menubar to set the entry's initial state from "
-        "_ha_display_var")
-    # And the call must come AFTER _build_menubar (otherwise
-    # _view_menu doesn't exist yet).
+        "_build_menubar to normalize the flat-highlight entry")
     build_at = src.index("_build_menubar()")
     sync_at = src.index("_sync_highlight_ha_flat_menu_state")
     assert build_at < sync_at, (
@@ -486,22 +496,21 @@ def test_init_syncs_menu_state_at_startup():
         "_build_menubar() in __init__")
 
 
-def _make_menu_mock_app(*, ha_on: bool):
+def _make_menu_mock_app():
     """Spin up a SimpleNamespace mock that the sync helper can drive
     without instantiating a real Tk root.
 
-    The helper now gates against ``_ha_menu`` (the Heikin-Ashi cascade
-    submenu) rather than ``_view_menu`` directly — the flat-bar entry
-    lives inside the cascade after the ``ha-menu-cascade`` audit.
+    The helper walks ``_ha_menu`` (the Heikin-Ashi cascade submenu) rather
+    than ``_view_menu`` directly because the flat-bar entry lives inside
+    the cascade after the ``ha-menu-cascade`` audit.
 
     We fake just enough of the ``tk.Menu`` surface
     (``index("end")``, ``type(i)``, ``entrycget(i, "label"|"state")``,
-    ``entryconfigure(i, state=...)``) to drive the helper through
-    its real code path.
+    ``entryconfigure(i, state=...)``) to drive the helper through its real
+    code path.
     """
     class _FakeMenu:
         def __init__(self, entries):
-            # entries: list of (type, label, state)
             self._entries = list(entries)
 
         def index(self, what):
@@ -526,17 +535,11 @@ def _make_menu_mock_app(*, ha_on: bool):
                 state = kw["state"]
             self._entries[i] = (t, label, state)
 
-    # The HA cascade carries two checkbuttons: the candle-style toggle
-    # and the flat-bar highlight. The gating helper walks this cascade
-    # (not the View menu) looking for the ``Highlight Flat Bars`` entry.
     ha_menu = _FakeMenu([
         ("checkbutton", "Show Heikin-Ashi Candles", "normal"),
         ("checkbutton", "Highlight Flat Bars", "normal"),
     ])
-    ns = SimpleNamespace(
-        _ha_menu=ha_menu,
-        _ha_display_var=SimpleNamespace(get=lambda: ha_on),
-    )
+    ns = SimpleNamespace(_ha_menu=ha_menu)
     from tradinglab.app import ChartApp
     ns._sync_highlight_ha_flat_menu_state = (
         ChartApp._sync_highlight_ha_flat_menu_state.__get__(ns)
@@ -544,20 +547,18 @@ def _make_menu_mock_app(*, ha_on: bool):
     return ns, ha_menu
 
 
-def test_sync_helper_disables_entry_when_ha_off():
-    """HA off → entry's ``state`` becomes ``"disabled"``."""
-    ns, menu = _make_menu_mock_app(ha_on=False)
+def test_sync_helper_keeps_entry_enabled_even_when_pre_disabled():
+    """Entry is always normalized to ``state='normal'``."""
+    ns, menu = _make_menu_mock_app()
+    menu.entryconfigure(1, state="disabled")
     ns._sync_highlight_ha_flat_menu_state()
-    # Index 1 = "Highlight Flat Bars" inside the HA cascade.
-    assert menu.entrycget(1, "state") == "disabled"
-    # Sibling "Show Heikin-Ashi Candles" entry is untouched.
+    assert menu.entrycget(1, "state") == "normal"
     assert menu.entrycget(0, "state") == "normal"
 
 
-def test_sync_helper_enables_entry_when_ha_on():
-    """HA on → entry's ``state`` becomes ``"normal"``."""
-    ns, menu = _make_menu_mock_app(ha_on=True)
-    # Pre-disable so we can verify the helper flips it back.
+def test_sync_helper_does_not_read_ha_mode():
+    """Missing ``_ha_display_var`` must not stop the entry from enabling."""
+    ns, menu = _make_menu_mock_app()
     menu.entryconfigure(1, state="disabled")
     ns._sync_highlight_ha_flat_menu_state()
     assert menu.entrycget(1, "state") == "normal"
@@ -565,24 +566,20 @@ def test_sync_helper_enables_entry_when_ha_on():
 
 def test_sync_helper_noop_when_view_menu_missing():
     """Defensive: helper must not raise if called before
-    ``_build_menubar`` (or after Tk shutdown). It should silently
-    no-op rather than crash."""
+    ``_build_menubar`` (or after Tk shutdown). It should silently no-op
+    rather than crash."""
     from tradinglab.app import ChartApp
-    ns = SimpleNamespace(_ha_display_var=SimpleNamespace(get=lambda: True))
-    # Bind without _ha_menu attribute at all.
+    ns = SimpleNamespace()
     ChartApp._sync_highlight_ha_flat_menu_state(ns)  # should not raise
 
 
 def test_sync_helper_preserves_underlying_var():
-    """The sync helper changes only the *menu entry's* state — it
-    must NOT touch the underlying BooleanVar. So the user's
-    "highlight on" preference persists across HA-off intervals
-    and re-engages on HA-on."""
-    ns, menu = _make_menu_mock_app(ha_on=False)
-    # Add a BooleanVar-ish stand-in and confirm it isn't touched.
+    """The sync helper changes only the *menu entry's* state — it must
+    NOT touch the underlying BooleanVar. The user's "highlight on"
+    preference persists across HA-off intervals and re-engages on HA-on."""
+    ns, menu = _make_menu_mock_app()
+    menu.entryconfigure(1, state="disabled")
     ns._highlight_ha_flat_var = SimpleNamespace(get=lambda: True)
     ns._sync_highlight_ha_flat_menu_state()
-    # Var still reports True (the user's preference).
     assert ns._highlight_ha_flat_var.get() is True
-    # But the menu entry is greyed out.
-    assert menu.entrycget(1, "state") == "disabled"
+    assert menu.entrycget(1, "state") == "normal"

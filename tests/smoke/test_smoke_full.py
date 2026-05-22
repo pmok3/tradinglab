@@ -12107,19 +12107,18 @@ def check_b35b_highlight_ha_flat_overlay_toggle(app) -> None:
 
     Audit ``ha-menu-cascade`` (2026) restructured the View menu so the
     HA candle toggle and the flat-bar overlay live inside a single
-    ``Heikin-Ashi`` cascade — the previous flat top-level layout was
-    relying on a disabled-greyed entry to communicate the dependency.
+    ``Heikin-Ashi`` cascade. The flat-bar entry remains clickable even
+    while HA is off; rendering is gated by HA mode AND the flat toggle.
 
     Validates:
-      A. ``_highlight_ha_flat_var`` exists, is a Tk BooleanVar,
-         defaults True (matching the persisted setting default).
+      A. ``_highlight_ha_flat_var`` exists and is a Tk BooleanVar.
       B. The View menu has a ``Heikin-Ashi`` cascade whose submenu
          carries the ``Show Heikin-Ashi Candles`` + ``Highlight Flat
          Bars`` entries in that order.
       C. The toggle handler ``_on_menu_toggle_highlight_ha_flat``
-         flips the BooleanVar AND persists via ``_settings.set``.
-      D. ``_ha_flat_overlay_for`` returns None when
-         the toggle is off (and when HA mode is off).
+         persists via ``_settings.set`` regardless of HA mode.
+      D. ``_ha_flat_overlay_for`` returns None unless HA mode and the
+         flat-highlight toggle are both on.
       E. ``_ha_flat_overlay_for`` returns a dict with the
          expected hatch-overlay schema (``bull_indices`` /
          ``bear_indices`` / ``bull_color`` / ``bear_color`` /
@@ -12128,10 +12127,7 @@ def check_b35b_highlight_ha_flat_overlay_toggle(app) -> None:
       F. Toggling the View entry triggers ``_render`` (verified by
          confirming a render-tagged attribute mutates).
       G. The *Highlight Flat Bars* menu entry (inside the cascade)
-         is **gated on HA mode**: ``state="disabled"`` when
-         ``_ha_display_var`` is False, ``state="normal"`` when True.
-         Toggling the HA entry flips the gating live via
-         ``_sync_highlight_ha_flat_menu_state``.
+         stays ``state="normal"`` across HA-off and HA-on intervals.
     """
     import datetime as _dt
     import tkinter as tk
@@ -12211,32 +12207,45 @@ def check_b35b_highlight_ha_flat_overlay_toggle(app) -> None:
         f"View menu must keep 'Highlight Key Bars' at the top level; "
         f"got {view_labels!r}")
 
-    # C. Handler flips var AND persists.
+    # C. Handler persists regardless of HA mode.
     from tradinglab import settings as _settings_mod
-    var.set(False)
-    app._on_menu_toggle_highlight_ha_flat()
-    persisted = _settings_mod.get("highlight_ha_flat", None)
-    assert persisted is False, (
-        f"toggle handler must persist; got {persisted!r}")
-    assert bool(var.get()) is False
+    pre_ha_for_persist = bool(app._ha_display_var.get())
+    try:
+        app._ha_display_var.set(False)
+        var.set(True)
+        app._on_menu_toggle_highlight_ha_flat()
+        persisted = _settings_mod.get("highlight_ha_flat", None)
+        assert persisted is True, (
+            f"toggle handler must persist while HA off; got {persisted!r}")
+        assert bool(var.get()) is True
+    finally:
+        app._ha_display_var.set(pre_ha_for_persist)
 
-    # D. helper returns None when toggled off.
+    # D/E. Render gate: only HA ON + flat-highlight ON produces overlay.
     candles = [
         Candle(date=_dt.datetime(2024, 1, 2, 9, 30) + _dt.timedelta(minutes=i),
                open=100.0 + i, high=102.0 + i, low=99.0 + i,
                close=101.0 + i, volume=1000, session="regular")
         for i in range(8)
     ]
-    out_off = app._ha_flat_overlay_for(candles)
-    assert out_off is None, (
-        f"helper must short-circuit when toggle off; got {out_off!r}")
-
-    # E. helper returns a dict when both flat-toggle AND HA are on.
-    var.set(True)
-    pre_ha = bool(app._ha_display_var.get())
-    app._ha_display_var.set(True)
+    pre_ha_for_gate = bool(app._ha_display_var.get())
+    pre_flat_for_gate = bool(var.get())
+    out_on = None
     try:
-        out_on = app._ha_flat_overlay_for(candles)
+        for ha_on, flat_on, expect_overlay in (
+            (False, False, False),
+            (False, True, False),
+            (True, False, False),
+            (True, True, True),
+        ):
+            app._ha_display_var.set(ha_on)
+            var.set(flat_on)
+            out = app._ha_flat_overlay_for(candles)
+            assert (out is not None) is expect_overlay, (
+                "overlay render gate must require HA mode and flat toggle; "
+                f"ha_on={ha_on!r} flat_on={flat_on!r} out={out!r}")
+            if expect_overlay:
+                out_on = out
         assert out_on is not None, (
             "helper must return dict when HA + flat both on with qualifying bars")
         assert isinstance(out_on, dict)
@@ -12260,7 +12269,8 @@ def check_b35b_highlight_ha_flat_overlay_toggle(app) -> None:
         assert out_on["bull_hatch"]
         assert out_on["bear_hatch"]
     finally:
-        app._ha_display_var.set(pre_ha)
+        app._ha_display_var.set(pre_ha_for_gate)
+        var.set(pre_flat_for_gate)
 
     # F. Handler triggers _render — observable by ``_last_render_tick``.
     pre_tick = getattr(app, "_render_tick_counter", None)
@@ -12286,9 +12296,9 @@ def check_b35b_highlight_ha_flat_overlay_toggle(app) -> None:
     var.set(pre)
     _settings_mod.set("highlight_ha_flat", pre)
 
-    # G. Menu entry is gated on HA mode. Find the "Highlight Flat Bars"
-    #    entry's index inside the HA cascade and assert state follows
-    #    _ha_display_var.
+    # G. Menu entry is always enabled. Find the "Highlight Flat Bars"
+    #    entry's index inside the HA cascade and assert state stays normal
+    #    while HA flips off and back on; the BooleanVar remains independent.
     entry_index = None
     for i in range(k + 1):
         try:
@@ -12302,29 +12312,36 @@ def check_b35b_highlight_ha_flat_overlay_toggle(app) -> None:
     assert entry_index is not None, (
         "Could not locate 'Highlight Flat Bars' entry in HA cascade")
     pre_ha_g = bool(app._ha_display_var.get())
+    pre_flat_g = bool(var.get())
     try:
-        # HA OFF → entry must be disabled.
+        var.set(True)
+        # HA OFF → entry remains enabled, but overlay rendering is dormant.
         app._ha_display_var.set(False)
         app._on_menu_toggle_heikin_ashi()
         state_off = str(ha_menu.entrycget(entry_index, "state"))
-        assert state_off == "disabled", (
-            f"Highlight Flat Bars must be disabled when HA off; "
+        assert state_off == "normal", (
+            f"Highlight Flat Bars must stay enabled when HA off; "
             f"got state={state_off!r}")
-        # HA ON → entry must be normal/enabled.
+        assert bool(var.get()) is True
+        assert app._ha_flat_overlay_for(candles) is None
+        # HA ON → entry remains enabled and the remembered toggle renders.
         app._ha_display_var.set(True)
         app._on_menu_toggle_heikin_ashi()
         state_on = str(ha_menu.entrycget(entry_index, "state"))
         assert state_on == "normal", (
-            f"Highlight Flat Bars must be enabled when HA on; "
+            f"Highlight Flat Bars must stay enabled when HA on; "
             f"got state={state_on!r}")
+        assert bool(var.get()) is True
+        assert app._ha_flat_overlay_for(candles) is not None
     finally:
+        var.set(pre_flat_g)
         app._ha_display_var.set(pre_ha_g)
         try:
             app._on_menu_toggle_heikin_ashi()
         except Exception:  # noqa: BLE001
             pass
     print("  [OK] b35b View → Heikin-Ashi → Highlight Flat Bars toggle wired "
-          "(var, cascade, handler, hatch overlay helper, persistence, HA-gating)")
+          "(var, cascade, handler, hatch overlay helper, persistence, always-enabled)")
 
 
 def check_b69_color_only_toggles_use_glyph_repaint(app) -> None:

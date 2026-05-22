@@ -470,12 +470,10 @@ class ChartApp(
         )
         self._build_menubar()
         # The *Highlight Flat Bars* menu entry (View → Heikin-Ashi
-        # cascade) is gated on HA mode: enabled (clickable) when HA
-        # candles are displayed, disabled (greyed out) when raw OHLC
-        # candles are. The underlying BooleanVar still holds the user's
-        # preference, so the highlight re-engages automatically the
-        # moment HA comes back on. Sync the initial state here,
-        # immediately after the View menu has been built.
+        # cascade) is always clickable. The visual overlay is gated in
+        # the renderer by HA mode AND the flat-highlight toggle, so the
+        # BooleanVar can hold the user's preference while HA is off.
+        # Normalize the entry immediately after the View menu is built.
         self._sync_highlight_ha_flat_menu_state()
         # Window geometry: restored from `gui/geometry_store.py` (UI/UX
         # audit P0 #3). The prior adaptive-90% block is now the FALLBACK
@@ -3545,12 +3543,9 @@ class ChartApp(
             _settings.set("heikin_ashi", on)
         except Exception:  # noqa: BLE001
             pass
-        # Sync the *Highlight Flat Bars* menu entry's clickable
-        # state to follow HA mode — the flat highlight is an HA-only
-        # feature, and showing it as enabled while HA is off would
-        # invite the user to click a control that has no visible
-        # effect. The underlying BooleanVar keeps its value so the
-        # preference is preserved across the toggle.
+        # Keep the flat-bar entry clickable across HA flips. Rendering
+        # remains HA-only because ``_ha_flat_overlay_for`` requires both
+        # HA mode and the flat-highlight toggle to be on.
         try:
             self._sync_highlight_ha_flat_menu_state()
         except Exception:  # noqa: BLE001
@@ -3580,14 +3575,12 @@ class ChartApp(
             pass
 
     def _sync_highlight_ha_flat_menu_state(self) -> None:
-        """Gate the *Highlight Flat Bars* menu entry on HA mode.
+        """Keep the *Highlight Flat Bars* menu entry enabled.
 
-        The entry lives inside the View → Heikin-Ashi cascade. Sets its
-        ``state`` to ``"normal"`` when ``_ha_display_var`` is ``True``
-        and ``"disabled"`` (greyed out, non-clickable) when it is
-        ``False``. The underlying ``_highlight_ha_flat_var`` is **not**
-        touched — the user's preference persists across HA toggles and
-        re-engages the moment HA comes back on.
+        The entry lives inside the View → Heikin-Ashi cascade and is
+        intentionally always clickable. Its BooleanVar stores the user's
+        preference even while HA candles are off; visual rendering is
+        separately gated by HA mode AND the flat-highlight toggle.
 
         Called from :meth:`__init__` (initial state) and from
         :meth:`_on_menu_toggle_heikin_ashi` (every HA flip). Defensive:
@@ -3598,11 +3591,6 @@ class ChartApp(
         ha_menu = getattr(self, "_ha_menu", None)
         if ha_menu is None:
             return
-        try:
-            ha_on = bool(self._ha_display_var.get())
-        except Exception:  # noqa: BLE001
-            return
-        new_state = "normal" if ha_on else "disabled"
         try:
             end = ha_menu.index("end")
             if end is None:
@@ -3616,7 +3604,7 @@ class ChartApp(
                     continue
                 if label == "Highlight Flat Bars":
                     try:
-                        ha_menu.entryconfigure(i, state=new_state)
+                        ha_menu.entryconfigure(i, state="normal")
                     except Exception:  # noqa: BLE001
                         pass
                     return

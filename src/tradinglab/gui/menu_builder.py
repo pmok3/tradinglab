@@ -239,13 +239,11 @@ class MenuBuilder:
 
         view_menu = tk.Menu(menubar, tearoff=0)
         # Heikin-Ashi cascade — groups the candle-style toggle with the
-        # flat-bar overlay since the latter is meaningless without HA on.
-        # The previous flat top-level layout used a disabled-greyed entry
-        # to communicate the dependency; the cascade replaces that with a
-        # clearer hierarchy. The flat-bar entry is still gated on HA mode
-        # (see ``app._sync_highlight_ha_flat_menu_state``) — disabling
-        # it inside the cascade preserves the persisted preference across
-        # HA-off intervals. Audit ``ha-menu-cascade``.
+        # flat-bar overlay since the latter only renders while HA is on.
+        # The flat-bar entry stays clickable even when HA is off; its
+        # BooleanVar persists the preference and the renderer gates the
+        # visual overlay on HA mode AND the flat-highlight toggle.
+        # Audit ``ha-menu-cascade``.
         ha_menu = tk.Menu(view_menu, tearoff=0)
         ha_menu.add_checkbutton(
             label="Show Heikin-Ashi Candles",

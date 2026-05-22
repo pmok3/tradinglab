@@ -91,9 +91,10 @@ Collections without rebuilding formatters/locators.
   bails in HA mode (rightmost-only mutation can't satisfy the HA recurrence).
 - Highlight Key Bars: `_key_bar_hollow_indices_for(candles)` → `hollow_indices`
   set. Fastpath bails when toggle is on.
-- Highlight Flat HA Candles: only active in HA mode; hatch pattern is
-  `"xxx"` on both sides (bull/bear identity is already in the body fill).
-  Piggybacks on the HA fastpath bail.
+- Highlight Flat Bars (View → Heikin-Ashi): only renders when HA mode and
+  the flat-highlight toggle are both on; hatch pattern is `"xxx"` on both
+  sides (bull/bear identity is already in the body fill). Piggybacks on the
+  HA fastpath bail.
 - `draw_*` never calls `ax.clear()` or sets xlim — caller's job. This is
   what makes pan re-renders cheap.
 
