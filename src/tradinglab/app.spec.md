@@ -74,7 +74,12 @@ File structure:
 3. Token-gated callback: `_fetch_token` bump on submit; callback drops if mismatched.
 4. `_full_cache[(source,ticker,interval,prepost)]` — OrderedDict, LRU, soft cap `_FULL_CACHE_MAX=16`. Pinned entries never evicted by trim.
 5. `_series_cache[id(candles)]` — memoizes `_build_series_safe(...)`; verified via `sa._candles is candles` to defend against id-reuse.
-6. Compare-mode pre-fetch via `_ensure_compare_prefetched`.
+6. `_prefetched_raw` ingests executor-fetched bars without a second
+   provider call. When it supplies fresh primary/compare data,
+   `_load_data` invalidates indicator entries for the prior visible
+   lists before rendering. This prevents stale fingerprint hits from
+   rebinding onto replacement lists.
+7. Compare-mode pre-fetch via `_ensure_compare_prefetched`.
 
 ### Cache staleness (`_cache_is_stale`)
 Interval- and session-aware:
@@ -375,6 +380,7 @@ Update check (`_update_check.start_update_check`) is env-var gated by `TRADINGLA
 - `check_c0/c5/c6` — watchlist tab + 5-tab notebook + bad-ticker revert.
 - `check_d2_preserve_xlim_across_compare_toggle`, `check_d5_x_axis_pan_stability`, `check_d7_slide_to_right_edge`.
 - `check_d8_scheduler_aligns_to_bar_close`, `check_d9_poll_retry_when_bar_not_ready`, `check_d10_offload_to_executor`.
+- `test_prefetched_load_invalidates_prior_visible_indicator_entries` — `_prefetched_raw` reloads do not reuse stale indicator results through fingerprint fallback.
 - `check_d11_tab_labels`, `check_d12_companion_prefetch`, `check_d13_watchlist_pinned_subtabs`, `check_d14_theme_overrides`, `check_d15_pin_kicks_preload`.
 - `check_d16_startup_defaults`, `check_d17_drilldown_to_5m`, `check_d18_display_timezone`.
 - `check_d23_perf_h3_h6_m2_m4`, `check_d24_async_user_load`, `check_d25_scroll_wheel_zoom`, `check_d26_scroll_invert`, `check_d27_floating_price_label`, `check_d28_readout_strip`.

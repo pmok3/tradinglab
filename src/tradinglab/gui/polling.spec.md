@@ -81,8 +81,10 @@ Also hosts the pure scheduler helpers (only caller is here).
 - `_next_bar_fetch_tick()` — actual fetch. Provider HTTP runs on
   `_fetch_executor` (off Tk thread). Result marshaled via
   `_await_future_on_tk` and fed into `_load_data` through
-  `_prefetched_raw`. Bumps `_fetch_token` before submission so
-  stale results from a superseding ticker switch can drop. **1d
+  `_prefetched_raw`. `_load_data` invalidates prior visible
+  primary/compare indicator entries when it consumes those fresh bars.
+  Bumps `_fetch_token` before submission so stale results from a
+  superseding ticker switch can drop. **1d
   ticks redirect to intraday prefetch** (`_ensure_prefetched(sym,
   "5m", force=True)`) for primary + compare instead of refetching
   daily — the prefetch-arrival handler then re-renders the
@@ -112,6 +114,8 @@ Also hosts the pure scheduler helpers (only caller is here).
 - **Off-thread fetch** via `_fetch_executor`; `_fetch_token`
   bumped before submission so the in-flight result callback can
   drop stale data via `if token != self._fetch_token: return`.
+  Prefetched arrivals reuse `_load_data`'s targeted indicator-cache
+  invalidation instead of clearing the whole cache.
 - **80ms worker-inbox / 50ms stream-queue** tick rates: balance
   perceived smoothness vs idle CPU.
 - **Retry path bypasses aligned scheduler** — only reason to

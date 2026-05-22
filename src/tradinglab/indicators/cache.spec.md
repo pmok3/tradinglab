@@ -70,9 +70,14 @@ identity verification on lookup.
     mutates while length is unchanged. The incremental hook can't
     detect this (length equal → returns stale arrays). Such callers
     **must** call `invalidate_for_candles(candles)` (or `clear()`).
-  `ChartApp._invalidate_focused_panels` (forming-bar) and
-  `_notify_focused_panels_appended` (pure-append) own this on the app
-  side.
+  * **Fresh-fetch replacement** (`ChartApp._load_data` consuming
+    `_prefetched_raw`): a provider reload can replace the visible list
+    with a new list whose fingerprint still matches the previous list
+    while interior bars changed. The app invalidates the prior visible
+    primary/compare lists before rendering the replacement.
+  `ChartApp._invalidate_focused_panels` (forming-bar and fresh-fetch
+  replacement) and `_notify_focused_panels_appended` (pure-append) own
+  this on the app side.
 
 ## Invariants
 - Same `(candles, hash_key)` returns the same cached dict identity

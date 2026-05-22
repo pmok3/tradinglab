@@ -2654,9 +2654,12 @@ class ChartApp(
         fetcher = DATA_SOURCES.get(src)
         primary_failed = False
         compare_failed = False
+        prefetched_primary_used = False
+        prefetched_compare_used = False
         if primary_raw is None and fetcher is not None:
             if prefetched_valid:
                 primary_raw = prefetched.get("primary") or []
+                prefetched_primary_used = bool(primary_raw)
             else:
                 try:
                     primary_raw = fetcher(primary_key[1], interval) or []
@@ -2675,6 +2678,7 @@ class ChartApp(
         if compare_key is not None and compare_raw is None and fetcher is not None:
             if prefetched_valid:
                 compare_raw = prefetched.get("compare") or []
+                prefetched_compare_used = bool(compare_raw)
             else:
                 try:
                     compare_raw = fetcher(compare_key[1], interval) or []
@@ -2794,12 +2798,21 @@ class ChartApp(
             )
             compare = []
 
+        old_primary = self._primary
+        old_compare = self._compare
         self._set_data_state(
             primary_raw=primary_raw,
             primary=primary,
             compare_raw=compare_raw,
             compare=compare,
         )
+        # Fresh provider reloads replace the visible lists. Drop the
+        # previous entries so fingerprint fallback cannot rebind stale
+        # indicator arrays onto the replacement lists.
+        if prefetched_primary_used:
+            self._invalidate_focused_panels(old_primary)
+        if prefetched_compare_used:
+            self._invalidate_focused_panels(old_compare)
         # M2: when both sides came from the in-memory cache, the data
         # arrays are already in their final form so the render is just
         # a redraw. Defer it via ``after_idle`` so Tk gets a chance to
