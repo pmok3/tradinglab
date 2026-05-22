@@ -362,6 +362,10 @@ class InteractionMixin:
                 if patch.get_visible():
                     fp_ids.append(id(patch))
                     artists.append(patch)
+            for text in list(axx.texts):
+                if text.get_visible():
+                    fp_ids.append(id(text))
+                    artists.append(text)
             for axis_obj in (axx.xaxis, axx.yaxis):
                 fp_ids.append(id(axis_obj))
                 artists.append(axis_obj)
@@ -457,6 +461,10 @@ class InteractionMixin:
                 if patch.get_visible():
                     fp_ids.append(id(patch))
                     artists.append(patch)
+            for text in list(axx.texts):
+                if text.get_visible():
+                    fp_ids.append(id(text))
+                    artists.append(text)
             for axis_obj in (axx.xaxis, axx.yaxis):
                 fp_ids.append(id(axis_obj))
                 artists.append(axis_obj)

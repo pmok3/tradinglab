@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from tradinglab.events.base import DividendRecord, EarningsRecord
 from tradinglab.events.gating import EventsView, ForwardEarningsBadge
 from tradinglab.events.render import (
+    EVENT_MARKER_GLYPH,
     GLYPH_DIVIDEND,
     GLYPH_EARNINGS_FORWARD,
     GLYPH_EARNINGS_PAST,
@@ -44,6 +45,14 @@ def _candles_jan() -> list:
     return [_Candle(date=_day(2024, 1, i)) for i in range(2, 12)]
 
 
+def test_event_marker_glyph_mapping_table():
+    assert EVENT_MARKER_GLYPH == {
+        "earnings_amc": "A",
+        "earnings_bmo": "B",
+        "dividend": "D",
+    }
+
+
 def test_past_earnings_anchors_to_matching_bar():
     candles = _candles_jan()
     view = EventsView(past_earnings=[
@@ -57,6 +66,7 @@ def test_past_earnings_anchors_to_matching_bar():
     assert len(glyphs) == 1
     g = glyphs[0]
     assert g.glyph_kind == GLYPH_EARNINGS_PAST
+    assert g.marker_glyph == "A"
     assert candles[g.bar_index].date.day == 5
     assert "EPS" in g.tooltip
 
@@ -73,10 +83,22 @@ def test_dividends_emit_correct_glyph_kinds():
                        ratio_num=2, ratio_den=1, source="t"),
     ])
     glyphs = build_event_glyphs(view, candles, blind=False)
-    kinds = {g.glyph_kind for g in glyphs}
-    assert GLYPH_DIVIDEND in kinds
-    assert GLYPH_SPECIAL_DIVIDEND in kinds
-    assert GLYPH_SPLIT in kinds
+    by_kind = {g.glyph_kind: g for g in glyphs}
+    assert GLYPH_DIVIDEND in by_kind
+    assert GLYPH_SPECIAL_DIVIDEND in by_kind
+    assert GLYPH_SPLIT in by_kind
+    assert by_kind[GLYPH_DIVIDEND].marker_glyph == "D"
+    assert by_kind[GLYPH_SPECIAL_DIVIDEND].marker_glyph == "D"
+    assert by_kind[GLYPH_SPLIT].marker_glyph == "S"
+
+
+def test_earnings_bmo_marker_glyph_is_b():
+    candles = _candles_jan()
+    view = EventsView(past_earnings=[
+        EarningsRecord(ts=_ms(2024, 1, 6), symbol="X", when="BMO"),
+    ])
+    glyphs = build_event_glyphs(view, candles, blind=False)
+    assert [g.marker_glyph for g in glyphs] == ["B"]
 
 
 def test_event_outside_visible_window_is_dropped():
@@ -121,6 +143,7 @@ def test_forward_in_pane_glyph_suppresses_right_edge_badge():
     assert len(glyphs) == 1
     assert glyphs[0].bar_index >= 0
     assert glyphs[0].glyph_kind == GLYPH_EARNINGS_FORWARD
+    assert glyphs[0].marker_glyph == "A"
 
 
 def test_none_view_returns_empty():

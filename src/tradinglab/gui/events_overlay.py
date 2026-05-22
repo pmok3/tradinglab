@@ -2,7 +2,7 @@
 
 Renders the :class:`~tradinglab.events.render.EventGlyph` descriptors
 built by :func:`tradinglab.events.render.build_event_glyphs` as
-matplotlib markers anchored at the **bottom edge of each price pane**
+matplotlib text glyphs anchored at the **bottom edge of each price pane**
 (plan.md decision 13b). Mixed-transform placement: ``transData`` for X
 (bar index, like every other on-chart element), ``transAxes`` for Y
 (fixed near the axes bottom so the glyphs never move with the price
@@ -14,16 +14,15 @@ be torn down between renders alongside the candle/indicator artists,
 following the same rebuild-every-frame pattern as
 :class:`tradinglab.gui.evidence_overlay.EvidenceOverlay`.
 
-Glyph taxonomy (matches ``events.render.GLYPH_*``):
+User-facing text taxonomy:
 
-* ``E``   — past earnings print: filled square
-* ``E?``  — forward earnings: open square (outline only)
-* ``D``   — regular cash dividend: filled circle
-* ``D*``  — special dividend / spinoff: filled diamond
-* ``S``   — stock split: filled upward triangle
+* ``A`` — earnings AMC
+* ``B`` — earnings BMO
+* ``D`` — dividend ex-date, including special/spinoff cash events
+* ``S`` — stock split
 
-Per plan.md decision 17 every glyph is a single neutral color — surprise
-% and amount land in the hover tooltip only, never in glyph styling.
+Every glyph uses a theme-aware foreground plus a small rounded backing
+box so the letter remains readable against candles and chart backgrounds.
 
 Hover hit-testing is performed by :mod:`gui.interaction` — this module
 only registers the per-glyph metadata (``ts_ms``, tooltip, bar index)
@@ -39,11 +38,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from matplotlib.axes import Axes
-from matplotlib.lines import Line2D
 from matplotlib.text import Text
 from matplotlib.transforms import blended_transform_factory
 
 from ..events.render import (
+    EVENT_MARKER_GLYPH,
     GLYPH_DIVIDEND,
     GLYPH_EARNINGS_FORWARD,
     GLYPH_EARNINGS_PAST,
@@ -52,17 +51,16 @@ from ..events.render import (
     EventGlyph,
 )
 
-# Single neutral color (plan.md decision 17). Slightly translucent so a
-# glyph sitting on a candle wick still lets the wick read through. The
-# theme's spine color is the closest match to the existing chart
-# chrome; fall back to a fixed hex if theme lookup fails.
-_FALLBACK_COLOR = "#7d8794"
-_GLYPH_ALPHA = 0.85
-_GLYPH_SIZE = 7
+_FALLBACK_TEXT_COLOR = "#111111"
+_FALLBACK_BBOX_FACE = "#ffffff"
+_FALLBACK_BBOX_EDGE = "#7d8794"
+_GLYPH_ALPHA = 0.95
+_GLYPH_BBOX_ALPHA = 0.85
+_GLYPH_FONT_SIZE = 7
 _GLYPH_ZORDER = 4  # above indicators (3), below crosshair (5)
 
 # Bottom-of-pane Y anchor in axes-fraction. Sits just above the axes
-# bottom spine so the marker doesn't clip on the lower spine pixel.
+# bottom spine so the letter box doesn't clip on the lower spine pixel.
 _GLYPH_Y = 0.025
 
 # Right-edge forward badge Y / X (axes fraction). Plan §13b: forward
@@ -71,13 +69,12 @@ _BADGE_AX_X = 0.985
 _BADGE_AX_Y = 0.04
 
 
-# Per-glyph-kind matplotlib marker + fill style.
-_MARKER_STYLE: dict[str, dict[str, Any]] = {
-    GLYPH_EARNINGS_PAST:    {"marker": "s", "fillstyle": "full"},
-    GLYPH_EARNINGS_FORWARD: {"marker": "s", "fillstyle": "none"},
-    GLYPH_DIVIDEND:         {"marker": "o", "fillstyle": "full"},
-    GLYPH_SPECIAL_DIVIDEND: {"marker": "D", "fillstyle": "full"},
-    GLYPH_SPLIT:            {"marker": "^", "fillstyle": "full"},
+_FALLBACK_MARKER_GLYPH: dict[str, str] = {
+    GLYPH_EARNINGS_PAST: "E",
+    GLYPH_EARNINGS_FORWARD: "E",
+    GLYPH_DIVIDEND: EVENT_MARKER_GLYPH["dividend"],
+    GLYPH_SPECIAL_DIVIDEND: EVENT_MARKER_GLYPH["dividend"],
+    GLYPH_SPLIT: GLYPH_SPLIT,
 }
 
 
@@ -85,8 +82,8 @@ _MARKER_STYLE: dict[str, dict[str, Any]] = {
 class EventGlyphArtists:
     """The render output: per-glyph matplotlib artist refs + metadata.
 
-    ``artists`` is the flat list of every :class:`Line2D` / :class:`Text`
-    produced by :func:`draw_event_glyphs`. Callers stash this list on
+    ``artists`` is the flat list of every :class:`Text` produced by
+    :func:`draw_event_glyphs`. Callers stash this list on
     ``panel_state[slot]["event_artists"]`` so the next ``_draw_slice``
     can call :func:`clear_event_glyph_artists` before rebuilding.
 
@@ -105,20 +102,13 @@ class EventGlyphArtists:
     forward_badge_tooltip: str = ""
 
 
-def _color_for(theme: Any) -> str:
-    """Return the glyph color from the active theme, with fallback.
-
-    Themes are a plain dict in this codebase (see ``constants.THEMES``).
-    We try a couple of likely keys — ``axis_text`` first (matches the
-    chart's secondary chrome), then ``spine`` — before falling back to
-    a fixed grey.
-    """
+def _theme_color(theme: Any, keys: tuple[str, ...], fallback: str) -> str:
     if isinstance(theme, dict):
-        for key in ("axis_text", "spine", "text"):
+        for key in keys:
             v = theme.get(key)
             if isinstance(v, str) and v:
                 return v
-    return _FALLBACK_COLOR
+    return fallback
 
 
 def clear_event_glyph_artists(artists: Sequence[Any]) -> None:
@@ -166,7 +156,11 @@ def draw_event_glyphs(
     out = EventGlyphArtists()
     if ax is None or not glyphs:
         return out
-    color = _color_for(theme)
+    text_color = _theme_color(
+        theme, ("tooltip_fg", "text", "axis_text", "spine"), _FALLBACK_TEXT_COLOR,
+    )
+    box_face = _theme_color(theme, ("tooltip_bg", "ax_bg", "fig_bg"), _FALLBACK_BBOX_FACE)
+    box_edge = _theme_color(theme, ("spine", "axis_text", "text"), _FALLBACK_BBOX_EDGE)
     trans = blended_transform_factory(ax.transData, ax.transAxes)
 
     for g in glyphs:
@@ -181,9 +175,9 @@ def draw_event_glyphs(
             if not show_dividends:
                 continue
 
-        style = _MARKER_STYLE.get(kind)
-        if style is None:
-            continue
+        marker_glyph = str(
+            getattr(g, "marker_glyph", "") or _FALLBACK_MARKER_GLYPH.get(kind, ""),
+        )
 
         if g.bar_index < 0:
             # Right-edge forward badge. One per render (the descriptor
@@ -196,7 +190,7 @@ def draw_event_glyphs(
                     transform=ax.transAxes,
                     ha="right", va="bottom",
                     fontsize=7,
-                    color=color, alpha=_GLYPH_ALPHA,
+                    color=text_color, alpha=_GLYPH_ALPHA,
                     style="italic",
                     zorder=_GLYPH_ZORDER,
                     clip_on=True,
@@ -207,23 +201,29 @@ def draw_event_glyphs(
                 pass
             continue
 
+        if not marker_glyph:
+            continue
         x = float(g.bar_index + offset)
         try:
-            line: Line2D = ax.plot(
-                [x], [_GLYPH_Y],
+            text: Text = ax.text(
+                x, _GLYPH_Y, marker_glyph,
                 transform=trans,
-                marker=style["marker"],
-                fillstyle=style["fillstyle"],
-                markersize=_GLYPH_SIZE,
-                markerfacecolor=color,
-                markeredgecolor=color,
-                color=color,
-                linestyle="None",
+                ha="center", va="center",
+                fontsize=_GLYPH_FONT_SIZE,
+                fontweight="bold",
+                color=text_color,
                 alpha=_GLYPH_ALPHA,
+                bbox=dict(
+                    facecolor=box_face,
+                    edgecolor=box_edge,
+                    boxstyle="round,pad=0.12",
+                    alpha=_GLYPH_BBOX_ALPHA,
+                    linewidth=0.5,
+                ),
                 zorder=_GLYPH_ZORDER,
                 clip_on=True,
-            )[0]
-            out.artists.append(line)
+            )
+            out.artists.append(text)
             out.hit_meta.append((x, kind, g.tooltip))
         except Exception:  # noqa: BLE001
             continue

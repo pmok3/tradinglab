@@ -139,7 +139,7 @@ during drag.
   the click-flicker from `canvas.draw()` against `animated=True`
   data artists when a press resolves to a pure click.
 - **blit-based pan**: mark every data artist (Collections / Lines
-  / Patches / X/Y axes) `animated=True`; `canvas.draw()`;
+  / Patches / Texts / X/Y axes) `animated=True`; `canvas.draw()`;
   `copy_from_bbox(figure.bbox)`. On drag: `restore_region(bg) +
   draw_artist(each) + blit(bbox)`. 16 ms target. ~10× faster than
   `canvas.draw_idle()`.
@@ -157,8 +157,8 @@ during drag.
   back to `_pan_setup_blit` if `_pan_bg is None`.
 - **Pan-setup fingerprint reuse**: `_pan_setup_blit` hashes
   figure topology by `id()` into `_pan_anim_fingerprint` (tuple of
-  ints over collections + visible lines + visible patches + axes
-  spines). On entry, matching fingerprint + non-None `_pan_bg` +
+  ints over collections + visible lines + visible patches + visible
+  texts + axes spines). On entry, matching fingerprint + non-None `_pan_bg` +
   non-empty `_pan_animated` → skip the full setup. Pan → release
   → pan saves ~30–80 ms.
 - **Per-frame Y autoscale** during pan (~0.25 ms; affordable at 60 FPS).

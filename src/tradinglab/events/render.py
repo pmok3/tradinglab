@@ -13,16 +13,13 @@ Keeping the descriptor build pure (no matplotlib dependency) means:
   future Performance-View thumbnail without duplicating placement
   math.
 
-Glyph kinds match the visual taxonomy in plan.md decision 3:
+Glyph kinds preserve event semantics for filtering and hover, while
+``EventGlyph.marker_glyph`` carries the on-chart text marker:
 
-* ``"E"``   — past earnings print (square glyph, color by surprise)
-* ``"E?"``  — forward earnings (open square outline; absolute date in
-              non-blind mode, relative "T-N" badge in blind mode)
-* ``"D"``   — ex-dividend (filled circle)
-* ``"D*"``  — special dividend (filled diamond)
-* ``"S"``   — stock split / spinoff (filled triangle)
-* ``"BMO"`` / ``"AMC"`` / ``"DMH"`` — caption suffix appended to the
-                                       tooltip; not a separate glyph.
+* Earnings AMC → ``"A"``
+* Earnings BMO → ``"B"``
+* Dividend ex-date → ``"D"``
+* Splits keep ``"S"``; unsupported earnings slots fall back to ``"E"``.
 """
 
 from __future__ import annotations
@@ -38,6 +35,13 @@ GLYPH_EARNINGS_FORWARD = "E?"
 GLYPH_DIVIDEND = "D"
 GLYPH_SPECIAL_DIVIDEND = "D*"
 GLYPH_SPLIT = "S"
+
+# On-chart text labels requested by the user-facing event taxonomy.
+EVENT_MARKER_GLYPH = {
+    "earnings_amc": "A",
+    "earnings_bmo": "B",
+    "dividend": "D",
+}
 
 
 @dataclass(frozen=True)
@@ -59,11 +63,16 @@ class EventGlyph:
     ``ts_ms`` is the event's UTC ms-since-epoch ts — useful for the
     hover hit-test (matching the event under the cursor) but not
     used for placement (``bar_index`` already encodes that).
+
+    ``marker_glyph`` is the literal text painted in-pane. It stays
+    separate from ``glyph_kind`` so renderers can filter semantic event
+    kinds while drawing user-facing A/B/D labels.
     """
     bar_index: int
     glyph_kind: str
     tooltip: str
     ts_ms: int
+    marker_glyph: str = ""
 
 
 MS_PER_DAY = 86_400_000
@@ -161,6 +170,22 @@ def _dividend_tooltip(record: Any) -> str:
     return f"Dividend ${amount:.4f}/sh"
 
 
+def _earnings_marker_glyph(record: Any) -> str:
+    when = str(getattr(record, "when", "") or "").strip().upper()
+    if when == "AMC":
+        return EVENT_MARKER_GLYPH["earnings_amc"]
+    if when == "BMO":
+        return EVENT_MARKER_GLYPH["earnings_bmo"]
+    return GLYPH_EARNINGS_PAST
+
+
+def _dividend_marker_glyph(record: Any) -> str:
+    kind = str(getattr(record, "kind", "cash") or "cash")
+    if kind == "stock_split":
+        return GLYPH_SPLIT
+    return EVENT_MARKER_GLYPH["dividend"]
+
+
 def build_event_glyphs(
     view: Any,
     candles: Sequence[Any],
@@ -211,6 +236,7 @@ def build_event_glyphs(
             glyph_kind=glyph,
             tooltip=_dividend_tooltip(d),
             ts_ms=ts_ms,
+            marker_glyph=_dividend_marker_glyph(d),
         ))
 
     for e in past_e:
@@ -223,6 +249,7 @@ def build_event_glyphs(
             glyph_kind=GLYPH_EARNINGS_PAST,
             tooltip=_earnings_tooltip(e, future=False),
             ts_ms=ts_ms,
+            marker_glyph=_earnings_marker_glyph(e),
         ))
 
     for e in forward_e:
@@ -235,6 +262,7 @@ def build_event_glyphs(
             glyph_kind=GLYPH_EARNINGS_FORWARD,
             tooltip=_earnings_tooltip(e, future=True),
             ts_ms=ts_ms,
+            marker_glyph=_earnings_marker_glyph(e),
         ))
 
     if forward_badges and not forward_e:
@@ -267,4 +295,5 @@ __all__ = (
     "GLYPH_DIVIDEND",
     "GLYPH_SPECIAL_DIVIDEND",
     "GLYPH_SPLIT",
+    "EVENT_MARKER_GLYPH",
 )
