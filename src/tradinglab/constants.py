@@ -130,6 +130,17 @@ def build_ttk_style_spec(theme: dict) -> list:
          dict(background=bg, foreground=fg),
          dict(background=[("active", bg)],
               foreground=[("active", fg)])),
+        # ``TRadiobutton`` mirrors ``TCheckbutton`` — pinned to the
+        # window-background on every state so the LABEL never grows a
+        # light-grey hover halo in dark mode. The radio indicator
+        # circle is painted separately by the theme engine so it still
+        # reacts to ``active``/``pressed`` (filled when selected, etc.);
+        # we only suppress the label-bg sweep. Audit
+        # ``radio-hover-dark``.
+        ("TRadiobutton",
+         dict(background=bg, foreground=fg),
+         dict(background=[("active", bg), ("pressed", bg)],
+              foreground=[("active", fg), ("pressed", fg)])),
         ("TEntry",
          dict(fieldbackground=ax_bg, foreground=fg, insertcolor=fg),
          {}),
