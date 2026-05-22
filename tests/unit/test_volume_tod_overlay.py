@@ -347,3 +347,31 @@ def test_compute_patches_slice_clamped_to_bounds():
     )
     # All 3 bars produced (no gaps); the slice is clamped to [0, 3).
     assert len(out) == 3
+
+
+# --------------------------------------------------------- app/menu wiring
+
+
+def test_volume_tod_view_menu_wiring_is_discoverable():
+    import inspect
+
+    from tradinglab import app as app_mod
+    from tradinglab.gui import menu_builder as menu_builder_mod
+
+    menu_src = inspect.getsource(menu_builder_mod.MenuBuilder.build)
+    app_src = inspect.getsource(app_mod.ChartApp._build_menubar)
+    assert "Volume time-of-day shading (1d bars)" in menu_src
+    assert "_volume_tod_var" in menu_src
+    assert "_on_menu_toggle_volume_tod" in menu_src
+    assert "Volume time-of-day shading (1d bars)" in app_src
+
+
+def test_volume_tod_prefetch_arrival_redraw_hook_exists():
+    import inspect
+
+    from tradinglab import app as app_mod
+    from tradinglab.gui import polling as polling_mod
+
+    assert hasattr(app_mod.ChartApp, "_refresh_volume_tod_for_prefetch")
+    polling_src = inspect.getsource(polling_mod.PollingMixin._drain_worker_inbox)
+    assert "_refresh_volume_tod_for_prefetch" in polling_src

@@ -14,10 +14,10 @@ Constructs and owns these Tk variables:
 - `source`, `interval`, `prepost`, `days`
 - `dark`, `log_price`, `watchlist`
 - `status`, `status_display`
-- `ha_display`, `highlight_key_bars`, `highlight_ha_flat`, `chartstack_visible`
+- `ha_display`, `highlight_key_bars`, `highlight_ha_flat`, `volume_tod`, `chartstack_visible`
 
 ## Dependencies
-- Internal: `tradinglab.settings`, `tradinglab.data.DATA_SOURCES`, `tradinglab.watchlists.DEFAULT_WATCHLIST_NAME`, `tradinglab.gui.chartstack.settings_adapter` (late import for initial ChartStack visibility).
+- Internal: `tradinglab.defaults`, `tradinglab.settings`, `tradinglab.data.DATA_SOURCES`, `tradinglab.watchlists.DEFAULT_WATCHLIST_NAME`, `tradinglab.gui.chartstack.settings_adapter` (late import for initial ChartStack visibility).
 - External: `tkinter`.
 
 ## Design Decisions

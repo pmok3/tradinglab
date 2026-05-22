@@ -130,9 +130,10 @@ watermark                        zorder=0
 
 ## Integration points (ChartApp)
 
-- `set_volume_tod_enabled(enabled)` — public toggle. Writes
-  `settings.json`, calls `defaults.reload()`, kicks intraday
-  prefetch, schedules redraw.
+- `set_volume_tod_enabled(enabled)` — public toggle behind Settings and
+  View → `Volume time-of-day shading (1d bars)`. Writes
+  `settings.json`, syncs the menu BooleanVar, calls `defaults.reload()`,
+  kicks intraday prefetch, schedules redraw.
 - `_now_ms_for_slot(slot)` — returns `int(self._sandbox.clock_ts())`
   when sandbox active, else `int(time.time() * 1000)`.
 - `panel_state[slot]['vol_tod_artists']` + `['vol_tod_patches']` —
@@ -144,7 +145,9 @@ watermark                        zorder=0
   fetch intraday, compute, draw, suppress default fill.
 - `_get_intraday_for_volume_tod(symbol)` — reads
   `self._full_cache[(source, symbol, "5m")]`; on miss returns
-  empty + kicks async prefetch.
+  empty + kicks async prefetch. Prefetch arrival calls
+  `_refresh_volume_tod_for_prefetch(...)` so an already-visible 1d chart
+  repaints as soon as the companion cache is warm.
 - `_suppress_default_volume_fill(slot, suppress_indices)` —
   mutates `vol_bars._sc_colors` to `(0, 0, 0, 0)` for affected
   indices; preserves collection identity (H1 stream-tick

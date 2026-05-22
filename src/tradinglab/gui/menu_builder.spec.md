@@ -8,7 +8,7 @@
   4. **Sandbox** — Start / End Session, Performance, Save / Load Session, Tags.
   5. **Entries** — sits left of **Exits** (entries logically precede exits in the trade lifecycle).
   6. **Exits** — Edit Strategies.
-  7. **View** — Heikin-Ashi (cascade: Show Heikin-Ashi Candles + Highlight Flat Bars), Highlight Key Bars, ChartStack.
+  7. **View** — Heikin-Ashi (cascade: Show Heikin-Ashi Candles + Highlight Flat Bars), Highlight Key Bars, Volume time-of-day shading, ChartStack.
   8. **Tools** — Credentials, Local Data, Download Replay Data, Export CSV, Status History, Reveal Data Folder, Restore Templates.
   9. **Help** — built by `HelpMenuMixin._build_help_menu`.
 - Keep menu commands routed back into `ChartApp` through a narrow callback protocol so the builder owns widget construction, not app business logic.
@@ -40,6 +40,7 @@
 - **Entries appears left of Exits.** Entries logically precede Exits in the trade lifecycle, so the menubar mirrors that order rather than alphabetical.
 - **Theme lives under File, not View.** Theme selection is a one-time/per-session preference (similar to "Load Configuration") rather than a transient view toggle like Heikin-Ashi or ChartStack — the placement matches that mental model. The accelerator on the View menu is removed; users open the theme editor via File → Theme… or via Settings → Open Theme Editor….
 - **Heikin-Ashi is a cascade, not three top-level entries.** Audit `ha-menu-cascade` (2026) grouped the "Show Heikin-Ashi Candles" toggle and the "Highlight Flat Bars" overlay into a single `Heikin-Ashi` cascade inside View. The previous flat layout used a disabled-greyed top-level entry to communicate that the flat-bar overlay only matters when HA is on — clearer hierarchy beats clever state styling. The flat-bar entry is still gated on HA mode (via `app._sync_highlight_ha_flat_menu_state`, which walks `_ha_menu` now instead of `_view_menu`); disabling it inside the cascade preserves the persisted preference across HA-off intervals. Top-level "Highlight Key Bars" stays a sibling because it's not HA-specific. The cascade submenu is registered in `submenus` so `ThemeController._apply_menubar_theme` repaints it on theme toggle.
+- **Volume TOD shading is in View and Settings.** The overlay remains default-off and still appears in Settings, but the View menu also exposes a checkbutton so chart-only users can discover and flip the visual layer without opening the full settings dialog. Both surfaces drive `ChartApp.set_volume_tod_enabled`, keeping persistence, prefetch warmup, and redraw behavior identical.
 
 ## Notes
 - `MenuBuilder` intentionally preserves the existing submenu list shape used by `ThemeController._apply_menubar_theme`.

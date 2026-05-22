@@ -296,6 +296,15 @@ class PollingMixin:
                                 self._refresh_daily_synth_for_active_view(
                                     prefetched_symbol=_sym,
                                 )
+                                refresh_volume_tod = getattr(
+                                    self, "_refresh_volume_tod_for_prefetch", None,
+                                )
+                                if callable(refresh_volume_tod):
+                                    refresh_volume_tod(
+                                        prefetched_source=_src,
+                                        prefetched_symbol=_sym,
+                                        prefetched_interval=_iv,
+                                    )
                         except Exception:  # noqa: BLE001
                             pass
                     except Exception:  # noqa: BLE001

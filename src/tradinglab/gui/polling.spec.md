@@ -63,7 +63,8 @@ Also hosts the pure scheduler helpers (only caller is here).
   a `prefetch` event arrives for an intraday interval, also
   calls `_refresh_daily_synth_for_active_view` so a daily chart
   picks up the freshly-warmed intraday data without a round-trip
-  (audit `daily-today-upsample`).
+  (audit `daily-today-upsample`) and `_refresh_volume_tod_for_prefetch`
+  so volume time-of-day shading repaints after a cold 5m cache warms.
 - `_drain_stream_queue()` — pop streaming events. Routes
   `"card:N"`-slot events to `self._chartstack.apply_stream_event`;
   routes `tick`/`rollover` for main chart through

@@ -244,7 +244,7 @@ Background workers marshal results to the Tk thread via `self.after(0, _stash_fu
 Tk's `createcommand` blocks indefinitely from non-main threads on this build. Workers therefore deposit `("stash"/"card_stash", payload)` on a `queue.Queue`; a periodic 80 ms `_drain_worker_inbox` tick (re-armed via `_track_after`) applies them on the Tk thread. Same-thread fastpath inlines the apply.
 
 ### Volume time-of-day shading
-Opt-in `_volume_tod_enabled` (default `False`, settings top-level). Adds two collections on every 1d volume bar: a "realized" fill height-scaled to *minutes elapsed / RTH span*, plus a darker envelope at full-day height. Time source is `_now_ms_for_slot(slot)` (sandbox clock or wall-clock). Per-slot artists tracked on `panel_state[slot]['vol_tod_artists']` / `'vol_tod_patches'`. Math contract + degrade paths: `gui/volume_tod_overlay.spec.md`.
+Opt-in `_volume_tod_enabled` (default `False`, settings top-level). Settings and View → `Volume time-of-day shading (1d bars)` both drive `set_volume_tod_enabled`, which persists, syncs `_volume_tod_var`, warms the 5m companion cache, and redraws. Adds two collections on every 1d volume bar: a "realized" fill height-scaled to *minutes elapsed / RTH span*, plus a darker envelope at full-day height. Time source is `_now_ms_for_slot(slot)` (sandbox clock or wall-clock). Per-slot artists tracked on `panel_state[slot]['vol_tod_artists']` / `'vol_tod_patches'`. Intraday prefetch arrival calls `_refresh_volume_tod_for_prefetch(...)` so a cold first render repaints when the 5m cache lands. Math contract + degrade paths: `gui/volume_tod_overlay.spec.md`.
 
 ### Floating crosshair price + top-left OHLCV readout
 `InteractionMixin._ensure_overlay_artists` populates per-price-axes overlays:

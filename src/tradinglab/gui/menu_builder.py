@@ -13,6 +13,7 @@ class MenuBuilderCallbacks(Protocol):
     _ha_display_var: tk.BooleanVar
     _highlight_ha_flat_var: tk.BooleanVar
     _highlight_key_bars_var: tk.BooleanVar
+    _volume_tod_var: tk.BooleanVar
     _chartstack_visible_var: tk.BooleanVar
 
     def _on_menu_load_config(self) -> None: ...
@@ -48,6 +49,7 @@ class MenuBuilderCallbacks(Protocol):
     def _on_menu_toggle_heikin_ashi(self) -> None: ...
     def _on_menu_toggle_highlight_ha_flat(self) -> None: ...
     def _on_menu_toggle_highlight_key_bars(self) -> None: ...
+    def _on_menu_toggle_volume_tod(self) -> None: ...
     def _on_view_toggle_chartstack(self) -> None: ...
     def _on_view_open_theme_editor(self) -> None: ...
     def _on_help_configure_credentials(self) -> None: ...
@@ -266,6 +268,13 @@ class MenuBuilder:
             offvalue=False,
             variable=self._cb._highlight_key_bars_var,
             command=self._cb._on_menu_toggle_highlight_key_bars,
+        )
+        view_menu.add_checkbutton(
+            label="Volume time-of-day shading (1d bars)",
+            onvalue=True,
+            offvalue=False,
+            variable=self._cb._volume_tod_var,
+            command=self._cb._on_menu_toggle_volume_tod,
         )
         view_menu.add_separator()
         view_menu.add_checkbutton(

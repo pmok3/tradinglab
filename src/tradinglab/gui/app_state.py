@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tkinter as tk
 
+from .. import defaults as _defaults
 from .. import settings as _settings
 from ..data import DATA_SOURCES
 from ..watchlists import DEFAULT_WATCHLIST_NAME as _DEFAULT_WATCHLIST_NAME
@@ -32,6 +33,14 @@ class AppState:
         self.highlight_ha_flat = tk.BooleanVar(
             master=master,
             value=bool(_settings.get("highlight_ha_flat", False)),
+        )
+        try:
+            volume_tod_enabled = bool(_defaults.get("volume_tod_enabled"))
+        except Exception:  # noqa: BLE001
+            volume_tod_enabled = False
+        self.volume_tod = tk.BooleanVar(
+            master=master,
+            value=volume_tod_enabled,
         )
         self.chartstack_visible = tk.BooleanVar(
             master=master,

@@ -453,6 +453,7 @@ class ChartApp(
         self._ha_display_var = self._state.ha_display
         self._highlight_key_bars_var = self._state.highlight_key_bars
         self._highlight_ha_flat_var = self._state.highlight_ha_flat
+        self._volume_tod_var = self._state.volume_tod
         self._chartstack_visible_var = self._state.chartstack_visible
         self._theme_ctrl = ThemeController(self)
         self._theme = self._theme_ctrl.theme
@@ -1630,8 +1631,15 @@ class ChartApp(
             _settings.set("volume_tod_enabled", bool(enabled))
         except Exception:  # noqa: BLE001
             pass
+        enabled = bool(enabled)
         try:
             _defaults.reload()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            var = getattr(self, "_volume_tod_var", None)
+            if var is not None and bool(var.get()) != enabled:
+                var.set(enabled)
         except Exception:  # noqa: BLE001
             pass
         if enabled:
@@ -1643,6 +1651,14 @@ class ChartApp(
             self._request_redraw_for_volume_tod()
         except Exception:  # noqa: BLE001
             pass
+
+    def _on_menu_toggle_volume_tod(self) -> None:
+        """View menu callback for the 1d volume time-of-day overlay."""
+        try:
+            enabled = bool(self._volume_tod_var.get())
+        except Exception:  # noqa: BLE001
+            enabled = False
+        self.set_volume_tod_enabled(enabled)
 
     def _now_ms_for_slot(self, slot: str) -> int | None:
         """Return the reference epoch-ms for time-of-day computations.
@@ -5230,8 +5246,8 @@ class ChartApp(
     def _ensure_intraday_for_volume_tod(self) -> None:
         """Warm ``_full_cache`` with 5m bars for both slots' symbols.
 
-        Called when the user toggles the volume-TOD overlay ON via the
-        Settings dialog — the next render needs intraday data, and we
+        Called when the user toggles the volume-TOD overlay ON via Settings
+        or the View menu — the next render needs intraday data, and we
         don't want to render an empty overlay then re-paint a second
         later when the data arrives. Idempotent and async — submits to
         ``_executor`` and returns immediately. The arrival callback on
@@ -5250,6 +5266,42 @@ class ChartApp(
                 self._ensure_prefetched(sym, itv)
             except Exception:  # noqa: BLE001
                 pass
+
+    def _refresh_volume_tod_for_prefetch(
+        self,
+        *,
+        prefetched_source: str,
+        prefetched_symbol: str,
+        prefetched_interval: str,
+    ) -> None:
+        """Repaint TOD shading when its 5m companion prefetch lands."""
+        try:
+            if not bool(_defaults.get("volume_tod_enabled")):
+                return
+            if self.interval_var.get() != "1d":
+                return
+            if self.source_var.get() != prefetched_source:
+                return
+            tod_interval = str(_defaults.get("volume_tod_intraday_interval") or "5m")
+            if str(prefetched_interval) != tod_interval:
+                return
+        except Exception:  # noqa: BLE001
+            return
+        prefetched_symbol = str(prefetched_symbol or "").strip().upper()
+        active_symbols: set[str] = set()
+        for slot in ("primary", "compare"):
+            try:
+                sym = self._slot_symbol(slot)
+            except Exception:  # noqa: BLE001
+                sym = ""
+            if sym:
+                active_symbols.add(str(sym).strip().upper())
+        if prefetched_symbol not in active_symbols:
+            return
+        try:
+            self._request_redraw_for_volume_tod()
+        except Exception:  # noqa: BLE001
+            pass
 
     def _suppress_default_volume_fill(
         self, slot: str, suppress_indices: dict[int, bool],
@@ -6229,6 +6281,8 @@ class ChartApp(
         ``_highlight_ha_flat_var`` to ``_on_menu_toggle_highlight_ha_flat``;
         View → Heikin-Ashi → "Show Heikin-Ashi Candles" binds
         ``_ha_display_var`` to ``_on_menu_toggle_heikin_ashi``.
+        View → "Volume time-of-day shading (1d bars)" binds
+        ``_volume_tod_var`` to ``_on_menu_toggle_volume_tod``.
         The extracted builder still owns the literal menu labels
         "Highlight Key Bars", "Download Replay Data…", and
         "Restore Default Templates…".
