@@ -36,7 +36,7 @@ Single output key `"rvol"` (matches RVOL). Raw ratio when
 ## Algorithm
 
 1. Compute `RVOL(mode=…)` on the primary bars (numerator).
-2. Resolve `compare_symbol` (uppercased): `core.reference_data.get_reference_bars(source, compare_symbol, interval)`. If absent, schedule a background fetch and return all-NaN; the on-arrival callback fires a re-render.
+2. Resolve `compare_symbol` (uppercased): `core.reference_data.get_reference_bars(source, compare_symbol, interval)`. If absent, schedule a background fetch and return all-NaN; the ChartApp on-arrival callback clears `IndicatorCache` and fires an indicator redraw so the pane repaints when the comparison bars land.
 3. Compute the same `RVOL(mode=…)` on the comparison bars.
 4. For each primary timestamp, look up the matching comparison index via a
    sorted-`searchsorted` vectorized join. Unmatched bars → NaN.

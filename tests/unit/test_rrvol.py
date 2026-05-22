@@ -229,6 +229,75 @@ def test_cache_miss_schedules_provider():
     assert calls == [("yfinance", "SPY", "5m")]
 
 
+def test_reference_arrival_rerenders_cached_blank_rrvol_line():
+    """RRVOL initially drawn before SPY/5m arrives must repaint on arrival."""
+    import matplotlib.pyplot as plt
+
+    from tradinglab.app import ChartApp
+    from tradinglab.indicators.cache import IndicatorCache
+    from tradinglab.indicators.config import IndicatorConfig, IndicatorManager
+    from tradinglab.indicators.render import PanelIndicatorState, render_for_slot
+
+    candles = _intraday_candles(n_days=15, seed=31)
+    cfg = IndicatorConfig(
+        kind_id="rrvol",
+        display_name="RRVOL",
+        params={"mode": "simple", "length": 10, "compare_symbol": "SPY"},
+        intervals=("5m",),
+        scopes=frozenset({"main"}),
+        pane_group="rvol",
+    )
+    manager = IndicatorManager()
+    manager._configs = [cfg]
+    fig, (_price_ax, rrvol_ax) = plt.subplots(2, 1)
+
+    class Harness:
+        def __init__(self) -> None:
+            self._indicator_cache = IndicatorCache()
+            self._indicator_manager = manager
+            self._indicator_redraw_pending = False
+            self.state = PanelIndicatorState()
+            self.render_calls = 0
+
+        def after_idle(self, fn):
+            fn()
+
+        def _sched_indicator_redraw(self, fn):
+            fn()
+
+        def _render(self) -> None:
+            self.render_calls += 1
+            with render_context(interval="5m", source="yfinance", primary_symbol="AMD"):
+                render_for_slot(
+                    price_ax=_price_ax,
+                    pane_axes=[rrvol_ax],
+                    candles=candles,
+                    offset=0,
+                    manager=self._indicator_manager,
+                    cache=self._indicator_cache,
+                    interval="5m",
+                    scope="main",
+                    state=self.state,
+                )
+
+    h = Harness()
+    h._on_indicator_event = ChartApp._on_indicator_event.__get__(h, Harness)
+    h._reference_data_redraw = ChartApp._reference_data_redraw.__get__(h, Harness)
+    try:
+        rd.set_provider(None, on_arrival=h._reference_data_redraw)
+        h._render()
+        line = h.state.pane_lines[cfg.id]["rvol"]
+        assert h.render_calls == 1
+        assert not np.isfinite(np.asarray(line.get_ydata(), dtype=float)).any()
+
+        rd.set_reference_bars("yfinance", "SPY", "5m", Bars.from_candles(candles))
+
+        assert h.render_calls == 2
+        assert np.isfinite(np.asarray(line.get_ydata(), dtype=float)).any()
+    finally:
+        plt.close(fig)
+
+
 # ----------------------------------------------------------------------
 # Z-score support (NEW capability)
 # ----------------------------------------------------------------------
