@@ -26,14 +26,14 @@ APP_PATH = (
 
 def test_reset_view_toolbar_button_uses_default_style() -> None:
     src = APP_PATH.read_text(encoding="utf-8")
-    # Find the ttk.Button(... text="Reset view ...") block. It
+    # Find the ttk.Button(... text="Reset View ...") block. It
     # spans at most a few lines (text + style? + command).
     match = re.search(
-        r"ttk\.Button\(top, text=\"Reset view[^\"]*\"[^)]*\)",
+        r"ttk\.Button\(top, text=\"Reset View[^\"]*\"[^)]*\)",
         src, flags=re.DOTALL,
     )
     assert match is not None, (
-        "Could not find the Reset view ttk.Button definition in "
+        "Could not find the Reset View ttk.Button definition in "
         "app.py — has the toolbar been restructured?"
     )
     block = match.group(0)

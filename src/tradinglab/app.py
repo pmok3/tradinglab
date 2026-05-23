@@ -963,7 +963,7 @@ class ChartApp(
         # Source-based toolbar markers retained in app.py for legacy
         # grep-style regression tests after widget extraction:
         # text="Extended Hours"
-        # ttk.Button(top, text="Reset view (R)", command=self._reset_view)
+        # ttk.Button(top, text="Reset View (Ctrl+R)", command=self._reset_view)
         # "Settings (Ctrl+,)"
         # "Watchlists (Ctrl+L)"
         # self._prepost_tooltip = _ToolTip(
@@ -1270,11 +1270,15 @@ class ChartApp(
         # gui/entries_app.py.
         self._build_entries_stack()
 
-        # Tab 8: Strategy — mechanical strategy tester pairing entry +
+        # Strategy Tester — mechanical strategy tester pairing entry +
         # exit strategies and running them over a universe + date range.
-        # Standalone widget; runs the kernel on a worker thread. See
-        # gui/strategy_tab.py + strategy_tester/runner.py.
-        self._build_strategy_tab()
+        # Opens in a Toplevel popup via the **Strategy** menu (between
+        # **Exits** and **View** in the menubar). State is held lazily;
+        # the StrategyTab widget is constructed the first time the user
+        # opens the dialog. See gui/strategy_tab.py +
+        # strategy_tester/runner.py.
+        self._strategy_dialog: Any = None
+        self._strategy_tab: Any = None
 
         # --- chart artist handles ---------------------------------------
         self._wicks = None
@@ -6863,31 +6867,91 @@ class ChartApp(
         )
         self._notebook.add(self._scanner_tab, text="Scanner")
 
-    def _build_strategy_tab(self) -> None:
-        """Construct the Strategy Tester tab (PR 4 of the rollout).
+    def _on_open_strategy_dialog(self) -> None:
+        """**Strategy** menu entry — open or re-focus the Strategy Tester popup.
 
-        The tab is fully self-contained — it loads the entry / exit
-        / watchlist libraries from disk, builds a Run on a worker
-        thread, and renders the resulting aggregate inline. Failures
-        in the tab degrade gracefully so the rest of the app still
-        boots.
+        Lazily constructs a Toplevel containing a :class:`StrategyTab`
+        on first open. Subsequent opens deiconify + lift + focus the
+        existing window so the worker / poll loop / Recent Runs state
+        survives. Closing the window destroys the embedded tab (which
+        runs its own ``<Destroy>`` cleanup of the poll job + acceptance
+        token) and clears the stash so the next open builds a fresh
+        widget.
         """
+        existing = self._strategy_dialog
+        if existing is not None:
+            try:
+                if existing.winfo_exists():
+                    try:
+                        existing.deiconify()
+                        existing.lift()
+                        existing.focus_set()
+                    except tk.TclError:
+                        pass
+                    return
+            except tk.TclError:
+                pass
+            self._strategy_dialog = None
+            self._strategy_tab = None
+
         try:
             from .gui.strategy_tab import StrategyTab
         except Exception:  # noqa: BLE001
-            logger.exception("Failed to import StrategyTab; skipping tab")
-            self._strategy_tab = None
+            logger.exception("Failed to import StrategyTab; cannot open dialog")
             return
+
         try:
-            self._strategy_tab = StrategyTab(self._notebook)
+            dlg = tk.Toplevel(self)
         except Exception:  # noqa: BLE001
-            logger.exception("Failed to construct StrategyTab; skipping tab")
-            self._strategy_tab = None
+            logger.exception("Failed to create Strategy Tester Toplevel")
             return
+
+        dlg.title("Strategy Tester")
         try:
-            self._notebook.add(self._strategy_tab, text="Strategy")
+            dlg.transient(self)
+        except tk.TclError:
+            pass
+        try:
+            from .gui.geometry_store import attach_persistent_geometry
+            attach_persistent_geometry(dlg, "dlg.strategy", "1400x780")
         except Exception:  # noqa: BLE001
-            logger.exception("Failed to add StrategyTab to notebook")
+            try:
+                dlg.geometry("1400x780")
+            except tk.TclError:
+                pass
+        try:
+            dlg.minsize(1000, 600)
+        except tk.TclError:
+            pass
+
+        try:
+            tab = StrategyTab(dlg)
+            tab.pack(fill="both", expand=True)
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to construct StrategyTab inside popup")
+            try:
+                dlg.destroy()
+            except Exception:  # noqa: BLE001
+                pass
+            return
+
+        self._strategy_dialog = dlg
+        self._strategy_tab = tab
+
+        def _on_dialog_close() -> None:
+            try:
+                dlg.destroy()
+            except Exception:  # noqa: BLE001
+                pass
+            finally:
+                if self._strategy_dialog is dlg:
+                    self._strategy_dialog = None
+                    self._strategy_tab = None
+
+        try:
+            dlg.protocol("WM_DELETE_WINDOW", _on_dialog_close)
+        except tk.TclError:
+            pass
 
     def _on_scanner_scan_saved(self, scan: Any) -> None:
         try:

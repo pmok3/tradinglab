@@ -563,22 +563,28 @@ def check_c5_notebook(app) -> None:
     Compare tab is conditionally hidden when compare mode is off; the
     Sandbox tab is permanently registered but hidden until a replay
     session is started (single-window UX — sandbox controls live in
-    the side notebook, not a Toplevel)."""
+    the side notebook, not a Toplevel).
+
+    NOTE: The Strategy Tester is **not** in this notebook anymore — it
+    moved to a Toplevel popup launched from the **Strategy** menubar
+    cascade (between **Exits** and **View**). See
+    ``test_smoke_strategy.test_strategy_menu_present_in_chartapp`` for
+    the menubar wiring assertion."""
     import tkinter.ttk as ttk
     nb = getattr(app, "_notebook", None)
     assert isinstance(nb, ttk.Notebook), "§18.4 _notebook must be a ttk.Notebook"
     tabs = [nb.tab(i, "text") for i in range(nb.index("end"))]
-    assert len(tabs) == 8, f"§1.2 expected 8 notebook tabs, got {tabs}"
+    assert len(tabs) == 7, f"§1.2 expected 7 notebook tabs, got {tabs}"
     assert "Watchlist" in tabs, f"§18.4 missing 'Watchlist' tab: {tabs}"
     assert "Sandbox" in tabs, f"§1.2 missing 'Sandbox' tab: {tabs}"
     assert "Scanner" in tabs, f"§1.2 missing 'Scanner' tab: {tabs}"
     assert "Entries" in tabs, f"missing 'Entries' tab: {tabs}"
     assert "Exits" in tabs, f"missing 'Exits' tab: {tabs}"
-    assert "Strategy" in tabs, f"missing 'Strategy' tab: {tabs}"
+    assert "Strategy" not in tabs, (
+        f"Strategy moved to a Toplevel popup; should not appear in "
+        f"the notebook: {tabs}")
     assert tabs.index("Entries") < tabs.index("Exits"), (
         f"Entries tab must precede Exits in notebook order: {tabs}")
-    assert tabs.index("Exits") < tabs.index("Strategy"), (
-        f"Exits tab must precede Strategy in notebook order: {tabs}")
     assert hasattr(app, "_primary_table") and hasattr(app, "_compare_table"), (
         "§1.2 separate Primary + Compare OHLC tables expected")
     assert hasattr(app, "_status_label"), "§13 missing bottom _status_label widget"

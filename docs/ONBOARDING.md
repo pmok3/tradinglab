@@ -105,7 +105,7 @@ When the app opens, you'll see (top-down, roughly):
   (display-only labels; click on the chart and type to change them
   — see [Loading your first chart](#loading-your-first-chart)) plus
   the *Source* and *Interval* dropdowns and a *Pre/Post* checkbox;
-  right side has the **Reset view (R)**, **Settings (Ctrl+,)**, and
+  right side has the **Reset View (Ctrl+R)**, **Settings (Ctrl+,)**, and
   **Watchlists (Ctrl+L)** buttons. The theme toggle lives in the
   *Settings* dialog (and on the *View* menu), not on the toolbar.
 - **Notebook tabs** — *Chart*, *Table*, *Watchlist*, *Scanner*. The

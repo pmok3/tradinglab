@@ -2,14 +2,21 @@
 
 ## Purpose
 PR 4 of the Strategy Tester rollout. A self-contained Tk widget
-(``ttk.Frame`` subclass) wired into ``ChartApp`` as the last
-right-side notebook tab. Owns the entire **Configure → Running →
-Result** UX loop for the strategy tester.
+(``ttk.Frame`` subclass) embedded in a Toplevel popup launched from
+the **Strategy** menubar entry (between **Exits** and **View**). Owns
+the entire **Configure → Running → Result** UX loop for the strategy
+tester.
+
+The widget itself remains parent-agnostic — it is constructed against
+whatever ``master`` is passed in (a Toplevel in production, the Tk
+root in smoke tests). The popup wrapper + menubar wiring live in
+``ChartApp._on_open_strategy_dialog``; the widget is stashed at
+``app._strategy_tab`` only while the popup is open.
 
 ## Public surface
 - `StrategyTab(master, *, entries_storage=None, exits_storage=None,
   watchlists_storage=None, run_fn=None, candles_fetcher=None)` —
-  notebook-mountable widget. Optional kwargs are dependency-injection
+  Toplevel-mountable widget. Optional kwargs are dependency-injection
   hooks used by smoke tests; production wiring passes nothing.
 - `refresh()` — reloads the entry / exit / watchlist library snapshots
   used to populate the pickers.

@@ -43,6 +43,7 @@ class MenuBuilderCallbacks(Protocol):
     def _on_menu_sandbox_load(self) -> None: ...
     def _on_menu_sandbox_tags(self) -> None: ...
     def _on_open_exits_dialog(self) -> None: ...
+    def _on_open_strategy_dialog(self) -> None: ...
     def _on_open_entries_new_dialog(self) -> None: ...
     def _on_open_entries_dialog(self) -> None: ...
     def _on_entries_disarm_all(self) -> None: ...
@@ -236,6 +237,18 @@ class MenuBuilder:
             command=self._cb._on_open_exits_dialog,
         )
         menubar.add_cascade(label="Exits", menu=exits_menu)
+
+        # Strategy Tester — opens a Toplevel popup with the full
+        # Configure → Run → Result UX. Wedged between **Exits** and
+        # **View** so the menubar reads
+        # ``File / Watchlists / Indicators / Sandbox / Entries /
+        # Exits / Strategy / View / Tools / Help``.
+        strategy_menu = tk.Menu(menubar, tearoff=0)
+        strategy_menu.add_command(
+            label="Open Strategy Tester…",
+            command=self._cb._on_open_strategy_dialog,
+        )
+        menubar.add_cascade(label="Strategy", menu=strategy_menu)
 
         view_menu = tk.Menu(menubar, tearoff=0)
         # Heikin-Ashi cascade — groups the candle-style toggle with the

@@ -1,8 +1,8 @@
 """Regression tests for audit ``toolbar-double-spaces``.
 
-The toolbar's three right-side buttons (**Reset view**, **Settings**,
+The toolbar's three right-side buttons (**Reset View**, **Settings**,
 **Watchlists**) used to ship with **two** spaces between the label
-and the parenthetical hotkey hint (e.g. ``"Reset view  (R)"``).
+and the parenthetical hotkey hint (e.g. ``"Reset View  (Ctrl+R)"``).
 Two-space padding inside a button label reads as a missed-typo to
 new users — Windows/macOS/Linux button labels conventionally use a
 single space between the action verb and the parenthetical
@@ -22,7 +22,7 @@ APP_PATH = (
 
 # Three known-bad patterns (post-fix none of them may appear in app.py).
 DOUBLE_SPACE_LABEL_PATTERNS = [
-    r"\"Reset view  \(R\)\"",
+    r"\"Reset View  \(Ctrl\+R\)\"",
     r"\"Settings  \(Ctrl\+,\)\"",
     r"\"Watchlists  \(Ctrl\+L\)\"",
 ]
@@ -31,7 +31,7 @@ DOUBLE_SPACE_LABEL_PATTERNS = [
 # present, so an accidental future rename doesn't silently regress
 # the spacing.
 SINGLE_SPACE_LABEL_PATTERNS = [
-    r"\"Reset view \(R\)\"",
+    r"\"Reset View \(Ctrl\+R\)\"",
     r"\"Settings \(Ctrl\+,\)\"",
     r"\"Watchlists \(Ctrl\+L\)\"",
 ]
@@ -43,7 +43,7 @@ def test_no_double_space_before_paren_in_toolbar_labels() -> None:
     assert not offenders, (
         "toolbar-double-spaces regression: double-space-before-paren "
         "form is back on the toolbar. Offending patterns: "
-        f"{offenders}. The buttons should be 'Reset view (R)' / "
+        f"{offenders}. The buttons should be 'Reset View (Ctrl+R)' / "
         "'Settings (Ctrl+,)' / 'Watchlists (Ctrl+L)' (single space)."
     )
 

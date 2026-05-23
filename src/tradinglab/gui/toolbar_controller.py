@@ -114,7 +114,7 @@ class ToolbarController:
 
         ttk.Button(
             self._frame,
-            text="Reset view (R)",
+            text="Reset View (Ctrl+R)",
             command=self._callbacks.on_reset_view,
         ).pack(side=tk.LEFT, padx=2)
         ttk.Button(

@@ -1,7 +1,8 @@
-"""StrategyTab — right-side notebook tab for the Strategy Tester.
+"""StrategyTab — embedded widget for the Strategy Tester popup.
 
 A self-contained ``ttk.Frame`` that owns the entire Configure → Running
-→ Result UX loop:
+→ Result UX loop. Mounted inside a Toplevel that ``ChartApp`` opens from
+the **Strategy** menubar entry (between **Exits** and **View**):
 
 1. **Configure** — entry/exit pickers, universe picker (Watchlists /
    Presets / Symbols list), date-range preset, advanced cost model.
@@ -12,12 +13,9 @@ A self-contained ``ttk.Frame`` that owns the entire Configure → Running
 
 The kernel (``strategy_tester.run``) is invoked on a daemon
 ``threading.Thread`` and writes ``aggregate.json`` + ``trades.csv``
-on its own via the runner integration shipped in PR 3. The tab polls
+on its own via the runner integration shipped in PR 3. The widget polls
 the worker via ``after()`` and reloads the aggregate from disk when
 the worker is done.
-
-This is a single-frame implementation; PR 5 will add the Recent Runs
-sidebar + HTML/PDF export, and PR 6 the help integration.
 """
 
 from __future__ import annotations

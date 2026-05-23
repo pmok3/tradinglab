@@ -655,14 +655,58 @@ def test_strategy_recent_runs_sidebar(tmp_cache_root: Path) -> None:
     check_st5_recent_runs_sidebar(tmp_cache_root)
 
 
-def test_strategy_tab_present_in_chartapp(app) -> None:
-    """The Strategy tab must be wired into ChartApp's notebook AFTER Exits."""
-    nb = app._notebook
-    tabs = [nb.tab(i, "text") for i in range(nb.index("end"))]
-    assert "Strategy" in tabs, f"Strategy tab missing from notebook (got {tabs})"
-    # Strategy must come AFTER Exits in tab order.
-    assert tabs.index("Strategy") > tabs.index("Exits"), (
-        f"Strategy tab should be inserted AFTER Exits; got order {tabs}"
+def test_strategy_menu_present_in_chartapp(app) -> None:
+    """The **Strategy** menu cascade must be wired into ChartApp's
+    menubar between **Exits** and **View**, and invoking its only
+    item opens a Toplevel containing a :class:`StrategyTab`.
+    """
+    import sys
+    import tkinter as tk
+
+    menubar = app.nametowidget(app.cget("menu"))
+    labels: list[str] = []
+    for idx in range(menubar.index("end") + 1):
+        try:
+            labels.append(menubar.entrycget(idx, "label"))
+        except tk.TclError:
+            labels.append("")
+    assert "Strategy" in labels, (
+        f"Strategy menu missing from menubar (got {labels})"
     )
-    # The widget reference is held on the app.
-    assert getattr(app, "_strategy_tab", None) is not None
+    # Strategy must sit between Exits and View.
+    s_idx = labels.index("Strategy")
+    assert "Exits" in labels and labels.index("Exits") < s_idx, (
+        f"Strategy must come AFTER Exits; got order {labels}"
+    )
+    assert "View" in labels and s_idx < labels.index("View"), (
+        f"Strategy must come BEFORE View; got order {labels}"
+    )
+
+    # The Strategy popup is built lazily — until the user opens it,
+    # both stash attributes stay None.
+    assert getattr(app, "_strategy_dialog", "missing") is None
+    assert getattr(app, "_strategy_tab", "missing") is None
+
+    # Invoking the menu callback constructs the Toplevel + StrategyTab.
+    # Skip the lift/transient + actual widget exercise on macOS so the
+    # Tk modal-transient deadlock landmine (CLAUDE.md §7.1) doesn't
+    # hang the headless runner.
+    if sys.platform == "darwin":
+        return
+    try:
+        app._on_open_strategy_dialog()
+        assert app._strategy_dialog is not None
+        assert app._strategy_tab is not None
+        # Toplevel widget alive + StrategyTab is the embedded child.
+        assert app._strategy_dialog.winfo_exists()
+        assert app._strategy_tab.winfo_exists()
+    finally:
+        # Clean up so subsequent checks don't see a leftover popup.
+        dlg = getattr(app, "_strategy_dialog", None)
+        if dlg is not None:
+            try:
+                dlg.destroy()
+            except Exception:  # noqa: BLE001
+                pass
+        app._strategy_dialog = None
+        app._strategy_tab = None
