@@ -80,14 +80,24 @@ class SMA:
         old_out = state["output"]["sma"]  # type: ignore[index]
         new_out = np.empty(n, dtype=np.float64)
         new_out[:prev_len] = old_out
-        # For each newly-committed bar, recompute the rolling mean over
-        # the trailing window. O(L) per bar — fine for k=1 (the common
-        # tick case). Larger k still beats a full O(n) recompute.
-        for i in range(prev_len, n):
-            if i < L - 1:
-                new_out[i] = np.nan
-            else:
-                new_out[i] = closes[i - L + 1 : i + 1].mean()
+        # Rolling-window means via cumulative sum. We mirror
+        # ``compute_arr``'s cumsum so byte-equality across the inc /
+        # full paths is preserved (test_indicator_cache asserts this).
+        # The work delta vs the prior per-bar slice-mean loop is the
+        # critical bit: the loop was O((n - prev_len) * L) Python-level
+        # multiplications, this is O(n) at C speed.
+        if n >= L:
+            csum = np.concatenate(([0.0], np.cumsum(closes)))
+            tail_means = (csum[L:] - csum[:-L]) / L
+            # tail_means[j] is the mean over closes[j:j+L], placed at
+            # output index ``j + L - 1``.
+            first_new = max(prev_len, L - 1)
+            if first_new > prev_len:
+                new_out[prev_len:first_new] = np.nan
+            if first_new < n:
+                new_out[first_new:n] = tail_means[first_new - (L - 1):]
+        else:
+            new_out[prev_len:n] = np.nan
         return {"output": {"sma": new_out}, "len": n}
 
 
@@ -411,11 +421,16 @@ class MovingAverage:
         new_out[:prev_len] = old_out
 
         if self.ma_type == "SMA":
-            for i in range(prev_len, n):
-                if i < L - 1:
-                    new_out[i] = np.nan
-                else:
-                    new_out[i] = closes[i - L + 1 : i + 1].mean()
+            if n >= L:
+                csum = np.concatenate(([0.0], np.cumsum(closes)))
+                tail_means = (csum[L:] - csum[:-L]) / L
+                first_new = max(prev_len, L - 1)
+                if first_new > prev_len:
+                    new_out[prev_len:first_new] = np.nan
+                if first_new < n:
+                    new_out[first_new:n] = tail_means[first_new - (L - 1):]
+            else:
+                new_out[prev_len:n] = np.nan
             return {"output": {"ma": new_out}, "len": n}
 
         a = 2.0 / (L + 1.0)
