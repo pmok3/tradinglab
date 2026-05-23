@@ -361,6 +361,13 @@ class FieldRef:
             if (original_id in _LEGACY_Z_OUTPUT_KIND_IDS
                     and output_key == "z"):
                 output_key = "rvol"
+            # NOTE: the SMA/EMA -> MovingAverage collapse intentionally
+            # does NOT migrate scanner FieldRefs. The scanner allowlist
+            # (``SCANNABLE_INDICATORS`` in ``scanner.fields``) keeps
+            # ``"sma"`` and ``"ema"`` as separate scannable field ids
+            # backed by the legacy registry entries (preserved via
+            # ``register_legacy_indicator``). Chart-side indicator
+            # configs DO migrate -- see ``IndicatorConfig.from_dict``.
         return cls(
             kind=str(kind),
             id=ref_id,

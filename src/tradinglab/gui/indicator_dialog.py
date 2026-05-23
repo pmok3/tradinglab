@@ -60,7 +60,7 @@ from __future__ import annotations
 import tkinter as tk
 from itertools import count
 from tkinter import ttk
-from typing import Any
+from typing import Any, ClassVar
 
 from ..indicators.base import INDICATORS, LineStyle, factory_by_kind_id, factory_is_available_for
 from ..indicators.config import (
@@ -312,6 +312,15 @@ class IndicatorDialog(tk.Toplevel):
     manager subscription is registered in ``__init__`` and unhooked
     in ``destroy``.
     """
+
+    #: Per-app-session memory of the last-picked MA type. Persisted in
+    #: memory only — never written to disk — so the bias resets on a
+    #: fresh launch (the trader-agent recommendation; users who want
+    #: SMA-by-default after restart still get it). Updated whenever a
+    #: ``kind_id == "ma"`` row is committed; injected as the seed for
+    #: future Moving Average rows whose ``params`` don't already
+    #: specify ``ma_type``.
+    _last_used_ma_type: ClassVar[str] = "SMA"
 
     def __init__(
         self,
@@ -1150,6 +1159,13 @@ class IndicatorDialog(tk.Toplevel):
         ParamDef default. Extra keys in ``seed_values`` not declared
         by the new schema are dropped (they don't survive the kind
         change anyway)."""
+        # Per-session muscle-memory hook: when adding (or kind-switching
+        # to) a Moving Average row without an explicit ``ma_type``, seed
+        # with the last MA type the user picked this session. Keeps the
+        # SMA-vs-EMA bias sticky without persisting to disk.
+        if kind_id == "ma" and "ma_type" not in seed_values:
+            seed_values = dict(seed_values)
+            seed_values["ma_type"] = type(self)._last_used_ma_type
         # Clear existing.
         sub = row.param_subframe
         if sub is None:
@@ -2262,6 +2278,15 @@ class IndicatorDialog(tk.Toplevel):
             self._reconciling = False
         # Snapshot the params so a future failed edit can revert.
         row.last_good_params = dict(params)
+        # Update the per-session MA-type memory whenever the user
+        # commits a Moving Average row. Captures both the direct
+        # type-dropdown change AND the silent change that happens when
+        # the user switches a non-MA kind into MA (the seed becomes
+        # the prior memory; if they then commit, it persists).
+        if kind_id == "ma":
+            picked = str(params.get("ma_type") or "").upper()
+            if picked:
+                type(self)._last_used_ma_type = picked
         # Mark dirty so the Save and Close button enables. Called
         # here rather than in _on_manager_event because _reconciling
         # suppresses the event callback during our own commits.

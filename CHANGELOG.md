@@ -4,6 +4,21 @@ All notable changes to this project will be documented here. Format roughly foll
 
 ## [Unreleased]
 
+### Changed
+
+- **Consolidated `SMA` and `EMA` indicators into a single "Moving
+  Average" entry** in the Add Indicator menu. Pick from `SMA / EMA /
+  WMA / RMA` in a Type dropdown plus a new Source dropdown (`Close /
+  Open / High / Low / HL2 / HLC3 / OHLC4`), so one indicator now
+  covers four kernels × seven source fields. Default colours match
+  the legacy classes (SMA = blue, EMA = orange). The dropdown
+  remembers the last MA type you picked for the rest of the app
+  session. Existing saved presets, drawings, and chart layouts that
+  used `SMA` or `EMA` migrate automatically at load — colour,
+  length, and per-interval visibility you customised are all
+  preserved. See `indicators/moving_averages.spec.md` and
+  `docs/indicators/ma.md`.
+
 ## [0.1.1] - 2026-05-22
 
 ### Added (0.1.1 cycle)

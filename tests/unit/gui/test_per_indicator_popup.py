@@ -59,10 +59,10 @@ def root_with_manager():
 
 def _make_sma_cfg(length: int = 20) -> IndicatorConfig:
     return IndicatorConfig(
-        kind_id="sma",
+        kind_id="ma",
         display_name=f"SMA({length})",
-        params={"length": length},
-        style={"sma": LineStyle(color="#ff8800", width=1.2, visible=True)},
+        params={"length": length, "ma_type": "SMA", "source": "Close"},
+        style={"ma": LineStyle(color="#ff8800", width=1.2, visible=True)},
         intervals=(),
         scopes=frozenset({"main"}),
         visible=True,
@@ -71,10 +71,10 @@ def _make_sma_cfg(length: int = 20) -> IndicatorConfig:
 
 def _make_ema_cfg() -> IndicatorConfig:
     return IndicatorConfig(
-        kind_id="ema",
+        kind_id="ma",
         display_name="EMA(50)",
-        params={"length": 50},
-        style={"ema": LineStyle(color="#00aaff", width=1.2, visible=True)},
+        params={"length": 50, "ma_type": "EMA", "source": "Close"},
+        style={"ma": LineStyle(color="#00aaff", width=1.2, visible=True)},
         intervals=(),
         scopes=frozenset({"main"}),
         visible=True,
@@ -320,13 +320,13 @@ class TestBaseDialogRestrictedFilter:
 
 
 def _make_multi_scope_cfg() -> IndicatorConfig:
-    """SMA config that lives on BOTH the Primary and Compare charts
-    so the popup's scope-split radio is exercised."""
+    """Moving Average config that lives on BOTH the Primary and Compare
+    charts so the popup's scope-split radio is exercised."""
     return IndicatorConfig(
-        kind_id="sma",
+        kind_id="ma",
         display_name="SMA(20)",
-        params={"length": 20},
-        style={"sma": LineStyle(color="#ff8800", width=1.2, visible=True)},
+        params={"length": 20, "ma_type": "SMA", "source": "Close"},
+        style={"ma": LineStyle(color="#ff8800", width=1.2, visible=True)},
         intervals=(),
         scopes=frozenset({"main", "compare"}),
         visible=True,
@@ -500,12 +500,12 @@ class TestLegendContextHelpers:
     exercised in the smoke check."""
 
     def test_legend_context_output_keys_sma_is_single(self, root_with_manager):
-        """SMA has one output ("sma") — single Change Color entry."""
+        """Moving Average has one output ("ma") — single Change Color entry."""
         from tradinglab.app import ChartApp
         cfg = _make_sma_cfg()
         keys = ChartApp._legend_context_output_keys(  # type: ignore[arg-type]
             root_with_manager, cfg)
-        assert keys == ["sma"]
+        assert keys == ["ma"]
 
     def test_legend_context_output_keys_unknown_is_empty(self, root_with_manager):
         """Unknown-kind configs render no Change-Color entry."""

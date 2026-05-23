@@ -322,6 +322,29 @@ def register_indicator(name: str, factory: IndicatorFactory) -> None:
         _BY_KIND_ID[kind_id] = (name, factory)
 
 
+def register_legacy_indicator(name: str, factory: IndicatorFactory) -> None:
+    """Register a back-compat factory in :data:`_BY_KIND_ID` ONLY.
+
+    Used by indicator families that consolidated multiple ``kind_id``
+    classes into a single unified replacement (e.g. SMA + EMA → MA).
+    The legacy class remains importable AND remains discoverable via
+    :func:`factory_by_kind_id` so in-memory configs with the old
+    ``kind_id`` keep working, but the class does NOT appear in
+    :data:`INDICATORS` and so is excluded from the Add Indicator menu.
+
+    Persisted configs (which flow through
+    :meth:`indicators.config.IndicatorConfig.from_dict`) are rewritten
+    to the unified ``kind_id`` via :data:`_KIND_ID_MIGRATIONS` before
+    the lookup, so they instantiate the unified replacement. The
+    hidden registration is the safety net for tests and any code path
+    that bypasses ``from_dict`` (e.g. constructing an
+    ``IndicatorConfig(kind_id="sma", ...)`` directly).
+    """
+    kind_id = getattr(factory, "kind_id", None)
+    if kind_id:
+        _BY_KIND_ID[kind_id] = (name, factory)
+
+
 def factory_by_kind_id(kind_id: str) -> tuple[str, IndicatorFactory] | None:
     """Return ``(display_name, factory)`` for ``kind_id`` or ``None``."""
     return _BY_KIND_ID.get(kind_id)
@@ -346,9 +369,24 @@ def kind_id_for(name: str) -> str | None:
 #: never re-keyed. The merged params are inserted only when the user's
 #: persisted ``params`` dict does NOT already specify the discriminator
 #: (so a user who manually edits the JSON to override always wins).
+#: Subset of :data:`_KIND_ID_MIGRATIONS` that should ONLY apply to
+#: chart-side persisted configs (loaded via
+#: :meth:`indicators.config.IndicatorConfig.from_dict`). The scanner
+#: surface intentionally keeps the legacy ``"sma"`` / ``"ema"`` field
+#: ids visible (per :data:`scanner.fields.SCANNABLE_INDICATORS`), so
+#: deserializing a scanner ``FieldRef`` must NOT rewrite the kind_id.
+#: See ``scanner.model.FieldRef.from_dict``.
+_CHART_ONLY_MIGRATION_KIND_IDS: frozenset = frozenset({"sma", "ema"})
+
 _KIND_ID_MIGRATIONS: dict[str, tuple[str, dict[str, Any]]] = {
     "bbands_ema": ("bbands", {"ma_type": "EMA"}),
     "atr_sma":    ("atr",    {"ma_type": "SMA"}),
+    # MA family collapse: legacy ``sma`` / ``ema`` indicators were
+    # merged into a single ``ma`` indicator with a discriminator. The
+    # discriminator and the source default ride along so an unparam'd
+    # legacy config hydrates to identical behaviour.
+    "sma": ("ma", {"ma_type": "SMA", "source": "Close"}),
+    "ema": ("ma", {"ma_type": "EMA", "source": "Close"}),
     # RVOL family collapse: 6 legacy ids → unified ``rvol`` + mode + z_score.
     "rvol_simple":   ("rvol", {"mode": "simple"}),
     "rvol_cum":      ("rvol", {"mode": "cumulative"}),
@@ -360,6 +398,16 @@ _KIND_ID_MIGRATIONS: dict[str, tuple[str, dict[str, Any]]] = {
     "rrvol_simple":  ("rrvol", {"mode": "simple"}),
     "rrvol_cum":     ("rrvol", {"mode": "cumulative"}),
     "rrvol_tod":     ("rrvol", {"mode": "time_of_day"}),
+}
+
+#: Map of legacy MA ``kind_id`` -> persisted output key. After
+#: migrating to the unified ``ma`` indicator (which emits ``"ma"``),
+#: any ``"sma"`` / ``"ema"`` style keys must be remapped to ``"ma"``
+#: so the user's customised colour / visibility / width survives the
+#: collapse. Consumed by :mod:`indicators.config`.
+_LEGACY_MA_OUTPUT_KEYS: dict[str, str] = {
+    "sma": "sma",
+    "ema": "ema",
 }
 
 #: Set of legacy z-score kind_ids whose ``style`` / ``output_key``
@@ -409,7 +457,10 @@ def _rename_legacy_lookback_days(
 
 
 def migrate_kind_id(
-    kind_id: str, params: dict[str, Any]
+    kind_id: str,
+    params: dict[str, Any],
+    *,
+    include_chart_only: bool = False,
 ) -> tuple[str, dict[str, Any]]:
     """Apply :data:`_KIND_ID_MIGRATIONS` and return ``(new_kind_id, new_params)``.
 
@@ -423,10 +474,24 @@ def migrate_kind_id(
       ``lookback_days`` key) — covers configs persisted during a
       partial-migration build.
 
+    ``include_chart_only`` controls whether migrations listed in
+    :data:`_CHART_ONLY_MIGRATION_KIND_IDS` (currently the
+    ``sma``/``ema`` → ``ma`` collapse) are applied. Chart configs
+    (``IndicatorConfig.from_dict``) pass ``True``; scanner configs
+    (``FieldRef.from_dict``) leave the default ``False`` so that
+    ``sma`` / ``ema`` remain scanner-visible field ids backed by the
+    legacy registry entries.
+
     Returns the inputs unchanged when no migration applies. Never
     raises.
     """
     mig = _KIND_ID_MIGRATIONS.get(kind_id)
+    if (
+        mig is not None
+        and not include_chart_only
+        and kind_id in _CHART_ONLY_MIGRATION_KIND_IDS
+    ):
+        mig = None
     if mig is None:
         # Defensive pass: the kind_id is already current, but params
         # may still carry the legacy ``lookback_days`` key. This keeps

@@ -4610,14 +4610,28 @@ def check_d39_indicators_phase1(app) -> None:
     ]
 
     # ---- A) Built-in registry + kind_id round-trip ----
-    assert set(INDICATORS) >= {"SMA", "EMA", "RSI", "Bollinger Bands"}, \
+    # SMA / EMA were consolidated into a single "Moving Average" entry
+    # (kind_id="ma"); the legacy classes remain registered via
+    # ``register_legacy_indicator`` so ``factory_by_kind_id("sma"|"ema")``
+    # still resolves persisted configs.
+    assert set(INDICATORS) >= {"Moving Average", "RSI", "Bollinger Bands"}, \
         f"missing built-ins: {set(INDICATORS)}"
-    for nm, kid in [("SMA", "sma"), ("EMA", "ema"), ("RSI", "rsi"),
+    # Visible (menu) entries: Moving Average / RSI / BB.
+    for nm, kid in [("Moving Average", "ma"), ("RSI", "rsi"),
                     ("Bollinger Bands", "bbands")]:
         assert kind_id_for(nm) == kid, f"kind_id_for({nm!r}) != {kid!r}"
         entry = factory_by_kind_id(kid)
         assert entry is not None and entry[0] == nm
-    print("  [OK] §d39.A registry + kind_id wiring")
+    # Legacy back-compat: SMA / EMA stay reachable by kind_id but are
+    # NOT in the visible INDICATORS dict (so they don't appear in the
+    # Add Indicator menu).
+    assert "SMA" not in INDICATORS and "EMA" not in INDICATORS, \
+        "SMA/EMA should be hidden legacy entries (register_legacy_indicator)"
+    for legacy_kid in ("sma", "ema"):
+        entry = factory_by_kind_id(legacy_kid)
+        assert entry is not None, \
+            f"legacy {legacy_kid!r} factory must remain registered"
+    print("  [OK] §d39.A registry + kind_id wiring (MA consolidation)")
 
     # ---- B) params_schema declared with sane bounds ----
     for cls in (SMA, EMA, RSI, BollingerBands):
@@ -4681,19 +4695,22 @@ def check_d39_indicators_phase1(app) -> None:
     print("  [OK] §d39.C compute correctness (SMA/EMA/RSI/BB)")
 
     # ---- D) IndicatorConfig round-trip + applies_to ----
+    # Persisting + reloading uses ``kind_id="ma"`` post-consolidation.
     cfg = IndicatorConfig(
-        kind_id="sma",
+        kind_id="ma",
         kind_version=1,
         display_name="SMA-20",
-        params={"length": 20},
+        params={"length": 20, "ma_type": "SMA", "source": "Close"},
         intervals=("1d", "1h"),
         scopes=frozenset({"main", "compare"}),
     )
     d = cfg.to_dict()
-    assert d["kind_id"] == "sma" and d["params"] == {"length": 20}
+    assert d["kind_id"] == "ma"
+    assert d["params"]["length"] == 20
+    assert d["params"]["ma_type"] == "SMA"
     assert d["scopes"] == ["compare", "main"]
     cfg2 = IndicatorConfig.from_dict(d)
-    assert cfg2.kind_id == "sma"
+    assert cfg2.kind_id == "ma"
     assert cfg2.intervals == ("1d", "1h")
     assert cfg2.scopes == frozenset({"main", "compare"})
     assert not cfg2.unknown
@@ -4703,6 +4720,14 @@ def check_d39_indicators_phase1(app) -> None:
     assert cfg2.applies_to("main", "5m") is False
     cfg2.visible = False
     assert cfg2.applies_to("main", "1d") is False
+
+    # Legacy SMA / EMA persisted configs migrate transparently.
+    legacy_sma = IndicatorConfig.from_dict({
+        "kind_id": "sma", "params": {"length": 20},
+    })
+    assert legacy_sma.kind_id == "ma"
+    assert legacy_sma.params.get("ma_type") == "SMA"
+    assert not legacy_sma.unknown
 
     # Unknown kind_id → placeholder
     cfg_unknown = IndicatorConfig.from_dict({"kind_id": "no_such_indicator"})
@@ -5954,9 +5979,13 @@ def check_d48_indicator_dialog(app) -> None:
     mgr.clear()
     # Seed manager with one pre-existing config so we can verify the
     # dialog hydrates from manager state on open.
+    # NB: post MA-consolidation the canonical SMA-style config uses
+    # ``kind_id="ma"`` with ``ma_type="SMA"`` — persisted legacy
+    # ``kind_id="sma"`` configs get migrated at hydration time by
+    # ``IndicatorConfig.from_dict`` (covered separately by §d39.D).
     seed = IndicatorConfig(
-        kind_id="sma", kind_version=1, display_name="SMA(20)",
-        params={"length": 20},
+        kind_id="ma", kind_version=1, display_name="SMA(20)",
+        params={"length": 20, "ma_type": "SMA", "source": "Close"},
     )
     mgr.add(seed)
 
@@ -6032,8 +6061,8 @@ def check_d48_indicator_dialog(app) -> None:
 
     # --- Drilldown scope is preserved across edits ---
     drilldown_cfg = IndicatorConfig(
-        kind_id="ema", kind_version=1, display_name="EMA(10)",
-        params={"length": 10},
+        kind_id="ma", kind_version=1, display_name="EMA(10)",
+        params={"length": 10, "ma_type": "EMA", "source": "Close"},
         scopes=frozenset({"main", "drilldown"}),
     )
     mgr.add(drilldown_cfg)
@@ -14152,9 +14181,14 @@ def check_b42_indicator_color_palette(app) -> None:
     dlg = open_indicator_dialog(app)
     try:
         # --- B: default_style lookup -----------------------------------
-        sma_def = dlg._default_style_for_kind("sma")
-        assert "sma" in sma_def, "SMA default_style must include 'sma' key"
-        assert isinstance(sma_def["sma"], LineStyle), (
+        # Post MA-consolidation: the visible "Moving Average" indicator
+        # (kind_id="ma") replaces SMA / EMA. The legacy classes still
+        # carry their own ``default_style`` dicts (with output keys
+        # "sma" / "ema") for migration compat, but the dialog operates
+        # on the unified "ma" output key.
+        ma_def = dlg._default_style_for_kind("ma")
+        assert "ma" in ma_def, "Moving Average default_style must include 'ma' key"
+        assert isinstance(ma_def["ma"], LineStyle), (
             "default_style values must be LineStyle instances"
         )
         bb_def = dlg._default_style_for_kind("bbands")
@@ -14162,21 +14196,22 @@ def check_b42_indicator_color_palette(app) -> None:
             f"Bollinger default_style must include middle/upper/lower; got {set(bb_def.keys())}"
         )
 
-        # --- Add an SMA row and pick a custom color via the public hook ---
+        # --- Add an MA row and pick a custom color via the public hook ---
         dlg._on_click_add()
         row = dlg._rows[-1]
-        # Force kind to 'sma' (Add Indicator seeds the first registered
-        # kind, which is sma in the current registry but be explicit).
+        # Force kind to 'ma' (the unified Moving Average) — the Add
+        # button seeds the first registered kind, which may or may
+        # not be MA depending on dict ordering. Be explicit.
         try:
-            sma_display = dlg._display_for_kind_id("sma")
-            row.kind_var.set(sma_display)
+            ma_display = dlg._display_for_kind_id("ma")
+            row.kind_var.set(ma_display)
             dlg._on_kind_changed(row)
         except Exception:  # noqa: BLE001
             pass
 
-        # G(part 1): SMA has exactly one color button keyed 'sma'.
-        assert set(row.color_buttons.keys()) == {"sma"}, (
-            f"SMA row should expose one color button; got {set(row.color_buttons.keys())}"
+        # G(part 1): MA has exactly one color button keyed 'ma'.
+        assert set(row.color_buttons.keys()) == {"ma"}, (
+            f"MA row should expose one color button; got {set(row.color_buttons.keys())}"
         )
 
         # G(part 2 — regression guard for "swatch shows wrong color"):
@@ -14188,61 +14223,61 @@ def check_b42_indicator_color_palette(app) -> None:
             dlg._apply_theme()
         except Exception:  # noqa: BLE001
             pass
-        sw = row.color_buttons["sma"]
+        sw = row.color_buttons["ma"]
         sw_bg = str(sw.cget("bg")).upper()
-        expected_bg = sma_def["sma"].color.upper()
+        expected_bg = ma_def["ma"].color.upper()
         assert sw_bg == expected_bg, (
             f"swatch bg {sw_bg!r} must match resolved color {expected_bg!r} "
             "after _apply_theme (theme walker must not paint over data swatches)"
         )
 
         # --- C: resolved color falls back to default before override ---
-        default_sma = sma_def["sma"].color
-        resolved_before = dlg._resolved_color_for(row, "sma", sma_def)
-        assert resolved_before.upper() == default_sma.upper(), (
-            f"pre-override resolved color must equal default {default_sma}; got {resolved_before}"
+        default_ma = ma_def["ma"].color
+        resolved_before = dlg._resolved_color_for(row, "ma", ma_def)
+        assert resolved_before.upper() == default_ma.upper(), (
+            f"pre-override resolved color must equal default {default_ma}; got {resolved_before}"
         )
 
         # --- D: simulate user picking magenta from the palette ---------
         chosen = "#A41DE5"  # purple-magenta from ring 1
-        row.style_overrides["sma"] = chosen
+        row.style_overrides["ma"] = chosen
         dlg._commit_now(row)
         cfg = mgr.get(row.config_id)
         assert cfg is not None, "commit must produce a manager config"
-        assert "sma" in cfg.style, (
-            "manager.update must receive style override for 'sma'"
+        assert "ma" in cfg.style, (
+            "manager.update must receive style override for 'ma'"
         )
-        assert cfg.style["sma"].color.upper() == chosen.upper(), (
-            f"persisted color {cfg.style['sma'].color!r} != chosen {chosen!r}"
+        assert cfg.style["ma"].color.upper() == chosen.upper(), (
+            f"persisted color {cfg.style['ma'].color!r} != chosen {chosen!r}"
         )
         # _resolved_color_for now prefers the override.
-        resolved_after = dlg._resolved_color_for(row, "sma", sma_def)
+        resolved_after = dlg._resolved_color_for(row, "ma", ma_def)
         assert resolved_after.upper() == chosen.upper(), (
             "override must take precedence in _resolved_color_for"
         )
 
         # --- E: setting override back to the default purges it ---------
-        row.style_overrides["sma"] = default_sma
-        style_built = dlg._build_style(row, "sma")
-        assert "sma" not in style_built, (
+        row.style_overrides["ma"] = default_ma
+        style_built = dlg._build_style(row, "ma")
+        assert "ma" not in style_built, (
             f"override matching default should be dropped; got {style_built}"
         )
         # Restore the override for the round-trip step.
-        row.style_overrides["sma"] = chosen
+        row.style_overrides["ma"] = chosen
         dlg._commit_now(row)
         cfg = mgr.get(row.config_id)
-        assert cfg.style.get("sma") is not None, (
+        assert cfg.style.get("ma") is not None, (
             "re-committing override should restore it on the config"
         )
 
         # --- F: persistence round-trip preserves the override ----------
         d = cfg.to_dict()
         cfg2 = IndicatorConfig.from_dict(d)
-        assert cfg2.style.get("sma") is not None, (
+        assert cfg2.style.get("ma") is not None, (
             "to_dict/from_dict must round-trip style entries"
         )
-        assert cfg2.style["sma"].color.upper() == chosen.upper(), (
-            f"round-trip lost the color: {cfg2.style['sma'].color!r}"
+        assert cfg2.style["ma"].color.upper() == chosen.upper(), (
+            f"round-trip lost the color: {cfg2.style['ma'].color!r}"
         )
 
         # --- G(part 2): Bollinger gives three independent buttons ------
@@ -18030,14 +18065,15 @@ def check_b73_per_indicator_popup(app) -> None:
     mgr = app._indicator_manager
     mgr.clear()
     # Seed two configs so we can verify the popup filters to just
-    # the one we asked for.
+    # the one we asked for. Post MA-consolidation: SMA/EMA both
+    # serialize as ``kind_id="ma"`` with ``ma_type`` discriminator.
     cfg_a = IndicatorConfig(
-        kind_id="sma", kind_version=1, display_name="SMA(20)",
-        params={"length": 20},
+        kind_id="ma", kind_version=1, display_name="SMA(20)",
+        params={"length": 20, "ma_type": "SMA", "source": "Close"},
     )
     cfg_b = IndicatorConfig(
-        kind_id="ema", kind_version=1, display_name="EMA(50)",
-        params={"length": 50},
+        kind_id="ma", kind_version=1, display_name="EMA(50)",
+        params={"length": 50, "ma_type": "EMA", "source": "Close"},
     )
     mgr.add(cfg_a)
     mgr.add(cfg_b)
@@ -18112,8 +18148,9 @@ def check_b73_per_indicator_popup(app) -> None:
     # Multi-scope config triggers the radio above the row; selecting
     # "this chart" then editing carves a single-scope clone.
     cfg_multi = IndicatorConfig(
-        kind_id="sma", kind_version=1, display_name="SMA(10)",
-        params={"length": 10}, scopes=frozenset({"main", "compare"}),
+        kind_id="ma", kind_version=1, display_name="SMA(10)",
+        params={"length": 10, "ma_type": "SMA", "source": "Close"},
+        scopes=frozenset({"main", "compare"}),
     )
     mgr.add(cfg_multi)
     orig_id = cfg_multi.id
@@ -18179,21 +18216,22 @@ def check_b73_per_indicator_popup(app) -> None:
     # ``tk.Menu`` is not amenable to a headless smoke check, but
     # the menu's commands all funnel through these helpers).
     cfg_ctx = IndicatorConfig(
-        kind_id="sma", kind_version=1, display_name="SMA(7)",
-        params={"length": 7}, scopes=frozenset({"main", "compare"}),
+        kind_id="ma", kind_version=1, display_name="SMA(7)",
+        params={"length": 7, "ma_type": "SMA", "source": "Close"},
+        scopes=frozenset({"main", "compare"}),
     )
     mgr.add(cfg_ctx)
-    # output_keys helper returns ["sma"] for single-output indicator.
+    # output_keys helper returns ["ma"] for single-output Moving Average.
     keys = app._legend_context_output_keys(cfg_ctx)
-    assert keys == ["sma"], (
-        f"single-output SMA must yield ['sma']; got {keys!r}")
+    assert keys == ["ma"], (
+        f"single-output Moving Average must yield ['ma']; got {keys!r}")
     # Duplicate clones the config with same scopes / params / new id.
     pre_dup = len(mgr.list())
     app._legend_duplicate(cfg_ctx.id)
     post_dup = mgr.list()
     assert len(post_dup) == pre_dup + 1, (
         "_legend_duplicate must add exactly one new config")
-    clones2 = [c for c in post_dup if c.id != cfg_ctx.id and c.kind_id == "sma"]
+    clones2 = [c for c in post_dup if c.id != cfg_ctx.id and c.kind_id == "ma"]
     assert len(clones2) == 1
     clone2 = clones2[0]
     assert clone2.id != cfg_ctx.id, (

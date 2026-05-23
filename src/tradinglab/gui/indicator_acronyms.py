@@ -28,6 +28,11 @@ from __future__ import annotations
 
 # kind_id → (full name, brief blurb).
 ACRONYMS: dict[str, tuple[str, str]] = {
+    "ma": (
+        "Moving Average",
+        "Unified moving average — choose SMA / EMA / WMA / RMA and pick"
+        " the source field (Close, HL2, HLC3, etc).",
+    ),
     "sma": (
         "Simple Moving Average",
         "Equal-weighted mean of the last N closes — smooth trend reference.",

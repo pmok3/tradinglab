@@ -49,6 +49,7 @@ from typing import Any
 
 from ..core.thread_guard import require_tk_thread
 from .base import (
+    _LEGACY_MA_OUTPUT_KEYS,
     _LEGACY_Z_OUTPUT_KIND_IDS,
     LineStyle,
     factory_by_kind_id,
@@ -252,17 +253,28 @@ class IndicatorConfig:
         # ``"rvol"``, so we remap the user's customised colour /
         # visibility / width entries to the new key).
         legacy_z_remap = kind_id in _LEGACY_Z_OUTPUT_KIND_IDS
+        # Same for the MA family: legacy ``sma`` / ``ema`` configs
+        # persisted ``style["sma"]`` / ``style["ema"]`` keys; the
+        # unified ``ma`` indicator emits ``"ma"``, so any prior key
+        # named after the legacy id must be remapped.
+        legacy_ma_key = _LEGACY_MA_OUTPUT_KEYS.get(kind_id)
         # Apply legacy kind_id migrations BEFORE the unknown-flag check
         # so configs persisted under a now-folded id (e.g. "bbands_ema",
-        # "atr_sma", "rvol_*") seamlessly hydrate as the unified
-        # replacement with the appropriate discriminator param baked in.
-        kind_id, params = migrate_kind_id(kind_id, params)
+        # "atr_sma", "rvol_*", "sma"/"ema") seamlessly hydrate as the
+        # unified replacement with the appropriate discriminator param
+        # baked in.
+        kind_id, params = migrate_kind_id(kind_id, params, include_chart_only=True)
         unknown = factory_by_kind_id(kind_id) is None
         style = {}
         for k, sd in (d.get("style") or {}).items():
             try:
                 # Remap legacy z-score "z" output key → unified "rvol".
-                style_key = "rvol" if (legacy_z_remap and k == "z") else k
+                if legacy_z_remap and k == "z":
+                    style_key = "rvol"
+                elif legacy_ma_key is not None and k == legacy_ma_key:
+                    style_key = "ma"
+                else:
+                    style_key = k
                 style[style_key] = LineStyle(
                     color=str(sd.get("color", "#888888")),
                     width=float(sd.get("width", 1.2)),

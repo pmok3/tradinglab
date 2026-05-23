@@ -51,7 +51,7 @@ A one-spec-per-`.py` documentation set. Each spec follows a fixed 9-section layo
 | `indicators/config.spec.md` | `IndicatorConfig` + `ParamDef` schema; per-pair config storage. |
 | `indicators/loader.spec.md` | Built-in indicator registration on package import. |
 | `indicators/cache.spec.md` | `IndicatorCache` — identity-keyed LRU (cap 64), key `(id(candles), config_hash)`. |
-| `indicators/moving_averages.spec.md` | SMA/EMA over close (folded into `ma_type` ParamDef). |
+| `indicators/moving_averages.spec.md` | Unified `MovingAverage` indicator (SMA / EMA / WMA / RMA × Close / Open / High / Low / HL2 / HLC3 / OHLC4); legacy `SMA`/`EMA` kept as hidden back-compat shims. |
 | `indicators/rsi.spec.md` | Wilder's RSI. |
 | `indicators/atr.spec.md` | Wilder's ATR. |
 | `indicators/adx.spec.md` | Wilder's ADX (with +DI / -DI). |

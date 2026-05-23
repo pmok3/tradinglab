@@ -9,7 +9,8 @@ Declares the `Indicator` Protocol, the `INDICATORS` display registry, and the ty
 - `LineStyle(color="#888888", width=1.2, visible=True)` — per-output-key visual default. Per-instance overrides live on `IndicatorConfig`.
 - `IndicatorFactory = Callable[..., Indicator]`.
 - `INDICATORS: Dict[str, IndicatorFactory]` — display registry, insertion-ordered.
-- `register_indicator(name, factory)` — idempotent; also indexes by `factory.kind_id` when present.
+- `register_indicator(name, factory)` — idempotent; adds to both `INDICATORS` (visible display registry → menu) and `_BY_KIND_ID` (persistence-side lookup) when the factory exposes a `kind_id`.
+- `register_legacy_indicator(name, factory)` — idempotent; adds to `_BY_KIND_ID` ONLY. Used for indicator families that consolidated into a single replacement (e.g. SMA + EMA → MovingAverage): the legacy class stays discoverable for in-memory configs and tests, but is excluded from the Add Indicator menu.
 - `factory_by_kind_id(kind_id) -> Optional[(name, factory)]` — stable-id lookup for persistence rehydration.
 - `kind_id_for(name) -> Optional[str]`.
 - `migrate_kind_id(kind_id, params) -> (kind_id, params)` — applies the
@@ -17,13 +18,22 @@ Declares the `Indicator` Protocol, the `INDICATORS` display registry, and the ty
   Current mappings (all additive, user-supplied params win):
   - `"bbands_ema"` → `("bbands", {"ma_type": "EMA"})`
   - `"atr_sma"` → `("atr", {"ma_type": "SMA"})`
+  - `"sma"` → `("ma", {"ma_type": "SMA", "source": "Close"})` *(chart-only — scanner FieldRefs keep `id="sma"`)*
+  - `"ema"` → `("ma", {"ma_type": "EMA", "source": "Close"})` *(chart-only — scanner FieldRefs keep `id="ema"`)*
   - `"rvol_simple"` / `"rvol_cum"` / `"rvol_tod"` → `("rvol", {"mode": "simple"|"cumulative"|"time_of_day"})`
   - `"rvol_z_simple"` / `"rvol_z_cum"` / `"rvol_z_tod"` → `("rvol", {"mode": "...", "z_score": True})`
   - `"rrvol_*"` variants → `("rrvol", ...)` following the same pattern
-  Called from `IndicatorConfig.from_dict` (chart configs) and
-  `FieldRef.from_dict` (scanner / exits / entries) before the
+  Called from `IndicatorConfig.from_dict` (chart configs, with
+  `include_chart_only=True`) and `FieldRef.from_dict` (scanner /
+  exits / entries — default `include_chart_only=False`) before the
   unknown-kind check, so a pre-merge stored config seamlessly hydrates
   as the unified replacement with the discriminator param baked in.
+  The `include_chart_only` flag gates entries listed in
+  `_CHART_ONLY_MIGRATION_KIND_IDS` (currently `"sma"`/`"ema"`): scanner
+  surfaces intentionally keep those as separate scannable field ids
+  backed by the legacy registry entries.
+
+- `_LEGACY_MA_OUTPUT_KEYS: dict[str, str]` — maps a legacy MA `kind_id` (`"sma"` / `"ema"`) to the output-key name the legacy class persisted (`"sma"` / `"ema"`). `IndicatorConfig.from_dict` reads this BEFORE migration so it can remap the user's customised `style[legacy_key]` → `style["ma"]` after the kind_id rewrite — mirrors the `_LEGACY_Z_OUTPUT_KIND_IDS` pattern used by the RVOL family.
 
 ## Dependencies
 - Internal: `..models.Candle`.

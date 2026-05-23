@@ -13,12 +13,13 @@ From `.base`:
 - `IndicatorFactory = Callable[..., Indicator]`.
 - `INDICATORS: Dict[str, IndicatorFactory]` — display registry.
 - `register_indicator(name, factory)`,
+  `register_legacy_indicator(name, factory)`,
   `factory_by_kind_id(kind_id)`, `kind_id_for(name)`.
 - `ParamDef`, `LineStyle`, `PARAM_KINDS`.
 
 Built-ins registered at import time (display name → kind_id):
-- `"SMA"` → `"sma"`
-- `"EMA"` → `"ema"`
+- `"Moving Average"` → `"ma"` (consolidated SMA / EMA / WMA / RMA;
+  see `moving_averages.spec.md`)
 - `"RSI"` → `"rsi"`
 - `"Bollinger Bands"` → `"bbands"`
 - `"Keltner Channels"` → `"keltner"`
@@ -33,8 +34,18 @@ Built-ins registered at import time (display name → kind_id):
 - `"RRVOL"` → `"rrvol"`
 - `"Chandelier Stops"` → `"chandelier"`
 
-`WMA` and `RMA` ship as moving-average kernels (selectable via
-`ma_type`) but are not registered as standalone display entries.
+`SMA`, `EMA` are registered as **hidden legacy entries** via
+`register_legacy_indicator` — they live in `_BY_KIND_ID` only
+(not in `INDICATORS`), so they remain reachable from
+`factory_by_kind_id("sma")` / `"ema"` (in-memory configs that bypass
+`from_dict` keep working) but never appear in the Add Indicator
+menu. Persisted configs with `kind_id="sma"` / `"ema"` migrate to
+the unified `"ma"` indicator at hydration via
+`_KIND_ID_MIGRATIONS`.
+
+`WMA` and `RMA` ship as moving-average kernels selectable via the
+unified `Moving Average` indicator's `ma_type` param. They are not
+standalone display entries.
 
 Higher-level facilities (imported on demand, not re-exported here):
 - `indicators.config` — `IndicatorConfig`, `IndicatorManager`.
@@ -58,6 +69,7 @@ Higher-level facilities (imported on demand, not re-exported here):
   consumers (backtesters) don't need.
 
 ## Invariants
-- After `import tradinglab.indicators`, `INDICATORS` contains all 15
-  display names listed above.
-- `factory_by_kind_id` resolves every kind_id listed above.
+- After `import tradinglab.indicators`, `INDICATORS` contains all
+  visible display names listed above (legacy SMA/EMA excluded).
+- `factory_by_kind_id` resolves every kind_id listed above PLUS the
+  legacy `"sma"` and `"ema"` ids (back-compat for in-memory configs).

@@ -49,13 +49,14 @@ from .base import (
     factory_by_kind_id,
     kind_id_for,
     register_indicator,
+    register_legacy_indicator,
 )
 from .bollinger import BollingerBands
 from .chandelier import ChandelierStops
 from .keltner import KeltnerChannels
 from .lrsi import LRSI
 from .macd import MACD
-from .moving_averages import EMA, SMA
+from .moving_averages import EMA, SMA, MovingAverage
 from .overlap_score import OverlapScoreInverted
 from .prior_day import PriorDayHLC
 from .rrvol import RRVOL
@@ -64,8 +65,14 @@ from .rvol import RVOL
 from .smi import SMI
 from .vwap import VWAP
 
-register_indicator("SMA", SMA)
-register_indicator("EMA", EMA)
+register_indicator("Moving Average", MovingAverage)
+# Legacy SMA / EMA: hidden from the Add menu (no INDICATORS entry) but
+# kept in the kind_id lookup so direct in-memory uses (e.g. test
+# fixtures, third-party scripts that bypass IndicatorConfig.from_dict)
+# keep instantiating the originals. Persisted configs migrate through
+# _KIND_ID_MIGRATIONS to the unified ``ma`` kind_id before lookup.
+register_legacy_indicator("SMA", SMA)
+register_legacy_indicator("EMA", EMA)
 register_indicator("RSI", RSI)
 register_indicator("Bollinger Bands", BollingerBands)
 register_indicator("Keltner Channels", KeltnerChannels)
@@ -94,6 +101,7 @@ __all__ = [
     "register_indicator",
     "SMA",
     "EMA",
+    "MovingAverage",
     "RSI",
     "BollingerBands",
     "KeltnerChannels",

@@ -222,3 +222,222 @@ class EMA:
             "committed_value": committed_value,
         }
 
+
+# ---------------------------------------------------------------------------
+# Unified Moving Average indicator (registered as "Moving Average")
+# ---------------------------------------------------------------------------
+
+from .ma_kernels import MA_TYPES, apply_ma  # noqa: E402
+
+#: Allowed values for the ``MovingAverage.source`` parameter. ``Close``
+#: is the traditional default that most traders reach for; the
+#: typical-price sources (HL2 / HLC3 / OHLC4) are useful for midpoint
+#: smoothing and pivot-style analysis.
+SOURCE_TYPES: tuple[str, ...] = (
+    "Close", "Open", "High", "Low", "HL2", "HLC3", "OHLC4",
+)
+
+
+#: Trader-mental-model default colors. SMA = blue, EMA = orange —
+#: matches the pre-consolidation classes AND TradingView's convention.
+#: WMA / RMA pick complementary palette slots so a chart carrying
+#: multiple MA types doesn't collapse to a single hue.
+_DEFAULT_COLOR_BY_MA: dict[str, str] = {
+    "SMA": "#1f77b4",
+    "EMA": "#ff7f0e",
+    "WMA": "#2ca02c",
+    "RMA": "#7f7f7f",
+}
+
+
+def _source_array(bars: Bars, source: str) -> np.ndarray:
+    """Return the 1-D source array selected by ``source``.
+
+    Unknown ``source`` strings fall through to closes — the dialog's
+    Combobox is read-only so this only matters for direct programmatic
+    misuse, and a silent fallback is friendlier than a crash mid-render.
+    """
+    src = str(source).upper()
+    if src == "OPEN":
+        return bars.open
+    if src == "HIGH":
+        return bars.high
+    if src == "LOW":
+        return bars.low
+    if src == "HL2":
+        return (bars.high + bars.low) / 2.0
+    if src == "HLC3":
+        return (bars.high + bars.low + bars.close) / 3.0
+    if src == "OHLC4":
+        return (bars.open + bars.high + bars.low + bars.close) / 4.0
+    return bars.close
+
+
+class MovingAverage:
+    """Single unified moving-average overlay.
+
+    ``compute`` returns ``{"ma": ndarray}``. The legend label encodes
+    the ``ma_type`` and ``length`` (and ``source`` only when non-default)
+    so a glance reads ``EMA(20)`` rather than ``MovingAverage(20, EMA)``.
+
+    Replaces the legacy :class:`SMA` and :class:`EMA` menu entries. Old
+    saved configs (``kind_id="sma"`` / ``"ema"``) migrate to
+    ``kind_id="ma"`` via :func:`indicators.base.migrate_kind_id` at load
+    time; preset JSONs on disk are not rewritten.
+
+    The incremental fast path (``inc_init`` / ``inc_step``) is honored
+    for ``ma_type in {"SMA", "EMA"}`` on Close only — those are the
+    cases the chart's per-tick redraw cares about. Other combinations
+    fall back to a full O(N) recompute via the standard cache miss
+    path; that's still microseconds for the visible candle window.
+    """
+
+    kind_id: ClassVar[str] = "ma"
+    kind_version: ClassVar[int] = 1
+    params_schema: ClassVar[tuple[ParamDef, ...]] = (
+        ParamDef("ma_type", "choice", default="SMA",
+                 choices=MA_TYPES, description="Type"),
+        ParamDef("length", "int", default=20, min=1, max=2000, step=1,
+                 description="Length"),
+        ParamDef("source", "choice", default="Close",
+                 choices=SOURCE_TYPES, description="Source"),
+    )
+    default_style: ClassVar[dict[str, LineStyle]] = {
+        "ma": LineStyle(color=_DEFAULT_COLOR_BY_MA["SMA"], width=1.4),
+    }
+
+    overlay = True
+
+    def __init__(
+        self,
+        length: int = 20,
+        ma_type: str = "SMA",
+        source: str = "Close",
+    ) -> None:
+        if length < 1:
+            raise ValueError("length must be >= 1")
+        ma_type_norm = str(ma_type).upper()
+        if ma_type_norm not in MA_TYPES:
+            raise ValueError(
+                f"ma_type must be one of {MA_TYPES}; got {ma_type!r}",
+            )
+        source_norm = self._normalize_source(source)
+        self.length = int(length)
+        self.ma_type = ma_type_norm
+        self.source = source_norm
+        src_tag = "" if source_norm == "Close" else f",{source_norm}"
+        self.name = f"{self.ma_type}({self.length}{src_tag})"
+        self.style_overrides: dict[str, LineStyle] = {
+            "ma": LineStyle(
+                color=_DEFAULT_COLOR_BY_MA.get(
+                    self.ma_type, _DEFAULT_COLOR_BY_MA["SMA"],
+                ),
+                width=1.4,
+            ),
+        }
+
+    @staticmethod
+    def _normalize_source(source: str) -> str:
+        """Canonicalize ``source`` to the casing of :data:`SOURCE_TYPES`.
+
+        Accepts case-insensitive input from saved configs; raises
+        :class:`ValueError` for values outside the allowed set so a
+        corrupt persisted source doesn't silently fall back to Close.
+        """
+        if source is None:
+            return "Close"
+        upper = str(source).strip().upper()
+        for canonical in SOURCE_TYPES:
+            if canonical.upper() == upper:
+                return canonical
+        raise ValueError(
+            f"source must be one of {SOURCE_TYPES}; got {source!r}",
+        )
+
+    def compute_arr(self, bars: Bars) -> dict[str, np.ndarray]:
+        arr = _source_array(bars, self.source)
+        out = apply_ma(self.ma_type, arr, self.length)
+        return {"ma": out}
+
+    def compute(self, candles: list[Candle]) -> dict[str, np.ndarray]:
+        return self.compute_arr(Bars.from_candles(candles))
+
+    def _can_inc(self) -> bool:
+        return self.source == "Close" and self.ma_type in ("SMA", "EMA")
+
+    def inc_init(self, bars: Bars) -> dict[str, object]:
+        if not self._can_inc():
+            raise ValueError(
+                f"incremental not supported for {self.ma_type}({self.source})",
+            )
+        out_full = self.compute_arr(bars)["ma"]
+        n = int(bars.close.size)
+        L = self.length
+        if self.ma_type == "SMA":
+            return {"output": {"ma": out_full}, "len": n}
+        if n >= L:
+            committed_idx = n - 1
+            committed_value = float(out_full[n - 1])
+        else:
+            committed_idx = -1
+            committed_value = float("nan")
+        return {
+            "output": {"ma": out_full},
+            "len": n,
+            "committed_idx": committed_idx,
+            "committed_value": committed_value,
+        }
+
+    def inc_step(
+        self,
+        state: dict[str, object],
+        bars: Bars,
+        *,
+        prev_len: int,
+    ) -> dict[str, object]:
+        if not self._can_inc():
+            raise ValueError(
+                f"incremental not supported for {self.ma_type}({self.source})",
+            )
+        closes = bars.close
+        n = int(closes.size)
+        if n <= prev_len:
+            raise ValueError(
+                f"inc_step requires growth: prev_len={prev_len}, new_len={n}",
+            )
+        L = self.length
+        old_out = state["output"]["ma"]  # type: ignore[index]
+        new_out = np.empty(n, dtype=np.float64)
+        new_out[:prev_len] = old_out
+
+        if self.ma_type == "SMA":
+            for i in range(prev_len, n):
+                if i < L - 1:
+                    new_out[i] = np.nan
+                else:
+                    new_out[i] = closes[i - L + 1 : i + 1].mean()
+            return {"output": {"ma": new_out}, "len": n}
+
+        a = 2.0 / (L + 1.0)
+        committed_idx = int(state["committed_idx"])  # type: ignore[arg-type]
+        committed_value = float(state["committed_value"])  # type: ignore[arg-type]
+        for i in range(prev_len, n):
+            if i < L - 1:
+                new_out[i] = np.nan
+                continue
+            if committed_idx < L - 1:
+                seed = float(closes[:L].mean())
+                new_out[i] = seed
+                committed_idx = i
+                committed_value = seed
+                continue
+            v = a * float(closes[i]) + (1.0 - a) * committed_value
+            new_out[i] = v
+            committed_idx = i
+            committed_value = v
+        return {
+            "output": {"ma": new_out},
+            "len": n,
+            "committed_idx": committed_idx,
+            "committed_value": committed_value,
+        }
