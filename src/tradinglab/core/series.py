@@ -38,11 +38,27 @@ class SeriesArrays:
     def __init__(self, candles: list[Candle], format_date) -> None:
         n = len(candles)
         self.n = n
-        self.opens = np.fromiter((c.open for c in candles), dtype=float, count=n)
-        self.highs = np.fromiter((c.high for c in candles), dtype=float, count=n)
-        self.lows = np.fromiter((c.low for c in candles), dtype=float, count=n)
-        self.closes = np.fromiter((c.close for c in candles), dtype=float, count=n)
-        self.volumes = np.fromiter((c.volume for c in candles), dtype=float, count=n)
+        # Single-pass extraction: one Python loop over ``candles``
+        # filling five pre-allocated arrays instead of five separate
+        # ``np.fromiter`` passes (each of which re-walked the candle
+        # list, paid attribute-access overhead per field, and built
+        # an internal generator state machine).
+        opens = np.empty(n, dtype=np.float64)
+        highs = np.empty(n, dtype=np.float64)
+        lows = np.empty(n, dtype=np.float64)
+        closes = np.empty(n, dtype=np.float64)
+        volumes = np.empty(n, dtype=np.float64)
+        for i, c in enumerate(candles):
+            opens[i] = c.open
+            highs[i] = c.high
+            lows[i] = c.low
+            closes[i] = c.close
+            volumes[i] = c.volume
+        self.opens = opens
+        self.highs = highs
+        self.lows = lows
+        self.closes = closes
+        self.volumes = volumes
         self._candles = candles
         # Lazy: built only if a consumer asks for the timestamps/session
         # arrays via :attr:`bars`. ``app._series`` may also seed this
