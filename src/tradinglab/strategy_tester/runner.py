@@ -51,7 +51,7 @@ from ..backtest.session import ENGINE_VERSION
 from ..entries.model import EntryStrategy
 from ..exits.model import ExitStrategy
 from ..models import Candle
-from . import storage
+from . import report, storage
 from .acceptance import AcceptanceToken
 from .evaluator import UnsupportedTriggerKind, evaluate_symbol
 from .model import (
@@ -500,6 +500,17 @@ def run(
         test_run.status = RunStatus.DONE
     test_run.finished_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     storage.save_manifest(run_dir, test_run)
+
+    # 6) Aggregate report + trades CSV. Run even on partial (CANCELLED)
+    #    Runs so the user can still inspect what completed; the failure
+    #    case is non-blocking (warn but don't change Run status).
+    if test_run.status in (RunStatus.DONE, RunStatus.CANCELLED) and outcomes:
+        try:
+            report.aggregate_run(run_dir)
+            report.write_run_csv(run_dir)
+        except Exception:  # noqa: BLE001
+            log.exception("aggregate/CSV write failed for run %s", run_dir)
+
     if progress is not None:
         try:
             progress(test_run)

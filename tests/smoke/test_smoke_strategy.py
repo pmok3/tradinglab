@@ -262,6 +262,61 @@ def check_st1_screenshots_written(tmp_cache_root: Path) -> None:
     assert elapsed < 30.0, f"check_st1_screenshots_written took {elapsed:.2f}s (>30s)"
 
 
+def check_st2_aggregate_and_csv(tmp_cache_root: Path) -> None:
+    """Verify the runner auto-writes aggregate.json + trades.csv on DONE."""
+    from tradinglab.strategy_tester import (
+        AcceptanceToken,
+        RunStatus,
+        load_aggregate,
+    )
+    from tradinglab.strategy_tester import (
+        run as run_strategy_test,
+    )
+
+    entry, exit_strat, cfg = _make_test_config()
+    entries_by_id = {entry.id: entry}
+    exits_by_id = {exit_strat.id: exit_strat}
+
+    result = run_strategy_test(
+        cfg,
+        cancel_token=AcceptanceToken(),
+        candles_fetcher=_fake_fetcher,
+        entry_loader=lambda sid: entries_by_id[sid],
+        exit_loader=lambda sid: exits_by_id[sid],
+        max_workers=2,
+    )
+    assert result.test_run.status is RunStatus.DONE
+
+    run_dir = result.run_dir
+    agg_path = run_dir / "aggregate.json"
+    csv_path = run_dir / "trades.csv"
+    assert agg_path.exists(), f"aggregate.json missing under {run_dir}"
+    assert csv_path.exists(), f"trades.csv missing under {run_dir}"
+    assert agg_path.stat().st_size > 50, "aggregate.json looks empty"
+    assert csv_path.stat().st_size > 50, "trades.csv looks empty"
+
+    # Aggregate round-trips back through load_aggregate cleanly.
+    agg = load_aggregate(run_dir)
+    assert agg is not None, "load_aggregate should produce a RunAggregate"
+    assert agg.run_id == result.test_run.run_id
+    # 3 symbols × ≥1 trade each = ≥3 trades total
+    assert agg.trade_count >= 3, (
+        f"expected at least 3 trades across 3 symbols, got {agg.trade_count}"
+    )
+    # The equity curve is populated and monotonic in ts.
+    assert agg.equity_curve, "equity_curve should be non-empty"
+    ts_seq = [p[0] for p in agg.equity_curve]
+    assert ts_seq == sorted(ts_seq), "equity_curve should be sorted by ts"
+
+    # CSV has the canonical 24-column header + at least one data row.
+    csv_lines = csv_path.read_text(encoding="utf-8").splitlines()
+    assert len(csv_lines) >= 2, "trades.csv should have header + data rows"
+    header_cols = csv_lines[0].split(",")
+    assert len(header_cols) == 24, (
+        f"expected 24-column trades.csv header, got {len(header_cols)}"
+    )
+
+
 @pytest.fixture
 def tmp_cache_root(tmp_path, monkeypatch):
     monkeypatch.setenv("TRADINGLAB_CACHE_DIR", str(tmp_path))
@@ -274,3 +329,7 @@ def test_strategy_kernel(tmp_cache_root: Path) -> None:
 
 def test_strategy_screenshots(tmp_cache_root: Path) -> None:
     check_st1_screenshots_written(tmp_cache_root)
+
+
+def test_strategy_aggregate_and_csv(tmp_cache_root: Path) -> None:
+    check_st2_aggregate_and_csv(tmp_cache_root)
