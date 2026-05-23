@@ -192,9 +192,17 @@ class ATR:
 
         if not is_intraday_np(bars):
             L = _TOD_DAILY_FALLBACK_LENGTH
-            for i in range(L, n):
-                window = tr[i - L + 1:i + 1]
-                out[i] = _aggregate(window, "mean")
+            if n > L:
+                # Rolling arithmetic mean of TR via cumulative sum.
+                # TR[0] is NaN (no prior close); replace with 0 in the
+                # cumsum then mask out windows where index 0 falls in
+                # range. Output starts valid at index L.
+                tr_clean = np.where(np.isfinite(tr), tr, 0.0)
+                csum = np.concatenate(([0.0], np.cumsum(tr_clean)))
+                # window for output index i covers tr[i-L+1 : i+1].
+                # i starts at L (skipping i=L-1 to avoid the NaN at TR[0]).
+                window_sums = csum[L + 1:n + 1] - csum[1:n - L + 1]
+                out[L:n] = window_sums / L
             return {"atr": out}
 
         admit_mask = session_filter_mask_np(bars, self.session_filter)
@@ -204,30 +212,57 @@ class ATR:
 
         tk = tod_key_np(bars)
 
-        per_session: list[dict[int, float]] = []
-        for grp in groups:
-            keyed: dict[int, float] = {}
-            for idx in grp:
-                if not admit_mask[idx]:
-                    continue
-                v = float(tr[idx])
-                if not np.isfinite(v):
-                    continue
-                keyed.setdefault(int(tk[idx]), v)
-            per_session.append(keyed)
+        # Build a (n_sessions x n_unique_tod_keys) dense matrix of TR
+        # so each current bar's baseline can be sliced as a numpy
+        # column window instead of an L-dict comprehension. NaN
+        # entries mark "this session never saw a bar at that ToD".
+        unique_keys, inv_idx = np.unique(tk, return_inverse=True)
+        n_sessions = len(groups)
+        n_keys = unique_keys.size
+        tod_matrix = np.full((n_sessions, n_keys), np.nan, dtype=np.float64)
+        for s, grp in enumerate(groups):
+            grp_arr = np.asarray(grp, dtype=np.int64)
+            keep = admit_mask[grp_arr] & np.isfinite(tr[grp_arr])
+            sel = grp_arr[keep]
+            if sel.size == 0:
+                continue
+            cols = inv_idx[sel]
+            # Mirror the prior dict.setdefault behaviour: first-write
+            # wins per (session, tod_key) bucket. np.unique returns
+            # sorted first occurrences in `idx` so we use that to
+            # de-duplicate while preserving "earliest bar in session".
+            _, first_idx = np.unique(cols, return_index=True)
+            tod_matrix[s, cols[first_idx]] = tr[sel[first_idx]]
 
-        for s in range(_MIN_WARMUP_SESSIONS, len(groups)):
+        L = self.length
+        for s in range(_MIN_WARMUP_SESSIONS, n_sessions):
             cur_grp = groups[s]
-            prior_window = per_session[max(0, s - self.length):s]
+            lo = max(0, s - L)
+            window = tod_matrix[lo:s]  # shape (<=L, n_keys)
+            valid_mask = np.isfinite(window)
+            counts = valid_mask.sum(axis=0)
+            ready_cols = counts >= _MIN_WARMUP_SESSIONS
+            if not ready_cols.any():
+                continue
+            if self.aggregator == "median":
+                # nanmedian per column; ignore not-ready columns.
+                agg_per_col = np.full(n_keys, np.nan, dtype=np.float64)
+                if ready_cols.any():
+                    agg_per_col[ready_cols] = np.nanmedian(
+                        window[:, ready_cols], axis=0,
+                    )
+            else:
+                col_sums = np.where(valid_mask, window, 0.0).sum(axis=0)
+                with np.errstate(invalid="ignore", divide="ignore"):
+                    agg_per_col = np.where(
+                        ready_cols, col_sums / counts, np.nan,
+                    )
             for idx in cur_grp:
                 if not admit_mask[idx]:
                     continue
-                k = int(tk[idx])
-                baseline_vals = [d[k] for d in prior_window if k in d]
-                if len(baseline_vals) < _MIN_WARMUP_SESSIONS:
-                    continue
-                out[idx] = _aggregate(
-                    np.asarray(baseline_vals, dtype=np.float64),
-                    self.aggregator,
-                )
+                col = inv_idx[idx]
+                if ready_cols[col]:
+                    v = float(agg_per_col[col])
+                    if np.isfinite(v):
+                        out[idx] = v
         return {"atr": out}
