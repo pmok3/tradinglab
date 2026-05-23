@@ -95,6 +95,44 @@ def test_list_runs_returns_newest_first(monkeypatch, tmp_path) -> None:
     assert [r.run_id for r in runs] == ["ccc33333", "bbb22222", "aaa11111"]
 
 
+def test_list_runs_with_paths_pairs_dir_and_manifest(
+    monkeypatch, tmp_path,
+) -> None:
+    """list_runs_with_paths returns each Run alongside its on-disk dir."""
+    monkeypatch.setenv("TRADINGLAB_CACHE_DIR", str(tmp_path))
+    cfg = _config()
+    for run_id, ts in (("aaa11111", "20260101T000000Z"),
+                        ("bbb22222", "20260201T000000Z")):
+        d = storage.run_dir_for(run_id, started_iso=ts)
+        run = TestRun(run_id=run_id, config=cfg, status=RunStatus.DONE,
+                      app_version="0.1.1", engine_version="sandbox-1d")
+        storage.save_manifest(d, run)
+    pairs = storage.list_runs_with_paths()
+    # Newest first.
+    assert [r.run_id for _p, r in pairs] == ["bbb22222", "aaa11111"]
+    # Each path exists and matches the run_id.
+    for path, run in pairs:
+        assert path.exists()
+        assert path.is_dir()
+        assert path.name.startswith(run.run_id + "-")
+
+
+def test_list_runs_with_paths_skips_unparseable_dirs(
+    monkeypatch, tmp_path,
+) -> None:
+    monkeypatch.setenv("TRADINGLAB_CACHE_DIR", str(tmp_path))
+    cfg = _config()
+    # One valid run + one stray empty dir without a manifest.
+    d_ok = storage.run_dir_for("ok000001", started_iso="20260101T000000Z")
+    storage.save_manifest(d_ok, TestRun(run_id="ok000001", config=cfg,
+                                        status=RunStatus.DONE))
+    stray = storage.runs_dir() / "garbage-folder"
+    stray.mkdir()
+    pairs = storage.list_runs_with_paths()
+    assert len(pairs) == 1
+    assert pairs[0][1].run_id == "ok000001"
+
+
 def test_delete_run_removes_directory(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("TRADINGLAB_CACHE_DIR", str(tmp_path))
     cfg = _config()

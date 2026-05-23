@@ -24,6 +24,7 @@ On-disk persistence for Strategy Tester Runs. Atomic writes only — no in-fligh
 - `save_manifest(run_dir, TestRun)` / `load_manifest(run_dir) -> TestRun | None`.
 - `save_session_result_for_symbol(run_dir, symbol, SessionResult)` / `load_session_result_for_symbol`.
 - `list_runs() -> list[TestRun]` — newest-first by directory name.
+- `list_runs_with_paths() -> list[tuple[Path, TestRun]]` — same ordering as `list_runs`, but also returns the on-disk run directory so callers can load `aggregate.json` / `trades.csv` / screenshots. Used by the GUI Recent Runs sidebar (PR 5).
 - `delete_run(run_dir) -> bool` — recursive removal, swallows OSError.
 
 ## Dependencies

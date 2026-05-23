@@ -407,6 +407,65 @@ class StrategyTab(ttk.Frame):
         ttk.Label(parent, textvariable=self._var_status, foreground="#404040").grid(
             row=row, column=0, columnspan=2, sticky="we", pady=(8, 0)
         )
+        row += 1
+
+        # Recent Runs sidebar (browse + load prior runs from disk).
+        ttk.Separator(parent, orient="horizontal").grid(
+            row=row, column=0, columnspan=2, sticky="we", pady=8
+        )
+        row += 1
+        recent_frame = ttk.LabelFrame(parent, text="Recent runs", padding=4)
+        recent_frame.grid(
+            row=row, column=0, columnspan=2, sticky="nswe", pady=(0, 0),
+        )
+        row += 1
+        parent.grid_rowconfigure(row - 1, weight=1)
+        recent_cols = ("started", "status", "label", "trades")
+        self._tree_recent = ttk.Treeview(
+            recent_frame, columns=recent_cols, show="headings", height=6,
+        )
+        for col, hdr, w in (
+            ("started", "Started", 130),
+            ("status", "Status", 70),
+            ("label", "Label", 140),
+            ("trades", "Trades", 50),
+        ):
+            self._tree_recent.heading(col, text=hdr)
+            self._tree_recent.column(col, width=w, anchor="w")
+        self._tree_recent.pack(side="left", fill="both", expand=True)
+        scrollbar = ttk.Scrollbar(
+            recent_frame, orient="vertical",
+            command=self._tree_recent.yview,
+        )
+        scrollbar.pack(side="left", fill="y")
+        self._tree_recent.configure(yscrollcommand=scrollbar.set)
+        self._tree_recent.bind(
+            "<<TreeviewSelect>>", self._on_recent_run_select,
+        )
+
+        recent_btns = ttk.Frame(parent)
+        recent_btns.grid(
+            row=row, column=0, columnspan=2, sticky="we", pady=(4, 0),
+        )
+        row += 1
+        self._btn_load_run = ttk.Button(
+            recent_btns, text="Load",
+            command=self._on_load_recent_run, state="disabled",
+        )
+        self._btn_load_run.pack(side="left", padx=(0, 6))
+        self._btn_refresh_recent = ttk.Button(
+            recent_btns, text="Refresh",
+            command=self._refresh_recent_runs,
+        )
+        self._btn_refresh_recent.pack(side="left", padx=(0, 6))
+        self._btn_delete_run = ttk.Button(
+            recent_btns, text="Delete…",
+            command=self._on_delete_recent_run, state="disabled",
+        )
+        self._btn_delete_run.pack(side="left")
+
+        # Cache of (run_dir, TestRun) keyed by Treeview iid.
+        self._recent_run_index: dict[str, tuple[Path, Any]] = {}
 
         parent.grid_columnconfigure(1, weight=1)
 
@@ -414,6 +473,7 @@ class StrategyTab(ttk.Frame):
         self._on_universe_kind_change()
         self._on_date_preset_change()
         self._on_advanced_toggle()
+        self._refresh_recent_runs()
 
     # ----- Report pane ------------------------------------------------
 
@@ -495,7 +555,7 @@ class StrategyTab(ttk.Frame):
             self._tree_year.column(col, width=w, anchor="w")
         self._tree_year.pack(fill="both", expand=True)
 
-        # Action row: open run folder, copy CSV path
+        # Action row: open run folder, copy CSV path, export HTML/PDF
         action_row = ttk.Frame(parent)
         action_row.pack(fill="x", pady=(6, 0))
         self._btn_open_folder = ttk.Button(
@@ -507,7 +567,17 @@ class StrategyTab(ttk.Frame):
             action_row, text="Export CSV…", command=self._on_export_csv,
             state="disabled",
         )
-        self._btn_export_csv.pack(side="left")
+        self._btn_export_csv.pack(side="left", padx=(0, 6))
+        self._btn_export_html = ttk.Button(
+            action_row, text="Export HTML…", command=self._on_export_html,
+            state="disabled",
+        )
+        self._btn_export_html.pack(side="left", padx=(0, 6))
+        self._btn_export_pdf = ttk.Button(
+            action_row, text="Export PDF…", command=self._on_export_pdf,
+            state="disabled",
+        )
+        self._btn_export_pdf.pack(side="left")
 
     # ------------------------------------------------------------------
     # Population
@@ -808,6 +878,11 @@ class StrategyTab(ttk.Frame):
         else:
             self._var_status.set(f"Run finished with status: {status.value}")
         self._render_aggregate(agg, run_dir)
+        # Refresh the Recent runs sidebar so the new run shows up.
+        try:
+            self._refresh_recent_runs()
+        except Exception:  # noqa: BLE001
+            logger.exception("StrategyTab: refresh_recent_runs failed")
 
     def _set_running_ui(self, running: bool) -> None:
         if running:
@@ -913,6 +988,8 @@ class StrategyTab(ttk.Frame):
 
         self._btn_open_folder.configure(state="normal")
         self._btn_export_csv.configure(state="normal")
+        self._btn_export_html.configure(state="normal")
+        self._btn_export_pdf.configure(state="normal")
 
     def _on_open_folder(self) -> None:
         if self._current_run_dir is None:
@@ -953,6 +1030,174 @@ class StrategyTab(ttk.Frame):
             shutil.copyfile(src, dst)
         except Exception as exc:  # noqa: BLE001
             messagebox.showerror("Strategy Tester", f"Export failed: {exc}")
+
+    def _on_export_html(self) -> None:
+        """Render report.html inside the Run dir, then offer to copy it out."""
+        if self._current_run_dir is None:
+            return
+        from ..strategy_tester import export as _exp
+        try:
+            in_run_html = _exp.export_html(
+                self._current_run_dir,
+                aggregate=self._current_aggregate,
+            )
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror(
+                "Strategy Tester", f"HTML export failed: {exc}"
+            )
+            return
+        dst = filedialog.asksaveasfilename(
+            title="Export HTML report",
+            defaultextension=".html",
+            initialfile=f"strategy_report_{int(time.time())}.html",
+            filetypes=[("HTML files", "*.html"), ("All files", "*.*")],
+        )
+        if not dst:
+            return
+        try:
+            import shutil
+            shutil.copyfile(in_run_html, dst)
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror(
+                "Strategy Tester", f"HTML save failed: {exc}"
+            )
+
+    def _on_export_pdf(self) -> None:
+        """Render report.pdf inside the Run dir, then offer to copy it out."""
+        if self._current_run_dir is None:
+            return
+        from ..strategy_tester import export as _exp
+        try:
+            in_run_pdf = _exp.export_pdf(
+                self._current_run_dir,
+                aggregate=self._current_aggregate,
+            )
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror(
+                "Strategy Tester", f"PDF export failed: {exc}"
+            )
+            return
+        dst = filedialog.asksaveasfilename(
+            title="Export PDF report",
+            defaultextension=".pdf",
+            initialfile=f"strategy_report_{int(time.time())}.pdf",
+            filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")],
+        )
+        if not dst:
+            return
+        try:
+            import shutil
+            shutil.copyfile(in_run_pdf, dst)
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror(
+                "Strategy Tester", f"PDF save failed: {exc}"
+            )
+
+    # ------------------------------------------------------------------
+    # Recent Runs sidebar
+    # ------------------------------------------------------------------
+
+    def _refresh_recent_runs(self) -> None:
+        """Reload the Recent Runs Treeview from disk."""
+        from ..strategy_tester import storage as _st_storage
+        try:
+            pairs = _st_storage.list_runs_with_paths()
+        except Exception:  # noqa: BLE001
+            logger.exception("StrategyTab: list_runs_with_paths failed")
+            pairs = []
+
+        # Clear existing tree.
+        for iid in self._tree_recent.get_children():
+            self._tree_recent.delete(iid)
+        self._recent_run_index.clear()
+
+        # Cap to newest 50 — anything older still browsable via "Open
+        # storage folder" in PR 6.
+        for path, run in pairs[:50]:
+            label = run.config.user_label or "(no label)"
+            started = run.started_at or "?"
+            # Trim ISO microseconds and "T" -> space for compactness.
+            try:
+                started_display = started.replace("T", " ")[:19]
+            except Exception:  # noqa: BLE001
+                started_display = started
+            iid = self._tree_recent.insert(
+                "", "end",
+                values=(
+                    started_display,
+                    run.status.value if hasattr(run.status, "value") else str(run.status),
+                    label,
+                    run.trade_count,
+                ),
+            )
+            self._recent_run_index[iid] = (path, run)
+
+    def _on_recent_run_select(self, _evt=None) -> None:
+        """Enable/disable Load + Delete buttons on selection change."""
+        sel = self._tree_recent.selection()
+        if sel:
+            self._btn_load_run.configure(state="normal")
+            self._btn_delete_run.configure(state="normal")
+        else:
+            self._btn_load_run.configure(state="disabled")
+            self._btn_delete_run.configure(state="disabled")
+
+    def _on_load_recent_run(self) -> None:
+        sel = self._tree_recent.selection()
+        if not sel:
+            return
+        iid = sel[0]
+        if iid not in self._recent_run_index:
+            return
+        run_dir, _run = self._recent_run_index[iid]
+        try:
+            agg = load_aggregate(run_dir)
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror(
+                "Strategy Tester",
+                f"Could not load run aggregate: {exc}",
+            )
+            return
+        if agg is None:
+            messagebox.showinfo(
+                "Strategy Tester",
+                "This run has no aggregate.json — it may still be running "
+                "or have failed before reaching the report stage.",
+            )
+            return
+        self._current_run_dir = run_dir
+        self._current_aggregate = agg
+        self._render_aggregate(agg, run_dir)
+        self._var_status.set(f"Loaded prior run from {run_dir.name}")
+
+    def _on_delete_recent_run(self) -> None:
+        sel = self._tree_recent.selection()
+        if not sel:
+            return
+        iid = sel[0]
+        if iid not in self._recent_run_index:
+            return
+        run_dir, run = self._recent_run_index[iid]
+        if not messagebox.askyesno(
+            "Strategy Tester",
+            f"Delete run {run.run_id}?\n\nThis removes:\n{run_dir}",
+        ):
+            return
+        from ..strategy_tester import storage as _st_storage
+        ok = _st_storage.delete_run(run_dir)
+        if not ok:
+            messagebox.showerror(
+                "Strategy Tester",
+                f"Failed to delete {run_dir} — close any open Explorer "
+                f"windows pointing at the directory and try again.",
+            )
+            return
+        # If we were viewing this run, clear the report.
+        if self._current_run_dir == run_dir:
+            self._current_run_dir = None
+            self._current_aggregate = None
+            self._var_status.set("Run deleted.")
+        self._refresh_recent_runs()
 
     # ------------------------------------------------------------------
     # Cleanup

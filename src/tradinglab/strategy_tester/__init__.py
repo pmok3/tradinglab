@@ -25,6 +25,12 @@ from __future__ import annotations
 
 from .acceptance import AcceptanceToken, RunCancelled
 from .evaluator import UnsupportedTriggerKind, evaluate_symbol
+from .export import (
+    HTML_FILENAME,
+    PDF_FILENAME,
+    export_html,
+    export_pdf,
+)
 from .model import (
     CURRENT_SCHEMA_VERSION,
     CostModel,
@@ -68,6 +74,14 @@ from .screenshot import (
     render_trade_screenshot,
     select_window,
     trade_filename,
+)
+from .storage import (
+    delete_run,
+    list_runs,
+    list_runs_with_paths,
+    load_manifest,
+    run_dir_for,
+    runs_dir,
 )
 from .universe import (
     PRESETS,
@@ -134,4 +148,16 @@ __all__ = [
     "render_trade_screenshot",
     "select_window",
     "trade_filename",
+    # export
+    "HTML_FILENAME",
+    "PDF_FILENAME",
+    "export_html",
+    "export_pdf",
+    # storage
+    "delete_run",
+    "list_runs",
+    "list_runs_with_paths",
+    "load_manifest",
+    "run_dir_for",
+    "runs_dir",
 ]

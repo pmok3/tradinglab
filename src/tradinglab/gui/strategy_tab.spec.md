@@ -50,8 +50,31 @@ Result** UX loop for the strategy tester.
 - **Notebook** with two tabs:
   - **Per-symbol** — Treeview rows from ``RunAggregate.per_symbol``.
   - **Per-year** — Treeview rows from ``RunAggregate.per_year``.
-- **Action row** — ``Open run folder`` + ``Export CSV…`` buttons,
-  enabled after a successful Run.
+- **Action row** — ``Open run folder`` + ``Export CSV…`` + ``Export HTML…`` + ``Export PDF…`` buttons, enabled after a successful Run.
+
+### Recent Runs sidebar (PR 5, bottom of Configure pane)
+- ``ttk.Treeview`` listing the newest 50 runs from
+  ``storage.list_runs_with_paths()`` with columns:
+  ``Started`` / ``Status`` / ``Label`` / ``Trades``.
+- **Load** button reads ``aggregate.json`` from the selected run via
+  ``report.load_aggregate`` and re-renders the Report pane against it.
+- **Refresh** rescans disk (useful after the user manually copies in
+  an external run dir, or trims runs from Explorer).
+- **Delete…** prompts ``messagebox.askyesno`` and on confirm calls
+  ``storage.delete_run``; if the deleted run was the one rendered in
+  the Report pane, the pane is cleared.
+- The sidebar auto-refreshes after every successful Run completion
+  via a ``_refresh_recent_runs()`` call at the end of ``_on_poll``.
+
+### Export buttons (PR 5)
+- **Export HTML…** writes ``<run_dir>/report.html`` via
+  ``strategy_tester.export.export_html`` then prompts a
+  ``filedialog.asksaveasfilename`` to copy the file out.
+- **Export PDF…** mirrors the HTML flow via ``export_pdf`` (one cover
+  page + one breakouts page + one equity-curve page + one landscape
+  page per trade screenshot, capped at 200 pages).
+- Both buttons reuse the in-memory ``RunAggregate`` (``self._current_aggregate``)
+  so no extra disk read is required.
 
 ## Run lifecycle
 - Click **Run** → `_build_config_from_ui` validates the form and

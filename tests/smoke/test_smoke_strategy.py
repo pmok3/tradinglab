@@ -452,6 +452,168 @@ def check_st3_strategy_tab_end_to_end(tmp_cache_root: Path) -> None:
             pass
 
 
+def check_st4_export_html_pdf(tmp_cache_root: Path) -> None:
+    """Validate the export module + StrategyTab Export buttons end-to-end.
+
+    Runs the kernel once to produce a real run_dir with aggregate.json,
+    then exercises export_html + export_pdf directly. Validates the
+    files are written, non-empty, and (for PDF) carry the PDF magic
+    bytes header.
+    """
+    from tradinglab.strategy_tester import (
+        AcceptanceToken,
+        RunStatus,
+        export_html,
+        export_pdf,
+    )
+    from tradinglab.strategy_tester import (
+        run as run_strategy_test,
+    )
+
+    entry, exit_strat, cfg = _make_test_config()
+    entries_by_id = {entry.id: entry}
+    exits_by_id = {exit_strat.id: exit_strat}
+
+    result = run_strategy_test(
+        cfg,
+        cancel_token=AcceptanceToken(),
+        candles_fetcher=_fake_fetcher,
+        entry_loader=lambda sid: entries_by_id[sid],
+        exit_loader=lambda sid: exits_by_id[sid],
+        max_workers=2,
+    )
+    assert result.test_run.status is RunStatus.DONE
+    run_dir = result.run_dir
+
+    # HTML export — written into run_dir by default; relative
+    # screenshot links work without modification.
+    html_path = export_html(run_dir)
+    assert html_path == run_dir / "report.html"
+    assert html_path.exists()
+    html_body = html_path.read_text(encoding="utf-8")
+    assert "Strategy Tester Run" in html_body
+    assert result.test_run.run_id in html_body
+    # 3 synthetic tickers should appear in the per-symbol table.
+    for sym in ("STRAT_A", "STRAT_B", "STRAT_C"):
+        assert sym in html_body, (
+            f"per-symbol table should include {sym} in {html_path}"
+        )
+
+    # PDF export — file exists, has PDF magic bytes, non-empty.
+    pdf_path = export_pdf(run_dir)
+    assert pdf_path == run_dir / "report.pdf"
+    assert pdf_path.exists()
+    assert pdf_path.stat().st_size > 2000, (
+        f"PDF should be non-trivial ({pdf_path.stat().st_size} bytes)"
+    )
+    with pdf_path.open("rb") as f:
+        head = f.read(8)
+    assert head.startswith(b"%PDF-"), (
+        f"PDF file missing %PDF- magic bytes (got {head!r})"
+    )
+
+
+def check_st5_recent_runs_sidebar(tmp_cache_root: Path) -> None:
+    """Validate StrategyTab's Recent Runs sidebar populates + loads prior runs.
+
+    Bypasses the GUI when possible — directly invokes
+    storage.list_runs_with_paths() to confirm the helper works, then
+    spins up the tab in a hidden Tk root and checks the Treeview gets
+    populated after refresh.
+    """
+    import sys
+
+    from tradinglab.strategy_tester import (
+        AcceptanceToken,
+        RunStatus,
+        list_runs_with_paths,
+    )
+    from tradinglab.strategy_tester import (
+        run as run_strategy_test,
+    )
+
+    entry, exit_strat, cfg = _make_test_config()
+    entries_by_id = {entry.id: entry}
+    exits_by_id = {exit_strat.id: exit_strat}
+
+    result = run_strategy_test(
+        cfg,
+        cancel_token=AcceptanceToken(),
+        candles_fetcher=_fake_fetcher,
+        entry_loader=lambda sid: entries_by_id[sid],
+        exit_loader=lambda sid: exits_by_id[sid],
+        max_workers=2,
+    )
+    assert result.test_run.status is RunStatus.DONE
+
+    # The helper itself sees this run.
+    pairs = list_runs_with_paths()
+    assert pairs, "list_runs_with_paths should report at least one run"
+    paths = [p for p, _r in pairs]
+    assert result.run_dir in paths
+
+    if sys.platform == "darwin":
+        print("[SKIP] check_st5 GUI portion — Tk hang risk on headless darwin")
+        return
+
+    # GUI smoke: tab built standalone, sidebar populated.
+    import tkinter as tk
+
+    from tradinglab.gui.strategy_tab import StrategyTab
+
+    class _FakeEntriesStorage:
+        @staticmethod
+        def load_all():
+            return ([entry], [])
+
+    class _FakeExitsStorage:
+        @staticmethod
+        def load_all():
+            return ([exit_strat], [])
+
+    class _FakeWatchlistsStorage:
+        @staticmethod
+        def load_all():
+            return ([], [])
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        tab = StrategyTab(
+            root,
+            entries_storage=_FakeEntriesStorage(),
+            exits_storage=_FakeExitsStorage(),
+            watchlists_storage=_FakeWatchlistsStorage(),
+        )
+        tab.pack(fill="both", expand=True)
+        for _ in range(5):
+            root.update()
+
+        sidebar_rows = tab._tree_recent.get_children()
+        assert sidebar_rows, (
+            "Recent Runs sidebar Treeview should contain at least one "
+            "row after refresh_recent_runs"
+        )
+
+        # Pick the first row and exercise the load path — should populate
+        # the report pane without raising.
+        tab._tree_recent.selection_set(sidebar_rows[0])
+        tab._on_recent_run_select()
+        tab._on_load_recent_run()
+        for _ in range(5):
+            root.update()
+        assert tab._current_aggregate is not None
+        assert tab._current_aggregate.run_id == result.test_run.run_id
+    finally:
+        try:
+            root.destroy()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+
+
+
 @pytest.fixture
 def tmp_cache_root(tmp_path, monkeypatch):
     monkeypatch.setenv("TRADINGLAB_CACHE_DIR", str(tmp_path))
@@ -472,6 +634,14 @@ def test_strategy_aggregate_and_csv(tmp_cache_root: Path) -> None:
 
 def test_strategy_tab_end_to_end(tmp_cache_root: Path) -> None:
     check_st3_strategy_tab_end_to_end(tmp_cache_root)
+
+
+def test_strategy_export_html_pdf(tmp_cache_root: Path) -> None:
+    check_st4_export_html_pdf(tmp_cache_root)
+
+
+def test_strategy_recent_runs_sidebar(tmp_cache_root: Path) -> None:
+    check_st5_recent_runs_sidebar(tmp_cache_root)
 
 
 def test_strategy_tab_present_in_chartapp(app) -> None:

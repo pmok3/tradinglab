@@ -49,6 +49,7 @@ __all__ = [
     "save_session_result_for_symbol",
     "load_session_result_for_symbol",
     "list_runs",
+    "list_runs_with_paths",
     "delete_run",
 ]
 
@@ -175,17 +176,30 @@ def list_runs() -> list[TestRun]:
     half-written run (e.g. crashed before manifest finalisation) does
     not break the Recent runs sidebar.
     """
+    return [run for _path, run in list_runs_with_paths()]
+
+
+def list_runs_with_paths() -> list[tuple[Path, TestRun]]:
+    """Return ``[(run_dir, TestRun), ...]`` newest-first.
+
+    Used by the GUI Recent Runs sidebar (PR 5) — the sidebar needs
+    both the on-disk directory (to load ``aggregate.json``,
+    ``trades.csv``, screenshots) and the manifest (for the display
+    label / status / timestamps).
+    """
     base = runs_dir()
-    out: list[tuple[str, TestRun]] = []
+    if not base.exists():
+        return []
+    pairs: list[tuple[str, Path, TestRun]] = []
     for child in base.iterdir():
         if not child.is_dir():
             continue
         run = load_manifest(child)
         if run is None:
             continue
-        out.append((child.name, run))
-    out.sort(key=lambda pair: pair[0], reverse=True)
-    return [run for _, run in out]
+        pairs.append((child.name, child, run))
+    pairs.sort(key=lambda triple: triple[0], reverse=True)
+    return [(p, r) for _n, p, r in pairs]
 
 
 def delete_run(run_dir: Path) -> bool:

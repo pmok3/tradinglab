@@ -10,6 +10,9 @@ Public re-export surface for the Strategy Tester package. Lets callers `from tra
 - From `evaluator`: `UnsupportedTriggerKind`, `evaluate_symbol`
 - From `runner`: `DEFAULT_MAX_WORKERS`, `RunResult`, `resolve_date_range`, `run`
 - From `screenshot`: `ScreenshotSpec`, `render_trade_screenshot`, `select_window`, `trade_filename`
+- From `report`: `AGGREGATE_FILENAME`, `BOOTSTRAP_SAMPLES_DEFAULT`, `ConfidenceInterval`, `PerSymbolStats`, `PerYearStats`, `RunAggregate`, `aggregate_run`, `bootstrap_ci`, `compute_aggregate`, `daily_sharpe`, `daily_sortino`, `expectancy`, `load_aggregate`, `max_drawdown`, `profit_factor`, `save_aggregate`, `wilson_score_ci`, `write_run_csv`
+- From `export` (PR 5): `HTML_FILENAME`, `PDF_FILENAME`, `export_html`, `export_pdf`
+- From `storage` (PR 5): `delete_run`, `list_runs`, `list_runs_with_paths`, `load_manifest`, `run_dir_for`, `runs_dir`
 
 ## Design Decisions
 - **Single import boundary** — GUI / runner / tests all import from the package root, not from submodules. Makes future refactors cheaper.
