@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented here. Format roughly follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [0.1.2] - 2026-05-23
 
 ### Added
 
@@ -33,6 +33,14 @@ All notable changes to this project will be documented here. Format roughly foll
   length, and per-interval visibility you customised are all
   preserved. See `indicators/moving_averages.spec.md` and
   `docs/indicators/ma.md`.
+
+### Fixed
+
+- Smoke tests no longer crash CPython 3.11/3.12 at exit on Linux
+  via `Tcl_AsyncDelete: async handler deleted by the wrong thread`.
+  The session `app` fixture now drains pending Tk `Variable.__del__`
+  on the main thread after `_on_close()`, and per-test Tk roots
+  in `test_smoke_strategy.py` do the same after `root.destroy()`.
 
 ## [0.1.1] - 2026-05-22
 
