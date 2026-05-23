@@ -1270,6 +1270,12 @@ class ChartApp(
         # gui/entries_app.py.
         self._build_entries_stack()
 
+        # Tab 8: Strategy — mechanical strategy tester pairing entry +
+        # exit strategies and running them over a universe + date range.
+        # Standalone widget; runs the kernel on a worker thread. See
+        # gui/strategy_tab.py + strategy_tester/runner.py.
+        self._build_strategy_tab()
+
         # --- chart artist handles ---------------------------------------
         self._wicks = None
         self._bodies = None
@@ -6815,6 +6821,32 @@ class ChartApp(
             on_row_action=self._on_scanner_row_action,
         )
         self._notebook.add(self._scanner_tab, text="Scanner")
+
+    def _build_strategy_tab(self) -> None:
+        """Construct the Strategy Tester tab (PR 4 of the rollout).
+
+        The tab is fully self-contained — it loads the entry / exit
+        / watchlist libraries from disk, builds a Run on a worker
+        thread, and renders the resulting aggregate inline. Failures
+        in the tab degrade gracefully so the rest of the app still
+        boots.
+        """
+        try:
+            from .gui.strategy_tab import StrategyTab
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to import StrategyTab; skipping tab")
+            self._strategy_tab = None
+            return
+        try:
+            self._strategy_tab = StrategyTab(self._notebook)
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to construct StrategyTab; skipping tab")
+            self._strategy_tab = None
+            return
+        try:
+            self._notebook.add(self._strategy_tab, text="Strategy")
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to add StrategyTab to notebook")
 
     def _on_scanner_scan_saved(self, scan: Any) -> None:
         try:

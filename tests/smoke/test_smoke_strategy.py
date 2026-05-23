@@ -317,6 +317,141 @@ def check_st2_aggregate_and_csv(tmp_cache_root: Path) -> None:
     )
 
 
+def check_st3_strategy_tab_end_to_end(tmp_cache_root: Path) -> None:
+    """Smoke-check the GUI StrategyTab through a full Configure → Run → Render flow.
+
+    We bypass the live notebook (no ChartApp boot) and exercise the
+    widget standalone in a hidden Tk root. The widget's worker thread
+    invokes the (stubbed) strategy_tester.run kernel and the tab's
+    poll loop renders the resulting aggregate.
+
+    Validates:
+    - Tab widget constructs without error in a fresh Tk root.
+    - refresh() reads entries/exits/watchlist libraries (injected
+      fake storages keep the test offline from disk).
+    - _build_config_from_ui returns a TestConfig.
+    - The full Run flow completes with status DONE and the per-symbol
+      Treeview gets populated.
+    """
+    import sys
+    import tkinter as tk
+
+    if sys.platform == "darwin":
+        # ttk widget operations on a hidden root can deadlock on
+        # headless macos-15-arm64 CI runners (same Tk transient()
+        # quirk that affects modal dialogs). Skip on darwin.
+        print("[SKIP] check_st3 — Tk widget hang risk on headless macos-15-arm64")
+        return
+
+    from tradinglab.gui.strategy_tab import StrategyTab
+    from tradinglab.strategy_tester import RunStatus
+
+    entry, exit_strat, _cfg = _make_test_config()
+
+    # Build fake storage modules so the tab's refresh() can find the
+    # test strategies without touching disk. The synthetic ticker
+    # names ("STRAT_A" etc.) wouldn't pass the entry-storage symbol
+    # validator, so we bypass storage entirely.
+    class _FakeEntriesStorage:
+        @staticmethod
+        def load_all():
+            return ([entry], [])
+
+    class _FakeExitsStorage:
+        @staticmethod
+        def load_all():
+            return ([exit_strat], [])
+
+    class _FakeWatchlistsStorage:
+        @staticmethod
+        def load_all():
+            return ([], [])
+
+    # Build a hidden Tk root + StrategyTab against the fake libraries.
+    # Stub candles_fetcher to deterministic synthetic bars.
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        tab = StrategyTab(
+            root,
+            entries_storage=_FakeEntriesStorage(),
+            exits_storage=_FakeExitsStorage(),
+            watchlists_storage=_FakeWatchlistsStorage(),
+            candles_fetcher=_fake_fetcher,
+        )
+        tab.pack(fill="both", expand=True)
+        # Drive Tk so widget creates internals.
+        for _ in range(5):
+            root.update()
+
+        # Seed the UI to use the 3 synthetic tickers via SYMBOLS mode.
+        tab._var_universe_kind.set("symbols")
+        tab._var_universe_symbols.set("STRAT_A, STRAT_B, STRAT_C")
+        tab._on_universe_kind_change()
+        tab._var_date_preset.set("custom")
+        tab._on_date_preset_change()
+        tab._var_start_date.set("2020-01-01")
+        tab._var_end_date.set("2030-01-01")
+        tab._var_interval.set("5m")
+        tab._var_screenshots.set(False)
+
+        # Pickers should auto-populate to the first available entry/exit
+        # since refresh() ran in __init__. Validate the selection now.
+        assert tab._selected_entry() is not None, (
+            f"selected_entry returned None; "
+            f"entry_combo={tab._var_entry_id.get()!r}, "
+            f"library names: {[e.name for e in tab._entries]}"
+        )
+        assert tab._selected_exit() is not None
+
+        cfg = tab._build_config_from_ui()
+        assert cfg is not None, "TestConfig should build from a valid UI"
+        assert cfg.entry_strategy_id == entry.id
+        assert cfg.exit_strategy_id == exit_strat.id
+        assert cfg.universe.symbols == ("STRAT_A", "STRAT_B", "STRAT_C")
+
+        # Trigger the Run. The worker thread runs the real kernel; the
+        # candles_fetcher is the deterministic stub, so the whole flow
+        # is offline + synthetic.
+        tab._on_run_clicked()
+
+        # Drive Tk until the worker finishes + poll callback renders.
+        # Hard cap at ~30 seconds (typical: <3s).
+        import time as _time
+        deadline = _time.monotonic() + 30.0
+        while _time.monotonic() < deadline:
+            root.update()
+            if tab._worker is None and tab._current_aggregate is not None:
+                break
+            _time.sleep(0.05)
+        else:
+            raise AssertionError(
+                "StrategyTab Run did not complete within 30 seconds"
+            )
+
+        # Validate the final state.
+        assert tab._current_aggregate is not None
+        assert tab._current_aggregate.trade_count >= 3, (
+            f"expected >=3 trades, got {tab._current_aggregate.trade_count}"
+        )
+        # Per-symbol Treeview should have 3 rows.
+        sym_rows = tab._tree_symbol.get_children()
+        assert len(sym_rows) == 3, (
+            f"expected 3 per-symbol rows, got {len(sym_rows)}"
+        )
+
+        # The worker_result must carry a successful Run.
+        worker_status = tab._worker_result.get("result")
+        assert worker_status is not None
+        assert worker_status.test_run.status is RunStatus.DONE
+
+    finally:
+        try:
+            root.destroy()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 @pytest.fixture
 def tmp_cache_root(tmp_path, monkeypatch):
     monkeypatch.setenv("TRADINGLAB_CACHE_DIR", str(tmp_path))
@@ -333,3 +468,20 @@ def test_strategy_screenshots(tmp_cache_root: Path) -> None:
 
 def test_strategy_aggregate_and_csv(tmp_cache_root: Path) -> None:
     check_st2_aggregate_and_csv(tmp_cache_root)
+
+
+def test_strategy_tab_end_to_end(tmp_cache_root: Path) -> None:
+    check_st3_strategy_tab_end_to_end(tmp_cache_root)
+
+
+def test_strategy_tab_present_in_chartapp(app) -> None:
+    """The Strategy tab must be wired into ChartApp's notebook AFTER Exits."""
+    nb = app._notebook
+    tabs = [nb.tab(i, "text") for i in range(nb.index("end"))]
+    assert "Strategy" in tabs, f"Strategy tab missing from notebook (got {tabs})"
+    # Strategy must come AFTER Exits in tab order.
+    assert tabs.index("Strategy") > tabs.index("Exits"), (
+        f"Strategy tab should be inserted AFTER Exits; got order {tabs}"
+    )
+    # The widget reference is held on the app.
+    assert getattr(app, "_strategy_tab", None) is not None

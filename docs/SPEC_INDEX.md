@@ -141,6 +141,7 @@ A one-spec-per-`.py` documentation set. Each spec follows a fixed 9-section layo
 | `gui/local_data_dialog.spec.md` | BYOD: `Configure Local Data…` Toplevel — enabled toggle + roots list + Save-and-Close paradigm. |
 | `gui/export_cache_dialog.spec.md` | BYOD: `Export Bars to CSV…` Toplevel — Treeview + checkbox column, Select All/None, atomic export. |
 | `gui/universe_prepare_dialog.spec.md` | `UniversePrepareDialog` Toplevel — 4-basket picker (SP500/QQQ/NYSE/NASDAQ) + watchlist option, reactive ETA/size estimate, amber survivorship banner for full-exchange baskets, Stop-safe-to-resume cancel paradigm, fundamental-filter prepass. See [`docs/UNIVERSES.md`](UNIVERSES.md). |
+| `gui/strategy_tab.spec.md` | `StrategyTab` notebook tab — full Configure → Running → Result UX loop for the Strategy Tester. Entry/exit pickers, 3-mode universe picker (Symbols/Watchlist/Preset), date-range preset, advanced cost model, Run / Stop, headline metrics + per-symbol & per-year Treeviews. Runs the strategy_tester kernel on a daemon thread; loads `aggregate.json` via `report.load_aggregate`. Survivorship + sample-size banners. |
 
 ## `preload/` — Sandbox universe preload pipeline
 | Spec | Covers |

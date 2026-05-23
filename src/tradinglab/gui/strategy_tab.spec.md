@@ -1,0 +1,112 @@
+# `gui/strategy_tab.py` — Spec
+
+## Purpose
+PR 4 of the Strategy Tester rollout. A self-contained Tk widget
+(``ttk.Frame`` subclass) wired into ``ChartApp`` as the last
+right-side notebook tab. Owns the entire **Configure → Running →
+Result** UX loop for the strategy tester.
+
+## Public surface
+- `StrategyTab(master, *, entries_storage=None, exits_storage=None,
+  watchlists_storage=None, run_fn=None, candles_fetcher=None)` —
+  notebook-mountable widget. Optional kwargs are dependency-injection
+  hooks used by smoke tests; production wiring passes nothing.
+- `refresh()` — reloads the entry / exit / watchlist library snapshots
+  used to populate the pickers.
+
+## UX
+### Configure pane (left)
+- **Entry strategy** — readonly combobox listing
+  ``"<name> · <id_short>"`` for every saved entry strategy.
+- **Exit strategy** — same shape for saved exit strategies.
+- **Universe picker** — three radio modes:
+  - `Symbols list` — comma / semicolon-separated tickers, case-folded
+    to upper.
+  - `Watchlist` — readonly combobox over saved watchlist names.
+  - `Preset` — readonly combobox over ``universe.list_presets()``;
+    surfaces a yellow **survivorship-bias** banner.
+- **Date range** — preset dropdown
+  (``YTD / Last 1Y / 3Y / 5Y / 10Y / Max / Custom``). Custom reveals
+  two YYYY-MM-DD entries. The preset start/end is computed by
+  ``_date_range_for_preset`` using UTC `today` as the end.
+- **Interval** — readonly combobox over ``("1d", "5m", "1m")``.
+- **Starting cash (per symbol)** — float entry, default 100 000.
+- **Advanced** — collapsible group with slippage (bps),
+  commission/trade ($), commission/share ($). Default values match
+  the ``CostModel`` defaults (5 bps / $0 / $0).
+- **Per-trade screenshots** — opt-in checkbox; on, the runner is
+  passed ``ScreenshotSpec()`` (default 1600×900 @ 110 dpi).
+- **Run label (optional)** — free-text seeding ``TestConfig.user_label``.
+- **Run** / **Stop** buttons + a status label.
+
+### Report pane (right)
+- **Header** — Run id + on-disk run-directory name.
+- **Sample-size banner** — yellow inline label populated when
+  ``RunAggregate.insufficient_sample`` (N<30) or ``low_sample`` (N<100)
+  fires.
+- **Headline metrics** — Trades / Win rate (point + 95% Wilson CI) /
+  Expectancy ($ + 95% bootstrap CI) / Profit Factor / P&L gross + net /
+  Max DD ($ + %) / Sharpe / Sortino.
+- **Notebook** with two tabs:
+  - **Per-symbol** — Treeview rows from ``RunAggregate.per_symbol``.
+  - **Per-year** — Treeview rows from ``RunAggregate.per_year``.
+- **Action row** — ``Open run folder`` + ``Export CSV…`` buttons,
+  enabled after a successful Run.
+
+## Run lifecycle
+- Click **Run** → `_build_config_from_ui` validates the form and
+  produces a ``TestConfig``. Validation errors surface via a
+  ``messagebox.showwarning`` and abort the Run.
+- A new ``AcceptanceToken`` is created and stashed; the kernel is
+  invoked on a daemon ``threading.Thread`` so the UI stays responsive
+  during long Runs.
+- The thread invokes ``strategy_tester.run(cfg, cancel_token=token,
+  candles_fetcher=..., entry_loader=..., exit_loader=...,
+  progress=..., screenshot_spec=...)``. The runner already auto-writes
+  ``aggregate.json`` + ``trades.csv`` after the symbol loop
+  (PR 3 integration).
+- A 250 ms ``after()`` poll loop watches `self._worker.is_alive()`
+  and, on completion, loads the aggregate via
+  ``report.load_aggregate(run_dir)`` and re-renders the Report pane.
+- Status transitions: ``Ready`` → ``Run starting…`` → ``Running… N/M
+  symbols done`` → ``Done. N symbols, K trades.`` (or ``Stopped.
+  Partial: …`` on cancel).
+- **Stop** → ``self._token.cancel()``; the worker finishes the
+  in-flight symbol and writes a CANCELLED manifest. The aggregate /
+  CSV are still generated (PR 3 integration), so the partial Report
+  renders.
+
+## Dependency-injection hooks (for tests)
+- ``entries_storage`` / ``exits_storage`` / ``watchlists_storage`` —
+  any object exposing ``load_all() -> (list, list)``. Used in the
+  ``check_st3_strategy_tab_end_to_end`` smoke check to feed in-memory
+  test strategies without round-tripping through the entries
+  validator (which rejects synthetic ``STRAT_X`` ticker names).
+- ``candles_fetcher`` — passed straight through to
+  ``strategy_tester.run``; tests use the deterministic
+  ``_fake_candles`` helper.
+- ``run_fn`` — override the kernel entry point (currently only used
+  to confirm the indirection works; production passes
+  ``strategy_tester.run``).
+
+## Cleanup
+- ``<Destroy>`` binding cancels any in-flight Run (``token.cancel()``)
+  and disposes the pending ``after()`` callback. The worker thread is
+  a daemon so it dies with the app.
+
+## Known gaps (deferred to PR 5+)
+- No Recent Runs sidebar (browse / delete / open prior runs).
+- No HTML / PDF export buttons (`Export CSV…` only).
+- No equity-curve chart in the Report pane (line + DD shading).
+- No screenshot gallery viewer.
+- Custom date entries are unvalidated free text; bad dates surface
+  as an error from the runner rather than the UI.
+
+## See also
+- [`strategy_tester/runner.spec.md`](../strategy_tester/runner.spec.md)
+  — the orchestration kernel the worker thread invokes.
+- [`strategy_tester/report.spec.md`](../strategy_tester/report.spec.md)
+  — the Run-aggregate JSON / CSV the Report pane renders.
+- [`gui/entries_tab.spec.md`](entries_tab.spec.md) /
+  [`gui/exits_tab.spec.md`](exits_tab.spec.md) — sibling notebook tabs
+  whose ``load_all()``-based refresh pattern this widget mirrors.
