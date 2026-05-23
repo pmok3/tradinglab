@@ -32,6 +32,7 @@ subset files are intended for **single-feature iteration**:
 """
 from __future__ import annotations
 
+import gc
 import os
 import re
 import tempfile
@@ -130,3 +131,12 @@ def app():
         a._on_close()
     except Exception:  # noqa: BLE001
         pass
+    # Drain any lingering Tk ``Variable.__del__`` calls on the main
+    # thread *before* the interpreter shuts down. Without this, GC
+    # of leftover ``StringVar`` / ``IntVar`` instances during process
+    # exit can fire from a non-main thread, hitting "main thread is
+    # not in main loop" → ``Tcl_AsyncDelete: async handler deleted by
+    # the wrong thread`` → SIGABRT on CPython 3.11. Two collect rounds
+    # flush objects whose ``__del__`` resurrects other Tk objects.
+    gc.collect()
+    gc.collect()

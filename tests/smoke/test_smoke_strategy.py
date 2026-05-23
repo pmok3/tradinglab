@@ -15,6 +15,7 @@ on disk, and the total runtime stays under ~3 seconds.
 
 from __future__ import annotations
 
+import gc
 import json
 import os
 import tempfile
@@ -450,6 +451,13 @@ def check_st3_strategy_tab_end_to_end(tmp_cache_root: Path) -> None:
             root.destroy()
         except Exception:  # noqa: BLE001
             pass
+        # Drain Tk Variable.__del__ on the main thread *now*, while we
+        # still own it. Without this, leftover IntVar / StringVar / etc.
+        # objects can be collected from a worker thread in the next
+        # check (check_st4 spawns ThreadPoolExecutor workers), and
+        # Tkinter's "main thread is not in main loop" RuntimeError
+        # escalates to Tcl_AsyncDelete → SIGABRT on Linux CPython 3.11.
+        gc.collect()
 
 
 def check_st4_export_html_pdf(tmp_cache_root: Path) -> None:
@@ -609,6 +617,9 @@ def check_st5_recent_runs_sidebar(tmp_cache_root: Path) -> None:
             root.destroy()
         except Exception:  # noqa: BLE001
             pass
+        # See check_st3 for why this is needed (Tk Variable.__del__ +
+        # threading + Python 3.11).
+        gc.collect()
 
 
 
