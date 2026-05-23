@@ -2522,7 +2522,25 @@ class ChartApp(
                     c = fetcher(raw_compare, interval) or []
                 except Exception:  # noqa: BLE001
                     c = []
-            return p, c
+            # H2: piggy-back the disk-cache read onto the worker so the
+            # Tk thread doesn't pay JSON parsing latency for the merge
+            # (line 2776/2780) or the network-failure fallback (line
+            # 2709/2726). disk_cache.save() uses atomic os.replace so
+            # concurrent reads on the worker are race-safe against any
+            # Tk-thread save still in flight.
+            p_disk: list | None = None
+            c_disk: list | None = None
+            try:
+                if raw_primary:
+                    p_disk = disk_cache.load(src, raw_primary, interval)
+            except Exception:  # noqa: BLE001
+                p_disk = None
+            try:
+                if raw_compare:
+                    c_disk = disk_cache.load(src, raw_compare, interval)
+            except Exception:  # noqa: BLE001
+                c_disk = None
+            return p, c, p_disk, c_disk
 
         try:
             fut = executor.submit(_work)
@@ -2536,8 +2554,9 @@ class ChartApp(
                 return
             if result is None:
                 p_raw, c_raw = None, None
+                p_disk, c_disk = None, None
             else:
-                p_raw, c_raw = result
+                p_raw, c_raw, p_disk, c_disk = result
             self._prefetched_raw = {
                 "token": token,
                 "src": src,
@@ -2546,6 +2565,11 @@ class ChartApp(
                 "compare_ticker": raw_compare,
                 "primary": p_raw,
                 "compare": c_raw,
+                # H2: disk pre-loads, consumed by _load_data so it
+                # doesn't re-read the JSON file on the Tk thread.
+                "primary_disk": p_disk,
+                "compare_disk": c_disk,
+                "disk_preloaded": True,
             }
             try:
                 self._load_data()
@@ -2686,6 +2710,23 @@ class ChartApp(
             and prefetched.get("primary_ticker") == raw_primary
             and prefetched.get("compare_ticker") == raw_compare
         )
+        # H2: disk-cache reads piggy-backed onto the async worker. When
+        # the prefetched-raw payload is valid for this load, consume
+        # the cached disk reads instead of paying JSON parsing latency
+        # on the Tk thread for the merge / fallback paths below.
+        disk_preloaded = bool(prefetched_valid and prefetched.get("disk_preloaded"))
+        primary_disk_cached = (
+            prefetched.get("primary_disk") if disk_preloaded else None
+        )
+        compare_disk_cached = (
+            prefetched.get("compare_disk") if disk_preloaded else None
+        )
+
+        def _disk_for(key, side: str):
+            if disk_preloaded:
+                return (primary_disk_cached if side == "primary"
+                        else compare_disk_cached)
+            return self._disk_load(key)
         fetcher = DATA_SOURCES.get(src)
         primary_failed = False
         compare_failed = False
@@ -2706,7 +2747,7 @@ class ChartApp(
                 # rather than go blank if the network is down.
                 primary_raw = (
                     mem_primary
-                    or (self._disk_load(primary_key) or [])
+                    or (_disk_for(primary_key, "primary") or [])
                 )
                 if primary_raw:
                     primary_failed = False
@@ -2723,7 +2764,7 @@ class ChartApp(
                 compare_failed = True
                 compare_raw = (
                     mem_compare
-                    or (self._disk_load(compare_key) or [])
+                    or (_disk_for(compare_key, "compare") or [])
                 )
                 if compare_raw:
                     compare_failed = False
@@ -2773,11 +2814,11 @@ class ChartApp(
         # provider revisions propagate.
         if primary_raw and mem_primary is not primary_raw:
             primary_raw = disk_cache.merge_candles(
-                self._disk_load(primary_key), primary_raw,
+                _disk_for(primary_key, "primary"), primary_raw,
             )
         if compare_key and compare_raw and mem_compare is not compare_raw:
             compare_raw = disk_cache.merge_candles(
-                self._disk_load(compare_key), compare_raw,
+                _disk_for(compare_key, "compare"), compare_raw,
             )
 
         primary_raw_ref = primary_raw

@@ -41,6 +41,7 @@ import queue
 import time
 import tkinter as tk
 
+from .. import disk_cache as _disk_cache
 from ..constants import interval_minutes, is_intraday
 from ..data import DATA_SOURCES
 
@@ -632,7 +633,20 @@ class PollingMixin:
                     c = fetcher(raw_compare, interval) or []
                 except Exception:  # noqa: BLE001
                     c = []
-            return p, c
+            # H2: piggy-back disk-cache reads onto the worker.
+            p_disk: list | None = None
+            c_disk: list | None = None
+            try:
+                if raw_primary:
+                    p_disk = _disk_cache.load(src, raw_primary, interval)
+            except Exception:  # noqa: BLE001
+                p_disk = None
+            try:
+                if raw_compare:
+                    c_disk = _disk_cache.load(src, raw_compare, interval)
+            except Exception:  # noqa: BLE001
+                c_disk = None
+            return p, c, p_disk, c_disk
 
         try:
             fut = executor.submit(_work)
@@ -651,8 +665,9 @@ class PollingMixin:
                 return
             if result is None:
                 p_raw, c_raw = None, None
+                p_disk, c_disk = None, None
             else:
-                p_raw, c_raw = result
+                p_raw, c_raw, p_disk, c_disk = result
             self._prefetched_raw = {
                 "token": token,
                 "src": src,
@@ -661,6 +676,9 @@ class PollingMixin:
                 "compare_ticker": raw_compare,
                 "primary": p_raw,
                 "compare": c_raw,
+                "primary_disk": p_disk,
+                "compare_disk": c_disk,
+                "disk_preloaded": True,
             }
             try:
                 self._load_data()
