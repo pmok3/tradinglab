@@ -140,3 +140,18 @@ def app():
     # flush objects whose ``__del__`` resurrects other Tk objects.
     gc.collect()
     gc.collect()
+    # Final safety net: neuter ``tkinter.Variable.__del__``. The Tk
+    # interpreter is gone after ``_on_close()``; any ``StringVar`` /
+    # ``IntVar`` that survives past pytest's session teardown will
+    # otherwise crash during interpreter shutdown when GC eventually
+    # reaches it on a non-main thread (CPython 3.11 + 3.12 both
+    # affected on Linux when matplotlib + Tk are mixed). Replacing
+    # ``__del__`` with a no-op is safe — the interpreter handle the
+    # ``Variable`` referenced is already dead, so the only thing the
+    # original ``__del__`` did was issue ``unset`` against a stale
+    # Tcl interp.
+    try:
+        import tkinter as _tk
+        _tk.Variable.__del__ = lambda self: None  # type: ignore[assignment]
+    except Exception:  # noqa: BLE001
+        pass
