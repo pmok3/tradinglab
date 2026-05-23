@@ -364,6 +364,8 @@ for _name in (
     "_on_scroll_zoom",
     "_maybe_handle_b3_click_menu",
     "_maybe_handle_drawing_dblclick",
+    "_maybe_handle_pane_indicator_label_click",
+    "_pane_indicator_label_hit",
     "_update_drawing_hover_cursor",
     "_reset_drawing_hover_cursor",
     "_begin_click_to_type",
