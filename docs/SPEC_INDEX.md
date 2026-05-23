@@ -84,6 +84,17 @@ A one-spec-per-`.py` documentation set. Each spec follows a fixed 9-section layo
 | `backtest/aggregation.spec.md` | `aggregate` + `divides_evenly` — pure-Python session-anchored higher-TF candle derivation from a single primary tick interval. |
 | `backtest/actions.spec.md` | `CorporateAction` (input) + `CashAdjustment` / `QuantityAdjustment` (engine-output facts) for the corporate-action tick phase. |
 
+## `strategy_tester/` — Mechanical entry/exit pairing over a universe
+| Spec | Covers |
+|---|---|
+| `strategy_tester/__init__.spec.md` | Package overview + public re-exports (`run`, `TestConfig`, `TestRun`, `RunStatus`, `UniverseSpec`, `UniverseKind`, `DatePreset`, `CostModel`, `AcceptanceToken`, `RunCancelled`). |
+| `strategy_tester/acceptance.spec.md` | `AcceptanceToken` — cancellation wrapper around `threading.Event` + `RunCancelled` sentinel. |
+| `strategy_tester/model.spec.md` | `TestConfig` / `TestRun` / `UniverseSpec` / `CostModel` / `RunStatus` / `UniverseKind` / `DatePreset` + `validate_config` + `make_run_id` (sha256-12 over canonical_json + engine_version). |
+| `strategy_tester/universe.spec.md` | `resolve` + `resolve_preset` + `resolve_watchlist` + `PRESETS` (megacaps / sp500_seed / nasdaq100_seed / dow30_seed). |
+| `strategy_tester/evaluator.spec.md` | Headless trigger-evaluation kernel — registry-based dispatch on `EntryTrigger.kind` / `ExitTrigger.kind`; PR-1 wires MARKET/LIMIT/STOP/STOP_LIMIT + eod_kill_switch; unsupported kinds raise `UnsupportedTriggerKind`. |
+| `strategy_tester/runner.spec.md` | `run(cfg, *, cancel_token, progress, candles_fetcher, entry_loader, exit_loader, max_workers, today) -> RunResult` orchestrator — ThreadPoolExecutor fan-out, per-symbol independent capital, atomic manifest writes, partial results on cancel/error. |
+| `strategy_tester/storage.spec.md` | `run_dir_for` / `save_config` / `save_manifest` / `save_session_result_for_symbol` / `list_runs` / `delete_run` — persists under `%LOCALAPPDATA%/TradingLab/strategy_tests/<run_id>-<iso_ts>/`. |
+
 ## `events/` — Earnings & dividends ambient context
 | Spec | Covers |
 |---|---|

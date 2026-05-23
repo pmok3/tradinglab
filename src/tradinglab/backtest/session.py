@@ -56,6 +56,14 @@ class SessionSpec:
     engine_version: str = ENGINE_VERSION
     setup_tags: tuple[str, ...] = ()
     starting_cash: float = 100_000.0
+    # Per-share commission added to every fill on top of the flat
+    # per-trade ``commission``. Additive default-zero so existing
+    # ``sandbox-1d`` saves load cleanly (``ENGINE_VERSION`` unchanged
+    # per the additive-fields decision). Total fill commission is
+    # ``commission + commission_per_share * abs(quantity)``. Introduced
+    # for the Strategy Tester to model brokers like Interactive Brokers
+    # ($0.005 / share).
+    commission_per_share: float = 0.0
     include_extended: bool = False
     auto_cycle: bool = False
     cycle_dates: tuple[str, ...] = ()
@@ -85,6 +93,7 @@ class SessionSpec:
             "engine_version": str(self.engine_version),
             "setup_tags": list(self.setup_tags),
             "starting_cash": float(self.starting_cash),
+            "commission_per_share": float(self.commission_per_share),
             "include_extended": bool(self.include_extended),
             "auto_cycle": bool(self.auto_cycle),
             "cycle_dates": list(self.cycle_dates),
@@ -104,6 +113,7 @@ class SessionSpec:
             engine_version=str(d.get("engine_version", ENGINE_VERSION)),
             setup_tags=tuple(d.get("setup_tags") or ()),
             starting_cash=float(d.get("starting_cash", 100_000.0)),
+            commission_per_share=float(d.get("commission_per_share", 0.0)),
             include_extended=bool(d.get("include_extended", False)),
             auto_cycle=bool(d.get("auto_cycle", False)),
             cycle_dates=tuple(d.get("cycle_dates") or ()),

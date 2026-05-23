@@ -275,6 +275,7 @@ class SandboxEngine:
             next_bar_ts=ts,
             slippage_bps=self.spec.slippage_bps,
             commission=self.spec.commission,
+            commission_per_share=self.spec.commission_per_share,
         )
         # Drop orders that got filled (or had no open price); requeue
         # symbols absent from this bar.

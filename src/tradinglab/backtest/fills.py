@@ -23,10 +23,20 @@ def apply_fills(
     next_bar_ts: int,
     slippage_bps: float,
     commission: float,
+    commission_per_share: float = 0.0,
 ) -> list[Fill]:
-    """Build fills for every order whose symbol has a next-bar open."""
+    """Build fills for every order whose symbol has a next-bar open.
+
+    ``commission`` is the flat per-trade fee; ``commission_per_share``
+    is added on top scaled by the order's absolute quantity. Per-fill
+    total commission is ``commission + commission_per_share * abs(qty)``.
+    Default-zero ``commission_per_share`` preserves back-compat for
+    callers that omit the kwarg.
+    """
     out: list[Fill] = []
     slip_frac = float(slippage_bps) / 10_000.0
+    per_share = float(commission_per_share)
+    flat = float(commission)
     for o in orders:
         px = next_bar_opens.get(o.symbol)
         if px is None:
@@ -36,6 +46,7 @@ def apply_fills(
             fill_px = float(px) + slip
         else:
             fill_px = float(px) - slip
+        total_comm = flat + per_share * abs(float(o.quantity))
         out.append(Fill(
             order_id=o.order_id,
             symbol=o.symbol,
@@ -44,6 +55,6 @@ def apply_fills(
             fill_price=fill_px,
             fill_ts=int(next_bar_ts),
             slippage_bps=float(slippage_bps),
-            commission=float(commission),
+            commission=total_comm,
         ))
     return out
