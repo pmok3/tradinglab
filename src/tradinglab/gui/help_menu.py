@@ -129,6 +129,8 @@ class HelpMenuMixin:
                       command=self._on_help_custom_indicators_guide)
         m.add_command(label="Entries and Exits Guide…",
                       command=self._on_help_entries_exits_guide)
+        m.add_command(label="Strategy Tester Guide…",
+                      command=self._on_help_strategy_tester_guide)
         m.add_command(label="Documentation Library…",
                       command=self._on_help_documentation_library)
         m.add_command(label="View Online Docs",
@@ -510,6 +512,33 @@ class HelpMenuMixin:
             "Create entry strategies in the Entries tab and exit "
             "strategies in the Exits tab.\n\n"
             "See the full guide in the Documentation Library.",
+            parent=self,
+        )
+
+    # ---- Strategy Tester guide ----------------------------------------
+
+    def _on_help_strategy_tester_guide(self) -> None:
+        """Open the Strategy Tester walkthrough in the doc viewer."""
+        try:
+            from .. import _resources
+            target = _resources.resource_path("docs", "STRATEGY_TESTER.md")
+        except Exception:  # noqa: BLE001
+            target = None
+        if target and os.path.exists(target):
+            try:
+                from .doc_viewer import open_doc_viewer
+                dlg = open_doc_viewer(self, target)
+            except Exception:  # noqa: BLE001
+                dlg = None
+            if dlg is not None:
+                return
+            if _open_in_default_app(target):
+                return
+        messagebox.showinfo(
+            "Strategy Tester",
+            "Open the Strategy tab to pair a saved Entry strategy with "
+            "a saved Exit strategy and replay it across a universe of "
+            "symbols.\n\nSee the full guide in the Documentation Library.",
             parent=self,
         )
 

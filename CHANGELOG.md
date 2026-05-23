@@ -4,6 +4,21 @@ All notable changes to this project will be documented here. Format roughly foll
 
 ## [Unreleased]
 
+### Added
+
+- **Strategy Tester — new top-level "Strategy" notebook tab.** Pair
+  a saved Entry strategy with a saved Exit strategy and replay it
+  mechanically over a chosen universe + date range. Produces a Run
+  on disk with per-symbol JSON results, an aggregate Report
+  (Wilson + bootstrap CIs, daily Sharpe / Sortino, max drawdown,
+  per-symbol + per-year breakouts, sample-size banners),
+  per-trade annotated screenshots, a 24-column trades.csv, and
+  optional self-contained HTML + multi-page PDF exports. Recent
+  Runs sidebar at the bottom of the Configure pane lets you reload
+  prior runs without re-execution. See `docs/STRATEGY_TESTER.md`
+  for the walkthrough and `docs/strategy_tester/metrics.md` for the
+  plain-English metrics glossary.
+
 ### Changed
 
 - **Consolidated `SMA` and `EMA` indicators into a single "Moving

@@ -85,6 +85,7 @@ _DOC_ORDER: tuple[str, ...] = (
     "WATCHLISTS.md",
     "CUSTOM_INDICATORS.md",
     "ENTRIES_EXITS.md",
+    "STRATEGY_TESTER.md",
     "chartstack.md",
     "BUILDING_EXE.md",
 )
@@ -96,6 +97,7 @@ _DOC_TITLES: dict[str, str] = {
     "WATCHLISTS.md": "Watchlists Guide",
     "CUSTOM_INDICATORS.md": "Custom Indicators Guide",
     "ENTRIES_EXITS.md": "Entries and Exits Guide",
+    "STRATEGY_TESTER.md": "Strategy Tester Guide",
     "chartstack.md": "ChartStack Guide",
     "BUILDING_EXE.md": "Building the .exe",
     "spec.md": "Application Spec",

@@ -39,6 +39,13 @@ check, onboarding banner, credentials, and reset / purge.
 - `_on_help_custom_indicators_guide` — opens
   `docs/CUSTOM_INDICATORS.md` in the in-app doc viewer. Same
   fallback chain.
+- `_on_help_entries_exits_guide` — opens `docs/ENTRIES_EXITS.md`
+  in the in-app doc viewer. Same fallback chain (last resort:
+  messagebox pointing at the Entries and Exits tabs).
+- `_on_help_strategy_tester_guide` — opens
+  `docs/STRATEGY_TESTER.md` in the in-app doc viewer. Same
+  fallback chain (last resort: messagebox pointing at the
+  Strategy tab).
 - `_on_help_keyboard_shortcuts` — modeless Toplevel listing
   hotkeys grouped by feature in a `ttk.Treeview`. Singleton-per-app
   (re-invoke lifts existing). ESC and Close teardown + destroy.
