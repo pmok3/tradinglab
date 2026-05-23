@@ -46,6 +46,7 @@ from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..backtest.performance import build_trade_rows
 from ..backtest.session import ENGINE_VERSION
 from ..entries.model import EntryStrategy
 from ..exits.model import ExitStrategy
@@ -60,6 +61,7 @@ from .model import (
     TestRun,
     make_run_id,
 )
+from .screenshot import ScreenshotSpec, render_trade_screenshot, trade_filename
 from .universe import ResolvedUniverse
 from .universe import resolve as resolve_universe
 
@@ -208,12 +210,57 @@ class _SymbolOutcome:
     symbol: str
     ok: bool
     trade_count: int
+    screenshot_count: int = 0
     error: str = ""
 
 
 # ---------------------------------------------------------------------------
 # Worker
 # ---------------------------------------------------------------------------
+
+
+def _render_screenshots_for_symbol(
+    *,
+    candles: list[Candle],
+    result,
+    run_dir: Path,
+    screenshot_spec: ScreenshotSpec | None,
+) -> int:
+    """Render one PNG per closed trade. Returns the number written.
+
+    Screenshot failures are logged but never abort the worker: the
+    Run still completes with the SessionResult on disk and the GUI
+    surfaces "no preview" for the affected trade. This matches the
+    plan.md design choice that screenshots are *complementary*
+    artifacts, not a correctness gate.
+    """
+    if screenshot_spec is None:
+        return 0
+    screenshots_dir = run_dir / "screenshots"
+    written = 0
+    try:
+        trade_rows = build_trade_rows(result)
+    except Exception:  # noqa: BLE001
+        log.exception("build_trade_rows failed for %s", result.spec.symbol)
+        return 0
+    for row in trade_rows:
+        order_id = row.pre.order_id if row.pre is not None else ""
+        fname = trade_filename(row.post.symbol, order_id)
+        out_path = screenshots_dir / fname
+        try:
+            render_trade_screenshot(
+                candles=candles,
+                trade_row=row,
+                output_path=out_path,
+                spec=screenshot_spec,
+            )
+            written += 1
+        except Exception:  # noqa: BLE001
+            log.exception(
+                "render_trade_screenshot failed for %s/%s",
+                row.post.symbol, order_id,
+            )
+    return written
 
 
 def _worker(
@@ -227,6 +274,7 @@ def _worker(
     run_dir: Path,
     cancel_token: AcceptanceToken,
     candles_fetcher: Callable[[str, str], list[Candle]],
+    screenshot_spec: ScreenshotSpec | None,
 ) -> _SymbolOutcome:
     """Run one symbol in isolation. Errors are captured, never raised."""
     if cancel_token.is_cancelled():
@@ -247,8 +295,15 @@ def _worker(
         )
         storage.save_session_result_for_symbol(run_dir, symbol, result)
         trade_count = len(result.fills)
+        shots = _render_screenshots_for_symbol(
+            candles=candles,
+            result=result,
+            run_dir=run_dir,
+            screenshot_spec=screenshot_spec,
+        )
         return _SymbolOutcome(
-            symbol=symbol, ok=True, trade_count=trade_count
+            symbol=symbol, ok=True, trade_count=trade_count,
+            screenshot_count=shots,
         )
     except UnsupportedTriggerKind as exc:
         return _SymbolOutcome(
@@ -295,6 +350,7 @@ def run(
     candles_fetcher: Callable[[str, str], list[Candle]] | None = None,
     entry_loader: Callable[[str], EntryStrategy] | None = None,
     exit_loader: Callable[[str], ExitStrategy] | None = None,
+    screenshot_spec: ScreenshotSpec | None = None,
 ) -> RunResult:
     """Execute a Strategy Tester Run end-to-end.
 
@@ -314,6 +370,10 @@ def run(
     * ``entry_loader`` / ``exit_loader`` — default load from on-disk
       ``entries/storage`` and ``exits/storage``. Tests pass closures
       that return in-memory strategies without touching disk.
+    * ``screenshot_spec`` — pass a :class:`ScreenshotSpec` to render
+      one PNG per closed trade under ``<run_dir>/screenshots/``.
+      The default ``None`` disables screenshots entirely (used by
+      lightweight smoke checks); the GUI passes ``ScreenshotSpec()``.
     """
 
     cancel_token = cancel_token or AcceptanceToken()
@@ -406,6 +466,7 @@ def run(
                 run_dir=run_dir,
                 cancel_token=cancel_token,
                 candles_fetcher=candles_fetcher,
+                screenshot_spec=screenshot_spec,
             )
             futures[fut] = sym
 

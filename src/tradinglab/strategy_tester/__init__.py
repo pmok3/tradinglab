@@ -43,6 +43,12 @@ from .runner import (
     resolve_date_range,
     run,
 )
+from .screenshot import (
+    ScreenshotSpec,
+    render_trade_screenshot,
+    select_window,
+    trade_filename,
+)
 from .universe import (
     PRESETS,
     PresetMissing,
@@ -84,4 +90,9 @@ __all__ = [
     "RunResult",
     "resolve_date_range",
     "run",
+    # screenshot
+    "ScreenshotSpec",
+    "render_trade_screenshot",
+    "select_window",
+    "trade_filename",
 ]

@@ -172,6 +172,14 @@ def check_st0_kernel_only(tmp_cache_root: Path) -> None:
     assert (run_dir / "per_symbol").is_dir(), "per_symbol/ should have been created"
     assert (run_dir / "screenshots").is_dir(), "screenshots/ should have been created"
 
+    # screenshot_spec defaulted to None → no PNGs and screenshot_count==0
+    assert all(o.screenshot_count == 0 for o in result.outcomes), (
+        "expected no screenshots without explicit ScreenshotSpec"
+    )
+    assert not list((run_dir / "screenshots").iterdir()), (
+        "screenshots/ should be empty when screenshot_spec=None"
+    )
+
     # Each symbol's SessionResult parses + contains at least one fill (MARKET
     # entry fires on the second bar, EOD kill-switch ensures a close on the
     # last bar, so trade_count >= 2 per symbol).
@@ -195,6 +203,65 @@ def check_st0_kernel_only(tmp_cache_root: Path) -> None:
     assert elapsed < 10.0, f"check_st0_kernel_only took {elapsed:.2f}s (>10s)"
 
 
+def check_st1_screenshots_written(tmp_cache_root: Path) -> None:
+    """Same flow as st0, but with screenshot_spec=ScreenshotSpec() → PNGs on disk."""
+    from tradinglab.strategy_tester import (
+        AcceptanceToken,
+        RunStatus,
+        ScreenshotSpec,
+    )
+    from tradinglab.strategy_tester import (
+        run as run_strategy_test,
+    )
+
+    entry, exit_strat, cfg = _make_test_config()
+    entries_by_id = {entry.id: entry}
+    exits_by_id = {exit_strat.id: exit_strat}
+
+    # Reasonably small for fast smoke runtime — still validates the full
+    # pipeline (slicing, annotation placement, PNG write).
+    spec = ScreenshotSpec(width_in=8.0, height_in=4.5, dpi=72)
+
+    t0 = time.monotonic()
+    result = run_strategy_test(
+        cfg,
+        cancel_token=AcceptanceToken(),
+        candles_fetcher=_fake_fetcher,
+        entry_loader=lambda sid: entries_by_id[sid],
+        exit_loader=lambda sid: exits_by_id[sid],
+        max_workers=2,
+        screenshot_spec=spec,
+    )
+    elapsed = time.monotonic() - t0
+
+    assert result.test_run.status is RunStatus.DONE, (
+        f"expected DONE status, got {result.test_run.status} "
+        f"with error={result.test_run.error!r}"
+    )
+
+    run_dir = result.run_dir
+    screenshots_dir = run_dir / "screenshots"
+    png_files = sorted(screenshots_dir.glob("*.png"))
+    assert png_files, (
+        "expected at least one PNG when screenshot_spec is passed; "
+        f"screenshots/ is empty under {screenshots_dir}"
+    )
+    # Each PNG is a real (non-empty) file.
+    for f in png_files:
+        assert f.stat().st_size > 1024, f"PNG {f.name} looks empty"
+    # screenshot_count totals across symbols matches PNG file count.
+    total_shots = sum(o.screenshot_count for o in result.outcomes)
+    assert total_shots == len(png_files), (
+        f"outcome screenshot_count={total_shots} but found {len(png_files)} PNGs"
+    )
+    # Filenames follow the <SYM>_<order_id>_post.png convention.
+    for f in png_files:
+        assert f.name.endswith("_post.png"), f"unexpected filename: {f.name}"
+
+    # Generous runtime: 3 symbols × ~5-10 trades each × ~50ms/PNG ≈ a few seconds.
+    assert elapsed < 30.0, f"check_st1_screenshots_written took {elapsed:.2f}s (>30s)"
+
+
 @pytest.fixture
 def tmp_cache_root(tmp_path, monkeypatch):
     monkeypatch.setenv("TRADINGLAB_CACHE_DIR", str(tmp_path))
@@ -203,3 +270,7 @@ def tmp_cache_root(tmp_path, monkeypatch):
 
 def test_strategy_kernel(tmp_cache_root: Path) -> None:
     check_st0_kernel_only(tmp_cache_root)
+
+
+def test_strategy_screenshots(tmp_cache_root: Path) -> None:
+    check_st1_screenshots_written(tmp_cache_root)

@@ -9,6 +9,7 @@ Public re-export surface for the Strategy Tester package. Lets callers `from tra
 - From `universe`: `PRESETS`, `PresetMissing`, `ResolvedUniverse`, `WatchlistMissing`, `list_presets`, `resolve_universe` (aliased from `resolve`)
 - From `evaluator`: `UnsupportedTriggerKind`, `evaluate_symbol`
 - From `runner`: `DEFAULT_MAX_WORKERS`, `RunResult`, `resolve_date_range`, `run`
+- From `screenshot`: `ScreenshotSpec`, `render_trade_screenshot`, `select_window`, `trade_filename`
 
 ## Design Decisions
 - **Single import boundary** — GUI / runner / tests all import from the package root, not from submodules. Makes future refactors cheaper.

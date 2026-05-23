@@ -6,7 +6,7 @@ Top-level orchestrator for a Strategy Tester Run. Fans out per-symbol workers on
 ## Public API
 - `DEFAULT_MAX_WORKERS` — `min(cpu_count-1, 4)` matching `scanner/runner.py`.
 - `RunResult(test_run, run_dir, universe, outcomes)` — what `run()` returns.
-- `run(cfg, *, cancel_token=None, progress=None, max_workers=None, today=None, candles_fetcher=None, entry_loader=None, exit_loader=None) -> RunResult` — entry point.
+- `run(cfg, *, cancel_token=None, progress=None, max_workers=None, today=None, candles_fetcher=None, entry_loader=None, exit_loader=None, screenshot_spec=None) -> RunResult` — entry point.
 - `resolve_date_range(cfg, *, today=None) -> tuple[date, date]` — preset → concrete UTC dates.
 - `load_entry_strategy(id) -> EntryStrategy` / `load_exit_strategy(id) -> ExitStrategy` — default loaders (test-overridable).
 - `fetch_candles_for_symbol(sym, interval) -> list[Candle]` — default fetcher routing through `DATA_SOURCES["yfinance"]` so the smoke `_stub_yfinance` intercepts cleanly.
@@ -34,6 +34,7 @@ Top-level orchestrator for a Strategy Tester Run. Fans out per-symbol workers on
 - **Override-able loaders + fetcher** — keeps the runner unit-testable without hitting disk or network. Smoke tests pass closures returning in-memory strategies + synthetic candles.
 - **Manifest writes after every completion** — atomic via `atomic_write_json`. Cheap (< 1 KB per write). Lets the GUI poll without blocking.
 - **`run_id` is `make_run_id(cfg, engine_version=ENGINE_VERSION)` + ISO timestamp suffix** — re-running an identical config produces the same `run_id` but a distinct on-disk directory, per the locked design.
+- **`screenshot_spec` opt-in:** pass an explicit `ScreenshotSpec` to render one PNG per closed trade into `<run_dir>/screenshots/<SYM>_<order_id>_post.png`. The default `None` disables screenshots entirely (smoke checks use this to stay fast); the GUI passes `ScreenshotSpec()` so production runs always include images. Screenshot failures are logged but never abort a worker — `SessionResult` correctness is the gating artifact, screenshots are complementary.
 
 ## Invariants
 - `run()` never raises; errors become `RunStatus.FAILED` on the manifest.

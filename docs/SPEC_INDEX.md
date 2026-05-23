@@ -92,7 +92,8 @@ A one-spec-per-`.py` documentation set. Each spec follows a fixed 9-section layo
 | `strategy_tester/model.spec.md` | `TestConfig` / `TestRun` / `UniverseSpec` / `CostModel` / `RunStatus` / `UniverseKind` / `DatePreset` + `validate_config` + `make_run_id` (sha256-12 over canonical_json + engine_version). |
 | `strategy_tester/universe.spec.md` | `resolve` + `resolve_preset` + `resolve_watchlist` + `PRESETS` (megacaps / sp500_seed / nasdaq100_seed / dow30_seed). |
 | `strategy_tester/evaluator.spec.md` | Headless trigger-evaluation kernel — registry-based dispatch on `EntryTrigger.kind` / `ExitTrigger.kind`; PR-1 wires MARKET/LIMIT/STOP/STOP_LIMIT + eod_kill_switch; unsupported kinds raise `UnsupportedTriggerKind`. |
-| `strategy_tester/runner.spec.md` | `run(cfg, *, cancel_token, progress, candles_fetcher, entry_loader, exit_loader, max_workers, today) -> RunResult` orchestrator — ThreadPoolExecutor fan-out, per-symbol independent capital, atomic manifest writes, partial results on cancel/error. |
+| `strategy_tester/runner.spec.md` | `run(cfg, *, cancel_token, progress, candles_fetcher, entry_loader, exit_loader, max_workers, today, screenshot_spec) -> RunResult` orchestrator — ThreadPoolExecutor fan-out, per-symbol independent capital, atomic manifest writes, partial results on cancel/error. Screenshots are opt-in via `screenshot_spec`. |
+| `strategy_tester/screenshot.spec.md` | Headless per-trade PNG rendering — `render_trade_screenshot` composes `rendering.draw_candlesticks` / `draw_volume` on a `FigureCanvasAgg` (no Tk, no pyplot); annotates entry / exit / MAE / MFE / optional target line. `<run_dir>/screenshots/<SYM>_<order_id>_post.png`. |
 | `strategy_tester/storage.spec.md` | `run_dir_for` / `save_config` / `save_manifest` / `save_session_result_for_symbol` / `list_runs` / `delete_run` — persists under `%LOCALAPPDATA%/TradingLab/strategy_tests/<run_id>-<iso_ts>/`. |
 
 ## `events/` — Earnings & dividends ambient context
