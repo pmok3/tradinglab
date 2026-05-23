@@ -9,6 +9,7 @@ import numpy as np
 from ..core.bars import Bars
 from ..models import Candle
 from .base import LineStyle, ParamDef
+from .wilder import wilder_smooth_avg
 
 
 class RSI:
@@ -48,22 +49,28 @@ class RSI:
         gains = np.where(deltas > 0, deltas, 0.0)
         losses = np.where(deltas < 0, -deltas, 0.0)
 
-        avg_gain = gains[:n].mean()
-        avg_loss = losses[:n].mean()
+        # Shared Wilder kernel: same recurrence the inline loop was
+        # running, but evaluated via cumsum substitution. The kernel
+        # seeds at index ``n-1`` with ``gains[:n].mean()`` (mirrors
+        # the original ``avg_gain`` seed at the loop entry) and steps
+        # forward with ``S_i = S_{i-1} * (n-1)/n + v_i / n``.
+        avg_gain = wilder_smooth_avg(gains, n)
+        avg_loss = wilder_smooth_avg(losses, n)
 
-        def _rsi_from(ag: float, al: float) -> float:
-            if al == 0.0:
-                return 100.0
-            rs = ag / al
-            return 100.0 - (100.0 / (1.0 + rs))
+        # ``out[i]`` in closes coords uses the avg_gain / avg_loss
+        # values aligned at gains index ``i - 1`` (because gains is
+        # one shorter than closes). Slicing from ``n - 1`` produces
+        # exactly ``closes.size - n`` valid values that line up with
+        # ``out[n:]``.
+        ag = avg_gain[n - 1:]
+        al = avg_loss[n - 1:]
 
-        out[n] = _rsi_from(avg_gain, avg_loss)
-        for i in range(n + 1, closes.size):
-            g = gains[i - 1]
-            l = losses[i - 1]
-            avg_gain = (avg_gain * (n - 1) + g) / n
-            avg_loss = (avg_loss * (n - 1) + l) / n
-            out[i] = _rsi_from(avg_gain, avg_loss)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            rs = np.where(al > 0.0, ag / al, np.inf)
+            rsi = np.where(
+                np.isinf(rs), 100.0, 100.0 - 100.0 / (1.0 + rs),
+            )
+        out[n:] = rsi
         return {"rsi": out}
 
     def compute(self, candles: list[Candle]) -> dict[str, np.ndarray]:
