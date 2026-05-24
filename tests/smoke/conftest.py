@@ -56,6 +56,35 @@ if "TRADINGLAB_CACHE_DIR" not in os.environ:
         prefix="tradinglab_smoke_")
 
 
+# ---------------------------------------------------------------------
+# Tk-finalizer landmine fix (CLAUDE.md §7.5 + cousin)
+# ---------------------------------------------------------------------
+# When matplotlib's Tk backend creates ``tkinter.PhotoImage`` instances
+# and the Tk Variables (``StringVar``, ``IntVar`` etc.) used by the
+# StrategyTab + dialogs go out of scope, their ``__del__`` finalizers
+# call into the Tcl interpreter. If GC runs on a non-main thread
+# (matplotlib's draw thread, a ThreadPoolExecutor worker, or pytest's
+# session teardown) the call hits the wrong thread → ``RuntimeError:
+# main thread is not in main loop`` → ``Tcl_AsyncDelete: async handler
+# deleted by the wrong thread`` → SIGABRT.
+#
+# Symptom in CI: the run aborts at ~96% during scanner tests with
+# ``Process completed with exit code 1`` and ``Tcl_AsyncDelete`` in
+# the log.
+#
+# Fix: neuter the affected ``__del__`` methods PROACTIVELY at conftest
+# load. Skipping the Tcl ``unset`` / ``image delete`` call is harmless
+# in a test process — the small per-test leak is reclaimed at process
+# exit, and the only thing the original finalizer did was issue a
+# command against a Tcl interp that's about to be torn down anyway.
+try:
+    import tkinter as _tk_neuter
+    _tk_neuter.Variable.__del__ = lambda self: None  # type: ignore[assignment]
+    _tk_neuter.Image.__del__ = lambda self: None  # type: ignore[assignment]
+except Exception:  # noqa: BLE001
+    pass
+
+
 _TEST_WL_PATTERN = re.compile(r"^_D\d+_")
 # Tickers used by the smoke suite that the user wouldn't realistically have.
 # Pickle litter from interrupted runs is scrubbed at session teardown.
@@ -131,27 +160,31 @@ def app():
         a._on_close()
     except Exception:  # noqa: BLE001
         pass
-    # Drain any lingering Tk ``Variable.__del__`` calls on the main
-    # thread *before* the interpreter shuts down. Without this, GC
-    # of leftover ``StringVar`` / ``IntVar`` instances during process
-    # exit can fire from a non-main thread, hitting "main thread is
-    # not in main loop" → ``Tcl_AsyncDelete: async handler deleted by
-    # the wrong thread`` → SIGABRT on CPython 3.11. Two collect rounds
-    # flush objects whose ``__del__`` resurrects other Tk objects.
+    # Drain any lingering Tk ``Variable.__del__`` / ``Image.__del__``
+    # calls on the main thread *before* the interpreter shuts down.
+    # Without this, GC of leftover ``StringVar`` / ``IntVar`` /
+    # ``PhotoImage`` instances during process exit can fire from a
+    # non-main thread, hitting "main thread is not in main loop" →
+    # ``Tcl_AsyncDelete: async handler deleted by the wrong thread``
+    # → SIGABRT on CPython 3.11/3.12. Two collect rounds flush objects
+    # whose ``__del__`` resurrects other Tk objects.
     gc.collect()
     gc.collect()
-    # Final safety net: neuter ``tkinter.Variable.__del__``. The Tk
-    # interpreter is gone after ``_on_close()``; any ``StringVar`` /
-    # ``IntVar`` that survives past pytest's session teardown will
+    # Final safety net: neuter ``tkinter.Variable.__del__`` AND
+    # ``tkinter.Image.__del__``. The Tk interpreter is gone after
+    # ``_on_close()``; any ``StringVar`` / ``IntVar`` / matplotlib
+    # ``PhotoImage`` that survives past pytest's session teardown will
     # otherwise crash during interpreter shutdown when GC eventually
-    # reaches it on a non-main thread (CPython 3.11 + 3.12 both
-    # affected on Linux when matplotlib + Tk are mixed). Replacing
-    # ``__del__`` with a no-op is safe — the interpreter handle the
-    # ``Variable`` referenced is already dead, so the only thing the
-    # original ``__del__`` did was issue ``unset`` against a stale
-    # Tcl interp.
+    # reaches it on a non-main thread. Affects CPython 3.11 + 3.12 on
+    # Linux + Windows when matplotlib's Tk backend is mixed in (it
+    # caches PhotoImage objects in figure canvases). Replacing
+    # ``__del__`` with a no-op is safe — the Tcl interp the
+    # ``Variable``/``Image`` referenced is already dead, so the only
+    # thing the original ``__del__`` did was issue ``unset`` /
+    # ``image delete`` against a stale interpreter.
     try:
         import tkinter as _tk
         _tk.Variable.__del__ = lambda self: None  # type: ignore[assignment]
+        _tk.Image.__del__ = lambda self: None  # type: ignore[assignment]
     except Exception:  # noqa: BLE001
         pass
