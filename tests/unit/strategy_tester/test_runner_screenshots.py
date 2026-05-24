@@ -178,3 +178,125 @@ def test_render_screenshots_off_when_spec_is_none(tmp_path: Path) -> None:
     )
     assert written == 0
     assert not (tmp_path / "screenshots").exists()
+
+
+# ---------------------------------------------------------------------------
+# Regression: every screenshot rendered the SAME first-window of candles
+# because PostTradeReview.entry_ts is in epoch seconds (strategy_tester
+# evaluator threads bar_ts in seconds through to Fill.fill_ts), but
+# screenshot._index_of_ts compared against c.date.timestamp() * 1000.0
+# (milliseconds). Exact-match never hit; the nearest-neighbour fallback
+# always picked the earliest candle (smallest |c_ms - ts_seconds|).
+# ---------------------------------------------------------------------------
+
+
+def _post_seconds(
+    candles: list[Candle],
+    entry_idx: int,
+    exit_idx: int,
+    *,
+    symbol: str = "AAPL",
+) -> PostTradeReview:
+    """Build a PostTradeReview whose entry_ts/exit_ts are in **SECONDS**
+    (matching what the strategy_tester evaluator actually emits)."""
+    ec = candles[entry_idx]
+    xc = candles[exit_idx]
+    entry_ts = int(ec.date.timestamp())   # seconds, NOT milliseconds
+    exit_ts = int(xc.date.timestamp())
+    qty = 100.0
+    pnl = (xc.close - ec.open) * qty
+    return PostTradeReview(
+        symbol=symbol,
+        entry_ts=entry_ts,
+        exit_ts=exit_ts,
+        entry_price=ec.open,
+        exit_price=xc.close,
+        quantity=qty,
+        side="buy",
+        pnl=pnl,
+        pnl_pct=pnl / (ec.open * qty) if ec.open and qty else 0.0,
+        mae=10.0,
+        mfe=50.0,
+        mae_pct=-0.001,
+        mfe_pct=0.005,
+        ref_pre_trade_id=None,
+    )
+
+
+def test_index_of_ts_handles_epoch_seconds() -> None:
+    """`_index_of_ts` must locate a candle whose timestamp matches in
+    seconds — the strategy_tester emits PostTradeReview.entry_ts as
+    epoch seconds, not milliseconds."""
+    from tradinglab.strategy_tester.screenshot import _index_of_ts
+
+    candles = _ramp_candles(80)
+    for i in [0, 5, 13, 47, 79]:
+        ts_seconds = int(candles[i].date.timestamp())
+        got = _index_of_ts(candles, ts_seconds)
+        assert got == i, (
+            f"expected _index_of_ts to return {i} for second-precision ts, "
+            f"got {got}"
+        )
+
+
+def test_index_of_ts_handles_epoch_milliseconds() -> None:
+    """Back-compat: `_index_of_ts` must still locate ms-precision
+    timestamps (used historically by some journal records)."""
+    from tradinglab.strategy_tester.screenshot import _index_of_ts
+
+    candles = _ramp_candles(80)
+    for i in [0, 5, 13, 47, 79]:
+        ts_ms = int(candles[i].date.timestamp() * 1000.0)
+        got = _index_of_ts(candles, ts_ms)
+        assert got == i, (
+            f"expected _index_of_ts to return {i} for ms-precision ts, "
+            f"got {got}"
+        )
+
+
+def test_render_screenshots_renders_distinct_windows_for_seconds_ts(
+    tmp_path: Path,
+) -> None:
+    """Regression for the "every screenshot is the same" bug.
+
+    Three trades at three different timestamps (in seconds) must
+    produce three visually distinct PNGs. We assert distinctness by
+    byte-comparing the PNG bodies — different windows → different
+    candle layouts → different pixel bytes.
+    """
+    candles = _ramp_candles(120)
+    posts = [
+        _post_seconds(candles, entry_idx=10, exit_idx=15),
+        _post_seconds(candles, entry_idx=60, exit_idx=68),
+        _post_seconds(candles, entry_idx=100, exit_idx=110),
+    ]
+    result = _make_result("AAPL", posts)
+
+    written = _render_screenshots_for_symbol(
+        candles=candles,
+        result=result,
+        run_dir=tmp_path,
+        screenshot_spec=ScreenshotSpec(width_in=6.0, height_in=3.5, dpi=72),
+    )
+    assert written == 3
+
+    shots_dir = tmp_path / "screenshots"
+    pngs = sorted(shots_dir.glob("*.png"))
+    assert len(pngs) == 3, f"expected 3 PNGs, got {len(pngs)}"
+
+    # If the bar-index bug is back, all three PNGs will render the same
+    # first-window of candles → identical byte content. We compare
+    # bytes directly; even small differences in marker placement /
+    # title datetime / x-axis labels will perturb the hash.
+    contents = [p.read_bytes() for p in pngs]
+    assert contents[0] != contents[1], (
+        "first two screenshots are byte-identical — bar-index lookup is "
+        "rendering the same window for both trades (the 'every screenshot "
+        "is the same' regression)"
+    )
+    assert contents[1] != contents[2], (
+        "screenshots 2 and 3 are byte-identical — bar-index regression"
+    )
+    assert contents[0] != contents[2], (
+        "screenshots 1 and 3 are byte-identical — bar-index regression"
+    )

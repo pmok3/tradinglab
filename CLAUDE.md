@@ -294,6 +294,76 @@ gh CLI. It WILL complete; don't kill it. Use `initial_wait: 300` or more
 when running via the powershell tool, and `read_powershell` to retrieve
 the final result.
 
+### 7.7 strategy_tester timestamps are EPOCH SECONDS — not milliseconds
+`PostTradeReview.entry_ts` and `.exit_ts` (and `Fill.fill_ts`) are
+**UTC epoch seconds**, NOT milliseconds, in the strategy_tester
+evaluator output. The evaluator's docstring spells this out:
+`bar_ts is the UTC epoch-second timestamp of the bar` (see
+`src/tradinglab/strategy_tester/evaluator.py` ~line 1114). The bar_ts
+flows unchanged into `engine.submit_order(submitted_ts=ts)` →
+`Fill.fill_ts` → `PostTradeReview.entry_ts`.
+
+But `Candle.date.timestamp() * 1000.0` is in **milliseconds**, and
+some legacy live-journal records also use ms. If you write a helper
+that bridges these two worlds, normalize by magnitude:
+```python
+def _normalize_ts_to_seconds(ts):
+    return float(ts) / 1000.0 if float(ts) >= 1e12 else float(ts)
+```
+(year 33,658 in seconds = ~1e12, so any ts ≥ 1e12 is definitely ms.)
+
+The "every screenshot is the same" bug (180 trades, 60 PNGs that all
+showed identical first-window candles) was caused by `_index_of_ts`
+in `screenshot.py` comparing in ms against a seconds-precision input.
+Exact match never hit; the nearest-neighbour fallback always picked
+the earliest candle. Fixed in `screenshot.py` `_index_of_ts` to
+normalize both sides to seconds first.
+
+### 7.8 `SessionResult.fills` is 2× round-trip-trade count
+Every closed mechanical trade produces exactly **2 fills** (entry
+open + exit close). To count *trades* (round-trips), use
+`len(result.post_trades)`, NOT `len(result.fills)`. The
+`PostTradeReview` is built once per close in `engine._build_post_trade`.
+
+This caused the AMD "120 trades in Recent Runs vs 60 in per-symbol
+table" bug — `runner.py:_run_one_symbol` was using `len(result.fills)`
+which double-counted. The aggregate's per-symbol stats use
+`build_trade_rows` which correctly pairs fills, so the per-symbol
+section was right and the manifest's `trade_count` was wrong.
+
+### 7.9 Mechanical evaluator emits NO PreTradeEntry records
+The strategy_tester evaluator path never calls
+`submit_order_with_pre_trade`, so `result.pre_trades` is always empty
+and every `TradeRow` returned by `build_trade_rows` has `row.pre =
+None`. Any code that relies on `row.pre.order_id` for a per-trade
+identifier (e.g. screenshot filename) MUST fall back to
+`row.post.ref_pre_trade_id` and then to `f"t{int(row.post.entry_ts)}"`.
+The mechanical evaluator does set `ref_pre_trade_id` to `None` too,
+so the entry-timestamp fallback is the practical one. This caused the
+"180 trades collapsed onto 3 PNGs" bug (all PNGs named
+`<SYM>_unknown_post.png`).
+
+### 7.10 `_ramp()` fixture in test_runner.py uses Saturday timestamps
+`tests/unit/strategy_tester/test_runner.py:_ramp()` constructs candles
+starting at `datetime(2024, 6, 1, 9, 30)` — but **2024-06-01 is a
+Saturday** and the candles are tz-naive. The default entry strategy
+has `require_market_open=True` which blocks all Saturday bars, so the
+fixture produces **zero fills**.
+
+Existing tests (`test_run_happy_path`, `test_run_handles_loader_failure`)
+don't assert trade counts so this never mattered. But any new test that
+needs *actual fills* from `_ramp()` must either:
+1. Build its own candles with a Monday (e.g. 2024-06-03) + tz-aware ET
+   timestamps starting at 09:35 ET, OR
+2. Set `entry.require_market_open = False` on the strategy fixture.
+
+Pattern from `test_evaluator.py`:
+```python
+from zoneinfo import ZoneInfo
+_ET = ZoneInfo("America/New_York")
+t = datetime(2026, 1, 5, 9, 35, tzinfo=_ET)  # Monday, RTH start
+```
+
 ---
 
 ## 8. Build & release flow
@@ -398,6 +468,12 @@ These files are **never** committed to git. Use them for working memory.
 | Synthetic test events | `src/tradinglab/events/synthetic_events.py` |
 | Helpers used by smoke | `tests/smoke/_helpers.py` |
 | Mega smoke test | `tests/smoke/test_smoke_full.py` |
+| Strategy Tester GUI | `src/tradinglab/gui/strategy_tab.py` |
+| Strategy Tester runner | `src/tradinglab/strategy_tester/runner.py` |
+| Strategy Tester evaluator (mechanical) | `src/tradinglab/strategy_tester/evaluator.py` |
+| Trade screenshots | `src/tradinglab/strategy_tester/screenshot.py` |
+| Strategy report (PDF/HTML) | `src/tradinglab/strategy_tester/export.py` |
+| Backtest engine (post-trade records) | `src/tradinglab/backtest/engine.py` |
 | PyInstaller spec | `TradingLab.spec` |
 | Build wrapper | `tools/build_exe.ps1` |
 | Onboarding docs | `docs/ONBOARDING.md` |
@@ -416,8 +492,19 @@ guessing — recent checkpoints include:
 - Cross-arch v0.1.0 build + release flow
 - Nine-fix UI/dark-mode/zip-export polish sprint
 - Security-audit 14-finding remediation (pickle → JSON, DPAPI creds)
+- Strategy Tester: triggers (TRAILING_STOP / TIME_OF_DAY / CHANDELIER /
+  SCANNER_ALERT / INDICATOR) wired into mechanical evaluator
+- Strategy Tester: arm_window / require_market_open / cooldown_secs
+  gates + per-ET-day session reset + per-day EOD kill
+- Strategy Tester: 1-trade-per-symbol re-entry bug fixed (now 60+
+  trades/symbol on 3/8 EMA cross 5m)
+- Strategy Tester: screenshot filename collision + "every PNG identical"
+  + multi-row Recent Runs delete + trade-count fill-vs-trade fix
+- Strategy Tester: HTML report screenshot links + PDF page-1
+  formatting + per-year 1970 + equity-curve x-axis fixes
 
 ---
 
-*Last updated: 2026-05-22. If you change the build/test/release flow,
-update §3 / §4 / §8 in the same PR.*
+*Last updated: 2026-05-23. If you change the build/test/release flow,
+update §3 / §4 / §8 in the same PR. Strategy Tester landmines are in
+§7.7–§7.10 — read those before touching `strategy_tester/`.*

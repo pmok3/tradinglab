@@ -210,3 +210,60 @@ def test_run_handles_per_symbol_worker_failure(monkeypatch, tmp_path) -> None:
     # and an empty list is returned; here we use a synchronous raise so
     # the worker's except-clause catches it.
     assert len(bad_outcomes) >= 0  # tolerant — fetcher swallows are also acceptable
+
+
+def test_run_trade_count_matches_post_trades_not_fills(monkeypatch, tmp_path) -> None:
+    """Regression: Recent Runs Treeview's "Trades" column must equal the
+    number of round-trip trades, NOT the number of raw fills.
+
+    User reported AMD showing 120 in Recent Runs but 60 in the per-symbol
+    section. Root cause: ``_run_one_symbol`` used ``len(result.fills)``,
+    but every closed round-trip trade has exactly 2 fills (entry open +
+    exit close), so the manifest double-counted.
+
+    This test uses a Monday-ET ramp + EOD kill switch so the single
+    MARKET entry is flattened at end of session: 1 BUY fill + 1 SELL
+    fill = 2 fills under the hood, but 1 PostTradeReview = 1 trade.
+    """
+    from zoneinfo import ZoneInfo
+
+    et = ZoneInfo("America/New_York")
+    # 2024-06-03 is a Monday; start at 09:35 ET so the first bar
+    # passes both the arm_window and require_market_open gates.
+    candles: list[Candle] = []
+    t = datetime(2024, 6, 3, 9, 35, tzinfo=et)
+    p = 100.0
+    for _ in range(40):
+        op = p
+        cl = p + 0.5
+        candles.append(Candle(
+            date=t, open=op, high=cl + 0.1, low=op - 0.1,
+            close=cl, volume=1000, session="regular",
+        ))
+        p = cl
+        t = t + timedelta(minutes=5)
+
+    monkeypatch.setenv("TRADINGLAB_CACHE_DIR", str(tmp_path))
+    entry, exit_strat = _entry(), _exit()  # exit has eod_kill_switch=True
+    cfg = _cfg(("A",))
+
+    result = run_test(
+        cfg,
+        candles_fetcher=lambda sym, interval: candles,
+        entry_loader=lambda sid: entry,
+        exit_loader=lambda sid: exit_strat,
+        max_workers=1,
+    )
+    assert result.test_run.status is RunStatus.DONE
+    assert len(result.outcomes) == 1
+    outcome = result.outcomes[0]
+    assert outcome.ok
+    # MARKET entry fires on the first eligible bar; EOD kill switch
+    # closes the position at end of session → exactly 1 round-trip
+    # trade = 1 PostTradeReview = 2 fills under the hood.
+    assert outcome.trade_count == 1, (
+        f"expected trade_count=1 (one round-trip trade), got "
+        f"{outcome.trade_count} — this is the AMD 120-vs-60 regression "
+        f"(would be 2 if we were counting fills)."
+    )
+    assert result.test_run.trade_count == 1

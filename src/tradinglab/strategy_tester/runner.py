@@ -305,7 +305,12 @@ def _worker(
             deck_seed=cfg.rng_seed,
         )
         storage.save_session_result_for_symbol(run_dir, symbol, result)
-        trade_count = len(result.fills)
+        # Count round-trip trades (one PostTradeReview per open+close pair),
+        # NOT raw fills — every closed trade has 2 fills (open + close), so
+        # using len(result.fills) double-counts. The Recent Runs sidebar
+        # and the per-symbol Report disagreed (e.g. 120 vs 60 on AMD) until
+        # this was fixed.
+        trade_count = len(result.post_trades)
         shots = _render_screenshots_for_symbol(
             candles=candles,
             result=result,

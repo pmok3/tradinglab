@@ -163,7 +163,9 @@ def export_html(
             for f in png_files:
                 rel = f"screenshots/{f.name}"
                 shot_imgs += (
-                    f"  <figure><img src='{html.escape(rel)}' alt='trade'>"
+                    f"  <figure><a href='{html.escape(rel)}' "
+                    f"target='_blank' rel='noopener'>"
+                    f"<img src='{html.escape(rel)}' alt='trade'></a>"
                     f"<figcaption>{html.escape(f.name)}</figcaption>"
                     f"</figure>\n"
                 )
@@ -309,15 +311,20 @@ def _draw_cover_page(pdf: PdfPages, agg: _report.RunAggregate) -> None:
     exp_ci = agg.expectancy_ci_95
     pf_disp = _fmt_pf(agg.profit_factor)
 
+    # CI strings are rendered as small sub-text below their parent row so
+    # they don't widen the value column and cause overflow into col 1.
+    ci_subs: dict[tuple[int, int], str] = {
+        (0, 1): f"95% CI [{_fmt_pct(wr_ci.lo)} \u2013 {_fmt_pct(wr_ci.hi)}]",
+        (0, 2): (
+            f"95% CI [{_fmt_money(exp_ci.lo)} \u2013 {_fmt_money(exp_ci.hi)}]"
+        ),
+    }
+
     lines = [
         ("Trades", f"{agg.trade_count}  "
                    f"({agg.win_count} W / {agg.loss_count} L)"),
-        ("Win rate",
-         f"{_fmt_pct(agg.win_rate)}  "
-         f"95% CI [{_fmt_pct(wr_ci.lo)} – {_fmt_pct(wr_ci.hi)}]"),
-        ("Expectancy",
-         f"{_fmt_money(agg.expectancy)}  "
-         f"95% CI [{_fmt_money(exp_ci.lo)} – {_fmt_money(exp_ci.hi)}]"),
+        ("Win rate", _fmt_pct(agg.win_rate)),
+        ("Expectancy", _fmt_money(agg.expectancy)),
         ("Profit factor", pf_disp),
         ("P&L gross", _fmt_money(agg.total_pnl_gross)),
         ("P&L net", _fmt_money(agg.total_pnl_net)),
@@ -355,22 +362,32 @@ def _draw_cover_page(pdf: PdfPages, agg: _report.RunAggregate) -> None:
             wrap=True,
         )
 
-    # 2-column key/value layout
+    # 2-column key/value layout.
+    # Labels are right-aligned (ha="right") at x_label so that long names
+    # like "Sharpe (daily, annualised):" grow *leftward* and cannot overlap
+    # the value text that starts at x_value to their right.  The previous
+    # layout used left-aligned labels with a fixed gap of only ~84 pt, which
+    # was too narrow for labels up to ~170 pt wide.
     n = len(lines)
     half = math.ceil(n / 2)
     y0 = 0.86
     dy = 0.045
     for col, batch in enumerate((lines[:half], lines[half:])):
-        x_label = 0.02 + 0.50 * col
-        x_value = 0.18 + 0.50 * col
+        x_label = 0.34 + 0.50 * col
+        x_value = 0.36 + 0.50 * col
         for i, (label, value) in enumerate(batch):
             y = y0 - i * dy
             ax.text(x_label, y, f"{label}:",
                     transform=ax.transAxes,
-                    fontsize=9.5, color="#444")
+                    fontsize=9.5, color="#444", ha="right")
             ax.text(x_value, y, value,
                     transform=ax.transAxes,
                     fontsize=10, fontweight="bold", color="#222")
+            ci_sub = ci_subs.get((col, i))
+            if ci_sub:
+                ax.text(x_value, y - dy * 0.45, ci_sub,
+                        transform=ax.transAxes,
+                        fontsize=7.5, color="#666")
 
     pdf.savefig(fig)
 
@@ -433,8 +450,8 @@ def _draw_equity_curve_page(
     fig.subplots_adjust(left=0.08, right=0.96, top=0.92, bottom=0.10)
     ax = fig.add_subplot(111)
     xs = [
-        _dt.datetime.fromtimestamp(ts_ms / 1000.0, tz=_dt.timezone.utc)
-        for ts_ms, _ in agg.equity_curve
+        _dt.datetime.fromtimestamp(ts_s, tz=_dt.timezone.utc)
+        for ts_s, _ in agg.equity_curve
     ]
     ys = [eq for _, eq in agg.equity_curve]
     ax.plot(xs, ys, color="#2360c8", linewidth=1.2)

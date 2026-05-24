@@ -62,11 +62,11 @@ def _fake_aggregate(
         sharpe_ratio=1.42,
         sortino_ratio=2.05,
         equity_curve=[
-            (1_700_000_000_000, 100_000.0),
-            (1_700_086_400_000, 100_500.0),
-            (1_700_172_800_000, 101_200.0),
-            (1_700_259_200_000, 100_900.0),
-            (1_700_345_600_000, 101_980.4),
+            (1_700_000_000, 100_000.0),
+            (1_700_086_400, 100_500.0),
+            (1_700_172_800, 101_200.0),
+            (1_700_259_200, 100_900.0),
+            (1_700_345_600, 101_980.4),
         ],
         best_month_removed_total_pnl=9_500.0,
         worst_month_removed_total_pnl=13_200.0,
@@ -171,6 +171,14 @@ def test_export_html_links_screenshots_relative(tmp_path: Path) -> None:
     assert "src='screenshots/bar_002_post.png'" in body
     # Section header is shown.
     assert "Trade screenshots" in body
+    # Each screenshot must be wrapped in an <a href=...> so it's clickable
+    # (regression: previously the <img> had no anchor and users couldn't
+    # open a screenshot full-resolution from the report).
+    assert "href='screenshots/foo_001_post.png'" in body
+    assert "href='screenshots/bar_002_post.png'" in body
+    # Link should open in a new tab with safe rel attribute.
+    assert "target='_blank'" in body
+    assert "rel='noopener'" in body
 
 
 def test_export_html_skips_screenshots_section_when_dir_missing(
@@ -318,6 +326,51 @@ def test_export_pdf_corrupt_screenshot_is_skipped_silently(
     assert out.exists()
 
 
+def test_export_pdf_cover_page_no_label_value_overlap(tmp_path: Path) -> None:
+    """Regression: long labels like 'Sharpe (daily, annualised):' must not
+    overlap their values on page 1 of the PDF.
+
+    Previously x_label and x_value were only 84 pt apart (left-aligned),
+    which was narrower than labels up to ~170 pt wide.  The fix uses
+    right-aligned labels so they grow leftward and can never reach the
+    value column.
+
+    The check uses pypdf's layout-mode text extraction: if the label text
+    immediately precedes a digit or '$' character (no whitespace gap) that
+    signals a physical rendering overlap.
+    """
+    pypdf = pytest.importorskip("pypdf")
+    import re
+
+    agg = _fake_aggregate()
+    out = export_pdf(tmp_path, aggregate=agg)
+
+    reader = pypdf.PdfReader(str(out))
+    text = reader.pages[0].extract_text(extraction_mode="layout")
+
+    # Each of these patterns fires when the long label runs into its value.
+    overlap_patterns = [
+        r"Sharpe \(daily, annualised\):[0-9\-\$]",
+        r"Sortino \(daily, annualised\):[0-9\-\$]",
+        r"Best-month-removed P&L:\$",
+        r"Worst-month-removed P&L:\$",
+    ]
+    for pattern in overlap_patterns:
+        assert not re.search(pattern, text), (
+            f"Label-value overlap detected on PDF cover page: {pattern!r}\n"
+            f"Extracted text snippet: {text[:800]!r}"
+        )
+
+    # The labels and values must still be present.
+    for label in (
+        "Sharpe (daily, annualised)",
+        "Sortino (daily, annualised)",
+        "Best-month-removed P&L",
+        "Worst-month-removed P&L",
+    ):
+        assert label in text, f"Label missing from cover page: {label!r}"
+
+
 # ---------------------------------------------------------------------------
 # Re-exports
 # ---------------------------------------------------------------------------
@@ -329,3 +382,54 @@ def test_strategy_tester_namespace_reexports_export_helpers() -> None:
     assert st.export_pdf is export_pdf
     assert st.HTML_FILENAME == HTML_FILENAME
     assert st.PDF_FILENAME == PDF_FILENAME
+
+
+# ---------------------------------------------------------------------------
+# Regression: equity curve x-axis must span the full experiment timeframe
+# ---------------------------------------------------------------------------
+
+
+def test_equity_curve_x_axis_spans_multiple_months(tmp_path: Path) -> None:
+    """Regression: _draw_equity_curve_page used to divide epoch-second
+    timestamps by 1000, collapsing all points to a single day in 1970.
+    Verify that an equity curve with points across multiple months produces
+    a PDF with an x-axis span > 1 day (verified via matplotlib directly).
+    """
+    import dataclasses
+    import datetime as _dt
+
+    import matplotlib
+    import matplotlib.figure as _mpl_figure
+    from matplotlib.backends.backend_pdf import PdfPages  # noqa: F401
+
+    matplotlib.use("Agg")
+    from tradinglab.strategy_tester.export import _draw_equity_curve_page
+
+    # Five monthly points spanning Jan–May 2025 (epoch seconds).
+    jan = int(_dt.datetime(2025, 1, 1, tzinfo=_dt.timezone.utc).timestamp())
+    monthly_curve = [
+        (jan + i * 30 * 86_400, 100_000.0 + i * 500.0)
+        for i in range(5)
+    ]
+    agg = dataclasses.replace(_fake_aggregate(), equity_curve=monthly_curve)
+
+    xs_captured: list[_dt.datetime] = []
+
+    class _CapturingPdf:
+        """Minimal PdfPages stand-in that captures the axes data."""
+        def savefig(self, fig: _mpl_figure.Figure) -> None:  # type: ignore[override]
+            for ax in fig.get_axes():
+                lines = ax.get_lines()
+                if lines:
+                    xdata = lines[0].get_xdata()
+                    xs_captured.extend(xdata)
+
+    _draw_equity_curve_page(_CapturingPdf(), agg)  # type: ignore[arg-type]
+
+    assert xs_captured, "No data points were plotted on the equity curve"
+    span = max(xs_captured) - min(xs_captured)
+    span_days = span.days if hasattr(span, "days") else (span / _dt.timedelta(days=1))
+    assert span_days > 1, (
+        f"Equity curve x-axis spans only {span_days} day(s) — "
+        "timestamps may still be divided by 1000 (epoch-ms bug)."
+    )

@@ -24,7 +24,7 @@ to `manifest.json`. The Strategy tab's Report view reads this file
 - `save_aggregate(run_dir, agg) -> Path` /
   `load_aggregate(run_dir) -> RunAggregate | None` — disk round-trip.
 - `write_run_csv(run_dir, rows=None) -> Path` — writes the canonical
-  24-column trades CSV via
+  22-column trades CSV via
   `backtest.performance.write_trade_rows_csv`.
 - Stat primitives: `wilson_score_ci`, `bootstrap_ci`,
   `profit_factor`, `expectancy`, `max_drawdown`, `daily_sharpe`,
@@ -91,7 +91,7 @@ to `manifest.json`. The Strategy tab's Report view reads this file
   },
   "risk": {"max_drawdown": 4321.0, "max_drawdown_pct": 0.043, "sharpe_ratio": 1.42, "sortino_ratio": 1.89},
   "robustness": {"best_month_removed_total_pnl": 9876.5, "worst_month_removed_total_pnl": 14210.1},
-  "equity_curve": [[1704096000000, 100000.0], ...],
+  "equity_curve": [[1704096000, 100000.0], ...],
   "per_symbol": [{"symbol": "AAPL", "trade_count": ...}, ...],
   "per_year": [{"year": 2024, "trade_count": ...}, ...],
   "per_setup": [...],

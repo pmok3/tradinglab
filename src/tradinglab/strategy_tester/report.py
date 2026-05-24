@@ -14,7 +14,7 @@ Public surface — three building blocks:
 * :func:`compute_aggregate` — pure-function math kernel that takes
   a list of :class:`TradeRow` and produces a :class:`RunAggregate`
   with no I/O. The unit-test entry point.
-* :func:`write_run_csv` — writes the canonical 24-column trades CSV
+* :func:`write_run_csv` — writes the canonical 22-column trades CSV
   via the existing :func:`backtest.performance.write_trade_rows_csv`.
   Included here so report-export consumers have one stop.
 
@@ -422,16 +422,19 @@ def max_drawdown(equity_curve: list[tuple[int, float]]) -> tuple[float, float]:
 def _daily_returns(equity_curve: list[tuple[int, float]]) -> list[float]:
     """Convert tick-level equity to daily returns.
 
-    Buckets ``(ts_ms, equity)`` samples by UTC calendar day, takes the
+    Buckets ``(ts_s, equity)`` samples by UTC calendar day, takes the
     last-equity sample per day, then computes pct-change between
     consecutive days. Returns ``[]`` when there are fewer than two
     distinct days.
+
+    ``ts_s`` is a UTC epoch-second integer (same unit as
+    ``PostTradeReview.exit_ts``).
     """
     if not equity_curve:
         return []
     by_day: dict[_dt.date, float] = {}
-    for ts_ms, eq in equity_curve:
-        d = _dt.datetime.fromtimestamp(ts_ms / 1000.0, tz=_dt.timezone.utc).date()
+    for ts_s, eq in equity_curve:
+        d = _dt.datetime.fromtimestamp(ts_s, tz=_dt.timezone.utc).date()
         by_day[d] = float(eq)  # last sample wins
     if len(by_day) < 2:
         return []
@@ -527,11 +530,15 @@ def _per_symbol_stats(
 
 
 def _per_year_stats(rows: list[TradeRow]) -> list[PerYearStats]:
-    """One row per UTC calendar year (indexed by exit_ts)."""
+    """One row per UTC calendar year (indexed by exit_ts).
+
+    ``exit_ts`` is a UTC epoch-second integer (same unit as
+    ``PostTradeReview.exit_ts`` from the strategy-tester engine).
+    """
     by_year: dict[int, list[TradeRow]] = {}
     for r in rows:
         y = _dt.datetime.fromtimestamp(
-            r.post.exit_ts / 1000.0, tz=_dt.timezone.utc
+            r.post.exit_ts, tz=_dt.timezone.utc
         ).year
         by_year.setdefault(y, []).append(r)
     out: list[PerYearStats] = []
@@ -591,7 +598,7 @@ def _month_removed_pnl(rows: list[TradeRow], *, best: bool) -> float:
     by_month: dict[tuple[int, int], float] = {}
     for r in rows:
         d = _dt.datetime.fromtimestamp(
-            r.post.exit_ts / 1000.0, tz=_dt.timezone.utc
+            r.post.exit_ts, tz=_dt.timezone.utc
         )
         key = (d.year, d.month)
         by_month[key] = by_month.get(key, 0.0) + float(r.post.pnl)
@@ -605,10 +612,10 @@ def _month_removed_pnl(rows: list[TradeRow], *, best: bool) -> float:
         float(r.post.pnl) for r in rows
         if (
             _dt.datetime.fromtimestamp(
-                r.post.exit_ts / 1000.0, tz=_dt.timezone.utc
+                r.post.exit_ts, tz=_dt.timezone.utc
             ).year,
             _dt.datetime.fromtimestamp(
-                r.post.exit_ts / 1000.0, tz=_dt.timezone.utc
+                r.post.exit_ts, tz=_dt.timezone.utc
             ).month,
         ) != target_month
     )
@@ -807,7 +814,7 @@ def write_run_csv(
     run_dir: Path,
     rows: list[TradeRow] | None = None,
 ) -> Path:
-    """Write the canonical 24-column trades CSV to ``run_dir/trades.csv``.
+    """Write the canonical 22-column trades CSV to ``run_dir/trades.csv``.
 
     If ``rows`` is None, rebuilds them from per-symbol JSON. This is
     the same column layout as the Sandbox CSV export, so users can

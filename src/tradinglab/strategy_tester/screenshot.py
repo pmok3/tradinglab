@@ -319,31 +319,71 @@ def render_trade_screenshot(
 # ---------------------------------------------------------------------------
 
 
-def _index_of_ts(candles: list[Candle], ts_ms: int) -> int:
-    """Return the index of ``ts_ms`` in ``candles`` (-1 when missing).
+def _normalize_ts_to_seconds(ts: int | float) -> float:
+    """Convert an integer epoch timestamp to **seconds** regardless of
+    whether the caller supplied seconds or milliseconds.
 
-    ``ts_ms`` is UTC ms-since-epoch as used by the journal records;
-    we compare against ``Candle.date`` translated the same way.
+    Heuristic by magnitude:
+    * ``ts >= 1e12`` → milliseconds (would be year 33,658 if seconds —
+      effectively impossible). Divide by 1000.
+    * ``ts < 1e12``  → seconds (post-2001 if in [1e9, 1e12]).
+
+    This solves the "every screenshot is the same" bug:
+    :data:`PostTradeReview.entry_ts` is in **epoch seconds** in the
+    strategy_tester evaluator output (see
+    :mod:`tradinglab.strategy_tester.evaluator` —
+    ``bar_ts`` is documented as UTC epoch seconds), but earlier
+    versions of :func:`_index_of_ts` compared against
+    ``c.date.timestamp() * 1000.0`` (milliseconds). The exact-match
+    branch never hit and the nearest-neighbour fallback always
+    returned the earliest candle (because ``|c_ms - ts_seconds|``
+    is minimised at the smallest ``c_ms``). Every trade rendered the
+    same first window of the dataset.
+    """
+    return float(ts) / 1000.0 if float(ts) >= 1e12 else float(ts)
+
+
+def _index_of_ts(candles: list[Candle], ts: int) -> int:
+    """Return the index of ``ts`` in ``candles`` (-1 when ``candles``
+    is empty).
+
+    ``ts`` may be supplied in either **epoch seconds** (the
+    strategy_tester convention) or **epoch milliseconds** (legacy
+    journal records). :func:`_normalize_ts_to_seconds` figures out
+    which based on magnitude, then comparison happens in seconds
+    against ``Candle.date.timestamp()`` directly.
+
+    A bar matches when its timestamp is within ½ second of the
+    target. The nearest-neighbour fallback is only used when no bar
+    is within ½ second AND the closest bar is within 1 day of the
+    target — otherwise we return -1 so the caller can short-circuit
+    rendering rather than silently drawing the wrong window.
     """
     if not candles:
         return -1
+    target = _normalize_ts_to_seconds(ts)
+    # Exact (½-second-tolerant) match.
     for i, c in enumerate(candles):
         if c.is_gap:
             continue
-        c_ms = int(c.date.timestamp() * 1000.0)
-        if c_ms == ts_ms:
+        c_sec = c.date.timestamp()
+        if abs(c_sec - target) < 0.5:
             return i
-    # Fallback: nearest match (engine may have used a slightly
-    # different epoch precision). Linear scan is fine for ≤10K bars.
+    # Nearest fallback (only useful for tz / epoch-precision drift).
     best_i = -1
-    best_delta = None
+    best_delta: float | None = None
     for i, c in enumerate(candles):
         if c.is_gap:
             continue
-        delta = abs(int(c.date.timestamp() * 1000.0) - ts_ms)
+        delta = abs(c.date.timestamp() - target)
         if best_delta is None or delta < best_delta:
             best_delta = delta
             best_i = i
+    if best_delta is not None and best_delta > 86_400.0:
+        # No bar within 24 h of the target — almost certainly a unit
+        # mismatch we didn't anticipate. Bail out rather than render
+        # the wrong window.
+        return -1
     return best_i
 
 
@@ -605,9 +645,17 @@ def _format_et_timestamp(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%d %H:%M") + suffix
 
 
-def _format_et_timestamp_from_ms(ts_ms: int) -> str:
-    """Return ``YYYY-MM-DD HH:MM ET`` for a UTC-ms-since-epoch."""
-    dt = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc)
+def _format_et_timestamp_from_ms(ts: int) -> str:
+    """Return ``YYYY-MM-DD HH:MM ET`` for an epoch timestamp.
+
+    Despite the historical name, ``ts`` may be supplied in either
+    epoch seconds (the strategy_tester convention) or epoch
+    milliseconds (legacy live-journal records); the function
+    auto-detects by magnitude (``ts >= 1e12`` → ms). See the
+    ``_index_of_ts`` docstring above for the same landmine.
+    """
+    ts_seconds = float(ts) / 1000.0 if float(ts) >= 1e12 else float(ts)
+    dt = datetime.fromtimestamp(ts_seconds, tz=timezone.utc)
     return _format_et_timestamp(dt)
 
 

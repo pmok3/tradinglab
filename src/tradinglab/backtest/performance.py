@@ -324,7 +324,15 @@ def screenshot_filenames(
 
 
 def _iso_utc(ts: int) -> str:
-    """``YYYY-MM-DDTHH:MM:SS+00:00`` for an epoch-second int."""
+    """``YYYY-MM-DDTHH:MM:SS+00:00`` for an epoch-second int.
+
+    .. note::
+       Despite the name, the column ``entry_iso`` / ``exit_iso`` in
+       :data:`CSV_COLUMNS` is now produced by
+       :func:`_human_et` instead, which returns a prose-style
+       Eastern-Time string. ``_iso_utc`` is kept for legacy callers
+       (clipboard TSV preview).
+    """
     try:
         return _dt.datetime.fromtimestamp(
             int(ts), tz=_dt.timezone.utc).isoformat()
@@ -332,10 +340,47 @@ def _iso_utc(ts: int) -> str:
         return ""
 
 
+# Eastern Time zone (one cache; ``_ET`` is None on platforms without
+# zoneinfo, in which case the formatter falls back to UTC labelling).
+try:
+    from zoneinfo import ZoneInfo as _ZoneInfo
+    _ET: _dt.tzinfo | None = _ZoneInfo("America/New_York")
+except Exception:  # noqa: BLE001 — best-effort
+    _ET = None
+
+
+def _ordinal(n: int) -> str:
+    """Return ``n`` with an English ordinal suffix: 1 -> 1st, 22 -> 22nd."""
+    if 11 <= (n % 100) <= 13:
+        return f"{n}th"
+    return f"{n}{ {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th') }"
+
+
+def _human_et(ts: int) -> str:
+    """Render an epoch-second timestamp as ``Month Dth, HH:MM ET``.
+
+    Example: ``1772203800`` → ``February 27th, 09:50 ET``.
+
+    Uses Eastern-Time wall-clock; the suffix is always ``ET`` rather
+    than EST/EDT so the same string survives DST transitions
+    consistently (matches the screenshot title convention in
+    :mod:`tradinglab.strategy_tester.screenshot`).
+
+    Returns ``""`` if the timestamp can't be converted.
+    """
+    try:
+        dt = _dt.datetime.fromtimestamp(int(ts), tz=_dt.timezone.utc)
+        if _ET is not None:
+            dt = dt.astimezone(_ET)
+        return f"{dt.strftime('%B')} {_ordinal(dt.day)}, {dt.strftime('%H:%M')} ET"
+    except (OverflowError, ValueError, OSError):
+        return ""
+
+
 CSV_COLUMNS: tuple[str, ...] = (
     "order_id",
-    "entry_ts", "entry_iso",
-    "exit_ts", "exit_iso",
+    "entry_iso",
+    "exit_iso",
     "holding_seconds",
     "symbol", "side", "qty",
     "entry_price", "exit_price",
@@ -361,10 +406,8 @@ def trade_row_to_csv_record(
     target = "" if row.target is None else f"{float(row.target):.6f}"
     return {
         "order_id": str(order_id),
-        "entry_ts": str(int(post.entry_ts)),
-        "entry_iso": _iso_utc(post.entry_ts),
-        "exit_ts": str(int(post.exit_ts)),
-        "exit_iso": _iso_utc(post.exit_ts),
+        "entry_iso": _human_et(post.entry_ts),
+        "exit_iso": _human_et(post.exit_ts),
         "holding_seconds": str(holding),
         "symbol": str(post.symbol),
         "side": str(post.side),

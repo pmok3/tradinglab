@@ -45,9 +45,9 @@ def _row(
     setup_tag: str = "",
 ) -> TradeRow:
     if entry_ts is None:
-        entry_ts = int(datetime(2024, 1, 2, tzinfo=timezone.utc).timestamp() * 1000)
+        entry_ts = int(datetime(2024, 1, 2, tzinfo=timezone.utc).timestamp())
     if exit_ts is None:
-        exit_ts = entry_ts + 60 * 60 * 1000
+        exit_ts = entry_ts + 60 * 60
     pre = PreTradeEntry(
         order_id=f"o-{exit_ts}",
         ts=entry_ts,
@@ -78,7 +78,7 @@ def _row(
 
 
 def _ts(year: int, month: int = 1, day: int = 1) -> int:
-    return int(datetime(year, month, day, 15, 30, tzinfo=timezone.utc).timestamp() * 1000)
+    return int(datetime(year, month, day, 15, 30, tzinfo=timezone.utc).timestamp())
 
 
 # ---------------------------------------------------------------------------
@@ -323,7 +323,7 @@ def test_compute_aggregate_permutation_invariance() -> None:
 def test_compute_aggregate_sample_banners() -> None:
     """N>=100 → no banners; 30<=N<100 → low only; N<30 → both."""
     def _gen(n):
-        return [_row(pnl=100.0, exit_ts=_ts(2024, 1, 2) + i * 86_400_000)
+        return [_row(pnl=100.0, exit_ts=_ts(2024, 1, 2) + i * 86_400)
                 for i in range(n)]
     agg_small = compute_aggregate(
         run_id="rs", rows_by_symbol={"X": _gen(10)},
@@ -423,3 +423,31 @@ def test_ci_to_dict_round_trip() -> None:
     ci = ConfidenceInterval(lo=0.1, hi=0.5, point=0.3, confidence=0.95)
     d = ci.to_dict()
     assert d == {"lo": 0.1, "hi": 0.5, "point": 0.3, "confidence": 0.95}
+
+
+# ---------------------------------------------------------------------------
+# Regression: per-year must use epoch-second exit_ts (not ms)
+# ---------------------------------------------------------------------------
+
+
+def test_per_year_epoch_seconds_produces_correct_years() -> None:
+    """Regression: _per_year_stats used to divide exit_ts by 1000, treating
+    epoch-second timestamps as milliseconds and returning year 1970.
+    Verify that second-precision exit_ts values produce the expected calendar
+    years, NOT 1970.
+    """
+    rows = [
+        _row(pnl=100.0, exit_ts=_ts(2024, 6, 1)),
+        _row(pnl=-50.0, exit_ts=_ts(2024, 12, 1)),
+        _row(pnl=200.0, exit_ts=_ts(2025, 3, 1)),
+        _row(pnl=75.0, exit_ts=_ts(2026, 1, 15)),
+    ]
+    agg = compute_aggregate(
+        run_id="reg-peryear",
+        rows_by_symbol={"X": rows},
+        starting_cash=100_000.0,
+        bootstrap_samples=10,
+    )
+    years = [y.year for y in agg.per_year]
+    assert years == [2024, 2025, 2026], f"Expected real years, got {years}"
+    assert 1970 not in years, "per_year must not show epoch year 1970"

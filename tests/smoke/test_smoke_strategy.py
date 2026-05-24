@@ -309,12 +309,19 @@ def check_st2_aggregate_and_csv(tmp_cache_root: Path) -> None:
     ts_seq = [p[0] for p in agg.equity_curve]
     assert ts_seq == sorted(ts_seq), "equity_curve should be sorted by ts"
 
-    # CSV has the canonical 24-column header + at least one data row.
+    # CSV has the canonical column layout (header + at least one data row).
+    # Column count is asserted dynamically against CSV_COLUMNS so the
+    # smoke test doesn't have to be edited every time the schema evolves.
+    from tradinglab.backtest.performance import CSV_COLUMNS
     csv_lines = csv_path.read_text(encoding="utf-8").splitlines()
     assert len(csv_lines) >= 2, "trades.csv should have header + data rows"
     header_cols = csv_lines[0].split(",")
-    assert len(header_cols) == 24, (
-        f"expected 24-column trades.csv header, got {len(header_cols)}"
+    assert len(header_cols) == len(CSV_COLUMNS), (
+        f"expected {len(CSV_COLUMNS)}-column trades.csv header "
+        f"(matches CSV_COLUMNS); got {len(header_cols)}"
+    )
+    assert tuple(header_cols) == CSV_COLUMNS, (
+        f"trades.csv header drifted from CSV_COLUMNS: got {header_cols}"
     )
 
 

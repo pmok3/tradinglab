@@ -5,7 +5,7 @@ mechanically over a user-chosen universe + date range, and produces:
 
 * an in-app Report (Summary / Trades / Per-symbol / Equity curve /
   Charts sub-tabs);
-* a CSV of all trades (24 columns, reused from
+* a CSV of all trades (22 columns, reused from
   :mod:`backtest.performance`);
 * a PNG screenshot per trade with entry/exit/MAE/MFE annotations (PR 2);
 * HTML + PDF exports (PR 5);

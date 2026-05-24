@@ -63,7 +63,7 @@ saved in the Entries and Exits tabs.
 6. **Export**:
    - **Open run folder** — opens the `%LOCALAPPDATA%\TradingLab\
      strategy_tests\<run_id>-<ts>\` directory in Explorer.
-   - **Export CSV…** — copies `trades.csv` (24 columns, identical
+   - **Export CSV…** — copies `trades.csv` (22 columns, identical
      to the Sandbox post-mortem CSV format).
    - **Export HTML…** — writes a self-contained `report.html` with
      relative `screenshots/<file>.png` links — zip the run dir for
@@ -87,7 +87,7 @@ config.json              # the TestConfig that was run
 manifest.json            # status + counters + started/finished_at
 per_symbol/<SYM>.json    # one SessionResult per ticker
 aggregate.json           # whole-Run rollup (the "Report")
-trades.csv               # 24-column flat trade list
+trades.csv               # 22-column flat trade list
 screenshots/             # one PNG per trade (if screenshots on)
   <SYM>_<order_id>_post.png
 report.html              # written by Export HTML…

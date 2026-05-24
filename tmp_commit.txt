@@ -1,0 +1,73 @@
+fix(strategy_tester): screenshot windows + PDF report + CSV human-readable + clickable HTML + trade counts
+
+User reported a half-dozen interlocking issues during the AMD 60-trade
+strategy_tester run. All caused by the same EPOCH-SECONDS-vs-MILLISECONDS
+unit mismatch (PostTradeReview.entry_ts is in seconds, but several
+formatters assumed milliseconds), plus a screenshot filename collision,
+a PDF cover layout bug, and a misleading manifest counter.
+
+Fixes:
+
+1) Screenshot bar-index lookup (screenshot.py _index_of_ts)
+   ---------------------------------------------------------
+   Every PNG was rendering the same first-window of candles because
+   _index_of_ts compared in ms against a seconds-precision input.
+   Now auto-normalizes by magnitude (>= 1e12 -> ms; else -> s).
+   Also added a 24h sanity guard to bail out rather than silently
+   render the wrong window. Also fixed the same latent bug in
+   _format_et_timestamp_from_ms (screenshot title fallback path).
+   Regression: 3 new tests in test_runner_screenshots.py.
+
+2) Trade count (runner.py _run_one_symbol)
+   ------------------------------------------
+   "Recent Runs" showed 120 trades but the per-symbol section showed
+   60. Cause: counted len(result.fills) (2 fills per round-trip) instead
+   of len(result.post_trades) (1 record per round-trip).
+   Regression: test_run_trade_count_matches_post_trades_not_fills.
+
+3) HTML screenshot links (export.py)
+   ------------------------------------
+   Screenshots in report.html had no <a href> wrapper so they weren't
+   clickable. Now wrapped with target=_blank rel=noopener.
+   Regression: extended test_export_html_links_screenshots_relative.
+
+4) PDF cover page label/value overlap (export.py _draw_cover_page)
+   ----------------------------------------------------------------
+   Labels like "Sharpe (daily, annualised):" (~168pt) physically
+   overlapped their values across an 84pt gap. Now right-aligned at
+   x_label=0.34+0.50*col so labels grow leftward; values left-aligned
+   at x_value=0.36+0.50*col. Win-rate / Expectancy CI ranges moved to
+   smaller sub-text below each row.
+   Regression: test_export_pdf_cover_page_no_label_value_overlap.
+
+5) PDF per-year shows 1970 (report.py _per_year_stats and friends)
+   ----------------------------------------------------------------
+   datetime.fromtimestamp(ts / 1000.0) on a seconds-ts -> 1970. Same
+   pattern in _month_removed_pnl and _daily_returns. Removed the /1000.
+   Regression: test_per_year_epoch_seconds_produces_correct_years.
+
+6) PDF equity-curve x-axis spans only one day (export.py)
+   --------------------------------------------------------
+   Same /1000 bug -> all points collapsed to ~Jan 1, 1970. Removed.
+   Regression: test_equity_curve_x_axis_spans_multiple_months.
+
+7) CSV human-readable timestamps (performance.py CSV_COLUMNS)
+   -----------------------------------------------------------
+   User: "none of this 1e9 business. something more like
+   January 17th, 10:05 EST". Dropped the integer-second columns
+   entry_ts and exit_ts; entry_iso and exit_iso now hold prose-style
+   Eastern-Time strings like "February 27th, 09:50 ET" (DST-aware
+   under the hood; stable ET suffix). CSV is now 22 columns (was 24).
+   12 new tests in tests/unit/backtest/test_csv_columns.py.
+
+8) Multi-row Recent Runs delete + Treeview selectmode=extended
+   (already in tree from earlier commit; reaffirmed in this batch.)
+
+CLAUDE.md updated with §7.7–§7.10 documenting the seconds-vs-ms
+landmine, the SessionResult.fills 2x trade count, the empty
+pre_trades from mechanical runs, and the test_runner _ramp() Saturday
+fixture gotcha.
+
+Tests: 547 unit+scanner+csv pass, 141 smoke pass + 12 skipped. Lint clean.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>

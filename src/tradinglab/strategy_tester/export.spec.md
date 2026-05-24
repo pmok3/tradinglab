@@ -54,6 +54,12 @@ Built via `matplotlib.backends.backend_pdf.PdfPages`. Pages in order:
 1. **Cover page** — Letter portrait, two-column key/value layout
    of every headline metric. Sample-size banner at the top when
    triggered. No charts on this page.
+   * Labels are **right-aligned** at `x_label = 0.34 + 0.50·col`
+     (axes fraction) so long labels like "Sharpe (daily, annualised):"
+     grow leftward and can never overlap the value column.
+   * Win-rate and Expectancy 95% CI ranges are rendered as a smaller
+     sub-text (fontsize 7.5) immediately below each value rather than
+     inline in the value string, preventing column-overflow onto col 1.
 2. **Breakouts page** — Letter portrait, two `ax.table` widgets:
    per-symbol on the top half, per-year on the bottom half.
 3. **Equity curve page** — Letter landscape, single line plot of
