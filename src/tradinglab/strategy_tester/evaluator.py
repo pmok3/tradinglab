@@ -46,6 +46,7 @@ elif`` blocks elsewhere.
 
 from __future__ import annotations
 
+import logging
 import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -66,7 +67,18 @@ from ..entries.model import TriggerKind as EntryTriggerKind
 from ..exits.model import ExitStrategy, ExitTrigger
 from ..exits.model import TriggerKind as ExitTriggerKind
 from ..models import Candle
+from ..scanner.engine import (
+    EvaluationContext as _ScannerEvalContext,
+)
+from ..scanner.engine import (
+    evaluate_group as _scanner_evaluate_group,
+)
+from ..scanner.engine import (
+    make_context as _scanner_make_context,
+)
 from .model import CostModel
+
+LOG = logging.getLogger(__name__)
 
 __all__ = [
     "evaluate_symbol",
@@ -201,7 +213,9 @@ def _entry_market(trigger: EntryTrigger, bar: _BarTuple, **_kw: object) -> bool:
     return True
 
 
-def _entry_limit(trigger: EntryTrigger, bar: _BarTuple, *, side: Side) -> bool:
+def _entry_limit(
+    trigger: EntryTrigger, bar: _BarTuple, *, side: Side, **_kw: object
+) -> bool:
     """LIMIT entry: LONG fires if bar.low <= price; SHORT fires if bar.high >= price."""
     price = trigger.price
     if price is None:
@@ -212,7 +226,9 @@ def _entry_limit(trigger: EntryTrigger, bar: _BarTuple, *, side: Side) -> bool:
     return hi >= float(price)
 
 
-def _entry_stop(trigger: EntryTrigger, bar: _BarTuple, *, side: Side) -> bool:
+def _entry_stop(
+    trigger: EntryTrigger, bar: _BarTuple, *, side: Side, **_kw: object
+) -> bool:
     """STOP entry: LONG fires if bar.high >= stop; SHORT fires if bar.low <= stop."""
     stop = trigger.stop_price
     if stop is None:
@@ -224,7 +240,7 @@ def _entry_stop(trigger: EntryTrigger, bar: _BarTuple, *, side: Side) -> bool:
 
 
 def _entry_stop_limit(
-    trigger: EntryTrigger, bar: _BarTuple, *, side: Side
+    trigger: EntryTrigger, bar: _BarTuple, *, side: Side, **_kw: object
 ) -> bool:
     """STOP_LIMIT entry: stop touched AND price acceptable as limit ceiling/floor."""
     if not _entry_stop(trigger, bar, side=side):
@@ -242,12 +258,47 @@ def _entry_unsupported(trigger: EntryTrigger, bar: _BarTuple, **_kw: object) -> 
     raise UnsupportedTriggerKind(trigger.kind, side="entry")
 
 
+def _entry_indicator(
+    trigger: EntryTrigger,
+    bar: _BarTuple,
+    *,
+    eval_ctx: _ScannerEvalContext | None = None,
+    **_kw: object,
+) -> bool:
+    """INDICATOR entry: evaluate ``trigger.condition`` at the current bar.
+
+    Uses the same :func:`scanner.engine.evaluate_group` kernel the live
+    :class:`EntryEvaluator` uses, so semantics — tri-valued AND/OR,
+    within-last-N-bars look-back, transition operators — match exactly.
+    The decision is made against ``bar i``'s close (mirrors the
+    decide-at-close / fill-next-open contract for the rest of the
+    handlers). If the condition is missing or evaluation raises, the
+    trigger silently does NOT fire (defensive — a broken indicator
+    shouldn't abort the entire Run; the scanner kernel already logs
+    indicator errors via ``IndicatorMemo.errors``).
+    """
+    if eval_ctx is None or trigger.condition is None:
+        return False
+    try:
+        result = _scanner_evaluate_group(trigger.condition, eval_ctx)
+    except NotImplementedError:
+        # Cross-interval / unimplemented indicator path — treat as "no fire".
+        return False
+    except Exception:  # noqa: BLE001
+        LOG.exception(
+            "strategy_tester._entry_indicator: evaluate_group raised "
+            "(symbol=%s, idx=%d)", eval_ctx.symbol, eval_ctx.current_index,
+        )
+        return False
+    return result is True
+
+
 _ENTRY_HANDLERS: dict[EntryTriggerKind, Callable[..., bool]] = {
     EntryTriggerKind.MARKET: _entry_market,
     EntryTriggerKind.LIMIT: _entry_limit,
     EntryTriggerKind.STOP: _entry_stop,
     EntryTriggerKind.STOP_LIMIT: _entry_stop_limit,
-    EntryTriggerKind.INDICATOR: _entry_unsupported,
+    EntryTriggerKind.INDICATOR: _entry_indicator,
     EntryTriggerKind.SCANNER_ALERT: _entry_unsupported,
 }
 
@@ -296,6 +347,7 @@ def _exit_limit(
     *,
     ref_price: float,
     position_side: str,
+    **_kw: object,
 ) -> bool:
     """LIMIT exit: LONG (position=buy) fires when bar.high >= take-profit;
     SHORT fires when bar.low <= take-profit."""
@@ -316,6 +368,7 @@ def _exit_stop(
     *,
     ref_price: float,
     position_side: str,
+    **_kw: object,
 ) -> bool:
     """STOP exit: LONG fires when bar.low <= stop; SHORT fires when bar.high >= stop."""
     stop = _resolve_exit_price(
@@ -335,6 +388,7 @@ def _exit_stop_limit(
     *,
     ref_price: float,
     position_side: str,
+    **_kw: object,
 ) -> bool:
     """STOP_LIMIT exit: stop touched AND limit acceptable for fill."""
     if not _exit_stop(trigger, bar, ref_price=ref_price, position_side=position_side):
@@ -349,6 +403,35 @@ def _exit_unsupported(trigger: ExitTrigger, bar: _BarTuple, **_kw: object) -> bo
     raise UnsupportedTriggerKind(trigger.kind, side="exit")
 
 
+def _exit_indicator(
+    trigger: ExitTrigger,
+    bar: _BarTuple,
+    *,
+    eval_ctx: _ScannerEvalContext | None = None,
+    **_kw: object,
+) -> bool:
+    """INDICATOR exit: evaluate ``trigger.condition`` at the current bar.
+
+    Mirrors :func:`_entry_indicator`. The exit fires when the condition
+    evaluates True; defensive about None / NotImplementedError /
+    indicator-compute exceptions (no fire on error so a broken
+    indicator doesn't flatten the position prematurely).
+    """
+    if eval_ctx is None or trigger.condition is None:
+        return False
+    try:
+        result = _scanner_evaluate_group(trigger.condition, eval_ctx)
+    except NotImplementedError:
+        return False
+    except Exception:  # noqa: BLE001
+        LOG.exception(
+            "strategy_tester._exit_indicator: evaluate_group raised "
+            "(symbol=%s, idx=%d)", eval_ctx.symbol, eval_ctx.current_index,
+        )
+        return False
+    return result is True
+
+
 _EXIT_HANDLERS: dict[ExitTriggerKind, Callable[..., bool]] = {
     ExitTriggerKind.MARKET: _exit_market,
     ExitTriggerKind.LIMIT: _exit_limit,
@@ -356,7 +439,7 @@ _EXIT_HANDLERS: dict[ExitTriggerKind, Callable[..., bool]] = {
     ExitTriggerKind.STOP_LIMIT: _exit_stop_limit,
     ExitTriggerKind.TRAILING_STOP: _exit_unsupported,
     ExitTriggerKind.TIME_OF_DAY: _exit_unsupported,
-    ExitTriggerKind.INDICATOR: _exit_unsupported,
+    ExitTriggerKind.INDICATOR: _exit_indicator,
     ExitTriggerKind.CHANDELIER: _exit_unsupported,
 }
 
@@ -410,12 +493,18 @@ def _bar_at(idx: int, bars) -> _BarTuple:
 
 
 def _check_entry(
-    ctx: EvalContext, bar: _BarTuple
+    ctx: EvalContext,
+    bar: _BarTuple,
+    *,
+    eval_ctx: _ScannerEvalContext | None = None,
 ) -> tuple[bool, Side, float]:
     """Decide whether the entry trigger fires against ``bar``.
 
     Returns ``(fired, side, qty)``. ``qty == 0.0`` means "trigger
     matched but sizing came back zero — treat as not fired".
+
+    ``eval_ctx`` is the per-symbol scanner-engine evaluation context.
+    Required for INDICATOR triggers; ignored by price-only handlers.
     """
     if not ctx.entry_strategy.enabled:
         return False, Side.BUY, 0.0
@@ -443,7 +532,7 @@ def _check_entry(
     )
 
     handler = _ENTRY_HANDLERS.get(trigger.kind, _entry_unsupported)
-    fired = handler(trigger, bar, side=side)
+    fired = handler(trigger, bar, side=side, eval_ctx=eval_ctx)
     if not fired:
         return False, side, 0.0
 
@@ -457,12 +546,18 @@ def _check_entry(
 
 
 def _check_exits(
-    ctx: EvalContext, bar: _BarTuple
+    ctx: EvalContext,
+    bar: _BarTuple,
+    *,
+    eval_ctx: _ScannerEvalContext | None = None,
 ) -> tuple[bool, float]:
     """Walk every enabled leg looking for an exit trigger that fires.
 
     Returns ``(fired, qty_to_close)``. First-leg-to-fire wins (per
     PR-1 simplification — proper OCO is PR 2).
+
+    ``eval_ctx`` is the per-symbol scanner-engine evaluation context.
+    Required for INDICATOR triggers; ignored by price-only handlers.
     """
     if not ctx.position_open:
         return False, 0.0
@@ -481,6 +576,7 @@ def _check_exits(
                 bar,
                 ref_price=ctx.position_avg_price,
                 position_side=ctx.position_side,
+                eval_ctx=eval_ctx,
             )
             if fired:
                 pct = max(0.0, min(100.0, float(trigger.qty_pct))) / 100.0
@@ -489,6 +585,29 @@ def _check_exits(
                     continue
                 return True, qty_to_close
     return False, 0.0
+
+
+def _strategy_uses_indicator_trigger(
+    entry_strategy: EntryStrategy, exit_strategy: ExitStrategy
+) -> bool:
+    """Return True if entry or any enabled exit-leg trigger is INDICATOR.
+
+    Used to decide whether to build the per-symbol scanner
+    :class:`EvaluationContext`. Skipping the construction for pure
+    price-only strategies avoids the ``BarsNp.from_candles`` + memo
+    init overhead.
+    """
+    if entry_strategy.trigger.kind is EntryTriggerKind.INDICATOR:
+        return True
+    for leg in exit_strategy.legs:
+        if not leg.enabled:
+            continue
+        for trig in leg.triggers:
+            if not trig.enabled:
+                continue
+            if trig.kind is ExitTriggerKind.INDICATOR:
+                return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -554,12 +673,37 @@ def evaluate_symbol(
         starting_cash=float(starting_cash),
     )
 
+    # Per-symbol scanner-engine context used for INDICATOR triggers.
+    # Built lazily so a strategy that uses only MARKET/LIMIT/STOP doesn't
+    # pay the cost of bar conversion + indicator memo init.
+    # ``current_index`` is mutated bar-by-bar (see _make_or_reset_eval_ctx).
+    # Two intervals possible per strategy: entry.trigger.interval and
+    # exit-leg.trigger.interval. PR-2 leaves cross-interval / multi-interval
+    # indicator triggers to the scanner registry's BarsRegistry path —
+    # for now we build a single ctx for the outer ``interval`` and let
+    # ``make_context`` reuse the same memo across bars.
+    eval_ctx: _ScannerEvalContext | None = None
+    if _strategy_uses_indicator_trigger(entry_strategy, exit_strategy):
+        eval_ctx = _scanner_make_context(
+            symbol=symbol,
+            interval=interval,
+            candles=list(candles),
+            current_index=0,
+        )
+
     n = len(bars)
     for i in range(n):
         if not engine.tick():
             break
         bar = _bar_at(i, bars)
         ts = int(bars.ts[i])
+        if eval_ctx is not None:
+            # Decision is made at bar ``i``'s close; reset the per-bar
+            # evidence collector so indicator look-back walks don't
+            # accumulate evidence across bars.
+            eval_ctx.current_index = i
+            if eval_ctx.evidence:
+                eval_ctx.evidence.clear()
 
         # Reflect engine-side fills into our context BEFORE checking new triggers.
         # The engine processed any pending order at this tick's open — sync our
@@ -570,7 +714,7 @@ def evaluate_symbol(
 
         # Exit-side first (an open position has priority over re-entry on the same bar).
         if ctx.position_open:
-            exit_fired, exit_qty = _check_exits(ctx, bar)
+            exit_fired, exit_qty = _check_exits(ctx, bar, eval_ctx=eval_ctx)
             if exit_fired:
                 exit_side = Side.SELL if ctx.position_side == "buy" else Side.BUY
                 exit_order = Order(
@@ -585,7 +729,7 @@ def evaluate_symbol(
                 continue
 
         # Entry-side
-        fired, side, qty = _check_entry(ctx, bar)
+        fired, side, qty = _check_entry(ctx, bar, eval_ctx=eval_ctx)
         if fired:
             entry_order = Order(
                 order_id=ctx.mint_order_id(),

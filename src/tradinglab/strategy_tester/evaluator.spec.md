@@ -18,13 +18,24 @@ For each bar `i`:
 
 ## PR-1 trigger scope
 Wired:
-- Entry MARKET, LIMIT, STOP, STOP_LIMIT
-- Exit MARKET, LIMIT, STOP, STOP_LIMIT
+- Entry MARKET, LIMIT, STOP, STOP_LIMIT, **INDICATOR**
+- Exit MARKET, LIMIT, STOP, STOP_LIMIT, **INDICATOR**
 - `eod_kill_switch` (synthetic flatten on last bar)
 
 `UnsupportedTriggerKind` for:
-- Entry INDICATOR, SCANNER_ALERT
-- Exit TRAILING_STOP, TIME_OF_DAY, INDICATOR, CHANDELIER
+- Entry SCANNER_ALERT
+- Exit TRAILING_STOP, TIME_OF_DAY, CHANDELIER
+
+INDICATOR triggers delegate to `scanner.engine.evaluate_group` against a
+per-symbol `EvaluationContext` built once outside the bar loop. The
+context's `current_index` is mutated each bar so the `IndicatorMemo`
+cache stays warm (O(n), not O(n²)) across the entire symbol scan. The
+strategy's per-trigger `interval` falls back to the outer `interval`
+passed to `evaluate_symbol`; true cross-interval evaluation requires a
+`BarsRegistry` and is deferred (the handler swallows
+`NotImplementedError` and treats it as "no fire"). Indicator-side
+exceptions are logged via `logging` and treated as "no fire" so a
+broken indicator never aborts an entire Run.
 
 Multi-leg OCO is reduced to first-leg-to-fire in PR 1. Proper OCO semantics ship in PR 2.
 
@@ -36,6 +47,7 @@ Multi-leg OCO is reduced to first-leg-to-fire in PR 1. Proper OCO semantics ship
 - `entries.model` / `exits.model` enums + dataclasses
 - `models.Candle`
 - `.model.CostModel`
+- `scanner.engine.{make_context, evaluate_group, EvaluationContext}` (INDICATOR triggers)
 
 ## Design Decisions
 - **Position-state mirror, not duplicate state** — `EvalContext` carries strategy-level flags (fires_total, fires_by_symbol, initial_stop_price) but the actual open-position quantity / avg_cost comes from `engine.portfolio.positions[sym]`. Single source of truth, prevents drift.
@@ -53,7 +65,7 @@ Multi-leg OCO is reduced to first-leg-to-fire in PR 1. Proper OCO semantics ship
 - `SessionResult.spec.tickers == (symbol,)`.
 
 ## Testing
-- `tests/unit/strategy_tester/test_evaluator.py` — entry MARKET fires on first bar; LIMIT entry fires when bar.low touches; STOP entry fires when bar.high touches; FIXED_NOTIONAL sizing rounds DOWN; position open blocks re-entry; exit STOP closes on touch; EOD kill-switch flattens at end; unsupported kinds raise `UnsupportedTriggerKind`.
+- `tests/unit/strategy_tester/test_evaluator.py` — entry MARKET fires on first bar; LIMIT entry fires when bar.low touches; STOP entry fires when bar.high touches; FIXED_NOTIONAL sizing rounds DOWN; position open blocks re-entry; exit STOP closes on touch; EOD kill-switch flattens at end; unsupported kinds raise `UnsupportedTriggerKind`; **INDICATOR entry fires when `close > threshold` becomes true; INDICATOR entry never fires for an unreachable threshold; INDICATOR with `condition=None` silently doesn't fire; INDICATOR exit closes the position when its condition triggers.**
 - `tests/smoke/test_smoke_strategy.py::check_st0_kernel_only` — 3 synthetic tickers + MARKET entry + STOP exit, validates `SessionResult` has ≥1 fill and per-symbol JSON parses.
 
 ## See also

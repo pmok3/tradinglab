@@ -187,3 +187,161 @@ def test_max_fires_per_symbol_one_only_one_entry() -> None:
     # Count BUY fills — should be exactly 1.
     buys = [f for f in result.fills if f.side.value == "buy"]
     assert len(buys) == 1
+
+
+# ---------------------------------------------------------------------------
+# INDICATOR trigger support (PR-1 / strategy_tester evaluator follow-up)
+# ---------------------------------------------------------------------------
+
+
+def _close_gt_threshold(threshold: float, *, interval: str = "5m") -> object:
+    """Build a one-leaf scanner.Group: ``close > <threshold>``."""
+    from tradinglab.scanner.model import (
+        OP_GT,
+        Condition,
+        FieldRef,
+        Group,
+    )
+
+    return Group(
+        combinator="and",
+        children=[
+            Condition(
+                left=FieldRef(kind="builtin", id="close"),
+                op=OP_GT,
+                params={
+                    "right": FieldRef(kind="literal", value=float(threshold)),
+                },
+                interval=interval,
+            ),
+        ],
+    )
+
+
+def _indicator_long_strategy(condition: object) -> EntryStrategy:
+    return EntryStrategy(
+        id="entry-ind",
+        name="Indicator Long",
+        direction=Direction.LONG,
+        universe=EntryUniverse(symbols=("TEST",)),
+        trigger=EntryTrigger(
+            kind=EntryTriggerKind.INDICATOR,
+            condition=condition,  # type: ignore[arg-type]
+            interval="5m",
+        ),
+        sizing=SizingRule(
+            kind=SizingKind.FIXED_QTY, qty=5.0,
+            share_rounding=ShareRounding.DOWN,
+        ),
+        max_fires_per_session_per_symbol=1,
+    )
+
+
+def test_indicator_entry_fires_when_condition_becomes_true() -> None:
+    """Ramp from 100 stepping +1; 'close > 105' fires once close crosses 105."""
+    condition = _close_gt_threshold(105.0)
+    entry = _indicator_long_strategy(condition)
+    exit_strat = _stop_5pct_exit()
+    exit_strat.eod_kill_switch = False
+    candles = _ramp_candles(n=30)
+
+    result = evaluate_symbol(
+        symbol="TEST",
+        candles=candles,
+        interval="5m",
+        entry_strategy=entry,
+        exit_strategy=exit_strat,
+        starting_cash=100_000.0,
+        cost_model=CostModel(),
+    )
+    buys = [f for f in result.fills if f.side.value == "buy"]
+    assert len(buys) == 1, f"expected exactly 1 BUY fill, got {len(buys)}"
+    # Decision at bar close → fill at next bar's open. The fill price must
+    # be at or above the bar where the condition first became true.
+    # (Threshold=105; ramp closes pass 105 around bar 4 → fill on bar 5+.)
+    assert buys[0].fill_price >= 105.0
+
+
+def test_indicator_entry_no_fire_when_condition_never_true() -> None:
+    """Threshold above any close → no fills, no errors."""
+    condition = _close_gt_threshold(99999.0)
+    entry = _indicator_long_strategy(condition)
+    exit_strat = _stop_5pct_exit()
+    exit_strat.eod_kill_switch = False
+    candles = _ramp_candles(n=30)
+
+    result = evaluate_symbol(
+        symbol="TEST",
+        candles=candles,
+        interval="5m",
+        entry_strategy=entry,
+        exit_strategy=exit_strat,
+        starting_cash=100_000.0,
+        cost_model=CostModel(),
+    )
+    buys = [f for f in result.fills if f.side.value == "buy"]
+    assert buys == []
+
+
+def test_indicator_entry_with_none_condition_silently_no_fire() -> None:
+    """Trigger with kind=INDICATOR but condition=None should not error and not fire."""
+    entry = _indicator_long_strategy(condition=None)  # type: ignore[arg-type]
+    exit_strat = _stop_5pct_exit()
+    candles = _ramp_candles(n=10)
+
+    result = evaluate_symbol(
+        symbol="TEST",
+        candles=candles,
+        interval="5m",
+        entry_strategy=entry,
+        exit_strategy=exit_strat,
+        starting_cash=100_000.0,
+        cost_model=CostModel(),
+    )
+    # No fires, no fills.
+    assert [f for f in result.fills if f.side.value == "buy"] == []
+
+
+def test_indicator_exit_fires_when_condition_true() -> None:
+    """Open a position via MARKET entry, then exit via INDICATOR
+    ``close > 110`` — ramp from 100 stepping +1 will trigger that around bar 10.
+    """
+    from tradinglab.exits.model import ExitLeg, ExitStrategy, ExitTrigger
+    from tradinglab.exits.model import TriggerKind as ExitTriggerKind  # noqa: F811
+
+    entry = _market_long_strategy()
+    entry.max_fires_per_session_per_symbol = 1
+    condition = _close_gt_threshold(110.0)
+    exit_strat = ExitStrategy(
+        id="exit-ind",
+        name="Indicator Exit",
+        legs=[
+            ExitLeg(
+                id="leg-ind",
+                triggers=[
+                    ExitTrigger(
+                        kind=ExitTriggerKind.INDICATOR,
+                        condition=condition,  # type: ignore[arg-type]
+                        interval="5m",
+                        qty_pct=100.0,
+                    ),
+                ],
+            ),
+        ],
+        eod_kill_switch=False,
+    )
+    candles = _ramp_candles(n=30)
+
+    result = evaluate_symbol(
+        symbol="TEST",
+        candles=candles,
+        interval="5m",
+        entry_strategy=entry,
+        exit_strategy=exit_strat,
+        starting_cash=100_000.0,
+        cost_model=CostModel(),
+    )
+    buys = [f for f in result.fills if f.side.value == "buy"]
+    sells = [f for f in result.fills if f.side.value == "sell"]
+    assert len(buys) == 1
+    assert len(sells) == 1, f"expected exactly 1 SELL fill from INDICATOR exit, got {len(sells)}"
