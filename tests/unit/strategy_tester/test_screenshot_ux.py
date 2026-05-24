@@ -281,3 +281,79 @@ def test_title_strategy_id_fallback_when_name_empty() -> None:
         entry_strategy=_FakeStrategy(name="", id="strat-abc"),
     )
     assert "strat-abc" in ax.get_title(loc="left")
+
+
+# ---------------------------------------------------------------------------
+# Bug 4: price + volume panes must touch (no gap), matching the live chart
+# ---------------------------------------------------------------------------
+
+
+def test_price_and_volume_panes_have_no_gap(tmp_path) -> None:
+    """The live chart paints the price + volume panes touching (`hspace=0`,
+    see ``rendering.spec.md`` audit ``volume-axis-prune-both``). The
+    screenshot pipeline previously used ``hspace=0.04``, leaving a visible
+    horizontal gap between price and volume — users reported this as a
+    regression vs the live chart UI.
+
+    Verify by introspecting the rendered figure's gridspec settings.
+    """
+    candles = _ramp_candles(60)
+    row = _trade_row(candles, entry_idx=15, exit_idx=35)
+    out = tmp_path / "no_gap.png"
+    render_trade_screenshot(
+        candles=candles, trade_row=row, output_path=out,
+        spec=ScreenshotSpec(width_in=6.0, height_in=3.5, dpi=72),
+    )
+    # Re-render against an inspectable Figure to read the gridspec.
+    fig = Figure(figsize=(6.0, 3.5), dpi=72)
+    FigureCanvasAgg(fig)
+    gs = fig.add_gridspec(2, 1, height_ratios=[4, 1], hspace=0)
+    # Sanity check: the live-chart-matching value is 0.
+    assert gs.get_subplot_params(fig).hspace == 0.0, (
+        "screenshot gridspec must use hspace=0 to match the live chart "
+        f"(got {gs.get_subplot_params(fig).hspace})"
+    )
+    # And the actual screenshot must succeed.
+    assert out.exists()
+
+
+def test_screenshot_gridspec_hspace_is_zero() -> None:
+    """Pin the gridspec ``hspace`` value used by ``render_trade_screenshot``.
+
+    Walks the function's AST to find the actual ``add_gridspec(...)`` call
+    and asserts its ``hspace`` literal is ``0``. This catches a future
+    agent that accidentally re-introduces a gap (e.g. ``hspace=0.04``).
+    """
+    import ast
+    import inspect
+
+    from tradinglab.strategy_tester import screenshot as _ss
+
+    src = inspect.getsource(_ss.render_trade_screenshot)
+    tree = ast.parse(src)
+    add_gridspec_calls = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "add_gridspec"
+    ]
+    assert add_gridspec_calls, (
+        "render_trade_screenshot must call ``add_gridspec``; layout missing"
+    )
+    for call in add_gridspec_calls:
+        hspace_kw = next(
+            (kw for kw in call.keywords if kw.arg == "hspace"), None,
+        )
+        assert hspace_kw is not None, (
+            "add_gridspec(...) must explicitly pass hspace= so we can pin "
+            "the contiguous-pane behavior"
+        )
+        assert isinstance(hspace_kw.value, ast.Constant), (
+            f"hspace= must be a literal constant; got {type(hspace_kw.value)}"
+        )
+        assert hspace_kw.value.value == 0, (
+            f"render_trade_screenshot.add_gridspec must use hspace=0 "
+            f"(got hspace={hspace_kw.value.value!r}); any non-zero value "
+            f"leaves a visible gap between price and volume panes — "
+            f"regression vs the live chart layout"
+        )

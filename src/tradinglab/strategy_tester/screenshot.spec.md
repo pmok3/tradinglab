@@ -45,6 +45,14 @@ holds.
   call from worker threads inside `runner.py`.
 - Y-axis is framed with an 8% headroom pad above the highest high /
   below the lowest low so annotations don't overlap the spine.
+- **Price + volume panes touch** (`gridspec.add_gridspec(..., hspace=0)`)
+  matching the live chart's contiguous layout. `setup_price_axes` /
+  `setup_volume_axes` already prune the bottom-most price tick AND
+  top-most volume tick so the shared boundary doesn't show colliding
+  tick labels (see `rendering.spec.md` audit `volume-axis-prune-both`).
+  Previously a `hspace=0.04` gap was visible — fixed in audit
+  `screenshot-pane-gap` after user-reported regression vs the live UI.
+  Regression test in `test_screenshot_ux.py::test_screenshot_gridspec_hspace_is_zero`.
 
 ## Annotation contract
 - **Entry**: triangle marker, green up-triangle for long, red

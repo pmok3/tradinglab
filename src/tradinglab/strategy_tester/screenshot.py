@@ -285,8 +285,15 @@ def render_trade_screenshot(
     canvas = FigureCanvasAgg(fig)
 
     # Axis layout: 4:1 price/volume; price pane only when volume is off.
+    # hspace=0 makes the two panes touch (matches the live chart's
+    # layout). setup_price_axes / setup_volume_axes already prune the
+    # bottom-most price tick AND top-most volume tick so the boundary
+    # doesn't show colliding tick labels (see rendering.spec.md audit
+    # ``volume-axis-prune-both``). Previously we used hspace=0.04 which
+    # left a visible horizontal gap between price and volume panes —
+    # users reported this as a regression vs the live chart UI.
     if spec.draw_volume_pane:
-        gs = fig.add_gridspec(2, 1, height_ratios=[4, 1], hspace=0.04)
+        gs = fig.add_gridspec(2, 1, height_ratios=[4, 1], hspace=0)
         ax_price = fig.add_subplot(gs[0])
         ax_volume = fig.add_subplot(gs[1], sharex=ax_price)
     else:
