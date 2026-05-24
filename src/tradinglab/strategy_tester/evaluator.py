@@ -26,22 +26,32 @@ Per-symbol independent capital: each symbol gets its own
 :meth:`SandboxEngine.register_bars` rejects content drift on
 re-registration).
 
-PR-1 trigger scope (per design):
+Supported trigger kinds (registry-based dispatch via
+``_ENTRY_HANDLERS`` / ``_EXIT_HANDLERS``):
 
-* Entry MARKET, LIMIT, STOP, STOP_LIMIT → fully wired.
-* Entry INDICATOR, SCANNER_ALERT → ``NotImplementedError`` with a
-  user-facing message.
-* Exit MARKET, LIMIT, STOP, STOP_LIMIT → fully wired (per-leg).
-* Exit TRAILING_STOP, TIME_OF_DAY, INDICATOR, CHANDELIER → not yet.
+* Entry MARKET, LIMIT, STOP, STOP_LIMIT, INDICATOR, SCANNER_ALERT.
+* Exit MARKET, LIMIT, STOP, STOP_LIMIT, INDICATOR, TRAILING_STOP,
+  TIME_OF_DAY, CHANDELIER.
 * ``eod_kill_switch`` honored as a strategy-level MARKET sweep on
   the last bar.
 * Multi-leg OCO interpreted as "first leg to fire wins"; partial-fill
   semantics are deferred.
 
-Registry-based dispatch (``_ENTRY_HANDLERS`` / ``_EXIT_HANDLERS``)
-means a new ``TriggerKind`` automatically lights up the GUI's
-"Supported" list when a handler is registered — no scattered ``if/
-elif`` blocks elsewhere.
+Statefulness:
+
+* ``TRAILING_STOP`` and ``CHANDELIER`` exits delegate to the pure
+  functions in :mod:`exits.spec`, threading a per-trigger
+  :class:`exits.spec.TriggerState` via :attr:`EvalContext.trigger_states`.
+  States are reset on every position-open transition (entry-anchored
+  semantics).
+* ``SCANNER_ALERT`` entries are edge-triggered against a loaded
+  :class:`scanner.model.ScanDefinition`; bar-0 initialises the
+  per-trigger prev-match state and subsequent False→True transitions
+  fire. This avoids the "every symbol already matching fires on day 1"
+  backtest gotcha.
+
+Registry-based dispatch means a new ``TriggerKind`` automatically
+lights up the GUI's "Supported" list when a handler is registered.
 """
 
 from __future__ import annotations
@@ -50,6 +60,7 @@ import logging
 import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from ..backtest.bars import from_candles
 from ..backtest.engine import SandboxEngine
@@ -66,7 +77,30 @@ from ..entries.model import (
 from ..entries.model import TriggerKind as EntryTriggerKind
 from ..exits.model import ExitStrategy, ExitTrigger
 from ..exits.model import TriggerKind as ExitTriggerKind
+from ..exits.spec import (
+    Bar as _SpecBar,
+)
+from ..exits.spec import (
+    TriggerState as _SpecTriggerState,
+)
+from ..exits.spec import (
+    evaluate_chandelier_stop as _spec_evaluate_chandelier,
+)
+from ..exits.spec import (
+    evaluate_time_of_day as _spec_evaluate_time_of_day,
+)
+from ..exits.spec import (
+    evaluate_trailing_stop as _spec_evaluate_trailing,
+)
+from ..exits.spec import (
+    update_chandelier_state as _spec_update_chandelier,
+)
+from ..exits.spec import (
+    update_trail_state as _spec_update_trail,
+)
 from ..models import Candle
+from ..positions.model import Position as _Position
+from ..scanner import storage as _scanner_storage
 from ..scanner.engine import (
     EvaluationContext as _ScannerEvalContext,
 )
@@ -79,6 +113,7 @@ from ..scanner.engine import (
 from ..scanner.model import Condition as _ScannerCondition
 from ..scanner.model import FieldRef as _ScannerFieldRef
 from ..scanner.model import Group as _ScannerGroup
+from ..scanner.model import ScanDefinition as _ScanDefinition
 from .model import CostModel
 
 LOG = logging.getLogger(__name__)
@@ -176,9 +211,18 @@ def _build_normalized_conditions(
 ) -> dict[str, _ScannerGroup]:
     """Build a ``trigger.id -> normalized condition tree`` cache.
 
-    Walked once per ``evaluate_symbol`` call; the indicator handlers
-    look up the normalized condition rather than re-walking the tree
-    per bar.
+    Walked once per ``evaluate_symbol`` call; the indicator and
+    scanner-alert handlers look up the normalized condition rather
+    than re-walking the tree per bar.
+
+    For ``SCANNER_ALERT`` triggers, this also resolves the
+    :attr:`EntryTrigger.scanner_id` to a saved
+    :class:`scanner.model.ScanDefinition` via
+    :func:`scanner.storage.load` and normalises its
+    :attr:`ScanDefinition.root` group. Load failures
+    (FileNotFoundError / ValueError) are logged and the trigger is
+    skipped — the handler then silently no-fires (mirrors the
+    defensive contract used by INDICATOR triggers).
     """
     out: dict[str, _ScannerGroup] = {}
     if (
@@ -190,6 +234,24 @@ def _build_normalized_conditions(
         )
         if isinstance(normalized, _ScannerGroup):
             out[entry_strategy.trigger.id] = normalized
+    if (
+        entry_strategy.trigger.kind is EntryTriggerKind.SCANNER_ALERT
+        and entry_strategy.trigger.scanner_id
+    ):
+        try:
+            scan: _ScanDefinition = _scanner_storage.load(
+                entry_strategy.trigger.scanner_id,
+            )
+        except (FileNotFoundError, ValueError, OSError) as exc:
+            LOG.warning(
+                "strategy_tester._build_normalized_conditions: "
+                "could not load scanner_id=%s: %s",
+                entry_strategy.trigger.scanner_id, exc,
+            )
+        else:
+            normalized = _normalize_intervals(scan.root, interval)
+            if isinstance(normalized, _ScannerGroup):
+                out[entry_strategy.trigger.id] = normalized
     for leg in exit_strategy.legs:
         if not leg.enabled:
             continue
@@ -258,6 +320,22 @@ class EvalContext:
     initial_stop_price: float | None = None
     armed_exit_legs: list[str] = field(default_factory=list)
     next_order_id: int = 1
+    # Per-trigger runtime state for stateful exit triggers
+    # (TRAILING_STOP, CHANDELIER). Keyed by trigger.id. Reset on every
+    # position-open transition (entry-anchored semantics: each new
+    # position starts a fresh HWM / chandelier window).
+    trigger_states: dict[str, _SpecTriggerState] = field(default_factory=dict)
+    # Tracks the previous bar's position_open value so we can detect
+    # the "activation bar" — the first bar a position is observed open
+    # — to correctly seed chandelier window state and reset trail HWM.
+    prev_position_open: bool = False
+    # Per-trigger previous match state for SCANNER_ALERT entries.
+    # Bar-0 just observes (no fire); subsequent False→True transitions
+    # fire (mirrors the live ScanRunner's edge-detection behaviour for
+    # backtest, less the "first-match-after-empty-history-is-new"
+    # interpretation that would force every already-matching symbol
+    # to fire on bar 0).
+    scanner_alert_prev_match: dict[str, bool] = field(default_factory=dict)
 
     def mint_order_id(self) -> str:
         oid = f"strat-{self.symbol}-{self.next_order_id:05d}"
@@ -422,13 +500,77 @@ def _entry_indicator(
     return result is True
 
 
+def _entry_scanner_alert(
+    trigger: EntryTrigger,
+    bar: _BarTuple,
+    *,
+    eval_ctx: _ScannerEvalContext | None = None,
+    normalized_conditions: dict[str, _ScannerGroup] | None = None,
+    eval_state: EvalContext | None = None,
+    **_kw: object,
+) -> bool:
+    """SCANNER_ALERT entry: evaluate the referenced Scan per bar with
+    edge-trigger semantics (False/None → True transition fires).
+
+    ``trigger.scanner_id`` is resolved via :func:`scanner.storage.load`
+    once per symbol and stashed in ``normalized_conditions`` keyed by
+    trigger.id. Per-Condition / per-FieldRef intervals on the Scan are
+    forced to the test's outer interval (same single-interval-mode
+    convention as INDICATOR triggers).
+
+    Bar 0 records the current match into
+    :attr:`EvalContext.scanner_alert_prev_match` without firing — this
+    avoids the "every symbol already matching fires on day 1" backtest
+    gotcha while still letting fresh transitions during the test
+    period fire normally.
+
+    Silently no-fire on:
+
+    * missing scanner_id field
+    * scan file not found / corrupt
+    * scanner_engine raising NotImplementedError (e.g. cross-interval)
+    * any other scanner-engine exception (logged)
+    """
+    if eval_ctx is None or eval_state is None:
+        return False
+    if not trigger.scanner_id:
+        return False
+    if normalized_conditions is None:
+        return False
+    condition = normalized_conditions.get(trigger.id)
+    if condition is None:
+        # The scan failed to load at evaluate_symbol startup
+        # (FileNotFoundError, etc.) — silently no-fire.
+        return False
+    try:
+        result = _scanner_evaluate_group(condition, eval_ctx)
+    except NotImplementedError:
+        return False
+    except Exception:  # noqa: BLE001
+        LOG.exception(
+            "strategy_tester._entry_scanner_alert: evaluate_group raised "
+            "(symbol=%s, idx=%d, scanner_id=%s)",
+            eval_ctx.symbol, eval_ctx.current_index, trigger.scanner_id,
+        )
+        return False
+    matched_now = result is True
+
+    prev = eval_state.scanner_alert_prev_match.get(trigger.id)
+    eval_state.scanner_alert_prev_match[trigger.id] = matched_now
+    if prev is None:
+        # Bar 0: just observe, never fire (avoids the "already-matching
+        # on day 1 fires unintentionally" trap).
+        return False
+    return matched_now and not prev
+
+
 _ENTRY_HANDLERS: dict[EntryTriggerKind, Callable[..., bool]] = {
     EntryTriggerKind.MARKET: _entry_market,
     EntryTriggerKind.LIMIT: _entry_limit,
     EntryTriggerKind.STOP: _entry_stop,
     EntryTriggerKind.STOP_LIMIT: _entry_stop_limit,
     EntryTriggerKind.INDICATOR: _entry_indicator,
-    EntryTriggerKind.SCANNER_ALERT: _entry_unsupported,
+    EntryTriggerKind.SCANNER_ALERT: _entry_scanner_alert,
 }
 
 
@@ -565,16 +707,224 @@ def _exit_indicator(
     return result is True
 
 
+# ---------------------------------------------------------------------------
+# Stateful exit handlers (TRAILING_STOP, TIME_OF_DAY, CHANDELIER)
+# delegate to pure-function evaluators in exits.spec.
+# ---------------------------------------------------------------------------
+
+
+def _ctx_to_position(ctx: EvalContext) -> _Position:
+    """Build a minimal :class:`positions.model.Position` from the
+    strategy-tester's :class:`EvalContext`.
+
+    Only fields read by the spec.py evaluators are populated meaningfully
+    (``side``, ``qty_open``, ``avg_entry_price``); the rest get
+    placeholders so the dataclass can be constructed. The result is
+    NOT meant to leak outside the handler — it's a per-call adapter.
+    """
+    side: str = "long" if ctx.position_side == "buy" else "short"
+    return _Position(
+        id=f"strat-test-pos-{ctx.symbol}",
+        symbol=ctx.symbol,
+        side=side,  # type: ignore[arg-type]
+        qty_initial=float(ctx.position_qty),
+        qty_open=float(ctx.position_qty),
+        avg_entry_price=float(ctx.position_avg_price),
+        entry_time=datetime.fromtimestamp(
+            int(ctx.position_entry_ts) if ctx.position_entry_ts else 0,
+            tz=timezone.utc,
+        ),
+        source="sandbox",  # type: ignore[arg-type]
+    )
+
+
+def _bar_to_specbar(bar: _BarTuple, bar_ts: int) -> _SpecBar:
+    """Wrap the strategy-tester's ``(o,h,l,c)`` tuple as a
+    :class:`exits.spec.Bar` with the bar's UTC datetime attached.
+
+    ``bar_ts`` is epoch seconds (matches :attr:`BarSeries.ts`).
+    The date is populated tz-aware (UTC) because :func:`from_candles`
+    treats naive Candle.date as UTC and downstream handlers only read
+    the time component.
+    """
+    o, h, l, c = bar
+    return _SpecBar(
+        open=float(o),
+        high=float(h),
+        low=float(l),
+        close=float(c),
+        volume=0.0,
+        date=datetime.fromtimestamp(int(bar_ts), tz=timezone.utc),
+    )
+
+
+def _exit_trailing_stop(
+    trigger: ExitTrigger,
+    bar: _BarTuple,
+    *,
+    ref_price: float,
+    position_side: str,
+    eval_state: EvalContext | None = None,
+    bar_ts: int = 0,
+    **_kw: object,
+) -> bool:
+    """TRAILING_STOP exit: delegate to :func:`exits.spec.update_trail_state`
+    + :func:`exits.spec.evaluate_trailing_stop` so headless and live
+    semantics stay byte-identical (HWM ratcheting, activation gate,
+    trail_basis intrabar/close, percent/dollar units).
+
+    Per-trigger :class:`TriggerState` is stored on
+    :attr:`EvalContext.trigger_states`; reset on every position-open
+    transition by :func:`_reset_trigger_states_on_activation`.
+    """
+    if eval_state is None:
+        return False
+    if trigger.trail_unit is None or trigger.trail_value is None:
+        return False
+    state = eval_state.trigger_states.get(trigger.id)
+    if state is None:
+        state = _SpecTriggerState()
+        eval_state.trigger_states[trigger.id] = state
+    position = _ctx_to_position(eval_state)
+    spec_bar = _bar_to_specbar(bar, bar_ts)
+    try:
+        # Strategy-tester only sees end-of-bar data: pass is_close=True
+        # for both trail_basis modes (the spec gates the HWM update on
+        # trail_basis internally).
+        _spec_update_trail(state, trigger, position, spec_bar, is_close=True)
+        decision = _spec_evaluate_trailing(state, trigger, position, spec_bar)
+    except Exception:  # noqa: BLE001
+        LOG.exception(
+            "strategy_tester._exit_trailing_stop: spec evaluator raised "
+            "(symbol=%s, trigger_id=%s)", eval_state.symbol, trigger.id,
+        )
+        return False
+    return bool(decision.fire)
+
+
+def _exit_time_of_day(
+    trigger: ExitTrigger,
+    bar: _BarTuple,
+    *,
+    eval_state: EvalContext | None = None,
+    bar_ts: int = 0,
+    **_kw: object,
+) -> bool:
+    """TIME_OF_DAY exit: delegate to :func:`exits.spec.evaluate_time_of_day`.
+
+    The ``now`` parameter is built from ``bar_ts`` (epoch seconds) as a
+    UTC-aware datetime; the time-of-day comparison uses only the
+    HH:MM portion so timezone tagging is informational only. Malformed
+    or missing ``time_of_day`` results in silent no-fire (no crash).
+    """
+    if eval_state is None:
+        return False
+    if not trigger.time_of_day:
+        return False
+    position = _ctx_to_position(eval_state)
+    spec_bar = _bar_to_specbar(bar, bar_ts)
+    now = datetime.fromtimestamp(int(bar_ts), tz=timezone.utc)
+    try:
+        decision = _spec_evaluate_time_of_day(trigger, position, spec_bar, now=now)
+    except Exception:  # noqa: BLE001
+        LOG.exception(
+            "strategy_tester._exit_time_of_day: spec evaluator raised "
+            "(symbol=%s, trigger_id=%s)", eval_state.symbol, trigger.id,
+        )
+        return False
+    return bool(decision.fire)
+
+
+def _exit_chandelier(
+    trigger: ExitTrigger,
+    bar: _BarTuple,
+    *,
+    eval_state: EvalContext | None = None,
+    bar_ts: int = 0,
+    **_kw: object,
+) -> bool:
+    """CHANDELIER exit: delegate to :func:`exits.spec.update_chandelier_state`
+    + :func:`exits.spec.evaluate_chandelier_stop`. Activation-bar handling
+    is centralized in :func:`_reset_trigger_states_on_activation`; this
+    handler always passes ``is_activation=False`` because by the time we
+    reach exit-evaluation the state has already been seeded with
+    ``is_activation=True`` for the entry bar.
+    """
+    if eval_state is None:
+        return False
+    state = eval_state.trigger_states.get(trigger.id)
+    if state is None:
+        # Shouldn't happen — the activation reset always creates state
+        # for chandelier triggers on the entry bar — but be defensive.
+        state = _SpecTriggerState()
+        eval_state.trigger_states[trigger.id] = state
+    position = _ctx_to_position(eval_state)
+    spec_bar = _bar_to_specbar(bar, bar_ts)
+    try:
+        _spec_update_chandelier(state, trigger, position, spec_bar, is_activation=False)
+        decision = _spec_evaluate_chandelier(state, trigger, position, spec_bar)
+    except Exception:  # noqa: BLE001
+        LOG.exception(
+            "strategy_tester._exit_chandelier: spec evaluator raised "
+            "(symbol=%s, trigger_id=%s)", eval_state.symbol, trigger.id,
+        )
+        return False
+    return bool(decision.fire)
+
+
 _EXIT_HANDLERS: dict[ExitTriggerKind, Callable[..., bool]] = {
     ExitTriggerKind.MARKET: _exit_market,
     ExitTriggerKind.LIMIT: _exit_limit,
     ExitTriggerKind.STOP: _exit_stop,
     ExitTriggerKind.STOP_LIMIT: _exit_stop_limit,
-    ExitTriggerKind.TRAILING_STOP: _exit_unsupported,
-    ExitTriggerKind.TIME_OF_DAY: _exit_unsupported,
+    ExitTriggerKind.TRAILING_STOP: _exit_trailing_stop,
+    ExitTriggerKind.TIME_OF_DAY: _exit_time_of_day,
     ExitTriggerKind.INDICATOR: _exit_indicator,
-    ExitTriggerKind.CHANDELIER: _exit_unsupported,
+    ExitTriggerKind.CHANDELIER: _exit_chandelier,
 }
+
+
+def _reset_trigger_states_on_activation(
+    ctx: EvalContext, bar: _BarTuple, bar_ts: int,
+) -> None:
+    """Seed per-trigger state for stateful exits at position-open.
+
+    Called exactly once per position-open transition (detected via
+    :attr:`EvalContext.prev_position_open`). Clears the entire
+    ``trigger_states`` dict (a fresh position gets a fresh HWM,
+    chandelier window, etc.) then primes the chandelier state with
+    ``is_activation=True`` for each enabled CHANDELIER trigger so the
+    rolling-high/low window is seeded from the entry bar and the
+    ATR running state initialises with the entry bar's close.
+
+    TRAILING_STOP triggers don't need explicit activation —
+    :func:`exits.spec.update_trail_state` handles HWM bootstrap from
+    the first bar's high/low itself.
+    """
+    ctx.trigger_states.clear()
+    position = _ctx_to_position(ctx)
+    spec_bar = _bar_to_specbar(bar, bar_ts)
+    for leg in ctx.exit_strategy.legs:
+        if not leg.enabled:
+            continue
+        for trigger in leg.triggers:
+            if not trigger.enabled:
+                continue
+            if trigger.kind is not ExitTriggerKind.CHANDELIER:
+                continue
+            state = _SpecTriggerState()
+            try:
+                _spec_update_chandelier(
+                    state, trigger, position, spec_bar, is_activation=True,
+                )
+            except Exception:  # noqa: BLE001
+                LOG.exception(
+                    "strategy_tester._reset_trigger_states_on_activation: "
+                    "chandelier seed failed (symbol=%s, trigger_id=%s)",
+                    ctx.symbol, trigger.id,
+                )
+                continue
+            ctx.trigger_states[trigger.id] = state
 
 
 # ---------------------------------------------------------------------------
@@ -672,6 +1022,7 @@ def _check_entry(
     fired = handler(
         trigger, bar, side=side, eval_ctx=eval_ctx,
         normalized_conditions=normalized_conditions,
+        eval_state=ctx,
     )
     if not fired:
         return False, side, 0.0
@@ -691,6 +1042,7 @@ def _check_exits(
     *,
     eval_ctx: _ScannerEvalContext | None = None,
     normalized_conditions: dict[str, _ScannerGroup] | None = None,
+    bar_ts: int = 0,
 ) -> tuple[bool, float]:
     """Walk every enabled leg looking for an exit trigger that fires.
 
@@ -702,6 +1054,9 @@ def _check_exits(
     ``normalized_conditions`` is a cache of interval-normalized
     condition trees keyed by trigger.id; threaded to INDICATOR
     handlers (price-only handlers ignore it).
+    ``bar_ts`` is the epoch-seconds timestamp of the current bar;
+    threaded to TIME_OF_DAY (needs HH:MM) and TRAILING_STOP /
+    CHANDELIER (need a :class:`exits.spec.Bar` with a datetime).
     """
     if not ctx.position_open:
         return False, 0.0
@@ -722,6 +1077,8 @@ def _check_exits(
                 position_side=ctx.position_side,
                 eval_ctx=eval_ctx,
                 normalized_conditions=normalized_conditions,
+                eval_state=ctx,
+                bar_ts=bar_ts,
             )
             if fired:
                 pct = max(0.0, min(100.0, float(trigger.qty_pct))) / 100.0
@@ -735,14 +1092,20 @@ def _check_exits(
 def _strategy_uses_indicator_trigger(
     entry_strategy: EntryStrategy, exit_strategy: ExitStrategy
 ) -> bool:
-    """Return True if entry or any enabled exit-leg trigger is INDICATOR.
+    """Return True if any entry/exit trigger needs the scanner eval_ctx.
 
-    Used to decide whether to build the per-symbol scanner
+    INDICATOR (entry + exit) and SCANNER_ALERT (entry) both delegate to
+    :func:`scanner.engine.evaluate_group`, so both require a per-symbol
+    :class:`scanner.engine.EvaluationContext`. Skipping context
+    construction for pure price-only strategies avoids the
+    ``BarsNp.from_candles`` + memo init overhead.
     :class:`EvaluationContext`. Skipping the construction for pure
     price-only strategies avoids the ``BarsNp.from_candles`` + memo
     init overhead.
     """
-    if entry_strategy.trigger.kind is EntryTriggerKind.INDICATOR:
+    if entry_strategy.trigger.kind in (
+        EntryTriggerKind.INDICATOR, EntryTriggerKind.SCANNER_ALERT,
+    ):
         return True
     for leg in exit_strategy.legs:
         if not leg.enabled:
@@ -863,12 +1226,23 @@ def evaluate_symbol(
         # mirrors the live evaluator's "armed-on-fill" semantics).
         _sync_position_state_from_engine(ctx, engine, symbol)
 
+        # Detect position-open transition (False→True) so stateful exit
+        # triggers (TRAILING_STOP, CHANDELIER) can seed their per-trigger
+        # :class:`exits.spec.TriggerState` at the entry bar. ``prev_position_open``
+        # is updated AFTER the activation reset so an immediate same-bar
+        # exit (e.g. take-profit hit on the activation bar) still sees
+        # the freshly-seeded chandelier state.
+        if ctx.position_open and not ctx.prev_position_open:
+            _reset_trigger_states_on_activation(ctx, bar, ts)
+        ctx.prev_position_open = ctx.position_open
+
         # Exit-side first (an open position has priority over re-entry on the same bar).
         if ctx.position_open:
             exit_fired, exit_qty = _check_exits(
                 ctx, bar,
                 eval_ctx=eval_ctx,
                 normalized_conditions=normalized_conditions,
+                bar_ts=ts,
             )
             if exit_fired:
                 exit_side = Side.SELL if ctx.position_side == "buy" else Side.BUY
