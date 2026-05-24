@@ -622,7 +622,7 @@ def check_st5_recent_runs_sidebar(tmp_cache_root: Path) -> None:
         gc.collect()
 
 
-def check_st6_universe_kind_layout(tmp_cache_root: Path) -> None:
+def check_st6_universe_kind_layout(app) -> None:
     """Switching universe kind (Symbols/Watchlist/Preset) toggles exactly
     one body widget without overlapping the screenshot separator below.
 
@@ -634,6 +634,11 @@ def check_st6_universe_kind_layout(tmp_cache_root: Path) -> None:
     The post-fix layout uses a ``_frame_universe_body`` sub-frame that
     owns a single outer-grid row, and the four sub-widgets are toggled
     with ``pack`` / ``pack_forget`` inside it.
+
+    Uses the session ``app`` fixture instead of a fresh ``tk.Tk()`` —
+    on Windows CPython 3.12, creating ≥4 Tk roots in one process can
+    trip "Can't find a usable init.tcl" because the Tcl library state
+    gets corrupted across destroy cycles.
     """
     import sys
     import tkinter as tk
@@ -661,11 +666,11 @@ def check_st6_universe_kind_layout(tmp_cache_root: Path) -> None:
         def load_all():
             return ([], [])
 
-    root = tk.Tk()
-    root.withdraw()
+    top = tk.Toplevel(app)
+    top.withdraw()
     try:
         tab = StrategyTab(
-            root,
+            top,
             entries_storage=_FakeEntriesStorage(),
             exits_storage=_FakeExitsStorage(),
             watchlists_storage=_FakeWatchlistsStorage(),
@@ -673,7 +678,7 @@ def check_st6_universe_kind_layout(tmp_cache_root: Path) -> None:
         )
         tab.pack(fill="both", expand=True)
         for _ in range(5):
-            root.update()
+            app.update()
 
         # The universe body must own a single outer-grid row.
         body_grid_info = tab._frame_universe_body.grid_info()
@@ -686,7 +691,7 @@ def check_st6_universe_kind_layout(tmp_cache_root: Path) -> None:
         tab._var_universe_kind.set("symbols")
         tab._on_universe_kind_change()
         for _ in range(3):
-            root.update()
+            app.update()
         assert tab._frame_symbols.winfo_manager() == "pack"
         assert tab._frame_watchlist.winfo_manager() == ""
         assert tab._frame_preset.winfo_manager() == ""
@@ -696,7 +701,7 @@ def check_st6_universe_kind_layout(tmp_cache_root: Path) -> None:
         tab._var_universe_kind.set("watchlist")
         tab._on_universe_kind_change()
         for _ in range(3):
-            root.update()
+            app.update()
         assert tab._frame_symbols.winfo_manager() == ""
         assert tab._frame_watchlist.winfo_manager() == "pack"
         assert tab._frame_preset.winfo_manager() == ""
@@ -706,7 +711,7 @@ def check_st6_universe_kind_layout(tmp_cache_root: Path) -> None:
         tab._var_universe_kind.set("preset")
         tab._on_universe_kind_change()
         for _ in range(3):
-            root.update()
+            app.update()
         assert tab._frame_symbols.winfo_manager() == ""
         assert tab._frame_watchlist.winfo_manager() == ""
         assert tab._frame_preset.winfo_manager() == "pack"
@@ -716,19 +721,19 @@ def check_st6_universe_kind_layout(tmp_cache_root: Path) -> None:
         tab._var_universe_kind.set("symbols")
         tab._on_universe_kind_change()
         for _ in range(3):
-            root.update()
+            app.update()
         assert tab._frame_symbols.winfo_manager() == "pack"
         assert tab._frame_watchlist.winfo_manager() == ""
         assert tab._frame_preset.winfo_manager() == ""
     finally:
         try:
-            root.destroy()
+            top.destroy()
         except Exception:  # noqa: BLE001
             pass
         gc.collect()
 
 
-def check_st7_failed_status_surfaces_error(tmp_cache_root: Path) -> None:
+def check_st7_failed_status_surfaces_error(app) -> None:
     """``_on_poll`` surfaces ``test_run.error`` when the runner returns
     a FAILED status, instead of complaining about a missing aggregate.
 
@@ -738,6 +743,10 @@ def check_st7_failed_status_surfaces_error(tmp_cache_root: Path) -> None:
     write (runner.py:507) — and the GUI then blindly called
     ``load_aggregate`` and reported "Run finished but aggregate.json
     is missing" with no further diagnostics.
+
+    Uses the session ``app`` fixture instead of a fresh ``tk.Tk()`` —
+    same rationale as check_st6 (Windows CPython 3.12 chokes on the
+    4th+ Tk root creation in a process).
     """
     import sys
     import tkinter as tk
@@ -768,8 +777,8 @@ def check_st7_failed_status_surfaces_error(tmp_cache_root: Path) -> None:
         def load_all():
             return ([], [])
 
-    root = tk.Tk()
-    root.withdraw()
+    top = tk.Toplevel(app)
+    top.withdraw()
 
     # Capture messagebox.showerror calls without popping a real dialog.
     showerror_calls: list[tuple[str, str]] = []
@@ -792,7 +801,7 @@ def check_st7_failed_status_surfaces_error(tmp_cache_root: Path) -> None:
     _strategy_tab_mod.load_aggregate = _fake_load_aggregate  # type: ignore[assignment]
     try:
         tab = StrategyTab(
-            root,
+            top,
             entries_storage=_FakeEntriesStorage(),
             exits_storage=_FakeExitsStorage(),
             watchlists_storage=_FakeWatchlistsStorage(),
@@ -800,7 +809,7 @@ def check_st7_failed_status_surfaces_error(tmp_cache_root: Path) -> None:
         )
         tab.pack(fill="both", expand=True)
         for _ in range(5):
-            root.update()
+            app.update()
 
         # Build a fake FAILED RunResult by hand. We don't need the
         # runner to actually fail; we're testing the _on_poll branch.
@@ -817,8 +826,8 @@ def check_st7_failed_status_surfaces_error(tmp_cache_root: Path) -> None:
             run_dir: Path
             test_run: _FakeTestRun
 
-        run_dir = tmp_cache_root / "fakerun"
-        run_dir.mkdir(parents=True, exist_ok=True)
+        import tempfile as _tempfile
+        run_dir = Path(_tempfile.mkdtemp(prefix="st7_fakerun_"))
         tab._worker_result["result"] = _FakeRunResult(
             run_dir=run_dir, test_run=_FakeTestRun(),
         )
@@ -834,7 +843,7 @@ def check_st7_failed_status_surfaces_error(tmp_cache_root: Path) -> None:
 
         tab._on_poll()
         for _ in range(3):
-            root.update()
+            app.update()
 
         assert showerror_calls, (
             "_on_poll should call messagebox.showerror on FAILED status"
@@ -843,7 +852,7 @@ def check_st7_failed_status_surfaces_error(tmp_cache_root: Path) -> None:
         assert "UnsupportedTriggerKind" in msg, (
             f"showerror message must include the captured error; got {msg!r}"
         )
-        assert "fakerun" in msg, (
+        assert run_dir.name in msg, (
             f"showerror message must include the run_dir path; got {msg!r}"
         )
         # load_aggregate must NOT be called on FAILED status.
@@ -857,7 +866,7 @@ def check_st7_failed_status_surfaces_error(tmp_cache_root: Path) -> None:
         _strategy_tab_mod.messagebox.showerror = original_showerror  # type: ignore[assignment]
         _strategy_tab_mod.load_aggregate = original_load_aggregate  # type: ignore[assignment]
         try:
-            root.destroy()
+            top.destroy()
         except Exception:  # noqa: BLE001
             pass
         gc.collect()
@@ -895,12 +904,12 @@ def test_strategy_recent_runs_sidebar(tmp_cache_root: Path) -> None:
     check_st5_recent_runs_sidebar(tmp_cache_root)
 
 
-def test_strategy_universe_kind_layout(tmp_cache_root: Path) -> None:
-    check_st6_universe_kind_layout(tmp_cache_root)
+def test_strategy_universe_kind_layout(app) -> None:
+    check_st6_universe_kind_layout(app)
 
 
-def test_strategy_failed_status_surfaces_error(tmp_cache_root: Path) -> None:
-    check_st7_failed_status_surfaces_error(tmp_cache_root)
+def test_strategy_failed_status_surfaces_error(app) -> None:
+    check_st7_failed_status_surfaces_error(app)
 
 
 def test_strategy_menu_present_in_chartapp(app) -> None:
