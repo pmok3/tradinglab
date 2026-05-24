@@ -292,3 +292,124 @@ def test_render_missing_ts_raises(tmp_path) -> None:
             output_path=tmp_path / "empty.png",
             spec=ScreenshotSpec(width_in=4.0, height_in=2.0, dpi=72),
         )
+
+
+# ---------------------------------------------------------------------------
+# Title + axis annotations (regression coverage for the
+# "screenshots tell me nothing about the stock nor where the entries
+# actually were" bug — see _draw_title_and_labels and
+# _apply_datetime_xaxis in screenshot.py).
+# ---------------------------------------------------------------------------
+
+
+def test_render_title_includes_symbol_side_quantity_and_entry_datetime(tmp_path) -> None:
+    """The title MUST identify the trade — symbol, side, qty, entry time.
+
+    Without an entry datetime in the title, a user staring at 60 PNGs
+    has no way to tell which trade each represents.
+    """
+    from datetime import datetime as _dt
+    from datetime import timezone as _tz
+
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+
+    from tradinglab.strategy_tester.screenshot import (
+        _draw_title_and_labels,
+    )
+
+    candles = _ramp_candles(
+        n=40,
+        start_ts=_dt(2026, 5, 12, 13, 35, tzinfo=_tz.utc),  # 09:35 ET
+    )
+    row = _trade_row(candles, entry_idx=10, exit_idx=20, side="buy")
+
+    fig = Figure(figsize=(6.0, 3.5), dpi=72)
+    FigureCanvasAgg(fig)
+    ax = fig.add_subplot(111)
+    _draw_title_and_labels(fig, ax, row, candles=candles, entry_index=10)
+
+    left_title = ax.get_title(loc="left")
+    right_title = ax.get_title(loc="right")
+
+    # Symbol, side, quantity must appear.
+    assert "TEST" in left_title, f"missing symbol in title: {left_title!r}"
+    assert "LONG" in left_title, f"missing side in title: {left_title!r}"
+    assert "100" in left_title, f"missing qty in title: {left_title!r}"
+
+    # Entry datetime must appear. The exact format is ET; we just
+    # check the bar's calendar date is somewhere in the string.
+    assert "2026-05-12" in left_title, (
+        f"missing entry date in title: {left_title!r}"
+    )
+    assert "ET" in left_title or "UTC" in left_title, (
+        f"missing tz marker in title: {left_title!r}"
+    )
+
+    # P&L on the right side.
+    assert "P&L" in right_title, f"missing P&L in right title: {right_title!r}"
+
+
+def test_render_writes_unique_files_for_different_trades(tmp_path) -> None:
+    """Two trades on the same symbol must produce two distinct PNGs.
+
+    Pre-fix the runner reused the same filename for every mechanical
+    trade. The screenshot module's own helper guarantees uniqueness
+    when given distinct identifiers.
+    """
+    from tradinglab.strategy_tester.screenshot import trade_filename
+
+    candles = _ramp_candles(80)
+    row_a = _trade_row(candles, entry_idx=10, exit_idx=15, order_id="t1")
+    row_b = _trade_row(candles, entry_idx=30, exit_idx=35, order_id="t2")
+
+    name_a = trade_filename(row_a.post.symbol, row_a.pre.order_id)
+    name_b = trade_filename(row_b.post.symbol, row_b.pre.order_id)
+    assert name_a != name_b
+    out_a = render_trade_screenshot(
+        candles=candles, trade_row=row_a,
+        output_path=tmp_path / name_a,
+        spec=ScreenshotSpec(width_in=6.0, height_in=3.5, dpi=72),
+    )
+    out_b = render_trade_screenshot(
+        candles=candles, trade_row=row_b,
+        output_path=tmp_path / name_b,
+        spec=ScreenshotSpec(width_in=6.0, height_in=3.5, dpi=72),
+    )
+    assert out_a.exists() and out_b.exists()
+    assert out_a != out_b
+    assert out_a.stat().st_size > 1024
+    assert out_b.stat().st_size > 1024
+
+
+def test_datetime_xaxis_formatter_returns_time_string(tmp_path) -> None:
+    """The bottom-pane x-axis formatter must turn bar indices into
+    human-readable time strings (not bare integers).
+    """
+    from datetime import datetime as _dt
+    from datetime import timezone as _tz
+
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+
+    from tradinglab.strategy_tester.screenshot import _apply_datetime_xaxis
+
+    # Intraday 5m candles starting 09:35 ET on a single day.
+    candles = _ramp_candles(
+        n=40,
+        start_ts=_dt(2026, 5, 12, 13, 35, tzinfo=_tz.utc),
+    )
+    fig = Figure(figsize=(6.0, 3.5), dpi=72)
+    FigureCanvasAgg(fig)
+    ax = fig.add_subplot(111)
+    ax.set_xlim(-0.5, 39.5)
+    _apply_datetime_xaxis(ax, candles, start=0, end=40)
+
+    formatter = ax.xaxis.get_major_formatter()
+    # Sample some x positions: integer bar indices -> HH:MM strings.
+    s_first = formatter(0, None)
+    s_mid = formatter(20, None)
+    assert ":" in s_first, f"expected HH:MM-ish string, got {s_first!r}"
+    assert ":" in s_mid, f"expected HH:MM-ish string, got {s_mid!r}"
+    # Out-of-range index returns "" (graceful, no crash).
+    assert formatter(9999, None) == ""

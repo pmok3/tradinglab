@@ -60,16 +60,22 @@ root in smoke tests). The popup wrapper + menubar wiring live in
 - **Action row** — ``Open run folder`` + ``Export CSV…`` + ``Export HTML…`` + ``Export PDF…`` buttons, enabled after a successful Run.
 
 ### Recent Runs sidebar (PR 5, bottom of Configure pane)
-- ``ttk.Treeview`` listing the newest 50 runs from
-  ``storage.list_runs_with_paths()`` with columns:
+- ``ttk.Treeview`` with ``selectmode="extended"`` listing the newest 50
+  runs from ``storage.list_runs_with_paths()`` with columns:
   ``Started`` / ``Status`` / ``Label`` / ``Trades``.
 - **Load** button reads ``aggregate.json`` from the selected run via
   ``report.load_aggregate`` and re-renders the Report pane against it.
+  Enabled **only when exactly one** row is selected (multi-row Load
+  doesn't make sense).
 - **Refresh** rescans disk (useful after the user manually copies in
   an external run dir, or trims runs from Explorer).
-- **Delete…** prompts ``messagebox.askyesno`` and on confirm calls
-  ``storage.delete_run``; if the deleted run was the one rendered in
-  the Report pane, the pane is cleared.
+- **Delete…** supports **multi-select** (Ctrl/Shift+click). A single
+  ``messagebox.askyesno`` confirm shows the count and the first 5
+  ``run_id``s; on confirm, ``storage.delete_run`` is invoked for each
+  selected run. The Delete button is enabled whenever ≥1 row is
+  selected. Failures are aggregated into a single error dialog; the
+  status bar reports the success count. If the currently-rendered run
+  was among the deleted, the Report pane is cleared.
 - The sidebar auto-refreshes after every successful Run completion
   via a ``_refresh_recent_runs()`` call at the end of ``_on_poll``.
 

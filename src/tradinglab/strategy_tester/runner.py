@@ -244,7 +244,18 @@ def _render_screenshots_for_symbol(
         log.exception("build_trade_rows failed for %s", result.spec.symbol)
         return 0
     for row in trade_rows:
-        order_id = row.pre.order_id if row.pre is not None else ""
+        # Filename uniqueness fallback chain — critical for runs with
+        # many trades per symbol. Mechanical strategy-tester runs do
+        # not produce PreTradeEntry records, so ``row.pre`` is always
+        # ``None`` there. Without a fallback, every trade for a symbol
+        # collapses onto ``<SYM>_unknown_post.png`` (the engine
+        # previously wrote 60 trades but produced exactly 1 PNG per
+        # symbol — see test_runner_screenshots.py for the regression).
+        order_id = (
+            (row.pre.order_id if row.pre is not None else None)
+            or row.post.ref_pre_trade_id
+            or f"t{int(row.post.entry_ts)}"
+        )
         fname = trade_filename(row.post.symbol, order_id)
         out_path = screenshots_dir / fname
         try:

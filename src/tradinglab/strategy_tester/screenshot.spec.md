@@ -44,18 +44,33 @@ holds.
 
 ## Annotation contract
 - **Entry**: triangle marker, green up-triangle for long, red
-  down-triangle for short. `s=120`, `edgecolors="black"`,
-  `linewidths=0.6`, `zorder=10`.
-- **Exit**: grey `x` marker at exit_price. `s=110`,
-  `linewidths=2.0`, `zorder=10`.
+  down-triangle for short. `s=180` (was 120 — bumped so the entry
+  remains obvious on dense charts), `edgecolors="black"`,
+  `linewidths=0.8`, `zorder=10`. A small inline label
+  ``" Entry $123.45"`` is placed at the marker so the user can read
+  the fill price without zooming in.
+- **Exit**: grey `x` marker at exit_price. `s=170`,
+  `linewidths=2.4`, `zorder=10`. Inline ``" Exit $123.45"`` label.
+- **Entry/exit guide lines**: faint vertical lines (`alpha=0.35`,
+  `zorder=3`) at the entry and exit bar indices. The entry line is
+  solid green; the exit line is dashed grey. These make the entry
+  unmissable even on 200-bar dense charts and are the visual
+  remediation for the "screenshots tell me nothing about where the
+  entries actually were" complaint.
 - **MAE**: red dot at the lowest-low bar (long) / highest-high bar
   (short) during the holding period. Y = `entry_price ∓
   |mae| / |qty|`; X = bar index returned by `_find_extreme_bar`.
 - **MFE**: green dot at the opposite extreme. Same y-derivation.
 - **Target**: dashed blue horizontal line at `pre.target` when
   PreTradeEntry recorded one; skipped otherwise.
-- **Title**: left-aligned `<SYM> • LONG/SHORT qty • setup: <tag>`.
-  Right-aligned P&L in green / red.
+- **Title**: left-aligned
+  ``<SYM>  •  LONG/SHORT qty  •  @ YYYY-MM-DD HH:MM ET  •  setup: <tag>``.
+  The entry datetime is critical for identifying which trade among a
+  busy run the screenshot represents. Right-aligned P&L in green/red.
+- **X-axis**: bottom pane (volume when present, otherwise price)
+  carries datetime labels via a ``FuncFormatter`` that maps bar
+  indices to ``HH:MM`` (single-day windows) or ``M/D HH:MM``
+  (multi-day). Labels are rotated 15° in multi-day mode for legibility.
 
 ## Threading contract
 - Pure function — no shared mutable state, no globals (apart from the

@@ -43,10 +43,17 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover - py<3.9
+    ZoneInfo = None  # type: ignore[assignment,misc]
 
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
+from matplotlib.ticker import FuncFormatter, MaxNLocator
 
 from ..backtest.performance import TradeRow
 from ..models import Candle
@@ -89,6 +96,16 @@ EXIT_COLOR = "#7d7d7d"          # neutral grey
 MAE_COLOR = "#d8444f"           # red dot at low-water mark
 MFE_COLOR = "#1bb556"           # green dot at high-water mark
 TARGET_COLOR = "#1f77b4"        # blue horizontal target line
+ENTRY_GUIDE_COLOR = "#1bb556"   # vertical guide line at entry index
+EXIT_GUIDE_COLOR = "#888888"    # vertical guide line at exit index
+
+# Marker sizing — bumped from the previous defaults so the entry / exit
+# remain obvious even on dense charts with 200 bars of context.
+ENTRY_MARKER_SIZE = 180
+EXIT_MARKER_SIZE = 170
+
+# Eastern Time zone (used for human-readable timestamp labels).
+_ET = ZoneInfo("America/New_York") if ZoneInfo is not None else None
 
 
 # Light theme that mirrors the live chart's default palette closely
@@ -282,7 +299,15 @@ def render_trade_screenshot(
         ax_price, candles, trade_row, entry_index, exit_index,
     )
 
-    _draw_title_and_labels(fig, ax_price, trade_row)
+    # Datetime x-axis labels — without these the user can't tell when
+    # in the timeline a trade actually occurred (all axes look like
+    # bare integer bar indices). The bottom-most pane is the one that
+    # actually paints tick labels (matplotlib hides the upper pane's
+    # x-labels when the panes share an x-axis).
+    target_ax = ax_volume if ax_volume is not None else ax_price
+    _apply_datetime_xaxis(target_ax, candles, start, end)
+
+    _draw_title_and_labels(fig, ax_price, trade_row, candles, entry_index)
 
     fig.subplots_adjust(left=0.06, right=0.96, top=0.94, bottom=0.08)
     canvas.print_png(str(out))
@@ -346,7 +371,7 @@ def _annotate_trade(
     entry_index: int,
     exit_index: int,
 ) -> None:
-    """Stamp entry, exit, MAE, MFE, and target annotations onto ``ax``."""
+    """Stamp entry, exit, MAE, MFE, target annotations + guide lines onto ``ax``."""
     post = trade_row.post
     pre = trade_row.pre
     side = (post.side or "").strip().lower()
@@ -358,14 +383,35 @@ def _annotate_trade(
     exit_y = float(post.exit_price)
     entry_color = ENTRY_LONG_COLOR if is_long else ENTRY_SHORT_COLOR
 
+    # Vertical guide lines at the entry / exit bar indices. Faint
+    # enough not to dominate the chart but bright enough that the
+    # eye locks onto the right bar even when the chart is dense.
+    ax.axvline(
+        x=entry_index,
+        color=ENTRY_GUIDE_COLOR,
+        linestyle="-",
+        linewidth=1.0,
+        alpha=0.35,
+        zorder=3,
+    )
+    if exit_index != entry_index:
+        ax.axvline(
+            x=exit_index,
+            color=EXIT_GUIDE_COLOR,
+            linestyle="--",
+            linewidth=1.0,
+            alpha=0.35,
+            zorder=3,
+        )
+
     # Entry: triangle pointing up (long) / down (short).
     ax.scatter(
         [entry_index], [entry_y],
         marker=("^" if is_long else "v"),
-        s=120,
+        s=ENTRY_MARKER_SIZE,
         color=entry_color,
         edgecolors="black",
-        linewidths=0.6,
+        linewidths=0.8,
         zorder=10,
         label="Entry",
     )
@@ -373,11 +419,33 @@ def _annotate_trade(
     # Exit: x marker.
     ax.scatter(
         [exit_index], [exit_y],
-        marker="x", s=110,
+        marker="x", s=EXIT_MARKER_SIZE,
         color=EXIT_COLOR,
-        linewidths=2.0,
+        linewidths=2.4,
         zorder=10,
         label="Exit",
+    )
+
+    # Price labels next to each marker so the user can read the fill
+    # prices without zooming in. Positioned with a small offset so
+    # they don't overlap the marker itself.
+    ax.annotate(
+        f" Entry ${entry_y:,.2f}",
+        xy=(entry_index, entry_y),
+        xytext=(6, -14 if is_long else 10),
+        textcoords="offset points",
+        fontsize=8,
+        color=entry_color,
+        zorder=11,
+    )
+    ax.annotate(
+        f" Exit ${exit_y:,.2f}",
+        xy=(exit_index, exit_y),
+        xytext=(6, 10),
+        textcoords="offset points",
+        fontsize=8,
+        color=EXIT_COLOR,
+        zorder=11,
     )
 
     # MAE / MFE dots: place at the price extreme during the holding
@@ -466,8 +534,20 @@ def _find_extreme_bar(
     return best_i
 
 
-def _draw_title_and_labels(fig: Figure, ax_price, trade_row: TradeRow) -> None:
-    """Stamp a single-line title bar with the trade's key facts."""
+def _draw_title_and_labels(
+    fig: Figure,
+    ax_price,
+    trade_row: TradeRow,
+    candles: list[Candle] | None = None,
+    entry_index: int = -1,
+) -> None:
+    """Stamp a single-line title bar with the trade's key facts.
+
+    The left-aligned title carries the symbol, side, quantity, the
+    entry date/time (ET) so the user can identify which trade among
+    a busy run they're looking at, and the setup tag if any. The
+    right-aligned title shows P&L absolute + percent.
+    """
     post = trade_row.post
     side = (post.side or "").strip().lower()
     is_long = side in ("buy", "long")
@@ -478,12 +558,110 @@ def _draw_title_and_labels(fig: Figure, ax_price, trade_row: TradeRow) -> None:
     pnl_color = ENTRY_LONG_COLOR if pnl >= 0 else ENTRY_SHORT_COLOR
 
     setup = trade_row.setup_tag or "(no setup)"
-    title = (
-        f"{post.symbol} • {side_label} {abs(post.quantity):.0f} • "
-        f"setup: {setup}"
-    )
+
+    # Entry timestamp annotation. Prefer the entry candle's actual
+    # date when available (so the title shows the exact bar time)
+    # and fall back to ``post.entry_ts`` otherwise.
+    entry_dt_str = ""
+    if (
+        candles is not None
+        and 0 <= entry_index < len(candles)
+        and candles[entry_index].date is not None
+    ):
+        entry_dt_str = _format_et_timestamp(candles[entry_index].date)
+    elif post.entry_ts:
+        entry_dt_str = _format_et_timestamp_from_ms(int(post.entry_ts))
+
+    parts = [f"{post.symbol}", f"{side_label} {abs(post.quantity):.0f}"]
+    if entry_dt_str:
+        parts.append(f"@ {entry_dt_str}")
+    parts.append(f"setup: {setup}")
+    title = "  •  ".join(parts)
     pnl_str = f"P&L: ${pnl:+,.2f}  ({pnl_pct:+.2f}%)"
 
     ax_price.set_title(title, loc="left", fontsize=10)
     ax_price.set_title(pnl_str, loc="right", fontsize=10, color=pnl_color)
     fig.suptitle("")  # explicit no-op; prevent default
+
+
+# ---------------------------------------------------------------------------
+# Datetime x-axis helpers
+# ---------------------------------------------------------------------------
+
+
+def _format_et_timestamp(dt: datetime) -> str:
+    """Return ``YYYY-MM-DD HH:MM ET`` for a (possibly tz-naive) datetime.
+
+    Naive datetimes are assumed to be UTC (matches Candle convention).
+    """
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    if _ET is not None:
+        dt = dt.astimezone(_ET)
+        suffix = " ET"
+    else:  # pragma: no cover - py without zoneinfo
+        dt = dt.astimezone(timezone.utc)
+        suffix = " UTC"
+    return dt.strftime("%Y-%m-%d %H:%M") + suffix
+
+
+def _format_et_timestamp_from_ms(ts_ms: int) -> str:
+    """Return ``YYYY-MM-DD HH:MM ET`` for a UTC-ms-since-epoch."""
+    dt = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc)
+    return _format_et_timestamp(dt)
+
+
+def _apply_datetime_xaxis(
+    ax,
+    candles: list[Candle],
+    start: int,
+    end: int,
+) -> None:
+    """Replace bare integer bar-index x-ticks with datetime labels.
+
+    Picks ``M/D HH:MM`` when the window spans multiple calendar days
+    (so the user sees the date) and ``HH:MM`` for intraday-only
+    windows (preferred for 5m / 1m intraday runs).
+    """
+    n = len(candles)
+    if n == 0 or end <= start:
+        return
+
+    # Decide format granularity by window span (multi-day vs intraday).
+    s = max(0, start)
+    e = min(n, end)
+    first = candles[s].date
+    last = candles[e - 1].date
+    multi_day = False
+    if first is not None and last is not None:
+        first_dt = first if first.tzinfo else first.replace(tzinfo=timezone.utc)
+        last_dt = last if last.tzinfo else last.replace(tzinfo=timezone.utc)
+        if _ET is not None:
+            first_dt = first_dt.astimezone(_ET)
+            last_dt = last_dt.astimezone(_ET)
+        multi_day = first_dt.date() != last_dt.date()
+
+    def _fmt(x: float, _pos) -> str:
+        # x is a bar index in continuous coords. Round to the nearest
+        # actual bar index inside the visible window.
+        idx = int(round(x))
+        if idx < 0 or idx >= n:
+            return ""
+        c = candles[idx]
+        if c.date is None:
+            return ""
+        dt = c.date if c.date.tzinfo else c.date.replace(tzinfo=timezone.utc)
+        if _ET is not None:
+            dt = dt.astimezone(_ET)
+        if multi_day:
+            return dt.strftime("%m/%d %H:%M")
+        return dt.strftime("%H:%M")
+
+    ax.xaxis.set_major_locator(MaxNLocator(nbins=8, integer=True, prune="both"))
+    ax.xaxis.set_major_formatter(FuncFormatter(_fmt))
+    # Slight rotation keeps multi-day labels readable without
+    # eating into the chart height.
+    for label in ax.get_xticklabels():
+        label.set_rotation(0 if not multi_day else 15)
+        label.set_horizontalalignment("center" if not multi_day else "right")
+        label.set_fontsize(8)

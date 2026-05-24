@@ -432,6 +432,7 @@ class StrategyTab(ttk.Frame):
         recent_cols = ("started", "status", "label", "trades")
         self._tree_recent = ttk.Treeview(
             recent_frame, columns=recent_cols, show="headings", height=6,
+            selectmode="extended",  # Ctrl/Shift+click for bulk-delete
         )
         for col, hdr, w in (
             ("started", "Started", 130),
@@ -1170,10 +1171,18 @@ class StrategyTab(ttk.Frame):
             self._recent_run_index[iid] = (path, run)
 
     def _on_recent_run_select(self, _evt=None) -> None:
-        """Enable/disable Load + Delete buttons on selection change."""
+        """Enable/disable Load + Delete buttons on selection change.
+
+        Load operates on exactly one run (loading multiple aggregates
+        makes no sense in this UI); Delete supports multi-select
+        (Ctrl/Shift+click) for bulk-deletes from the Recent runs list.
+        """
         sel = self._tree_recent.selection()
-        if sel:
+        if len(sel) == 1:
             self._btn_load_run.configure(state="normal")
+            self._btn_delete_run.configure(state="normal")
+        elif len(sel) > 1:
+            self._btn_load_run.configure(state="disabled")
             self._btn_delete_run.configure(state="normal")
         else:
             self._btn_load_run.configure(state="disabled")
@@ -1208,32 +1217,82 @@ class StrategyTab(ttk.Frame):
         self._var_status.set(f"Loaded prior run from {run_dir.name}")
 
     def _on_delete_recent_run(self) -> None:
+        """Delete the selected Recent Runs row(s).
+
+        Supports multi-select (Ctrl/Shift+click) — the underlying
+        ttk.Treeview uses ``selectmode="extended"`` by default. When
+        more than one row is selected, a single confirm dialog with
+        the count + first-five IDs gates the bulk delete; the report
+        pane is cleared if the *currently-viewed* run is among the
+        targets.
+        """
         sel = self._tree_recent.selection()
         if not sel:
             return
-        iid = sel[0]
-        if iid not in self._recent_run_index:
+        # Resolve all selected iids to (run_dir, TestRun) pairs.
+        targets: list[tuple[Path, Any]] = []
+        for iid in sel:
+            if iid in self._recent_run_index:
+                targets.append(self._recent_run_index[iid])
+        if not targets:
             return
-        run_dir, run = self._recent_run_index[iid]
-        if not messagebox.askyesno(
-            "Strategy Tester",
-            f"Delete run {run.run_id}?\n\nThis removes:\n{run_dir}",
-        ):
-            return
-        from ..strategy_tester import storage as _st_storage
-        ok = _st_storage.delete_run(run_dir)
-        if not ok:
-            messagebox.showerror(
-                "Strategy Tester",
-                f"Failed to delete {run_dir} — close any open Explorer "
-                f"windows pointing at the directory and try again.",
+
+        # Build the confirm dialog text. Show up to 5 run IDs to keep
+        # the dialog small; report the total count beyond that.
+        n = len(targets)
+        if n == 1:
+            run_dir, run = targets[0]
+            prompt = f"Delete run {run.run_id}?\n\nThis removes:\n{run_dir}"
+        else:
+            id_lines = "\n".join(
+                f"  • {run.run_id}" for _, run in targets[:5]
             )
+            if n > 5:
+                id_lines += f"\n  • … and {n - 5} more"
+            prompt = (
+                f"Delete {n} runs?\n\nThis removes the following run "
+                f"directories on disk:\n{id_lines}"
+            )
+        if not messagebox.askyesno("Strategy Tester", prompt):
             return
-        # If we were viewing this run, clear the report.
-        if self._current_run_dir == run_dir:
+
+        from ..strategy_tester import storage as _st_storage
+
+        failures: list[Path] = []
+        cleared_current = False
+        for run_dir, _run in targets:
+            ok = _st_storage.delete_run(run_dir)
+            if not ok:
+                failures.append(run_dir)
+                continue
+            if self._current_run_dir == run_dir:
+                cleared_current = True
+
+        if cleared_current:
             self._current_run_dir = None
             self._current_aggregate = None
-            self._var_status.set("Run deleted.")
+
+        if failures:
+            lines = "\n".join(str(p) for p in failures[:5])
+            extra = (
+                f"\n… and {len(failures) - 5} more" if len(failures) > 5 else ""
+            )
+            messagebox.showerror(
+                "Strategy Tester",
+                f"Failed to delete {len(failures)} of {n} run(s). Close any "
+                f"open Explorer windows pointing at these directories and "
+                f"try again:\n{lines}{extra}",
+            )
+
+        deleted = n - len(failures)
+        if deleted > 0:
+            if cleared_current:
+                self._var_status.set(
+                    f"Deleted {deleted} run(s); current report cleared."
+                )
+            else:
+                self._var_status.set(f"Deleted {deleted} run(s).")
+
         self._refresh_recent_runs()
 
     # ------------------------------------------------------------------
