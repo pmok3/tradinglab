@@ -9,8 +9,12 @@ holds.
 - `ScreenshotSpec` — knob bag with defaults: `pre_bars=30`,
   `post_bars=10`, `max_bars=200`, `width_in=14.5`, `height_in=8.2`,
   `dpi=110`, `dark_mode=False`, `draw_volume_pane=True`.
-- `render_trade_screenshot(*, candles, trade_row, output_path, spec=None) -> Path`
-  — renders one PNG to disk; returns the actual `Path`.
+- `render_trade_screenshot(*, candles, trade_row, output_path,
+  spec=None, entry_strategy=None, exit_strategy=None) -> Path`
+  — renders one PNG to disk; returns the actual `Path`. When
+  `entry_strategy` / `exit_strategy` are supplied, every distinct
+  price-overlay indicator referenced by their condition tree(s) is
+  drawn on the price pane (see "Indicator overlays" below).
 - `select_window(candles, entry_index, exit_index, *, pre_bars,
   post_bars, max_bars) -> (start, end)` — pure-function window
   selection; exported for unit-testability.
@@ -91,11 +95,39 @@ holds.
   marker (returns `-1` from `_find_extreme_bar`).
 
 ## Design notes
-- Per the plan, *indicator overlays* (drawing only the indicators
-  referenced by the entry/exit strategy) are out of scope for PR 2.
-  They land in a follow-up because they require introspecting the
-  strategy's `trigger.condition` shape and computing the matching
-  indicator series — orthogonal to the screenshot wiring itself.
+- *Indicator overlays* — when `entry_strategy` / `exit_strategy` are
+  supplied, the renderer walks the strategy condition tree(s)
+  (`EntryStrategy.trigger.condition` and every
+  `ExitStrategy.legs[*].triggers[*].condition`), collects every
+  `FieldRef(kind="indicator")`, deduplicates by
+  `(kind_id, sorted(params))`, instantiates each indicator via
+  `indicators.base.factory_by_kind_id`, and plots every output of
+  the instances whose `overlay == True` on the price pane.
+  Oscillator-style indicators (RSI, MACD, SMI — `overlay == False`)
+  are deliberately skipped because their 0–100 / centered-zero
+  y-scale collapses the price pane. Lines are drawn with a
+  distinct color from a small cycle
+  (`["#ff7f0e", "#1f77b4", "#9467bd", "#8c564b", "#e377c2",
+   "#17becf", "#bcbd22"]`), `linewidth=1.5`, `alpha=0.85`, and a
+  legend in the upper-left names each line (e.g. `EMA(3)`,
+  `EMA(8)`). When `entry_strategy` and `exit_strategy` are both
+  `None` (the default and current behavior of every caller until
+  PR-N), the rendered PNG is byte-identical to the pre-overlay
+  output — see `test_indicator_overlay_backcompat_when_strategy_none`.
+- *Volume y-axis on zero-volume windows* — `setup_volume_axes`
+  doesn't set `ylim`; matplotlib autoscales from the
+  `PolyCollection` vertices the `draw_volume` adds. When every
+  visible candle has `volume == 0` (common for yfinance intraday
+  bars in extended hours — AMD 5m at 04:00–09:30 ET returns
+  `volume=0`), all polygons top out at `y=0` and autoscale
+  collapses to the default `(0, 1)` range — the bug
+  user-reported on `AMD_t1772226600_post.png`. The renderer now
+  pins `ax_volume.set_ylim(0.0, vmax * 1.1)` (mirroring the live
+  chart's `core.viewport.compute_volume_ylim` policy); when
+  `vmax == 0`, ylim falls back to `(0, 1)` AND an explanatory
+  annotation `"Volume unavailable for this window (extended hours
+  or no data)"` is drawn in the pane so the empty pane reads as
+  intentional rather than a render glitch.
 - The PNG is rasterised at 110 dpi by default (≈750 KB / file for
   1600×900). Disk usage caps and "Delete run" controls live in the
   Recent runs sidebar (PR 5).

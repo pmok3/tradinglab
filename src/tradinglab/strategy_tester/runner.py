@@ -229,6 +229,8 @@ def _render_screenshots_for_symbol(
     result,
     run_dir: Path,
     screenshot_spec: ScreenshotSpec | None,
+    entry_strategy: EntryStrategy | None = None,
+    exit_strategy: ExitStrategy | None = None,
 ) -> int:
     """Render one PNG per closed trade. Returns the number written.
 
@@ -268,6 +270,8 @@ def _render_screenshots_for_symbol(
                 trade_row=row,
                 output_path=out_path,
                 spec=screenshot_spec,
+                entry_strategy=entry_strategy,
+                exit_strategy=exit_strategy,
             )
             written += 1
         except Exception:  # noqa: BLE001
@@ -320,6 +324,8 @@ def _worker(
             result=result,
             run_dir=run_dir,
             screenshot_spec=screenshot_spec,
+            entry_strategy=entry_strategy,
+            exit_strategy=exit_strategy,
         )
         return _SymbolOutcome(
             symbol=symbol, ok=True, trade_count=trade_count,

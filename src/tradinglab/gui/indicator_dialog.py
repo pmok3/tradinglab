@@ -68,6 +68,7 @@ from ..indicators.config import (
     IndicatorConfig,
     IndicatorManager,
 )
+from ._modal_base import protect_combobox_wheel
 from ._modal_keys import bind_modal_keys
 from .color_palette import pick_color
 from .colors import WARN_AMBER
@@ -405,6 +406,7 @@ class IndicatorDialog(tk.Toplevel):
         self._base_title = "Manage Indicators"
         # Build the chrome.
         self._build_layout()
+        self._protect_combobox_wheel()
         # Subscribe BEFORE seeding so a concurrent mutation during
         # the initial seed run still results in a single, consistent
         # final state on the next event tick.
@@ -1515,6 +1517,11 @@ class IndicatorDialog(tk.Toplevel):
                         break
         finally:
             self._reconciling = False
+        # Newly-rebuilt rows contain fresh Combobox/Spinbox widgets
+        # whose ttk class binding would silently mutate the selected
+        # value on wheel-over (see CLAUDE.md §7.11). Re-apply the
+        # guard so all freshly-created widgets are protected.
+        self._protect_combobox_wheel()
 
     # ------------------------------------------------------------------
     # Drag-to-reorder (b43)
@@ -1714,6 +1721,9 @@ class IndicatorDialog(tk.Toplevel):
         finally:
             row.suppress = False
         self._commit_now(row)
+        # Param widgets were torn down and rebuilt — re-guard the new
+        # Combobox/Spinbox descendants (see CLAUDE.md §7.11).
+        self._protect_combobox_wheel()
 
     # ------------------------------------------------------------------
     # Commit / validation
@@ -2408,6 +2418,27 @@ class IndicatorDialog(tk.Toplevel):
         # targets it without an extra click.
         self._selected_key.set(row.row_key)
         self._commit_now(row)
+        # New row introduced fresh Combobox/Spinbox widgets — re-guard
+        # them so wheel-over doesn't silently mutate (CLAUDE.md §7.11).
+        self._protect_combobox_wheel()
+
+    def _protect_combobox_wheel(self) -> None:
+        """Re-apply the Combobox/Spinbox wheel-guard across the dialog.
+
+        Idempotent. Called after the initial build and after any
+        dynamic widget rebuild (``_reconcile_from_manager``,
+        ``_on_kind_changed``, ``_on_click_add``) so newly-created
+        comboboxes / spinboxes are guarded too. Without this, scrolling
+        over a param widget in the dialog would silently mutate its
+        value because the ttk class binding wins over our bind_all
+        canvas handler. See ``protect_combobox_wheel`` docstring and
+        CLAUDE.md §7.11 for the full story.
+        """
+        target = getattr(self, "_rows_canvas", None)
+        try:
+            protect_combobox_wheel(self, scroll_target=target)
+        except tk.TclError:
+            pass
 
     def _on_click_remove(self) -> None:
         """User clicked Remove Selected — drop the row whose

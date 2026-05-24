@@ -27,6 +27,7 @@ from ..watchlists import (
 from ..watchlists import (
     import_from_file as _import_watchlists_from_file,
 )
+from ._modal_base import protect_combobox_wheel
 from ._modal_keys import bind_modal_keys
 from .colors import MUTED_GREY
 
@@ -112,6 +113,12 @@ class _SettingsDialog(tk.Toplevel):
             "<Destroy>",
             lambda _e: canvas.unbind_all("<MouseWheel>"),
         )
+        # Stash the host canvas so the post-layout combobox-wheel
+        # guard can forward scrolls into it. See landmine §7.11 in
+        # CLAUDE.md — without the guard, wheel-over-Combobox /
+        # wheel-over-Spinbox silently mutates the widget value
+        # because the ttk class binding wins over our bind_all.
+        self._form_canvas = canvas
 
         # ────────────────────────────────────────────────────────
         # Settings are grouped into ttk.LabelFrame sections so the
@@ -451,6 +458,17 @@ class _SettingsDialog(tk.Toplevel):
         ttk.Button(btns, text="Save and Close", command=self._on_ok).pack(side=tk.RIGHT)
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)
         bind_modal_keys(self, cancel=self._on_cancel, primary=self._on_ok)
+
+        # Block wheel-over-Combobox / wheel-over-Spinbox from silently
+        # mutating values (see ``protect_combobox_wheel`` docstring and
+        # CLAUDE.md §7.11). Settings is built once in __init__ with no
+        # partial widget rebuilds, so a single call after every widget
+        # exists is sufficient. Idempotent — safe if a future refactor
+        # adds a rebuild handler that re-calls this method.
+        try:
+            protect_combobox_wheel(self, scroll_target=self._form_canvas)
+        except tk.TclError:
+            pass
 
     def _on_open_theme_editor(self) -> None:
         """Open the dedicated Theme Editor Toplevel from Settings."""

@@ -62,6 +62,17 @@ checkbox groups, called from `_on_menu_sandbox_start` / `_on_menu_sandbox_end`.
   `<Button-4>`/`<Button-5>` (Linux). `bind_all` installed on `<Enter>`,
   removed on `<Leave>` (and `<Destroy>`) so wheel events don't bleed into
   chart wheel-zoom.
+- **Combobox / Spinbox wheel-guard installed dialog-wide.** After
+  `_build_layout`, after every `_reconcile_from_manager` (row teardown +
+  rebuild), after every `_on_kind_changed` (param-widget swap), and after
+  every `_on_click_add` (new row appended), the dialog calls
+  `_protect_combobox_wheel()` which delegates to
+  `_modal_base.protect_combobox_wheel(self, scroll_target=self._rows_canvas)`.
+  Without this, wheel-over a param Combobox/Spinbox would silently mutate
+  the indicator parameter on every tick (same hazard documented in
+  CLAUDE.md §7.11; baseline regression test:
+  `tests/unit/gui/test_combobox_wheel_guard.py`; per-dialog regression test:
+  `tests/unit/gui/test_indicator_dialog_wheel_guard.py`).
 - **Modeless singleton**, `Toplevel.transient(app)` — chart edits land while
   dialog stays open.
 - **Manager subscription, not snapshot ownership** — reconciles on every

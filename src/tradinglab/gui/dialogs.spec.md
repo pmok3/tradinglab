@@ -49,6 +49,17 @@ Modal Tk dialogs owned by `ChartApp`: the Settings dialog (worker count, dark mo
   the startup-defaults dict via `_commit_startup_defaults` (one
   `parent.set_startup_default` call per key in `STARTUP_DEFAULT_KEYS`).
   Theme overrides were persisted live; OK is a no-op for them.
+- `_SettingsDialog` installs the **Combobox / Spinbox wheel-guard**
+  dialog-wide at the end of `__init__` via
+  `protect_combobox_wheel(self, scroll_target=self._form_canvas)`.
+  Without this, the dialog's `canvas.bind_all("<MouseWheel>", …)`
+  global scroll handler would let wheel events fall through to the
+  ttk Combobox/Spinbox class binding, silently mutating the worker
+  spinbox / UI scale combobox / startup-defaults comboboxes / pin-cap
+  spinbox values on every wheel tick. See CLAUDE.md §7.11 and
+  `tests/unit/gui/test_settings_dialog_wheel_guard.py`. Settings is
+  built fully in `__init__` with no partial rebuilds, so a single
+  call after the last widget is created is sufficient.
 - `_WatchlistDialog` errors surface as modals and abort the specific action
   (never leaves the manager in a broken state).
 - `_WatchlistDialog._on_close` calls `parent._rebuild_watchlist_subtabs()`

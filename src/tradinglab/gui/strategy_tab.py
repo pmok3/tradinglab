@@ -117,6 +117,7 @@ class StrategyTab(ttk.Frame):
         self._worker: threading.Thread | None = None
         self._worker_result: dict[str, Any] = {}
         self._poll_after_id: str | None = None
+        self._pbar_hide_after_id: str | None = None
         self._current_run_dir: Path | None = None
         self._current_aggregate: RunAggregate | None = None
 
@@ -416,6 +417,12 @@ class StrategyTab(ttk.Frame):
         ttk.Label(parent, textvariable=self._var_status, foreground="#404040").grid(
             row=row, column=0, columnspan=2, sticky="we", pady=(8, 0)
         )
+        row += 1
+
+        # Progress bar — visible only while a run is in progress.
+        self._pbar = ttk.Progressbar(parent, mode="determinate", maximum=1)
+        self._pbar.grid(row=row, column=0, columnspan=2, sticky="we", pady=(4, 0))
+        self._pbar.grid_remove()  # hidden until _set_running_ui(True)
         row += 1
 
         # Recent Runs sidebar (browse + load prior runs from disk).
@@ -794,16 +801,6 @@ class StrategyTab(ttk.Frame):
         self._set_running_ui(True)
         self._var_status.set("Run starting…")
 
-        def _on_progress(test_run: Any) -> None:
-            try:
-                done = getattr(test_run, "symbol_count_done", 0)
-                total = getattr(test_run, "symbol_count_total", 0)
-                self._var_status.set(
-                    f"Running… {done}/{total} symbols done"
-                )
-            except Exception:  # noqa: BLE001
-                pass
-
         def _worker_main() -> None:
             try:
                 result = self._run_fn(
@@ -812,7 +809,7 @@ class StrategyTab(ttk.Frame):
                     candles_fetcher=self._candles_fetcher,
                     entry_loader=lambda sid: entries_by_id[sid],
                     exit_loader=lambda sid: exits_by_id[sid],
-                    progress=_on_progress,
+                    progress=self._on_progress,
                     screenshot_spec=screenshot_spec,
                 )
                 self._worker_result["result"] = result
@@ -927,12 +924,56 @@ class StrategyTab(ttk.Frame):
             logger.exception("StrategyTab: refresh_recent_runs failed")
 
     def _set_running_ui(self, running: bool) -> None:
+        # Cancel any pending bar-hide timer so a rapid re-run doesn't
+        # hide the bar one second after it was re-shown.
+        if self._pbar_hide_after_id is not None:
+            try:
+                self.after_cancel(self._pbar_hide_after_id)
+            except Exception:  # noqa: BLE001
+                pass
+            self._pbar_hide_after_id = None
+
         if running:
             self._btn_run.configure(state="disabled")
             self._btn_stop.configure(state="normal")
+            self._pbar.configure(value=0, maximum=1)
+            self._pbar.grid()
         else:
             self._btn_run.configure(state="normal")
             self._btn_stop.configure(state="disabled")
+            # Keep the bar visible for 1 s so the user sees the "full" state.
+            self._pbar_hide_after_id = self.after(1000, self._hide_progress_bar)
+
+    def _hide_progress_bar(self) -> None:
+        """Hide the progress bar (scheduled 1 s after run completion)."""
+        self._pbar_hide_after_id = None
+        try:
+            self._pbar.grid_remove()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _on_progress(self, test_run: Any) -> None:
+        """Progress callback; invoked from the runner's worker thread.
+
+        Marshals the update onto the Tk main thread via ``after(0, ...)``.
+        The bar shows completed / total symbols; the status label is updated
+        with the same counts.
+        """
+        try:
+            done = getattr(test_run, "symbol_count_done", 0)
+            total = getattr(test_run, "symbol_count_total", 0)
+            self.after(0, lambda d=done, t=total: self._apply_progress(d, t))
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _apply_progress(self, done: int, total: int) -> None:
+        """Apply a progress update on the Tk main thread."""
+        try:
+            if total > 0:
+                self._pbar.configure(maximum=total, value=done)
+            self._var_status.set(f"Running… {done}/{total} symbols")
+        except Exception:  # noqa: BLE001
+            pass
 
     # ------------------------------------------------------------------
     # Report rendering
@@ -1332,5 +1373,10 @@ class StrategyTab(ttk.Frame):
         try:
             if self._poll_after_id is not None:
                 self.after_cancel(self._poll_after_id)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if self._pbar_hide_after_id is not None:
+                self.after_cancel(self._pbar_hide_after_id)
         except Exception:  # noqa: BLE001
             pass

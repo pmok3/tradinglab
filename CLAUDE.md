@@ -364,6 +364,40 @@ _ET = ZoneInfo("America/New_York")
 t = datetime(2026, 1, 5, 9, 35, tzinfo=_ET)  # Monday, RTH start
 ```
 
+### 7.11 Wheel-over-Combobox/Spinbox silently mutates value in scrollable dialogs
+Windows ttk `Combobox` and `Spinbox` widgets consume `<MouseWheel>`
+natively and **silently rotate their selected value on every wheel
+tick**. When a dialog wraps a form in a scrollable canvas and binds
+`<MouseWheel>` globally (via `canvas.bind_all("<MouseWheel>", …)`) so
+the form scrolls under the cursor, the user can wheel-scroll while the
+pointer happens to sit on a combobox / spinbox and silently corrupt
+persisted state. The "EMA 3/8 cross template walked from
+`crosses_above` → `between(low=0, high=0)` after a Save" bug was
+exactly this — accidental wheel-over-combobox during form scroll.
+
+**The fix is `gui._modal_base.protect_combobox_wheel(root, scroll_target=canvas)`.**
+It walks the widget tree under `root`, binds widget-local
+`<MouseWheel>` / `<Button-4>` / `<Button-5>` on every
+`ttk.Combobox` / `ttk.Spinbox` to a handler that forwards scrolling to
+`scroll_target` (so the form still scrolls over the combobox) and
+returns `"break"` to stop the class binding from mutating the value.
+Idempotent — safe to re-apply.
+
+**MUST be re-run after every partial widget rebuild**, not just initial
+layout. Handlers like `_on_kind_changed`, `_render_trigger_params`,
+`_reconcile_from_manager`, `_on_block_editor_changed`, `_on_click_add`
+tear down old widgets and create new ones whose bindings start empty;
+the guard re-application must follow the rebuild. Guarded dialogs
+today: `entries_dialog.py`, `dialogs.py` `_SettingsDialog`,
+`indicator_dialog.py`. Other GUI files use only local widget wheel
+bindings (no `bind_all`), so they don't share this hazard.
+
+Regression tests: `tests/unit/gui/test_combobox_wheel_guard.py`
+(baseline + EntriesDialog),
+`tests/unit/gui/test_settings_dialog_wheel_guard.py`,
+`tests/unit/gui/test_indicator_dialog_wheel_guard.py`. Shared
+wheel-bombing helper: `tests/unit/gui/_wheel_guard_helpers.py`.
+
 ---
 
 ## 8. Build & release flow

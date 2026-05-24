@@ -56,6 +56,8 @@ from matplotlib.figure import Figure
 from matplotlib.ticker import FuncFormatter, MaxNLocator
 
 from ..backtest.performance import TradeRow
+from ..entries.model import EntryStrategy
+from ..exits.model import ExitStrategy
 from ..models import Candle
 from ..rendering import (
     draw_candlesticks,
@@ -65,6 +67,9 @@ from ..rendering import (
     setup_volume_axes,
     style_axes,
 )
+from ..scanner.model import Condition as _ScannerCondition
+from ..scanner.model import FieldRef as _FieldRef
+from ..scanner.model import Group as _ScannerGroup
 
 __all__ = [
     "ScreenshotSpec",
@@ -72,6 +77,19 @@ __all__ = [
     "select_window",
     "trade_filename",
 ]
+
+
+# Colour cycle for indicator overlays. Picked for perceptual distinctness
+# on both light and dark themes; readable next to entry/exit greens/reds.
+_INDICATOR_COLORS = (
+    "#ff7f0e",  # orange
+    "#1f77b4",  # blue
+    "#9467bd",  # purple
+    "#8c564b",  # brown
+    "#e377c2",  # pink
+    "#17becf",  # cyan
+    "#bcbd22",  # olive
+)
 
 
 # ---------------------------------------------------------------------------
@@ -210,6 +228,8 @@ def render_trade_screenshot(
     trade_row: TradeRow,
     output_path: str | Path,
     spec: ScreenshotSpec | None = None,
+    entry_strategy: EntryStrategy | None = None,
+    exit_strategy: ExitStrategy | None = None,
 ) -> Path:
     """Render one trade's screenshot to ``output_path`` and return the path.
 
@@ -222,6 +242,14 @@ def render_trade_screenshot(
     * a red MAE dot at the lowest excursion price (long; highest for
       short) and a green MFE dot at the highest excursion price
     * an optional dashed target line from PreTradeEntry.target
+    * (optional) **strategy indicator overlays** when
+      ``entry_strategy`` / ``exit_strategy`` are supplied — every
+      distinct price-overlay indicator (EMA / SMA / VWAP / Bollinger,
+      etc.; oscillator indicators like RSI / MACD are skipped because
+      their y-scale doesn't fit the price pane) referenced by the
+      strategy condition tree(s) is computed against the full
+      ``candles`` series and drawn on the price pane in a distinct
+      colour, with a small legend in the upper-left corner.
 
     Raises ``ValueError`` only when ``candles`` is empty *and* the
     trade refers to it — every other failure mode degrades gracefully
@@ -287,6 +315,7 @@ def render_trade_screenshot(
         draw_volume(
             ax_volume, candles, start=start, end=end, body_half=body_half,
         )
+        _apply_volume_ylim(ax_volume, candles, start, end)
 
     # Frame the price pane with a small headroom margin so arrows /
     # dots don't clip the spine.
@@ -294,6 +323,14 @@ def render_trade_screenshot(
     if math.isfinite(lo) and math.isfinite(hi) and hi > lo:
         pad = (hi - lo) * 0.08
         ax_price.set_ylim(lo - pad, hi + pad)
+
+    # Strategy-indicator overlays on the price pane (before annotations
+    # so entry/exit markers sit on top of the lines).
+    _draw_indicator_overlays(
+        ax_price, candles, start, end,
+        entry_strategy=entry_strategy,
+        exit_strategy=exit_strategy,
+    )
 
     _annotate_trade(
         ax_price, candles, trade_row, entry_index, exit_index,
@@ -385,6 +422,208 @@ def _index_of_ts(candles: list[Candle], ts: int) -> int:
         # the wrong window.
         return -1
     return best_i
+
+
+def _apply_volume_ylim(
+    ax,
+    candles: list[Candle],
+    start: int,
+    end: int,
+) -> None:
+    """Pin the volume pane's y-limits to ``(0, vmax * 1.1)`` for the visible slice.
+
+    Without this, matplotlib autoscales from the PolyCollection's
+    vertices — but when every visible bar has ``volume == 0`` (a
+    common yfinance quirk for intraday extended-hours bars, e.g.
+    AMD 5m at 04:00–09:30 ET), every polygon's top edge sits at
+    ``y=0`` and autoscale collapses the pane to its default
+    ``(0, 1)`` range. The y-axis labels then read "0" and "1.0"
+    with all bars rendered as zero-height rectangles — the bug
+    user-reported on ``AMD_t1772226600_post.png``.
+
+    Mirror the live chart's policy from
+    :func:`tradinglab.core.viewport.compute_volume_ylim` —
+    ``(0.0, vmax * 1.1)`` — and when ``vmax == 0`` (entire window
+    is extended-hours / volume-unavailable), draw an explanatory
+    annotation so the user knows the empty pane is intentional,
+    not a render bug.
+    """
+    vmax = 0.0
+    for i in range(start, min(end, len(candles))):
+        c = candles[i]
+        if c.is_gap:
+            continue
+        v = c.volume
+        try:
+            vf = float(v)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(vf) and vf > vmax:
+            vmax = vf
+    if vmax > 0.0:
+        ax.set_ylim(0.0, vmax * 1.1)
+        return
+    ax.set_ylim(0.0, 1.0)
+    ax.text(
+        0.5, 0.5,
+        "Volume unavailable for this window\n(extended hours or no data)",
+        transform=ax.transAxes,
+        ha="center", va="center",
+        fontsize=8, color="#888888", alpha=0.85,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Indicator overlays
+# ---------------------------------------------------------------------------
+
+
+def _walk_field_refs(node: object) -> list[_FieldRef]:
+    """Recursively collect every :class:`FieldRef` in a scanner condition tree.
+
+    Walks both :class:`Group` (with arbitrarily nested children) and
+    :class:`Condition` (which contributes its ``left`` FieldRef plus
+    any FieldRef-valued operator params, e.g. the right-hand operand
+    of an ``ema_cross`` comparison). Mirrors the traversal style used
+    by :func:`tradinglab.strategy_tester.evaluator._walk_authored_intervals`.
+    """
+    out: list[_FieldRef] = []
+    if node is None:
+        return out
+    if isinstance(node, _ScannerGroup):
+        for child in node.children:
+            out.extend(_walk_field_refs(child))
+        return out
+    if isinstance(node, _ScannerCondition):
+        if node.left is not None and isinstance(node.left, _FieldRef):
+            out.append(node.left)
+        for v in (node.params or {}).values():
+            if isinstance(v, _FieldRef):
+                out.append(v)
+        return out
+    return out
+
+
+def _collect_overlay_indicators(
+    entry_strategy: EntryStrategy | None,
+    exit_strategy: ExitStrategy | None,
+) -> list[tuple[str, dict, object]]:
+    """Return the ordered, deduplicated overlay-indicator instances to draw.
+
+    Each entry is ``(kind_id, params_dict, indicator_instance)``.
+    Deduplication is by ``(kind_id, sorted(params))`` — referencing
+    ``EMA(8)`` twice across entry+exit yields a single overlay.
+
+    Oscillator-style indicators (``overlay == False`` on the
+    factory class, e.g. RSI / MACD / SMI) are filtered out because
+    their y-scale (0–100 / centered-zero) doesn't fit on the price
+    pane. Lookups go through
+    :func:`tradinglab.indicators.factory_by_kind_id` so any indicator
+    the user has registered (built-in or plugin) is supported.
+    """
+    from ..indicators.base import factory_by_kind_id
+
+    seen: set[tuple[str, tuple]] = set()
+    out: list[tuple[str, dict, object]] = []
+    refs: list[_FieldRef] = []
+    if entry_strategy is not None and entry_strategy.trigger is not None:
+        refs.extend(_walk_field_refs(entry_strategy.trigger.condition))
+    if exit_strategy is not None:
+        for leg in exit_strategy.legs:
+            if not getattr(leg, "enabled", True):
+                continue
+            for trig in leg.triggers:
+                if not getattr(trig, "enabled", True):
+                    continue
+                refs.extend(_walk_field_refs(getattr(trig, "condition", None)))
+    for ref in refs:
+        if ref.kind != "indicator" or not ref.id:
+            continue
+        params = dict(ref.params or {})
+        key = (ref.id, tuple(sorted(params.items())))
+        if key in seen:
+            continue
+        seen.add(key)
+        factory_lookup = factory_by_kind_id(ref.id)
+        if factory_lookup is None:
+            continue
+        _name, factory = factory_lookup
+        try:
+            instance = factory(**params)
+        except Exception:  # noqa: BLE001 — broken params shouldn't crash render
+            continue
+        if not getattr(instance, "overlay", False):
+            continue
+        out.append((ref.id, params, instance))
+    return out
+
+
+def _draw_indicator_overlays(
+    ax,
+    candles: list[Candle],
+    start: int,
+    end: int,
+    *,
+    entry_strategy: EntryStrategy | None,
+    exit_strategy: ExitStrategy | None,
+) -> None:
+    """Compute and plot the price-overlay indicators on ``ax``.
+
+    Lines are drawn at the bar X-coordinates used by the candlestick
+    layer (global bar index). A small legend in the upper-left names
+    each line so a viewer can read off ``"EMA(8)"`` vs ``"EMA(3)"``
+    without checking the strategy definition.
+    """
+    if entry_strategy is None and exit_strategy is None:
+        return
+    overlays = _collect_overlay_indicators(entry_strategy, exit_strategy)
+    if not overlays:
+        return
+    import numpy as np
+
+    legend_handles: list = []
+    color_idx = 0
+    for _kind_id, _params, instance in overlays:
+        try:
+            series = instance.compute(candles)
+        except Exception:  # noqa: BLE001
+            continue
+        if not series:
+            continue
+        for out_key, arr in series.items():
+            if arr is None:
+                continue
+            arr_np = np.asarray(arr, dtype=float)
+            if arr_np.size == 0:
+                continue
+            sl = arr_np[start:end]
+            if sl.size == 0:
+                continue
+            x = np.arange(start, start + sl.size)
+            color = _INDICATOR_COLORS[color_idx % len(_INDICATOR_COLORS)]
+            color_idx += 1
+            label = getattr(instance, "name", _kind_id.upper())
+            if len(series) > 1:
+                label = f"{label} [{out_key}]"
+            line, = ax.plot(
+                x, sl,
+                color=color,
+                linewidth=1.5,
+                alpha=0.85,
+                zorder=5,
+                label=label,
+            )
+            legend_handles.append(line)
+    if legend_handles:
+        legend = ax.legend(
+            handles=legend_handles,
+            loc="upper left",
+            fontsize=8,
+            framealpha=0.85,
+            facecolor="white",
+            edgecolor="#cccccc",
+        )
+        legend.set_zorder(12)
 
 
 def _price_range(candles: list[Candle], start: int, end: int) -> tuple[float, float]:

@@ -27,6 +27,7 @@ root in smoke tests). The popup wrapper + menubar wiring live in
   ``"<name> · <id_short>"`` for every saved entry strategy.
 - **Exit strategy** — same shape for saved exit strategies.
 - **Universe picker** — three radio modes:
+
   - `Symbols list` — comma / semicolon-separated tickers, case-folded
     to upper.
   - `Watchlist` — readonly combobox over saved watchlist names.
@@ -44,7 +45,15 @@ root in smoke tests). The popup wrapper + menubar wiring live in
 - **Per-trade screenshots** — opt-in checkbox; on, the runner is
   passed ``ScreenshotSpec()`` (default 1600×900 @ 110 dpi).
 - **Run label (optional)** — free-text seeding ``TestConfig.user_label``.
-- **Run** / **Stop** buttons + a status label.
+- **Run** / **Stop** buttons + a status label + a **progress bar**.
+  - The ``ttk.Progressbar`` (``mode='determinate'``) sits between the
+    status label and the Recent Runs separator. It is **hidden** when
+    no Run is in progress and **shown** once the user clicks **Run**.
+  - ``maximum`` is set to the total symbol count on the first progress
+    callback; ``value`` increments after every symbol completion.
+  - One second after the Run finishes (Done / Cancelled / Failed) the
+    bar hides itself so the finished state is visible momentarily.
+
 
 ### Report pane (right)
 - **Header** — Run id + on-disk run-directory name.
@@ -105,7 +114,7 @@ root in smoke tests). The popup wrapper + menubar wiring live in
   and, on completion, loads the aggregate via
   ``report.load_aggregate(run_dir)`` and re-renders the Report pane.
 - Status transitions: ``Ready`` → ``Run starting…`` → ``Running… N/M
-  symbols done`` → ``Done. N symbols, K trades.`` (or ``Stopped.
+  symbols`` → ``Done. N symbols, K trades.`` (or ``Stopped.
   Partial: …`` on cancel).
 - **Stop** → ``self._token.cancel()``; the worker finishes the
   in-flight symbol and writes a CANCELLED manifest. The aggregate /

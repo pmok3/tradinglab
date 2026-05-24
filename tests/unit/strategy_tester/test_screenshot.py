@@ -413,3 +413,222 @@ def test_datetime_xaxis_formatter_returns_time_string(tmp_path) -> None:
     assert ":" in s_mid, f"expected HH:MM-ish string, got {s_mid!r}"
     # Out-of-range index returns "" (graceful, no crash).
     assert formatter(9999, None) == ""
+
+
+# ---------------------------------------------------------------------------
+# Volume pane fix (extended-hours / all-zero volume)
+# ---------------------------------------------------------------------------
+
+
+def _zero_volume_candles(n: int = 60) -> list[Candle]:
+    """Premarket-style candles: real OHLC but ``volume == 0`` (yfinance quirk)."""
+    bars = _ramp_candles(n)
+    for c in bars:
+        c.volume = 0
+    return bars
+
+
+def test_render_zero_volume_window_does_not_collapse_to_zero_to_one(tmp_path) -> None:
+    """Regression for the AMD_t1772226600 bug: when every candle's volume
+    is 0 the y-axis used to autoscale to (0, 1.0); now it pins to (0, 1)
+    AND draws an explanatory annotation."""
+    from matplotlib.figure import Figure
+
+    from tradinglab.strategy_tester.screenshot import _apply_volume_ylim
+
+    fig = Figure(figsize=(4, 2))
+    ax = fig.add_subplot(111)
+    bars = _zero_volume_candles(20)
+    _apply_volume_ylim(ax, bars, 0, len(bars))
+    lo, hi = ax.get_ylim()
+    assert lo == 0.0
+    assert hi == 1.0
+    # Annotation present so users understand why the pane is empty.
+    texts = [t.get_text() for t in ax.texts]
+    assert any("Volume unavailable" in t for t in texts), texts
+
+
+def test_render_real_volume_window_pins_to_vmax_times_1p1() -> None:
+    """Mirrors live-chart compute_volume_ylim: (0, vmax * 1.1)."""
+    from matplotlib.figure import Figure
+
+    from tradinglab.strategy_tester.screenshot import _apply_volume_ylim
+
+    fig = Figure(figsize=(4, 2))
+    ax = fig.add_subplot(111)
+    bars = _ramp_candles(30)
+    # _ramp_candles → volumes 1000..1290.
+    vmax = max(c.volume for c in bars)
+    _apply_volume_ylim(ax, bars, 0, len(bars))
+    lo, hi = ax.get_ylim()
+    assert lo == 0.0
+    assert abs(hi - vmax * 1.1) < 1e-6
+
+
+def test_render_trade_screenshot_handles_all_zero_volume(tmp_path) -> None:
+    """End-to-end: rendering a trade window with vol=0 produces a PNG
+    (no crash; the volume pane gets the fallback annotation)."""
+    bars = _zero_volume_candles(40)
+    row = _trade_row(bars, entry_idx=10, exit_idx=20)
+    out = tmp_path / "zerovol.png"
+    spec = ScreenshotSpec(width_in=6.0, height_in=3.5, dpi=72)
+    render_trade_screenshot(
+        candles=bars, trade_row=row, output_path=out, spec=spec,
+    )
+    assert out.exists() and out.stat().st_size > 0
+
+
+# ---------------------------------------------------------------------------
+# Indicator overlays
+# ---------------------------------------------------------------------------
+
+
+def _ema_cross_entry_strategy(fast: int = 3, slow: int = 8):
+    """Build a minimal EntryStrategy whose condition references EMA(fast)
+    crossing above EMA(slow). Uses the same scanner-condition model the
+    real strategies do."""
+    from tradinglab.entries.model import (
+        EntryStrategy,
+        EntryTrigger,
+        SizingKind,
+        SizingRule,
+        TriggerKind,
+        Universe,
+    )
+    from tradinglab.scanner.model import Condition, FieldRef, Group
+
+    cond = Condition(
+        left=FieldRef.indicator("ema", params={"length": fast}),
+        op="crosses_above",
+        params={
+            "right": FieldRef.indicator("ema", params={"length": slow}),
+            "lookback": 1,
+        },
+        interval="5m",
+    )
+    group = Group(combinator="and", children=[cond])
+    return EntryStrategy(
+        id="ema-cross",
+        name="EMA cross",
+        trigger=EntryTrigger(
+            id="trig1", kind=TriggerKind.INDICATOR, condition=group,
+            interval="5m",
+        ),
+        sizing=SizingRule(kind=SizingKind.FIXED_QTY, qty=100.0),
+        universe=Universe(),
+    )
+
+
+def test_indicator_overlay_draws_two_emas(tmp_path) -> None:
+    """EMA(3)/EMA(8) cross strategy → two distinct overlay lines on
+    the price pane."""
+    from tradinglab.strategy_tester.screenshot import _collect_overlay_indicators
+
+    bars = _ramp_candles(60)
+    row = _trade_row(bars, entry_idx=20, exit_idx=40)
+    entry = _ema_cross_entry_strategy(3, 8)
+    overlays = _collect_overlay_indicators(entry, None)
+    assert len(overlays) == 2
+    names = sorted(inst.name for _id, _p, inst in overlays)
+    assert names == ["EMA(3)", "EMA(8)"]
+    # End-to-end render also works.
+    out = tmp_path / "emas.png"
+    render_trade_screenshot(
+        candles=bars, trade_row=row, output_path=out,
+        spec=ScreenshotSpec(width_in=6.0, height_in=3.5, dpi=72),
+        entry_strategy=entry,
+    )
+    assert out.exists() and out.stat().st_size > 0
+
+
+def test_indicator_overlay_deduplicates_same_indicator() -> None:
+    """A strategy that mentions EMA(8) in two clauses should still
+    only produce ONE EMA(8) overlay line."""
+    from tradinglab.entries.model import (
+        EntryStrategy,
+        EntryTrigger,
+        SizingKind,
+        SizingRule,
+        TriggerKind,
+        Universe,
+    )
+    from tradinglab.scanner.model import Condition, FieldRef, Group
+    from tradinglab.strategy_tester.screenshot import _collect_overlay_indicators
+
+    c1 = Condition(
+        left=FieldRef.indicator("ema", params={"length": 8}),
+        op=">",
+        params={"right": FieldRef.builtin("close")},
+        interval="5m",
+    )
+    c2 = Condition(
+        left=FieldRef.builtin("close"),
+        op=">",
+        params={"right": FieldRef.indicator("ema", params={"length": 8})},
+        interval="5m",
+    )
+    strat = EntryStrategy(
+        id="x", name="x",
+        trigger=EntryTrigger(
+            id="t", kind=TriggerKind.INDICATOR,
+            condition=Group(combinator="and", children=[c1, c2]),
+            interval="5m",
+        ),
+        sizing=SizingRule(kind=SizingKind.FIXED_QTY, qty=100.0),
+        universe=Universe(),
+    )
+    overlays = _collect_overlay_indicators(strat, None)
+    assert len(overlays) == 1
+    assert overlays[0][2].name == "EMA(8)"
+
+
+def test_indicator_overlay_filters_out_oscillators() -> None:
+    """RSI is overlay=False (its scale is 0–100) — it must NOT be
+    drawn on the price pane."""
+    from tradinglab.entries.model import (
+        EntryStrategy,
+        EntryTrigger,
+        SizingKind,
+        SizingRule,
+        TriggerKind,
+        Universe,
+    )
+    from tradinglab.scanner.model import Condition, FieldRef, Group
+    from tradinglab.strategy_tester.screenshot import _collect_overlay_indicators
+
+    cond = Condition(
+        left=FieldRef.indicator("rsi", params={"length": 14}),
+        op=">",
+        params={"right": FieldRef.literal(70.0)},
+        interval="5m",
+    )
+    strat = EntryStrategy(
+        id="rsi-only", name="rsi-only",
+        trigger=EntryTrigger(
+            id="t", kind=TriggerKind.INDICATOR,
+            condition=Group(combinator="and", children=[cond]),
+            interval="5m",
+        ),
+        sizing=SizingRule(kind=SizingKind.FIXED_QTY, qty=100.0),
+        universe=Universe(),
+    )
+    overlays = _collect_overlay_indicators(strat, None)
+    assert overlays == []
+
+
+def test_indicator_overlay_backcompat_when_strategy_none(tmp_path) -> None:
+    """Omitting entry_strategy / exit_strategy → same PNG as before."""
+    bars = _ramp_candles(40)
+    row = _trade_row(bars, entry_idx=15, exit_idx=25)
+    spec = ScreenshotSpec(width_in=6.0, height_in=3.5, dpi=72)
+    p1 = tmp_path / "before.png"
+    p2 = tmp_path / "after.png"
+    render_trade_screenshot(candles=bars, trade_row=row, output_path=p1, spec=spec)
+    render_trade_screenshot(
+        candles=bars, trade_row=row, output_path=p2, spec=spec,
+        entry_strategy=None, exit_strategy=None,
+    )
+    # Bytewise identical — same render path when no strategies given.
+    assert p1.read_bytes() == p2.read_bytes()
+
+
