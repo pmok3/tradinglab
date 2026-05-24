@@ -339,9 +339,111 @@ class BaseEditorDialog(BaseModalDialog):
             pass
 
 
+# ---------------------------------------------------------------------------
+# Combobox / Spinbox mouse-wheel guard
+# ---------------------------------------------------------------------------
+#
+# Windows ttk Combobox / Spinbox widgets consume ``<MouseWheel>`` natively
+# and *silently change their selected value* on every wheel tick. When a
+# dialog hosts a scrollable canvas that binds ``<MouseWheel>`` globally
+# (via ``bind_all``) so the form scrolls under the cursor, the user can
+# scroll the form while the pointer happens to be over a combobox and
+# silently mutate persisted state — e.g. flipping an entry-strategy
+# operator from ``crosses_above`` to ``between``, which then ships to disk
+# on the next Save. The "EMA 3/8 cross became ``between(0, 0)``" bug was
+# exactly this: accidental wheel-over-combobox corruption.
+#
+# :func:`protect_combobox_wheel` walks all descendants of a root widget
+# and installs a widget-local ``<MouseWheel>`` (and X11 ``<Button-4>`` /
+# ``<Button-5>``) handler on every ttk Combobox / Spinbox that:
+#
+# 1. Forwards the wheel to an optional ``scroll_target`` canvas so the
+#    enclosing scrollable form keeps responding to the wheel.
+# 2. Returns ``"break"`` to stop the default class binding from
+#    mutating the widget's value.
+#
+# Idempotent — re-applying after a partial widget rebuild is safe;
+# bindings are replaced rather than stacked.
+
+
+def protect_combobox_wheel(
+    root: tk.Misc,
+    *,
+    scroll_target: tk.Widget | None = None,
+) -> int:
+    """Block wheel-driven value changes on Combobox/Spinbox descendants.
+
+    Walks the widget tree under ``root`` and binds ``<MouseWheel>`` (and
+    the X11 ``<Button-4>`` / ``<Button-5>`` pair) on every ``ttk.Combobox``
+    / ``ttk.Spinbox`` to a no-op that returns ``"break"`` — preventing the
+    class-level binding from changing the widget's selected value when
+    the user scrolls over it.
+
+    If ``scroll_target`` is provided, the wheel event is forwarded to
+    that canvas's ``yview_scroll`` first so the enclosing scrollable
+    form still responds to scrolling over a combobox. Without
+    ``scroll_target``, wheel events on guarded widgets are simply
+    swallowed (the user can still scroll the form by moving the
+    cursor off the combobox).
+
+    Returns the count of widgets guarded — handy for tests.
+    """
+    count = 0
+
+    def _wheel_handler(e: Any) -> str:
+        if scroll_target is not None:
+            try:
+                # Windows / macOS report a ``delta`` divisible by 120.
+                # X11 button events have no ``delta`` attribute; the
+                # ``<Button-4>`` / ``<Button-5>`` branch below covers them.
+                delta = int(getattr(e, "delta", 0))
+                if delta:
+                    scroll_target.yview_scroll(int(-1 * (delta / 120)), "units")
+            except tk.TclError:
+                pass
+        return "break"
+
+    def _button4_handler(_e: Any) -> str:
+        if scroll_target is not None:
+            try:
+                scroll_target.yview_scroll(-1, "units")
+            except tk.TclError:
+                pass
+        return "break"
+
+    def _button5_handler(_e: Any) -> str:
+        if scroll_target is not None:
+            try:
+                scroll_target.yview_scroll(1, "units")
+            except tk.TclError:
+                pass
+        return "break"
+
+    def _walk(w: tk.Misc) -> None:
+        nonlocal count
+        try:
+            children = w.winfo_children()
+        except tk.TclError:
+            return
+        for child in children:
+            if isinstance(child, (ttk.Combobox, ttk.Spinbox)):
+                try:
+                    child.bind("<MouseWheel>", _wheel_handler)
+                    child.bind("<Button-4>", _button4_handler)
+                    child.bind("<Button-5>", _button5_handler)
+                    count += 1
+                except tk.TclError:
+                    pass
+            _walk(child)
+
+    _walk(root)
+    return count
+
+
 __all__ = [
     "BaseModalDialog",
     "BaseEditorDialog",
+    "protect_combobox_wheel",
 ]
 
 

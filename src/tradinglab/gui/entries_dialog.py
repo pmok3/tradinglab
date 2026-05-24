@@ -53,6 +53,7 @@ from ..entries.model import (
 )
 from ..exits.model import ExitStrategy
 from ..scanner.model import Group as ConditionGroup
+from ._modal_base import protect_combobox_wheel
 from ._modal_keys import bind_modal_keys
 from .colors import ERROR_RED, MUTED_GREY
 from .scanner_block_editor import BlockEditor
@@ -162,6 +163,13 @@ class EntriesDialog(tk.Toplevel):
 
         self._build_layout()
         self._load_into_widgets()
+        # Block accidental wheel-driven value changes on every Combobox /
+        # Spinbox in the dialog. Without this, scrolling the form while
+        # the cursor is over the operator combobox silently mutates the
+        # selected op (e.g. ``crosses_above`` → ``between``) and the
+        # corrupted strategy is then persisted on Save — see the
+        # ``protect_combobox_wheel`` docstring for the full story.
+        self._protect_combobox_wheel()
         bind_modal_keys(
             self,
             cancel=self._on_cancel_clicked,
@@ -207,6 +215,7 @@ class EntriesDialog(tk.Toplevel):
         scroll_host = ttk.Frame(outer)
         scroll_host.pack(fill="both", expand=True)
         canvas = tk.Canvas(scroll_host, highlightthickness=0, borderwidth=0)
+        self._form_canvas = canvas
         vbar = ttk.Scrollbar(scroll_host, orient="vertical",
                              command=canvas.yview)
         canvas.configure(yscrollcommand=vbar.set)
@@ -739,6 +748,7 @@ class EntriesDialog(tk.Toplevel):
         else:
             self._draft.universe = Universe(symbols=())
         self._render_universe_params()
+        self._protect_combobox_wheel()
 
     def _on_universe_field_changed(self) -> None:
         mode = self._universe_radio_var.get()
@@ -766,6 +776,21 @@ class EntriesDialog(tk.Toplevel):
         if new == TriggerKind.INDICATOR and not self._draft.trigger.interval:
             self._draft.trigger.interval = "1m"
         self._render_trigger_params()
+        self._protect_combobox_wheel()
+
+    def _protect_combobox_wheel(self) -> None:
+        """Re-apply the Combobox/Spinbox wheel-guard across the dialog.
+
+        Idempotent. Called after the initial build and after any
+        dynamic widget rebuild (trigger-kind change, universe-radio
+        change, BlockEditor op/kind changes) so newly-created
+        comboboxes are guarded too.
+        """
+        target = getattr(self, "_form_canvas", None)
+        try:
+            protect_combobox_wheel(self, scroll_target=target)
+        except tk.TclError:
+            pass
 
     def _on_trigger_label_changed(self) -> None:
         self._draft.trigger.label = self._trigger_label_var.get()
@@ -805,6 +830,9 @@ class EntriesDialog(tk.Toplevel):
             self._draft.trigger.condition = self._block_editor.get_root()
         except Exception:  # noqa: BLE001
             logger.exception("EntriesDialog: BlockEditor.get_root raised")
+        # Op changes rebuild the per-op params row with fresh comboboxes;
+        # re-apply the wheel-guard so they don't fall through unprotected.
+        self._protect_combobox_wheel()
 
     def _on_trigger_scanner_id_changed(self) -> None:
         v = self._trigger_param_vars.get("scanner_id")

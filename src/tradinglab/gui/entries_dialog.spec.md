@@ -68,7 +68,20 @@ class EntriesDialog(tk.Toplevel):
 
 ## Invariants
 
-- Cancel produces no side effects (in-memory draft is discarded).
+- **Cancel produces no side effects** (in-memory draft is discarded).
+- **Combobox / Spinbox wheel-guard installed dialog-wide.** After
+  `_build_layout` and after every dynamic widget rebuild
+  (`_render_trigger_params`, `_render_universe_params`,
+  `BlockEditor` op changes via `_on_block_editor_changed`), the
+  dialog calls `_protect_combobox_wheel()` which delegates to
+  `_modal_base.protect_combobox_wheel(self, scroll_target=self._form_canvas)`.
+  Without this, mouse-wheel scrolling over the form (the dialog
+  `bind_all`s `<MouseWheel>` for canvas scroll) would silently
+  advance the operator / interval / sizing combobox values on
+  every wheel tick — the documented "EMA 3/8 cross became
+  `between(0, 0)` after saving" corruption was caused by exactly
+  this. Regression test:
+  `tests/unit/gui/test_combobox_wheel_guard.py`.
 - Save produces exactly one `storage.save(...)` write on success.
 - The dialog never directly mutates the live `EntryEvaluator`
   library — only via `storage.save` → tab refresh → evaluator's

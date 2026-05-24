@@ -36,6 +36,22 @@ two opt-in base classes.
     validation message; empty msg clears. Level selects color
     (`ERROR_RED` / `MUTED_GREY` / `SUCCESS_GREEN` fallback).
 
+- `protect_combobox_wheel(root, *, scroll_target=None) -> int` —
+  walks `root`'s descendant tree and binds `<MouseWheel>` (plus
+  X11 `<Button-4>` / `<Button-5>`) on every `ttk.Combobox` and
+  `ttk.Spinbox` so the class binding (which on Windows / macOS
+  silently advances the selected value on every wheel tick) does
+  NOT fire. Returns the number of widgets guarded. Idempotent —
+  re-applying after a partial widget rebuild replaces rather than
+  stacks bindings. Pass `scroll_target=<canvas>` to forward the
+  wheel to that canvas's `yview_scroll` first so the enclosing
+  scrollable form still scrolls when the cursor sits over a
+  guarded widget. Fixes the "EMA 3/8 cross became `between(0, 0)`"
+  bug: accidental wheel-over-combobox in `EntriesDialog` was
+  mutating the operator combobox and the corrupted strategy was
+  persisted on Save. Regression test:
+  `tests/unit/gui/test_combobox_wheel_guard.py`.
+
 ## Dependencies
 
 - Internal: `._modal_keys.bind_modal_keys`,
