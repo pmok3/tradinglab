@@ -61,6 +61,7 @@ import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
+from typing import Any
 
 try:
     from zoneinfo import ZoneInfo
@@ -122,6 +123,11 @@ from ..scanner.model import ScanDefinition as _ScanDefinition
 from .model import CostModel
 
 LOG = logging.getLogger(__name__)
+
+# Power-of-2 (256) so the per-bar cancel check collapses to a single bitmask
+# AND on the hot path. Tuned for "user clicks Stop and sees evaluation halt
+# within tens of ms even on multi-tens-of-thousands-of-bar symbols".
+_CANCEL_POLL_INTERVAL = 256
 
 __all__ = [
     "evaluate_symbol",
@@ -1404,6 +1410,7 @@ def evaluate_symbol(
     starting_cash: float,
     cost_model: CostModel,
     deck_seed: int = 0,
+    cancel_token: Any | None = None,
 ) -> SessionResult:
     """Run one symbol's mechanical-test session and return the SessionResult.
 
@@ -1414,6 +1421,14 @@ def evaluate_symbol(
     The function is **side-effect-free apart from constructing the
     engine** — no disk writes, no global state mutation. Persistence
     is the runner's responsibility.
+
+    ``cancel_token`` is optional. When supplied, the per-bar loop polls
+    ``cancel_token.is_cancelled()`` every ``_CANCEL_POLL_INTERVAL`` bars
+    and short-circuits on a tripped token so a user clicking Stop mid-Run
+    doesn't wait for a multi-tens-of-thousands-of-bar symbol to drain
+    before the next symbol's worker observes the cancel. The duck-typed
+    ``Any`` lets the evaluator stay decoupled from
+    ``strategy_tester.acceptance.AcceptanceToken`` while accepting it.
     """
     if not candles:
         spec = _build_session_spec(
@@ -1480,6 +1495,16 @@ def evaluate_symbol(
     for i in range(n):
         if not engine.tick():
             break
+        if cancel_token is not None and (i & (_CANCEL_POLL_INTERVAL - 1)) == 0:
+            try:
+                if cancel_token.is_cancelled():
+                    LOG.info(
+                        "evaluator: cancellation detected for %s at bar %d/%d",
+                        symbol, i, n,
+                    )
+                    break
+            except Exception:  # noqa: BLE001 — duck-typed token; never gate on probe failure
+                pass
         bar = _bar_at(i, bars)
         ts = int(bars.ts[i])
         # Compute the bar's ET datetime ONCE per bar — needed for both

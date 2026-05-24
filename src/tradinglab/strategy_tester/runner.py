@@ -45,6 +45,7 @@ from collections.abc import Callable, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Lock
 
 from ..backtest.performance import build_trade_rows
 from ..backtest.session import ENGINE_VERSION
@@ -184,26 +185,73 @@ def load_exit_strategy(strategy_id: str) -> ExitStrategy:
 # ---------------------------------------------------------------------------
 
 
+_FETCH_SOURCE = "yfinance"
+_fetch_locks: dict[tuple[str, str, str], Lock] = {}
+_fetch_locks_guard = Lock()
+
+
+def _lock_for(key: tuple[str, str, str]) -> Lock:
+    """Return a per-key lock so two parallel workers don't double-fetch + double-write."""
+    with _fetch_locks_guard:
+        lk = _fetch_locks.get(key)
+        if lk is None:
+            lk = Lock()
+            _fetch_locks[key] = lk
+        return lk
+
+
 def fetch_candles_for_symbol(
     symbol: str, interval: str
 ) -> list[Candle]:
     """Fetch candles for one symbol via the registered yfinance source.
 
+    Routes through :mod:`tradinglab.disk_cache` so repeat Runs on the same
+    universe skip network I/O entirely. Cache key is ``(source, ticker,
+    interval)`` matching the live app's chart loader. On cache miss the
+    fetcher is invoked and the result merged with whatever is already on
+    disk (so a longer historical window survives the next save). Concurrent
+    workers fetching the same symbol coordinate through a per-key lock so
+    no double-fetch + no torn jsonl writes.
+
     Uses :data:`DATA_SOURCES` so the smoke harness's ``_stub_yfinance``
     cleanly intercepts. Returns ``[]`` on any failure (network /
     import error / empty result).
     """
+    from .. import disk_cache
     from ..data.base import DATA_SOURCES
 
-    fetcher = DATA_SOURCES.get("yfinance")
-    if fetcher is None:
+    symbol = (symbol or "").strip().upper()
+    interval = interval or ""
+    if not symbol or not interval:
         return []
-    try:
-        out = fetcher(symbol, interval)
-    except Exception as exc:  # noqa: BLE001 — provider catch-all
-        log.debug("strategy_tester: fetch failed for %s/%s: %s", symbol, interval, exc)
-        return []
-    return list(out or [])
+
+    key = (_FETCH_SOURCE, symbol, interval)
+    lock = _lock_for(key)
+    with lock:
+        try:
+            cached = disk_cache.load(*key)
+        except Exception:  # noqa: BLE001 — corrupt cache file → re-fetch
+            cached = None
+        if cached:
+            return list(cached)
+
+        fetcher = DATA_SOURCES.get(_FETCH_SOURCE)
+        if fetcher is None:
+            return []
+        try:
+            out = fetcher(symbol, interval)
+        except Exception as exc:  # noqa: BLE001 — provider catch-all
+            log.debug("strategy_tester: fetch failed for %s/%s: %s", symbol, interval, exc)
+            return []
+        fetched = list(out or [])
+        if fetched:
+            try:
+                merged = disk_cache.merge_candles(disk_cache.load(*key), fetched)
+                disk_cache.save(*key, merged)
+                return list(merged)
+            except Exception:  # noqa: BLE001 — cache write failure must not break the Run
+                log.debug("strategy_tester: disk_cache save failed for %s/%s", symbol, interval)
+        return fetched
 
 
 def _slice_to_date_range(
@@ -267,6 +315,7 @@ def _render_screenshots_for_symbol(
     screenshot_spec: ScreenshotSpec | None,
     entry_strategy: EntryStrategy | None = None,
     exit_strategy: ExitStrategy | None = None,
+    cancel_token: AcceptanceToken | None = None,
 ) -> int:
     """Render one PNG per closed trade. Returns the number written.
 
@@ -275,24 +324,37 @@ def _render_screenshots_for_symbol(
     surfaces "no preview" for the affected trade. This matches the
     plan.md design choice that screenshots are *complementary*
     artifacts, not a correctness gate.
+
+    Rendering runs through a small per-symbol :class:`ThreadPoolExecutor`
+    (capped at 4 workers) because each :func:`render_trade_screenshot`
+    call builds a fresh ``Figure()`` + ``FigureCanvasAgg`` directly (no
+    ``pyplot``) and is therefore thread-safe. This shaves significant
+    wall-time on symbols with many closed trades — a 60-trade symbol
+    previously took ~60×80ms = ~5s of single-threaded matplotlib work.
+
+    Cancellation is cooperative: if ``cancel_token.is_cancelled()``
+    becomes true after the pool has been seeded, queued tasks
+    short-circuit on entry and no further PNGs are written.
     """
     if screenshot_spec is None:
         return 0
     screenshots_dir = run_dir / "screenshots"
-    written = 0
     try:
         trade_rows = build_trade_rows(result)
     except Exception:  # noqa: BLE001
         log.exception("build_trade_rows failed for %s", result.spec.symbol)
         return 0
-    for row in trade_rows:
-        # Filename uniqueness fallback chain — critical for runs with
-        # many trades per symbol. Mechanical strategy-tester runs do
-        # not produce PreTradeEntry records, so ``row.pre`` is always
-        # ``None`` there. Without a fallback, every trade for a symbol
-        # collapses onto ``<SYM>_unknown_post.png`` (the engine
-        # previously wrote 60 trades but produced exactly 1 PNG per
-        # symbol — see test_runner_screenshots.py for the regression).
+    if not trade_rows:
+        return 0
+    symbol_for_log = trade_rows[0].post.symbol
+
+    def _render_one(row) -> bool:
+        if cancel_token is not None:
+            try:
+                if cancel_token.is_cancelled():
+                    return False
+            except Exception:  # noqa: BLE001
+                pass
         order_id = (
             (row.pre.order_id if row.pre is not None else None)
             or row.post.ref_pre_trade_id
@@ -309,12 +371,27 @@ def _render_screenshots_for_symbol(
                 entry_strategy=entry_strategy,
                 exit_strategy=exit_strategy,
             )
-            written += 1
+            return True
         except Exception:  # noqa: BLE001
             log.exception(
                 "render_trade_screenshot failed for %s/%s",
                 row.post.symbol, order_id,
             )
+            return False
+
+    screenshot_workers = min(4, max(1, len(trade_rows)))
+    written = 0
+    with ThreadPoolExecutor(
+        max_workers=screenshot_workers,
+        thread_name_prefix=f"shots-{symbol_for_log}",
+    ) as pool:
+        futures = [pool.submit(_render_one, row) for row in trade_rows]
+        for fut in as_completed(futures):
+            try:
+                if fut.result():
+                    written += 1
+            except Exception:  # noqa: BLE001
+                log.exception("screenshot worker raised for %s", symbol_for_log)
     return written
 
 
@@ -349,6 +426,7 @@ def _worker(
             starting_cash=cfg.starting_cash,
             cost_model=cfg.cost_model,
             deck_seed=cfg.rng_seed,
+            cancel_token=cancel_token,
         )
         storage.save_session_result_for_symbol(run_dir, symbol, result)
         # Count round-trip trades (one PostTradeReview per open+close pair),
@@ -364,10 +442,15 @@ def _worker(
             screenshot_spec=screenshot_spec,
             entry_strategy=entry_strategy,
             exit_strategy=exit_strategy,
+            cancel_token=cancel_token,
         )
+        cancelled = cancel_token.is_cancelled()
         return _SymbolOutcome(
-            symbol=symbol, ok=True, trade_count=trade_count,
+            symbol=symbol,
+            ok=not cancelled,
+            trade_count=trade_count,
             screenshot_count=shots,
+            error="cancelled mid-evaluation" if cancelled else "",
         )
     except UnsupportedTriggerKind as exc:
         return _SymbolOutcome(

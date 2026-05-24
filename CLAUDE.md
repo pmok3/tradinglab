@@ -461,6 +461,57 @@ Filter helper: `strategy_tester.runner._filter_rth_only`, which reuses
 JSON: missing `include_extended_hours` key in old manifests
 deserialises to `False` (back-compat).
 
+### 7.14 Strategy tester perf design
+Three knobs cooperate to keep Runs fast (in order of impact):
+
+1. **Disk-cached fetches.** `runner.fetch_candles_for_symbol` routes
+   through `tradinglab.disk_cache` keyed by
+   `("yfinance", ticker, interval)` — the same JSONL store the live
+   chart loader uses. Repeat Runs on the same universe skip network I/O
+   entirely. Concurrent workers fetching the same symbol coordinate
+   through a per-key `threading.Lock` (`runner._fetch_locks`) so two
+   threads cannot double-fetch or torn-write the same JSONL. No TTL —
+   sealed OHLCV bars are immutable; the live-chart staleness check
+   (`ChartApp._cache_is_stale`) doesn't apply to historical batch
+   Runs where the user explicitly chose a fixed date range.
+   *Caveat:* if yfinance retroactively revises a historical bar, the
+   cached copy wins until the user manually clears via **File → Export
+   Bars → Clear Cache** (or deletes the relevant JSONL file).
+
+2. **Per-symbol parallel screenshot pool.**
+   `_render_screenshots_for_symbol` fans each closed trade out to a
+   small `ThreadPoolExecutor(max_workers=min(4, n_trades),
+   thread_name_prefix="shots-<SYM>")` instead of looping serially.
+   Safe because `render_trade_screenshot` constructs a fresh
+   `Figure()` + `FigureCanvasAgg` per call (no global `pyplot`). The
+   4-worker cap stops oversubscription when the outer
+   `_default_max_workers` pool is already running 8-12 symbol workers
+   in parallel. Output PNG content / filenames are unchanged; only
+   the order they hit disk may interleave.
+   *Caveat:* a 60-trade symbol that used to hold the GIL for ~5s of
+   matplotlib work now releases between submits, which can interleave
+   log lines from different symbols' worker pools.
+
+3. **Evaluator cancel-token polling.** `evaluator.evaluate_symbol`
+   accepts an optional `cancel_token` and polls
+   `cancel_token.is_cancelled()` every `_CANCEL_POLL_INTERVAL=256`
+   bars (power-of-2 → cheap bitmask on the hot loop). `_worker`
+   threads its token in, so a user clicking Stop mid-Run on a
+   25k-bar 5m-over-1y symbol halts evaluation within tens of ms
+   instead of waiting for the symbol to finish. Cancel-aware outcomes
+   are flagged `ok=False, error="cancelled mid-evaluation"`, but
+   the orchestrator's `cancelled_mid_run` flag still takes precedence
+   in the final-status decision (a cancelled Run stays CANCELLED,
+   never gets re-promoted to FAILED).
+   *Caveat:* A token whose `is_cancelled()` raises is swallowed —
+   evaluation continues. We choose "safe-default to keep running"
+   over "abort on a duck-typed probe failure".
+
+Tests pinning the contract:
+`tests/unit/strategy_tester/test_fetch_caching.py`,
+`tests/unit/strategy_tester/test_parallel_screenshots.py`,
+`tests/unit/strategy_tester/test_cancel_responsiveness.py`.
+
 ---
 
 ## 8. Build & release flow
