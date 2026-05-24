@@ -32,7 +32,9 @@ from __future__ import annotations
 import html
 import logging
 import math
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any, Protocol
 
 import matplotlib.figure as _mpl_figure
 from matplotlib.backends.backend_pdf import PdfPages
@@ -44,9 +46,60 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "HTML_FILENAME",
     "PDF_FILENAME",
+    "Cancelled",
+    "ProgressCallback",
     "export_html",
     "export_pdf",
 ]
+
+
+class Cancelled(Exception):
+    """Raised by ``export_pdf`` / ``export_html`` when the caller's
+    ``cancel_token.is_cancelled()`` returns True between pages.
+
+    The partial output file on disk is closed (via the ``with`` block
+    around :class:`PdfPages`) and remains a valid — if truncated — PDF.
+    Callers that wish to discard a partial export should ``unlink`` the
+    out_path themselves in their ``except Cancelled`` branch.
+    """
+
+
+class _CancelTokenLike(Protocol):
+    def is_cancelled(self) -> bool: ...
+
+
+ProgressCallback = Callable[[int, int, str], None]
+"""Signature: ``(current, total, label) -> None``.
+
+Invoked after each major page / step of an export completes.
+``current`` and ``total`` are 1-based integer page counts; ``label`` is
+a short human-readable name for the page just rendered.
+
+The callback runs on the export thread — Tk callers must marshal
+GUI updates back to the main thread via ``widget.after(0, ...)``.
+"""
+
+
+def _cancelled(token: Any) -> bool:
+    """Return True iff ``token`` has a working ``is_cancelled()`` that
+    returns True. Any exception raised by the duck-typed probe is
+    swallowed: we prefer "keep going" over "abort on probe failure".
+    """
+    if token is None:
+        return False
+    try:
+        return bool(token.is_cancelled())
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _emit(callback: ProgressCallback | None, current: int, total: int, label: str) -> None:
+    if callback is None:
+        return
+    try:
+        callback(current, total, label)
+    except Exception:  # noqa: BLE001
+        logger.debug("export progress callback raised; ignoring", exc_info=True)
 
 HTML_FILENAME = "report.html"
 PDF_FILENAME = "report.pdf"
@@ -80,6 +133,8 @@ def export_html(
     *,
     aggregate: _report.RunAggregate | None = None,
     out_path: Path | None = None,
+    progress_callback: ProgressCallback | None = None,
+    cancel_token: _CancelTokenLike | None = None,
 ) -> Path:
     """Render an HTML report next to ``aggregate.json``.
 
@@ -100,6 +155,15 @@ def export_html(
         Where to write the HTML. Defaults to
         ``run_dir / report.html`` so the relative screenshot links
         work without modification.
+    progress_callback : callable, optional
+        ``(current, total, label) -> None``. Fired up to three times
+        for the HTML path: aggregate loaded, body rendered, file
+        written. See :data:`ProgressCallback`.
+    cancel_token : object, optional
+        Anything exposing ``is_cancelled() -> bool``. Polled before
+        the body render and before the disk write. Raises
+        :class:`Cancelled` when set; no partial file is written if
+        cancellation fires before ``write_text``.
     """
     run_dir = Path(run_dir)
     if aggregate is None:
@@ -111,6 +175,10 @@ def export_html(
             )
     if out_path is None:
         out_path = run_dir / HTML_FILENAME
+
+    if _cancelled(cancel_token):
+        raise Cancelled("HTML export cancelled before render")
+    _emit(progress_callback, 1, 3, "Loaded aggregate")
 
     # Build HTML body.
     head = aggregate
@@ -301,7 +369,11 @@ tr:nth-child(even) td { background: #fafafa; }
 
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    if _cancelled(cancel_token):
+        raise Cancelled("HTML export cancelled before write")
+    _emit(progress_callback, 2, 3, "Rendered body")
     out_path.write_text(doc, encoding="utf-8")
+    _emit(progress_callback, 3, 3, "Wrote file")
     return out_path
 
 
@@ -516,6 +588,8 @@ def export_pdf(
     out_path: Path | None = None,
     include_screenshots: bool = True,
     max_screenshots: int = 200,
+    progress_callback: ProgressCallback | None = None,
+    cancel_token: _CancelTokenLike | None = None,
 ) -> Path:
     """Render a multi-page PDF report.
 
@@ -536,6 +610,20 @@ def export_pdf(
     max_screenshots : int
         Hard cap on screenshot pages. PRs over 200 trades produce
         report files >>10 MB; default 200 keeps file size sensible.
+    progress_callback : callable, optional
+        ``(current, total, label) -> None``. Fired once per page
+        rendered. ``current`` is 1-based and monotonically increases;
+        ``total`` is fixed across the run and equals
+        ``3 + min(len(png_files), max_screenshots)`` (equity curve
+        still claims a slot even when empty). See
+        :data:`ProgressCallback`.
+    cancel_token : object, optional
+        Anything exposing ``is_cancelled() -> bool``. Polled before
+        each page is drawn. On cancellation, the ``PdfPages`` context
+        is exited cleanly so the partial PDF on disk is a valid (but
+        truncated) document, and :class:`Cancelled` is raised. The
+        caller is responsible for deleting the partial file if not
+        wanted.
     """
     run_dir = Path(run_dir)
     if aggregate is None:
@@ -550,14 +638,35 @@ def export_pdf(
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
+    png_files: list[Path] = []
+    if include_screenshots:
+        shots_dir = run_dir / "screenshots"
+        if shots_dir.is_dir():
+            png_files = sorted(shots_dir.glob("*.png"))[:max_screenshots]
+    total_pages = 3 + len(png_files)
+
+    if _cancelled(cancel_token):
+        raise Cancelled("PDF export cancelled before start")
+
     with PdfPages(str(out_path)) as pdf:
         _draw_cover_page(pdf, aggregate)
+        _emit(progress_callback, 1, total_pages, "Cover")
+        if _cancelled(cancel_token):
+            raise Cancelled("PDF export cancelled after cover page")
+
         _draw_breakouts_page(pdf, aggregate)
+        _emit(progress_callback, 2, total_pages, "Breakouts")
+        if _cancelled(cancel_token):
+            raise Cancelled("PDF export cancelled after breakouts page")
+
         _draw_equity_curve_page(pdf, aggregate)
-        if include_screenshots:
-            shots_dir = run_dir / "screenshots"
-            if shots_dir.is_dir():
-                png_files = sorted(shots_dir.glob("*.png"))
-                for f in png_files[:max_screenshots]:
-                    _draw_screenshot_page(pdf, f)
+        _emit(progress_callback, 3, total_pages, "Equity curve")
+
+        for i, f in enumerate(png_files):
+            if _cancelled(cancel_token):
+                raise Cancelled(
+                    f"PDF export cancelled after {3 + i}/{total_pages} pages"
+                )
+            _draw_screenshot_page(pdf, f)
+            _emit(progress_callback, 4 + i, total_pages, f.name)
     return out_path

@@ -512,6 +512,61 @@ Tests pinning the contract:
 `tests/unit/strategy_tester/test_parallel_screenshots.py`,
 `tests/unit/strategy_tester/test_cancel_responsiveness.py`.
 
+### 7.15 Strategy Tester exports (PDF/HTML/CSV) run on a background thread
+`strategy_tester.export.export_pdf` renders 3 fixed pages (cover +
+breakouts + equity) plus up to `max_screenshots=200` landscape pages,
+one per trade PNG, via `matplotlib.backends.backend_pdf.PdfPages`.
+Total wall-time for a full 200-trade report is 20-60 s. Calling this
+**directly on the Tk main thread freezes the entire app** (no
+clicks, no chart pan, no Stop button) — the symptom that motivated
+this refactor.
+
+The GUI now runs every export on a daemon thread named
+`StrategyTabExport{CSV,HTML,PDF}` and surfaces progress via the
+existing strategy-tester progress bar widget reused in determinate
+mode. The pattern (in `gui/strategy_tab.py`):
+
+1. **Save dialog first** so the user picks the destination upfront.
+2. `_begin_export(kind, dst)` initialises a fresh `AcceptanceToken`
+   in `self._export_cancel_token`, flips the in-flight flag, and
+   swaps the originating button's label to `"Cancel <kind>…"`.
+3. The worker calls `export_pdf(...,
+   progress_callback=self._on_export_progress,
+   cancel_token=self._export_cancel_token)` and stashes its result
+   into `self._export_result`.
+4. A `self.after(100, self._on_export_poll)` loop on the Tk main
+   thread (mirroring `_on_poll` for the runner) reads
+   `self._export_latest_progress` to paint the bar/status and
+   detects worker-thread completion via `thread.is_alive()`.
+
+**DO NOT** call `self.after(0, ...)` from the export worker.
+Stock CPython on Windows is built with a non-threaded Tcl; cross-thread
+`after` raises `RuntimeError("main thread is not in main loop")` and
+the callback is silently dropped (the GUI hangs in "Ready." with the
+in-flight flag never clearing). Use the result-dict + polling pattern
+above instead. See `gui/strategy_tab.spec.md` → "Background-export
+plumbing" for the contract.
+
+**Cancel semantics.** The export polls `cancel_token.is_cancelled()`
+between pages (PDF) or before render/write (HTML). On cancel, the
+`with PdfPages(...)` context exits cleanly so the partial PDF on disk
+is a valid (truncated) document; the export raises `export.Cancelled`
+which the worker translates into `result["cancelled"] = True`. The
+caller is responsible for `unlink`ing the partial file if undesired;
+the GUI currently leaves it in `<run_dir>/report.pdf` because
+re-running the export overwrites it cleanly. CSV is a single
+`shutil.copyfile`, so it cannot be cancelled mid-copy.
+
+**Reentrancy.** While an export is in flight the other two export
+buttons are disabled to prevent racing writes into the in-run-dir
+report files. The Run button stays enabled (separate concern); a
+concurrent Run will share the same `self._pbar` widget — last writer
+wins, acceptable trade-off given the relative rarity.
+
+Tests pinning the contract:
+`tests/unit/strategy_tester/test_export_cancel_and_progress.py`,
+`tests/unit/gui/test_strategy_tab_async_export.py`.
+
 ---
 
 ## 8. Build & release flow

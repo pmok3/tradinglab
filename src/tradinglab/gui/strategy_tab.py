@@ -123,6 +123,20 @@ class StrategyTab(ttk.Frame):
         self._current_run_dir: Path | None = None
         self._current_aggregate: RunAggregate | None = None
 
+        # Background-export state (PDF/HTML/CSV — see _on_export_pdf etc.).
+        # ``_export_kind`` is one of {"PDF", "HTML", "CSV"} while a job is
+        # in flight, otherwise None. The button that started the job has
+        # its text swapped to "Cancel"; the other two are disabled.
+        self._export_in_flight: bool = False
+        self._export_kind: str | None = None
+        self._export_dst: str | None = None
+        self._export_cancel_token: AcceptanceToken | None = None
+        self._export_thread: threading.Thread | None = None
+        self._export_result: dict[str, Any] = {}
+        self._export_latest_progress: tuple[int, int, str] | None = None
+        self._export_poll_after_id: str | None = None
+        self._export_btn_original_text: dict[str, str] = {}
+
         # Tk Variables for the Configure pane.
         self._var_entry_id = tk.StringVar(value="")
         self._var_exit_id = tk.StringVar(value="")
@@ -1163,6 +1177,14 @@ class StrategyTab(ttk.Frame):
             logger.exception("StrategyTab: failed to open run folder")
 
     def _on_export_csv(self) -> None:
+        """Copy the in-run trades.csv to a user-chosen destination.
+
+        CSV export is fast (~0.5s) but still backgrounded so the UI
+        stays consistent with HTML/PDF.
+        """
+        if self._export_in_flight:
+            self._cancel_in_flight_export()
+            return
         if self._current_run_dir is None:
             return
         src = self._current_run_dir / "trades.csv"
@@ -1179,26 +1201,29 @@ class StrategyTab(ttk.Frame):
         )
         if not dst:
             return
-        try:
-            import shutil
-            shutil.copyfile(src, dst)
-        except Exception as exc:  # noqa: BLE001
-            messagebox.showerror("Strategy Tester", f"Export failed: {exc}")
+
+        self._begin_export("CSV", dst)
+
+        def _bg() -> None:
+            try:
+                import shutil
+                shutil.copyfile(src, dst)
+                self._export_result["dst"] = dst
+            except Exception as exc:  # noqa: BLE001
+                self._export_result["error"] = str(exc)
+
+        self._export_thread = threading.Thread(
+            target=_bg, daemon=True, name="StrategyTabExportCSV",
+        )
+        self._export_thread.start()
+        self._schedule_export_poll()
 
     def _on_export_html(self) -> None:
-        """Render report.html inside the Run dir, then offer to copy it out."""
-        if self._current_run_dir is None:
+        """Render report.html on a background thread and copy it to dst."""
+        if self._export_in_flight:
+            self._cancel_in_flight_export()
             return
-        from ..strategy_tester import export as _exp
-        try:
-            in_run_html = _exp.export_html(
-                self._current_run_dir,
-                aggregate=self._current_aggregate,
-            )
-        except Exception as exc:  # noqa: BLE001
-            messagebox.showerror(
-                "Strategy Tester", f"HTML export failed: {exc}"
-            )
+        if self._current_run_dir is None:
             return
         dst = filedialog.asksaveasfilename(
             title="Export HTML report",
@@ -1208,28 +1233,51 @@ class StrategyTab(ttk.Frame):
         )
         if not dst:
             return
-        try:
-            import shutil
-            shutil.copyfile(in_run_html, dst)
-        except Exception as exc:  # noqa: BLE001
-            messagebox.showerror(
-                "Strategy Tester", f"HTML save failed: {exc}"
-            )
+
+        self._begin_export("HTML", dst)
+        run_dir = self._current_run_dir
+        agg = self._current_aggregate
+        token = self._export_cancel_token
+
+        def _bg() -> None:
+            try:
+                from ..strategy_tester import export as _exp
+                in_run_html = _exp.export_html(
+                    run_dir,
+                    aggregate=agg,
+                    progress_callback=self._on_export_progress,
+                    cancel_token=token,
+                )
+                import shutil
+                shutil.copyfile(in_run_html, dst)
+                self._export_result["dst"] = dst
+            except Exception as exc:  # noqa: BLE001
+                from ..strategy_tester import export as _exp
+                if isinstance(exc, _exp.Cancelled):
+                    self._export_result["cancelled"] = True
+                else:
+                    self._export_result["error"] = str(exc)
+
+        self._export_thread = threading.Thread(
+            target=_bg, daemon=True, name="StrategyTabExportHTML",
+        )
+        self._export_thread.start()
+        self._schedule_export_poll()
 
     def _on_export_pdf(self) -> None:
-        """Render report.pdf inside the Run dir, then offer to copy it out."""
-        if self._current_run_dir is None:
+        """Render report.pdf on a background thread and copy it to dst.
+
+        PDF export is the slow one (20-60 s for a 200-screenshot report).
+        Runs on a daemon thread, polls a cancel token between pages, and
+        marshals progress + completion back to the Tk main thread via
+        the same ``after(POLL_INTERVAL_MS, ...)`` pattern the runner
+        uses. A second click on the Export PDF button (whose label is
+        now "Cancel PDF…") cancels the in-flight job.
+        """
+        if self._export_in_flight:
+            self._cancel_in_flight_export()
             return
-        from ..strategy_tester import export as _exp
-        try:
-            in_run_pdf = _exp.export_pdf(
-                self._current_run_dir,
-                aggregate=self._current_aggregate,
-            )
-        except Exception as exc:  # noqa: BLE001
-            messagebox.showerror(
-                "Strategy Tester", f"PDF export failed: {exc}"
-            )
+        if self._current_run_dir is None:
             return
         dst = filedialog.asksaveasfilename(
             title="Export PDF report",
@@ -1239,13 +1287,270 @@ class StrategyTab(ttk.Frame):
         )
         if not dst:
             return
+
+        self._begin_export("PDF", dst)
+        run_dir = self._current_run_dir
+        agg = self._current_aggregate
+        token = self._export_cancel_token
+
+        def _bg() -> None:
+            try:
+                from ..strategy_tester import export as _exp
+                in_run_pdf = _exp.export_pdf(
+                    run_dir,
+                    aggregate=agg,
+                    progress_callback=self._on_export_progress,
+                    cancel_token=token,
+                )
+                import shutil
+                shutil.copyfile(in_run_pdf, dst)
+                self._export_result["dst"] = dst
+            except Exception as exc:  # noqa: BLE001
+                from ..strategy_tester import export as _exp
+                if isinstance(exc, _exp.Cancelled):
+                    self._export_result["cancelled"] = True
+                else:
+                    self._export_result["error"] = str(exc)
+
+        self._export_thread = threading.Thread(
+            target=_bg, daemon=True, name="StrategyTabExportPDF",
+        )
+        self._export_thread.start()
+        self._schedule_export_poll()
+
+    # ------------------------------------------------------------------
+    # Background-export plumbing (shared by CSV / HTML / PDF)
+    # ------------------------------------------------------------------
+
+    EXPORT_POLL_INTERVAL_MS = 100
+
+    def _begin_export(self, kind: str, dst: str) -> None:
+        """Initialise per-export state and switch the UI to export mode.
+
+        Called on the Tk main thread before the background thread is
+        spawned. Sets the cancel token + result dict, flips the
+        in-flight flag, and calls :meth:`_set_export_ui` to swap button
+        labels + show the progress bar.
+        """
+        self._export_in_flight = True
+        self._export_kind = kind
+        self._export_dst = dst
+        self._export_cancel_token = AcceptanceToken()
+        self._export_result = {}
+        # latest_progress is updated from the background thread (atomic
+        # tuple assignment is safe under the GIL) and read by the
+        # Tk-main-thread poller. We intentionally do NOT call
+        # ``self.after`` from the worker because tkinter's ``after`` is
+        # only thread-safe when CPython's Tcl was built with threads,
+        # which is not the case on the default Windows install — the
+        # ``RuntimeError("main thread is not in main loop")`` surfaces
+        # in pytest as PytestUnhandledThreadExceptionWarning.
+        self._export_latest_progress: tuple[int, int, str] | None = None
+        self._set_export_ui(True, kind)
+
+    def _cancel_in_flight_export(self) -> None:
+        """Signal the in-flight export to cancel.
+
+        The background thread polls the token between pages and raises
+        :class:`export.Cancelled`, which routes through
+        :meth:`_on_export_done` with ``error="cancelled"``.
+        """
+        if self._export_cancel_token is not None:
+            self._export_cancel_token.cancel()
+        if self._export_kind:
+            self._var_status.set(f"{self._export_kind} export cancelling…")
+
+    def _on_export_progress(self, current: int, total: int, label: str) -> None:
+        """Progress callback invoked from the export thread.
+
+        Writes the latest progress tuple into ``self._export_latest_progress``
+        for the Tk-main-thread poller to pick up. We rely on CPython's
+        GIL making the single attribute assignment atomic; no lock
+        needed because lost intermediate ticks are acceptable (the
+        latest one always wins).
+        """
+        self._export_latest_progress = (current, total, label)
+
+    def _schedule_export_poll(self) -> None:
+        """Schedule the next export-poll tick on the Tk main thread."""
+        if self._export_poll_after_id is not None:
+            try:
+                self.after_cancel(self._export_poll_after_id)
+            except Exception:  # noqa: BLE001
+                pass
         try:
-            import shutil
-            shutil.copyfile(in_run_pdf, dst)
-        except Exception as exc:  # noqa: BLE001
-            messagebox.showerror(
-                "Strategy Tester", f"PDF save failed: {exc}"
+            self._export_poll_after_id = self.after(
+                self.EXPORT_POLL_INTERVAL_MS, self._on_export_poll,
             )
+        except Exception:  # noqa: BLE001
+            self._export_poll_after_id = None
+
+    def _on_export_poll(self) -> None:
+        """Tk-main-thread poll: paint progress, check for completion."""
+        self._export_poll_after_id = None
+        # Pick up any progress tick the worker dropped since last poll.
+        progress = self._export_latest_progress
+        if progress is not None:
+            self._apply_export_progress(*progress)
+            self._export_latest_progress = None
+        thread = self._export_thread
+        if thread is not None and thread.is_alive():
+            self._schedule_export_poll()
+            return
+        # Worker finished — drain the result dict.
+        result = self._export_result
+        kind = self._export_kind or "Export"
+        if result.get("cancelled"):
+            self._on_export_done(kind, None, "cancelled")
+        elif result.get("error"):
+            self._on_export_done(kind, None, result["error"])
+        else:
+            self._on_export_done(kind, result.get("dst"), None)
+
+    def _apply_export_progress(self, current: int, total: int, label: str) -> None:
+        """Apply an export progress tick on the Tk main thread.
+
+        See ``strategy_tab.spec.md`` and ``_apply_progress`` for the
+        ``update_idletasks()`` paint-forcing rationale: rapid sub-second
+        progress callbacks queue up and Tk batches their paints,
+        producing a stuck-at-zero bar without the forced flush.
+        """
+        kind = self._export_kind or "Export"
+        try:
+            if total > 0:
+                try:
+                    self._pbar.configure(mode="determinate", maximum=total, value=current)
+                except Exception:  # noqa: BLE001
+                    pass
+            self._var_status.set(
+                f"Exporting {kind}… ({current}/{total}: {label})"
+            )
+            try:
+                self._pbar.update_idletasks()
+            except Exception:  # noqa: BLE001
+                pass
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _on_export_done(self, kind: str, dst: str | None, error: str | None) -> None:
+        """Export-thread completion callback (Tk main thread).
+
+        Restores the UI, shows the appropriate dialog, and on success
+        offers an "Open now?" prompt that launches the file in the OS
+        default viewer.
+        """
+        self._export_in_flight = False
+        self._export_kind = None
+        self._export_dst = None
+        self._export_cancel_token = None
+        self._export_thread = None
+        self._export_result = {}
+        self._export_latest_progress = None
+        self._set_export_ui(False, kind)
+        if error == "cancelled":
+            self._var_status.set(f"{kind} export cancelled.")
+        elif error:
+            self._var_status.set(f"{kind} export failed.")
+            messagebox.showerror(
+                "Strategy Tester", f"{kind} export failed: {error}"
+            )
+        else:
+            self._var_status.set(f"{kind} exported to {dst}.")
+            if dst and messagebox.askyesno(
+                "Strategy Tester",
+                f"{kind} exported to:\n{dst}\n\nOpen now?",
+            ):
+                self._open_in_os_default(dst)
+
+    def _set_export_ui(self, active: bool, kind: str) -> None:
+        """Toggle UI between idle and export-in-flight modes.
+
+        Reuses ``self._pbar`` (Option A in the task brief). Saves the
+        original button text on first activation so cancellation can
+        restore it. While active, the kind's button text becomes
+        ``"Cancel <kind>…"`` and the other two export buttons are
+        disabled to prevent concurrent file writes into the in-run-dir
+        ``report.pdf`` / ``report.html``.
+
+        Run / Stop are intentionally *not* affected — exports are
+        considered a separate concern from the runner.
+        """
+        all_btns = {
+            "CSV": self._btn_export_csv,
+            "HTML": self._btn_export_html,
+            "PDF": self._btn_export_pdf,
+        }
+        if active:
+            # Cancel any pending hide-bar timer so a quick export doesn't
+            # have its bar yanked away one second in.
+            if self._pbar_hide_after_id is not None:
+                try:
+                    self.after_cancel(self._pbar_hide_after_id)
+                except Exception:  # noqa: BLE001
+                    pass
+                self._pbar_hide_after_id = None
+            for k, btn in all_btns.items():
+                # Stash original label exactly once per button.
+                if k not in self._export_btn_original_text:
+                    try:
+                        self._export_btn_original_text[k] = btn.cget("text")
+                    except Exception:  # noqa: BLE001
+                        self._export_btn_original_text[k] = f"Export {k}…"
+                if k == kind:
+                    try:
+                        btn.configure(text=f"Cancel {k}…", state="normal")
+                    except Exception:  # noqa: BLE001
+                        pass
+                else:
+                    try:
+                        btn.configure(state="disabled")
+                    except Exception:  # noqa: BLE001
+                        pass
+            # Indeterminate by default; flips to determinate on first
+            # progress tick.
+            try:
+                self._pbar.configure(mode="indeterminate", maximum=1, value=0)
+                self._pbar.grid()
+                self._pbar.start(50)
+            except Exception:  # noqa: BLE001
+                pass
+        else:
+            try:
+                self._pbar.stop()
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                self._pbar.configure(mode="determinate")
+            except Exception:  # noqa: BLE001
+                pass
+            for k, btn in all_btns.items():
+                original = self._export_btn_original_text.get(k, f"Export {k}…")
+                try:
+                    btn.configure(text=original, state="normal")
+                except Exception:  # noqa: BLE001
+                    pass
+            # Hide the bar after 1 s, mirroring _set_running_ui's
+            # "leave full state visible briefly" behaviour. The Run path
+            # also uses self._pbar_hide_after_id, so the most-recent
+            # caller wins — fine because exports and Runs don't overlap
+            # at the pbar level (Run uses determinate; exports return
+            # the bar to determinate on exit).
+            self._pbar_hide_after_id = self.after(1000, self._hide_progress_bar)
+
+    def _open_in_os_default(self, path: str) -> None:
+        """Open ``path`` in the OS-default application (Acrobat / browser)."""
+        try:
+            import os as _os
+            import subprocess as _sub
+            import sys
+            if sys.platform == "win32":
+                _os.startfile(path)  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                _sub.Popen(["open", path])  # noqa: S607,S603
+            else:
+                _sub.Popen(["xdg-open", path])  # noqa: S607,S603
+        except Exception:  # noqa: BLE001
+            logger.exception("StrategyTab: open default failed for %s", path)
 
     # ------------------------------------------------------------------
     # Recent Runs sidebar
@@ -1429,5 +1734,15 @@ class StrategyTab(ttk.Frame):
         try:
             if self._pbar_hide_after_id is not None:
                 self.after_cancel(self._pbar_hide_after_id)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if self._export_cancel_token is not None:
+                self._export_cancel_token.cancel()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if self._export_poll_after_id is not None:
+                self.after_cancel(self._export_poll_after_id)
         except Exception:  # noqa: BLE001
             pass

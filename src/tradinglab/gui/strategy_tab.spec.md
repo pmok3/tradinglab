@@ -98,14 +98,48 @@ root in smoke tests). The popup wrapper + menubar wiring live in
   via a ``_refresh_recent_runs()`` call at the end of ``_on_poll``.
 
 ### Export buttons (PR 5)
-- **Export HTML…** writes ``<run_dir>/report.html`` via
-  ``strategy_tester.export.export_html`` then prompts a
-  ``filedialog.asksaveasfilename`` to copy the file out.
-- **Export PDF…** mirrors the HTML flow via ``export_pdf`` (one cover
-  page + one breakouts page + one equity-curve page + one landscape
-  page per trade screenshot, capped at 200 pages).
-- Both buttons reuse the in-memory ``RunAggregate`` (``self._current_aggregate``)
-  so no extra disk read is required.
+- **Export CSV…** / **Export HTML…** / **Export PDF…** all run on a
+  daemon ``threading.Thread`` (`StrategyTabExportCSV` /
+  `StrategyTabExportHTML` / `StrategyTabExportPDF`) so the Tk main
+  loop stays responsive during the 20-60 s PDF render. The save
+  dialog opens *first* so the user picks the destination upfront;
+  the export then runs in the background.
+- **Cancel button.** While an export is in flight, the originating
+  button's text changes to ``Cancel <kind>…``; clicking it calls
+  ``cancel_token.cancel()``. The export polls the token between pages
+  (PDF) or before render/write (HTML) and raises
+  ``export.Cancelled``, which routes through ``_on_export_done`` with
+  ``error="cancelled"``. CSV is a single ``shutil.copyfile`` so it
+  cannot be cancelled mid-copy — the button still flips to Cancel
+  for UI consistency but the copy completes.
+- **Reentrancy guard.** ``self._export_in_flight`` is True from
+  ``_begin_export`` until ``_on_export_done`` fires. While set, the
+  two non-active export buttons are disabled (no concurrent writes
+  into ``<run_dir>/report.pdf`` / ``report.html``); the Run button
+  stays enabled (separate concern).
+- **Progress.** ``progress_callback(current, total, label)`` is
+  invoked from the export thread; the handler
+  (``_on_export_progress``) stores the latest tick into
+  ``self._export_latest_progress`` and the Tk-main-thread poller
+  (``_on_export_poll``, 100 ms cadence) paints the progress bar +
+  status label. The status label reads
+  ``"Exporting <kind>… (current/total: label)"``.
+- **No cross-thread ``self.after``.** We deliberately don't call
+  ``self.after(0, ...)`` from the export thread. ``tkinter.Misc.after``
+  is only thread-safe when the underlying Tcl was built with thread
+  support, which is not the case on the stock CPython Windows install
+  — it raises ``RuntimeError("main thread is not in main loop")`` and
+  the callback is silently dropped. Instead the worker writes its
+  result into a result dict (``self._export_result``) + tuple
+  (``self._export_latest_progress``); the Tk main thread polls via
+  ``self.after(100, self._on_export_poll)``. This mirrors the runner
+  thread / ``_schedule_poll`` / ``_on_poll`` pattern already used for
+  the Strategy Tester run loop.
+- **Open prompt.** On success a ``messagebox.askyesno`` offers to open
+  the file in the OS default viewer (``os.startfile`` on Windows,
+  ``open`` on macOS, ``xdg-open`` on Linux).
+- Both HTML and PDF exporters reuse the in-memory ``RunAggregate``
+  (``self._current_aggregate``) so no extra disk read is required.
 
 ## Run lifecycle
 - Click **Run** → `_build_config_from_ui` validates the form and

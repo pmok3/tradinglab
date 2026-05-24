@@ -12,9 +12,15 @@ same Run.
 
 * `HTML_FILENAME` (`"report.html"`) — canonical filename inside the Run dir.
 * `PDF_FILENAME` (`"report.pdf"`) — canonical filename inside the Run dir.
-* `export_html(run_dir, *, aggregate=None, out_path=None) -> Path`
+* `class Cancelled(Exception)` — raised mid-export when the caller's
+  `cancel_token.is_cancelled()` returns True between pages.
+* `ProgressCallback` — `Callable[[int, int, str], None]` alias for
+  `(current, total, label) -> None` page-tick callbacks.
+* `export_html(run_dir, *, aggregate=None, out_path=None,
+              progress_callback=None, cancel_token=None) -> Path`
 * `export_pdf(run_dir, *, aggregate=None, out_path=None,
-              include_screenshots=True, max_screenshots=200) -> Path`
+              include_screenshots=True, max_screenshots=200,
+              progress_callback=None, cancel_token=None) -> Path`
 
 Both functions:
 * Accept an existing `RunAggregate` (avoids re-reading disk) and
@@ -23,6 +29,36 @@ Both functions:
 * Default `out_path` to `<run_dir>/report.html` or `<run_dir>/report.pdf`
   so that *relative* image references resolve next to the file.
 * Return the absolute Path to the written file.
+
+## Progress callback contract
+
+`progress_callback(current, total, label)` is invoked synchronously
+on the export thread after each major page/step completes:
+
+* PDF: 3 fixed-page ticks (`"Cover"`, `"Breakouts"`, `"Equity curve"`)
+  followed by one tick per screenshot, with `label` = the PNG filename.
+  `current` is 1-based and monotonically increases; `total` is fixed
+  for the whole export and equals
+  `3 + min(len(png_files), max_screenshots)`.
+* HTML: exactly 3 ticks (`"Loaded aggregate"` / `"Rendered body"` /
+  `"Wrote file"`).
+
+The callback may raise; the exception is logged at DEBUG and the
+export continues. This protects against buggy GUI marshalers from
+breaking long batch exports.
+
+## Cancel token contract
+
+`cancel_token` is any object exposing `is_cancelled() -> bool`. It is
+polled before each page is drawn (PDF) or before render/write (HTML).
+When the token returns True, the `with PdfPages` context exits cleanly
+— leaving a valid (truncated) PDF on disk — and `Cancelled` is raised.
+HTML cancellation prior to the disk write leaves no partial file.
+
+Exceptions raised by `is_cancelled()` itself are swallowed; the export
+keeps running ("safe-default keep going" over "abort on probe
+failure"). Callers that wish to discard a partial PDF must `unlink`
+the out_path themselves in their `except Cancelled` branch.
 
 ## HTML layout
 
@@ -73,8 +109,13 @@ Built via `matplotlib.backends.backend_pdf.PdfPages`. Pages in order:
 
 Both functions are pure-Python aside from matplotlib. They do not
 spawn threads, do not touch Tk, and do not modify global state.
-They are safe to invoke from background threads provided the
-calling code does not concurrently mutate the Run directory.
+They are **designed to run on a background thread** — the GUI
+``StrategyTab`` invokes them from a daemon thread and polls the
+``progress_callback``/``cancel_token`` plumbing to keep the Tk main
+loop responsive. The callbacks are invoked synchronously on the
+calling thread; GUI callers must marshal back to the Tk main thread
+themselves (see ``gui/strategy_tab.spec.md`` § "Background-export
+plumbing").
 
 ## Failure modes
 
