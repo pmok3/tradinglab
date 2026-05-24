@@ -12,9 +12,20 @@ Headless trigger-evaluation kernel for the Strategy Tester. The live `EntryEvalu
 ## Decision contract
 For each bar `i`:
 1. `engine.tick()` advances clock to `i`, fills any pending orders at `i.open`, updates MAE/MFE on `i.H/L`, marks-to-market at `i.close`.
-2. `_sync_position_state_from_engine` mirrors engine state into the EvalContext.
-3. If a position is open, check every enabled exit-leg trigger against `i.O/H/L/C`. First leg to fire wins; `submit_order` is queued and will fill at `i+1.open`.
-4. Otherwise check the entry trigger; size via `_compute_quantity(decision_price=i.close)`; submit if `qty > 0`.
+2. **ET conversion**: bar timestamp `i.ts` (UTC epoch seconds) is converted to America/New_York via `_bar_ts_to_et(ts)` once and threaded through to trigger checks. All time gates (`arm_window_start/end`, `require_market_open`, TIME_OF_DAY exit cutoff) compare in ET.
+3. **Per-ET-day session reset**: if `et_now.date() != ctx.current_session_et_date`, reset `fires_total = 0` and `fires_by_symbol = 0` BEFORE checking entries. This mirrors the live `EntryEvaluator._roll_session_counters_if_needed` semantics (with ET correctness; live uses UTC). Without this, `max_fires_per_session_per_symbol=1` caps the entire backtest at 1 entry per symbol — the smoking-gun "AAPL/NVDA/SPY each have 1 trade on a year of 5m" bug.
+4. **Per-ET-day `eod_kill_switch` flatten**: if the ET date rolled AND `exit_strategy.eod_kill_switch=True` AND a position is still open from the prior trading day, synthesise an exit fill at the prior bar's close (= EOD of prior trading day) using the cost model's slippage + commission. Without this, a strategy with `position_already_open_policy=BLOCK` and no intraday-firing stop will hold a position across all days and the daily reset is moot. Same code path as the existing end-of-run kill switch.
+5. `_sync_position_state_from_engine` mirrors engine state into the EvalContext.
+6. If a position is open, check every enabled exit-leg trigger against `i.O/H/L/C`. First leg to fire wins; `submit_order` is queued and will fill at `i+1.open`.
+7. Otherwise check the entry trigger; **enforce the time-of-day gates in this order**: arm_window → require_market_open → cooldown_secs → fires_total/fires_by_symbol caps → trigger handler. Size via `_compute_quantity(decision_price=i.close)`; submit if `qty > 0`. On fire, set `ctx.last_fire_ts = ts`.
+
+## Time-of-day gates (`_check_entry`)
+- **`arm_window_start/end`** — `"HH:MM"` strings; default `"09:35"/"15:30"` ET. Blank string disables the gate (mirrors live `_parse_hhmm("")` → None). Supports midnight wrap (start > end → "fire if t >= start OR t <= end").
+- **`require_market_open`** — `True` by default. Blocks Saturday/Sunday and any time outside 09:30-16:00 ET. Does NOT enforce holidays (would require a calendar dep); acceptable for user-supplied backtest data.
+- **`cooldown_secs`** — `0` by default. Blocks fires when `(bar_ts - ctx.last_fire_ts) < cooldown_secs`.
+
+## TIME_OF_DAY exit ET fix
+`_exit_time_of_day` now passes `now = _bar_ts_to_et(int(bar_ts))` to `evaluate_time_of_day` (was `now = datetime.fromtimestamp(ts, tz=timezone.utc)`). Template cutoffs like `"15:55"` are unambiguously ET; comparing against UTC would fire 5h early.
 
 ## Trigger scope (all wired)
 Wired:
@@ -139,7 +150,7 @@ Multi-leg OCO is reduced to first-leg-to-fire in PR 1. Proper OCO semantics ship
 - `SessionResult.spec.tickers == (symbol,)`.
 
 ## Testing
-- `tests/unit/strategy_tester/test_evaluator.py` — entry MARKET fires on first bar; LIMIT entry fires when bar.low touches; STOP entry fires when bar.high touches; FIXED_NOTIONAL sizing rounds DOWN; position open blocks re-entry; exit STOP closes on touch; EOD kill-switch flattens at end; defensive `UnsupportedTriggerKind` fallback (via registry-pop test); INDICATOR entry fires when `close > threshold` becomes true; INDICATOR entry never fires for an unreachable threshold; INDICATOR with `condition=None` silently doesn't fire; INDICATOR exit closes the position when its condition triggers; **TRAILING_STOP percent fires on retrace, no fire on uninterrupted uptrend, dollar unit honoured**; **TIME_OF_DAY fires at/after cutoff, no fire before, malformed string = no fire**; **CHANDELIER fires after ATR warm-up, no fire during warm-up window**; **SCANNER_ALERT fires on edge False → True, no fire when already matching, missing scanner ID = silent no-fire.**
+- `tests/unit/strategy_tester/test_evaluator.py` — entry MARKET fires on first bar; LIMIT entry fires when bar.low touches; STOP entry fires when bar.high touches; FIXED_NOTIONAL sizing rounds DOWN; position open blocks re-entry; exit STOP closes on touch; EOD kill-switch flattens at end; defensive `UnsupportedTriggerKind` fallback (via registry-pop test); INDICATOR entry fires when `close > threshold` becomes true; INDICATOR entry never fires for an unreachable threshold; INDICATOR with `condition=None` silently doesn't fire; INDICATOR exit closes the position when its condition triggers; **TRAILING_STOP percent fires on retrace, no fire on uninterrupted uptrend, dollar unit honoured**; **TIME_OF_DAY fires at/after cutoff (ET), no fire before, malformed string = no fire**; **CHANDELIER fires after ATR warm-up, no fire during warm-up window**; **SCANNER_ALERT fires on edge False → True, no fire when already matching, missing scanner ID = silent no-fire**; **`max_fires_per_session_per_symbol` resets on ET-date roll** (STACK + max=1 + 5-day timeline → 5 BUYs); **`arm_window` blocks bars outside 09:35-15:30 ET**; **blank arm_window strings disable the gate**; **`require_market_open=True` blocks Saturday bars**; **`require_market_open=False` allows weekends**; **`cooldown_secs=600` throttles fires to every other 5m bar**; **`cooldown_secs=0` allows every bar**; **per-day `eod_kill_switch=True` flattens overnight positions** (BLOCK + 3-day trending timeline + no intraday stop → 3 BUYs + 3 SELLs).
 - `tests/smoke/test_smoke_strategy.py::check_st0_kernel_only` — 3 synthetic tickers + MARKET entry + STOP exit, validates `SessionResult` has ≥1 fill and per-symbol JSON parses.
 
 ## See also

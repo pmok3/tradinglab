@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from tradinglab.entries.model import (
     Direction,
@@ -33,11 +34,20 @@ from tradinglab.strategy_tester import (
     evaluate_symbol,
 )
 
+_ET = ZoneInfo("America/New_York")
+
 
 def _ramp_candles(n: int = 30, start: float = 100.0, step: float = 1.0) -> list[Candle]:
-    """Linear ramp — close grows by ``step`` per bar so every trigger touches predictably."""
+    """Linear ramp — close grows by ``step`` per bar so every trigger touches predictably.
+
+    Bars are tz-aware ET and start at 09:35 ET on Mon Jan 5 2026 so they
+    fall within the default ``arm_window_start="09:35"`` /
+    ``arm_window_end="15:30"`` window and the RTH session
+    (``require_market_open=True``). 30 bars × 5 minutes = 2h25m → all
+    within a single RTH session.
+    """
     out: list[Candle] = []
-    t = datetime(2026, 1, 1, 9, 30)
+    t = datetime(2026, 1, 5, 9, 35, tzinfo=_ET)  # Monday, RTH start
     price = start
     for i in range(n):
         op = price
@@ -412,7 +422,7 @@ def _explicit_close_candles(closes: list[float], *, start: datetime | None = Non
     intrabar updates have wider extremes than the close.
     """
     out: list[Candle] = []
-    t = start or datetime(2026, 1, 1, 9, 30)
+    t = start or datetime(2026, 1, 5, 9, 35, tzinfo=_ET)  # Mon RTH start by default
     for i, c in enumerate(closes):
         prev = closes[i - 1] if i > 0 else c
         op = float(prev)
@@ -814,4 +824,341 @@ def test_scanner_alert_entry_missing_scanner_no_fire(monkeypatch, tmp_path) -> N
     )
     assert result.fills == [], (
         f"expected silent no-fire when scanner_id missing; got {result.fills}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Per-session-day reset, arm_window, cooldown, require_market_open
+# (regression tests for the "1 trade per symbol" bug)
+# ---------------------------------------------------------------------------
+
+
+def _multiday_ramp_candles(
+    n_days: int = 5,
+    bars_per_day: int = 30,
+    start: float = 100.0,
+    step: float = 1.0,
+) -> list[Candle]:
+    """Build a multi-day ramp of 5m bars. Each day starts at 09:35 ET (RTH).
+
+    Default: 5 trading days × 30 bars × 5m = 150 5-minute bars total
+    spread across Mon-Fri Jan 5-9 2026 (a real RTH week).
+    """
+    out: list[Candle] = []
+    price = start
+    # Mon Jan 5 2026, Tue Jan 6, ..., Fri Jan 9, then Mon Jan 12 if needed.
+    weekdays: list[datetime] = []
+    day = datetime(2026, 1, 5, 9, 35, tzinfo=_ET)
+    while len(weekdays) < n_days:
+        if day.weekday() < 5:  # Mon-Fri
+            weekdays.append(day)
+        day = day + timedelta(days=1)
+    for d in weekdays:
+        t = d
+        for i in range(bars_per_day):
+            op = price
+            cl = price + step
+            hi = max(op, cl) + 0.2
+            lo = min(op, cl) - 0.2
+            out.append(Candle(date=t, open=op, high=hi, low=lo, close=cl,
+                              volume=1000 + i, session="regular"))
+            price = cl
+            t = t + timedelta(minutes=5)
+    return out
+
+
+def test_max_fires_per_symbol_resets_on_et_date_roll() -> None:
+    """``max_fires_per_session_per_symbol=1`` MUST mean "1 per trading day",
+    not "1 per backtest". This is the smoking-gun bug: with the default
+    cap of 1 and no daily reset, a 3/8 EMA cross on AAPL/NVDA/SPY 5m
+    over a year of data returned exactly 1 trade per symbol.
+
+    We use STACK policy + max_fires_per_session_per_symbol=1 to isolate
+    the daily-reset behaviour from BLOCK-on-open semantics. Each new ET
+    trading day should reset ``fires_by_symbol`` so exactly 1 new entry
+    fires per day.
+    """
+    entry = _market_long_strategy()  # MARKET fires on every eligible bar
+    entry.max_fires_per_session_per_symbol = 1
+    entry.position_already_open_policy = type(entry.position_already_open_policy).STACK
+    exit_strat = _stop_5pct_exit()
+    exit_strat.eod_kill_switch = False
+    candles = _multiday_ramp_candles(n_days=5, bars_per_day=20)  # Mon-Fri × 20 bars
+
+    result = evaluate_symbol(
+        symbol="TEST",
+        candles=candles,
+        interval="5m",
+        entry_strategy=entry,
+        exit_strategy=exit_strat,
+        starting_cash=10_000_000.0,  # ample cash for 5 stacking positions
+        cost_model=CostModel(),
+    )
+    buys = [f for f in result.fills if f.side.value == "buy"]
+    # Each of 5 trading days should produce exactly 1 entry (max_fires=1 cap
+    # resets per ET trading day). With STACK policy, the position from the
+    # prior day doesn't block re-entry.
+    assert len(buys) == 5, (
+        f"expected 5 BUY fills (1 per ET trading day); got {len(buys)}"
+    )
+
+
+def test_arm_window_blocks_bars_outside_rth_et() -> None:
+    """A bar at 09:30 ET (= 5 minutes before the default 09:35 arm-window
+    start) MUST NOT fire. A bar at 09:35 ET MUST fire."""
+    entry = _market_long_strategy()
+    entry.arm_window_start = "09:35"
+    entry.arm_window_end = "15:30"
+    exit_strat = _stop_5pct_exit()
+
+    # Build 3 bars: 09:30 ET (outside), 09:35 ET (inside), 09:40 ET (inside)
+    base = datetime(2026, 1, 5, 9, 30, tzinfo=_ET)
+    candles: list[Candle] = []
+    price = 100.0
+    for i in range(3):
+        t = base + timedelta(minutes=5 * i)
+        op = price
+        cl = price + 1.0
+        hi = max(op, cl) + 0.2
+        lo = min(op, cl) - 0.2
+        candles.append(Candle(date=t, open=op, high=hi, low=lo, close=cl,
+                              volume=1000, session="regular"))
+        price = cl
+
+    result = evaluate_symbol(
+        symbol="TEST",
+        candles=candles,
+        interval="5m",
+        entry_strategy=entry,
+        exit_strategy=exit_strat,
+        starting_cash=100_000.0,
+        cost_model=CostModel(),
+    )
+    buys = [f for f in result.fills if f.side.value == "buy"]
+    # MARKET should fire on bar 1 (09:35 ET) — the first arm-window-eligible bar.
+    # Bar 0 (09:30 ET) is outside the arm window.
+    assert len(buys) == 1
+    # Fill happens at bar 2's open (i.e. submitted-at-bar-1, fills-at-bar-2)
+    # with default 5 bps slippage applied (102 * 1.0005 = 102.051).
+    assert 102.0 <= buys[0].fill_price <= 102.2, (
+        f"expected fill near bar 2's open (102) — proves entry fired at bar 1, "
+        f"not bar 0 — got fill price {buys[0].fill_price}"
+    )
+
+
+def test_arm_window_disabled_when_blank() -> None:
+    """Empty arm_window_* strings disable the check (matches live evaluator)."""
+    entry = _market_long_strategy()
+    entry.arm_window_start = ""
+    entry.arm_window_end = ""
+    exit_strat = _stop_5pct_exit()
+
+    # 3 pre-RTH bars (04:00, 04:05, 04:10 ET) — should fire bar 0 since window disabled.
+    base = datetime(2026, 1, 5, 4, 0, tzinfo=_ET)
+    candles: list[Candle] = []
+    price = 100.0
+    for i in range(3):
+        t = base + timedelta(minutes=5 * i)
+        op = price
+        cl = price + 1.0
+        hi = max(op, cl) + 0.2
+        lo = min(op, cl) - 0.2
+        candles.append(Candle(date=t, open=op, high=hi, low=lo, close=cl,
+                              volume=1000, session="regular"))
+        price = cl
+
+    # Also disable require_market_open since we're at 04:00 ET.
+    entry.require_market_open = False
+
+    result = evaluate_symbol(
+        symbol="TEST",
+        candles=candles,
+        interval="5m",
+        entry_strategy=entry,
+        exit_strategy=exit_strat,
+        starting_cash=100_000.0,
+        cost_model=CostModel(),
+    )
+    buys = [f for f in result.fills if f.side.value == "buy"]
+    assert len(buys) == 1, f"expected blank arm_window to allow pre-RTH fire; got {buys}"
+
+
+def test_require_market_open_blocks_weekends() -> None:
+    """``require_market_open=True`` blocks fires on Saturday/Sunday."""
+    entry = _market_long_strategy()
+    entry.require_market_open = True
+    entry.arm_window_start = ""  # disable arm_window so it doesn't gate first
+    entry.arm_window_end = ""
+    exit_strat = _stop_5pct_exit()
+
+    # Saturday Jan 3 2026 + Sunday Jan 4 2026 — weekend bars (no real-world
+    # data here normally, but synthetic data can have them).
+    base = datetime(2026, 1, 3, 10, 0, tzinfo=_ET)  # Sat
+    candles: list[Candle] = []
+    price = 100.0
+    for i in range(20):
+        t = base + timedelta(hours=i)
+        op = price
+        cl = price + 1.0
+        hi = max(op, cl) + 0.2
+        lo = min(op, cl) - 0.2
+        candles.append(Candle(date=t, open=op, high=hi, low=lo, close=cl,
+                              volume=1000, session="regular"))
+        price = cl
+
+    result = evaluate_symbol(
+        symbol="TEST",
+        candles=candles,
+        interval="5m",
+        entry_strategy=entry,
+        exit_strategy=exit_strat,
+        starting_cash=100_000.0,
+        cost_model=CostModel(),
+    )
+    buys = [f for f in result.fills if f.side.value == "buy"]
+    assert buys == [], (
+        f"expected require_market_open to block all weekend fires; got {buys}"
+    )
+
+
+def test_require_market_open_disabled_allows_weekends() -> None:
+    """``require_market_open=False`` allows fires on weekends."""
+    entry = _market_long_strategy()
+    entry.require_market_open = False
+    entry.arm_window_start = ""
+    entry.arm_window_end = ""
+    exit_strat = _stop_5pct_exit()
+
+    base = datetime(2026, 1, 3, 10, 0, tzinfo=_ET)  # Sat
+    candles: list[Candle] = []
+    price = 100.0
+    for i in range(5):
+        t = base + timedelta(hours=i)
+        op = price
+        cl = price + 1.0
+        hi = max(op, cl) + 0.2
+        lo = min(op, cl) - 0.2
+        candles.append(Candle(date=t, open=op, high=hi, low=lo, close=cl,
+                              volume=1000, session="regular"))
+        price = cl
+
+    result = evaluate_symbol(
+        symbol="TEST",
+        candles=candles,
+        interval="5m",
+        entry_strategy=entry,
+        exit_strategy=exit_strat,
+        starting_cash=100_000.0,
+        cost_model=CostModel(),
+    )
+    buys = [f for f in result.fills if f.side.value == "buy"]
+    assert len(buys) == 1, (
+        f"expected require_market_open=False to allow weekend fire; got {buys}"
+    )
+
+
+def test_cooldown_secs_blocks_rapid_reentry() -> None:
+    """A cooldown of 600s on 5m bars means at least 2 bars between fires
+    (a 5m bar is 300s, so 600s cooldown skips the next bar)."""
+    entry = _market_long_strategy()
+    entry.max_fires_per_session_per_symbol = 10  # raise cap so cooldown is the binding constraint
+    entry.position_already_open_policy = (
+        # STACK policy: don't block on existing pos so we test cooldown directly
+        type(entry.position_already_open_policy).STACK
+    )
+    entry.cooldown_secs = 600  # 10 minutes ⇒ skip 1 bar between fires
+    exit_strat = _stop_5pct_exit()
+    candles = _ramp_candles(n=10)  # 10 bars × 5m = 50 minutes
+
+    result = evaluate_symbol(
+        symbol="TEST",
+        candles=candles,
+        interval="5m",
+        entry_strategy=entry,
+        exit_strategy=exit_strat,
+        starting_cash=100_000.0,
+        cost_model=CostModel(),
+    )
+    buys = [f for f in result.fills if f.side.value == "buy"]
+    # 10 bars × 5m: fires possible at bars 0, 2, 4, 6, 8 (every other 5m bar).
+    # That's 5 fires max (300s + 300s = 600s = cooldown gate met at bar 2).
+    # First bar: fire (no prior). Second bar: blocked (300s < 600s).
+    # Third bar (10m after first): cooldown met → fire. Etc.
+    assert len(buys) == 5, (
+        f"expected cooldown to throttle to every-other-bar (5 fires); got {len(buys)}"
+    )
+
+
+def test_cooldown_zero_allows_every_bar() -> None:
+    """Default cooldown_secs=0 should allow consecutive bars (with appropriate
+    ALLOW policy and high max_fires)."""
+    entry = _market_long_strategy()
+    entry.max_fires_per_session_per_symbol = 100
+    entry.position_already_open_policy = type(entry.position_already_open_policy).STACK
+    entry.cooldown_secs = 0
+    exit_strat = _stop_5pct_exit()
+    candles = _ramp_candles(n=10)
+
+    result = evaluate_symbol(
+        symbol="TEST",
+        candles=candles,
+        interval="5m",
+        entry_strategy=entry,
+        exit_strategy=exit_strat,
+        starting_cash=100_000.0,
+        cost_model=CostModel(),
+    )
+    buys = [f for f in result.fills if f.side.value == "buy"]
+    # Every bar can fire — bar 0..n-1 submit, bar 0..n-2 fill (no bar n+1 to fill bar n-1's order).
+    # 10 bars → 9 fills (last bar's order never fills).
+    assert len(buys) == 9, (
+        f"expected cooldown=0 to allow every-bar fire (9 fills for 10 bars); got {len(buys)}"
+    )
+
+
+def test_eod_kill_switch_flattens_per_day_when_position_held_overnight() -> None:
+    """A position held across an ET-date boundary with eod_kill_switch=True
+    MUST be flattened at the EOD of the prior trading day, allowing the
+    BLOCK-policy strategy to re-enter on the next day.
+
+    Without per-day flatten, a 3/8 EMA cross strategy on a trending day
+    (no bracket-stop trigger) would hold the position across all days,
+    and the BLOCK policy + daily-reset combo would still produce only
+    1 trade per backtest.
+    """
+    entry = _market_long_strategy()  # MARKET — fires every eligible bar
+    entry.max_fires_per_session_per_symbol = 1
+    # BLOCK policy: position must close before re-entry possible.
+    # (this is the default — explicit for clarity)
+    entry.position_already_open_policy = type(entry.position_already_open_policy).BLOCK
+    # No stop trigger that fires intraday — strict "buy and hold" strategy.
+    exit_strat = ExitStrategy(
+        id="exit-eod-only",
+        name="EOD only",
+        legs=[],
+        eod_kill_switch=True,
+    )
+    candles = _multiday_ramp_candles(n_days=3, bars_per_day=20)
+
+    result = evaluate_symbol(
+        symbol="TEST",
+        candles=candles,
+        interval="5m",
+        entry_strategy=entry,
+        exit_strategy=exit_strat,
+        starting_cash=10_000_000.0,
+        cost_model=CostModel(),
+    )
+    buys = [f for f in result.fills if f.side.value == "buy"]
+    sells = [f for f in result.fills if f.side.value == "sell"]
+    # 3 days × 1 entry/day = 3 entries.
+    # Each day's position is flattened at EOD: 2 mid-run per-day flattens +
+    # 1 final end-of-run flatten = 3 sells.
+    assert len(buys) == 3, (
+        f"expected 3 BUY fills (1 per ET trading day with per-day eod_kill_switch); "
+        f"got {len(buys)}"
+    )
+    assert len(sells) == 3, (
+        f"expected 3 SELL fills (per-day + end-of-run eod_kill_switch flattens); "
+        f"got {len(sells)}"
     )

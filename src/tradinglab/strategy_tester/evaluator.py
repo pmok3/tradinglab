@@ -60,7 +60,12 @@ import logging
 import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover — Python <3.9 fallback
+    ZoneInfo = None  # type: ignore[assignment]
 
 from ..backtest.bars import from_candles
 from ..backtest.engine import SandboxEngine
@@ -125,6 +130,101 @@ __all__ = [
     "_ENTRY_HANDLERS",
     "_EXIT_HANDLERS",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Time-zone helpers — strategies' arm_window, require_market_open and
+# per-session-day counter resets are all interpreted in US/Eastern time
+# (ET), the same convention used by the live evaluator's templates and by
+# every "trading day" reference in the codebase. Bar timestamps in
+# :class:`BarSeries.ts` are int64 epoch SECONDS in UTC; the conversion
+# happens here.
+# ---------------------------------------------------------------------------
+
+
+def _et_zoneinfo():
+    """Return ``ZoneInfo('America/New_York')`` or ``None`` on missing tzdata.
+
+    Cached at module load via :func:`functools.lru_cache`-equivalent — the
+    ``ZoneInfo`` constructor itself caches identical zone names, so
+    repeated calls are O(1).
+    """
+    if ZoneInfo is None:
+        return None
+    try:
+        return ZoneInfo("America/New_York")
+    except Exception:  # noqa: BLE001 — missing tzdata, fall through
+        return None
+
+
+_ET = _et_zoneinfo()
+
+
+def _bar_ts_to_et(ts: int) -> datetime:
+    """Convert an int64 UTC epoch-second bar timestamp to an ET datetime.
+
+    Falls back to a fixed UTC-5 offset (EST) if ``zoneinfo`` is missing
+    on the host. The fallback is off by 1 hour for ~10% of the year
+    (EDT vs EST) but RTH never straddles the ET-date boundary, so the
+    session-day reset behaviour stays correct.
+    """
+    if _ET is not None:
+        return datetime.fromtimestamp(ts, tz=_ET)
+    # tzdata-less fallback: assume UTC, shift -5h, fake an ET-flavoured
+    # tz tag. Datetime arithmetic and comparisons still work.
+    return datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(
+        timezone(timedelta(hours=-5))
+    )
+
+
+def _parse_hhmm_to_time(s: str | None) -> time | None:
+    """Parse an ``"HH:MM"`` string into a :class:`datetime.time`.
+
+    Returns ``None`` for blank/malformed input — mirrors the live
+    ``entries.evaluator._parse_hhmm`` semantics so blank arm windows
+    disable the gate cleanly.
+    """
+    if not s:
+        return None
+    try:
+        h, m = s.split(":")
+        return time(hour=int(h), minute=int(m))
+    except (ValueError, AttributeError):
+        return None
+
+
+def _within_arm_window(strategy: EntryStrategy, et_dt: datetime) -> bool:
+    """True iff ``et_dt`` falls within the strategy's arm window.
+
+    Blank arm-window strings (or unparseable values) disable the gate.
+    Window may wrap midnight (start > end) — rare for US-equity
+    strategies but supported for compatibility with the live
+    evaluator.
+    """
+    start = _parse_hhmm_to_time(strategy.arm_window_start)
+    end = _parse_hhmm_to_time(strategy.arm_window_end)
+    if start is None or end is None:
+        return True
+    local_t = et_dt.time()
+    if start <= end:
+        return start <= local_t <= end
+    return local_t >= start or local_t <= end
+
+
+# Regular-session boundaries for US equities. Live evaluator treats
+# RTH = 09:30:00–16:00:00 ET, Mon–Fri (holidays not enforced — the
+# strategy tester also runs against arbitrary user-supplied data so we
+# leave holiday filtering to the data layer).
+_RTH_OPEN = time(hour=9, minute=30)
+_RTH_CLOSE = time(hour=16, minute=0)
+
+
+def _is_regular_session(et_dt: datetime) -> bool:
+    """True iff ``et_dt`` is Mon–Fri AND 09:30 ≤ time ≤ 16:00 ET."""
+    if et_dt.weekday() >= 5:  # Saturday=5, Sunday=6
+        return False
+    local_t = et_dt.time()
+    return _RTH_OPEN <= local_t <= _RTH_CLOSE
 
 
 def _normalize_intervals(
@@ -336,6 +436,16 @@ class EvalContext:
     # interpretation that would force every already-matching symbol
     # to fire on bar 0).
     scanner_alert_prev_match: dict[str, bool] = field(default_factory=dict)
+    # ET trading-day boundary tracking — see ``_roll_session_counters``.
+    # ``max_fires_per_session_per_symbol`` and ``max_fires_per_session_total``
+    # are interpreted as "per ET trading day". When the ET date rolls
+    # (UTC date is too coarse for ET — 14:00 ET on Dec 31 ≠ 14:00 ET on
+    # Jan 1 in UTC), ``fires_total`` and ``fires_by_symbol`` are reset
+    # to 0 so the next day's first eligible bar can fire again.
+    current_session_et_date: date | None = None
+    # Timestamp of the most recent successful entry fire — drives the
+    # ``cooldown_secs`` gate. ``None`` until the first fire.
+    last_fire_ts: int | None = None
 
     def mint_order_id(self) -> str:
         oid = f"strat-{self.symbol}-{self.next_order_id:05d}"
@@ -823,7 +933,14 @@ def _exit_time_of_day(
         return False
     position = _ctx_to_position(eval_state)
     spec_bar = _bar_to_specbar(bar, bar_ts)
-    now = datetime.fromtimestamp(int(bar_ts), tz=timezone.utc)
+    # TIME_OF_DAY cutoffs in saved templates are ET HH:MM (matching the
+    # ``arm_window_*`` convention). Bar timestamps are UTC epoch
+    # seconds, so we convert to ET before handing to
+    # :func:`exits.spec.evaluate_time_of_day` — otherwise a "15:55 ET"
+    # cutoff on 5m bars whose ts is e.g. ``20:55 UTC`` (= 15:55 ET in
+    # winter) would compare ``20:55 >= 15:55`` and fire too early on
+    # almost every RTH bar.
+    now = _bar_ts_to_et(int(bar_ts))
     try:
         decision = _spec_evaluate_time_of_day(trigger, position, spec_bar, now=now)
     except Exception:  # noqa: BLE001
@@ -981,6 +1098,8 @@ def _check_entry(
     *,
     eval_ctx: _ScannerEvalContext | None = None,
     normalized_conditions: dict[str, _ScannerGroup] | None = None,
+    bar_ts: int = 0,
+    et_now: datetime | None = None,
 ) -> tuple[bool, Side, float]:
     """Decide whether the entry trigger fires against ``bar``.
 
@@ -992,6 +1111,11 @@ def _check_entry(
     ``normalized_conditions`` is a cache of interval-normalized
     condition trees keyed by trigger.id; threaded to INDICATOR
     handlers (price-only handlers ignore it).
+    ``bar_ts`` is the UTC epoch-second timestamp of the bar (needed for
+    the ``cooldown_secs`` gate). ``et_now`` is the bar timestamp
+    converted to ET (needed for ``arm_window`` and
+    ``require_market_open`` gates) — supplied by the caller so the
+    conversion happens once per bar, not once per handler.
     """
     if not ctx.entry_strategy.enabled:
         return False, Side.BUY, 0.0
@@ -1008,6 +1132,30 @@ def _check_entry(
     if (
         ctx.fires_by_symbol
         >= ctx.entry_strategy.max_fires_per_session_per_symbol
+    ):
+        return False, Side.BUY, 0.0
+    # Arm-window gate (ET HH:MM). Blank → no gate. The default template
+    # cooks 09:35–15:30 ET, so without this gate a 24/7 fictional bar
+    # series would fire pre-market.
+    if et_now is not None and not _within_arm_window(ctx.entry_strategy, et_now):
+        return False, Side.BUY, 0.0
+    # Require-market-open gate (Mon–Fri AND 09:30 ≤ ET time ≤ 16:00).
+    # Holidays are not enforced — synthetic data with a Christmas-day
+    # bar will fire, matching the strategy's "any RTH-shaped bar is
+    # eligible" interpretation.
+    if (
+        et_now is not None
+        and ctx.entry_strategy.require_market_open
+        and not _is_regular_session(et_now)
+    ):
+        return False, Side.BUY, 0.0
+    # Cooldown-since-last-fire gate. ``cooldown_secs == 0`` is the
+    # "no cooldown" default. ``last_fire_ts is None`` means "no prior
+    # fire" — always passes.
+    if (
+        ctx.entry_strategy.cooldown_secs > 0
+        and ctx.last_fire_ts is not None
+        and (bar_ts - ctx.last_fire_ts) < ctx.entry_strategy.cooldown_secs
     ):
         return False, Side.BUY, 0.0
 
@@ -1211,6 +1359,68 @@ def evaluate_symbol(
             break
         bar = _bar_at(i, bars)
         ts = int(bars.ts[i])
+        # Compute the bar's ET datetime ONCE per bar — needed for both
+        # the session-day-roll check below AND the arm_window /
+        # require_market_open gates in ``_check_entry``.
+        et_now = _bar_ts_to_et(ts)
+        et_date = et_now.date()
+
+        # Per-ET-trading-day counter reset. Mirrors the live
+        # ``EntryEvaluator._roll_session_counters_if_needed`` semantics.
+        # ``max_fires_per_session_per_symbol`` means "per trading day",
+        # not "per backtest"; without this reset, the default cap of 1
+        # caps the entire run at 1 entry per symbol (the smoking-gun
+        # "AAPL/NVDA/SPY each have 1 trade" bug).
+        if ctx.current_session_et_date != et_date:
+            # Per-ET-day ``eod_kill_switch`` flatten. Mirrors the live
+            # "market-on-close at 15:55 ET" behaviour: when the ET date
+            # rolls and a position is still open from the prior day,
+            # synthesise an exit fill at the **prior** bar's close
+            # (= EOD of prior trading day). Without this, a 3/8 EMA
+            # cross strategy in a trending market would never get a
+            # chance to re-enter the next day because the BLOCK policy
+            # holds the position open across the date boundary even
+            # though the user opted into ``eod_kill_switch``.
+            if (
+                ctx.current_session_et_date is not None
+                and exit_strategy.eod_kill_switch
+                and ctx.position_open
+                and ctx.position_qty > 0.0
+                and i > 0
+            ):
+                prior_idx = i - 1
+                prior_ts = int(bars.ts[prior_idx])
+                prior_close = float(bars.close[prior_idx])
+                exit_side = Side.SELL if ctx.position_side == "buy" else Side.BUY
+                # Use ``apply_fills`` to honour the cost model (slippage
+                # + commission) — same shape as the end-of-run kill.
+                from ..backtest.fills import apply_fills as _apply_fills
+                synth_fills = _apply_fills(
+                    orders=[
+                        Order(
+                            order_id=ctx.mint_order_id(),
+                            symbol=symbol,
+                            side=exit_side,
+                            quantity=float(ctx.position_qty),
+                            submitted_ts=prior_ts,
+                        )
+                    ],
+                    next_bar_opens={symbol: prior_close},
+                    next_bar_ts=prior_ts,
+                    slippage_bps=float(cost_model.slippage_bps),
+                    commission=float(cost_model.commission_per_trade),
+                    commission_per_share=float(cost_model.commission_per_share),
+                )
+                for f in synth_fills:
+                    engine._apply_fill_with_tracking(f)
+                    engine.fills.append(f)
+                # Re-sync ctx so the position-state reflects the flatten
+                # before the new day's processing begins.
+                _sync_position_state_from_engine(ctx, engine, symbol)
+            ctx.fires_total = 0
+            ctx.fires_by_symbol = 0
+            ctx.current_session_et_date = et_date
+
         if eval_ctx is not None:
             # Decision is made at bar ``i``'s close; reset the per-bar
             # evidence collector so indicator look-back walks don't
@@ -1262,6 +1472,8 @@ def evaluate_symbol(
             ctx, bar,
             eval_ctx=eval_ctx,
             normalized_conditions=normalized_conditions,
+            bar_ts=ts,
+            et_now=et_now,
         )
         if fired:
             entry_order = Order(
@@ -1274,6 +1486,7 @@ def evaluate_symbol(
             engine.submit_order(entry_order)
             ctx.fires_total += 1
             ctx.fires_by_symbol += 1
+            ctx.last_fire_ts = ts
 
     # EOD kill-switch: if the strategy mandates flatten-at-EOD and we still
     # have an open position when the timeline runs out, sweep on the last bar.
