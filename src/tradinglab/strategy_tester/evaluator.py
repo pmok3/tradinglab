@@ -76,6 +76,9 @@ from ..scanner.engine import (
 from ..scanner.engine import (
     make_context as _scanner_make_context,
 )
+from ..scanner.model import Condition as _ScannerCondition
+from ..scanner.model import FieldRef as _ScannerFieldRef
+from ..scanner.model import Group as _ScannerGroup
 from .model import CostModel
 
 LOG = logging.getLogger(__name__)
@@ -87,6 +90,120 @@ __all__ = [
     "_ENTRY_HANDLERS",
     "_EXIT_HANDLERS",
 ]
+
+
+def _normalize_intervals(
+    node: _ScannerGroup | _ScannerCondition,
+    interval: str,
+) -> _ScannerGroup | _ScannerCondition:
+    """Deep-clone a scanner condition tree with all intervals forced to ``interval``.
+
+    The strategy tester runs in **single-interval mode** in PR-1: the
+    test's outer ``interval`` (from ``TestConfig.interval``) is the
+    one-and-only data interval. Saved entry/exit strategies authored
+    via the entries/exits dialogs typically carry per-Condition
+    ``interval="5m"`` and per-FieldRef ``interval=None`` (the model
+    defaults). When the user runs the strategy tester at any other
+    interval (e.g. ``"1d"``), the scanner's cross-interval gate in
+    :func:`scanner.engine.evaluate_condition` silently returns ``None``
+    (no ``bars_registry`` is wired in the headless path) and **no
+    triggers ever fire** — see GH bug "0 trades on 3/8 EMA cross
+    default".
+
+    This helper rewrites the tree so every leaf's interval matches
+    the test interval, letting the existing same-interval evaluation
+    path do its job. Returns a NEW tree; the input is not mutated.
+
+    True cross-interval evaluation in mechanical testing requires a
+    ``BarsRegistry`` populated from multi-interval candle fetches and
+    is deferred to a future PR.
+    """
+    if isinstance(node, _ScannerCondition):
+        # Strip FieldRef intervals (set to None) so the field-level
+        # cross-interval gate also no-ops.
+        new_params: dict = {}
+        for k, v in node.params.items():
+            if isinstance(v, _ScannerFieldRef) and v.interval is not None:
+                if v.kind == "literal":
+                    new_params[k] = _ScannerFieldRef(
+                        kind=v.kind, value=v.value, interval=None,
+                    )
+                else:
+                    new_params[k] = _ScannerFieldRef(
+                        kind=v.kind, id=v.id, params=dict(v.params or {}),
+                        output_key=v.output_key, interval=None,
+                    )
+            else:
+                new_params[k] = v
+        left = node.left
+        if left.interval is not None:
+            if left.kind == "literal":
+                left = _ScannerFieldRef(
+                    kind=left.kind, value=left.value, interval=None,
+                )
+            else:
+                left = _ScannerFieldRef(
+                    kind=left.kind, id=left.id,
+                    params=dict(left.params or {}),
+                    output_key=left.output_key, interval=None,
+                )
+        return _ScannerCondition(
+            id=node.id,
+            left=left,
+            op=node.op,
+            params=new_params,
+            interval=interval,
+            enabled=node.enabled,
+            comment=node.comment,
+            within_last_bars=node.within_last_bars,
+            within_last_mode=node.within_last_mode,
+        )
+    # Group
+    return _ScannerGroup(
+        combinator=node.combinator,
+        children=[_normalize_intervals(c, interval) for c in node.children],
+        enabled=node.enabled,
+        id=node.id,
+        within_last_bars=node.within_last_bars,
+        within_last_mode=node.within_last_mode,
+    )
+
+
+def _build_normalized_conditions(
+    entry_strategy: EntryStrategy,
+    exit_strategy: ExitStrategy,
+    interval: str,
+) -> dict[str, _ScannerGroup]:
+    """Build a ``trigger.id -> normalized condition tree`` cache.
+
+    Walked once per ``evaluate_symbol`` call; the indicator handlers
+    look up the normalized condition rather than re-walking the tree
+    per bar.
+    """
+    out: dict[str, _ScannerGroup] = {}
+    if (
+        entry_strategy.trigger.kind is EntryTriggerKind.INDICATOR
+        and entry_strategy.trigger.condition is not None
+    ):
+        normalized = _normalize_intervals(
+            entry_strategy.trigger.condition, interval,
+        )
+        if isinstance(normalized, _ScannerGroup):
+            out[entry_strategy.trigger.id] = normalized
+    for leg in exit_strategy.legs:
+        if not leg.enabled:
+            continue
+        for trig in leg.triggers:
+            if not trig.enabled:
+                continue
+            if trig.kind is not ExitTriggerKind.INDICATOR:
+                continue
+            if trig.condition is None:
+                continue
+            normalized = _normalize_intervals(trig.condition, interval)
+            if isinstance(normalized, _ScannerGroup):
+                out[trig.id] = normalized
+    return out
 
 
 class UnsupportedTriggerKind(NotImplementedError):
@@ -263,6 +380,7 @@ def _entry_indicator(
     bar: _BarTuple,
     *,
     eval_ctx: _ScannerEvalContext | None = None,
+    normalized_conditions: dict[str, _ScannerGroup] | None = None,
     **_kw: object,
 ) -> bool:
     """INDICATOR entry: evaluate ``trigger.condition`` at the current bar.
@@ -276,11 +394,22 @@ def _entry_indicator(
     trigger silently does NOT fire (defensive — a broken indicator
     shouldn't abort the entire Run; the scanner kernel already logs
     indicator errors via ``IndicatorMemo.errors``).
+
+    ``normalized_conditions`` maps ``trigger.id`` → condition tree
+    with all per-Condition / per-FieldRef intervals forced to the
+    test's outer interval. Built once per symbol by
+    :func:`_build_normalized_conditions`. Without it, conditions
+    authored at a different default interval (e.g. ``"5m"``) silently
+    no-fire against the test's interval (e.g. ``"1d"``) due to the
+    scanner's cross-interval gate.
     """
     if eval_ctx is None or trigger.condition is None:
         return False
+    condition: _ScannerGroup = trigger.condition  # type: ignore[assignment]
+    if normalized_conditions is not None:
+        condition = normalized_conditions.get(trigger.id, condition)
     try:
-        result = _scanner_evaluate_group(trigger.condition, eval_ctx)
+        result = _scanner_evaluate_group(condition, eval_ctx)
     except NotImplementedError:
         # Cross-interval / unimplemented indicator path — treat as "no fire".
         return False
@@ -408,6 +537,7 @@ def _exit_indicator(
     bar: _BarTuple,
     *,
     eval_ctx: _ScannerEvalContext | None = None,
+    normalized_conditions: dict[str, _ScannerGroup] | None = None,
     **_kw: object,
 ) -> bool:
     """INDICATOR exit: evaluate ``trigger.condition`` at the current bar.
@@ -419,8 +549,11 @@ def _exit_indicator(
     """
     if eval_ctx is None or trigger.condition is None:
         return False
+    condition: _ScannerGroup = trigger.condition  # type: ignore[assignment]
+    if normalized_conditions is not None:
+        condition = normalized_conditions.get(trigger.id, condition)
     try:
-        result = _scanner_evaluate_group(trigger.condition, eval_ctx)
+        result = _scanner_evaluate_group(condition, eval_ctx)
     except NotImplementedError:
         return False
     except Exception:  # noqa: BLE001
@@ -497,6 +630,7 @@ def _check_entry(
     bar: _BarTuple,
     *,
     eval_ctx: _ScannerEvalContext | None = None,
+    normalized_conditions: dict[str, _ScannerGroup] | None = None,
 ) -> tuple[bool, Side, float]:
     """Decide whether the entry trigger fires against ``bar``.
 
@@ -505,6 +639,9 @@ def _check_entry(
 
     ``eval_ctx`` is the per-symbol scanner-engine evaluation context.
     Required for INDICATOR triggers; ignored by price-only handlers.
+    ``normalized_conditions`` is a cache of interval-normalized
+    condition trees keyed by trigger.id; threaded to INDICATOR
+    handlers (price-only handlers ignore it).
     """
     if not ctx.entry_strategy.enabled:
         return False, Side.BUY, 0.0
@@ -532,7 +669,10 @@ def _check_entry(
     )
 
     handler = _ENTRY_HANDLERS.get(trigger.kind, _entry_unsupported)
-    fired = handler(trigger, bar, side=side, eval_ctx=eval_ctx)
+    fired = handler(
+        trigger, bar, side=side, eval_ctx=eval_ctx,
+        normalized_conditions=normalized_conditions,
+    )
     if not fired:
         return False, side, 0.0
 
@@ -550,6 +690,7 @@ def _check_exits(
     bar: _BarTuple,
     *,
     eval_ctx: _ScannerEvalContext | None = None,
+    normalized_conditions: dict[str, _ScannerGroup] | None = None,
 ) -> tuple[bool, float]:
     """Walk every enabled leg looking for an exit trigger that fires.
 
@@ -558,6 +699,9 @@ def _check_exits(
 
     ``eval_ctx`` is the per-symbol scanner-engine evaluation context.
     Required for INDICATOR triggers; ignored by price-only handlers.
+    ``normalized_conditions`` is a cache of interval-normalized
+    condition trees keyed by trigger.id; threaded to INDICATOR
+    handlers (price-only handlers ignore it).
     """
     if not ctx.position_open:
         return False, 0.0
@@ -577,6 +721,7 @@ def _check_exits(
                 ref_price=ctx.position_avg_price,
                 position_side=ctx.position_side,
                 eval_ctx=eval_ctx,
+                normalized_conditions=normalized_conditions,
             )
             if fired:
                 pct = max(0.0, min(100.0, float(trigger.qty_pct))) / 100.0
@@ -680,15 +825,21 @@ def evaluate_symbol(
     # Two intervals possible per strategy: entry.trigger.interval and
     # exit-leg.trigger.interval. PR-2 leaves cross-interval / multi-interval
     # indicator triggers to the scanner registry's BarsRegistry path —
-    # for now we build a single ctx for the outer ``interval`` and let
-    # ``make_context`` reuse the same memo across bars.
+    # for now we build a single ctx for the outer ``interval`` and
+    # normalize all saved Condition / FieldRef intervals to match the
+    # test's outer interval (so a 5m-authored EMA cross can be tested
+    # at 1d without the scanner's cross-interval gate silently no-firing).
     eval_ctx: _ScannerEvalContext | None = None
+    normalized_conditions: dict[str, _ScannerGroup] = {}
     if _strategy_uses_indicator_trigger(entry_strategy, exit_strategy):
         eval_ctx = _scanner_make_context(
             symbol=symbol,
             interval=interval,
             candles=list(candles),
             current_index=0,
+        )
+        normalized_conditions = _build_normalized_conditions(
+            entry_strategy, exit_strategy, interval,
         )
 
     n = len(bars)
@@ -714,7 +865,11 @@ def evaluate_symbol(
 
         # Exit-side first (an open position has priority over re-entry on the same bar).
         if ctx.position_open:
-            exit_fired, exit_qty = _check_exits(ctx, bar, eval_ctx=eval_ctx)
+            exit_fired, exit_qty = _check_exits(
+                ctx, bar,
+                eval_ctx=eval_ctx,
+                normalized_conditions=normalized_conditions,
+            )
             if exit_fired:
                 exit_side = Side.SELL if ctx.position_side == "buy" else Side.BUY
                 exit_order = Order(
@@ -729,7 +884,11 @@ def evaluate_symbol(
                 continue
 
         # Entry-side
-        fired, side, qty = _check_entry(ctx, bar, eval_ctx=eval_ctx)
+        fired, side, qty = _check_entry(
+            ctx, bar,
+            eval_ctx=eval_ctx,
+            normalized_conditions=normalized_conditions,
+        )
         if fired:
             entry_order = Order(
                 order_id=ctx.mint_order_id(),

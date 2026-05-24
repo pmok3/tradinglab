@@ -262,6 +262,46 @@ def test_indicator_entry_fires_when_condition_becomes_true() -> None:
     assert buys[0].fill_price >= 105.0
 
 
+def test_indicator_entry_fires_when_condition_authored_at_different_interval() -> None:
+    """Regression: 0-trade bug reported on real $SPY runs.
+
+    User authored an entry strategy in the GUI; the scanner.Condition
+    default ``interval="5m"`` was preserved on save. They then ran
+    the strategy tester at the default ``"1d"`` interval. Without
+    interval normalization, the cross-interval gate in
+    scanner.engine.evaluate_condition silently returns ``None`` (no
+    BarsRegistry is wired in the headless path) -> zero fires across
+    the entire universe.
+
+    The fix normalizes all per-Condition / per-FieldRef intervals in
+    the strategy's condition tree to the test's outer interval at
+    evaluate_symbol time. This test exercises that path: the
+    condition is created with interval="5m" but the test runs at
+    interval="1d", and the strategy must still produce a fill.
+    """
+    # Condition's interval is "5m" but we'll evaluate at "1d".
+    condition = _close_gt_threshold(105.0, interval="5m")
+    entry = _indicator_long_strategy(condition)
+    exit_strat = _stop_5pct_exit()
+    exit_strat.eod_kill_switch = False
+    candles = _ramp_candles(n=30)
+
+    result = evaluate_symbol(
+        symbol="TEST",
+        candles=candles,
+        interval="1d",   # different from the condition's authored interval
+        entry_strategy=entry,
+        exit_strategy=exit_strat,
+        starting_cash=100_000.0,
+        cost_model=CostModel(),
+    )
+    buys = [f for f in result.fills if f.side.value == "buy"]
+    assert len(buys) == 1, (
+        f"expected exactly 1 BUY fill after interval normalization, "
+        f"got {len(buys)} -- this is the 0-trade regression"
+    )
+
+
 def test_indicator_entry_no_fire_when_condition_never_true() -> None:
     """Threshold above any close → no fills, no errors."""
     condition = _close_gt_threshold(99999.0)

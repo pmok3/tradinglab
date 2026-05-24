@@ -37,6 +37,20 @@ passed to `evaluate_symbol`; true cross-interval evaluation requires a
 exceptions are logged via `logging` and treated as "no fire" so a
 broken indicator never aborts an entire Run.
 
+**Single-interval normalization.** Saved scanner conditions carry
+per-`Condition`/`FieldRef` ``interval`` slots that default to
+``"5m"`` (per `scanner.model`). When the strategy tester runs at a
+different interval (e.g. ``"1d"``) with no `BarsRegistry`, the
+scanner's cross-interval gate would silently return ``None`` for
+every leaf — producing zero fires across the entire universe. To
+prevent that, `evaluate_symbol` calls `_build_normalized_conditions`
+once per symbol to deep-clone every INDICATOR trigger's condition
+tree with all internal intervals forced to match the test's outer
+interval. The normalized cache is keyed by ``trigger.id`` and
+threaded to the indicator handlers, which look up the rewritten tree
+instead of the original. The input strategy objects are never
+mutated.
+
 Multi-leg OCO is reduced to first-leg-to-fire in PR 1. Proper OCO semantics ship in PR 2.
 
 ## Dependencies
