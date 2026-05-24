@@ -93,6 +93,7 @@ class StrategyTab(ttk.Frame):
         self,
         master: tk.Misc,
         *,
+        app: Any = None,
         entries_storage: Any = None,
         exits_storage: Any = None,
         watchlists_storage: Any = None,
@@ -101,6 +102,7 @@ class StrategyTab(ttk.Frame):
         candles_fetcher: Callable[[str, str], Any] | None = None,
     ) -> None:
         super().__init__(master)
+        self._app = app  # ChartApp reference; supplies _worker_count
         self._entries_storage = entries_storage or _entries_storage
         self._exits_storage = exits_storage or _exits_storage
         self._watchlists_storage = watchlists_storage or _watchlists_storage
@@ -138,6 +140,7 @@ class StrategyTab(ttk.Frame):
         self._var_comm_share = tk.StringVar(value="0")
         self._var_user_label = tk.StringVar(value="")
         self._var_screenshots = tk.BooleanVar(value=True)
+        self._var_include_extended_hours = tk.BooleanVar(value=False)
         self._var_advanced_open = tk.BooleanVar(value=False)
         self._var_status = tk.StringVar(value="Ready.")
 
@@ -388,6 +391,30 @@ class StrategyTab(ttk.Frame):
             parent, text="Generate per-trade screenshots (PNG)",
             variable=self._var_screenshots,
         ).grid(row=row, column=0, columnspan=2, sticky="w")
+        row += 1
+
+        # Extended-hours opt-in (default OFF = RTH-only). Premarket /
+        # postmarket bars otherwise leak into indicator math and skew
+        # EMA / SMA / RSI / VWAP values at the open.
+        ttk.Checkbutton(
+            parent, text="Include pre/post-market data",
+            variable=self._var_include_extended_hours,
+            command=self._on_extended_hours_toggle,
+        ).grid(row=row, column=0, columnspan=2, sticky="w")
+        row += 1
+        self._lbl_extended_hours_warning = ttk.Label(
+            parent,
+            text=(
+                "\u26a0 Warning: indicators (EMA, SMA, RSI, VWAP, etc.) "
+                "will be skewed by extended-hours data."
+            ),
+            foreground="#cc6600",
+            wraplength=400,
+        )
+        self._lbl_extended_hours_warning.grid(
+            row=row, column=0, columnspan=2, sticky="we", padx=(20, 0)
+        )
+        self._lbl_extended_hours_warning.grid_remove()
         row += 1
 
         # Label + Run / Stop buttons
@@ -672,6 +699,12 @@ class StrategyTab(ttk.Frame):
         else:
             self._frame_advanced.grid_remove()
 
+    def _on_extended_hours_toggle(self, *_args) -> None:
+        if self._var_include_extended_hours.get():
+            self._lbl_extended_hours_warning.grid()
+        else:
+            self._lbl_extended_hours_warning.grid_remove()
+
     # ------------------------------------------------------------------
     # Run lifecycle
     # ------------------------------------------------------------------
@@ -736,6 +769,7 @@ class StrategyTab(ttk.Frame):
             cost_model=cost,
             date_preset=preset,
             user_label=self._var_user_label.get().strip(),
+            include_extended_hours=bool(self._var_include_extended_hours.get()),
         )
 
     def _selected_entry(self) -> Any | None:
@@ -803,6 +837,7 @@ class StrategyTab(ttk.Frame):
 
         def _worker_main() -> None:
             try:
+                max_workers = getattr(self._app, "_worker_count", None)
                 result = self._run_fn(
                     cfg,
                     cancel_token=self._token,
@@ -811,6 +846,7 @@ class StrategyTab(ttk.Frame):
                     exit_loader=lambda sid: exits_by_id[sid],
                     progress=self._on_progress,
                     screenshot_spec=screenshot_spec,
+                    max_workers=max_workers,
                 )
                 self._worker_result["result"] = result
             except Exception as exc:  # noqa: BLE001

@@ -110,13 +110,23 @@ root in smoke tests). The popup wrapper + menubar wiring live in
 ## Run lifecycle
 - Click **Run** → `_build_config_from_ui` validates the form and
   produces a ``TestConfig``. Validation errors surface via a
-  ``messagebox.showwarning`` and abort the Run.
+  ``messagebox.showwarning`` and abort the Run. The form also threads
+  ``include_extended_hours`` (default ``False`` = RTH-only) into the
+  config; the runner filters non-RTH bars before the evaluator sees
+  them. A checkbox **"Include pre/post-market data"** sits in the
+  Configure pane below the screenshot opt-in; toggling it on reveals
+  an inline amber warning that indicators (EMA, SMA, RSI, VWAP, ...)
+  will be skewed by extended-hours data.
 - A new ``AcceptanceToken`` is created and stashed; the kernel is
   invoked on a daemon ``threading.Thread`` so the UI stays responsive
   during long Runs.
 - The thread invokes ``strategy_tester.run(cfg, cancel_token=token,
   candles_fetcher=..., entry_loader=..., exit_loader=...,
-  progress=..., screenshot_spec=...)``. The runner already auto-writes
+  progress=..., screenshot_spec=..., max_workers=app._worker_count)``.
+  ``max_workers`` is sourced from ``self._app._worker_count`` when
+  ``self._app`` is set (production), or ``None`` (falls through to
+  ``DEFAULT_MAX_WORKERS``) in smoke/unit-test contexts where no app
+  reference is available. The runner already auto-writes
   ``aggregate.json`` + ``trades.csv`` after the symbol loop
   (PR 3 integration).
 - A 250 ms ``after()`` poll loop watches `self._worker.is_alive()`
@@ -142,6 +152,12 @@ root in smoke tests). The popup wrapper + menubar wiring live in
 - ``run_fn`` — override the kernel entry point (currently only used
   to confirm the indirection works; production passes
   ``strategy_tester.run``).
+- ``app`` — optional reference to the parent ``ChartApp`` instance.
+  When provided, ``_on_run_clicked`` reads ``app._worker_count`` and
+  passes it as ``max_workers=`` to ``runner.run``, so the Strategy
+  Tester thread pool honours the user's **Settings → Workers** value.
+  When ``None`` (smoke tests, unit tests that don't need a full app),
+  ``runner.run`` falls back to ``DEFAULT_MAX_WORKERS``.
 
 ## Cleanup
 - ``<Destroy>`` binding cancels any in-flight Run (``token.cancel()``)

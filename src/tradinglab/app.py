@@ -6925,7 +6925,7 @@ class ChartApp(
             pass
 
         try:
-            tab = StrategyTab(dlg)
+            tab = StrategyTab(dlg, app=self)
             tab.pack(fill="both", expand=True)
         except Exception:  # noqa: BLE001
             logger.exception("Failed to construct StrategyTab inside popup")

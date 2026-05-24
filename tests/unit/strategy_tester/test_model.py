@@ -122,3 +122,32 @@ def test_test_run_round_trip() -> None:
     assert revived.status is RunStatus.RUNNING
     assert revived.symbol_count_done == 1
     assert revived.config == cfg
+
+
+def test_include_extended_hours_default_is_false() -> None:
+    cfg = _cfg()
+    assert cfg.include_extended_hours is False
+
+
+def test_include_extended_hours_to_dict_includes_field() -> None:
+    cfg = _cfg(include_extended_hours=True)
+    assert cfg.to_dict()["include_extended_hours"] is True
+    cfg2 = _cfg(include_extended_hours=False)
+    assert cfg2.to_dict()["include_extended_hours"] is False
+
+
+def test_include_extended_hours_from_dict_missing_key_defaults_false() -> None:
+    """Old JSON files predating this field deserialise to False (back-compat)."""
+    payload = _cfg().to_dict()
+    payload.pop("include_extended_hours", None)
+    revived = TestConfig.from_dict(payload)
+    assert revived.include_extended_hours is False
+
+
+def test_include_extended_hours_round_trip_preserves_value() -> None:
+    for v in (True, False):
+        cfg = _cfg(include_extended_hours=v)
+        revived = TestConfig.from_dict(cfg.to_dict())
+        assert revived.include_extended_hours is v
+        assert revived == cfg
+

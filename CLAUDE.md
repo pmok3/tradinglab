@@ -429,6 +429,38 @@ compat, TIME_OF_DAY trigger isolation).
 of RTH membership. Don't accidentally extend the RTH gate to that
 handler.
 
+### 7.13 Strategy tester defaults to RTH-only filtering
+`TestConfig.include_extended_hours` defaults to `False` — meaning the
+runner's `_worker` calls `_filter_rth_only(candles)` after the date-range
+slice, dropping every bar outside Mon-Fri 09:30-16:00 ET *before* the
+evaluator sees them. This stops premarket / postmarket prints (e.g.
+04:00 ET, 19:55 ET) from skewing EMA / SMA / RSI / VWAP / etc. values
+at the open — the "9 EMA bounce at 09:31 ET pulled from 8 premarket
+bars" footgun.
+
+Opt in via the GUI checkbox **"Include pre/post-market data"** in the
+Strategy Tester Configure pane, which sets
+`TestConfig.include_extended_hours=True` through `_build_config_from_ui`.
+A warning label appears beneath the checkbox when on.
+
+**Don't accidentally bypass the filter in custom workers / tests.** If
+you author a new test using synthetic `_fake_candles` that aren't
+RTH-aligned in ET (tz-naive datetimes get interpreted as local time,
+which is rarely ET), the filter will drop everything → 0 fills. Two
+fixes:
+1. **Opt in:** set `include_extended_hours=True` on the `TestConfig`
+   (or `tab._var_include_extended_hours.set(True)` for GUI tests).
+   This is what the smoke checks do (see `test_smoke_strategy.py`).
+2. **Build RTH-aligned candles:** use `tz=ZoneInfo("America/New_York")`
+   with a Monday-Friday date, and timestamps in `09:30..16:00`.
+   See `tests/unit/strategy_tester/test_rth_filter.py` for the
+   reference pattern.
+
+Filter helper: `strategy_tester.runner._filter_rth_only`, which reuses
+`evaluator._is_regular_session` + `evaluator._bar_ts_to_et`. Round-trip
+JSON: missing `include_extended_hours` key in old manifests
+deserialises to `False` (back-compat).
+
 ---
 
 ## 8. Build & release flow

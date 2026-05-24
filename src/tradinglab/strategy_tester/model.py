@@ -259,6 +259,7 @@ class TestConfig:
     rng_seed: int = 0
     schema_version: int = CURRENT_SCHEMA_VERSION
     user_label: str = ""
+    include_extended_hours: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -274,6 +275,7 @@ class TestConfig:
             "date_preset": self.date_preset.value,
             "rng_seed": int(self.rng_seed),
             "user_label": str(self.user_label),
+            "include_extended_hours": bool(self.include_extended_hours),
         }
 
     @classmethod
@@ -302,6 +304,7 @@ class TestConfig:
             rng_seed=int(d.get("rng_seed", 0)),
             schema_version=version,
             user_label=str(d.get("user_label", "")),
+            include_extended_hours=bool(d.get("include_extended_hours", False)),
         )
 
     def canonical_dict(self) -> dict[str, Any]:

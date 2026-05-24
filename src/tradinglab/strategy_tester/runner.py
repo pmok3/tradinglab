@@ -55,6 +55,8 @@ from . import report, storage
 from .acceptance import AcceptanceToken
 from .evaluator import (
     UnsupportedTriggerKind,
+    _bar_ts_to_et,
+    _is_regular_session,
     collect_interval_overrides,
     evaluate_symbol,
 )
@@ -83,10 +85,26 @@ __all__ = [
 log = logging.getLogger(__name__)
 
 
-# Cap workers per the scanner runner convention (cpu_count - 1, max 4).
 def _default_max_workers() -> int:
+    """Return the default thread-pool size for a strategy run.
+
+    Precedence:
+    1. Persisted ``worker_count`` tunable (from Settings → Workers) — if the
+       user set an explicit count > 0, honour it (clamped to 64).
+    2. Auto-detect: ``os.cpu_count() - 1``, clamped to ``[1, 64]``.
+
+    The old hard cap of 4 is removed so a user who allocates e.g. 12 workers
+    in Settings actually gets 12 strategy-tester threads.
+    """
+    try:
+        from ..defaults import get as _defaults_get
+        persisted = int(_defaults_get("worker_count") or 0)
+        if persisted > 0:
+            return min(persisted, 64)
+    except Exception:  # noqa: BLE001 — missing import / corrupt settings → fall through
+        pass
     cpu = os.cpu_count() or 2
-    return max(1, min(cpu - 1, 4))
+    return max(1, min(cpu - 1, 64))
 
 
 DEFAULT_MAX_WORKERS = _default_max_workers()
@@ -204,6 +222,24 @@ def _slice_to_date_range(
     return out
 
 
+def _filter_rth_only(candles: Sequence[Candle]) -> list[Candle]:
+    """Drop bars outside US-equity Regular Trading Hours.
+
+    RTH = Mon-Fri AND 09:30 <= ET time <= 16:00. Premarket (04:00-09:30
+    ET) and postmarket (16:00-20:00 ET) bars are dropped so indicators
+    (EMA, SMA, RSI, VWAP, etc.) computed inside the evaluator are not
+    skewed by thin extended-hours prints. tz-naive ``Candle.date`` values
+    are treated as UTC epoch seconds for the ET conversion — matches
+    the convention used by ``_bar_ts_to_et`` elsewhere in the kernel.
+    """
+    out: list[Candle] = []
+    for c in candles:
+        ts = int(c.date.timestamp())
+        if _is_regular_session(_bar_ts_to_et(ts)):
+            out.append(c)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Per-symbol outcome
 # ---------------------------------------------------------------------------
@@ -302,6 +338,8 @@ def _worker(
     try:
         raw = candles_fetcher(symbol, cfg.interval)
         candles = _slice_to_date_range(raw, start_date, end_date)
+        if not cfg.include_extended_hours:
+            candles = _filter_rth_only(candles)
         result = evaluate_symbol(
             symbol=symbol,
             candles=candles,

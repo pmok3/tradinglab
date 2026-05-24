@@ -115,6 +115,9 @@ def _make_test_config():
         cost_model=CostModel(),
         date_preset=DatePreset.CUSTOM,
         user_label="ST0 smoke kernel",
+        # Synthetic candles are tz-naive and not RTH-aligned in ET;
+        # opt into extended-hours so the RTH filter doesn't drop them all.
+        include_extended_hours=True,
     )
 
     return entry, exit_strat, cfg
@@ -402,6 +405,9 @@ def check_st3_strategy_tab_end_to_end(tmp_cache_root: Path) -> None:
         tab._var_end_date.set("2030-01-01")
         tab._var_interval.set("5m")
         tab._var_screenshots.set(False)
+        # Synthetic candles aren't RTH-aligned in ET — opt into
+        # extended-hours so the RTH filter doesn't drop them all.
+        tab._var_include_extended_hours.set(True)
 
         # Pickers should auto-populate to the first available entry/exit
         # since refresh() ran in __init__. Validate the selection now.
