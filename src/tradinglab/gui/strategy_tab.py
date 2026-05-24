@@ -967,11 +967,26 @@ class StrategyTab(ttk.Frame):
             pass
 
     def _apply_progress(self, done: int, total: int) -> None:
-        """Apply a progress update on the Tk main thread."""
+        """Apply a progress update on the Tk main thread.
+
+        ``update_idletasks()`` at the end is mandatory: when symbols complete
+        sub-second (e.g. cached data + simple strategies), the runner fires
+        ``progress(test_run)`` 12 times in <100ms, which queues 12
+        ``after(0, ...)`` callbacks. Tk processes them all in a single
+        batch BEFORE yielding to redraw, so without forcing idle-task
+        processing here the bar visually jumps straight from 0 to N/N at
+        the end of the run instead of advancing one symbol at a time.
+        ``update_idletasks()`` flushes pending paint requests synchronously
+        without re-entering the event loop, which is exactly what we want.
+        """
         try:
             if total > 0:
                 self._pbar.configure(maximum=total, value=done)
             self._var_status.set(f"Running… {done}/{total} symbols")
+            try:
+                self._pbar.update_idletasks()
+            except Exception:  # noqa: BLE001
+                pass
         except Exception:  # noqa: BLE001
             pass
 

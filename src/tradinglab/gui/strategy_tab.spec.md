@@ -53,6 +53,15 @@ root in smoke tests). The popup wrapper + menubar wiring live in
     callback; ``value`` increments after every symbol completion.
   - One second after the Run finishes (Done / Cancelled / Failed) the
     bar hides itself so the finished state is visible momentarily.
+  - **Paint-forcing invariant** — ``_apply_progress`` MUST call
+    ``self._pbar.update_idletasks()`` after every ``configure`` so the
+    bar visibly advances between rapid sequential updates. Without
+    this, when symbols complete sub-second (cached data + simple
+    strategies), the runner's ``progress(test_run)`` fires 12 times in
+    <100ms which queues 12 ``after(0, ...)`` callbacks; Tk processes
+    them all in a single batch BEFORE yielding to redraw, so the bar
+    visually jumps from 0 to N/N at the END of the run instead of
+    advancing one symbol at a time.
 
 
 ### Report pane (right)

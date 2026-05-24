@@ -256,3 +256,84 @@ class TestOnProgress:
         _drain(tk_root)
         # Bar value stays at 0; no crash.
         assert tab._pbar["value"] == 0
+
+
+class TestProgressPaintForcing:
+    """Verify _apply_progress forces an immediate paint so rapid updates
+    are visually distinguishable (regression for "bar jumps from 0 to N/N
+    at end of run because Tk batches paint operations")."""
+
+    def test_apply_progress_calls_update_idletasks(self, tk_root: Any) -> None:
+        """Each _apply_progress call must invoke _pbar.update_idletasks()
+        so the bar visibly advances between rapid sequential updates.
+
+        Without this, when the runner fires progress(test_run) N times
+        in <100ms (e.g. cached data, fast strategies), all N after(0, ...)
+        callbacks queue and process in a single Tk batch — the bar jumps
+        straight from 0 to N/N at the END of the run instead of advancing
+        one symbol at a time.
+        """
+        tab = _make_tab(tk_root)
+        tab._set_running_ui(True)
+        tk_root.update_idletasks()
+
+        # Wrap update_idletasks to count calls.
+        original = tab._pbar.update_idletasks
+        calls: list[float] = []
+
+        def _counting_update():
+            calls.append(float(tab._pbar["value"]))
+            return original()
+
+        tab._pbar.update_idletasks = _counting_update  # type: ignore[method-assign]
+
+        for done in range(1, 6):
+            tab._apply_progress(done, 5)
+
+        assert len(calls) == 5, (
+            f"_apply_progress must call update_idletasks once per progress "
+            f"update (got {len(calls)} calls for 5 updates)"
+        )
+        # Each call must have observed the intermediate bar value, not just
+        # the final state — proves the paint was forced between updates.
+        assert calls == [1.0, 2.0, 3.0, 4.0, 5.0], (
+            f"each forced paint must observe the in-flight bar value "
+            f"(got {calls}, expected [1.0, 2.0, 3.0, 4.0, 5.0])"
+        )
+
+    def test_rapid_after_queue_drains_with_intermediate_paints(
+        self, tk_root: Any
+    ) -> None:
+        """End-to-end repro: queue 12 _on_progress events WITHOUT draining
+        between them, drain once, verify update_idletasks was called 12 times.
+
+        This mirrors what the runner does in production — fires progress()
+        rapidly from the worker thread, each call queues an after(0, ...)
+        on the Tk thread. The fix forces a paint after each, so the user
+        sees the bar advance step-by-step.
+        """
+        tab = _make_tab(tk_root)
+        tab._set_running_ui(True)
+        tk_root.update_idletasks()
+
+        original = tab._pbar.update_idletasks
+        call_count = [0]
+
+        def _counting_update():
+            call_count[0] += 1
+            return original()
+
+        tab._pbar.update_idletasks = _counting_update  # type: ignore[method-assign]
+
+        # Queue 12 updates without draining between them, as the runner
+        # does in production when symbols complete sub-second.
+        for done in range(1, 13):
+            test_run = _make_test_run(done=done, total=12)
+            tab._on_progress(test_run)
+        _drain(tk_root)
+
+        assert call_count[0] == 12, (
+            f"all 12 queued after(0, ...) callbacks must each force a paint "
+            f"(got {call_count[0]} update_idletasks calls)"
+        )
+        assert tab._pbar["value"] == 12
