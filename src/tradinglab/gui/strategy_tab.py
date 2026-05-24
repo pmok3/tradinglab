@@ -497,6 +497,10 @@ class StrategyTab(ttk.Frame):
         self._banner_sample = ttk.Label(
             parent, text="", foreground="#a06000", wraplength=420,
         )
+        self._banner_interval = ttk.Label(
+            parent, text="", foreground="#1f3a73", wraplength=420,
+            font=("", 9),
+        )
         # Headline metrics grid
         hg = ttk.LabelFrame(parent, text="Headline", padding=6)
         hg.pack(fill="x", pady=(0, 6))
@@ -989,6 +993,26 @@ class StrategyTab(ttk.Frame):
         else:
             try:
                 self._banner_sample.pack_forget()
+            except Exception:  # noqa: BLE001
+                pass
+
+        # Interval-override banner (independent of sample-size banner;
+        # both can show simultaneously). Single-interval mode rewrites
+        # every authored interval to TestConfig.interval — surface that
+        # to the user so they're not confused why a "1m EMA cross"
+        # template tested at 5m fires on 5m bars instead of 1m.
+        if agg.interval_overrides:
+            lines = "\n".join(f"  • {s}" for s in agg.interval_overrides)
+            self._banner_interval.configure(
+                text=(
+                    "ℹ Interval overrides (strategy_tester runs in "
+                    "single-interval mode):\n" + lines
+                ),
+            )
+            self._banner_interval.pack(anchor="w", fill="x", pady=(0, 4))
+        else:
+            try:
+                self._banner_interval.pack_forget()
             except Exception:  # noqa: BLE001
                 pass
 

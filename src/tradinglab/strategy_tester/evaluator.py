@@ -368,6 +368,108 @@ def _build_normalized_conditions(
     return out
 
 
+def _walk_authored_intervals(
+    node: _ScannerGroup | _ScannerCondition,
+) -> list[str]:
+    """Yield every per-Condition / per-FieldRef interval string in a tree.
+
+    Used by :func:`collect_interval_overrides` to surface mismatches
+    between the strategy's authored intervals and the test's outer
+    interval. Returns interval strings ordered by tree traversal;
+    duplicates are preserved (deduplication is the caller's job).
+    """
+    out: list[str] = []
+    if isinstance(node, _ScannerCondition):
+        if node.interval is not None:
+            out.append(str(node.interval))
+        if node.left is not None and getattr(node.left, "interval", None):
+            out.append(str(node.left.interval))
+        for v in (node.params or {}).values():
+            iv = getattr(v, "interval", None)
+            if iv:
+                out.append(str(iv))
+        return out
+    for child in node.children:
+        out.extend(_walk_authored_intervals(child))
+    return out
+
+
+def collect_interval_overrides(
+    entry_strategy: EntryStrategy,
+    exit_strategy: ExitStrategy,
+    test_interval: str,
+) -> list[str]:
+    """Return one human-readable warning string per overridden interval.
+
+    The strategy tester runs in single-interval mode and rewrites
+    every authored ``interval`` to ``test_interval`` (see
+    :func:`_normalize_intervals`). When the user's authored interval
+    differs, this helper produces a string like::
+
+        "entry trigger '<label-or-id>' authored at 1m; evaluated at 5m"
+
+    Returns an empty list when every authored interval matches
+    ``test_interval`` (the no-override happy path) and when the
+    strategies don't carry any indicator-style conditions at all
+    (e.g. MARKET entry + STOP exit — no condition trees to walk).
+    """
+
+    def _label(trig_id: str, trig_label: str | None) -> str:
+        if trig_label and str(trig_label).strip():
+            return str(trig_label).strip()
+        return trig_id
+
+    msgs: list[str] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    def _emit(scope: str, label: str, iv: str) -> None:
+        if iv == test_interval:
+            return
+        key = (scope, label, iv)
+        if key in seen:
+            return
+        seen.add(key)
+        msgs.append(
+            f"{scope} trigger '{label}' authored at {iv}; "
+            f"evaluated at {test_interval} (single-interval mode)"
+        )
+
+    # Entry trigger interval itself (the trigger object carries one).
+    et = entry_strategy.trigger
+    if et.kind is EntryTriggerKind.INDICATOR and et.condition is not None:
+        if et.interval:
+            _emit("entry", _label(et.id, et.label), str(et.interval))
+        for iv in _walk_authored_intervals(et.condition):
+            _emit("entry", _label(et.id, et.label), iv)
+    if et.kind is EntryTriggerKind.SCANNER_ALERT and et.scanner_id:
+        try:
+            scan: _ScanDefinition = _scanner_storage.load(et.scanner_id)
+        except (FileNotFoundError, ValueError, OSError):
+            scan = None  # type: ignore[assignment]
+        if scan is not None:
+            for iv in _walk_authored_intervals(scan.root):
+                _emit("entry", _label(et.id, et.label), iv)
+
+    # Exit triggers — each leg's INDICATOR triggers carry condition trees.
+    for leg in exit_strategy.legs:
+        if not leg.enabled:
+            continue
+        for trig in leg.triggers:
+            if not trig.enabled:
+                continue
+            if trig.kind is not ExitTriggerKind.INDICATOR:
+                continue
+            if trig.condition is None:
+                continue
+            label = _label(trig.id, getattr(trig, "label", None))
+            if getattr(trig, "interval", None):
+                _emit("exit", label, str(trig.interval))
+            for iv in _walk_authored_intervals(trig.condition):
+                _emit("exit", label, iv)
+
+    return msgs
+
+
 class UnsupportedTriggerKind(NotImplementedError):
     """Raised when a strategy uses a trigger kind not yet wired in the headless evaluator.
 

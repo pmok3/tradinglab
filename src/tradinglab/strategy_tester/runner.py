@@ -53,7 +53,11 @@ from ..exits.model import ExitStrategy
 from ..models import Candle
 from . import report, storage
 from .acceptance import AcceptanceToken
-from .evaluator import UnsupportedTriggerKind, evaluate_symbol
+from .evaluator import (
+    UnsupportedTriggerKind,
+    collect_interval_overrides,
+    evaluate_symbol,
+)
 from .model import (
     DatePreset,
     RunStatus,
@@ -522,7 +526,16 @@ def run(
     #    case is non-blocking (warn but don't change Run status).
     if test_run.status in (RunStatus.DONE, RunStatus.CANCELLED) and outcomes:
         try:
-            report.aggregate_run(run_dir)
+            # Surface single-interval-mode interval overrides on the
+            # aggregate so HTML/PDF/GUI can render a banner. (The
+            # strategy_tester rewrites every authored interval to
+            # cfg.interval before evaluation — see
+            # `_normalize_intervals`; this list explains the rewrite
+            # to the user.)
+            iv_overrides = collect_interval_overrides(
+                entry_strategy, exit_strategy, cfg.interval,
+            )
+            report.aggregate_run(run_dir, interval_overrides=iv_overrides)
             report.write_run_csv(run_dir)
         except Exception:  # noqa: BLE001
             log.exception("aggregate/CSV write failed for run %s", run_dir)

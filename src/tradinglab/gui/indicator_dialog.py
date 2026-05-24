@@ -695,7 +695,29 @@ class IndicatorDialog(tk.Toplevel):
             self._header_banner = banner
         except tk.TclError:
             self._header_banner = None
-        # --- Scrollable rows region ---
+        # --- Bottom bar --- packed BEFORE the scrollable region so it always
+        # claims its natural height regardless of dialog size. Canonical
+        # Tkinter pattern for a fixed footer: anchor it with side="bottom"
+        # first, then let the scrollable area fill the remaining space.
+        bar = tk.Frame(outer)
+        bar.pack(side="bottom", fill="x", pady=(8, 0))
+        self._add_button = ttk.Button(
+            bar, text="Add Indicator", command=self._on_click_add,
+        )
+        self._add_button.pack(side="left")
+        ttk.Button(bar, text="Remove Selected",
+                   command=self._on_click_remove).pack(side="left",
+                                                       padx=(6, 0))
+        self._budget_label = ttk.Label(bar, text="", foreground=WARN_AMBER)
+        self._budget_label.pack(side="left", padx=(8, 0))
+        ttk.Button(bar, text="Cancel",
+                   command=self._on_cancel).pack(side="right")
+        self._save_close_btn = ttk.Button(
+            bar, text="Save and Close", command=self._on_save_close,
+            state="disabled",
+        )
+        self._save_close_btn.pack(side="right", padx=(0, 6))
+        # --- Scrollable rows region --- fills the remaining middle space
         scroll_wrap = tk.Frame(outer)
         scroll_wrap.pack(fill="both", expand=True)
         canvas = tk.Canvas(scroll_wrap, highlightthickness=0,
@@ -754,25 +776,6 @@ class IndicatorDialog(tk.Toplevel):
         )
 
         self._rows_inner = inner
-        # --- Bottom bar ---
-        bar = tk.Frame(outer)
-        bar.pack(fill="x", pady=(8, 0))
-        self._add_button = ttk.Button(
-            bar, text="Add Indicator", command=self._on_click_add,
-        )
-        self._add_button.pack(side="left")
-        ttk.Button(bar, text="Remove Selected",
-                   command=self._on_click_remove).pack(side="left",
-                                                       padx=(6, 0))
-        self._budget_label = ttk.Label(bar, text="", foreground=WARN_AMBER)
-        self._budget_label.pack(side="left", padx=(8, 0))
-        ttk.Button(bar, text="Cancel",
-                   command=self._on_cancel).pack(side="right")
-        self._save_close_btn = ttk.Button(
-            bar, text="Save and Close", command=self._on_save_close,
-            state="disabled",
-        )
-        self._save_close_btn.pack(side="right", padx=(0, 6))
 
     # ------------------------------------------------------------------
     # Mouse-wheel binding helpers (extracted as methods so headless

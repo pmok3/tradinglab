@@ -105,6 +105,12 @@ checkbox groups, called from `_on_menu_sandbox_start` / `_on_menu_sandbox_end`.
 - **Explicit dialog geometry**: `geometry("980x560")`, `minsize(880, 420)`.
   Without it the canvas auto-sized to its declared `height=320` only and
   `_on_canvas_configure` clipped wide rows (most visibly Bollinger's MA combobox).
+- **Button-bar pack order**: the bottom bar (`Add Indicator`, `Remove Selected`,
+  `Cancel`, `Save and Close`) is packed with `side="bottom"` BEFORE the scrollable
+  canvas area. This is the canonical Tkinter pattern for a fixed footer: the footer
+  anchors first so it always claims its natural height; the canvas area fills the
+  remaining space with `fill="both", expand=True`. Packing the canvas first would
+  leave the bar with 0px at short dialog heights, making all four buttons invisible.
 
 ### Drag-to-reorder (b43)
 `≡` handle (`tk.Label`, cursor=`sb_v_double_arrow`) + `<Alt-Up>`/`<Alt-Down>`

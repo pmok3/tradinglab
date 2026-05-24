@@ -127,6 +127,16 @@ def export_html(
             f"(N={head.trade_count} &lt; 100). Confidence intervals may "
             f"be wider than you'd like.</div>"
         )
+    if head.interval_overrides:
+        items = "".join(
+            f"<li>{html.escape(line)}</li>" for line in head.interval_overrides
+        )
+        banner_html += (
+            f"<div class='banner banner-info'>ℹ Interval overrides "
+            f"(strategy_tester runs in single-interval mode — every "
+            f"authored Condition / FieldRef interval was rewritten to "
+            f"the test interval before evaluation):<ul>{items}</ul></div>"
+        )
 
     pf_disp = _fmt_pf(head.profit_factor)
     pf_ci_lo = _fmt_pf(head.profit_factor_ci_95.lo)
@@ -181,6 +191,10 @@ h2 { font-size: 1.1rem; margin: 16px 0 6px; }
           font-size: 0.95rem; }
 .banner-warn { background: #fff7d6; color: #6b5200;
                border: 1px solid #d9c269; }
+.banner-info { background: #e8f1ff; color: #1f3a73;
+               border: 1px solid #97b8e6; }
+.banner-info ul { margin: 6px 0 0 18px; padding: 0; }
+.banner-info li { font-size: 0.88rem; }
 .headline { display: grid; grid-template-columns: repeat(3, 1fr);
             gap: 8px 16px; margin: 12px 0; }
 .headline .label { color: #666; font-size: 0.85rem; }
@@ -359,6 +373,21 @@ def _draw_cover_page(pdf: PdfPages, agg: _report.RunAggregate) -> None:
             0.0, 0.94, banner,
             transform=ax.transAxes,
             fontsize=9, color="#8a6500",
+            wrap=True,
+        )
+    if agg.interval_overrides:
+        # Surface single-interval-mode overrides under the sample-size
+        # banner. Cap at 4 lines to avoid pushing the headline grid down
+        # the page; the HTML / GUI banners show the full list.
+        overrides_text = "Interval overrides: " + "; ".join(
+            agg.interval_overrides[:4]
+        )
+        if len(agg.interval_overrides) > 4:
+            overrides_text += f" (+{len(agg.interval_overrides) - 4} more)"
+        ax.text(
+            0.0, 0.905, overrides_text,
+            transform=ax.transAxes,
+            fontsize=8, color="#1f3a73",
             wrap=True,
         )
 

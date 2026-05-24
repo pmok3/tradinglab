@@ -215,6 +215,10 @@ class RunAggregate:
     # Banners
     insufficient_sample: bool = False
     low_sample: bool = False
+    # Strings like ``"trigger 'tmpl-ema-3-8-cross-long' authored at 1m;
+    # evaluated at 5m (single-interval mode)"`` — empty when every
+    # authored interval matches the test interval.
+    interval_overrides: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -257,6 +261,7 @@ class RunAggregate:
             "banners": {
                 "insufficient_sample": self.insufficient_sample,
                 "low_sample": self.low_sample,
+                "interval_overrides": list(self.interval_overrides),
             },
         }
 
@@ -634,6 +639,7 @@ def compute_aggregate(
     bootstrap_samples: int = BOOTSTRAP_SAMPLES_DEFAULT,
     rng_seed: int = 1337,
     schema_version: int = 1,
+    interval_overrides: list[str] | None = None,
 ) -> RunAggregate:
     """Build a :class:`RunAggregate` from per-symbol trade rows.
 
@@ -645,6 +651,10 @@ def compute_aggregate(
     :class:`TestConfig.starting_cash`. The whole-Run starting capital
     is ``starting_cash * len(rows_by_symbol)`` since each symbol gets
     a fresh sandbox.
+
+    ``interval_overrides`` is an opaque list of warning strings
+    (one per overridden interval) surfaced on the report — empty
+    when every authored interval matches the test's outer interval.
     """
     # Flatten to a single trade row list for whole-Run metrics.
     all_rows: list[TradeRow] = []
@@ -729,6 +739,7 @@ def compute_aggregate(
         per_setup=per_setup_dicts,
         insufficient_sample=insufficient,
         low_sample=low,
+        interval_overrides=list(interval_overrides or []),
     )
 
 
@@ -742,11 +753,18 @@ def aggregate_run(
     *,
     bootstrap_samples: int = BOOTSTRAP_SAMPLES_DEFAULT,
     rng_seed: int = 1337,
+    interval_overrides: list[str] | None = None,
 ) -> RunAggregate:
     """Walk ``run_dir/per_symbol/*.json``, compute aggregate, write ``aggregate.json``.
 
     Returns the :class:`RunAggregate` so callers can render the in-app
     Report without re-reading disk.
+
+    ``interval_overrides`` — optional list of human-readable warning
+    strings (one per condition whose authored ``interval`` differed
+    from ``cfg.interval`` and was rewritten by
+    :func:`~tradinglab.strategy_tester.evaluator._normalize_intervals`).
+    Surfaced on the report as a banner.
     """
     run_dir = Path(run_dir)
     manifest = storage.load_manifest(run_dir)
@@ -777,6 +795,7 @@ def aggregate_run(
         starting_cash=float(cfg.starting_cash),
         bootstrap_samples=bootstrap_samples,
         rng_seed=rng_seed,
+        interval_overrides=interval_overrides,
     )
     save_aggregate(run_dir, agg)
     return agg
@@ -917,6 +936,7 @@ def _aggregate_from_dict(payload: dict[str, Any]) -> RunAggregate:
         per_setup=list(payload.get("per_setup", [])),
         insufficient_sample=bool(banners.get("insufficient_sample", False)),
         low_sample=bool(banners.get("low_sample", False)),
+        interval_overrides=[str(s) for s in banners.get("interval_overrides", [])],
     )
 
 
