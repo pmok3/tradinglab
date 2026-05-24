@@ -38,6 +38,18 @@ class RSI:
         self.length = length
         self.name = f"RSI({length})"
 
+    @property
+    def warmup_bars(self) -> int:
+        """4×length — Wilder smoothing is IIR; values converge asymptotically.
+
+        The first-finite RSI index is just ``length`` (one delta + the seed
+        average), but the recurrence ``S_i = S_{i-1}·(n-1)/n + v_i/n`` keeps
+        the average drifting toward truth for many bars after that.
+        ``4×length`` is the textbook "fully hydrated" cutoff used across
+        every charting platform's docs.
+        """
+        return 4 * int(self.length)
+
     def compute_arr(self, bars: Bars) -> dict[str, np.ndarray]:
         closes = bars.close
         n = self.length

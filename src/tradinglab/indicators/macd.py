@@ -204,6 +204,19 @@ class MACD:
         self.source = str(source)
         self.name = self._render_name()
 
+    @property
+    def warmup_bars(self) -> int:
+        """``max(fast, slow) + signal`` — signal MA chains on top of macd line.
+
+        First-finite ``macd`` is at ``slow - 1`` (the slow MA seed), then
+        the signal MA needs another ``signal - 1`` of its own seed → first
+        finite ``signal`` / ``histogram`` is at ``slow + signal - 2``. We
+        publish a slightly looser ``max(fast, slow) + signal`` so the
+        signal line is one full window past its seed for SMA/RMA/WMA
+        kernels. Matches every textbook formula.
+        """
+        return max(int(self.fast_length), int(self.slow_length)) + int(self.signal_length)
+
     def _render_name(self) -> str:
         """Compact display label.
 

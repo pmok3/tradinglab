@@ -156,6 +156,19 @@ class ChandelierStops:
         self.ma_type = ma_type_norm
         self.name = self._render_name()
 
+    @property
+    def warmup_bars(self) -> int:
+        """``max(lookback, 4×atr_period)`` for RMA — both legs must seed.
+
+        The highest-high window needs ``lookback`` bars; the ATR leg
+        needs Wilder's ``4×atr_period`` to converge. For non-RMA kernels
+        the ATR leg settles in ``atr_period``, so just ``max(lookback,
+        atr_period)`` would suffice — we use the RMA-conservative form
+        because LeBeau's original chandelier spec uses RMA (the default).
+        """
+        atr_warmup = 4 * int(self.atr_period) if self.ma_type == "RMA" else int(self.atr_period)
+        return max(int(self.lookback), atr_warmup)
+
     def _render_name(self) -> str:
         """Compact display label.
 

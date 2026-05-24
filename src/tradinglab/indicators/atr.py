@@ -168,6 +168,19 @@ class ATR:
         else:
             self.name = f"ATR-{self.ma_type}({self.length})"
 
+    @property
+    def warmup_bars(self) -> int:
+        """4×length for Wilder (RMA) smoothing; ``length`` otherwise.
+
+        ATR's first-finite index is ``length`` for every kernel, but RMA
+        (Wilder's recursive form) keeps drifting toward truth — same IIR
+        story as RSI. SMA / EMA / WMA settle by ``length`` bars, so the
+        empirical index is the right number for them.
+        """
+        if self.ma_type == "RMA":
+            return 4 * int(self.length)
+        return int(self.length)
+
     def compute_arr(self, bars: Bars) -> dict[str, np.ndarray]:
         n = len(bars)
         out = np.full(n, np.nan, dtype=np.float64)

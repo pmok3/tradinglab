@@ -567,6 +567,87 @@ Tests pinning the contract:
 `tests/unit/strategy_tester/test_export_cancel_and_progress.py`,
 `tests/unit/gui/test_strategy_tab_async_export.py`.
 
+### 7.16 Strategy tester pre-loads N trading days of indicator warmup
+The runner now pre-pends a **warmup window** of historical bars before
+`start_date` so every indicator referenced by the entry + exit
+strategies is **fully hydrated by Day 1** of the active backtest period.
+Without this, EMA(8) / RSI(14) / MACD / etc. were NaN for the first
+~N bars of Day 1 morning, silently suppressing trades that should
+have fired (the "9 EMA bounce isn't yet defined at 09:31 ET on the
+first day" footgun the user explicitly called out).
+
+How it works:
+1. **Warmup-bar walker** — `strategy_tester/warmup.py` walks
+   `entry.trigger.condition` + `exit.legs[*].triggers[*].condition`
+   trees (plus exit CHANDELIER trigger fields) and asks
+   `warmup_bars_for_kind(kind_id, params)` for each unique pair.
+   Returns the **max** (not sum) × 1.5 safety multiplier, rounded up.
+2. **`warmup_bars_for_kind` is generalized — NOT a hardcoded table.**
+   It resolves each `(kind_id, params)` through three steps:
+   (a) instantiate the factory via `factory_by_kind_id(kind_id)`;
+   (b) if the instance exposes a `warmup_bars` attribute / method,
+   use that value — this is the explicit opt-in for Wilder-converged
+   indicators (RSI, ATR, ADX, MACD, ChandelierStops);
+   (c) else run `compute_arr` on a deterministic 500-bar synthetic
+   OHLCV series and return `max(first_finite_index)+1`. Unknown
+   `kind_id`, factory raises, or all-NaN output → `DEFAULT_WARMUP_BARS=100`.
+   Cached per-process by `(kind_id, frozen_params)`.
+3. **User plugin indicators** loaded via `tradinglab.indicators.loader`
+   work uniformly through path (c) — no edit to `warmup.py` is needed
+   when a new built-in or user-plugin indicator ships. The previous
+   hardcoded if/elif table silently fell back to 100 for every plugin
+   (and was brittle to indicator-name aliasing).
+4. **Fetch range extension** — `runner.run` calls
+   `bars_to_calendar_days(bars, interval)` (intraday: trading days ×
+   1.5 for weekend/holiday slack; 1d: bars × 1.5; 1w: bars × 7) and
+   subtracts that from `start_date` to compute `fetch_start_date`.
+   The fetcher gets the extended range; the disk_cache merges happily.
+5. **Active-period gate in evaluator** — `evaluate_symbol` gained a
+   `warmup_until_ts: int | None` kwarg. Bars with `ts < warmup_until_ts`
+   still tick the engine (so indicators hydrate, scanner eval_ctx state
+   stays consistent, `_sync_position_state_from_engine` still runs) but
+   `_check_entry` and `_check_exits` are **NOT** called for those bars.
+   `SessionResult.equity_curve` is trimmed to `ts >= warmup_until_ts`
+   before return — so aggregate stats (max drawdown, Sharpe, daily
+   returns, chart x-axis) reflect only the active period.
+6. **EOD kill switch interaction** — the per-day-roll kill and
+   end-of-run kill blocks are naturally inert during warmup because
+   no position can be open (entry handler is gated off). The explicit
+   `is_active` check on `_check_exits` makes that contract loud.
+
+**Don't accidentally count warmup bars in equity / trade stats.** Per
+the design, no fills can land before `warmup_until_ts`; if you ever
+see one during debugging, the trim/gate has regressed.
+
+**Adding a new indicator that needs explicit warmup:** declare a
+`warmup_bars` property on the class (int or no-arg method returning
+int). Skip this for indicators where empirical first-finite is correct
+(SMA/EMA/Bollinger/VWAP/most). Add it for indicators where "first
+valid" ≠ "fully converged" — Wilder IIR families (RSI/ATR/ADX),
+chained MAs (MACD signal-of-macd), composites (Chandelier = HH +
+Wilder-ATR). See `src/tradinglab/strategy_tester/warmup.spec.md` for
+the resolution-order table.
+
+**Config knob:** `TestConfig.warmup_override_days: int | None = None`
+(default `None` = auto-compute from indicators). Positive int = explicit
+calendar-day count, overrides the auto-compute. Round-trips through
+`to_dict` / `from_dict`; missing key in old manifests deserialises to
+`None` (back-compat).
+
+**Smoke-stub safety:** if a test fetcher returns no extra warmup bars
+(its data starts at-or-after `start_date`), the worker degrades to
+`warmup_until_ts=None` (no-op gate) rather than no-firing every bar.
+This lets existing smoke fixtures keep working unchanged.
+
+Tests pinning the contract:
+`tests/unit/strategy_tester/test_warmup.py` (real-indicator end-to-end
+values, explicit-attribute vs empirical paths, caching, fallback,
+tree walker, calendar-days conversion),
+`tests/unit/strategy_tester/test_warmup_plugin_compat.py` (user
+plugins get empirical detection without registry edits),
+`tests/unit/strategy_tester/test_warmup_integration.py` (8 cases:
+evaluator gate, runner extended-fetch, back-compat, override).
+
 ---
 
 ## 8. Build & release flow

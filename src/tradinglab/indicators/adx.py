@@ -91,6 +91,17 @@ class ADX:
         self.length = int(length)
         self.name = f"ADX({self.length})"
 
+    @property
+    def warmup_bars(self) -> int:
+        """``4 × length`` — Wilder smoothing chained twice (DI then ADX).
+
+        First-finite ``adx`` lands at ``2×length - 1`` (one Wilder seed
+        for the DI inputs, another for the ADX kernel), but the IIR drift
+        is the same as RSI/ATR — values keep refining for many bars after
+        first emit. ``4×length`` matches RSI/ATR convention.
+        """
+        return 4 * int(self.length)
+
     # --- public --------------------------------------------------------
 
     def compute_arr(self, bars: Bars) -> dict[str, np.ndarray]:

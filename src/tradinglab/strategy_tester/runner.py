@@ -71,6 +71,7 @@ from .model import (
 from .screenshot import ScreenshotSpec, render_trade_screenshot, trade_filename
 from .universe import ResolvedUniverse
 from .universe import resolve as resolve_universe
+from .warmup import bars_to_calendar_days, required_warmup_bars
 
 __all__ = [
     "run",
@@ -403,20 +404,38 @@ def _worker(
     exit_strategy: ExitStrategy,
     start_date: _dt.date,
     end_date: _dt.date,
+    fetch_start_date: _dt.date,
+    warmup_until_ts: int | None,
     run_dir: Path,
     cancel_token: AcceptanceToken,
     candles_fetcher: Callable[[str, str], list[Candle]],
     screenshot_spec: ScreenshotSpec | None,
 ) -> _SymbolOutcome:
-    """Run one symbol in isolation. Errors are captured, never raised."""
+    """Run one symbol in isolation. Errors are captured, never raised.
+
+    ``fetch_start_date`` may be earlier than ``start_date`` to give the
+    evaluator a warmup window before the active backtest period — see
+    :mod:`tradinglab.strategy_tester.warmup`. ``warmup_until_ts`` is the
+    UTC-epoch-second cutoff (= midnight UTC of ``start_date``) before
+    which trade entries/exits are gated off; ``None`` disables the gate.
+    """
     if cancel_token.is_cancelled():
         return _SymbolOutcome(symbol=symbol, ok=False, trade_count=0,
                               error="cancelled before start")
     try:
         raw = candles_fetcher(symbol, cfg.interval)
-        candles = _slice_to_date_range(raw, start_date, end_date)
+        candles = _slice_to_date_range(raw, fetch_start_date, end_date)
         if not cfg.include_extended_hours:
             candles = _filter_rth_only(candles)
+        # If the fetcher returned no extra warmup bars (e.g. a smoke
+        # stub whose data starts at start_date), gracefully fall back
+        # to the no-warmup behaviour so old tests / fixtures keep
+        # passing without modification.
+        effective_warmup_ts: int | None = warmup_until_ts
+        if effective_warmup_ts is not None and candles:
+            first_bar_ts = int(candles[0].date.timestamp())
+            if first_bar_ts >= effective_warmup_ts:
+                effective_warmup_ts = None
         result = evaluate_symbol(
             symbol=symbol,
             candles=candles,
@@ -427,6 +446,7 @@ def _worker(
             cost_model=cfg.cost_model,
             deck_seed=cfg.rng_seed,
             cancel_token=cancel_token,
+            warmup_until_ts=effective_warmup_ts,
         )
         storage.save_session_result_for_symbol(run_dir, symbol, result)
         # Count round-trip trades (one PostTradeReview per open+close pair),
@@ -583,6 +603,31 @@ def run(
     test_run.status = RunStatus.RUNNING
     storage.save_manifest(run_dir, test_run)
 
+    # Compute the warmup window so the evaluator can pre-load enough
+    # historical bars to fully hydrate every indicator the strategies
+    # reference by the time the active period begins. ``warmup_until_ts``
+    # is the UTC-epoch-second cutoff: bars with ts < cutoff still tick
+    # the engine (indicators hydrate) but no trades fire. The fetcher is
+    # called with ``fetch_start_date`` (= start_date − warmup calendar
+    # days) so the candle stream actually contains the warmup bars.
+    # ``warmup_override_days`` on the config lets the user override the
+    # auto-computed value (None = auto-compute, int = explicit override).
+    override = getattr(cfg, "warmup_override_days", None)
+    if override is not None and int(override) > 0:
+        warmup_calendar_days = int(override)
+    else:
+        warmup_bar_count = required_warmup_bars(entry_strategy, exit_strategy)
+        warmup_calendar_days = bars_to_calendar_days(warmup_bar_count, cfg.interval)
+    if warmup_calendar_days > 0:
+        fetch_start_date = start_date - _dt.timedelta(days=warmup_calendar_days)
+        active_dt = _dt.datetime.combine(
+            start_date, _dt.time.min, tzinfo=_dt.timezone.utc
+        )
+        warmup_until_ts: int | None = int(active_dt.timestamp())
+    else:
+        fetch_start_date = start_date
+        warmup_until_ts = None
+
     # 4) Fan out per-symbol workers.
     outcomes: list[_SymbolOutcome] = []
     if not universe.symbols:
@@ -610,6 +655,8 @@ def run(
                 exit_strategy=exit_strategy,
                 start_date=start_date,
                 end_date=end_date,
+                fetch_start_date=fetch_start_date,
+                warmup_until_ts=warmup_until_ts,
                 run_dir=run_dir,
                 cancel_token=cancel_token,
                 candles_fetcher=candles_fetcher,

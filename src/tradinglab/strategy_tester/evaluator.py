@@ -1411,6 +1411,7 @@ def evaluate_symbol(
     cost_model: CostModel,
     deck_seed: int = 0,
     cancel_token: Any | None = None,
+    warmup_until_ts: int | None = None,
 ) -> SessionResult:
     """Run one symbol's mechanical-test session and return the SessionResult.
 
@@ -1429,6 +1430,17 @@ def evaluate_symbol(
     before the next symbol's worker observes the cancel. The duck-typed
     ``Any`` lets the evaluator stay decoupled from
     ``strategy_tester.acceptance.AcceptanceToken`` while accepting it.
+
+    ``warmup_until_ts`` (optional, UTC epoch seconds) gates the **active
+    period**: bars with ``ts < warmup_until_ts`` still let the engine
+    tick (so indicators stay hydrated and position-state stays
+    consistent) but **no trade entries or exits are checked**, and the
+    equity_curve is trimmed to entries at-or-after ``warmup_until_ts``
+    before return. This is how the runner pre-loads N trading days of
+    historical bars so EMA(8) / RSI(14) / MACD / etc. are fully seeded
+    by the moment the active backtest window officially begins. Pass
+    ``None`` (the default) to keep the legacy behaviour (no warmup gate;
+    every bar is part of the active period).
     """
     if not candles:
         spec = _build_session_spec(
@@ -1492,6 +1504,7 @@ def evaluate_symbol(
         )
 
     n = len(bars)
+    in_warmup_mode = warmup_until_ts is not None
     for i in range(n):
         if not engine.tick():
             break
@@ -1507,6 +1520,14 @@ def evaluate_symbol(
                 pass
         bar = _bar_at(i, bars)
         ts = int(bars.ts[i])
+        # NEW: warmup gate. During warmup the engine still ticks (so
+        # indicators hydrate + scanner eval_ctx state stays consistent)
+        # but no entry/exit triggers are checked and no synthetic EOD
+        # kill fills are produced. No position can be open during warmup
+        # because the entry handler is gated, so the day-roll kill and
+        # end-of-run kill blocks below are naturally inert; the explicit
+        # `is_active` check just makes that contract loud.
+        is_active = (not in_warmup_mode) or ts >= int(warmup_until_ts)
         # Compute the bar's ET datetime ONCE per bar — needed for both
         # the session-day-roll check below AND the arm_window /
         # require_market_open gates in ``_check_entry``.
@@ -1595,7 +1616,7 @@ def evaluate_symbol(
         ctx.prev_position_open = ctx.position_open
 
         # Exit-side first (an open position has priority over re-entry on the same bar).
-        if ctx.position_open:
+        if is_active and ctx.position_open:
             exit_fired, exit_qty = _check_exits(
                 ctx, bar,
                 eval_ctx=eval_ctx,
@@ -1616,6 +1637,8 @@ def evaluate_symbol(
                 continue
 
         # Entry-side
+        if not is_active:
+            continue
         fired, side, qty = _check_entry(
             ctx, bar,
             eval_ctx=eval_ctx,
@@ -1674,7 +1697,17 @@ def evaluate_symbol(
             engine._apply_fill_with_tracking(f)
             engine.fills.append(f)
 
-    return engine.result()
+    final_result = engine.result()
+    # Warmup-period equity points are noise (no trades possible during
+    # warmup → flat-line at starting_cash). Trim them so downstream
+    # stats (max drawdown, Sharpe, daily returns, chart x-axis) reflect
+    # only the active period — exactly what the user asked for.
+    if in_warmup_mode and final_result.equity_curve:
+        cutoff = int(warmup_until_ts)
+        final_result.equity_curve = [
+            (ts_e, eq) for (ts_e, eq) in final_result.equity_curve if ts_e >= cutoff
+        ]
+    return final_result
 
 
 def _sync_position_state_from_engine(

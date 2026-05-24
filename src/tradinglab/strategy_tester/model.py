@@ -260,6 +260,13 @@ class TestConfig:
     schema_version: int = CURRENT_SCHEMA_VERSION
     user_label: str = ""
     include_extended_hours: bool = False
+    # Optional override for the indicator-warmup window. ``None`` =
+    # auto-compute from the strategies' indicator references (default;
+    # see :mod:`strategy_tester.warmup`). Positive int = explicit
+    # calendar-day count to pre-pend before ``start_date``. Persisted
+    # separately from the canonical fingerprint so re-running an old
+    # config without it works transparently.
+    warmup_override_days: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -276,6 +283,10 @@ class TestConfig:
             "rng_seed": int(self.rng_seed),
             "user_label": str(self.user_label),
             "include_extended_hours": bool(self.include_extended_hours),
+            "warmup_override_days": (
+                None if self.warmup_override_days is None
+                else int(self.warmup_override_days)
+            ),
         }
 
     @classmethod
@@ -305,6 +316,10 @@ class TestConfig:
             schema_version=version,
             user_label=str(d.get("user_label", "")),
             include_extended_hours=bool(d.get("include_extended_hours", False)),
+            warmup_override_days=(
+                None if d.get("warmup_override_days") is None
+                else int(d["warmup_override_days"])
+            ),
         )
 
     def canonical_dict(self) -> dict[str, Any]:
