@@ -240,10 +240,21 @@ class StrategyTab(ttk.Frame):
                 command=self._on_universe_kind_change,
             ).pack(side="left", padx=(0, 8))
 
-        # Symbols entry
-        self._frame_symbols = ttk.Frame(parent)
-        self._frame_symbols.grid(row=row, column=0, columnspan=2, sticky="we", pady=(4, 0))
+        # Universe body: a single grid row hosting one of three
+        # mutually-exclusive sub-frames + a banner. Using a sub-frame
+        # with internal pack() avoids the bug where re-gridding the
+        # WATCHLIST / PRESET frames at hard-coded outer rows overlapped
+        # the "Generate per-trade screenshots" separator + checkbox
+        # below (visible as a half-rendered horizontal line cutting
+        # off mid-row when Watchlist / Preset was selected).
+        self._frame_universe_body = ttk.Frame(parent)
+        self._frame_universe_body.grid(
+            row=row, column=0, columnspan=2, sticky="we", pady=(4, 0),
+        )
         row += 1
+
+        # Symbols entry
+        self._frame_symbols = ttk.Frame(self._frame_universe_body)
         ttk.Label(self._frame_symbols, text="Symbols (comma-separated):").pack(
             side="left", padx=(0, 4)
         )
@@ -252,7 +263,7 @@ class StrategyTab(ttk.Frame):
         ).pack(side="left", fill="x", expand=True)
 
         # Watchlist picker
-        self._frame_watchlist = ttk.Frame(parent)
+        self._frame_watchlist = ttk.Frame(self._frame_universe_body)
         ttk.Label(self._frame_watchlist, text="Watchlist:").pack(
             side="left", padx=(0, 4)
         )
@@ -263,7 +274,7 @@ class StrategyTab(ttk.Frame):
         self._cb_watchlist.pack(side="left", fill="x", expand=True)
 
         # Preset picker
-        self._frame_preset = ttk.Frame(parent)
+        self._frame_preset = ttk.Frame(self._frame_universe_body)
         ttk.Label(self._frame_preset, text="Preset:").pack(side="left", padx=(0, 4))
         self._cb_preset = ttk.Combobox(
             self._frame_preset, textvariable=self._var_universe_preset,
@@ -273,7 +284,7 @@ class StrategyTab(ttk.Frame):
 
         # Survivorship banner — only visible when PRESET mode.
         self._banner_survivorship = ttk.Label(
-            parent,
+            self._frame_universe_body,
             text=(
                 "⚠ Survivorship bias: current preset memberships are used "
                 "for the entire date range, including periods when symbols "
@@ -608,27 +619,22 @@ class StrategyTab(ttk.Frame):
 
     def _on_universe_kind_change(self, *_args) -> None:
         kind = UniverseKind(self._var_universe_kind.get())
-        self._frame_symbols.grid_remove()
-        self._frame_watchlist.grid_remove()
-        self._frame_preset.grid_remove()
-        self._banner_survivorship.grid_remove()
+        # All four sub-widgets live inside ``_frame_universe_body`` and
+        # are toggled with pack/pack_forget, so no outer grid row
+        # numbers are involved (the previous hardcoded ``row=14``/
+        # ``row=15`` regrids overlapped the screenshot separator below).
+        self._frame_symbols.pack_forget()
+        self._frame_watchlist.pack_forget()
+        self._frame_preset.pack_forget()
+        self._banner_survivorship.pack_forget()
         if kind is UniverseKind.SYMBOLS:
-            self._frame_symbols.grid(
-                row=self._frame_symbols.grid_info().get("row", 0),
-                column=0, columnspan=2, sticky="we", pady=(4, 0),
-            )
-            # Re-establish geometry if grid_info was empty (first time).
-            self._frame_symbols.grid_configure(sticky="we")
+            self._frame_symbols.pack(fill="x", expand=False)
         elif kind is UniverseKind.WATCHLIST:
-            self._frame_watchlist.grid(
-                row=14, column=0, columnspan=2, sticky="we", pady=(4, 0),
-            )
+            self._frame_watchlist.pack(fill="x", expand=False)
         elif kind is UniverseKind.PRESET:
-            self._frame_preset.grid(
-                row=14, column=0, columnspan=2, sticky="we", pady=(4, 0),
-            )
-            self._banner_survivorship.grid(
-                row=15, column=0, columnspan=2, sticky="we", pady=(4, 0),
+            self._frame_preset.pack(fill="x", expand=False)
+            self._banner_survivorship.pack(
+                fill="x", expand=False, pady=(4, 0),
             )
 
     def _on_date_preset_change(self, *_args) -> None:
@@ -854,14 +860,47 @@ class StrategyTab(ttk.Frame):
             return
         run_dir = Path(result.run_dir)
         self._current_run_dir = run_dir
+        status = result.test_run.status
+        # FAILED runs do NOT write aggregate.json (runner.py:507 gates
+        # the aggregate write on status DONE/CANCELLED). Surface the
+        # actual error message the runner captured so the user can
+        # diagnose, instead of the misleading "aggregate is missing"
+        # text we used to show.
+        if status is RunStatus.FAILED:
+            err_detail = result.test_run.error or "(no further details captured)"
+            self._var_status.set(f"Run failed: {err_detail}")
+            messagebox.showerror(
+                "Strategy Tester",
+                f"Run failed.\n\n{err_detail}\n\n"
+                f"Per-symbol artifacts (manifest.json + per_symbol/*.json) "
+                f"are in:\n{run_dir}",
+            )
+            try:
+                self._refresh_recent_runs()
+            except Exception:  # noqa: BLE001
+                logger.exception("StrategyTab: _refresh_recent_runs raised")
+            return
         agg = load_aggregate(run_dir)
         if agg is None:
+            # Status was DONE/CANCELLED but the aggregate write itself
+            # failed (runner caught + logged the exception). Tell the
+            # user where to look.
             self._var_status.set(
-                "Run finished but aggregate.json is missing."
+                "Run finished but aggregate.json is missing — "
+                "check the application log for the write error."
             )
+            messagebox.showwarning(
+                "Strategy Tester",
+                "The Run completed but writing aggregate.json failed. "
+                "Per-symbol artifacts are still on disk; see the "
+                f"application log and inspect:\n{run_dir}",
+            )
+            try:
+                self._refresh_recent_runs()
+            except Exception:  # noqa: BLE001
+                logger.exception("StrategyTab: _refresh_recent_runs raised")
             return
         self._current_aggregate = agg
-        status = result.test_run.status
         if status is RunStatus.CANCELLED:
             self._var_status.set(
                 f"Stopped. Partial results: "

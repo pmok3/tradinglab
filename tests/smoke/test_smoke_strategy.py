@@ -622,6 +622,246 @@ def check_st5_recent_runs_sidebar(tmp_cache_root: Path) -> None:
         gc.collect()
 
 
+def check_st6_universe_kind_layout(tmp_cache_root: Path) -> None:
+    """Switching universe kind (Symbols/Watchlist/Preset) toggles exactly
+    one body widget without overlapping the screenshot separator below.
+
+    Regression test for the bug where ``_on_universe_kind_change``
+    grid()'d the Watchlist + Preset sub-frames at hardcoded outer-grid
+    rows 14/15, overlaying the "Generate per-trade screenshots"
+    ``ttk.Separator`` and clipping it horizontally.
+
+    The post-fix layout uses a ``_frame_universe_body`` sub-frame that
+    owns a single outer-grid row, and the four sub-widgets are toggled
+    with ``pack`` / ``pack_forget`` inside it.
+    """
+    import sys
+    import tkinter as tk
+
+    if sys.platform == "darwin":
+        print("[SKIP] check_st6 — Tk widget hang risk on headless macos-15-arm64")
+        return
+
+    from tradinglab.gui.strategy_tab import StrategyTab
+
+    entry, exit_strat, _cfg = _make_test_config()
+
+    class _FakeEntriesStorage:
+        @staticmethod
+        def load_all():
+            return ([entry], [])
+
+    class _FakeExitsStorage:
+        @staticmethod
+        def load_all():
+            return ([exit_strat], [])
+
+    class _FakeWatchlistsStorage:
+        @staticmethod
+        def load_all():
+            return ([], [])
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        tab = StrategyTab(
+            root,
+            entries_storage=_FakeEntriesStorage(),
+            exits_storage=_FakeExitsStorage(),
+            watchlists_storage=_FakeWatchlistsStorage(),
+            candles_fetcher=_fake_fetcher,
+        )
+        tab.pack(fill="both", expand=True)
+        for _ in range(5):
+            root.update()
+
+        # The universe body must own a single outer-grid row.
+        body_grid_info = tab._frame_universe_body.grid_info()
+        assert body_grid_info, (
+            "_frame_universe_body must be grid'd into the outer Configure "
+            "layout (single owning row)"
+        )
+
+        # SYMBOLS: only _frame_symbols should be packed.
+        tab._var_universe_kind.set("symbols")
+        tab._on_universe_kind_change()
+        for _ in range(3):
+            root.update()
+        assert tab._frame_symbols.winfo_manager() == "pack"
+        assert tab._frame_watchlist.winfo_manager() == ""
+        assert tab._frame_preset.winfo_manager() == ""
+        assert tab._banner_survivorship.winfo_manager() == ""
+
+        # WATCHLIST: only _frame_watchlist should be packed.
+        tab._var_universe_kind.set("watchlist")
+        tab._on_universe_kind_change()
+        for _ in range(3):
+            root.update()
+        assert tab._frame_symbols.winfo_manager() == ""
+        assert tab._frame_watchlist.winfo_manager() == "pack"
+        assert tab._frame_preset.winfo_manager() == ""
+        assert tab._banner_survivorship.winfo_manager() == ""
+
+        # PRESET: _frame_preset + _banner_survivorship packed.
+        tab._var_universe_kind.set("preset")
+        tab._on_universe_kind_change()
+        for _ in range(3):
+            root.update()
+        assert tab._frame_symbols.winfo_manager() == ""
+        assert tab._frame_watchlist.winfo_manager() == ""
+        assert tab._frame_preset.winfo_manager() == "pack"
+        assert tab._banner_survivorship.winfo_manager() == "pack"
+
+        # Back to SYMBOLS — confirms toggle path is round-trip safe.
+        tab._var_universe_kind.set("symbols")
+        tab._on_universe_kind_change()
+        for _ in range(3):
+            root.update()
+        assert tab._frame_symbols.winfo_manager() == "pack"
+        assert tab._frame_watchlist.winfo_manager() == ""
+        assert tab._frame_preset.winfo_manager() == ""
+    finally:
+        try:
+            root.destroy()
+        except Exception:  # noqa: BLE001
+            pass
+        gc.collect()
+
+
+def check_st7_failed_status_surfaces_error(tmp_cache_root: Path) -> None:
+    """``_on_poll`` surfaces ``test_run.error`` when the runner returns
+    a FAILED status, instead of complaining about a missing aggregate.
+
+    Regression test for the bug where a single-symbol failure (e.g.
+    ``UnsupportedTriggerKind``, empty candles) sets ``status=FAILED``
+    in the runner — which intentionally skips the ``aggregate.json``
+    write (runner.py:507) — and the GUI then blindly called
+    ``load_aggregate`` and reported "Run finished but aggregate.json
+    is missing" with no further diagnostics.
+    """
+    import sys
+    import tkinter as tk
+    from dataclasses import dataclass
+
+    if sys.platform == "darwin":
+        print("[SKIP] check_st7 — Tk widget hang risk on headless macos-15-arm64")
+        return
+
+    from tradinglab.gui import strategy_tab as _strategy_tab_mod
+    from tradinglab.gui.strategy_tab import StrategyTab
+    from tradinglab.strategy_tester import RunStatus
+
+    entry, exit_strat, _cfg = _make_test_config()
+
+    class _FakeEntriesStorage:
+        @staticmethod
+        def load_all():
+            return ([entry], [])
+
+    class _FakeExitsStorage:
+        @staticmethod
+        def load_all():
+            return ([exit_strat], [])
+
+    class _FakeWatchlistsStorage:
+        @staticmethod
+        def load_all():
+            return ([], [])
+
+    root = tk.Tk()
+    root.withdraw()
+
+    # Capture messagebox.showerror calls without popping a real dialog.
+    showerror_calls: list[tuple[str, str]] = []
+
+    def _fake_showerror(title, message, **_kwargs):
+        showerror_calls.append((title, message))
+        return "ok"
+
+    # Track load_aggregate calls — the FAILED branch must short-circuit
+    # BEFORE invoking it.
+    load_aggregate_calls: list[Path] = []
+
+    def _fake_load_aggregate(run_dir):
+        load_aggregate_calls.append(run_dir)
+        return None
+
+    original_showerror = _strategy_tab_mod.messagebox.showerror
+    original_load_aggregate = _strategy_tab_mod.load_aggregate
+    _strategy_tab_mod.messagebox.showerror = _fake_showerror  # type: ignore[assignment]
+    _strategy_tab_mod.load_aggregate = _fake_load_aggregate  # type: ignore[assignment]
+    try:
+        tab = StrategyTab(
+            root,
+            entries_storage=_FakeEntriesStorage(),
+            exits_storage=_FakeExitsStorage(),
+            watchlists_storage=_FakeWatchlistsStorage(),
+            candles_fetcher=_fake_fetcher,
+        )
+        tab.pack(fill="both", expand=True)
+        for _ in range(5):
+            root.update()
+
+        # Build a fake FAILED RunResult by hand. We don't need the
+        # runner to actually fail; we're testing the _on_poll branch.
+        @dataclass
+        class _FakeTestRun:
+            run_id: str = "00000000abcd"
+            status: RunStatus = RunStatus.FAILED
+            error: str = "UnsupportedTriggerKind: foo"
+            symbol_count_done: int = 0
+            symbol_count_total: int = 1
+
+        @dataclass
+        class _FakeRunResult:
+            run_dir: Path
+            test_run: _FakeTestRun
+
+        run_dir = tmp_cache_root / "fakerun"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        tab._worker_result["result"] = _FakeRunResult(
+            run_dir=run_dir, test_run=_FakeTestRun(),
+        )
+        tab._worker_result["error"] = None
+        # _on_poll early-returns if _worker is None, so install a real
+        # thread that's already finished — that's the "worker just
+        # completed" state the function expects.
+        import threading as _threading
+        finished_thread = _threading.Thread(target=lambda: None)
+        finished_thread.start()
+        finished_thread.join()
+        tab._worker = finished_thread
+
+        tab._on_poll()
+        for _ in range(3):
+            root.update()
+
+        assert showerror_calls, (
+            "_on_poll should call messagebox.showerror on FAILED status"
+        )
+        title, msg = showerror_calls[0]
+        assert "UnsupportedTriggerKind" in msg, (
+            f"showerror message must include the captured error; got {msg!r}"
+        )
+        assert "fakerun" in msg, (
+            f"showerror message must include the run_dir path; got {msg!r}"
+        )
+        # load_aggregate must NOT be called on FAILED status.
+        assert not load_aggregate_calls, (
+            "FAILED status must short-circuit before load_aggregate; "
+            f"got {len(load_aggregate_calls)} unexpected call(s)"
+        )
+        # Status bar surfaces the error too.
+        assert "UnsupportedTriggerKind" in tab._var_status.get()
+    finally:
+        _strategy_tab_mod.messagebox.showerror = original_showerror  # type: ignore[assignment]
+        _strategy_tab_mod.load_aggregate = original_load_aggregate  # type: ignore[assignment]
+        try:
+            root.destroy()
+        except Exception:  # noqa: BLE001
+            pass
+        gc.collect()
+
 
 
 
@@ -653,6 +893,14 @@ def test_strategy_export_html_pdf(tmp_cache_root: Path) -> None:
 
 def test_strategy_recent_runs_sidebar(tmp_cache_root: Path) -> None:
     check_st5_recent_runs_sidebar(tmp_cache_root)
+
+
+def test_strategy_universe_kind_layout(tmp_cache_root: Path) -> None:
+    check_st6_universe_kind_layout(tmp_cache_root)
+
+
+def test_strategy_failed_status_surfaces_error(tmp_cache_root: Path) -> None:
+    check_st7_failed_status_surfaces_error(tmp_cache_root)
 
 
 def test_strategy_menu_present_in_chartapp(app) -> None:
