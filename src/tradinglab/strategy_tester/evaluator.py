@@ -227,6 +227,27 @@ def _is_regular_session(et_dt: datetime) -> bool:
     return _RTH_OPEN <= local_t <= _RTH_CLOSE
 
 
+def _find_last_rth_bar_at_or_before(bars, idx_inclusive: int) -> int:
+    """Return the index of the last regular-session bar at or before
+    ``idx_inclusive``, or ``-1`` if no such bar exists in the range
+    ``[0, idx_inclusive]``.
+
+    "Regular session" = Mon-Fri AND 09:30 ≤ ET time ≤ 16:00. Used by the
+    ``eod_kill_switch`` paths to ensure synthetic flatten fills land on a
+    real RTH bar (NOT a postmarket bar at e.g. 19:55 ET) — otherwise the
+    P&L is computed against an extended-hours price that can diverge
+    significantly from the regular-session close.
+    """
+    if idx_inclusive < 0:
+        return -1
+    for j in range(idx_inclusive, -1, -1):
+        ts = int(bars.ts[j])
+        et_dt = _bar_ts_to_et(ts)
+        if _is_regular_session(et_dt):
+            return j
+    return -1
+
+
 def _normalize_intervals(
     node: _ScannerGroup | _ScannerCondition,
     interval: str,
@@ -1489,8 +1510,8 @@ def evaluate_symbol(
                 and ctx.position_open
                 and ctx.position_qty > 0.0
                 and i > 0
+                and (prior_idx := _find_last_rth_bar_at_or_before(bars, i - 1)) >= 0
             ):
-                prior_idx = i - 1
                 prior_ts = int(bars.ts[prior_idx])
                 prior_close = float(bars.close[prior_idx])
                 exit_side = Side.SELL if ctx.position_side == "buy" else Side.BUY
@@ -1596,8 +1617,8 @@ def evaluate_symbol(
         exit_strategy.eod_kill_switch
         and ctx.position_open
         and ctx.position_qty > 0.0
+        and (last_idx := _find_last_rth_bar_at_or_before(bars, n - 1)) >= 0
     ):
-        last_idx = n - 1
         last_ts = int(bars.ts[last_idx])
         exit_side = Side.SELL if ctx.position_side == "buy" else Side.BUY
         # Append a synthetic fill at the last bar's close so the position

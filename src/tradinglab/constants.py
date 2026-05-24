@@ -78,6 +78,12 @@ LIGHT_THEME: dict = {
     # palette without the Windows-default etched/embossed look that
     # appears blurry on dark backgrounds. Audit ``menu-disabled-fg``.
     "text_disabled": "#8b949e",
+    # Border color for clickable input widgets (TEntry / TCombobox /
+    # TSpinbox). Distinct from ``spine`` (chart axis lines) because
+    # chart spines can be subtle but input outlines MUST pop or users
+    # can't see where to click. Picked for high contrast against
+    # ``ax_bg``. Audit ``input-border-visible``.
+    "input_border": "#7a7a7a",
 }
 
 #: Sentinel key returned as the first row of :func:`build_ttk_style_spec`.
@@ -114,6 +120,28 @@ def build_ttk_style_spec(theme: dict) -> list:
     )
     field_chrome = dict(chrome, fieldbackground=ax_bg)
     flat_chrome = dict(chrome, borderwidth=1, relief="flat")
+    # Input chrome — for clickable input widgets (TEntry / TCombobox /
+    # TSpinbox) that need a visibly distinct outline so users can see
+    # the tap target. Uses ``input_border`` (separate palette key) for
+    # all three border layers + ``borderwidth=1, relief="solid"`` so the
+    # outline reads as a clean 1px frame in both light and dark modes.
+    # Falls back to ``spine`` if a theme dict omits ``input_border``
+    # (back-compat for third-party / older theme palettes).
+    # Audit ``input-border-visible``: regression of commit 536fe6c
+    # which had collapsed the 3D bevel to a single ``spine`` color and
+    # made input outlines invisible against the field background.
+    input_border = theme.get("input_border", spine)
+    input_chrome = dict(
+        fieldbackground=ax_bg,
+        bordercolor=input_border,
+        lightcolor=input_border,
+        darkcolor=input_border,
+        selectbackground=spine,
+        selectforeground=fg,
+        troughcolor=bg,
+        borderwidth=1,
+        relief="solid",
+    )
     selection_map = dict(
         selectbackground=[("disabled", spine), ("!disabled", spine)],
         selectforeground=[("disabled", disabled_fg), ("!disabled", fg)],
@@ -187,13 +215,13 @@ def build_ttk_style_spec(theme: dict) -> list:
                           ("pressed", fg)],
               **selection_map)),
         ("TEntry",
-         dict(foreground=fg, insertcolor=fg, **field_chrome),
+         dict(foreground=fg, insertcolor=fg, **input_chrome),
          dict(fieldbackground=[("disabled", ax_bg), ("readonly", ax_bg)],
               foreground=[("disabled", disabled_fg), ("readonly", fg)],
               **selection_map)),
         ("TCombobox",
          dict(background=ax_bg, foreground=fg, arrowcolor=fg,
-              insertcolor=fg, **field_chrome),
+              insertcolor=fg, **input_chrome),
          dict(fieldbackground=[("disabled", ax_bg), ("readonly", ax_bg)],
               foreground=[("disabled", disabled_fg), ("readonly", fg)],
               background=[("disabled", ax_bg), ("readonly", ax_bg),
@@ -278,7 +306,7 @@ def build_ttk_style_spec(theme: dict) -> list:
               **selection_map)),
         ("TSpinbox",
          dict(background=ax_bg, foreground=fg, arrowcolor=fg,
-              insertcolor=fg, **field_chrome),
+              insertcolor=fg, **input_chrome),
          dict(fieldbackground=[("disabled", ax_bg), ("readonly", ax_bg)],
               foreground=[("disabled", disabled_fg), ("readonly", fg)],
               background=[("disabled", ax_bg), ("readonly", ax_bg),
@@ -326,6 +354,10 @@ DARK_THEME: dict = {
     # Foreground for disabled menu/button text. See ``LIGHT_THEME``
     # comment — dark-palette counterpart from the GitHub "muted" greys.
     "text_disabled": "#6e7681",
+    # Border color for clickable input widgets. See ``LIGHT_THEME``
+    # comment — high contrast against ``ax_bg`` (#2b2b2b) so users can
+    # see input tap targets at a glance.
+    "input_border": "#9a9a9a",
 }
 
 

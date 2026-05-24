@@ -50,11 +50,19 @@ holds.
 - **Entry**: triangle marker, green up-triangle for long, red
   down-triangle for short. `s=180` (was 120 — bumped so the entry
   remains obvious on dense charts), `edgecolors="black"`,
-  `linewidths=0.8`, `zorder=10`. A small inline label
-  ``" Entry $123.45"`` is placed at the marker so the user can read
-  the fill price without zooming in.
+  `linewidths=0.8`, `zorder=10`. A bold ``"Entry $123.45"`` label is
+  placed ~30 pt to the side + ~35 pt vertically from the marker
+  (offset direction picked by `_annotation_offset` so it doesn't
+  overlap the candle body), rendered with a white rounded bbox
+  outlined in the entry colour and an arrow leader line pointing
+  back to the marker. When the marker sits in the right-hand 20%
+  of the visible window the horizontal offset flips so the label
+  stays inside the chart bounds.
 - **Exit**: grey `x` marker at exit_price. `s=170`,
-  `linewidths=2.4`, `zorder=10`. Inline ``" Exit $123.45"`` label.
+  `linewidths=2.4`, `zorder=10`. Same bbox + arrow treatment as the
+  entry label; the vertical offset direction is the opposite of the
+  entry label's so the two never collide when entry/exit are close
+  together on the x-axis.
 - **Entry/exit guide lines**: faint vertical lines (`alpha=0.35`,
   `zorder=3`) at the entry and exit bar indices. The entry line is
   solid green; the exit line is dashed grey. These make the entry
@@ -68,13 +76,29 @@ holds.
 - **Target**: dashed blue horizontal line at `pre.target` when
   PreTradeEntry recorded one; skipped otherwise.
 - **Title**: left-aligned
-  ``<SYM>  •  LONG/SHORT qty  •  @ YYYY-MM-DD HH:MM ET  •  setup: <tag>``.
+  ``<SYM>  •  LONG/SHORT qty  •  @ YYYY-MM-DD HH:MM ET  •  <setup-segment>``.
   The entry datetime is critical for identifying which trade among a
-  busy run the screenshot represents. Right-aligned P&L in green/red.
-- **X-axis**: bottom pane (volume when present, otherwise price)
-  carries datetime labels via a ``FuncFormatter`` that maps bar
+  busy run the screenshot represents. The setup segment is selected
+  by `_draw_title_and_labels`:
+  * `setup_tag` set + `entry_strategy` supplied →
+    ``setup: <tag>  •  via <strategy.name>``
+  * `setup_tag` set, no strategy → ``setup: <tag>``
+  * empty `setup_tag` + `entry_strategy` supplied →
+    ``<strategy.name or strategy.id>`` (mechanical strategy_tester
+    runs never write `setup_tag`; this is the common path)
+  * neither set → segment omitted entirely (no `(no setup)` placeholder)
+
+  Right-aligned P&L in green/red.
+- **X-axis**: BOTH the price pane and the volume pane (when present)
+  carry datetime labels via a ``FuncFormatter`` that maps bar
   indices to ``HH:MM`` (single-day windows) or ``M/D HH:MM``
-  (multi-day). Labels are rotated 15° in multi-day mode for legibility.
+  (multi-day). The price pane explicitly re-enables
+  ``tick_params(axis="x", labelbottom=True)`` to override
+  matplotlib's `sharex` auto-hide — without that the user sees no
+  time labels at all when the volume pane is missing or carries
+  the "Volume unavailable" annotation. Price-pane labels render at
+  `fontsize=7`; volume-pane labels at `fontsize=8`. Labels are
+  rotated 15° in multi-day mode for legibility.
 
 ## Threading contract
 - Pure function — no shared mutable state, no globals (apart from the

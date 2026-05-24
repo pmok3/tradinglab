@@ -337,14 +337,22 @@ def render_trade_screenshot(
     )
 
     # Datetime x-axis labels — without these the user can't tell when
-    # in the timeline a trade actually occurred (all axes look like
-    # bare integer bar indices). The bottom-most pane is the one that
-    # actually paints tick labels (matplotlib hides the upper pane's
-    # x-labels when the panes share an x-axis).
-    target_ax = ax_volume if ax_volume is not None else ax_price
-    _apply_datetime_xaxis(target_ax, candles, start, end)
+    # in the timeline a trade actually occurred. Apply to BOTH panes
+    # when the volume pane is present: matplotlib's ``sharex`` would
+    # otherwise auto-hide the price pane's tick labels, and a user
+    # whose volume pane is empty / annotated "Volume unavailable"
+    # would see no time labels at all (Bug 1).
+    _apply_datetime_xaxis(ax_price, candles, start, end, fontsize=7)
+    # ``sharex`` flips ``labelbottom`` off on the upper pane during
+    # axis-share setup; force it back on so the labels actually paint.
+    ax_price.tick_params(axis="x", labelbottom=True)
+    if ax_volume is not None:
+        _apply_datetime_xaxis(ax_volume, candles, start, end)
 
-    _draw_title_and_labels(fig, ax_price, trade_row, candles, entry_index)
+    _draw_title_and_labels(
+        fig, ax_price, trade_row, candles, entry_index,
+        entry_strategy=entry_strategy,
+    )
 
     fig.subplots_adjust(left=0.06, right=0.96, top=0.94, bottom=0.08)
     canvas.print_png(str(out))
@@ -706,24 +714,58 @@ def _annotate_trade(
     )
 
     # Price labels next to each marker so the user can read the fill
-    # prices without zooming in. Positioned with a small offset so
-    # they don't overlap the marker itself.
-    ax.annotate(
-        f" Entry ${entry_y:,.2f}",
-        xy=(entry_index, entry_y),
-        xytext=(6, -14 if is_long else 10),
-        textcoords="offset points",
-        fontsize=8,
-        color=entry_color,
-        zorder=11,
+    # prices without zooming in. Use a generous offset + white bbox +
+    # arrow leader line so the label never overlaps neighbouring
+    # candles (Bug 2). Flip the offset direction near the chart edges
+    # so the label stays inside the visible window.
+    entry_dx, entry_dy = _annotation_offset(
+        ax, entry_index, is_entry=True, is_long=is_long,
     )
     ax.annotate(
-        f" Exit ${exit_y:,.2f}",
-        xy=(exit_index, exit_y),
-        xytext=(6, 10),
+        f"Entry ${entry_y:,.2f}",
+        xy=(entry_index, entry_y),
+        xytext=(entry_dx, entry_dy),
         textcoords="offset points",
-        fontsize=8,
+        fontsize=9,
+        color=entry_color,
+        fontweight="bold",
+        bbox=dict(
+            boxstyle="round,pad=0.3",
+            facecolor="white",
+            edgecolor=entry_color,
+            alpha=0.92,
+        ),
+        arrowprops=dict(
+            arrowstyle="->",
+            color=entry_color,
+            alpha=0.7,
+            connectionstyle="arc3,rad=0.0",
+        ),
+        zorder=11,
+    )
+    exit_dx, exit_dy = _annotation_offset(
+        ax, exit_index, is_entry=False, is_long=is_long,
+    )
+    ax.annotate(
+        f"Exit ${exit_y:,.2f}",
+        xy=(exit_index, exit_y),
+        xytext=(exit_dx, exit_dy),
+        textcoords="offset points",
+        fontsize=9,
         color=EXIT_COLOR,
+        fontweight="bold",
+        bbox=dict(
+            boxstyle="round,pad=0.3",
+            facecolor="white",
+            edgecolor=EXIT_COLOR,
+            alpha=0.92,
+        ),
+        arrowprops=dict(
+            arrowstyle="->",
+            color=EXIT_COLOR,
+            alpha=0.7,
+            connectionstyle="arc3,rad=0.0",
+        ),
         zorder=11,
     )
 
@@ -778,6 +820,44 @@ def _annotate_trade(
         )
 
 
+def _annotation_offset(
+    ax,
+    bar_index: int,
+    *,
+    is_entry: bool,
+    is_long: bool,
+) -> tuple[float, float]:
+    """Pick an (dx, dy) offset (in points) for an entry/exit price label.
+
+    Default direction places the entry label below+right (for long) or
+    above+right (for short) of its marker, and the exit label always
+    above+right (so entry and exit labels don't collide when the trade
+    is short). When the marker sits in the right-hand 20% of the
+    visible window we flip the horizontal direction so the label
+    stays inside the chart bounds instead of being clipped.
+    """
+    try:
+        x_lo, x_hi = ax.get_xlim()
+    except Exception:  # noqa: BLE001 - axes without xlim set
+        x_lo, x_hi = 0.0, max(1.0, float(bar_index) + 1.0)
+    span = float(x_hi) - float(x_lo)
+    rel = (float(bar_index) - float(x_lo)) / span if span > 0 else 0.5
+    # Flip horizontally if too close to the right edge so the label
+    # leader-line points leftward instead of off-chart.
+    flip_x = rel >= 0.80
+    dx = -30.0 if flip_x else 30.0
+    if is_entry:
+        # Long entries get a label below the up-triangle marker, short
+        # entries above the down-triangle marker — keeps the leader
+        # arrow pointing into the candle body, not across it.
+        dy = -35.0 if is_long else 35.0
+    else:
+        # Exit always offset opposite from the entry direction so the
+        # two labels don't stack on top of each other.
+        dy = 35.0 if is_long else -35.0
+    return (dx, dy)
+
+
 def _find_extreme_bar(
     candles: list[Candle],
     entry_index: int,
@@ -819,13 +899,29 @@ def _draw_title_and_labels(
     trade_row: TradeRow,
     candles: list[Candle] | None = None,
     entry_index: int = -1,
+    *,
+    entry_strategy: EntryStrategy | None = None,
 ) -> None:
     """Stamp a single-line title bar with the trade's key facts.
 
     The left-aligned title carries the symbol, side, quantity, the
     entry date/time (ET) so the user can identify which trade among
-    a busy run they're looking at, and the setup tag if any. The
-    right-aligned title shows P&L absolute + percent.
+    a busy run they're looking at, and the setup / strategy tag.
+    The right-aligned title shows P&L absolute + percent.
+
+    Setup-tag fallback (Bug 3):
+
+    * When ``trade_row.setup_tag`` is set, show ``setup: <tag>`` (and
+      additionally ``via <strategy_name>`` when an ``entry_strategy``
+      is supplied — the journal tag is user-authored and more
+      specific, but the strategy name still tells the reader how the
+      trade got fired).
+    * When ``setup_tag`` is empty but ``entry_strategy`` is supplied,
+      show the strategy name (or its id as a fallback) instead of
+      the uninformative ``(no setup)`` placeholder. Mechanical
+      strategy_tester runs never write a setup_tag (see CLAUDE.md
+      §7.9) so this is the common path.
+    * When neither is available, omit the setup segment entirely.
     """
     post = trade_row.post
     side = (post.side or "").strip().lower()
@@ -836,7 +932,13 @@ def _draw_title_and_labels(
     pnl_pct = float(post.pnl_pct) * 100.0
     pnl_color = ENTRY_LONG_COLOR if pnl >= 0 else ENTRY_SHORT_COLOR
 
-    setup = trade_row.setup_tag or "(no setup)"
+    setup_tag = (trade_row.setup_tag or "").strip()
+    strategy_label = ""
+    if entry_strategy is not None:
+        strategy_label = (
+            (entry_strategy.name or "").strip()
+            or (getattr(entry_strategy, "id", "") or "").strip()
+        )
 
     # Entry timestamp annotation. Prefer the entry candle's actual
     # date when available (so the title shows the exact bar time)
@@ -854,7 +956,13 @@ def _draw_title_and_labels(
     parts = [f"{post.symbol}", f"{side_label} {abs(post.quantity):.0f}"]
     if entry_dt_str:
         parts.append(f"@ {entry_dt_str}")
-    parts.append(f"setup: {setup}")
+    if setup_tag and strategy_label:
+        parts.append(f"setup: {setup_tag}  •  via {strategy_label}")
+    elif setup_tag:
+        parts.append(f"setup: {setup_tag}")
+    elif strategy_label:
+        parts.append(strategy_label)
+    # else: omit the setup segment entirely (no "(no setup)" noise).
     title = "  •  ".join(parts)
     pnl_str = f"P&L: ${pnl:+,.2f}  ({pnl_pct:+.2f}%)"
 
@@ -903,6 +1011,8 @@ def _apply_datetime_xaxis(
     candles: list[Candle],
     start: int,
     end: int,
+    *,
+    fontsize: int = 8,
 ) -> None:
     """Replace bare integer bar-index x-ticks with datetime labels.
 
@@ -951,4 +1061,4 @@ def _apply_datetime_xaxis(
     for label in ax.get_xticklabels():
         label.set_rotation(0 if not multi_day else 15)
         label.set_horizontalalignment("center" if not multi_day else "right")
-        label.set_fontsize(8)
+        label.set_fontsize(fontsize)

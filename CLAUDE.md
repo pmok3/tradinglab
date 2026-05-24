@@ -398,6 +398,37 @@ Regression tests: `tests/unit/gui/test_combobox_wheel_guard.py`
 `tests/unit/gui/test_indicator_dialog_wheel_guard.py`. Shared
 wheel-bombing helper: `tests/unit/gui/_wheel_guard_helpers.py`.
 
+### 7.12 EOD kill switch MUST flatten on RTH bars only (no postmarket)
+`exit_strategy.eod_kill_switch=True` synthesises flatten fills at two
+sites in `strategy_tester/evaluator.py`:
+1. **Per-day kill** at ET-date rollover (around line 1486–1525) — walks
+   back from `i-1` to find the last RTH bar.
+2. **End-of-run kill** when timeline ends with open position (around
+   line 1614–1650) — walks back from `n-1` to find the last RTH bar.
+
+Both sites use the helper `_find_last_rth_bar_at_or_before(bars, idx)`
+which returns the most-recent index where `_is_regular_session(et_dt)`
+is True (Mon-Fri AND 09:30 ≤ ET time ≤ 16:00), or `-1` if none exists.
+
+**Why this matters:** 1-minute yfinance candle streams routinely include
+extended-hours data (premarket 04:00 ET, postmarket up to 20:00 ET). The
+naive `prior_idx = i - 1` / `last_idx = n - 1` form lands on a postmarket
+bar (e.g. 19:55 ET) producing wildly wrong P&L vs the documented
+"market-on-close at 15:55 ET" behaviour, plus misleading screenshots
+dated at extended-hours timestamps.
+
+**Don't revert** the walk-back. If you need to relax it (e.g. honour a
+user-configurable extended-hours mode), wire a new flag through
+`ExitStrategy` and keep the RTH-only default. Regression tests:
+`tests/unit/strategy_tester/test_eod_postmarket.py` (5 tests covering
+per-day kill, end-of-run kill, no-RTH skip path, RTH-only backwards
+compat, TIME_OF_DAY trigger isolation).
+
+**`TIME_OF_DAY` exit is NOT affected** — it lives in `_exit_time_of_day`
+(separate code path) and still fires at its authored cutoff regardless
+of RTH membership. Don't accidentally extend the RTH gate to that
+handler.
+
 ---
 
 ## 8. Build & release flow
