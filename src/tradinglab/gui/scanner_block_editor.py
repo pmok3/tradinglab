@@ -88,6 +88,89 @@ _NO_LEFT_OPS = frozenset({OP_INSIDE_BAR, OP_OUTSIDE_BAR, OP_NR7})
 
 
 # ---------------------------------------------------------------------------
+# Cross-symbol (FieldRef.symbol) UI plumbing
+# ---------------------------------------------------------------------------
+
+#: Sentinel value shown in the Symbol combo for "this ref evaluates
+#: against the active symbol". A literal sentinel string keeps the
+#: combo a single uniform widget (no special-case empty value); the
+#: picker maps it back to ``ref.symbol = ""`` on commit. Visible
+#: glyph keeps the dropdown self-explanatory at a glance.
+_ACTIVE_SYMBOL_SENTINEL: str = "(active)"
+
+#: Maximum number of distinct cross-symbol picks remembered in the
+#: settings-backed LRU. 20 covers the realistic ceiling — even a
+#: heavy multi-symbol relative-strength workflow rarely pins more
+#: than ~6-8 reference tickers.
+_RECENT_CROSS_SYMBOLS_CAP: int = 20
+
+# Module-level cache mirroring the persisted LRU. Loaded lazily on
+# first access; ``_remember_cross_symbol`` writes through both this
+# cache AND the settings file so a re-mounted picker sees the new
+# entry without reloading from disk. Tests reset via ``_reset_recent``.
+_recent_cross_symbols: list[str] | None = None
+
+
+def _load_recent_cross_symbols() -> list[str]:
+    """Return the persisted recent-cross-symbols LRU.
+
+    Settings access is wrapped in a broad except because the picker
+    may be instantiated in test contexts (or before the settings
+    module is initialized) where ``_settings.get`` raises. Failing
+    safe to an empty list keeps the combo functional in every
+    environment — only the persistence layer degrades.
+    """
+    global _recent_cross_symbols
+    if _recent_cross_symbols is not None:
+        return _recent_cross_symbols
+    try:
+        from .. import settings as _settings
+        raw = _settings.get("recent_cross_symbols", []) or []
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for s in raw:
+            if not isinstance(s, str):
+                continue
+            sym = s.strip().upper()
+            if not sym or sym in seen:
+                continue
+            seen.add(sym)
+            cleaned.append(sym)
+        _recent_cross_symbols = cleaned[:_RECENT_CROSS_SYMBOLS_CAP]
+    except Exception:  # noqa: BLE001 — degrade silently per design above
+        _recent_cross_symbols = []
+    return _recent_cross_symbols
+
+
+def _remember_cross_symbol(sym: str) -> None:
+    """Push ``sym`` to the front of the recent LRU (MRU first).
+
+    No-op for empty / active-sentinel values. Writes through to the
+    settings file via ``_settings.set`` so the pick survives restart.
+    """
+    s = (sym or "").strip().upper()
+    if not s or s == _ACTIVE_SYMBOL_SENTINEL.upper():
+        return
+    recent = _load_recent_cross_symbols()
+    # Move-to-front; preserve order for the rest.
+    if s in recent:
+        recent.remove(s)
+    recent.insert(0, s)
+    del recent[_RECENT_CROSS_SYMBOLS_CAP:]
+    try:
+        from .. import settings as _settings
+        _settings.set("recent_cross_symbols", list(recent))
+    except Exception:  # noqa: BLE001 — best-effort persistence
+        LOG.debug("recent_cross_symbols persistence failed", exc_info=True)
+
+
+def _reset_recent_cross_symbols_for_tests() -> None:
+    """Test hook — drops the module-level cache so the next load re-reads."""
+    global _recent_cross_symbols
+    _recent_cross_symbols = None
+
+
+# ---------------------------------------------------------------------------
 # Adaptive flow layout helper
 # ---------------------------------------------------------------------------
 
@@ -177,6 +260,13 @@ class _FieldRefPicker(ttk.Frame):
         # Cache: last numeric the user typed, restored when toggling
         # back to Number from another type.
         self._last_literal: float = 0.0
+        # Cross-symbol combo state. ``_symbol_var`` holds either the
+        # ``(active)`` sentinel or an uppercased ticker. Recreated per
+        # ``_rebuild_value_pane`` call.
+        self._symbol_var: tk.StringVar = tk.StringVar(
+            value=self._ref.symbol or _ACTIVE_SYMBOL_SENTINEL
+        )
+        self._symbol_combo: ttk.Combobox | None = None
 
         # ----- type selector -------------------------------------------------
         self._type_var = tk.StringVar(value=self._TYPE_BY_KIND[self._ref.kind])
@@ -254,10 +344,13 @@ class _FieldRefPicker(ttk.Frame):
         new_kind = self._TYPE_LABELS[self._type_var.get()]
         if new_kind == self._ref.kind:
             return
+        # Preserve the user's cross-symbol pin across Builtin↔Indicator
+        # toggles. Literal has no symbol slot so it's dropped there.
+        prev_symbol = self._ref.symbol
         if new_kind == FIELD_KIND_LITERAL:
             self._ref = FieldRef.literal(self._last_literal)
         elif new_kind == FIELD_KIND_BUILTIN:
-            self._ref = FieldRef.builtin("close")
+            self._ref = FieldRef.builtin("close", symbol=prev_symbol)
         else:
             # Pick the first registered indicator alphabetically (so
             # the default seed matches the user-visible dropdown
@@ -266,7 +359,10 @@ class _FieldRefPicker(ttk.Frame):
                 (s.id for s in all_fields() if s.kind == "indicator"),
                 key=str.casefold,
             )
-            self._ref = FieldRef.indicator(ids[0]) if ids else FieldRef.builtin("close")
+            if ids:
+                self._ref = FieldRef.indicator(ids[0], symbol=prev_symbol)
+            else:
+                self._ref = FieldRef.builtin("close", symbol=prev_symbol)
         self._rebuild_value_pane()
         self._fire()
 
@@ -287,6 +383,12 @@ class _FieldRefPicker(ttk.Frame):
                 pass
         self._param_widgets = {}
         self._flow_children = []
+        self._symbol_combo = None
+        # Re-seed the cross-symbol var from the ref each rebuild so the
+        # combo shows the persisted value (e.g. after .set(ref)).
+        self._symbol_var = tk.StringVar(
+            value=self._ref.symbol or _ACTIVE_SYMBOL_SENTINEL
+        )
         kind = self._ref.kind
         if kind == FIELD_KIND_LITERAL:
             self._literal_var = tk.StringVar(
@@ -309,6 +411,9 @@ class _FieldRefPicker(ttk.Frame):
             )
             cb.grid(row=0, column=0, padx=(0, 4))
             cb.bind("<<ComboboxSelected>>", lambda _e: self._commit_builtin())
+            # Cross-symbol combo for Builtin branch: placed at the end
+            # so layout of existing non-cross-symbol rows is unchanged.
+            self._build_symbol_combo(col=1)
             return
 
         # FIELD_KIND_INDICATOR
@@ -359,6 +464,15 @@ class _FieldRefPicker(ttk.Frame):
             out_combo.bind("<<ComboboxSelected>>", lambda _e: self._commit_indicator())
             self._flow_children.append(out_combo)
 
+        # Cross-symbol combo: placed at the very end of the indicator
+        # branch flow so existing rows' layout is unchanged for the
+        # common "(active)" case. Joins ``_flow_children`` so the
+        # adaptive wrap layout includes it on narrow dialogs.
+        sym_col_start = 1 + len(spec.params_schema) + (
+            1 if len(spec.output_keys) > 1 else 0
+        )
+        self._build_symbol_combo(col=sym_col_start)
+
         # Schedule the initial flow layout. ``after_idle`` runs after
         # Tk has had a chance to compute requested widths, so each
         # widget reports its true ``winfo_reqwidth`` rather than 1.
@@ -382,14 +496,15 @@ class _FieldRefPicker(ttk.Frame):
 
     def _commit_builtin(self) -> None:
         new_id = self._field_id_var.get()
-        if new_id and new_id != self._ref.id:
-            self._ref = FieldRef.builtin(new_id)
+        sym = self._current_symbol_from_combo()
+        if new_id and (new_id != self._ref.id or sym != self._ref.symbol):
+            self._ref = FieldRef.builtin(new_id, symbol=sym)
             self._fire()
 
     def _on_indicator_change(self) -> None:
         new_id = self._field_id_var.get()
         if new_id and new_id != self._ref.id:
-            self._ref = FieldRef.indicator(new_id)
+            self._ref = FieldRef.indicator(new_id, symbol=self._ref.symbol)
             self._rebuild_value_pane()
             self._fire()
 
@@ -413,8 +528,68 @@ class _FieldRefPicker(ttk.Frame):
                 output_key = self._output_var.get()
             except tk.TclError:
                 pass
-        self._ref = FieldRef.indicator(self._ref.id, params=params, output_key=output_key)
+        sym = self._current_symbol_from_combo()
+        self._ref = FieldRef.indicator(
+            self._ref.id, params=params, output_key=output_key, symbol=sym,
+        )
         self._fire()
+
+    # -- cross-symbol combo --------------------------------------------------
+
+    def _current_symbol_from_combo(self) -> str:
+        """Read the current Symbol combo value, mapping sentinel → ``""``."""
+        try:
+            raw = self._symbol_var.get()
+        except tk.TclError:
+            return self._ref.symbol or ""
+        s = (raw or "").strip().upper()
+        if not s or s == _ACTIVE_SYMBOL_SENTINEL.upper():
+            return ""
+        return s
+
+    def _build_symbol_combo(self, *, col: int) -> None:
+        """Build the optional ``@ [Symbol ▾]`` cluster.
+
+        Placed at ``(row=0, column=col)`` in the value pane (regridded
+        by the flow walker on narrow dialogs). Combobox is
+        ``state="normal"`` so the user can type any ticker; the
+        dropdown is pre-populated with the persisted recent-cross
+        LRU. On commit, the picked / typed value is remembered.
+        """
+        wrap = ttk.Frame(self._value_pane)
+        wrap.grid(row=0, column=col, padx=(6, 0))
+        ttk.Label(wrap, text="@").pack(side="left", padx=(0, 2))
+        values = (_ACTIVE_SYMBOL_SENTINEL, *tuple(_load_recent_cross_symbols()))
+        combo = ttk.Combobox(
+            wrap, textvariable=self._symbol_var,
+            state="normal", values=values, width=9,
+        )
+        combo.pack(side="left")
+        combo.bind("<<ComboboxSelected>>", lambda _e: self._commit_symbol())
+        combo.bind("<FocusOut>", lambda _e: self._commit_symbol())
+        combo.bind("<Return>", lambda _e: self._commit_symbol())
+        self._symbol_combo = combo
+        self._flow_children.append(wrap)
+
+    def _commit_symbol(self) -> None:
+        """Commit a Symbol combo change. Routes through kind-specific commit."""
+        new_sym = self._current_symbol_from_combo()
+        if new_sym == (self._ref.symbol or ""):
+            return
+        # Persist the recent-cross LRU when the user picks a real
+        # ticker (not the active sentinel).
+        if new_sym:
+            _remember_cross_symbol(new_sym)
+        # Rebuild the ref with the new symbol. The kind-specific
+        # commit path also picks up the latest param/output state in
+        # case the user changed both before tabbing out.
+        if self._ref.kind == FIELD_KIND_INDICATOR:
+            self._commit_indicator()
+        elif self._ref.kind == FIELD_KIND_BUILTIN:
+            self._commit_builtin()
+        else:
+            # Literal: shouldn't happen — symbol combo isn't shown.
+            self._fire()
 
     # -- helpers --------------------------------------------------------------
 

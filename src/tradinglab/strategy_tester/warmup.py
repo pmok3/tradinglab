@@ -60,6 +60,7 @@ __all__ = [
     "DEFAULT_WARMUP_BARS",
     "WARMUP_SAFETY_MULTIPLIER",
     "required_warmup_bars",
+    "required_warmup_bars_by_symbol",
     "warmup_bars_for_kind",
     "bars_to_calendar_days",
 ]
@@ -258,21 +259,28 @@ def warmup_bars_for_kind(kind_id: str, params: dict[str, Any] | None) -> int:
 
 def _walk_field_kinds(
     node: _ScannerGroup | _ScannerCondition | None,
-) -> list[tuple[str, dict[str, Any]]]:
-    """Yield every ``(indicator_kind_id, params)`` pair under a Group/Condition tree.
+) -> list[tuple[str, str, dict[str, Any]]]:
+    """Yield every ``(symbol, indicator_kind_id, params)`` triple under a tree.
 
     Walks both the LHS (``node.left``) and any RHS :class:`FieldRef`
     values in ``node.params``. Literal / builtin field refs are skipped
     (they need no warmup). Returns ``[]`` for ``None`` so callers can
     pass optional condition trees directly.
+
+    The leading ``symbol`` slot is the empty string ``""`` for
+    active-symbol references (every legacy ref) and the pinned ticker
+    for :class:`FieldRef` instances whose ``ref.symbol`` is non-empty
+    (cross-ticker support — see Phase 1+2 cross-symbol expansion).
+    Callers that want a per-symbol warmup breakdown can group by the
+    first element; callers that don't care can ignore it.
     """
-    out: list[tuple[str, dict[str, Any]]] = []
+    out: list[tuple[str, str, dict[str, Any]]] = []
     if node is None:
         return out
     if isinstance(node, _ScannerCondition):
         for ref in (node.left, *list((node.params or {}).values())):
             if isinstance(ref, _ScannerFieldRef) and ref.kind == "indicator" and ref.id:
-                out.append((str(ref.id), dict(ref.params or {})))
+                out.append((str(ref.symbol or ""), str(ref.id), dict(ref.params or {})))
         return out
     # Group: recurse into children.
     for child in node.children:
@@ -291,14 +299,21 @@ def required_warmup_bars(
     Returns ``0`` when neither strategy references an indicator-based
     trigger (e.g. MARKET entry + STOP exit — no condition trees to walk
     and no chandelier leg).
+
+    For per-symbol breakdown (Phase 3 work — strategy_tester runner
+    companion-fetcher needs warmup *per* dependency symbol so it
+    fetches enough history for each cross-ticker reference), see
+    :func:`required_warmup_bars_by_symbol`. This function returns the
+    aggregate active-symbol-equivalent warmup so v1 callers
+    (runner.py) keep working unchanged.
     """
-    pairs: list[tuple[str, dict[str, Any]]] = []
+    triples: list[tuple[str, str, dict[str, Any]]] = []
 
     # Entry trigger condition tree (INDICATOR triggers).
     if entry_strategy is not None:
         et = entry_strategy.trigger
         if et.kind is EntryTriggerKind.INDICATOR and et.condition is not None:
-            pairs.extend(_walk_field_kinds(et.condition))
+            triples.extend(_walk_field_kinds(et.condition))
         # SCANNER_ALERT entry references a scan definition that we can't
         # cheaply resolve here without touching disk; the runner's
         # condition walk in collect_interval_overrides loads it explicitly.
@@ -315,9 +330,10 @@ def required_warmup_bars(
                 if not trig.enabled:
                     continue
                 if trig.kind is ExitTriggerKind.INDICATOR and trig.condition is not None:
-                    pairs.extend(_walk_field_kinds(trig.condition))
+                    triples.extend(_walk_field_kinds(trig.condition))
                 elif trig.kind is ExitTriggerKind.CHANDELIER:
-                    pairs.append((
+                    triples.append((
+                        "",
                         "chandelier",
                         {
                             "lookback": int(trig.chandelier_lookback),
@@ -325,16 +341,77 @@ def required_warmup_bars(
                         },
                     ))
 
-    if not pairs:
+    if not triples:
         return 0
 
     max_bars = 0
-    for kid, params in pairs:
+    for _sym, kid, params in triples:
         n = warmup_bars_for_kind(kid, params)
         if n > max_bars:
             max_bars = n
 
     return int(math.ceil(max_bars * WARMUP_SAFETY_MULTIPLIER))
+
+
+def required_warmup_bars_by_symbol(
+    entry_strategy: EntryStrategy | None,
+    exit_strategy: ExitStrategy | None,
+) -> dict[str, int]:
+    """Return a mapping from symbol → required warmup bars.
+
+    The empty-string key (``""``) is the **active symbol** (every
+    legacy ref). Non-empty keys are cross-ticker dependencies pinned
+    via :attr:`tradinglab.scanner.model.FieldRef.symbol` (Phase 1+2
+    cross-symbol expansion).
+
+    Each value is ``ceil(max(warmup_bars_for_kind(kid, params))
+    × WARMUP_SAFETY_MULTIPLIER)`` across every indicator referenced
+    on that symbol — same shape as :func:`required_warmup_bars`, just
+    grouped by symbol so the strategy_tester runner (Phase 3 wiring)
+    can pre-fetch the right history window per dependency.
+
+    Returns an empty dict when neither strategy references any
+    indicator-based trigger.
+    """
+    triples: list[tuple[str, str, dict[str, Any]]] = []
+
+    if entry_strategy is not None:
+        et = entry_strategy.trigger
+        if et.kind is EntryTriggerKind.INDICATOR and et.condition is not None:
+            triples.extend(_walk_field_kinds(et.condition))
+
+    if exit_strategy is not None:
+        for leg in exit_strategy.legs:
+            if not leg.enabled:
+                continue
+            for trig in leg.triggers:
+                if not trig.enabled:
+                    continue
+                if trig.kind is ExitTriggerKind.INDICATOR and trig.condition is not None:
+                    triples.extend(_walk_field_kinds(trig.condition))
+                elif trig.kind is ExitTriggerKind.CHANDELIER:
+                    triples.append((
+                        "",
+                        "chandelier",
+                        {
+                            "lookback": int(trig.chandelier_lookback),
+                            "atr_period": int(trig.chandelier_atr_period),
+                        },
+                    ))
+
+    if not triples:
+        return {}
+
+    by_sym: dict[str, int] = {}
+    for sym, kid, params in triples:
+        n = warmup_bars_for_kind(kid, params)
+        if n > by_sym.get(sym, 0):
+            by_sym[sym] = n
+
+    return {
+        sym: int(math.ceil(n * WARMUP_SAFETY_MULTIPLIER))
+        for sym, n in by_sym.items()
+    }
 
 
 # Approximate bar counts per US-equity RTH trading day (390 min / day).

@@ -296,6 +296,13 @@ class FieldRef:
     output_key: str = ""
     value: float | None = None
     interval: str | None = None
+    #: Optional cross-symbol pin. Empty string ``""`` (the back-compat
+    #: default for every existing saved scan / entry / exit JSON) means
+    #: "evaluate against the active symbol". A non-empty value pins this
+    #: ref to that symbol — the engine resolves the field on
+    #: ``(symbol, interval)`` via ``EvaluationContext.bars_registry``.
+    #: See :func:`tradinglab.scanner.engine._sub_context_for_symbol_at_ts`.
+    symbol: str = ""
 
     def __post_init__(self) -> None:
         if self.kind not in _FIELD_KINDS:
@@ -327,6 +334,12 @@ class FieldRef:
                 d["output_key"] = self.output_key
         if self.interval is not None:
             d["interval"] = self.interval
+        # Only serialize ``symbol`` when set so existing saved JSON
+        # round-trips byte-identically (no spurious ``"symbol": ""`` keys
+        # appearing on previously-saved scans the first time they're
+        # re-saved).
+        if self.symbol:
+            d["symbol"] = self.symbol
         return d
 
     @classmethod
@@ -339,6 +352,7 @@ class FieldRef:
                 kind=FIELD_KIND_LITERAL,
                 value=float(d["value"]),
                 interval=d.get("interval"),
+                symbol=str(d.get("symbol", "") or ""),
             )
         ref_id = str(d.get("id", ""))
         params = dict(d.get("params", {}) or {})
@@ -374,6 +388,7 @@ class FieldRef:
             params=params,
             output_key=output_key,
             interval=d.get("interval"),
+            symbol=str(d.get("symbol", "") or ""),
         )
 
     # -- convenience ---------------------------------------------------------
@@ -384,16 +399,23 @@ class FieldRef:
 
     @classmethod
     def builtin(cls, id: str, *, output_key: str = "",
-                interval: str | None = None) -> FieldRef:
+                interval: str | None = None, symbol: str = "") -> FieldRef:
         return cls(kind=FIELD_KIND_BUILTIN, id=id, output_key=output_key,
-                   interval=interval)
+                   interval=interval, symbol=symbol)
 
     @classmethod
     def indicator(cls, id: str, *, params: Mapping[str, Any] | None = None,
-                  output_key: str = "", interval: str | None = None) -> FieldRef:
+                  output_key: str = "", interval: str | None = None,
+                  symbol: str = "") -> FieldRef:
         return cls(kind=FIELD_KIND_INDICATOR, id=id,
                    params=dict(params or {}), output_key=output_key,
-                   interval=interval)
+                   interval=interval, symbol=symbol)
+
+    # -- queries -------------------------------------------------------------
+
+    def is_cross_symbol(self) -> bool:
+        """``True`` iff this ref pins a non-active symbol (``symbol != ""``)."""
+        return bool(self.symbol)
 
 
 # ---------------------------------------------------------------------------

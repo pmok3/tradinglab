@@ -438,9 +438,9 @@ def test_field_ref_picker_records_flow_children_for_rvol(root):
     try:
         # Indicator combo + 6 trigger-relevant params (mode, length,
         # aggregator, session_filter, denominator_includes_current,
-        # z_score). RVOL has a single output key, so no output combo
-        # is added.
-        assert len(picker._flow_children) == 7
+        # z_score) + 1 cross-symbol Symbol wrap. RVOL has a single
+        # output key, so no output combo is added.
+        assert len(picker._flow_children) == 8
     finally:
         picker.destroy()
 
@@ -451,11 +451,13 @@ def test_field_ref_picker_records_flow_children_for_smi(root):
     try:
         # SMI has 2 output keys (smi, signal) so the output combo is
         # appended to flow_children. Concrete count depends on SMI's
-        # params_schema, but it must include the output combo.
-        assert len(picker._flow_children) >= 2
-        # The last flow child's class is a Combobox (the output combo).
-        last = picker._flow_children[-1]
-        assert "Combobox" in type(last).__name__
+        # params_schema, but it must include the output combo. The
+        # very last flow child is now the cross-symbol Symbol wrap
+        # Frame (added after the output combo) — pin that the output
+        # combo still appears somewhere in the flow.
+        assert len(picker._flow_children) >= 3
+        widget_types = [type(w).__name__ for w in picker._flow_children]
+        assert any("Combobox" in name for name in widget_types)
     finally:
         picker.destroy()
 

@@ -20,6 +20,20 @@ be fully hydrated by Day 1 of the active backtest period.
   by reading their colocated `chandelier_lookback` / `chandelier_atr_period`
   fields. Returns `max(bar_count) × WARMUP_SAFETY_MULTIPLIER` rounded up.
   Returns `0` when no indicator-style triggers are present.
+- `required_warmup_bars_by_symbol(entry, exit) -> dict[str, int]` —
+  same walk as `required_warmup_bars` but **grouped by symbol**. The
+  empty-string key `""` is the active symbol (every legacy ref);
+  non-empty keys are cross-ticker dependencies pinned via
+  `FieldRef.symbol`. Each value is the per-symbol max bar count ×
+  `WARMUP_SAFETY_MULTIPLIER`. Returns `{}` when no indicator-style
+  triggers are present. Phase 3 work (strategy_tester runner
+  companion-fetcher) will consume this to extend the fetch range per
+  dependency symbol; today `required_warmup_bars` keeps returning an
+  int aggregate so the runner doesn't have to change.
+- `_walk_field_kinds(node) -> list[tuple[str, str, dict]]` — internal
+  tree walker. Emits `(symbol, kind_id, params)` triples; the leading
+  `symbol` slot is `""` for active-symbol refs and the pinned ticker
+  for cross-symbol refs.
 - `bars_to_calendar_days(bars, interval) -> int` — converts bars at
   the given interval to a calendar-day window for the fetch range:
   - intraday (`1m`/`5m`/`15m`/`30m`/`1h`): `ceil(bars / bars_per_RTH_day) × 1.5`

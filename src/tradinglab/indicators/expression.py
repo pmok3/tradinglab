@@ -754,7 +754,7 @@ def _resolve_warmup(group):
     pairs = _walk_field_kinds(group)
     if not pairs:
         return 0
-    return max(warmup_bars_for_kind(kid, params) for kid, params in pairs)
+    return max(warmup_bars_for_kind(kid, params) for _sym, kid, params in pairs)
 
 
 class _CustomCondition:
@@ -830,7 +830,7 @@ def warmup_for_conditions(group_dict: dict) -> int:
     pairs = _walk_field_kinds(grp)
     if not pairs:
         return 0
-    return max(warmup_bars_for_kind(kid, params) for kid, params in pairs)
+    return max(warmup_bars_for_kind(kid, params) for _sym, kid, params in pairs)
 
 
 def conditions_to_python(
@@ -872,7 +872,7 @@ def conditions_to_python(
     from ..indicators.base import factory_by_kind_id
     try:
         from ..strategy_tester.warmup import _walk_field_kinds
-        for kid, _params in _walk_field_kinds(_Group.from_dict(group_dict)):
+        for _sym, kid, _params in _walk_field_kinds(_Group.from_dict(group_dict)):
             if factory_by_kind_id(kid) is None:
                 raise ExpressionError(
                     f"unknown indicator id {kid!r} in condition tree; "

@@ -730,6 +730,85 @@ remaining overhead is the per-bar field-resolution + combinator walk.
 combobox-wheel-guard regression per §7.11 — re-applied after every
 BlockEditor partial rebuild via `_on_block_editor_changed`).
 
+### 7.18 Cross-ticker FieldRef contract (Phase 1+2 of cross-symbol)
+
+`FieldRef.symbol` (default `""`) pins a single value reference to a
+non-active ticker. The bread-and-butter relative-strength use case
+the user called out — "3 flat bullish HA candles on SPY → enter
+AAPL LONG" — is expressed by setting `ref.symbol="SPY"` on the
+conditions of the AAPL-context entry trigger.
+
+**Resolution path** (`scanner/engine.py:evaluate_field_at`):
+
+1. **Symbol swap first.** If `ref.symbol` is non-empty AND differs
+   from `ctx.symbol`, build a sibling sub-context via
+   `_sub_context_for_symbol_at_ts(ctx, ref.symbol)` — pulls
+   `BarsView` for `(ref.symbol, ctx.interval)` from
+   `ctx.bars_registry` and snaps `current_index` to the largest dep
+   bar whose timestamp `≤ ctx.bars.timestamps[ctx.current_index]`.
+2. **Interval swap second**, on the already-symbol-swapped context.
+3. Field resolves against the final sub-context at the snapped index.
+
+**Return-value contract**:
+
+- Missing `ctx.bars_registry` OR registry has no view for
+  `(ref.symbol, ctx.interval)` → `None` (silent — the runner /
+  evaluator tri-valued logic propagates None per Kleene).
+- Dep series starts AFTER the active bar (no bar at-or-before active
+  ts — pre-IPO case) → `None`.
+- Dep series has a gap (active ts between two dep bars) → use the
+  most-recent dep bar at-or-before (NOT None — gaps don't kill the
+  comparison; halts / weekends should behave the same as "use the
+  last known value").
+
+**Registry requirement.** Cross-symbol resolution depends on the
+caller wiring a `BarsRegistry` onto the `EvaluationContext`. Live
+entries/exits already do this. The strategy_tester runner does NOT
+yet (Phase 3 work — runner companion-fetcher needs to populate the
+registry with dependency-symbol bars BEFORE the worker submits the
+context to the evaluator). Until Phase 3 lands, cross-symbol refs in
+a strategy_tester Run will resolve to `None` and the user will see
+"never fires" symptoms for those conditions — that's the expected
+failure mode while the runner-side work is in flight.
+
+**GUI surface.** `gui/scanner_block_editor.py:_FieldRefPicker` shows
+an optional `@ [Symbol ▾]` combo at the end of the
+Indicator / Builtin branches (NOT Number — literals are
+symbol-independent). Default = `(active)` sentinel (literal string)
+which maps to `ref.symbol = ""`. The combo is freely typeable and
+its dropdown shows the user's recent cross-symbol picks (LRU
+persisted to `_settings.set("recent_cross_symbols", [...])`, capped
+at 20). The pin survives Builtin↔Indicator type toggles.
+
+**Warmup walker.** `strategy_tester/warmup.py:_walk_field_kinds`
+emits `(symbol, kind_id, params)` triples (symbol-first). The new
+`required_warmup_bars_by_symbol(entry, exit) -> dict[str, int]`
+groups warmup bars by symbol so Phase 3 can pre-fetch the right
+history window per dependency. Back-compat: legacy
+`required_warmup_bars(entry, exit) -> int` still returns the
+aggregate active-symbol-equivalent count so the runner doesn't have
+to change yet.
+
+**HA-builtin sanity check.** `_b_ha_streak` (and every other
+BarsNp-based builtin) "just works" with `ref.symbol` because the
+sub-context's `bars` + `current_index` come from the swapped view
+— the existing per-`id(BarsNp)` HA cache (`scanner/fields.py:
+_ha_for`) keys on the swapped `bars` object, not the active one,
+so cross-symbol HA streaks compute correctly. Pinned in
+`tests/unit/scanner/test_evaluate_cross_symbol.py:
+test_ha_streak_on_dependency_symbol`.
+
+Tests pinning the contract:
+`tests/unit/scanner/test_field_ref_cross_symbol.py` (model
+back-compat + symbol round-trip),
+`tests/unit/scanner/test_evaluate_cross_symbol.py` (engine
+resolution, bar-time-snap rule, HA streak, combined cross-symbol +
+cross-interval),
+`tests/unit/gui/test_field_ref_picker_symbol_combo.py` (Symbol
+combo presence, commit, LRU persistence, type-toggle preservation),
+`tests/unit/strategy_tester/test_warmup_cross_symbol.py` (per-symbol
+walker + by-symbol aggregator).
+
 ---
 
 ## 8. Build & release flow

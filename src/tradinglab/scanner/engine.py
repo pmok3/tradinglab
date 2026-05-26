@@ -415,56 +415,75 @@ def evaluate_field_at(
 ) -> float | None:
     """Resolve ``ref`` at the given bar index. Returns ``None`` for OOB / NaN.
 
-    Cross-interval semantics: if ``ref.interval`` is non-null and
-    differs from ``ctx.interval``, the engine tries to resolve the
-    field against the bars/memo for ``(symbol, ref.interval)`` from
-    ``ctx.bars_registry``. If no registry is bound to the context,
-    raises :class:`NotImplementedError` (the v1 back-compat gate).
-    If the registry has no buffer for that key yet (lazy-load
-    pending), the field resolves to ``None``.
+    Resolution precedence (most-specific wins; both can apply):
+
+    1. **Symbol swap.** If ``ref.symbol`` is non-empty AND differs from
+       ``ctx.symbol``, build a cross-symbol sub-context via
+       :func:`_sub_context_for_symbol_at_ts` (the timestamp-snapped
+       variant — see that function's docstring for the bar-time-snap
+       rule). Returns ``None`` if the registry can't resolve the
+       symbol OR no dependency bar exists at-or-before the active
+       bar's timestamp.
+    2. **Interval swap.** If ``ref.interval`` is non-null AND differs
+       from the (possibly already symbol-swapped) sub-context's
+       interval, build a sibling context via
+       :func:`_sub_context_for_interval`. Without a registry the
+       historical ``NotImplementedError`` gate is preserved for v1
+       back-compat (same-symbol callers that don't wire a registry).
+    3. **Direct.** Both empty / matching → resolve against ``ctx``
+       directly at ``index``.
+
+    When a symbol swap happens, ``index`` is replaced with the snapped
+    sub-context's ``current_index``; subsequent interval swaps then
+    use that snapped index as the source-of-truth "current bar". This
+    makes ``SPY 5m EMA on an AAPL 1d context`` mean "SPY at 5m at the
+    bar with timestamp ≤ AAPL_current_ts".
     """
-    if ref.interval is not None and ref.interval != ctx.interval:
-        if ctx.bars_registry is None:
+    sub_ctx = ctx
+    sub_index = index
+    # 1. Symbol swap (cross-ticker).
+    if ref.symbol and ref.symbol.upper() != ctx.symbol.upper():
+        swapped = _sub_context_for_symbol_at_ts(ctx, ref.symbol)
+        if swapped is None:
+            return None
+        sub_ctx = swapped
+        sub_index = swapped.current_index
+        # Strip the symbol so any recursive evaluation doesn't re-swap.
+        ref = _strip_symbol(ref)
+    # 2. Interval swap (cross-interval).
+    if ref.interval is not None and ref.interval != sub_ctx.interval:
+        if sub_ctx.bars_registry is None:
             raise NotImplementedError(
                 f"FieldRef.interval override ({ref.interval!r}) requires a "
                 f"BarsRegistry on the EvaluationContext; current scan runs at "
-                f"interval {ctx.interval!r} with no registry bound"
+                f"interval {sub_ctx.interval!r} with no registry bound"
             )
-        # Resolve via the cross-interval registry. The ``index``
-        # argument is in this context's bar space; for the alternate
-        # interval we re-target to that buffer's last bar (since
-        # cross-interval references don't have a meaningful shared
-        # index — see the spec for why "now" semantics is the only
-        # sane v1 interpretation).
-        sub_ctx = _sub_context_for_interval(ctx, ref.interval)
-        if sub_ctx is None:
+        next_ctx = _sub_context_for_interval(sub_ctx, ref.interval)
+        if next_ctx is None:
             return None
-        # Build a copy of the ref with ``interval=None`` so the
-        # recursive call resolves locally against the sub-context.
         local_ref = _strip_interval(ref)
-        # Use the sub-context's last index when index points "now";
-        # for lookback ops that pass i-N, we map proportionally —
-        # but for v1, simply use the sub-context's current_index +
-        # (index - ctx.current_index) clamped to valid range.
-        offset = index - ctx.current_index
-        sub_index = sub_ctx.current_index + offset
-        return evaluate_field_at(local_ref, sub_ctx, sub_index)
+        # Map the source index proportionally to the alternate-interval
+        # buffer (mirrors the v1 cross-interval behavior).
+        offset = sub_index - sub_ctx.current_index
+        return evaluate_field_at(
+            local_ref, next_ctx, next_ctx.current_index + offset
+        )
     if ref.kind == FIELD_KIND_LITERAL:
         return _coerce_float(ref.value)
-    if index < 0 or index >= len(ctx.bars):
+    if sub_index < 0 or sub_index >= len(sub_ctx.bars):
         return None
     if ref.kind == FIELD_KIND_BUILTIN:
         fn = builtin_compute(ref.id)
         if fn is None:
             return None
         try:
-            v = fn(ctx.bars, index, ref.params or {})
+            v = fn(sub_ctx.bars, sub_index, ref.params or {})
         except Exception:  # noqa: BLE001
-            LOG.exception("builtin %s failed at index %d", ref.id, index)
+            LOG.exception("builtin %s failed at index %d", ref.id, sub_index)
             return None
         return _coerce_float(v)
     if ref.kind == FIELD_KIND_INDICATOR:
-        out = ctx.memo.get(ref.id, ref.params or {})
+        out = sub_ctx.memo.get(ref.id, ref.params or {})
         if not out:
             return None
         key = ref.output_key
@@ -476,9 +495,9 @@ def evaluate_field_at(
         arr = out.get(key)
         if arr is None:
             return None
-        if index >= len(arr):
+        if sub_index >= len(arr):
             return None
-        return _coerce_float(arr[index])
+        return _coerce_float(arr[sub_index])
     return None
 
 
@@ -493,13 +512,38 @@ def _strip_interval(ref: FieldRef) -> FieldRef:
     if ref.interval is None:
         return ref
     if ref.kind == FIELD_KIND_LITERAL:
-        return FieldRef(kind=ref.kind, value=ref.value, interval=None)
+        return FieldRef(kind=ref.kind, value=ref.value, interval=None,
+                        symbol=ref.symbol)
     return FieldRef(
         kind=ref.kind,
         id=ref.id,
         params=dict(ref.params or {}),
         output_key=ref.output_key,
         interval=None,
+        symbol=ref.symbol,
+    )
+
+
+def _strip_symbol(ref: FieldRef) -> FieldRef:
+    """Return a copy of ``ref`` with ``symbol`` cleared.
+
+    Used internally when redirecting a cross-symbol reference into a
+    sibling sub-context — once the swap has happened, the recursive
+    field resolution must see ``symbol=""`` so it doesn't re-trigger
+    the symbol-swap branch in an infinite loop.
+    """
+    if not ref.symbol:
+        return ref
+    if ref.kind == FIELD_KIND_LITERAL:
+        return FieldRef(kind=ref.kind, value=ref.value,
+                        interval=ref.interval, symbol="")
+    return FieldRef(
+        kind=ref.kind,
+        id=ref.id,
+        params=dict(ref.params or {}),
+        output_key=ref.output_key,
+        interval=ref.interval,
+        symbol="",
     )
 
 
@@ -536,6 +580,85 @@ def _sub_context_for_interval(
         bars_registry=registry,
     )
     return sub_ctx
+
+
+def _sub_context_for_symbol(
+    ctx: EvaluationContext, symbol: str
+) -> EvaluationContext | None:
+    """Build a sibling context against the bars/memo for ``symbol``.
+
+    Pulls the :class:`BarsView` for ``(symbol, ctx.interval)`` from
+    ``ctx.bars_registry``; returns ``None`` if the registry has no
+    buffer yet (lazy-load in flight, or the user's BarsRegistry isn't
+    wired). The returned context shares ``ctx.bars_registry`` so
+    nested cross-symbol / cross-interval lookups still work.
+
+    The sub-context's ``current_index`` defaults to the last bar of
+    the other symbol's buffer ("use the most recent dependency-symbol
+    bar available"). For the canonical bar-time-snapped variant — the
+    one wired into :func:`evaluate_field_at` — see
+    :func:`_sub_context_for_symbol_at_ts`.
+    """
+    registry = ctx.bars_registry
+    if registry is None:
+        return None
+    view = registry.get_view(symbol, ctx.interval)
+    if view is None:
+        return None
+    candles = view.memo.candles
+    sub_idx = max(0, len(candles) - 1)
+    return EvaluationContext(
+        symbol=symbol.upper(),
+        interval=ctx.interval,
+        bars=view.bars,
+        candles=candles,
+        current_index=sub_idx,
+        memo=view.memo,
+        bars_registry=registry,
+    )
+
+
+def _sub_context_for_symbol_at_ts(
+    ctx: EvaluationContext, symbol: str
+) -> EvaluationContext | None:
+    """Like :func:`_sub_context_for_symbol` but snaps ``current_index``
+    in the other symbol's buffer to the **same timestamp** as the
+    active context's current bar.
+
+    Bar-time-snap rule: find the largest bar in the dependency symbol
+    whose ``timestamps[idx] <= active_bar_ts``. If no such bar exists
+    (dependency series starts after the active series' current bar —
+    e.g. the dependency hasn't IPO'd yet), return ``None`` so the
+    caller emits ``None`` (the tri-valued evaluator handles the rest).
+
+    This is the canonical cross-symbol resolution path — SPY at
+    09:30 ET aligns with AAPL at 09:30 ET; if AAPL halts and skips
+    bars, the most recent prior bar is used; if AAPL hasn't IPO'd
+    yet, the condition evaluates to ``None``.
+    """
+    sub = _sub_context_for_symbol(ctx, symbol)
+    if sub is None:
+        return None
+    # Read the active context's current timestamp from its bars view.
+    try:
+        active_ts = ctx.bars.timestamps[ctx.current_index]
+    except (AttributeError, IndexError, ValueError):
+        return sub
+    other_ts = sub.bars.timestamps
+    if len(other_ts) == 0:
+        return None
+    idx = int(np.searchsorted(other_ts, active_ts, side="right")) - 1
+    if idx < 0:
+        return None
+    return EvaluationContext(
+        symbol=sub.symbol,
+        interval=sub.interval,
+        bars=sub.bars,
+        candles=sub.candles,
+        current_index=idx,
+        memo=sub.memo,
+        bars_registry=sub.bars_registry,
+    )
 
 
 def evaluate_field(ref: FieldRef, ctx: EvaluationContext) -> float | None:

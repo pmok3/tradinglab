@@ -112,6 +112,54 @@ If `ref.interval is not None and ref.interval != ctx.interval`:
 `Condition.interval` follows the same pattern. Without a registry,
 historical silent-`None` is preserved.
 
+## FieldRef.symbol cross-symbol (Phase 1+2)
+
+If `ref.symbol` is non-empty AND differs from `ctx.symbol`,
+`evaluate_field_at` builds a sibling sub-context via
+`_sub_context_for_symbol_at_ts(ctx, ref.symbol)` — the canonical
+**bar-time-snapped** cross-ticker resolution path:
+
+1. Pulls `BarsView` for `(ref.symbol, ctx.interval)` from
+   `ctx.bars_registry`. Missing registry OR missing view → `None`.
+2. Snaps the sub-context's `current_index` to the largest dependency
+   bar whose timestamp `≤ ctx.bars.timestamps[ctx.current_index]`.
+   No such bar (dependency starts AFTER the active bar's ts — e.g.
+   the dependency hasn't IPO'd yet) → `None`.
+
+The non-snapping variant `_sub_context_for_symbol(ctx, symbol)`
+returns a sub-context pointing at the dependency's last-available
+bar; reserved for callers that want "most recent dependency value"
+semantics rather than time-aligned.
+
+### Precedence (symbol-first, then interval)
+
+`evaluate_field_at` applies swaps in this order:
+
+1. **Symbol swap** if `ref.symbol` set and differs from `ctx.symbol`.
+   After the swap, `index` is replaced with the snapped sub-context's
+   `current_index` (its time-aligned position in the dependency buffer).
+2. **Interval swap** on the (possibly already symbol-swapped) sub-context
+   if `ref.interval` set and differs.
+3. Resolve the field on the final sub-context.
+
+So a `FieldRef.indicator("ema", params={"length": 20}, symbol="SPY",
+interval="1d")` on an AAPL 5m context resolves to "SPY at 1d at the
+1d bar with timestamp ≤ AAPL's current 5m bar ts".
+
+`_strip_symbol(ref)` / `_strip_interval(ref)` produce copies with
+the respective slot cleared — used internally to prevent infinite
+re-swaps in the recursive resolution path.
+
+### Bar-time-snap edge cases
+
+- **Dependency halt (gap):** active ts falls between two dep bars →
+  the most-recent dep bar at-or-before is used (no None).
+- **Pre-IPO:** active ts < dep's first bar ts → `None` (Kleene
+  propagates; the comparison evaluates to None and the Group
+  combinators handle it per the standard truth tables).
+- **Intraday extended-hours:** Phase 1+2 makes no assumption about
+  session filtering — caller decides what bars land in the registry.
+
 ## What we *don't* do here
 
 - Threading — `runner.py`.

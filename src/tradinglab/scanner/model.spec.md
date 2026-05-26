@@ -9,7 +9,7 @@ correctness against the registry.
 
 ## Public types
 
-- `FieldRef(kind: "builtin"|"indicator"|"literal", id, params, output_key, value, interval)` — single value reference.
+- `FieldRef(kind: "builtin"|"indicator"|"literal", id, params, output_key, value, interval, symbol)` — single value reference.
 - `Condition(left, op, params, interval, enabled, id, comment)` — leaf comparison.
 - `Group(combinator: "and"|"or", children, enabled, id)` — internal node.
 - `UniverseFilter(kind: "all"|"watchlist"|"symbols", name, symbols)` — symbol-set restriction.
@@ -59,6 +59,21 @@ column with `None` (engine returns `None` for unknown `condition_id`).
 v1 scans always set `FieldRef.interval = None`. Engine raises
 `NotImplementedError` on non-null override. Saving preserves the
 slot; v2 will lift the restriction without re-migrating.
+
+## FieldRef.symbol — cross-ticker pin
+
+`FieldRef.symbol` defaults to `""` ("active symbol" — every legacy
+saved scan deserialises to this). A non-empty value pins the ref to
+that ticker; the engine resolves it against `(symbol, interval)` via
+`EvaluationContext.bars_registry` (see `engine.spec.md` →
+"FieldRef.symbol cross-symbol"). `FieldRef.is_cross_symbol()` returns
+`True` iff `symbol` is non-empty.
+
+`to_dict()` omits the `symbol` key when empty so existing saved JSON
+round-trips byte-identically (no spurious `"symbol": ""` appearing on
+previously-saved scans the first time they're re-saved). `from_dict`
+accepts the missing key (defaults to `""`) — full back-compat for
+every pre-Phase-1 scan / entry / exit JSON ever written.
 
 ## Within-pct semantics (engine, specced here so the spec is one place)
 
