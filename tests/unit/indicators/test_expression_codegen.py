@@ -1,0 +1,138 @@
+"""Codegen + evaluator tests for ``indicators.expression``.
+
+Pins:
+* `expression_to_python` returns syntactically valid Python.
+* Executing the generated module registers an indicator in
+  ``INDICATORS``.
+* ``compute_arr`` on a synthetic Bars view returns a single-output
+  dict with a numpy array of the right length.
+* ``warmup_bars`` returns the expected max-length.
+"""
+from __future__ import annotations
+
+import numpy as np
+import pytest
+
+from tradinglab.core.bars import Bars
+from tradinglab.indicators import base as ind_base
+from tradinglab.indicators.expression import (
+    ExpressionError,
+    estimate_warmup,
+    evaluate,
+    expression_to_python,
+    parse_expression,
+    safe_indicator_filename,
+)
+
+
+def _synthetic_bars(n: int = 200) -> Bars:
+    rng = np.random.default_rng(42)
+    closes = 100.0 * np.exp(np.cumsum(rng.normal(0.0001, 0.005, size=n)))
+    opens = np.roll(closes, 1)
+    opens[0] = closes[0]
+    highs = np.maximum(opens, closes) * (1 + np.abs(rng.normal(0, 0.002, size=n)))
+    lows = np.minimum(opens, closes) * (1 - np.abs(rng.normal(0, 0.002, size=n)))
+    volumes = rng.lognormal(10.0, 0.5, size=n)
+    ts = np.datetime64("2026-01-05T14:30") + np.arange(n) * np.timedelta64(5, "m")
+    sess = np.full(n, "regular", dtype=object)
+    return Bars.from_arrays(
+        open=opens, high=highs, low=lows, close=closes,
+        volume=volumes, timestamps=ts, session=sess,
+    )
+
+
+def test_evaluate_simple_expression() -> None:
+    expr = parse_expression("ema(close, 9) - sma(close, 20)")
+    bars = _synthetic_bars(100)
+    out = evaluate(expr, bars)
+    assert set(out.keys()) == {"value"}
+    arr = out["value"]
+    assert arr.shape == (100,)
+    # Last several values should be finite once both MAs warm up.
+    assert np.isfinite(arr[-1])
+
+
+def test_evaluate_where() -> None:
+    expr = parse_expression("where(close > sma(close, 5), 1, 0)")
+    bars = _synthetic_bars(50)
+    out = evaluate(expr, bars)
+    arr = out["value"]
+    # Output should be 0 or 1 from bar 5 onward.
+    valid = arr[10:]
+    assert set(np.unique(valid)).issubset({0.0, 1.0})
+
+
+def test_evaluate_constant_expression() -> None:
+    expr = parse_expression("42")
+    bars = _synthetic_bars(20)
+    out = evaluate(expr, bars)
+    assert np.all(out["value"] == 42.0)
+
+
+def test_estimate_warmup() -> None:
+    assert estimate_warmup(parse_expression("close")) == 1
+    assert estimate_warmup(parse_expression("ema(close, 9)")) == 9
+    assert estimate_warmup(parse_expression("ema(close, 9) - sma(close, 20)")) == 20
+    assert estimate_warmup(parse_expression("atr(14)")) == 14
+    # macd: max(fast, slow) + signal = 26 + 9 = 35
+    assert estimate_warmup(parse_expression("macd(close, 12, 26, 9)")) == 26 + 9
+
+
+def test_expression_to_python_is_valid_source() -> None:
+    src = expression_to_python(
+        name="test_codegen",
+        expression="ema(close, 9) - sma(close, 20)",
+        description="demo",
+    )
+    compile(src, "<custom>", "exec")
+    assert "# tradinglab-custom-indicator" in src
+    assert "mode: building_blocks" in src
+    assert "register_indicator" in src
+
+
+def test_exec_generated_source_registers_indicator() -> None:
+    src = expression_to_python(
+        name="test_codegen_exec",
+        expression="ema(close, 9)",
+    )
+    try:
+        ns: dict = {}
+        exec(compile(src, "<custom>", "exec"), ns)
+        assert "test_codegen_exec" in ind_base.INDICATORS
+        # Instantiate via the registered factory and compute.
+        ind = ind_base.INDICATORS["test_codegen_exec"]()
+        bars = _synthetic_bars(50)
+        out = ind.compute_arr(bars)
+        assert set(out.keys()) == {"value"}
+        assert out["value"].shape == (50,)
+        assert ind.warmup_bars == 9
+    finally:
+        ind_base.INDICATORS.pop("test_codegen_exec", None)
+        ind_base._BY_KIND_ID.pop("test_codegen_exec", None)
+
+
+def test_safe_indicator_filename_validates_name() -> None:
+    assert safe_indicator_filename("test_1") == "test_1.py"
+    assert safe_indicator_filename("MyInd_v2") == "MyInd_v2.py"
+    with pytest.raises(ExpressionError):
+        safe_indicator_filename("")
+    with pytest.raises(ExpressionError):
+        safe_indicator_filename("1starts_with_digit")
+    with pytest.raises(ExpressionError):
+        safe_indicator_filename("has space")
+    with pytest.raises(ExpressionError):
+        safe_indicator_filename("with-dash")
+    with pytest.raises(ExpressionError, match="built-in"):
+        safe_indicator_filename("sma")
+    with pytest.raises(ExpressionError, match="built-in"):
+        safe_indicator_filename("RSI")
+
+
+def test_expression_to_python_rejects_bad_name() -> None:
+    with pytest.raises(ExpressionError):
+        expression_to_python(name="bad name", expression="close")
+
+
+def test_expression_to_python_rejects_bad_expression() -> None:
+    with pytest.raises(ExpressionError):
+        expression_to_python(name="ok_name", expression="__import__('os')")

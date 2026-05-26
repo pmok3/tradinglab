@@ -92,6 +92,38 @@ class IndicatorMenuMixin:
         except Exception:  # noqa: BLE001
             pass
 
+    def _on_custom_indicator_builder(self) -> None:
+        """Open the Custom Indicator Builder dialog.
+
+        The dialog itself is always safe to open — it writes to the
+        custom-indicator folder and live-registers the new factory via
+        :func:`indicators.loader.register_user_indicator_file` for the
+        current session regardless of the ``custom_indicators_enabled``
+        Settings gate. We surface a status hint if auto-load is off so
+        the user knows to flip it before the next startup, but we don't
+        block the editor.
+        """
+        from ..defaults import get as _get_default
+        from .custom_indicator_dialog import open_custom_indicator_dialog
+
+        try:
+            enabled = bool(_get_default("custom_indicators_enabled"))
+        except Exception:  # noqa: BLE001
+            enabled = False
+
+        open_custom_indicator_dialog(self)
+        try:
+            if enabled:
+                self._status.info("Opened Custom Indicator Builder")
+            else:
+                self._status.warn(
+                    "Custom Indicator Builder opened — enable "
+                    "'custom_indicators_enabled' in Settings to auto-load "
+                    "saved indicators on next startup"
+                )
+        except Exception:  # noqa: BLE001
+            pass
+
     def _populate_indicator_preset_menu(
         self, menu: tk.Menu, action: str,
     ) -> None:

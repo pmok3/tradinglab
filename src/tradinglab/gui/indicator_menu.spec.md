@@ -24,6 +24,13 @@ mutates `self._indicator_manager`, and reports outcome via `self._status`.
   - `_on_menu_save_indicator_preset()`
   - `_on_menu_load_indicator_preset(name)`
   - `_on_menu_delete_indicator_preset(name)`
+  - `_on_custom_indicator_builder()` — opens the
+    `gui.custom_indicator_dialog.CustomIndicatorDialog` via
+    `open_custom_indicator_dialog(self)`. The dialog itself is
+    safe to open regardless of `custom_indicators_enabled`; the
+    handler reads that setting only to surface a status warning
+    when off so the user knows saved files won't auto-load on
+    next startup.
 
 ## Mixin Rules
 

@@ -648,6 +648,60 @@ plugins get empirical detection without registry edits),
 `tests/unit/strategy_tester/test_warmup_integration.py` (8 cases:
 evaluator gate, runner extended-fetch, back-compat, override).
 
+### 7.17 Custom Indicator Builder dialog + expression DSL
+Indicators → **Custom Indicator Builder…** (menu entry sits directly
+under *Manage Indicators…*) opens a Toplevel that lets the user
+author indicators stored as `.py` files in
+`%LOCALAPPDATA%\TradingLab\indicators\`. Files written by the dialog
+carry the marker header `# tradinglab-custom-indicator` plus
+`# mode: building_blocks | python` and metadata lines
+(`expression`, `description`, `created`, `updated`).
+
+Two authoring modes:
+
+1. **Building blocks** — a whitelisted mini-expression language in
+   `src/tradinglab/indicators/expression.py`. Examples:
+   `ema(close, 9) - sma(close, 20)`,
+   `where(close > vwap(), 1, 0)`,
+   `(close - ema(close, 20)) / atr(14)`.
+   Allowed series: `close open high low volume hl2 hlc3 ohlc4`.
+   Allowed functions: `ema sma wma rma (s, n)`, `rsi(s, n)`,
+   `atr(n)`, `vwap()`, `bollinger / bollinger_upper / bollinger_lower
+   (s, n, k)`, `macd / macd_signal / macd_hist (s, fast, slow,
+   signal)`, `highest lowest (s, n)`, `abs sqrt log exp (x)`,
+   `max min (a, b)`, `where(cond, then, else)`. Math: `+ - * / ** %`.
+   Comparison + logical operators return 1.0/0.0 arrays. **Safe by
+   construction:** `parse_expression` walks the `ast` tree with a
+   strict whitelist and rejects `__import__`, attribute access,
+   subscripts, lambdas, comprehensions, and keyword args.
+2. **Python** — full Python module. Gated behind a per-save
+   `askokcancel` confirmation: *"This indicator contains custom
+   Python code which will be executed every time the indicator is
+   computed. Only save indicators you trust."* The body must define
+   a class and end with `register_indicator(name, factory)`.
+
+**Loader cooperation.** `indicators/loader.py:_is_builder_file`
+detects the header marker and grants the file full
+`builtins.__dict__` (instead of the restricted `_SAFE_BUILTINS`) so
+generated code can import `tradinglab.indicators.expression` and
+`tradinglab.core.bars` freely. Hand-authored drop-in plugins (no
+marker) keep the locked-down import hook.
+
+**Hot-register.** `indicators/loader.py:register_user_indicator_file`
+re-execs one freshly-saved file so the indicator appears immediately
+in the chart Add Indicator menu + entry/exit trigger dropdowns,
+without restart. `unregister_indicator(name)` pops both `INDICATORS`
+and `_BY_KIND_ID` on delete.
+
+**Scanner caveat.** Scanner dropdowns are gated by the hand-curated
+`scanner.fields.SCANNABLE_INDICATORS` allowlist; custom indicators
+do NOT auto-appear there. Add to the allowlist manually if needed.
+
+**Tests:** `tests/unit/indicators/test_expression_parser.py`,
+`tests/unit/indicators/test_expression_codegen.py`,
+`tests/unit/gui/test_custom_indicator_dialog.py` (includes the
+combobox-wheel-guard regression per §7.11).
+
 ---
 
 ## 8. Build & release flow

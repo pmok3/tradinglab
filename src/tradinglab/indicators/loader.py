@@ -39,7 +39,7 @@ import traceback
 from pathlib import Path
 from typing import NamedTuple
 
-from .base import INDICATORS, IndicatorFactory, register_indicator
+from .base import _BY_KIND_ID, INDICATORS, IndicatorFactory, register_indicator
 
 _MAX_FILE_SIZE = 256 * 1024
 _SAFE_IMPORT_MODULES = frozenset(
@@ -59,6 +59,22 @@ _SAFE_IMPORT_MODULES = frozenset(
     }
 )
 _SAFE_IMPORT_PREFIXES = ("numpy.",)
+
+#: Marker line that distinguishes builder-managed indicator files
+#: (created via the Custom Indicator Builder dialog) from hand-authored
+#: plugin files. Builder files are saved by trusted in-app UI code and
+#: may freely import internal ``tradinglab.*`` helpers (e.g.
+#: ``tradinglab.indicators.expression`` and
+#: ``tradinglab.indicators.ma_kernels``) which the restricted
+#: ``_safe_import`` blocks for hand-authored plugins. Detection is a
+#: literal substring search in the first 512 bytes of source — robust
+#: against trailing whitespace / different line endings.
+BUILDER_HEADER_MARKER = "# tradinglab-custom-indicator"
+
+
+def _is_builder_file(source: str) -> bool:
+    """True if ``source`` carries the builder header marker."""
+    return BUILDER_HEADER_MARKER in source[:512]
 
 
 def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
@@ -263,7 +279,10 @@ def discover_user_indicators(
                 register_indicator(name, factory)
 
         namespace = {
-            "__builtins__": dict(_SAFE_BUILTINS),
+            "__builtins__": (
+                _builtins.__dict__ if _is_builder_file(source)
+                else dict(_SAFE_BUILTINS)
+            ),
             "__file__": str(path),
             "__name__": f"tradinglab_plugin_{path.stem}",
             "register_indicator": _capture_register,
@@ -288,3 +307,48 @@ def discover_user_indicators(
         loaded.extend(local_loaded)
 
     return DiscoveryResult(loaded=loaded, errors=errors)
+
+
+def unregister_indicator(name: str) -> bool:
+    """Best-effort removal of an indicator factory by display name.
+
+    Used by the Custom Indicator Builder dialog when the user deletes a
+    saved indicator: the on-disk ``.py`` file is removed, then the
+    in-process registration is dropped so the chart's Add menu and
+    every dependent dropdown stop offering it. Returns ``True`` if any
+    registration was removed.
+
+    Loader-loaded plugins are registered under their display name
+    (which the builder dialog always sets equal to the file stem) and,
+    if their factory exposes a ``kind_id`` attribute, also indexed in
+    ``_BY_KIND_ID``. We pop both to keep the two indexes consistent.
+    """
+    removed = False
+    if name in INDICATORS:
+        INDICATORS.pop(name, None)
+        removed = True
+    if name in _BY_KIND_ID:
+        _BY_KIND_ID.pop(name, None)
+        removed = True
+    return removed
+
+
+def register_user_indicator_file(path: Path) -> DiscoveryResult:
+    """Discover + register a single ``.py`` file via the standard loader.
+
+    Thin wrapper around :func:`discover_user_indicators` that scans the
+    parent directory but filters the file list to ``path`` only. Lets
+    the builder dialog hot-reload one freshly-saved file without
+    rescanning every plugin.
+    """
+    if not path.is_file():
+        return DiscoveryResult(loaded=[], errors=[])
+    # Single-file scan: build a minimal DiscoveryResult by reusing the
+    # multi-file path under a tempdir-equivalent — we just call
+    # ``discover_user_indicators`` on the parent and filter out
+    # non-matching results. Cheap; user-indicators dirs are tiny.
+    result = discover_user_indicators(path.parent, register_globally=True)
+    matched_loaded = [li for li in result.loaded if li.source_path == path]
+    matched_errors = [e for e in result.errors if e.source_path == path]
+    return DiscoveryResult(loaded=matched_loaded, errors=matched_errors)
+

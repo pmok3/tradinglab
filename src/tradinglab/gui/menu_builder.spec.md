@@ -45,3 +45,4 @@
 ## Notes
 - `MenuBuilder` intentionally preserves the existing submenu list shape used by `ThemeController._apply_menubar_theme`.
 - The Indicators → `Manage Indicators…` entry still opens `gui.indicator_dialog.open_indicator_dialog(self)`; only the widget assembly moved.
+- The Indicators → `Custom Indicator Builder…` entry (added directly under `Manage Indicators…`) dispatches via `self._cb._on_custom_indicator_builder()` to `IndicatorMenuMixin._on_custom_indicator_builder`, which opens `gui.custom_indicator_dialog.open_custom_indicator_dialog(self)`. See `gui/custom_indicator_dialog.spec.md`.

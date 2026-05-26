@@ -19,10 +19,22 @@ shim become available in the Add menu.
     List[LoadError])`.
   - `LoadedIndicator(name, factory, source_path, source_hash)`.
   - `LoadError(source_path, error, traceback_text)`.
+- `register_user_indicator_file(path) -> DiscoveryResult` — single-file
+  hot-reload used by the Custom Indicator Builder dialog after a save.
+  Thin wrapper around `discover_user_indicators(path.parent)` that
+  filters results to the matching file only.
+- `unregister_indicator(name) -> bool` — best-effort removal from
+  both `INDICATORS` and `_BY_KIND_ID`. Used by the dialog on Delete.
+- `BUILDER_HEADER_MARKER = "# tradinglab-custom-indicator"` +
+  `_is_builder_file(source) -> bool` — detect Builder-managed files.
+  Builder files are exec'd with **full `builtins.__dict__`** (not
+  `_SAFE_BUILTINS`) so generated code can freely import
+  `tradinglab.indicators.expression` / `tradinglab.core.bars`.
+  Hand-authored drop-ins (no marker) keep the locked-down sandbox.
 - Plugin namespace each file sees:
   - `__name__ = "tradinglab_plugin_<stem>"`
   - `__file__ = <full path>`
-  - `__builtins__ = <curated safe builtins dict>`
+  - `__builtins__ = <curated safe builtins dict OR real builtins.__dict__>`
   - `register_indicator(name, factory)` — captured shim that appends
     to the result list and (when `register_globally`) calls the real
     `tradinglab.indicators.register_indicator`.
