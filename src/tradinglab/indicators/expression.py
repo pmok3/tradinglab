@@ -62,11 +62,13 @@ __all__ = [
     "ALLOWED_SERIES",
     "ExpressionError",
     "ParsedExpression",
+    "conditions_to_python",
     "evaluate",
     "estimate_warmup",
     "expression_to_python",
     "parse_expression",
     "safe_indicator_filename",
+    "warmup_for_conditions",
 ]
 
 
@@ -712,6 +714,192 @@ def expression_to_python(
         header=header,
         expr_literal=expression,
         warmup=int(warmup),
+        name_literal=name,
+        overlay=bool(overlay),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Conditions-mode codegen (Groups + Conditions visual builder)
+# ---------------------------------------------------------------------------
+
+
+_CONDITIONS_TEMPLATE = '''{header}
+import json
+
+import numpy as np
+
+from tradinglab.indicators.base import register_indicator
+from tradinglab.core.bars import Bars
+from tradinglab.scanner.engine import IndicatorMemo, EvaluationContext, evaluate_group
+from tradinglab.scanner.model import Group
+
+
+_GROUP_JSON = {group_json_literal!r}
+_GROUP_DICT = json.loads(_GROUP_JSON)
+
+
+def _build_group():
+    return Group.from_dict(_GROUP_DICT)
+
+
+def _resolve_warmup(group):
+    try:
+        from tradinglab.strategy_tester.warmup import (
+            _walk_field_kinds,
+            warmup_bars_for_kind,
+        )
+    except Exception:
+        return 0
+    pairs = _walk_field_kinds(group)
+    if not pairs:
+        return 0
+    return max(warmup_bars_for_kind(kid, params) for kid, params in pairs)
+
+
+class _CustomCondition:
+    name = {name_literal!r}
+    kind_id = {name_literal!r}
+    kind_version = 1
+    overlay = {overlay!r}
+    pane_group = ""
+
+    def __init__(self):
+        self._group = _build_group()
+        self._warmup = _resolve_warmup(self._group)
+
+    def compute_arr(self, bars):
+        n = int(bars.close.size)
+        out = np.full(n, np.nan, dtype=float)
+        candles = list(bars.candles or [])
+        if not candles or len(candles) != n:
+            return {{"value": out}}
+        memo = IndicatorMemo(candles=candles)
+        memo._bars = bars
+        interval = getattr(bars, "interval", None) or "1d"
+        warmup = int(self._warmup or 0)
+        ctx = EvaluationContext(
+            symbol="<custom>",
+            interval=interval,
+            bars=bars,
+            candles=candles,
+            current_index=warmup,
+            memo=memo,
+        )
+        for i in range(warmup, n):
+            ctx.current_index = i
+            ctx.evidence = []
+            try:
+                v = evaluate_group(self._group, ctx)
+            except Exception:
+                v = None
+            if v is True:
+                out[i] = 1.0
+            elif v is False:
+                out[i] = 0.0
+        return {{"value": out}}
+
+    def compute(self, candles):
+        return self.compute_arr(Bars.from_candles(candles))
+
+    @property
+    def warmup_bars(self):
+        return int(self._warmup or 0)
+
+
+register_indicator({name_literal!r}, lambda: _CustomCondition())
+'''
+
+
+def warmup_for_conditions(group_dict: dict) -> int:
+    """Return the max warmup bars required by any indicator in a Group tree.
+
+    ``group_dict`` is the ``Group.to_dict()`` serialization. Returns 0 when
+    the tree references no indicator fields (e.g. only builtins + literals)
+    or when the warmup walker import fails (e.g. during partial imports).
+    """
+    try:
+        from ..scanner.model import Group
+        from ..strategy_tester.warmup import _walk_field_kinds, warmup_bars_for_kind
+    except Exception:
+        return 0
+    try:
+        grp = Group.from_dict(group_dict)
+    except Exception as exc:
+        raise ExpressionError(f"invalid group dict: {exc}") from exc
+    pairs = _walk_field_kinds(grp)
+    if not pairs:
+        return 0
+    return max(warmup_bars_for_kind(kid, params) for kid, params in pairs)
+
+
+def conditions_to_python(
+    *,
+    name: str,
+    group_dict: dict,
+    description: str = "",
+    overlay: bool = False,
+    created: str = "",
+    updated: str = "",
+) -> str:
+    """Compile a Conditions-mode (visual Groups/Conditions tree) into a self-contained ``.py``.
+
+    The generated module evaluates ``group_dict`` per-bar via
+    :func:`tradinglab.scanner.engine.evaluate_group` and emits a single
+    ``"value"`` output that is 1.0 (condition True), 0.0 (False), or NaN
+    (warmup / insufficient data).
+
+    The serialized group dict is embedded both as a header comment
+    (``# conditions_json: ...``) for round-trip into the dialog and as a
+    runtime constant inside the module. Round-tripping the header back to
+    a Group via ``Group.from_dict(json.loads(...))`` is the source of truth
+    for re-opening the indicator in the visual editor.
+    """
+    import json as _json
+
+    safe_indicator_filename(name)
+    if not isinstance(group_dict, dict) or group_dict.get("type") != "group":
+        raise ExpressionError("group_dict must be a serialized Group (type='group')")
+    # Validate by round-tripping through the model so codegen never emits
+    # a tree the engine cannot load.
+    from ..scanner.model import Group as _Group  # local import: avoid cycles
+    try:
+        _Group.from_dict(group_dict)
+    except Exception as exc:
+        raise ExpressionError(f"invalid group dict: {exc}") from exc
+    # Validate every referenced indicator id has a registered factory at
+    # codegen time so the user sees the error in the dialog, not at runtime.
+    from ..indicators.base import factory_by_kind_id
+    try:
+        from ..strategy_tester.warmup import _walk_field_kinds
+        for kid, _params in _walk_field_kinds(_Group.from_dict(group_dict)):
+            if factory_by_kind_id(kid) is None:
+                raise ExpressionError(
+                    f"unknown indicator id {kid!r} in condition tree; "
+                    "register the indicator first or pick a different field"
+                )
+    except ExpressionError:
+        raise
+    except Exception:
+        # Warmup walker missing (partial import) — skip the strict check;
+        # the runtime path will still surface the error.
+        pass
+
+    group_json = _json.dumps(group_dict, sort_keys=True, separators=(",", ":"))
+    safe_desc = description.replace("\n", " ").strip()
+    header_lines = [
+        "# tradinglab-custom-indicator",
+        "# mode: conditions",
+        f"# description: {safe_desc or '(no description)'}",
+        f"# created: {created or ''}",
+        f"# updated: {updated or ''}",
+        f"# overlay: {bool(overlay)}",
+        f"# conditions_json: {group_json}",
+    ]
+    header = "\n".join(header_lines) + "\n"
+    return _CONDITIONS_TEMPLATE.format(
+        header=header,
+        group_json_literal=group_json,
         name_literal=name,
         overlay=bool(overlay),
     )

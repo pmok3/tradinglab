@@ -40,12 +40,15 @@ from ..indicators import loader as ind_loader
 from ..indicators.base import INDICATORS
 from ..indicators.expression import (
     ExpressionError,
+    conditions_to_python,
     evaluate,
     expression_to_python,
     parse_expression,
     python_mode_wrapper,
     safe_indicator_filename,
+    warmup_for_conditions,
 )
+from ..scanner.model import Group
 from ._modal_base import BaseModalDialog, protect_combobox_wheel
 
 __all__ = [
@@ -54,9 +57,17 @@ __all__ = [
 ]
 
 
-_BUILDING_BLOCKS = "Building blocks"
+_CONDITIONS_MODE = "Conditions"
+_EXPRESSION_MODE = "Expression"
 _PYTHON_MODE = "Python"
-_MODES = (_BUILDING_BLOCKS, _PYTHON_MODE)
+_MODES = (_CONDITIONS_MODE, _EXPRESSION_MODE, _PYTHON_MODE)
+
+# Back-compat alias so older callers / tests that imported the old
+# constant continue to resolve. ``_BUILDING_BLOCKS`` is the on-disk
+# header value for the (now-renamed) Expression mode; the dialog label
+# changed but the file format key did not, so saved indicators keep
+# loading without migration.
+_BUILDING_BLOCKS = _EXPRESSION_MODE
 
 _PYTHON_STARTER = '''\
 """Custom indicator (Python mode). Edit me!
@@ -184,8 +195,8 @@ class CustomIndicatorDialog(BaseModalDialog):
         # Form state vars.
         self._name_var = tk.StringVar(value="")
         self._desc_var = tk.StringVar(value="")
-        self._mode_var = tk.StringVar(value=_BUILDING_BLOCKS)
-        self._overlay_var = tk.BooleanVar(value=True)
+        self._mode_var = tk.StringVar(value=_CONDITIONS_MODE)
+        self._overlay_var = tk.BooleanVar(value=False)
         self._status_var = tk.StringVar(value="")
         # Currently-loaded file path (None for "new").
         self._current_path: Path | None = None
@@ -193,6 +204,12 @@ class CustomIndicatorDialog(BaseModalDialog):
         # changes so we can detect "the user switched modes after
         # loading" if needed.
         self._loaded_mode: str | None = None
+
+        # Per-mode body state, preserved across mode switches so the
+        # user doesn't lose work when toggling the mode picker.
+        self._group_root: Group = Group(combinator="and", children=[])
+        self._expression_text_cached: str = ""
+        self._python_text_cached: str = ""
 
         self._build_layout()
         self._refresh_saved_list()
@@ -261,6 +278,7 @@ class CustomIndicatorDialog(BaseModalDialog):
         self._cheatsheet_lbl: ttk.Label | None = None
         self._expr_text: tk.Text | None = None
         self._python_text: tk.Text | None = None
+        self._block_editor: Any = None  # BlockEditor instance, lazy
 
         self._render_compose_for_mode()
 
@@ -298,46 +316,130 @@ class CustomIndicatorDialog(BaseModalDialog):
         )
         self._status_lbl.pack(side="left", fill="x", expand=True)
 
+    def _capture_body_state(self) -> None:
+        """Snapshot whichever body widget is currently mounted into the cache vars.
+
+        Called before tearing down a body during a mode switch so the user's
+        composition isn't lost. The Conditions body keeps its tree in
+        ``self._group_root`` already via the BlockEditor's live mutation,
+        but we still pull ``get_root()`` to capture any pending edits.
+        """
+        if self._expr_text is not None:
+            try:
+                self._expression_text_cached = self._expr_text.get("1.0", "end").rstrip("\n")
+            except tk.TclError:
+                pass
+        if self._python_text is not None:
+            try:
+                self._python_text_cached = self._python_text.get("1.0", "end").rstrip("\n")
+            except tk.TclError:
+                pass
+        if self._block_editor is not None:
+            try:
+                self._group_root = self._block_editor.get_root()
+            except Exception:  # noqa: BLE001
+                pass
+
     def _render_compose_for_mode(self) -> None:
         for child in self._compose_frame.winfo_children():
             child.destroy()
         self._expr_text = None
         self._python_text = None
         self._cheatsheet_lbl = None
+        self._block_editor = None
 
-        if self._mode_var.get() == _BUILDING_BLOCKS:
-            self._cheatsheet_lbl = ttk.Label(
-                self._compose_frame,
-                text=_BUILTIN_CHEATSHEET,
-                font=("Consolas", 9), foreground="#666666",
-                justify="left",
-            )
-            self._cheatsheet_lbl.pack(side="top", anchor="w", pady=(0, 6))
-            ttk.Label(self._compose_frame, text="Expression:").pack(
-                side="top", anchor="w",
-            )
-            self._expr_text = tk.Text(
-                self._compose_frame, height=6, wrap="word", font=("Consolas", 10),
-            )
-            self._expr_text.pack(side="top", fill="both", expand=True)
+        mode = self._mode_var.get()
+        if mode == _CONDITIONS_MODE:
+            self._render_conditions_body()
+        elif mode == _EXPRESSION_MODE:
+            self._render_expression_body()
         else:
-            ttk.Label(
-                self._compose_frame,
-                text=(
-                    "⚠ Python mode executes arbitrary code every time the "
-                    "indicator is computed.\n"
-                    "    Only save indicators you trust."
-                ),
-                foreground="#a02020", justify="left",
-            ).pack(side="top", anchor="w", pady=(0, 6))
-            ttk.Label(self._compose_frame, text="Python source:").pack(
-                side="top", anchor="w",
-            )
-            self._python_text = tk.Text(
-                self._compose_frame, height=22, wrap="none",
-                font=("Consolas", 10),
-            )
-            self._python_text.pack(side="top", fill="both", expand=True)
+            self._render_python_body()
+
+        # Re-apply combobox wheel guard AFTER widgets are mounted so the
+        # Mode combobox itself plus any new comboboxes inside the
+        # embedded BlockEditor are protected (CLAUDE.md §7.11).
+        try:
+            protect_combobox_wheel(self, scroll_target=None)
+        except tk.TclError:
+            pass
+
+    def _render_conditions_body(self) -> None:
+        from .scanner_block_editor import BlockEditor
+
+        ttk.Label(
+            self._compose_frame,
+            text=(
+                "Build a condition tree (same editor used by entries/exits). "
+                "The indicator emits 1.0 when the group is TRUE at a bar, "
+                "0.0 when FALSE, NaN during warmup."
+            ),
+            foreground="#666666", justify="left",
+        ).pack(side="top", anchor="w", pady=(0, 4))
+        ttk.Label(self._compose_frame, text="Condition tree:").pack(
+            side="top", anchor="w",
+        )
+        self._block_editor = BlockEditor(
+            self._compose_frame,
+            root=self._group_root,
+            on_change=self._on_block_editor_changed,
+            default_interval="1d",
+        )
+        self._block_editor.pack(side="top", fill="both", expand=True)
+
+    def _on_block_editor_changed(self) -> None:
+        # Re-apply wheel guard after every edit because the BlockEditor
+        # tears down + rebuilds child widgets on Add/Delete/combinator
+        # changes; freshly-built widgets start with no bindings.
+        try:
+            protect_combobox_wheel(self, scroll_target=None)
+        except tk.TclError:
+            pass
+        if self._block_editor is not None:
+            try:
+                self._group_root = self._block_editor.get_root()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _render_expression_body(self) -> None:
+        self._cheatsheet_lbl = ttk.Label(
+            self._compose_frame,
+            text=_BUILTIN_CHEATSHEET,
+            font=("Consolas", 9), foreground="#666666",
+            justify="left",
+        )
+        self._cheatsheet_lbl.pack(side="top", anchor="w", pady=(0, 6))
+        ttk.Label(self._compose_frame, text="Expression:").pack(
+            side="top", anchor="w",
+        )
+        self._expr_text = tk.Text(
+            self._compose_frame, height=6, wrap="word", font=("Consolas", 10),
+        )
+        self._expr_text.pack(side="top", fill="both", expand=True)
+        if self._expression_text_cached:
+            self._expr_text.insert("1.0", self._expression_text_cached)
+
+    def _render_python_body(self) -> None:
+        ttk.Label(
+            self._compose_frame,
+            text=(
+                "⚠ Python mode executes arbitrary code every time the "
+                "indicator is computed.\n"
+                "    Only save indicators you trust."
+            ),
+            foreground="#a02020", justify="left",
+        ).pack(side="top", anchor="w", pady=(0, 6))
+        ttk.Label(self._compose_frame, text="Python source:").pack(
+            side="top", anchor="w",
+        )
+        self._python_text = tk.Text(
+            self._compose_frame, height=22, wrap="none",
+            font=("Consolas", 10),
+        )
+        self._python_text.pack(side="top", fill="both", expand=True)
+        if self._python_text_cached:
+            self._python_text.insert("1.0", self._python_text_cached)
+        else:
             name = self._name_var.get().strip() or "my_indicator"
             self._python_text.insert(
                 "1.0", _PYTHON_STARTER.replace("__NAME__", name)
@@ -388,16 +490,37 @@ class CustomIndicatorDialog(BaseModalDialog):
         self._loaded_mode = mode
         self._name_var.set(path.stem)
         self._desc_var.set(meta.get("description", ""))
-        if mode == "building_blocks":
-            self._mode_var.set(_BUILDING_BLOCKS)
+        # Overlay flag round-trips through the header for conditions mode.
+        overlay_str = meta.get("overlay", "").strip().lower()
+        if overlay_str in ("true", "false"):
+            self._overlay_var.set(overlay_str == "true")
+        if mode == "conditions":
+            self._mode_var.set(_CONDITIONS_MODE)
+            group_json = meta.get("conditions_json", "")
+            loaded_group: Group | None = None
+            if group_json:
+                try:
+                    import json as _json
+                    loaded_group = Group.from_dict(_json.loads(group_json))
+                except Exception as exc:  # noqa: BLE001
+                    self._set_status(
+                        f"Loaded {path.name} but conditions_json is corrupt: {exc}",
+                        level="error",
+                    )
+            if loaded_group is None:
+                loaded_group = Group(combinator="and", children=[])
+            self._group_root = loaded_group
             self._render_compose_for_mode()
+        elif mode == "building_blocks":
+            self._mode_var.set(_EXPRESSION_MODE)
             expr = meta.get("expression", "")
+            self._expression_text_cached = expr
+            self._render_compose_for_mode()
             if self._expr_text is not None:
                 self._expr_text.delete("1.0", "end")
                 self._expr_text.insert("1.0", expr)
         else:
             self._mode_var.set(_PYTHON_MODE)
-            self._render_compose_for_mode()
             # Strip the header (lines that start with '#' at top) from
             # display so the user edits the body only.
             body_lines = []
@@ -408,6 +531,8 @@ class CustomIndicatorDialog(BaseModalDialog):
                 past_header = True
                 body_lines.append(ln)
             body = "\n".join(body_lines).lstrip("\n")
+            self._python_text_cached = body
+            self._render_compose_for_mode()
             if self._python_text is not None:
                 self._python_text.delete("1.0", "end")
                 self._python_text.insert("1.0", body)
@@ -418,8 +543,13 @@ class CustomIndicatorDialog(BaseModalDialog):
         self._loaded_mode = None
         self._name_var.set("")
         self._desc_var.set("")
-        self._mode_var.set(_BUILDING_BLOCKS)
-        self._overlay_var.set(True)
+        self._mode_var.set(_CONDITIONS_MODE)
+        self._overlay_var.set(False)
+        # Reset cached body states so the next mode-switch doesn't restore
+        # stale composition from a prior load.
+        self._group_root = Group(combinator="and", children=[])
+        self._expression_text_cached = ""
+        self._python_text_cached = ""
         self._render_compose_for_mode()
         self._listbox.selection_clear(0, "end")
         self._set_status("Editing new indicator", level="info")
@@ -457,18 +587,27 @@ class CustomIndicatorDialog(BaseModalDialog):
     # Mode / validate / preview
     # ------------------------------------------------------------------
     def _on_mode_changed(self, _event: object = None) -> None:
+        self._capture_body_state()
         self._render_compose_for_mode()
-        self._set_status("Mode switched; existing composition was reset", level="info")
+        self._set_status("Mode switched", level="info")
 
     def _current_expression(self) -> str:
         if self._expr_text is None:
-            return ""
+            return self._expression_text_cached.strip()
         return self._expr_text.get("1.0", "end").strip()
 
     def _current_python_body(self) -> str:
         if self._python_text is None:
-            return ""
+            return self._python_text_cached
         return self._python_text.get("1.0", "end")
+
+    def _current_group(self) -> Group:
+        if self._block_editor is not None:
+            try:
+                return self._block_editor.get_root()
+            except Exception:  # noqa: BLE001
+                pass
+        return self._group_root
 
     def _validate(self) -> tuple[bool, str]:
         name = self._name_var.get().strip()
@@ -476,7 +615,17 @@ class CustomIndicatorDialog(BaseModalDialog):
             safe_indicator_filename(name)
         except ExpressionError as exc:
             return False, str(exc)
-        if self._mode_var.get() == _BUILDING_BLOCKS:
+        mode = self._mode_var.get()
+        if mode == _CONDITIONS_MODE:
+            grp = self._current_group()
+            if not grp.children:
+                return False, "Condition tree is empty — add at least one condition"
+            try:
+                warmup = warmup_for_conditions(grp.to_dict())
+            except ExpressionError as exc:
+                return False, str(exc)
+            return True, f"Condition tree OK (warmup: {warmup} bars)"
+        if mode == _EXPRESSION_MODE:
             try:
                 expr = self._current_expression()
                 if not expr:
@@ -514,7 +663,10 @@ class CustomIndicatorDialog(BaseModalDialog):
         try:
             from ..core.bars import Bars
             bars = Bars.from_candles(candles[-200:])
-            if self._mode_var.get() == _BUILDING_BLOCKS:
+            mode = self._mode_var.get()
+            if mode == _CONDITIONS_MODE:
+                out = self._compute_conditions(bars)
+            elif mode == _EXPRESSION_MODE:
                 expr = parse_expression(self._current_expression())
                 out = evaluate(expr, bars)
             else:
@@ -544,6 +696,49 @@ class CustomIndicatorDialog(BaseModalDialog):
             return ind.compute_arr(bars)
         return ind.compute(list(bars.candles or []))
 
+    def _compute_conditions(self, bars: Any) -> dict[str, Any]:
+        """Evaluate the current Group tree per-bar against ``bars``.
+
+        Mirrors what the generated module's ``compute_arr`` does so the
+        Preview matches what the saved indicator will compute.
+        """
+        import numpy as np
+
+        from ..scanner.engine import EvaluationContext, IndicatorMemo, evaluate_group
+
+        grp = self._current_group()
+        n = int(bars.close.size)
+        out_arr = np.full(n, np.nan, dtype=float)
+        candles = list(bars.candles or [])
+        if not candles or len(candles) != n:
+            return {"value": out_arr}
+        try:
+            warmup = warmup_for_conditions(grp.to_dict())
+        except ExpressionError:
+            warmup = 0
+        memo = IndicatorMemo(candles=candles)
+        memo._bars = bars
+        ctx = EvaluationContext(
+            symbol="<custom>",
+            interval=getattr(bars, "interval", None) or "1d",
+            bars=bars,
+            candles=candles,
+            current_index=int(warmup),
+            memo=memo,
+        )
+        for i in range(int(warmup), n):
+            ctx.current_index = i
+            ctx.evidence = []
+            try:
+                v = evaluate_group(grp, ctx)
+            except Exception:  # noqa: BLE001
+                v = None
+            if v is True:
+                out_arr[i] = 1.0
+            elif v is False:
+                out_arr[i] = 0.0
+        return {"value": out_arr}
+
     def _render_preview(self, bars: Any, out: dict[str, Any]) -> None:
         # Lazy import to keep dialog construction cheap on systems
         # where the matplotlib Tk backend hasn't been initialised yet.
@@ -553,18 +748,27 @@ class CustomIndicatorDialog(BaseModalDialog):
         for child in self._preview_frame.winfo_children():
             child.destroy()
         fig = Figure(figsize=(7, 3), dpi=90)
+        is_conditions = self._mode_var.get() == _CONDITIONS_MODE
         if self._overlay_var.get():
             ax = fig.add_subplot(111)
             ax.plot(bars.close, color="#888888", linewidth=1.0, label="close")
             for key, arr in out.items():
-                ax.plot(arr, linewidth=1.4, label=key)
+                if is_conditions:
+                    ax.step(range(len(arr)), arr, where="post", linewidth=1.4, label=key)
+                else:
+                    ax.plot(arr, linewidth=1.4, label=key)
             ax.legend(loc="upper left", fontsize=8)
         else:
             ax_price = fig.add_subplot(211)
             ax_price.plot(bars.close, color="#888888", linewidth=1.0)
             ax_ind = fig.add_subplot(212, sharex=ax_price)
             for key, arr in out.items():
-                ax_ind.plot(arr, linewidth=1.4, label=key)
+                if is_conditions:
+                    ax_ind.step(range(len(arr)), arr, where="post", linewidth=1.4, label=key)
+                else:
+                    ax_ind.plot(arr, linewidth=1.4, label=key)
+            if is_conditions:
+                ax_ind.set_ylim(-0.1, 1.1)
             ax_ind.legend(loc="upper left", fontsize=8)
         fig.tight_layout()
         canvas = FigureCanvasTkAgg(fig, master=self._preview_frame)
@@ -627,7 +831,17 @@ class CustomIndicatorDialog(BaseModalDialog):
         updated = _utc_now_iso()
 
         try:
-            if self._mode_var.get() == _BUILDING_BLOCKS:
+            mode = self._mode_var.get()
+            if mode == _CONDITIONS_MODE:
+                source = conditions_to_python(
+                    name=name,
+                    group_dict=self._current_group().to_dict(),
+                    description=self._desc_var.get().strip(),
+                    overlay=self._overlay_var.get(),
+                    created=created,
+                    updated=updated,
+                )
+            elif mode == _EXPRESSION_MODE:
                 source = expression_to_python(
                     name=name,
                     expression=self._current_expression(),
@@ -687,7 +901,10 @@ class CustomIndicatorDialog(BaseModalDialog):
         from ..strategy_tester.warmup import _synthetic_bars  # reuse helper
 
         bars = _synthetic_bars(200)
-        if self._mode_var.get() == _BUILDING_BLOCKS:
+        mode = self._mode_var.get()
+        if mode == _CONDITIONS_MODE:
+            out = self._compute_conditions(bars)
+        elif mode == _EXPRESSION_MODE:
             expr = parse_expression(self._current_expression())
             out = evaluate(expr, bars)
         else:
@@ -700,7 +917,13 @@ class CustomIndicatorDialog(BaseModalDialog):
                 a = np.asarray(arr)
             except Exception as exc:  # noqa: BLE001
                 raise RuntimeError(f"output {key!r} is not array-like: {exc}") from exc
-            if a.size == 0 or not np.any(np.isfinite(a)):
+            if a.size == 0:
+                raise RuntimeError(f"output {key!r} is empty")
+            # Conditions output is naturally NaN-padded during warmup +
+            # may be all-NaN if no bars evaluate True/False. Skip the
+            # strict finite check for that mode — emptiness is the real
+            # failure signal, and we caught that above.
+            if mode != _CONDITIONS_MODE and not np.any(np.isfinite(a)):
                 raise RuntimeError(f"output {key!r} is all-NaN / empty")
 
     @staticmethod

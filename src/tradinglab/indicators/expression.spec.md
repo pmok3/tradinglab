@@ -34,6 +34,29 @@ auto-registers the indicator via the existing loader.
   expression + description + created / updated timestamps) plus a
   `class _Indicator` definition and `register_indicator(name, ...)`
   call.
+- `conditions_to_python(*, name, group_dict, description="", overlay=False,
+  created="", updated="") -> str` — alternate code generator for the
+  **Conditions** mode of the Custom Indicator Builder. ``group_dict`` is a
+  serialized :class:`scanner.model.Group` (the visual Conditions/Groups
+  tree used by entries/exits). The generated module:
+  - Carries header lines `# mode: conditions` plus
+    `# conditions_json: <compact JSON>` so the dialog can round-trip the
+    tree back into the visual editor on reopen.
+  - Embeds the same JSON as a module constant and reconstructs the Group
+    via `Group.from_dict(...)`.
+  - Per-bar walks `evaluate_group(group, ctx)` and emits a single
+    `"value"` output that is 1.0 (True), 0.0 (False), or NaN (warmup /
+    insufficient data). NaN-padded warmup is sized via
+    :func:`warmup_for_conditions` at indicator-instantiation time so the
+    output matches the strategy_tester warmup contract (§7.16).
+  Raises `ExpressionError` for invalid names, malformed group dicts, or
+  references to unknown indicator kind_ids.
+- `warmup_for_conditions(group_dict) -> int` — companion helper that
+  returns the max warmup bars across every indicator referenced in the
+  tree, computed via `strategy_tester.warmup._walk_field_kinds` +
+  `warmup_bars_for_kind`. Used both by the dialog's Validate step
+  ("Warmup: N bars") and by the generated module's `warmup_bars`
+  property.
 - `python_mode_wrapper(name=, body=, ...)` — alternate generator for
   user-authored Python bodies; prepends the header verbatim.
 - `safe_indicator_filename(name) -> str` — validates name is

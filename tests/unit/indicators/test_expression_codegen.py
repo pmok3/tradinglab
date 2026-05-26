@@ -136,3 +136,38 @@ def test_expression_to_python_rejects_bad_name() -> None:
 def test_expression_to_python_rejects_bad_expression() -> None:
     with pytest.raises(ExpressionError):
         expression_to_python(name="ok_name", expression="__import__('os')")
+
+
+def test_conditions_codegen_warmup_round_trip() -> None:
+    """The generated module exposes a ``warmup_bars`` matching the helper."""
+    import json
+
+    from tradinglab.indicators.expression import (
+        conditions_to_python,
+        warmup_for_conditions,
+    )
+    from tradinglab.scanner.model import Condition, FieldRef, Group
+    g = Group(combinator="and", children=[
+        Condition(
+            left=FieldRef.builtin("close"),
+            op=">",
+            params={"right": FieldRef.indicator("ema", params={"length": 14})},
+            interval="1d",
+        ),
+    ])
+    src = conditions_to_python(name="warmup_rt", group_dict=g.to_dict())
+    ns: dict = {}
+    try:
+        exec(compile(src, "<test>", "exec"), ns)
+        ind = ind_base.INDICATORS["warmup_rt"]()
+        assert ind.warmup_bars == warmup_for_conditions(g.to_dict())
+        # Pull the header JSON back and verify it round-trips through
+        # Group.from_dict.
+        hl = next(
+            ln for ln in src.splitlines() if ln.startswith("# conditions_json:")
+        )
+        loaded = Group.from_dict(json.loads(hl[len("# conditions_json:"):].strip()))
+        assert len(loaded.children) == 1
+    finally:
+        ind_base.INDICATORS.pop("warmup_rt", None)
+        ind_base._BY_KIND_ID.pop("warmup_rt", None)

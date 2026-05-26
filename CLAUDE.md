@@ -654,16 +654,28 @@ under *Manage Indicators…*) opens a Toplevel that lets the user
 author indicators stored as `.py` files in
 `%LOCALAPPDATA%\TradingLab\indicators\`. Files written by the dialog
 carry the marker header `# tradinglab-custom-indicator` plus
-`# mode: building_blocks | python` and metadata lines
-(`expression`, `description`, `created`, `updated`).
+`# mode: conditions | building_blocks | python` and metadata lines
+(`description`, `created`, `updated`, plus per-mode extras —
+`expression` for Expression mode, `overlay` + `conditions_json` for
+Conditions mode).
 
-Two authoring modes:
+Three authoring modes (default: **Conditions**):
 
-1. **Building blocks** — a whitelisted mini-expression language in
-   `src/tradinglab/indicators/expression.py`. Examples:
-   `ema(close, 9) - sma(close, 20)`,
-   `where(close > vwap(), 1, 0)`,
-   `(close - ema(close, 20)) / atr(14)`.
+1. **Conditions** *(default)* — embeds the same visual Groups/Conditions
+   builder used by entries/exits (`gui.scanner_block_editor.BlockEditor`).
+   Composes a `scanner.model.Group` tree; the indicator emits a 0/1
+   signal series via `scanner.engine.evaluate_group` per-bar (1.0 True,
+   0.0 False, NaN during warmup). Visualised as a step function on the
+   chart and reusable as an entry/exit trigger via the INDICATOR
+   trigger kind — keeps semantics consistent with the rest of the
+   codebase. Warmup is auto-sized via
+   `strategy_tester.warmup.warmup_bars_for_kind` against every
+   indicator referenced in the tree, so the pre-load system (§7.16)
+   covers it automatically.
+2. **Expression** *(formerly "Building blocks")* — a whitelisted
+   mini-expression language in `src/tradinglab/indicators/expression.py`.
+   Examples: `ema(close, 9) - sma(close, 20)`,
+   `where(close > vwap(), 1, 0)`, `(close - ema(close, 20)) / atr(14)`.
    Allowed series: `close open high low volume hl2 hlc3 ohlc4`.
    Allowed functions: `ema sma wma rma (s, n)`, `rsi(s, n)`,
    `atr(n)`, `vwap()`, `bollinger / bollinger_upper / bollinger_lower
@@ -673,19 +685,25 @@ Two authoring modes:
    Comparison + logical operators return 1.0/0.0 arrays. **Safe by
    construction:** `parse_expression` walks the `ast` tree with a
    strict whitelist and rejects `__import__`, attribute access,
-   subscripts, lambdas, comprehensions, and keyword args.
-2. **Python** — full Python module. Gated behind a per-save
+   subscripts, lambdas, comprehensions, and keyword args. The on-disk
+   `mode:` header still reads `building_blocks` for back-compat; only
+   the dialog label changed.
+3. **Python** — full Python module. Gated behind a per-save
    `askokcancel` confirmation: *"This indicator contains custom
    Python code which will be executed every time the indicator is
    computed. Only save indicators you trust."* The body must define
    a class and end with `register_indicator(name, factory)`.
 
+Each body keeps its own state across mode switches inside the dialog
+(toggle Conditions → Expression and back without losing the tree).
+
 **Loader cooperation.** `indicators/loader.py:_is_builder_file`
 detects the header marker and grants the file full
 `builtins.__dict__` (instead of the restricted `_SAFE_BUILTINS`) so
-generated code can import `tradinglab.indicators.expression` and
-`tradinglab.core.bars` freely. Hand-authored drop-in plugins (no
-marker) keep the locked-down import hook.
+generated code can import `tradinglab.indicators.expression`,
+`tradinglab.scanner.engine`, and `tradinglab.core.bars` freely.
+Hand-authored drop-in plugins (no marker) keep the locked-down import
+hook.
 
 **Hot-register.** `indicators/loader.py:register_user_indicator_file`
 re-execs one freshly-saved file so the indicator appears immediately
@@ -697,10 +715,20 @@ and `_BY_KIND_ID` on delete.
 `scanner.fields.SCANNABLE_INDICATORS` allowlist; custom indicators
 do NOT auto-appear there. Add to the allowlist manually if needed.
 
+**Perf note.** Conditions-mode `compute_arr` is O(n) Python overhead
+per bar (one `evaluate_group` call per index, no vectorization). For a
+typical 200-bar preview that's <50 ms; for multi-year 1m histories it
+can be 1-3 s. Acceptable for the discretionary workflow; if it ever
+becomes a bottleneck, the engine's per-symbol `IndicatorMemo` cache
+already shares indicator computes across bars within one call, so the
+remaining overhead is the per-bar field-resolution + combinator walk.
+
 **Tests:** `tests/unit/indicators/test_expression_parser.py`,
 `tests/unit/indicators/test_expression_codegen.py`,
+`tests/unit/indicators/test_conditions_codegen.py`,
 `tests/unit/gui/test_custom_indicator_dialog.py` (includes the
-combobox-wheel-guard regression per §7.11).
+combobox-wheel-guard regression per §7.11 — re-applied after every
+BlockEditor partial rebuild via `_on_block_editor_changed`).
 
 ---
 

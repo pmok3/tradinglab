@@ -67,11 +67,17 @@ def test_default_state(root, tmp_dir) -> None:
     dlg = _mk(root, tmp_dir)
     assert dlg._name_var.get() == ""
     assert dlg._desc_var.get() == ""
-    assert dlg._mode_var.get() == mod._BUILDING_BLOCKS
-    assert dlg._overlay_var.get() is True
+    # Default is now Conditions (visual builder).
+    assert dlg._mode_var.get() == mod._CONDITIONS_MODE
+    # Overlay defaults to False for Conditions (0/1 signal → sub-pane).
+    assert dlg._overlay_var.get() is False
     assert dlg._current_path is None
     # Listbox empty (no files in tmp dir).
     assert dlg._listbox.size() == 0
+    # BlockEditor mounted, expression/python text widgets not.
+    assert dlg._block_editor is not None
+    assert dlg._expr_text is None
+    assert dlg._python_text is None
     dlg.destroy()
 
 
@@ -85,11 +91,16 @@ def test_mode_switch_preserves_metadata(root, tmp_dir) -> None:
     assert dlg._desc_var.get() == "a description"
     assert dlg._python_text is not None
     assert dlg._expr_text is None
+    assert dlg._block_editor is None
     dlg.destroy()
 
 
 def test_validate_rejects_empty_name(root, tmp_dir) -> None:
     dlg = _mk(root, tmp_dir)
+    # Switch to expression mode so we can fill in a body without
+    # constructing a Group.
+    dlg._mode_var.set(mod._EXPRESSION_MODE)
+    dlg._render_compose_for_mode()
     if dlg._expr_text is not None:
         dlg._expr_text.insert("1.0", "close")
     ok, msg = dlg._validate()
@@ -101,6 +112,8 @@ def test_validate_rejects_empty_name(root, tmp_dir) -> None:
 def test_validate_accepts_valid_expression(root, tmp_dir) -> None:
     dlg = _mk(root, tmp_dir)
     dlg._name_var.set("ok_one")
+    dlg._mode_var.set(mod._EXPRESSION_MODE)
+    dlg._render_compose_for_mode()
     dlg._expr_text.insert("1.0", "ema(close, 9) - sma(close, 20)")
     ok, msg = dlg._validate()
     assert ok, msg
@@ -110,6 +123,8 @@ def test_validate_accepts_valid_expression(root, tmp_dir) -> None:
 def test_validate_rejects_unsafe_expression(root, tmp_dir) -> None:
     dlg = _mk(root, tmp_dir)
     dlg._name_var.set("ok_one")
+    dlg._mode_var.set(mod._EXPRESSION_MODE)
+    dlg._render_compose_for_mode()
     dlg._expr_text.insert("1.0", "__import__('os')")
     ok, msg = dlg._validate()
     assert not ok
@@ -120,6 +135,8 @@ def test_save_writes_file_and_registers(root, tmp_dir, monkeypatch) -> None:
     dlg = _mk(root, tmp_dir)
     dlg._name_var.set("test_save")
     dlg._desc_var.set("save flow")
+    dlg._mode_var.set(mod._EXPRESSION_MODE)
+    dlg._render_compose_for_mode()
     dlg._expr_text.insert("1.0", "ema(close, 9) - sma(close, 20)")
     # Skip the messagebox prompts.
     dlg._on_save()
@@ -150,6 +167,8 @@ def test_save_python_mode_requires_register_call(root, tmp_dir, monkeypatch) -> 
 def test_delete_unlinks_and_unregisters(root, tmp_dir, monkeypatch) -> None:
     dlg = _mk(root, tmp_dir)
     dlg._name_var.set("test_del")
+    dlg._mode_var.set(mod._EXPRESSION_MODE)
+    dlg._render_compose_for_mode()
     dlg._expr_text.insert("1.0", "close")
     dlg._on_save()
     assert "test_del" in ind_base.INDICATORS
@@ -203,7 +222,8 @@ def test_load_existing_file_populates_editor(root, tmp_dir) -> None:
     dlg._on_select_saved()
     assert dlg._name_var.get() == "preseed"
     assert dlg._desc_var.get() == "a preseeded indicator"
-    assert dlg._mode_var.get() == mod._BUILDING_BLOCKS
+    # mode: building_blocks maps to the (renamed) Expression mode.
+    assert dlg._mode_var.get() == mod._EXPRESSION_MODE
     assert dlg._expr_text is not None
     assert "ema(close, 9)" in dlg._expr_text.get("1.0", "end")
     dlg.destroy()
@@ -230,6 +250,8 @@ def test_save_overwrite_existing_loaded_file_is_silent(
 ) -> None:
     dlg = _mk(root, tmp_dir)
     dlg._name_var.set("overwrite_test")
+    dlg._mode_var.set(mod._EXPRESSION_MODE)
+    dlg._render_compose_for_mode()
     dlg._expr_text.insert("1.0", "close")
     dlg._on_save()
     # Re-save without changing the name should not trigger a yesno
@@ -260,3 +282,136 @@ def test_loader_hot_register_round_trip(tmp_dir) -> None:
         assert "round_trip_test" in ind_base.INDICATORS
     finally:
         ind_loader.unregister_indicator("round_trip_test")
+
+
+# ===========================================================================
+# Conditions mode (visual Groups/Conditions builder)
+# ===========================================================================
+
+
+def _build_simple_group():
+    from tradinglab.scanner.model import Condition, FieldRef, Group
+    return Group(combinator="and", children=[
+        Condition(
+            left=FieldRef.builtin("close"),
+            op=">",
+            params={"right": FieldRef.indicator("ema", params={"length": 20})},
+            interval="1d",
+        ),
+    ])
+
+
+def test_conditions_is_default_mode(root, tmp_dir) -> None:
+    dlg = _mk(root, tmp_dir)
+    assert dlg._mode_var.get() == mod._CONDITIONS_MODE
+    assert dlg._block_editor is not None
+    dlg.destroy()
+
+
+def test_conditions_to_expression_preserves_text(root, tmp_dir) -> None:
+    dlg = _mk(root, tmp_dir)
+    # Start on Conditions (default), switch to Expression, type some text,
+    # switch back to Conditions, then back to Expression and verify the
+    # text cache was preserved.
+    dlg._mode_var.set(mod._EXPRESSION_MODE)
+    dlg._on_mode_changed()
+    dlg._expr_text.insert("1.0", "ema(close, 9) - sma(close, 20)")
+    dlg._mode_var.set(mod._CONDITIONS_MODE)
+    dlg._on_mode_changed()
+    assert dlg._block_editor is not None
+    assert dlg._expr_text is None
+    dlg._mode_var.set(mod._EXPRESSION_MODE)
+    dlg._on_mode_changed()
+    assert dlg._expr_text is not None
+    assert "ema(close, 9) - sma(close, 20)" in dlg._expr_text.get("1.0", "end")
+    dlg.destroy()
+
+
+def test_expression_to_conditions_preserves_group(root, tmp_dir) -> None:
+    dlg = _mk(root, tmp_dir)
+    # Install a non-trivial Group via the editor, switch to Expression,
+    # then back to Conditions; the editor should still show the group.
+    g = _build_simple_group()
+    dlg._block_editor.set_root(g)
+    # Mimic the user committing the change.
+    dlg._capture_body_state()
+    dlg._mode_var.set(mod._EXPRESSION_MODE)
+    dlg._on_mode_changed()
+    dlg._mode_var.set(mod._CONDITIONS_MODE)
+    dlg._on_mode_changed()
+    assert dlg._block_editor is not None
+    root_group = dlg._block_editor.get_root()
+    assert len(root_group.children) == 1
+    dlg.destroy()
+
+
+def test_conditions_validate_empty_tree_fails(root, tmp_dir) -> None:
+    dlg = _mk(root, tmp_dir)
+    dlg._name_var.set("cond_empty")
+    ok, msg = dlg._validate()
+    assert not ok
+    assert "empty" in msg.lower()
+    dlg.destroy()
+
+
+def test_conditions_save_writes_file_with_json_header(root, tmp_dir) -> None:
+    dlg = _mk(root, tmp_dir)
+    dlg._name_var.set("cond_save_test")
+    dlg._desc_var.set("a conditions indicator")
+    dlg._block_editor.set_root(_build_simple_group())
+    dlg._capture_body_state()
+    dlg._on_save()
+    saved = tmp_dir / "cond_save_test.py"
+    assert saved.exists()
+    text = saved.read_text(encoding="utf-8")
+    assert "# tradinglab-custom-indicator" in text
+    assert "# mode: conditions" in text
+    assert "# conditions_json:" in text
+    assert "cond_save_test" in ind_base.INDICATORS
+    dlg.destroy()
+
+
+def test_conditions_round_trip_reload(root, tmp_dir) -> None:
+    dlg = _mk(root, tmp_dir)
+    dlg._name_var.set("cond_rt_test")
+    dlg._desc_var.set("round trip")
+    dlg._block_editor.set_root(_build_simple_group())
+    dlg._capture_body_state()
+    dlg._on_save()
+    saved = tmp_dir / "cond_rt_test.py"
+    assert saved.exists()
+    # Click New to clear, then re-load via the listbox.
+    dlg._on_new()
+    assert dlg._block_editor.get_root().children == []
+    # Find the file in the listbox and select it.
+    files = [dlg._listbox.get(i) for i in range(dlg._listbox.size())]
+    idx = files.index("cond_rt_test")
+    dlg._listbox.selection_clear(0, "end")
+    dlg._listbox.selection_set(idx)
+    dlg._on_select_saved()
+    assert dlg._mode_var.get() == mod._CONDITIONS_MODE
+    assert dlg._block_editor is not None
+    loaded = dlg._block_editor.get_root()
+    assert len(loaded.children) == 1
+    assert dlg._desc_var.get() == "round trip"
+    dlg.destroy()
+
+
+def test_conditions_wheel_guard_after_block_editor_mutation(root, tmp_dir) -> None:
+    """Wheel-over-Combobox inside the embedded BlockEditor must NOT mutate.
+
+    Mirrors CLAUDE.md §7.11 — the wheel guard must be re-applied after
+    every BlockEditor partial rebuild (Add Condition, Add Group, change
+    combinator). We install a group, simulate the on_change callback to
+    rebuild, then wheel over the mode combobox and verify it is stable.
+    """
+    dlg = _mk(root, tmp_dir)
+    dlg._block_editor.set_root(_build_simple_group())
+    dlg._on_block_editor_changed()
+    combo = dlg._mode_combo
+    initial = combo.get()
+    for _ in range(5):
+        combo.event_generate("<MouseWheel>", delta=-120, x=5, y=5)
+        combo.update()
+    assert combo.get() == initial
+    dlg.destroy()
