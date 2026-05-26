@@ -1626,10 +1626,14 @@ class StrategyTab(ttk.Frame):
             )
             return
         if agg is None:
-            messagebox.showinfo(
-                "Strategy Tester",
+            # Non-modal status update (was a messagebox.showinfo modal that
+            # hung headless CI tests forever). The Recent Runs flow is
+            # forgiving — a missing aggregate.json just means the run is
+            # in flight or failed before reporting; users can see the
+            # status string + try a refresh.
+            self._var_status.set(
                 "This run has no aggregate.json — it may still be running "
-                "or have failed before reaching the report stage.",
+                "or have failed before reaching the report stage."
             )
             return
         self._current_run_dir = run_dir
