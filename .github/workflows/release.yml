@@ -57,16 +57,30 @@ jobs:
           python -m pip install --upgrade pip wheel
           python -m pip install -e ".[dev,schwab]"
 
-      - name: Run unit + smoke tests
+      # IMPORTANT: unit tests + scanner tests must run with a CLEAN
+      # environment (no TRADINGLAB_* env vars set). They use
+      # ``monkeypatch.setenv("TRADINGLAB_CACHE_DIR", str(tmp_path))``
+      # to redirect to an isolated tmp_path, but ``paths._resolve_root``
+      # gives ``TRADINGLAB_DATA_DIR`` precedence — so a workflow-level
+      # ``TRADINGLAB_DATA_DIR`` would silently shadow the monkeypatch
+      # and cause tests to see leftover state from other tests.
+      # See ``tests/unit/conftest.py`` for the defense-in-depth.
+      - name: Run unit + scanner tests (clean env)
         shell: pwsh
-        env:
-          # Isolate the smoke harness from any leftover state on the
-          # runner image. The harness sets TRADINGLAB_CACHE_DIR
-          # itself, but pre-setting TRADINGLAB_DATA_DIR belt-and-
-          # braces the new paths.py root resolver too.
-          TRADINGLAB_DATA_DIR: ${{ runner.temp }}\smoke-data
         run: |
-          python -m pytest tests/unit tests/smoke tests/scanner -q
+          python -m pytest tests/unit tests/scanner -q
+
+      # Smoke tests are allowed to use ``TRADINGLAB_CACHE_DIR``
+      # (already set by ``tests/smoke/conftest.py`` to a fresh tempdir
+      # at import time). We do NOT set ``TRADINGLAB_DATA_DIR`` here
+      # because (a) the smoke conftest's own setup is sufficient and
+      # (b) it would override the smoke conftest's path resolution,
+      # making ``check_b65_events_cache_disk_roundtrip`` look for
+      # bundle files in the wrong place.
+      - name: Run smoke tests
+        shell: pwsh
+        run: |
+          python -m pytest tests/smoke -q
 
       - name: Build redistributable
         shell: pwsh
