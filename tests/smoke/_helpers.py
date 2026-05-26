@@ -103,7 +103,17 @@ def _timeout_scale() -> float:
 
 
 def _pump(app, seconds: float = 0.3) -> None:
-    end = time.monotonic() + seconds * _timeout_scale()
+    """Drive Tk events for ``seconds`` (NOT scaled by TIMEOUT_SCALE).
+
+    Many checks use ``_pump(app, X)`` as a "wait briefly, then assert
+    NOT done yet" probe. Scaling those would change semantics — the
+    test would wait LONGER, by which time the work might actually be
+    done. So ``_pump`` is fixed-wall-time on every host; only
+    :func:`_pump_until` (which is "wait UP TO X for predicate") is
+    scaled — extending an upper-bound wait can never falsify a passing
+    test on dev hardware.
+    """
+    end = time.monotonic() + seconds
     while time.monotonic() < end:
         try:
             app.update()
