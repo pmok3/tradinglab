@@ -77,8 +77,16 @@ jobs:
       # (b) it would override the smoke conftest's path resolution,
       # making ``check_b65_events_cache_disk_roundtrip`` look for
       # bundle files in the wrong place.
+      #
+      # ``TRADINGLAB_PYTEST_TIMEOUT_SCALE=5.0`` scales every
+      # ``_pump`` / ``_pump_until`` call in the smoke harness so async
+      # fetch + Tk event-loop races have time to settle on the
+      # ``windows-latest`` runner (consistently ~2-5x slower than
+      # local dev). See ``tests/smoke/_helpers.py:_timeout_scale``.
       - name: Run smoke tests
         shell: pwsh
+        env:
+          TRADINGLAB_PYTEST_TIMEOUT_SCALE: "5.0"
         run: |
           python -m pytest tests/smoke -q
 

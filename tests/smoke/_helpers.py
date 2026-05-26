@@ -83,8 +83,27 @@ def _stub_yfinance():
 
 # --------------------------------------------------------- Tk event pumps --
 
+import os as _os
+
+
+def _timeout_scale() -> float:
+    """Return the multiplier applied to ``_pump`` / ``_pump_until`` timeouts.
+
+    Read from ``TRADINGLAB_PYTEST_TIMEOUT_SCALE`` (default ``1.0``).
+    CI sets this to ``5.0`` because the ``windows-latest`` runner is
+    significantly slower than dev hardware on Tk-event-loop /
+    async-fetch races (the dev box runs the same checks in ~half the
+    wall-clock). The scale is applied uniformly inside the helpers so
+    individual checks don't need to special-case CI.
+    """
+    try:
+        return max(1.0, float(_os.environ.get("TRADINGLAB_PYTEST_TIMEOUT_SCALE", "1.0")))
+    except (TypeError, ValueError):
+        return 1.0
+
+
 def _pump(app, seconds: float = 0.3) -> None:
-    end = time.monotonic() + seconds
+    end = time.monotonic() + seconds * _timeout_scale()
     while time.monotonic() < end:
         try:
             app.update()
@@ -95,8 +114,13 @@ def _pump(app, seconds: float = 0.3) -> None:
 
 def _pump_until(app, predicate, timeout: float = 2.0,
                 poll: float = 0.02) -> bool:
-    """Pump Tk events until ``predicate()`` returns truthy or timeout fires."""
-    end = time.monotonic() + timeout
+    """Pump Tk events until ``predicate()`` returns truthy or timeout fires.
+
+    ``timeout`` is multiplied by :func:`_timeout_scale` so slow CI
+    runners (and emulated environments) can satisfy timing-sensitive
+    predicates without per-check tuning.
+    """
+    end = time.monotonic() + timeout * _timeout_scale()
     while time.monotonic() < end:
         try:
             app.update()
