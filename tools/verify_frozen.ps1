@@ -76,16 +76,18 @@ $env:TRADINGLAB_NO_SPLASH = "1"
 # redirected to a temp file because Start-Process can't capture stdout
 # from a Windows-subsystem (windowed) binary directly.
 $verOut = New-TemporaryFile
+$verErr = New-TemporaryFile
 try {
     $proc = Start-Process -FilePath $ExePath -ArgumentList "--version" `
         -NoNewWindow -PassThru -RedirectStandardOutput $verOut.FullName `
-        -RedirectStandardError $null
+        -RedirectStandardError $verErr.FullName
     if (-not $proc.WaitForExit(30000)) {
         try { $proc.Kill() } catch {}
         Write-Error "Probe 1 timed out after 30s waiting for --version"
     }
     if ($proc.ExitCode -ne 0) {
-        Write-Error "Probe 1 exit code $($proc.ExitCode) (expected 0)"
+        $stderrText = (Get-Content -Raw -Path $verErr.FullName -ErrorAction SilentlyContinue) ?? ""
+        Write-Error "Probe 1 exit code $($proc.ExitCode) (expected 0). stderr: $stderrText"
     }
     $stdoutText = (Get-Content -Raw -Path $verOut.FullName).Trim()
     # Match ``MAJOR.MINOR.PATCH`` possibly followed by ``+<commit>``
@@ -98,6 +100,7 @@ try {
 }
 finally {
     Remove-Item -Force $verOut -ErrorAction SilentlyContinue
+    Remove-Item -Force $verErr -ErrorAction SilentlyContinue
 }
 
 # -----------------------------------------------------------------------
