@@ -142,8 +142,21 @@ def app():
     _stub_yfinance()
     from tradinglab.app import ChartApp
     a = ChartApp()
+    # Hide the window completely so the smoke test doesn't steal focus
+    # or flash a taskbar icon on the user's screen. ``withdraw()`` keeps
+    # the Tk root alive (so widgets / geometry / event handlers all work)
+    # but the window never appears. Also park it off-screen as a belt-
+    # and-braces: if any future check ``deiconify``-s the window
+    # mid-test, it lands at -3000,-3000 (off any practical display)
+    # rather than at the user's cursor. Previously called ``iconify``,
+    # which on Windows minimises to the taskbar and steals focus for
+    # ~100ms during construction.
     try:
-        a.iconify()
+        a.geometry("800x600-3000-3000")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        a.withdraw()
     except Exception:  # noqa: BLE001
         pass
     _pump(a, 0.3)

@@ -84,11 +84,18 @@ from .gui.banner import FirstRunBannerMixin
 from .gui.chart_renderer import ChartRenderer
 from .gui.config_manager import ConfigManager
 from .gui.dialog_manager import DialogManager
+
+# ``_SettingsDialog`` / ``_WatchlistDialog`` are constructed only when the
+# user actually opens those dialogs (see ``_open_settings_dialog`` /
+# ``_open_watchlist_dialog`` near the bottom of this file). Lazy-loading
+# them shaves the dialog-stack imports out of cold start — the dialogs
+# module pulls in theme + matplotlib + several mixins that aren't needed
+# until first open. The two constants ``WORKER_COUNT_MIN`` /
+# ``WORKER_COUNT_MAX`` ARE re-exported eagerly because they're referenced
+# at class-definition time by ``WorkerPoolMixin._clamp_worker_count``.
 from .gui.dialogs import (
     WORKER_COUNT_MAX,
     WORKER_COUNT_MIN,
-    _SettingsDialog,
-    _WatchlistDialog,
 )
 from .gui.drilldown import DrilldownMixin, _DrilldownRequest
 from .gui.entries_app import EntriesAppMixin
@@ -6320,10 +6327,16 @@ class ChartApp(
 
 
 
-    def _open_settings_dialog(self) -> _SettingsDialog:
+    def _open_settings_dialog(self):
+        # Lazy import — the settings dialog drags in theme + matplotlib
+        # font helpers + the full scrollable-form scaffolding that aren't
+        # needed until first open. Keeps cold-start lean.
+        from .gui.dialogs import _SettingsDialog
         return _SettingsDialog(self)
 
-    def _open_watchlist_dialog(self) -> _WatchlistDialog:
+    def _open_watchlist_dialog(self):
+        # Lazy import — same rationale as ``_open_settings_dialog``.
+        from .gui.dialogs import _WatchlistDialog
         return _WatchlistDialog(self)
 
     # ------------------------------------------------------------------
