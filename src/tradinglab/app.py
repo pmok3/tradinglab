@@ -3026,8 +3026,10 @@ class ChartApp(
         redundant HTTP fetch whose merge is a no-op.
         """
         try:
-            from zoneinfo import ZoneInfo
-            et = datetime.fromtimestamp(now_s, ZoneInfo("America/New_York"))
+            from .core.timezones import ET
+            if ET is None:
+                return True
+            et = datetime.fromtimestamp(now_s, ET)
         except Exception:  # noqa: BLE001
             # No tzdata: fall back to UTC offset estimate (-5h naïve).
             # Conservative: treat unknown as "open" so we don't silently

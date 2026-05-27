@@ -165,10 +165,10 @@ class SandboxPanel(ttk.Frame):
         name = getattr(host, "_display_tz", "") or ""
         name = name.strip()
         if not name:
-            try:
-                return ("ET", ZoneInfo("America/New_York"))
-            except Exception:  # noqa: BLE001
+            from ..core.timezones import ET
+            if ET is None:
                 return ("UTC", None)
+            return ("ET", ET)
         try:
             zone = ZoneInfo(name)
         except Exception:  # noqa: BLE001

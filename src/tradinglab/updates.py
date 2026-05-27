@@ -93,12 +93,11 @@ class UpdateResult:
 
 def _is_rth_now() -> bool:
     """Return ``True`` if the wall clock is inside US regular trading hours."""
-    try:
-        from zoneinfo import ZoneInfo
+    from .core.timezones import ET
 
-        now = datetime.now(ZoneInfo("America/New_York"))
-    except Exception:  # noqa: BLE001
+    if ET is None:
         return True
+    now = datetime.now(ET)
 
     if now.weekday() >= 5:  # Saturday / Sunday
         return False

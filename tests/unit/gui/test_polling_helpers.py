@@ -109,18 +109,12 @@ class TestPostponePastClosedMarket:
     def test_zoneinfo_import_failure_returns_input(self):
         """If zoneinfo cannot be loaded the helper is conservative —
         returns the input epoch unchanged so callers still schedule
-        *something*."""
+        *something*. After CLAUDE.md §7.23 the ET helper is imported
+        from core.timezones; missing tzdata = monkeypatch the cached
+        ET constant to None."""
         t = _epoch_at(2025, 5, 13, 22, 0)
-        # Patch the in-method import.
-        import builtins
-        real_import = builtins.__import__
-
-        def _fail(name, *args, **kwargs):
-            if name == "zoneinfo":
-                raise ImportError("simulated missing zoneinfo")
-            return real_import(name, *args, **kwargs)
-
-        with patch.object(builtins, "__import__", _fail):
+        from tradinglab.core import timezones as _tz
+        with patch.object(_tz, "ET", None):
             out = _polling._postpone_past_closed_market(t, include_extended=False)
         assert out == t
 
@@ -168,15 +162,8 @@ class TestNextDailyCloseEpoch:
 
     def test_zoneinfo_failure_returns_now_plus_one_day(self):
         now = _epoch_at(2025, 5, 13, 10, 0)
-        import builtins
-        real_import = builtins.__import__
-
-        def _fail(name, *args, **kwargs):
-            if name == "zoneinfo":
-                raise ImportError("simulated")
-            return real_import(name, *args, **kwargs)
-
-        with patch.object(builtins, "__import__", _fail):
+        from tradinglab.core import timezones as _tz
+        with patch.object(_tz, "ET", None):
             out = _polling._next_daily_close_epoch(now, grace_s=300)
         assert out == now + 86400
 

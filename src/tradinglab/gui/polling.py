@@ -88,13 +88,8 @@ def _postpone_past_closed_market(target_epoch: float,
     behavior so scheduling still produces *some* fetch rather than
     silently breaking.
     """
-    try:
-        from zoneinfo import ZoneInfo
-    except Exception:  # noqa: BLE001
-        return target_epoch
-    try:
-        ET = ZoneInfo("America/New_York")
-    except Exception:  # noqa: BLE001
+    from ..core.timezones import ET
+    if ET is None:
         return target_epoch
     t = _dt.datetime.fromtimestamp(target_epoch, tz=ET)
     open_t, close_t = _market_window_et(include_extended)
@@ -122,10 +117,8 @@ def _next_daily_close_epoch(now_epoch: float, grace_s: int = 300) -> float:
     Fridays) as an optimization; here we poll every weekday so
     in-progress weekly/monthly candles also refresh.
     """
-    try:
-        from zoneinfo import ZoneInfo
-        ET = ZoneInfo("America/New_York")
-    except Exception:  # noqa: BLE001
+    from ..core.timezones import ET
+    if ET is None:
         return now_epoch + 24 * 3600
     now = _dt.datetime.fromtimestamp(now_epoch, tz=ET)
     close_today = now.replace(hour=16, minute=0, second=0, microsecond=0)

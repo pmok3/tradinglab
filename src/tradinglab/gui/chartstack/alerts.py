@@ -33,18 +33,18 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from ...core.timezones import ET as _ET_FROM_CORE
 from ..colors import CAUTION_YELLOW, ERROR_RED, INFO_BLUE, WARN_AMBER
 from . import settings_adapter as _adapter
 
 _LOG = logging.getLogger(__name__)
 
-# Eastern-time offset is captured at module load via ``zoneinfo``;
+# Eastern-time offset is captured at module load via ``core.timezones``;
 # when zoneinfo isn't available (paranoid CI), fall back to a fixed
 # UTC-4 offset since we only need a rough ToD gate at 09:30 ET.
-try:  # pragma: no cover - import guard
-    from zoneinfo import ZoneInfo  # type: ignore
-    _ET = ZoneInfo("America/New_York")
-except Exception:  # pragma: no cover - fallback
+if _ET_FROM_CORE is not None:
+    _ET = _ET_FROM_CORE
+else:  # pragma: no cover - tzdata missing
     _ET = _dt.timezone(_dt.timedelta(hours=-4))
 
 

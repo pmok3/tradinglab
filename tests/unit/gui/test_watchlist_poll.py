@@ -209,17 +209,13 @@ class TestPollInRTHNow:
 
     def test_zoneinfo_failure_returns_true(self):
         """Missing tzdata ⇒ conservative True (don't silently
-        downgrade to off-hours cadence)."""
+        downgrade to off-hours cadence). After CLAUDE.md §7.23
+        the ET helper is imported from core.timezones; simulating
+        a missing-tzdata environment means monkey-patching the
+        cached ET constant to None."""
         h = _Harness()
-        import builtins as _b
-        real_import = _b.__import__
-
-        def _fail(name, *args, **kwargs):
-            if name == "zoneinfo":
-                raise ImportError("simulated")
-            return real_import(name, *args, **kwargs)
-
-        with patch.object(_b, "__import__", _fail):
+        from tradinglab.core import timezones as _tz
+        with patch.object(_tz, "ET", None):
             assert h._watchlist_poll_in_rth_now() is True
 
 

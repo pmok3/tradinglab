@@ -1747,12 +1747,12 @@ class WatchlistTabMixin:
         sees live-cadence polling rather than a silent off-hours
         slowdown.
         """
-        try:
-            from datetime import datetime
-            from zoneinfo import ZoneInfo
-            et = datetime.now(ZoneInfo("America/New_York"))
-        except Exception:  # noqa: BLE001
+        from datetime import datetime
+
+        from ..core.timezones import ET
+        if ET is None:
             return True
+        et = datetime.now(ET)
         if et.weekday() >= 5:  # Sat/Sun
             return False
         minutes = et.hour * 60 + et.minute
