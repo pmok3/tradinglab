@@ -18956,6 +18956,205 @@ def check_d81_rvol_rhs_reachable(app) -> None:
                 pass
 
 
+def check_d82_modeless_dialogs_preserve_grab(app) -> None:
+    """The three dialogs that pass ``grab=False`` to BaseModalDialog
+    (IndicatorDialog, DrawingDialog, PerformanceView) must remain
+    **modeless** after the audit-#4 migration — i.e. they must NOT
+    install a Tk grab on themselves.
+
+    Regression for the audit-#4 batch-1/batch-2/batch-4 migrations
+    (commits ``2e0eace`` / ``6b41b06`` / ``cc2fefe``) that swapped 19
+    dialogs from raw ``tk.Toplevel`` to ``BaseModalDialog``. Three of
+    them explicitly opt out of the default ``grab=True`` because their
+    UX contract requires the user to keep interacting with the parent
+    chart while the dialog is open:
+
+    * ``IndicatorDialog`` — long-lived; user toggles indicator
+      visibility from the chart while editing rows.
+    * ``DrawingDialog`` — live-commit; user drags the line on the
+      chart and watches the dialog reflect the new price.
+    * ``PerformanceView`` — read-only review; user keeps cross-
+      referencing the chart while sorting trades.
+
+    If a future refactor accidentally drops the ``grab=False`` kwarg
+    (or BaseModalDialog inverts the default), the chart goes dead
+    until the dialog closes. Wheel-guard unit tests can't catch this
+    — they don't open the parent app.
+
+    macOS skip per §7.1 (transient + headless deadlock).
+    """
+    if sys.platform == "darwin":
+        print("  [SKIP] d82: macOS Tk dialog deadlock (transient + headless)")
+        return
+
+    import tkinter as tk
+
+    from tradinglab.backtest.session import SessionResult, SessionSpec
+    from tradinglab.drawings.model import make_hline_drawing
+    from tradinglab.gui.drawing_dialog import DrawingDialog
+    from tradinglab.gui.indicator_dialog import (
+        IndicatorDialog,
+        open_indicator_dialog,
+    )
+    from tradinglab.gui.performance_view import PerformanceView
+
+    # --- IndicatorDialog (singleton via open_indicator_dialog) -------
+    mgr = app._indicator_manager
+    saved = list(mgr.list())
+    mgr.clear()
+    ind_dlg: IndicatorDialog | None = None
+    drawing_dlg: DrawingDialog | None = None
+    perf_dlg: PerformanceView | None = None
+    seeded_drawing_id: str | None = None
+    try:
+        ind_dlg = open_indicator_dialog(app)
+        assert isinstance(ind_dlg, IndicatorDialog)
+        _pump(app, 0.1)
+        assert ind_dlg.grab_status() is None, (
+            "IndicatorDialog must be modeless (grab=False) — "
+            "chart interactivity contract; got "
+            f"grab_status={ind_dlg.grab_status()!r}")
+
+        # --- DrawingDialog ----------------------------------------
+        store = app._drawings
+        sym = (app._confirmed_primary_ticker or "AMD").strip().upper()
+        seed = make_hline_drawing(sym, 88.5)
+        store.add(seed)
+        seeded_drawing_id = seed.id
+        drawing_dlg = DrawingDialog(app, store=store, drawing=seed)
+        _pump(app, 0.1)
+        assert drawing_dlg.grab_status() is None, (
+            "DrawingDialog must be modeless (grab=False) — "
+            "user-must-drag-line-on-chart contract; got "
+            f"grab_status={drawing_dlg.grab_status()!r}")
+
+        # --- PerformanceView --------------------------------------
+        spec = SessionSpec(
+            deck_seed=1, tickers=("AMD",),
+            start_clock_iso="2024-01-02T14:30:00Z",
+            slippage_bps=0.0, commission=0.0, starting_cash=10_000.0,
+        )
+        result = SessionResult(spec=spec, final_cash=10_000.0)
+        perf_dlg = PerformanceView(app, result, title="smoke d82")
+        _pump(app, 0.1)
+        assert perf_dlg.grab_status() is None, (
+            "PerformanceView must be modeless (grab=False) — "
+            "read-only-while-chart-stays-live contract; got "
+            f"grab_status={perf_dlg.grab_status()!r}")
+
+        print("  [OK] d82: IndicatorDialog + DrawingDialog + "
+              "PerformanceView all preserve grab=False (modeless)")
+    finally:
+        for d in (perf_dlg, drawing_dlg, ind_dlg):
+            if d is not None:
+                try:
+                    d.destroy()
+                except tk.TclError:
+                    pass
+        try:
+            app._indicator_dialog = None
+        except Exception:  # noqa: BLE001
+            pass
+        if seeded_drawing_id is not None:
+            try:
+                app._drawings.remove(seeded_drawing_id)
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            mgr.clear()
+            for c in saved:
+                mgr.add(c)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def check_d83_entries_scanner_alert_renders_scanner_id_entry(app) -> None:
+    """Schema-driven trigger-params renderer (audit #8, commit
+    ``11517ce``): flipping an EntriesDialog's trigger kind to
+    SCANNER_ALERT must mount a ``scanner_id`` text Entry bound to a
+    ``StringVar`` in ``_trigger_param_vars["scanner_id"]``, AND
+    typing into it must flow back to ``draft.trigger.scanner_id``.
+
+    Parallel to :func:`check_d81_rvol_rhs_reachable` (which pins the
+    ``block_editor`` field-spec path on the INDICATOR kind). This
+    check exercises the simpler ``"str"`` field-spec path so the new
+    ``_FIELD_SPECS_BY_KIND`` + ``render_kind_params`` orchestrator
+    is exercised end-to-end on a different per-kind shape.
+
+    Regression: if the entries-side spec table forgets the
+    SCANNER_ALERT entry (or the renderer's ``"str"`` branch stops
+    binding the StringVar to the parent dict), the scanner_id
+    field becomes invisible / unreadable and SCANNER_ALERT triggers
+    silently save with ``scanner_id=None``.
+
+    macOS skip per §7.1.
+    """
+    if sys.platform == "darwin":
+        print("  [SKIP] d83: macOS Tk dialog deadlock (transient + headless)")
+        return
+
+    import tkinter as tk
+
+    from tradinglab.entries.model import EntryStrategy, TriggerKind
+    from tradinglab.gui.entries_dialog import EntriesDialog
+
+    strat = EntryStrategy(name="(smoke d83)")
+    dlg: EntriesDialog | None = None
+    try:
+        dlg = EntriesDialog(app, strategy=strat)
+        for _ in range(10):
+            dlg.update_idletasks()
+            dlg.update()
+            if dlg.winfo_width() > 1:
+                break
+
+        dlg._draft.trigger.kind = TriggerKind.SCANNER_ALERT
+        dlg._render_trigger_params()
+        for _ in range(5):
+            dlg.update_idletasks()
+            dlg.update()
+
+        var = dlg._trigger_param_vars.get("scanner_id")
+        assert var is not None, (
+            "SCANNER_ALERT spec must register a 'scanner_id' var in "
+            "_trigger_param_vars (entries-side _ENTRY_TRIGGER_SPECS "
+            "missing the SCANNER_ALERT entry, or render_kind_params "
+            "stopped populating vars_dict for the 'str' kind)")
+        assert isinstance(var, tk.StringVar), (
+            f"'str' field-spec kind must mint a StringVar (got "
+            f"{type(var).__name__})")
+
+        # Typing into the var must flow into the draft trigger.
+        var.set("my-scanner-42")
+        # The dialog wires a write trace via render_field; pump so the
+        # callback runs synchronously (Tk write traces fire on .set).
+        for _ in range(3):
+            dlg.update_idletasks()
+            dlg.update()
+        assert dlg._draft.trigger.scanner_id == "my-scanner-42", (
+            f"StringVar write trace did not flow into "
+            f"draft.trigger.scanner_id; got "
+            f"{dlg._draft.trigger.scanner_id!r}")
+
+        # Empty string sentinel → None per the spec's "" => None mapping.
+        var.set("   ")
+        for _ in range(3):
+            dlg.update_idletasks()
+            dlg.update()
+        assert dlg._draft.trigger.scanner_id is None, (
+            f"Blank scanner_id must map to None on the draft (got "
+            f"{dlg._draft.trigger.scanner_id!r})")
+
+        print("  [OK] d83: SCANNER_ALERT trigger renders scanner_id "
+              "Entry via schema-driven renderer; round-trips to draft")
+    finally:
+        if dlg is not None:
+            try:
+                dlg.destroy()
+            except tk.TclError:
+                pass
+
+
 # ---------------------------------------------------------------------- Main
 
 
@@ -19119,6 +19318,8 @@ def _run_all_checks(app) -> None:
     check_b72_chandelier_stops(app)
     check_d80_horizontal_lines(app)
     check_d81_rvol_rhs_reachable(app)
+    check_d82_modeless_dialogs_preserve_grab(app)
+    check_d83_entries_scanner_alert_renders_scanner_id_entry(app)
     check_e0_disk_cache_persist(app)
 
 
