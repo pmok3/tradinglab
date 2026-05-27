@@ -163,6 +163,68 @@ def _watchlist_prior_close_from_tail(
     return tail[-1][1]
 
 
+# ---------------------------------------------------------------------------
+# Watchlist sort-column registry
+# ---------------------------------------------------------------------------
+#
+# Per-column key extractors used by ``WatchlistTabMixin._watchlist_sort_key``.
+# Each extractor takes ``(tab_mixin, ticker, snap)`` and returns the
+# ``(is_missing, value)`` sort key. Adding a new sortable column = one
+# entry below + (optionally) a new extractor function.
+
+def _sort_key_ticker(_tab, ticker: str, _snap: dict):
+    return (False, ticker.upper())
+
+
+def _make_snap_value_extractor(snap_key: str, *fallback_keys: str):
+    """Build an extractor that reads a numeric value from ``snap``.
+
+    Used by Last / Change / Change Pct columns where the value is
+    already in the snap dict (with a 1d-pinned key and a legacy
+    fallback). Returns ``(True, 0.0)`` for missing or non-numeric
+    values so blanks always trail.
+    """
+    def _extract(_tab, _ticker: str, snap: dict):
+        v = snap.get(snap_key)
+        for k in fallback_keys:
+            if v is not None:
+                break
+            v = snap.get(k)
+        if isinstance(v, (int, float)):
+            return (False, float(v))
+        return (True, 0.0)
+    return _extract
+
+
+def _sort_key_next_earn(tab, ticker: str, _snap: dict):
+    """Sort by ascending trading-days-until-next-earnings.
+
+    The missing-data sentinel from :func:`_format_next_earn` is
+    ``10**9`` which would sort last in ascending — but we also want
+    blanks to trail in *descending*, hence the ``(is_missing, value)``
+    pair convention. Treat any value ``>= 10**8`` as missing.
+    """
+    try:
+        bundle = tab._events_cache.get(ticker.upper())
+    except AttributeError:
+        bundle = None
+    import time as _time
+    now_ms = int(_time.time() * 1000)
+    _, td = _format_next_earn(bundle, now_ms=now_ms)
+    if td >= 10**8:
+        return (True, 0.0)
+    return (False, float(td))
+
+
+_WATCHLIST_SORT_EXTRACTORS = {
+    "ticker":     _sort_key_ticker,
+    "last":       _make_snap_value_extractor("last"),
+    "change":     _make_snap_value_extractor("change_1d", "chg"),
+    "change_pct": _make_snap_value_extractor("pct_1d", "pct"),
+    "next_earn":  _sort_key_next_earn,
+}
+
+
 class WatchlistTabMixin:
     """Watchlist tab repaint + preload helpers."""
 
@@ -765,36 +827,16 @@ class WatchlistTabMixin:
         self._populate_watchlist_tab(name)
 
     def _watchlist_sort_key(self, col: str, ticker: str, snap: dict):
-        """Return a (is_missing, value) key so blanks always trail."""
-        if col == "ticker":
-            return (False, ticker.upper())
-        if col == "last":
-            v = snap.get("last")
-        elif col == "change":
-            v = snap.get("change_1d", snap.get("chg"))
-        elif col == "change_pct":
-            v = snap.get("pct_1d", snap.get("pct"))
-        elif col == "next_earn":
-            # Sort by ascending trading-days-until-next-earnings. The
-            # missing-data sentinel from :func:`_format_next_earn` is
-            # ``10**9`` which would sort last in ascending — but we
-            # also want blanks to trail in *descending*, hence the
-            # (is_missing, value) pair convention. Treat any value
-            # >= 10**8 as missing.
-            try:
-                bundle = self._events_cache.get(ticker.upper())
-            except AttributeError:
-                bundle = None
-            import time as _time
-            now_ms = int(_time.time() * 1000)
-            _, td = _format_next_earn(bundle, now_ms=now_ms)
-            if td >= 10**8:
-                return (True, 0.0)
-            return (False, float(td))
-        else:
-            v = None
-        if isinstance(v, (int, float)):
-            return (False, float(v))
+        """Return a (is_missing, value) key so blanks always trail.
+
+        Dispatches to a per-column extractor via
+        :data:`_WATCHLIST_SORT_EXTRACTORS`. New sortable columns add
+        an entry there. Unknown columns fall through to
+        ``(True, 0.0)`` (sort to the end).
+        """
+        extractor = _WATCHLIST_SORT_EXTRACTORS.get(col)
+        if extractor is not None:
+            return extractor(self, ticker, snap)
         return (True, 0.0)
 
     # ---- repaint ------------------------------------------------------

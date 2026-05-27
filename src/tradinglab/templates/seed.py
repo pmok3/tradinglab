@@ -60,19 +60,38 @@ def bundled_templates_dir(kind_subdir: str) -> Path:
 def _target_storage_dir(kind: str) -> Path:
     """Resolve the user-local storage dir for the given template kind.
 
-    We import the storage module lazily so this module stays cheap to
-    import (it's pulled in at startup).
+    Lazy-imports the per-kind storage module so this file stays
+    cheap to import at startup. New template kinds register here.
     """
-    if kind == "entries":
-        from ..entries.storage import storage_dir
-        return storage_dir()
-    if kind == "exits":
-        from ..exits.storage import exit_strategies_dir
-        return exit_strategies_dir()
-    if kind == "scans":
-        from ..scanner.storage import scans_dir
-        return scans_dir()
-    raise ValueError(f"unknown template kind: {kind!r}")
+    try:
+        return _STORAGE_DIR_RESOLVERS[kind]()
+    except KeyError:
+        raise ValueError(f"unknown template kind: {kind!r}") from None
+
+
+def _entries_storage_dir() -> Path:
+    from ..entries.storage import storage_dir
+    return storage_dir()
+
+
+def _exits_storage_dir() -> Path:
+    from ..exits.storage import exit_strategies_dir
+    return exit_strategies_dir()
+
+
+def _scans_storage_dir() -> Path:
+    from ..scanner.storage import scans_dir
+    return scans_dir()
+
+
+#: Per-kind resolver registry. Each resolver is a zero-arg callable
+#: that lazy-imports the target storage module and returns its dir.
+#: New template kinds add one entry here + one resolver function.
+_STORAGE_DIR_RESOLVERS: dict[str, Callable[[], Path]] = {
+    "entries": _entries_storage_dir,
+    "exits":   _exits_storage_dir,
+    "scans":   _scans_storage_dir,
+}
 
 
 def _is_library_empty(target_dir: Path) -> bool:

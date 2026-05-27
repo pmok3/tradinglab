@@ -156,6 +156,31 @@ def _earnings_tooltip(record: Any, *, future: bool) -> str:
     return "\n".join(lines)
 
 
+#: Per-dividend-kind glyph for the price-pane in-bar marker. Keys
+#: are normalised ``record.kind`` strings; missing kinds (or the
+#: default ``"cash"``) fall back to ``GLYPH_DIVIDEND``. Splits get
+#: their own ``GLYPH_SPLIT`` so a 4:1 split doesn't look like a
+#: cash distribution. Single source of truth for the three call
+#: sites (``_dividend_marker_glyph``, ``_dividend_tooltip``,
+#: ``build_event_glyphs``).
+_DIVIDEND_GLYPH_BY_KIND: dict[str, str] = {
+    "stock_split": GLYPH_SPLIT,
+    "special":     GLYPH_SPECIAL_DIVIDEND,
+    "spinoff":     GLYPH_SPECIAL_DIVIDEND,
+}
+
+
+def _dividend_glyph_for_kind(kind: str) -> str:
+    """Map ``record.kind`` to a ``GLYPH_*`` constant.
+
+    Defaults to ``GLYPH_DIVIDEND`` for the plain ``"cash"`` case and
+    any unknown kind. Used by :func:`build_event_glyphs` for the
+    price-pane glyph; the marker (in-bar label) is handled by
+    :func:`_dividend_marker_glyph`.
+    """
+    return _DIVIDEND_GLYPH_BY_KIND.get(kind, GLYPH_DIVIDEND)
+
+
 def _dividend_tooltip(record: Any) -> str:
     kind = str(getattr(record, "kind", "cash") or "cash")
     if kind == "stock_split":
@@ -163,11 +188,20 @@ def _dividend_tooltip(record: Any) -> str:
         den = int(getattr(record, "ratio_den", 1) or 1)
         return f"Stock split {num}:{den}"
     amount = float(getattr(record, "amount", 0.0) or 0.0)
-    if kind == "special":
-        return f"Special dividend ${amount:.4f}/sh"
-    if kind == "spinoff":
-        return f"Spinoff (cash credit) ${amount:.4f}/sh"
-    return f"Dividend ${amount:.4f}/sh"
+    tooltip_prefix = _DIVIDEND_TOOLTIP_PREFIX_BY_KIND.get(kind, "Dividend")
+    return f"{tooltip_prefix} ${amount:.4f}/sh"
+
+
+#: Per-dividend-kind tooltip phrase (everything before the
+#: ``" $X.XXXX/sh"`` suffix). Same registry pattern as
+#: ``_DIVIDEND_GLYPH_BY_KIND`` but for the hover-tooltip layer.
+#: Note: ``"stock_split"`` is intentionally absent — splits use
+#: a totally different tooltip format (ratio not amount) and are
+#: handled with an early return above.
+_DIVIDEND_TOOLTIP_PREFIX_BY_KIND: dict[str, str] = {
+    "special": "Special dividend",
+    "spinoff": "Spinoff (cash credit)",
+}
 
 
 def _earnings_marker_glyph(record: Any) -> str:
@@ -223,14 +257,7 @@ def build_event_glyphs(
         if idx < 0:
             continue
         kind = str(getattr(d, "kind", "cash") or "cash")
-        if kind == "stock_split":
-            glyph = GLYPH_SPLIT
-        elif kind == "special":
-            glyph = GLYPH_SPECIAL_DIVIDEND
-        elif kind == "spinoff":
-            glyph = GLYPH_SPECIAL_DIVIDEND
-        else:
-            glyph = GLYPH_DIVIDEND
+        glyph = _dividend_glyph_for_kind(kind)
         out.append(EventGlyph(
             bar_index=idx,
             glyph_kind=glyph,

@@ -39,6 +39,25 @@ from .base import factory_by_kind_id as _factory_by_kind_id_raw
 _LOG = logging.getLogger(__name__)
 
 
+#: Output-kind → matplotlib ``drawstyle`` keyword mapping. Extend
+#: here when adding a new line-shape kind to the Indicator output
+#: protocol; callers use :func:`_drawstyle_for_output_kind`.
+_DRAWSTYLE_BY_OUTPUT_KIND: dict[str, str] = {
+    "stair_line": "steps-post",
+    # "line" / unknown → default smooth line.
+}
+
+
+def _drawstyle_for_output_kind(kind: str | None) -> str:
+    """Return the matplotlib ``drawstyle`` for an indicator output kind.
+
+    Falls back to ``"default"`` for ``None`` / unknown kinds — keeps
+    a single source of truth for the price-pane and lower-pane
+    rendering paths (which both materialize ``Line2D`` artists).
+    """
+    return _DRAWSTYLE_BY_OUTPUT_KIND.get(kind or "", "default")
+
+
 def factory_by_kind_id(kind_id):
     """Return just the factory class for ``kind_id`` or ``None``.
 
@@ -569,7 +588,7 @@ def render_for_slot(
                 continue
             color, width = _resolve_style(cfg, key)
             kind_ov = out_kinds_ov.get(key, "line")
-            drawstyle = "steps-post" if kind_ov == "stair_line" else "default"
+            drawstyle = _drawstyle_for_output_kind(kind_ov)
             ln = existing.get(key)
             if ln is None:
                 (ln,) = price_ax.plot(
@@ -727,7 +746,7 @@ def render_for_slot(
                     )
                 else:
                     color, width = _resolve_style(cfg, key)
-                    drawstyle = "steps-post" if kind == "stair_line" else "default"
+                    drawstyle = _drawstyle_for_output_kind(kind)
                     ln = existing.get(key)
                     if ln is None:
                         (ln,) = ax_lower.plot(
