@@ -53,6 +53,20 @@ OHLCV NumPy arrays. v1 set:
 
 `hod`/`lod` are **prefix-restricted** to bars `[0..i]` (no look-ahead).
 
+### Session-day cache
+
+`hod`, `lod`, and `bars_since_open` all need to know "which bars share
+the same ET calendar date as bar `i`". Computing
+`b.timestamps.astype("datetime64[D]")` fresh per call was O(N) per bar,
+making scanner evaluation O(N²) over a strategy_tester Run. The
+`_days_for(b)` helper caches one `datetime64[D]` array per `BarsNp` on
+the same `BarsKeyedCache` LRU pattern (max 64 entries, `id(bars)` +
+length key, identity-recycle guard) used by the HA / key-bar clusters.
+`_today_mask` and `_b_bars_since_open` both consume the cached array;
+`_b_bars_since_open` additionally uses `np.searchsorted` over the
+monotonic days array to find today's first bar in O(log N), then
+scans only today's bars for the first regular-session entry.
+
 ### Heikin-Ashi builtins
 
 `ha_*` project `core.heikin_ashi.ha_arrays` over `[0..i]` (same

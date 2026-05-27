@@ -51,6 +51,7 @@ from ..indicators.base import (
     indicator_scannable_outputs,
     iter_indicator_factories,
 )
+from ._bars_cache import BarsKeyedCache
 from .model import FIELD_KIND_INDICATOR, FieldRef
 
 # ---------------------------------------------------------------------------
@@ -170,13 +171,36 @@ def _b_gap_pct(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:
     return float((o - prev) / prev * 100.0)
 
 
+# Per-BarsNp cache of timestamps rounded to ``datetime64[D]`` (ET-naive
+# calendar date). Computing this fresh from ``b.timestamps`` is O(N) and
+# was previously repeated PER BAR by every call to ``_today_mask`` /
+# ``_b_bars_since_open`` — making scanner evaluation O(N²) over a Run.
+# Mirrors the ``_ha_cache`` / ``_kb_cache`` pattern: ``id(bars)``-keyed
+# LRU with identity-recycle guard (see ``_bars_cache.py``).
+_days_cache: BarsKeyedCache[np.ndarray] = BarsKeyedCache(max_size=64)
+
+
+def _days_for(b: BarsNp) -> np.ndarray:
+    """Return cached ``datetime64[D]`` array (one entry per timestamp).
+
+    Empty timestamps → empty array. The returned array is shared across
+    callers; treat as read-only.
+    """
+    if not b.timestamps.size:
+        return np.empty(0, dtype="datetime64[D]")
+    return _days_cache.get_or_compute(
+        b,
+        lambda x: x.timestamps.astype("datetime64[D]"),
+        extra_key=int(b.timestamps.size),
+    )
+
+
 def _today_mask(b: BarsNp, i: int) -> np.ndarray | None:
     """Boolean mask of bars sharing the same calendar date as ``b[i]``."""
     if i < 0 or i >= b.timestamps.size:
         return None
-    today = b.timestamps[i].astype("datetime64[D]")
-    days = b.timestamps.astype("datetime64[D]")
-    mask = days == today
+    days = _days_for(b)
+    mask = days == days[i]
     # Restrict to the prefix [0..i] so HOD/LOD reflect what the trader
     # has actually seen at the current bar — no look-ahead.
     mask[i + 1:] = False
@@ -220,14 +244,17 @@ def _b_bars_since_open(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:
     """
     if i < 0 or i >= b.timestamps.size:
         return None
-    today = b.timestamps[i].astype("datetime64[D]")
-    days = b.timestamps.astype("datetime64[D]")
-    same_day = (days == today) & (np.arange(b.timestamps.size) <= i)
-    regular = b.session == "regular"
-    candidates = np.where(same_day & regular)[0]
-    if candidates.size == 0:
-        return 0.0
-    return float(i - int(candidates[0]))
+    days = _days_for(b)
+    today = days[i]
+    # ``days`` is non-decreasing (timestamps are sorted ascending), so
+    # ``searchsorted`` gives the start of today's block in O(log N). We
+    # then scan only today's bars [day_start..i] for the first regular
+    # session bar — bounded by bars-per-day (≪ N).
+    day_start = int(np.searchsorted(days, today, side="left"))
+    for j in range(day_start, i + 1):
+        if b.session[j] == "regular":
+            return float(i - j)
+    return 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -249,8 +276,6 @@ def _b_bars_since_open(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:
 # support __weakref__ by default. We therefore key on ``id(b)`` and
 # additionally store the array's ``data.tobytes`` length so a recycled
 # id can't return a stale entry. A small LRU cap keeps memory bounded.
-
-from ._bars_cache import BarsKeyedCache  # noqa: E402
 
 _ha_cache: BarsKeyedCache[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = BarsKeyedCache(max_size=64)
 
