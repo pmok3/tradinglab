@@ -60,8 +60,10 @@ import logging
 import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from typing import Any
+
+import numpy as np
 
 try:
     from zoneinfo import ZoneInfo
@@ -245,7 +247,137 @@ def _is_regular_session(et_dt: datetime) -> bool:
     return _RTH_OPEN <= local_t <= _RTH_CLOSE
 
 
-def _find_last_rth_bar_at_or_before(bars, idx_inclusive: int) -> int:
+# ---------------------------------------------------------------------------
+# Vectorized ET conversion (hot-path optimisation).
+#
+# ``datetime.fromtimestamp(ts, tz=ZoneInfo)`` is one of the slowest stdlib
+# calls — each invocation walks the zoneinfo transition table. The main
+# per-bar evaluator loop used to call it 1× per bar (≈25k allocations on a
+# 5m × 1y run per symbol). :func:`_compute_et_arrays` does the equivalent
+# work once per symbol via numpy, by sampling the tz offset at noon-UTC for
+# each unique UTC date in the timestamps and broadcasting.
+#
+# DST safety: the two US DST transitions (2nd Sunday of March, 1st Sunday
+# of November) happen at 02:00 ET = 07:00 UTC. For each unique UTC day
+# in the input, we probe the tz offset at BOTH 00:00 UTC and 23:59:59
+# UTC: for the ~363 non-transition days/year both probes agree → one
+# constant offset broadcast to every bar in that UTC day. For the ~2
+# transition days/year (where the probes disagree) every bar's offset
+# is resolved individually via a per-bar zoneinfo lookup — a tiny price
+# for bit-for-bit correctness across the transition.
+# ---------------------------------------------------------------------------
+
+_SECONDS_PER_DAY = 86400
+_RTH_OPEN_SEC = 9 * 3600 + 30 * 60  # 34200
+_RTH_CLOSE_SEC = 16 * 3600           # 57600
+# 1970-01-01 was a Thursday (weekday() == 3). Days-since-epoch + 3, mod 7
+# yields the Python-convention weekday (Mon=0 … Sun=6).
+_EPOCH_WEEKDAY_OFFSET = 3
+
+
+def _compute_et_arrays(
+    timestamps: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Vectorize per-bar ET date + RTH-mask computation.
+
+    Parameters
+    ----------
+    timestamps : ndarray[int64]
+        Array of UTC epoch-second bar timestamps (the ``bars.ts`` series).
+
+    Returns
+    -------
+    et_date_ints : ndarray[int64]
+        Days-since-1970-01-01 in **ET** for each bar. Suitable for
+        ET-date-rollover detection by integer equality (replaces
+        ``datetime.fromtimestamp(ts, _ET).date()`` comparisons).
+    rth_mask : ndarray[bool]
+        ``True`` where the bar falls in Mon-Fri AND 09:30 ≤ ET ≤ 16:00.
+        Matches ``_is_regular_session(_bar_ts_to_et(ts))`` bit-for-bit.
+    et_offsets_sec : ndarray[int64]
+        Per-bar UTC offset of America/New_York at that bar (in seconds —
+        ``-18000`` for EST, ``-14400`` for EDT). Exposed so callers that
+        still need a real ET datetime can construct one cheaply without
+        re-walking the zoneinfo table.
+    """
+    ts = np.asarray(timestamps, dtype=np.int64)
+    n = int(ts.shape[0])
+    if n == 0:
+        return (
+            np.empty(0, dtype=np.int64),
+            np.empty(0, dtype=bool),
+            np.empty(0, dtype=np.int64),
+        )
+
+    # Group bars by UTC day so we pay the zoneinfo cost once per unique
+    # day (~250-500 per year) instead of once per bar (~25k+).
+    utc_day = ts // _SECONDS_PER_DAY
+    unique_days, inverse = np.unique(utc_day, return_inverse=True)
+
+    if _ET is not None:
+        n_days = int(unique_days.shape[0])
+        # Probe each unique UTC day at BOTH 00:00 UTC and 23:59:59 UTC.
+        # For ~363 days/year the two probes agree → one constant offset
+        # for the whole UTC day. The ~2 DST transition days/year disagree
+        # (the transition happens at 07:00 UTC) — for those days, every
+        # bar's offset is resolved individually below.
+        offsets_start = np.fromiter(
+            (
+                int(
+                    datetime.fromtimestamp(
+                        int(d) * _SECONDS_PER_DAY, tz=_ET
+                    ).utcoffset().total_seconds()
+                )
+                for d in unique_days
+            ),
+            dtype=np.int64,
+            count=n_days,
+        )
+        offsets_end = np.fromiter(
+            (
+                int(
+                    datetime.fromtimestamp(
+                        int(d) * _SECONDS_PER_DAY + _SECONDS_PER_DAY - 1, tz=_ET
+                    ).utcoffset().total_seconds()
+                )
+                for d in unique_days
+            ),
+            dtype=np.int64,
+            count=n_days,
+        )
+        et_offsets = offsets_start[inverse]
+        transition_day_mask = offsets_start != offsets_end
+        if bool(transition_day_mask.any()):
+            bar_on_transition_day = transition_day_mask[inverse]
+            for i in np.flatnonzero(bar_on_transition_day).tolist():
+                et_offsets[i] = int(
+                    datetime.fromtimestamp(
+                        int(ts[i]), tz=_ET
+                    ).utcoffset().total_seconds()
+                )
+    else:  # pragma: no cover — tzdata-less fallback (parallels _bar_ts_to_et)
+        et_offsets = np.full(ts.shape, -5 * 3600, dtype=np.int64)
+
+    et_seconds = ts + et_offsets
+    # numpy ``//`` and ``%`` are floor-div / floor-mod (same as Python),
+    # so et_tod is always in [0, 86399] even if et_seconds is negative.
+    et_date_ints = et_seconds // _SECONDS_PER_DAY
+    et_tod = et_seconds - et_date_ints * _SECONDS_PER_DAY
+    weekday = (et_date_ints + _EPOCH_WEEKDAY_OFFSET) % 7
+    rth_mask = (
+        (weekday < 5)
+        & (et_tod >= _RTH_OPEN_SEC)
+        & (et_tod <= _RTH_CLOSE_SEC)
+    )
+    return et_date_ints, rth_mask, et_offsets
+
+
+def _find_last_rth_bar_at_or_before(
+    bars,
+    idx_inclusive: int,
+    *,
+    rth_mask: np.ndarray | None = None,
+) -> int:
     """Return the index of the last regular-session bar at or before
     ``idx_inclusive``, or ``-1`` if no such bar exists in the range
     ``[0, idx_inclusive]``.
@@ -255,9 +387,20 @@ def _find_last_rth_bar_at_or_before(bars, idx_inclusive: int) -> int:
     real RTH bar (NOT a postmarket bar at e.g. 19:55 ET) — otherwise the
     P&L is computed against an extended-hours price that can diverge
     significantly from the regular-session close.
+
+    Pass a precomputed ``rth_mask`` (from :func:`_compute_et_arrays`) to
+    skip the per-bar zoneinfo walk — the main evaluator loop does this.
+    The slow fallback (no mask) is retained for callers that don't have
+    one cached and for backward compatibility with existing tests.
     """
     if idx_inclusive < 0:
         return -1
+    if rth_mask is not None:
+        sl = rth_mask[: idx_inclusive + 1]
+        hits = np.flatnonzero(sl)
+        if hits.size == 0:
+            return -1
+        return int(hits[-1])
     for j in range(idx_inclusive, -1, -1):
         ts = int(bars.ts[j])
         et_dt = _bar_ts_to_et(ts)
@@ -583,7 +726,12 @@ class EvalContext:
     # (UTC date is too coarse for ET — 14:00 ET on Dec 31 ≠ 14:00 ET on
     # Jan 1 in UTC), ``fires_total`` and ``fires_by_symbol`` are reset
     # to 0 so the next day's first eligible bar can fire again.
-    current_session_et_date: date | None = None
+    #
+    # Stored as **days-since-1970-01-01 in ET** (int) — see
+    # :func:`_compute_et_arrays`. Integer compare in the hot loop is the
+    # whole reason we vectorized; constructing ``datetime.date`` per bar
+    # was the second-slowest stdlib call after ``fromtimestamp``.
+    current_session_et_date: int | None = None
     # Timestamp of the most recent successful entry fire — drives the
     # ``cooldown_secs`` gate. ``None`` until the first fire.
     last_fire_ts: int | None = None
@@ -1099,6 +1247,7 @@ def _check_entry(
     normalized_conditions: dict[str, _ScannerGroup] | None = None,
     bar_ts: int = 0,
     et_now: datetime | None = None,
+    is_rth: bool | None = None,
 ) -> tuple[bool, Side, float]:
     """Decide whether the entry trigger fires against ``bar``.
 
@@ -1112,9 +1261,12 @@ def _check_entry(
     handlers (price-only handlers ignore it).
     ``bar_ts`` is the UTC epoch-second timestamp of the bar (needed for
     the ``cooldown_secs`` gate). ``et_now`` is the bar timestamp
-    converted to ET (needed for ``arm_window`` and
-    ``require_market_open`` gates) — supplied by the caller so the
-    conversion happens once per bar, not once per handler.
+    converted to ET (needed for ``arm_window`` gate) — supplied by the
+    caller only when the strategy has an arm window configured (lazy:
+    avoids the ~1µs zoneinfo walk per bar when not needed).
+    ``is_rth`` is the precomputed RTH-membership of this bar (from
+    :func:`_compute_et_arrays`) used by ``require_market_open``; falls
+    back to ``_is_regular_session(et_now)`` when not supplied.
     """
     if not ctx.entry_strategy.enabled:
         return False, Side.BUY, 0.0
@@ -1142,12 +1294,11 @@ def _check_entry(
     # Holidays are not enforced — synthetic data with a Christmas-day
     # bar will fire, matching the strategy's "any RTH-shaped bar is
     # eligible" interpretation.
-    if (
-        et_now is not None
-        and ctx.entry_strategy.require_market_open
-        and not _is_regular_session(et_now)
-    ):
-        return False, Side.BUY, 0.0
+    if ctx.entry_strategy.require_market_open:
+        if is_rth is None and et_now is not None:
+            is_rth = _is_regular_session(et_now)
+        if is_rth is False:
+            return False, Side.BUY, 0.0
     # Cooldown-since-last-fire gate. ``cooldown_secs == 0`` is the
     # "no cooldown" default. ``last_fire_ts is None`` means "no prior
     # fire" — always passes.
@@ -1386,6 +1537,18 @@ def evaluate_symbol(
 
     n = len(bars)
     in_warmup_mode = warmup_until_ts is not None
+    # Vectorized once-per-symbol ET conversion. Replaces 25k+ slow
+    # ``datetime.fromtimestamp(ts, _ET)`` calls per symbol with a single
+    # numpy pass (~250-500 zoneinfo lookups per year, broadcast to N
+    # bars via np.searchsorted on UTC-day groups).
+    et_date_ints, rth_mask, _et_offsets = _compute_et_arrays(bars.ts)
+    # Decide once whether the strategy needs a real ET datetime per bar
+    # (arm_window gate). require_market_open / EOD-kill-rollover are
+    # served by the precomputed int/bool arrays directly.
+    _needs_et_now_for_arm = (
+        _parse_hhmm_to_time(entry_strategy.arm_window_start) is not None
+        and _parse_hhmm_to_time(entry_strategy.arm_window_end) is not None
+    )
     for i in range(n):
         if not engine.tick():
             break
@@ -1409,11 +1572,14 @@ def evaluate_symbol(
         # end-of-run kill blocks below are naturally inert; the explicit
         # `is_active` check just makes that contract loud.
         is_active = (not in_warmup_mode) or ts >= int(warmup_until_ts)
-        # Compute the bar's ET datetime ONCE per bar — needed for both
-        # the session-day-roll check below AND the arm_window /
-        # require_market_open gates in ``_check_entry``.
-        et_now = _bar_ts_to_et(ts)
-        et_date = et_now.date()
+        # Per-bar ET facts from the precomputed numpy arrays. ``et_date``
+        # is days-since-1970-01-01 in ET (int — compared by equality for
+        # the session-day-roll). ``is_rth`` is the Mon-Fri 09:30-16:00
+        # membership. ``et_now`` (real datetime) is only built when the
+        # strategy has an arm_window gate that needs HH:MM comparison.
+        et_date = int(et_date_ints[i])
+        is_rth = bool(rth_mask[i])
+        et_now = _bar_ts_to_et(ts) if _needs_et_now_for_arm else None
 
         # Per-ET-trading-day counter reset. Mirrors the live
         # ``EntryEvaluator._roll_session_counters_if_needed`` semantics.
@@ -1437,7 +1603,9 @@ def evaluate_symbol(
                 and ctx.position_open
                 and ctx.position_qty > 0.0
                 and i > 0
-                and (prior_idx := _find_last_rth_bar_at_or_before(bars, i - 1)) >= 0
+                and (prior_idx := _find_last_rth_bar_at_or_before(
+                    bars, i - 1, rth_mask=rth_mask,
+                )) >= 0
             ):
                 prior_ts = int(bars.ts[prior_idx])
                 prior_close = float(bars.close[prior_idx])
@@ -1526,6 +1694,7 @@ def evaluate_symbol(
             normalized_conditions=normalized_conditions,
             bar_ts=ts,
             et_now=et_now,
+            is_rth=is_rth,
         )
         if fired:
             entry_order = Order(
@@ -1546,7 +1715,9 @@ def evaluate_symbol(
         exit_strategy.eod_kill_switch
         and ctx.position_open
         and ctx.position_qty > 0.0
-        and (last_idx := _find_last_rth_bar_at_or_before(bars, n - 1)) >= 0
+        and (last_idx := _find_last_rth_bar_at_or_before(
+            bars, n - 1, rth_mask=rth_mask,
+        )) >= 0
     ):
         last_ts = int(bars.ts[last_idx])
         exit_side = Side.SELL if ctx.position_side == "buy" else Side.BUY

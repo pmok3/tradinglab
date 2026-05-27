@@ -47,6 +47,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
 
+import numpy as np
+
 from ..backtest.performance import build_trade_rows
 from ..backtest.session import ENGINE_VERSION
 from ..entries.model import EntryStrategy
@@ -56,8 +58,7 @@ from . import report, storage
 from .acceptance import AcceptanceToken
 from .evaluator import (
     UnsupportedTriggerKind,
-    _bar_ts_to_et,
-    _is_regular_session,
+    _compute_et_arrays,
     collect_interval_overrides,
     evaluate_symbol,
 )
@@ -280,13 +281,24 @@ def _filter_rth_only(candles: Sequence[Candle]) -> list[Candle]:
     skewed by thin extended-hours prints. tz-naive ``Candle.date`` values
     are treated as UTC epoch seconds for the ET conversion — matches
     the convention used by ``_bar_ts_to_et`` elsewhere in the kernel.
+
+    Implementation: builds the timestamp array once and delegates the
+    Mon-Fri / 09:30-16:00 ET membership decision to
+    :func:`evaluator._compute_et_arrays` — a single numpy pass instead of
+    one ``datetime.fromtimestamp(ts, _ET)`` per candle. For a 1-year 5m
+    universe (~25k candles per symbol) this trims seconds of per-symbol
+    setup time off the runner's hot path.
     """
-    out: list[Candle] = []
-    for c in candles:
-        ts = int(c.date.timestamp())
-        if _is_regular_session(_bar_ts_to_et(ts)):
-            out.append(c)
-    return out
+    n = len(candles)
+    if n == 0:
+        return []
+    ts_arr = np.fromiter(
+        (int(c.date.timestamp()) for c in candles),
+        dtype=np.int64,
+        count=n,
+    )
+    _, rth_mask, _ = _compute_et_arrays(ts_arr)
+    return [c for c, keep in zip(candles, rth_mask.tolist(), strict=True) if keep]
 
 
 # ---------------------------------------------------------------------------
