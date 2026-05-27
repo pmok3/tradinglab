@@ -48,6 +48,7 @@ from typing import ClassVar
 import numpy as np
 
 from ..core.bars import Bars
+from ._palette import TAB10_OLIVE
 from .base import BaseIndicator, LineStyle, ParamDef
 
 
@@ -80,7 +81,7 @@ class LRSI(BaseIndicator):
         # Olive: distinct from RSI (default blue) so a chart with both
         # indicators is readable; matches LRSI's convention of being
         # the "smarter cousin" of RSI.
-        "lrsi": LineStyle(color="#bcbd22", width=1.4),
+        "lrsi": LineStyle(color=TAB10_OLIVE, width=1.4),
     }
     scannable_outputs: ClassVar[tuple[tuple[str, str], ...]] = (
         ("lrsi", "numeric"),

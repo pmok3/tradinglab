@@ -62,6 +62,7 @@ from itertools import count
 from tkinter import ttk
 from typing import Any, ClassVar
 
+from ..indicators._palette import FALLBACK_GRAY
 from ..indicators.base import INDICATORS, LineStyle, factory_by_kind_id, factory_is_available_for
 from ..indicators.config import (
     DEFAULT_SCOPES,
@@ -2270,13 +2271,13 @@ class IndicatorDialog(BaseModalDialog):
         """Return the color currently assigned to output ``key``.
 
         Override (if any) wins; otherwise the factory default; finally
-        the global ``LineStyle()`` fallback (#888888)."""
+        the global ``LineStyle()`` fallback (FALLBACK_GRAY)."""
         if key in row.style_overrides:
             return row.style_overrides[key]
         ls = default_style.get(key)
         if ls is not None:
-            return getattr(ls, "color", "#888888") or "#888888"
-        return "#888888"
+            return getattr(ls, "color", FALLBACK_GRAY) or FALLBACK_GRAY
+        return FALLBACK_GRAY
 
     def _rebuild_color_buttons(self, row: _IndicatorRow,
                                kind_id: str) -> None:
@@ -2378,8 +2379,8 @@ class IndicatorDialog(BaseModalDialog):
         out: dict[str, LineStyle] = {}
         for key, color in row.style_overrides.items():
             ls_default = default_style.get(key)
-            default_color = (getattr(ls_default, "color", "#888888")
-                             if ls_default is not None else "#888888")
+            default_color = (getattr(ls_default, "color", FALLBACK_GRAY)
+                             if ls_default is not None else FALLBACK_GRAY)
             if (color or "").upper() == (default_color or "").upper():
                 # User picked the default — no override needed.
                 continue

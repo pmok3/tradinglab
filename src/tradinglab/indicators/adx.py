@@ -46,6 +46,7 @@ from typing import ClassVar
 import numpy as np
 
 from ..core.bars import Bars
+from ._palette import QUATERNARY, TAB10_GRAY, TERTIARY_LINE
 from .base import BaseIndicator, LineStyle, ParamDef
 from .wilder import (
     true_range as _true_range,
@@ -74,9 +75,9 @@ class ADX(BaseIndicator):
     default_style: ClassVar[dict[str, LineStyle]] = {
         # +DI green (bull direction), -DI red (bear direction), ADX
         # blue (the de-signed trend-strength magnitude).
-        "plus_di":  LineStyle(color="#2ca02c", width=1.2),
-        "minus_di": LineStyle(color="#d62728", width=1.2),
-        "adx":      LineStyle(color="#7f7f7f", width=1.6),
+        "plus_di":  LineStyle(color=TERTIARY_LINE, width=1.2),
+        "minus_di": LineStyle(color=QUATERNARY,    width=1.2),
+        "adx":      LineStyle(color=TAB10_GRAY,    width=1.6),
     }
     scannable_outputs: ClassVar[tuple[tuple[str, str], ...]] = (
         ("adx", "numeric"),

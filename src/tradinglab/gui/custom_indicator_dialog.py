@@ -37,6 +37,7 @@ from tkinter import messagebox, ttk
 from typing import Any
 
 from ..indicators import loader as ind_loader
+from ..indicators._palette import FALLBACK_GRAY
 from ..indicators.base import INDICATORS
 from ..indicators.expression import (
     ExpressionError,
@@ -316,7 +317,7 @@ class CustomIndicatorDialog(BaseModalDialog):
         ttk.Label(
             self._preview_frame,
             text="(Click Preview to render the indicator on the current chart's candles.)",
-            foreground="#888888",
+            foreground=FALLBACK_GRAY,
         ).pack(side="top", anchor="w")
 
         # Status bar.
@@ -768,7 +769,7 @@ class CustomIndicatorDialog(BaseModalDialog):
         is_conditions = self._mode_var.get() == _CONDITIONS_MODE
         if self._overlay_var.get():
             ax = fig.add_subplot(111)
-            ax.plot(bars.close, color="#888888", linewidth=1.0, label="close")
+            ax.plot(bars.close, color=FALLBACK_GRAY, linewidth=1.0, label="close")
             for key, arr in out.items():
                 if is_conditions:
                     ax.step(range(len(arr)), arr, where="post", linewidth=1.4, label=key)
@@ -777,7 +778,7 @@ class CustomIndicatorDialog(BaseModalDialog):
             ax.legend(loc="upper left", fontsize=8)
         else:
             ax_price = fig.add_subplot(211)
-            ax_price.plot(bars.close, color="#888888", linewidth=1.0)
+            ax_price.plot(bars.close, color=FALLBACK_GRAY, linewidth=1.0)
             ax_ind = fig.add_subplot(212, sharex=ax_price)
             for key, arr in out.items():
                 if is_conditions:

@@ -44,6 +44,7 @@ import numpy as np
 from ..constants import INTRADAY_INTERVALS
 from ..core.bars import Bars
 from ..models import Candle
+from ._palette import FALLBACK_GRAY
 
 # --- Parameter schema --------------------------------------------------------
 
@@ -100,7 +101,7 @@ class LineStyle:
     the indicator (useful for BB upper/lower lines).
     """
 
-    color: str = "#888888"
+    color: str = FALLBACK_GRAY
     width: float = 1.2
     visible: bool = True
 

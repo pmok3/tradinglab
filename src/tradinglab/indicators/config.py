@@ -48,6 +48,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..core.thread_guard import require_tk_thread
+from ._palette import FALLBACK_GRAY
 from .base import (
     _LEGACY_MA_OUTPUT_KEYS,
     _LEGACY_Z_OUTPUT_KIND_IDS,
@@ -276,7 +277,7 @@ class IndicatorConfig:
                 else:
                     style_key = k
                 style[style_key] = LineStyle(
-                    color=str(sd.get("color", "#888888")),
+                    color=str(sd.get("color", FALLBACK_GRAY)),
                     width=float(sd.get("width", 1.2)),
                     visible=bool(sd.get("visible", True)),
                 )

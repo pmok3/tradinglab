@@ -54,6 +54,7 @@ from typing import ClassVar
 import numpy as np
 
 from ..core.bars import Bars
+from ._palette import TAB10_BROWN, TAB10_CYAN, TAB10_PINK
 from .base import BaseIndicator, LineStyle, ParamDef
 from .ma_kernels import MA_TYPES, apply_ma
 from .sessions import (
@@ -65,10 +66,10 @@ from .sessions import (
 from .wilder import true_range as _true_range
 
 _DEFAULT_COLOR_BY_MA: dict[str, str] = {
-    "RMA": "#ffbb78",
-    "SMA": "#8c564b",
-    "EMA": "#17becf",
-    "WMA": "#e377c2",
+    "RMA": "#ffbb78",          # tab20 light-orange — off-palette by design
+    "SMA": TAB10_BROWN,
+    "EMA": TAB10_CYAN,
+    "WMA": TAB10_PINK,
 }
 
 ATR_MODES: tuple[str, ...] = ("rolling", "tod")

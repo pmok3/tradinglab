@@ -28,6 +28,7 @@ from typing import ClassVar
 import numpy as np
 
 from ..core.bars import Bars
+from ._palette import QUINARY
 from .base import BaseIndicator, LineStyle, ParamDef
 from .sessions import is_intraday_np, session_groups_np
 
@@ -51,7 +52,7 @@ class VWAP(BaseIndicator):
         ),
     )
     default_style: ClassVar[dict[str, LineStyle]] = {
-        "vwap": LineStyle(color="#9467bd", width=1.6),
+        "vwap": LineStyle(color=QUINARY, width=1.6),
     }
     scannable_outputs: ClassVar[tuple[tuple[str, str], ...]] = (
         ("vwap", "numeric"),

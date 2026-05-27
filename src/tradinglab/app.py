@@ -133,6 +133,7 @@ from .gui.watchlist_tab import WatchlistTabMixin
 from .gui.workers import WorkerPoolMixin
 from .gui.x_axis_locator import _adaptive_x_locator_class, _make_x_formatter
 from .indicators import render as _ind_render
+from .indicators._palette import FALLBACK_GRAY
 from .indicators.cache import IndicatorCache
 from .indicators.config import IndicatorManager
 from .models import Candle
@@ -6791,7 +6792,7 @@ class ChartApp(
             current_ls = current_style.get(
                 output_key, default_style.get(output_key))
             current_color = (getattr(current_ls, "color", None)
-                             or "#888888")
+                             or FALLBACK_GRAY)
             from .gui.color_palette import pick_color
             chosen = pick_color(
                 self, initial=str(current_color),
@@ -6799,8 +6800,8 @@ class ChartApp(
             if not chosen:
                 return
             default_ls = default_style.get(output_key)
-            default_color = (getattr(default_ls, "color", "#888888")
-                             if default_ls is not None else "#888888")
+            default_color = (getattr(default_ls, "color", FALLBACK_GRAY)
+                             if default_ls is not None else FALLBACK_GRAY)
             from .indicators.base import LineStyle
             new_style = dict(current_style)
             if str(chosen).upper() == str(default_color).upper():

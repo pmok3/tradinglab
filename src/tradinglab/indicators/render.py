@@ -33,6 +33,7 @@ from typing import Any
 import numpy as np
 
 from ..models import Candle
+from ._palette import FALLBACK_GRAY
 from .base import compute_via_bars
 from .base import factory_by_kind_id as _factory_by_kind_id_raw
 
@@ -636,9 +637,9 @@ def render_for_slot(
                     # neutral grey if for some reason we're rendering
                     # before any theme has been applied.
                     try:
-                        text_color = ax_lower.yaxis.label.get_color() or "#888888"
+                        text_color = ax_lower.yaxis.label.get_color() or FALLBACK_GRAY
                     except Exception:  # noqa: BLE001
-                        text_color = "#888888"
+                        text_color = FALLBACK_GRAY
                     artist = ax_lower.text(
                         0.005, 0.97, label_text,
                         transform=ax_lower.transAxes,
@@ -702,7 +703,7 @@ def render_for_slot(
                     try:
                         new_lines.append(ax_lower.axhline(
                             float(lvl),
-                            color="#888888",
+                            color=FALLBACK_GRAY,
                             linewidth=0.7,
                             linestyle="--",
                             alpha=0.6,

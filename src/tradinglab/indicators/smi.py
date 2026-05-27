@@ -36,6 +36,7 @@ import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
 
 from ..core.bars import Bars
+from ._palette import SECONDARY_LINE, TAB10_CYAN
 from .base import BaseIndicator, LineStyle, ParamDef
 
 
@@ -62,8 +63,8 @@ class SMI(BaseIndicator):
     default_style: ClassVar[dict[str, LineStyle]] = {
         # Teal SMI line; orange signal line for clear contrast on dark
         # and light themes alike.
-        "smi":    LineStyle(color="#17becf", width=1.4),
-        "signal": LineStyle(color="#ff7f0e", width=1.2),
+        "smi":    LineStyle(color=TAB10_CYAN,      width=1.4),
+        "signal": LineStyle(color=SECONDARY_LINE,  width=1.2),
     }
     scannable_outputs: ClassVar[tuple[tuple[str, str], ...]] = (
         ("smi", "numeric"),

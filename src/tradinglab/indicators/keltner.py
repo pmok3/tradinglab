@@ -45,6 +45,7 @@ from typing import ClassVar
 import numpy as np
 
 from ..core.bars import Bars
+from ._palette import PRIMARY_LINE, QUINARY, SECONDARY_LINE, TAB10_CYAN
 from .base import BaseIndicator, LineStyle, ParamDef
 from .ma_kernels import MA_TYPES, apply_ma
 from .wilder import true_range as _true_range
@@ -74,10 +75,10 @@ _DEFAULT_MA_TYPE_BY_METHOD: dict[str, str] = {
 
 
 _DEFAULT_COLOR_BY_MA: dict[str, str] = {
-    "SMA": "#1f77b4",  # blue
-    "EMA": "#ff7f0e",  # orange (KC's signature TradingView hue)
-    "WMA": "#9467bd",  # purple
-    "RMA": "#17becf",  # teal
+    "SMA": PRIMARY_LINE,    # blue
+    "EMA": SECONDARY_LINE,  # orange (KC's signature TradingView hue)
+    "WMA": QUINARY,         # purple
+    "RMA": TAB10_CYAN,      # teal
 }
 
 

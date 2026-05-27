@@ -7,6 +7,7 @@ from typing import ClassVar
 import numpy as np
 
 from ..core.bars import Bars
+from ._palette import QUATERNARY
 from .base import BaseIndicator, LineStyle, ParamDef
 from .wilder import wilder_smooth_avg
 
@@ -26,7 +27,7 @@ class RSI(BaseIndicator):
                  description="Length"),
     )
     default_style: ClassVar[dict[str, LineStyle]] = {
-        "rsi": LineStyle(color="#d62728", width=1.4),
+        "rsi": LineStyle(color=QUATERNARY, width=1.4),
     }
     scannable_outputs: ClassVar[tuple[tuple[str, str], ...]] = (
         ("rsi", "numeric"),

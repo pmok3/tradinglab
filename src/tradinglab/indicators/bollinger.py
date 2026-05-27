@@ -34,6 +34,7 @@ from typing import ClassVar
 import numpy as np
 
 from ..core.bars import Bars
+from ._palette import PRIMARY_LINE, QUATERNARY, QUINARY, TERTIARY_LINE
 from .base import BaseIndicator, LineStyle, ParamDef
 from .ma_kernels import MA_TYPES, apply_ma
 
@@ -41,10 +42,10 @@ from .ma_kernels import MA_TYPES, apply_ma
 # glance. Defaults override only when the user didn't already set a
 # style; see :meth:`__init__`.
 _DEFAULT_COLOR_BY_MA: dict[str, str] = {
-    "SMA": "#2ca02c",  # green
-    "EMA": "#d62728",  # red (matches the previous BB-EMA hue)
-    "WMA": "#9467bd",  # purple
-    "RMA": "#1f77b4",  # blue
+    "SMA": TERTIARY_LINE,   # green
+    "EMA": QUATERNARY,      # red (matches the previous BB-EMA hue)
+    "WMA": QUINARY,         # purple
+    "RMA": PRIMARY_LINE,    # blue
 }
 
 

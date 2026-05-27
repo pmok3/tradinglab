@@ -7,6 +7,7 @@ from typing import ClassVar
 import numpy as np
 
 from ..core.bars import Bars
+from ._palette import PRIMARY_LINE, SECONDARY_LINE, TAB10_GRAY, TERTIARY_LINE
 from .base import BaseIndicator, LineStyle, ParamDef
 
 
@@ -24,7 +25,7 @@ class SMA(BaseIndicator):
                  description="Length"),
     )
     default_style: ClassVar[dict[str, LineStyle]] = {
-        "sma": LineStyle(color="#1f77b4", width=1.4),
+        "sma": LineStyle(color=PRIMARY_LINE, width=1.4),
     }
     scannable_outputs: ClassVar[tuple[tuple[str, str], ...]] = (
         ("sma", "numeric"),
@@ -121,7 +122,7 @@ class EMA(BaseIndicator):
                  description="Length"),
     )
     default_style: ClassVar[dict[str, LineStyle]] = {
-        "ema": LineStyle(color="#ff7f0e", width=1.4),
+        "ema": LineStyle(color=SECONDARY_LINE, width=1.4),
     }
     scannable_outputs: ClassVar[tuple[tuple[str, str], ...]] = (
         ("ema", "numeric"),
@@ -254,10 +255,10 @@ SOURCE_TYPES: tuple[str, ...] = (
 #: WMA / RMA pick complementary palette slots so a chart carrying
 #: multiple MA types doesn't collapse to a single hue.
 _DEFAULT_COLOR_BY_MA: dict[str, str] = {
-    "SMA": "#1f77b4",
-    "EMA": "#ff7f0e",
-    "WMA": "#2ca02c",
-    "RMA": "#7f7f7f",
+    "SMA": PRIMARY_LINE,
+    "EMA": SECONDARY_LINE,
+    "WMA": TERTIARY_LINE,
+    "RMA": TAB10_GRAY,
 }
 
 

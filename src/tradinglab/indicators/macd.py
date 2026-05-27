@@ -35,6 +35,7 @@ from typing import ClassVar
 import numpy as np
 
 from ..core.bars import Bars
+from ._palette import SECONDARY_LINE, TERTIARY_LINE
 from .base import BaseIndicator, LineStyle, ParamDef
 from .ma_kernels import MA_TYPES, apply_ma
 
@@ -156,8 +157,8 @@ class MACD(BaseIndicator):
     )
 
     default_style: ClassVar[dict[str, LineStyle]] = {
-        "macd":      LineStyle(color="#2ca02c", width=1.4),  # green
-        "signal":    LineStyle(color="#ff7f0e", width=1.2),  # orange
+        "macd":      LineStyle(color=TERTIARY_LINE,  width=1.4),  # green
+        "signal":    LineStyle(color=SECONDARY_LINE, width=1.2),  # orange
         "histogram": LineStyle(color=_HISTOGRAM_PALETTE[0], width=1.0),
     }
 

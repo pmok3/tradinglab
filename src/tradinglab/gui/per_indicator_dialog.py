@@ -51,6 +51,7 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk
 
+from ..indicators._palette import FALLBACK_GRAY
 from ..indicators.base import LineStyle
 from ..indicators.config import SCOPES, IndicatorConfig
 from .indicator_dialog import IndicatorDialog
@@ -192,7 +193,7 @@ class _PerIndicatorDialog(IndicatorDialog):
         footnote_wrap.pack(fill="x", pady=(6, 0))
         self._footnote_label = ttk.Label(
             footnote_wrap, text=_FOOTNOTE_TEXT,
-            foreground="#888888", wraplength=0,
+            foreground=FALLBACK_GRAY, wraplength=0,
         )
         self._footnote_label.pack(side="left", anchor="w")
         # Bottom bar — Save and Close + Cancel.
@@ -536,7 +537,7 @@ class _PerIndicatorDialog(IndicatorDialog):
                     for k, sd in (snap.get("style") or {}).items():
                         try:
                             style[k] = LineStyle(
-                                color=str(sd.get("color", "#888888")),
+                                color=str(sd.get("color", FALLBACK_GRAY)),
                                 width=float(sd.get("width", 1.2)),
                                 visible=bool(sd.get("visible", True)),
                             )

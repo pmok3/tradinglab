@@ -37,6 +37,7 @@ import numpy as np
 
 from ..core.bars import Bars
 from ..models import Candle
+from ._palette import TAB10_BROWN
 from .base import BaseIndicator, LineStyle, ParamDef
 
 _PRICE_SOURCES: tuple[str, ...] = ("typical", "close", "ohlc4")
@@ -69,7 +70,9 @@ class AnchoredVWAP(BaseIndicator):
         ),
     )
     default_style: ClassVar[dict[str, LineStyle]] = {
-        "avwap": LineStyle(color="#8c564b", width=1.6),
+        "avwap":  LineStyle(color=TAB10_BROWN, width=1.6),
+        # ColorBrewer blue — chosen specifically for band readability
+        # against the brown centerline. Off-palette by design.
         "upper1": LineStyle(color="#4393c3", width=1.0),
         "lower1": LineStyle(color="#4393c3", width=1.0),
         "upper2": LineStyle(color="#4393c3", width=1.0),
