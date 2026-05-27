@@ -25,9 +25,11 @@ drive should not silently lose a user's intentional MRU slot.
 """
 from __future__ import annotations
 
-import json
+import logging
 from pathlib import Path
 from typing import Any
+
+LOG = logging.getLogger(__name__)
 
 #: Maximum number of MRU entries kept per kind. The File submenu is
 #: rendered with up to this many entries; older paths fall off the end
@@ -53,11 +55,8 @@ def _storage_path() -> Path:
 
 def _read_raw() -> dict[str, Any]:
     """Return the on-disk MRU dict, or ``{}`` on any failure."""
-    try:
-        with _storage_path().open("r", encoding="utf-8") as f:
-            raw = json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return {}
+    from .core.io_helpers import read_json
+    raw = read_json(_storage_path(), default={}, log=LOG, log_label="recent_files")
     if not isinstance(raw, dict):
         return {}
     return raw

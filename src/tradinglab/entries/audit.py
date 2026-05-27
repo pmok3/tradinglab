@@ -85,36 +85,8 @@ def _serialise_record(record: dict[str, Any]) -> str:
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    out: list[dict[str, Any]] = []
-    try:
-        with path.open("r", encoding="utf-8") as fh:
-            for lineno, raw in enumerate(fh, start=1):
-                line = raw.strip()
-                if not line:
-                    continue
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
-                    LOG.warning(
-                        "entries audit log: corrupt line skipped: %s:%d",
-                        path,
-                        lineno,
-                    )
-                    continue
-                if not isinstance(record, dict):
-                    LOG.warning(
-                        "entries audit log: non-object record skipped: %s:%d",
-                        path,
-                        lineno,
-                    )
-                    continue
-                out.append(record)
-    except OSError as exc:  # pragma: no cover - filesystem race
-        LOG.warning("entries audit log: failed to read %s: %s", path, exc)
-        return []
-    return out
+    from ..core.io_helpers import read_jsonl
+    return read_jsonl(path, default=[], log=LOG, log_label="entries audit log") or []
 
 
 @dataclass

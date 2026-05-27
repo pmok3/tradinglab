@@ -182,12 +182,10 @@ class GeometryStore:
     # ----------------------------------------------------------------- I/O --
     def load(self) -> None:
         """Read ``geometry.json`` into memory; tolerate missing/corrupt files."""
-        import json
+        from ..core.io_helpers import read_json
         self._loaded = True
-        try:
-            with self._path.open("r", encoding="utf-8") as fh:
-                payload = json.load(fh)
-        except (OSError, json.JSONDecodeError):
+        payload = read_json(self._path, default=None)
+        if payload is None:
             return
         if not isinstance(payload, dict):
             return

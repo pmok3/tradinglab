@@ -44,11 +44,13 @@ not a verbatim preservation.
 
 from __future__ import annotations
 
-import json
+import logging
 from pathlib import Path
 from typing import Any
 
-from .core.io_helpers import atomic_write_json
+from .core.io_helpers import atomic_write_json, read_json
+
+LOG = logging.getLogger(__name__)
 
 # In-process state.
 _store: dict[str, Any] = {}
@@ -117,10 +119,8 @@ def import_from_file(path: Any) -> bool:
     """
     global _loaded_path, _dirty
     p = Path(path) if not isinstance(path, Path) else path
-    try:
-        with p.open("r", encoding="utf-8") as f:
-            raw = json.load(f)
-    except (OSError, json.JSONDecodeError):
+    raw = read_json(p, default=None, log=LOG, log_label="settings")
+    if raw is None:
         return False
     if not isinstance(raw, dict):
         return False

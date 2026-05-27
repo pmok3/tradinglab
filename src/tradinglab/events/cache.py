@@ -200,13 +200,10 @@ def load(source: str, ticker: str) -> EventBundle | None:
     — the caller can simply re-fetch. Legacy ``.pkl`` files are
     intentionally NEVER loaded (see module docstring).
     """
+    from ..core.io_helpers import read_json
     path = _path_for(source, ticker)
-    if not path.exists():
-        return None
-    try:
-        with path.open("r", encoding="utf-8") as f:
-            payload = json.load(f)
-    except (OSError, json.JSONDecodeError):
+    payload = read_json(path, default=None)
+    if payload is None:
         return None
     return _bundle_from_dict(payload)
 
