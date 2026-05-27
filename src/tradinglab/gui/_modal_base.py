@@ -440,10 +440,185 @@ def protect_combobox_wheel(
     return count
 
 
+# ---------------------------------------------------------------------------
+# Scrollable form skeleton
+# ---------------------------------------------------------------------------
+#
+# Five dialogs in the codebase previously hand-rolled the same
+# ``Canvas + Scrollbar + create_window + <Configure> bindings +
+# global bind_all("<MouseWheel>", ...) + cleanup-on-destroy`` boilerplate
+# (Settings dialog, EntriesDialog form + trigger_params, ExitsDialog
+# legs holder, IndicatorDialog rows). The audit pass that retired
+# audit item #5 collapsed the boilerplate into this helper.
+#
+# Compatibility contract for callers:
+#
+# 1. The returned canvas is intended as the ``scroll_target`` argument
+#    of :func:`protect_combobox_wheel` (CLAUDE.md §7.11 — without that
+#    guard, scrolling over a ttk Combobox / Spinbox silently mutates
+#    its value). The helper does NOT call ``protect_combobox_wheel``
+#    itself — the consumer dialog must do that AFTER it finishes
+#    building its widgets, and re-do it after every partial widget
+#    rebuild.
+#
+# 2. When ``bind_mousewheel=True`` (default), the wheel is installed
+#    via ``bind_all`` on the canvas's ``<Enter>`` and removed on
+#    ``<Leave>``. The inner frame's ``<Destroy>`` runs the uninstall
+#    again as a backstop so the global binding never leaks past the
+#    dialog's lifetime (the audit explicitly flagged ungated
+#    ``bind_all`` as fragile). Pass ``bind_mousewheel=False`` for
+#    nested scrollables (e.g. EntriesDialog ``trigger_params`` lives
+#    inside the outer form's scrollable — the outer wheel already
+#    drives both) or when the consumer keeps a specialised wheel
+#    install path that tests drive directly (IndicatorDialog).
+
+
+def make_scrollable_form(
+    parent: tk.Misc,
+    *,
+    horizontal: bool = False,
+    bind_mousewheel: bool = True,
+) -> tuple[ttk.Frame, tk.Canvas]:
+    """Build a scrollable Canvas + Scrollbar(s) + inner ``ttk.Frame`` triple.
+
+    ``parent`` hosts the canvas and scrollbar(s). The returned inner
+    frame is the widget the caller packs / grids form content into.
+    The canvas is also returned so the caller can pass it as
+    ``protect_combobox_wheel(scroll_target=canvas)`` (see
+    CLAUDE.md §7.11 — required for any dialog whose form contains a
+    ttk ``Combobox`` or ``Spinbox``).
+
+    Layout produced inside ``parent``:
+
+    * Vertical ``ttk.Scrollbar`` packed ``side="right", fill="y"``.
+    * If ``horizontal=True``, horizontal ``ttk.Scrollbar`` packed
+      ``side="bottom", fill="x"`` BEFORE the vbar / canvas so it
+      spans the full body width under the canvas+vbar group.
+    * ``tk.Canvas`` packed ``side="left", fill="both", expand=True``.
+    * Inner ``ttk.Frame`` placed as a window on the canvas at
+      ``(0, 0)`` anchored north-west.
+
+    Auto-bindings (always installed):
+
+    * Inner frame ``<Configure>`` updates ``canvas.scrollregion`` to
+      ``canvas.bbox("all")``.
+    * Canvas ``<Configure>`` resizes the inner window to
+      ``event.width`` (vertical-only mode) or to
+      ``max(event.width, inner.winfo_reqwidth())`` (horizontal
+      mode — lets the inner frame grow beyond the canvas when its
+      content is wider, so the hbar has something to scroll).
+
+    Auto-bindings (only when ``bind_mousewheel=True``):
+
+    * Canvas ``<Enter>`` installs ``bind_all`` on ``<MouseWheel>``
+      (Windows / macOS) and ``<Button-4>`` / ``<Button-5>`` (X11)
+      so the form scrolls vertically while the cursor is inside
+      the canvas region.
+    * Canvas ``<Leave>`` removes those ``bind_all`` hooks so wheel
+      events outside the dialog (e.g. over the main chart) do not
+      also drive the canvas.
+    * Inner frame ``<Destroy>`` runs the same uninstall as a
+      backstop in case the dialog closes while the cursor is still
+      over the canvas.
+    * The wheel handler returns ``"break"`` so a parent scrollable
+      container does not also receive the same event and
+      double-scroll.
+
+    Returns ``(inner_frame, canvas)``.
+    """
+    canvas = tk.Canvas(parent, borderwidth=0, highlightthickness=0)
+    vbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
+    if horizontal:
+        hbar = ttk.Scrollbar(parent, orient="horizontal", command=canvas.xview)
+        canvas.configure(yscrollcommand=vbar.set, xscrollcommand=hbar.set)
+        # hbar packed BEFORE vbar / canvas so it spans the full body
+        # width under the canvas+vbar group (pack-order semantics:
+        # earlier ``side="bottom"`` siblings claim height first).
+        hbar.pack(side="bottom", fill="x")
+    else:
+        canvas.configure(yscrollcommand=vbar.set)
+    vbar.pack(side="right", fill="y")
+    canvas.pack(side="left", fill="both", expand=True)
+
+    inner = ttk.Frame(canvas)
+    window_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+
+    def _on_inner_configure(_e: Any = None) -> None:
+        try:
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            if horizontal:
+                canvas_w = canvas.winfo_width()
+                req_w = inner.winfo_reqwidth()
+                canvas.itemconfigure(window_id, width=max(canvas_w, req_w))
+        except tk.TclError:
+            pass
+
+    inner.bind("<Configure>", _on_inner_configure)
+
+    def _on_canvas_configure(e: tk.Event) -> None:
+        try:
+            if horizontal:
+                req_w = inner.winfo_reqwidth()
+                canvas.itemconfigure(window_id, width=max(e.width, req_w))
+            else:
+                canvas.itemconfigure(window_id, width=e.width)
+        except tk.TclError:
+            pass
+
+    canvas.bind("<Configure>", _on_canvas_configure)
+
+    if bind_mousewheel:
+        def _on_wheel(e: tk.Event) -> str:
+            try:
+                delta = int(getattr(e, "delta", 0))
+                if delta:
+                    canvas.yview_scroll(int(-1 * (delta / 120)), "units")
+            except tk.TclError:
+                pass
+            return "break"
+
+        def _on_button4(_e: tk.Event) -> str:
+            try:
+                canvas.yview_scroll(-1, "units")
+            except tk.TclError:
+                pass
+            return "break"
+
+        def _on_button5(_e: tk.Event) -> str:
+            try:
+                canvas.yview_scroll(1, "units")
+            except tk.TclError:
+                pass
+            return "break"
+
+        def _install_wheel(_e: Any = None) -> None:
+            try:
+                canvas.bind_all("<MouseWheel>", _on_wheel)
+                canvas.bind_all("<Button-4>", _on_button4)
+                canvas.bind_all("<Button-5>", _on_button5)
+            except tk.TclError:
+                pass
+
+        def _uninstall_wheel(_e: Any = None) -> None:
+            try:
+                canvas.unbind_all("<MouseWheel>")
+                canvas.unbind_all("<Button-4>")
+                canvas.unbind_all("<Button-5>")
+            except tk.TclError:
+                pass
+
+        canvas.bind("<Enter>", _install_wheel)
+        canvas.bind("<Leave>", _uninstall_wheel)
+        inner.bind("<Destroy>", _uninstall_wheel, add="+")
+
+    return inner, canvas
+
+
 __all__ = [
     "BaseModalDialog",
     "BaseEditorDialog",
     "protect_combobox_wheel",
+    "make_scrollable_form",
 ]
 
 

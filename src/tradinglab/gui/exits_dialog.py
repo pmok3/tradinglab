@@ -68,6 +68,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+from ._modal_base import make_scrollable_form  # noqa: E402
 from ._modal_keys import bind_modal_keys  # noqa: E402
 from .colors import ERROR_RED  # noqa: E402
 from .exits_dialog_widgets import (  # noqa: E402
@@ -321,45 +322,21 @@ class ExitsDialog(tk.Toplevel):
         self._eod_offset_sp.grid(row=0, column=4, sticky="w", padx=(2, 0))
         header.columnconfigure(1, weight=1)
 
-        # Body — scrollable legs + OCO area
+        # Body — scrollable legs + OCO area. Skeleton lives in
+        # :func:`_modal_base.make_scrollable_form` (audit item #5).
+        # Horizontal scrollbar present so wide indicator trigger
+        # condition rows (e.g. ``ema(3) crosses_above ema(8)``) can
+        # scroll instead of being clipped or stretching the dialog.
+        # ``bind_mousewheel=False`` preserves the historical behaviour
+        # (the dialog never bound the wheel here — users scroll via
+        # the scrollbars). Flip to True if user feedback ever asks
+        # for wheel scrolling on the legs area.
         body = ttk.Frame(editor_outer)
         body.pack(fill="both", expand=True, padx=4, pady=2)
-        canvas = tk.Canvas(body, borderwidth=0, highlightthickness=0)
-        vbar = ttk.Scrollbar(body, orient="vertical", command=canvas.yview)
-        hbar = ttk.Scrollbar(body, orient="horizontal", command=canvas.xview)
-        canvas.configure(yscrollcommand=vbar.set, xscrollcommand=hbar.set)
-        # Pack order matters: bottom hbar first so it spans full body width
-        # under the canvas+vbar group; vbar on the right; canvas fills rest.
-        hbar.pack(side="bottom", fill="x")
-        vbar.pack(side="right", fill="y")
-        canvas.pack(side="left", fill="both", expand=True)
-
-        self._legs_holder = ttk.Frame(canvas)
-        self._legs_window_id = canvas.create_window((0, 0), window=self._legs_holder, anchor="nw")
+        self._legs_holder, canvas = make_scrollable_form(
+            body, horizontal=True, bind_mousewheel=False,
+        )
         self._legs_canvas = canvas
-
-        def _on_holder_configure(_event: tk.Event) -> None:
-            canvas.configure(scrollregion=canvas.bbox("all"))
-            # If content has grown beyond the canvas width, let the
-            # inner window expand to its natural size so the hbar can
-            # scroll. If it's narrower, keep it pinned to canvas width
-            # so children that pack(fill='x') stretch correctly.
-            try:
-                canvas_w = canvas.winfo_width()
-                req_w = self._legs_holder.winfo_reqwidth()
-                canvas.itemconfigure(
-                    self._legs_window_id, width=max(canvas_w, req_w),
-                )
-            except tk.TclError:
-                pass
-        self._legs_holder.bind("<Configure>", _on_holder_configure)
-
-        def _on_canvas_configure(event: tk.Event) -> None:
-            req_w = self._legs_holder.winfo_reqwidth()
-            canvas.itemconfigure(
-                self._legs_window_id, width=max(event.width, req_w),
-            )
-        canvas.bind("<Configure>", _on_canvas_configure)
 
         # Legs section header + add-leg button
         self._legs_section = ttk.LabelFrame(self._legs_holder, text="Legs")

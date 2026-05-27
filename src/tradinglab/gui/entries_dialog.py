@@ -53,7 +53,7 @@ from ..entries.model import (
 )
 from ..exits.model import ExitStrategy
 from ..scanner.model import Group as ConditionGroup
-from ._modal_base import protect_combobox_wheel
+from ._modal_base import make_scrollable_form, protect_combobox_wheel
 from ._modal_keys import bind_modal_keys
 from .colors import ERROR_RED, MUTED_GREY
 from .scanner_block_editor import BlockEditor
@@ -212,42 +212,12 @@ class EntriesDialog(tk.Toplevel):
         # vertically-scrollable form composed of LabelFrames. Same
         # logical sections, dramatically more usable (no tab-hopping;
         # full draft visible at a glance for cross-section validation).
+        # Skeleton lives in :func:`_modal_base.make_scrollable_form`
+        # (audit item #5).
         scroll_host = ttk.Frame(outer)
         scroll_host.pack(fill="both", expand=True)
-        canvas = tk.Canvas(scroll_host, highlightthickness=0, borderwidth=0)
+        form, canvas = make_scrollable_form(scroll_host)
         self._form_canvas = canvas
-        vbar = ttk.Scrollbar(scroll_host, orient="vertical",
-                             command=canvas.yview)
-        canvas.configure(yscrollcommand=vbar.set)
-        canvas.pack(side="left", fill="both", expand=True)
-        vbar.pack(side="right", fill="y")
-
-        form = ttk.Frame(canvas)
-        form_window = canvas.create_window((0, 0), window=form, anchor="nw")
-
-        def _on_form_configure(_e=None):
-            try:
-                canvas.configure(scrollregion=canvas.bbox("all"))
-            except tk.TclError:
-                pass
-        form.bind("<Configure>", _on_form_configure)
-
-        def _on_canvas_configure(e):
-            try:
-                canvas.itemconfigure(form_window, width=e.width)
-            except tk.TclError:
-                pass
-        canvas.bind("<Configure>", _on_canvas_configure)
-
-        def _on_mousewheel(e):
-            try:
-                canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
-            except tk.TclError:
-                pass
-        canvas.bind("<Enter>",
-                    lambda _e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
-        canvas.bind("<Leave>",
-                    lambda _e: canvas.unbind_all("<MouseWheel>"))
 
         sections: tuple[tuple[str, Callable[[tk.Misc], ttk.Frame]], ...] = (
             ("Identity",        self._build_identity_tab),
@@ -430,44 +400,15 @@ class EntriesDialog(tk.Toplevel):
         # Trigger params live in a scrollable canvas so wide indicator
         # rows (e.g. ema(3) crosses_above ema(8)) can scroll horizontally
         # instead of being clipped or overflowing the dialog width.
+        # ``bind_mousewheel=False`` because this canvas is nested
+        # inside the outer ``_form_canvas`` scrollable — the outer
+        # wheel handler already drives this region too.
         body = ttk.Frame(f)
         body.grid(row=2, column=0, columnspan=2, sticky="nsew", pady=(8, 0))
-        canvas = tk.Canvas(body, borderwidth=0, highlightthickness=0)
-        vbar = ttk.Scrollbar(body, orient="vertical", command=canvas.yview)
-        hbar = ttk.Scrollbar(body, orient="horizontal", command=canvas.xview)
-        canvas.configure(yscrollcommand=vbar.set, xscrollcommand=hbar.set)
-        hbar.pack(side="bottom", fill="x")
-        vbar.pack(side="right", fill="y")
-        canvas.pack(side="left", fill="both", expand=True)
-
-        self._trigger_params = ttk.Frame(canvas)
-        self._trigger_params_window_id = canvas.create_window(
-            (0, 0), window=self._trigger_params, anchor="nw")
+        self._trigger_params, canvas = make_scrollable_form(
+            body, horizontal=True, bind_mousewheel=False,
+        )
         self._trigger_params_canvas = canvas
-
-        def _on_trigger_holder_configure(_event: tk.Event) -> None:
-            try:
-                canvas.configure(scrollregion=canvas.bbox("all"))
-                canvas_w = canvas.winfo_width()
-                req_w = self._trigger_params.winfo_reqwidth()
-                canvas.itemconfigure(
-                    self._trigger_params_window_id,
-                    width=max(canvas_w, req_w),
-                )
-            except tk.TclError:
-                pass
-        self._trigger_params.bind("<Configure>", _on_trigger_holder_configure)
-
-        def _on_trigger_canvas_configure(event: tk.Event) -> None:
-            try:
-                req_w = self._trigger_params.winfo_reqwidth()
-                canvas.itemconfigure(
-                    self._trigger_params_window_id,
-                    width=max(event.width, req_w),
-                )
-            except tk.TclError:
-                pass
-        canvas.bind("<Configure>", _on_trigger_canvas_configure)
 
         self._err_label(f, "trigger").grid(
             row=3, column=0, columnspan=2, sticky="w")

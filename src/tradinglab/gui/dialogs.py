@@ -27,7 +27,7 @@ from ..watchlists import (
 from ..watchlists import (
     import_from_file as _import_watchlists_from_file,
 )
-from ._modal_base import protect_combobox_wheel
+from ._modal_base import make_scrollable_form, protect_combobox_wheel
 from ._modal_keys import bind_modal_keys
 from .colors import MUTED_GREY
 
@@ -79,45 +79,19 @@ class _SettingsDialog(tk.Toplevel):
         # / Entry field together.
         self._startup_initial = deepcopy(parent._startup_defaults)
 
-        # Scrollable container: canvas + vertical scrollbar wrapping an
-        # inner ttk.Frame that holds every grid() row below. The body
-        # builds against ``frm`` exactly as before — only the container
-        # changes.
+        # Scrollable container: the standard Canvas + Scrollbar + inner
+        # ttk.Frame skeleton lives in :func:`_modal_base.make_scrollable_form`
+        # — see audit item #5. The inner frame is themed with padding so
+        # the LabelFrame groups don't hug the left edge of the canvas.
+        # Stash the host canvas so the post-layout combobox-wheel guard
+        # can forward scrolls into it (CLAUDE.md §7.11 — without the
+        # guard, wheel-over-Combobox / wheel-over-Spinbox silently
+        # mutates the widget value because the ttk class binding wins
+        # over our bind_all).
         outer = ttk.Frame(self)
         outer.pack(fill=tk.BOTH, expand=True)
-        canvas = tk.Canvas(outer, borderwidth=0, highlightthickness=0)
-        vbar = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
-        canvas.configure(yscrollcommand=vbar.set)
-        vbar.pack(side=tk.RIGHT, fill=tk.Y)
-        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        frm = ttk.Frame(canvas, padding=12)
-        canvas_window = canvas.create_window((0, 0), window=frm, anchor="nw")
-
-        def _on_inner_configure(_e: object) -> None:
-            canvas.configure(scrollregion=canvas.bbox("all"))
-        frm.bind("<Configure>", _on_inner_configure)
-
-        def _on_canvas_configure(e: tk.Event) -> None:
-            canvas.itemconfigure(canvas_window, width=e.width)
-        canvas.bind("<Configure>", _on_canvas_configure)
-
-        def _on_mousewheel(e: tk.Event) -> None:
-            try:
-                canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
-            except tk.TclError:
-                pass
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
-        # The bind_all call above is global; unhook on destroy so it
-        # doesn't leak into other dialogs after this one closes.
-        self.bind(
-            "<Destroy>",
-            lambda _e: canvas.unbind_all("<MouseWheel>"),
-        )
-        # Stash the host canvas so the post-layout combobox-wheel
-        # guard can forward scrolls into it. See landmine §7.11 in
-        # CLAUDE.md — without the guard, wheel-over-Combobox /
-        # wheel-over-Spinbox silently mutates the widget value
-        # because the ttk class binding wins over our bind_all.
+        frm, canvas = make_scrollable_form(outer)
+        frm.configure(padding=12)
         self._form_canvas = canvas
 
         # ────────────────────────────────────────────────────────
