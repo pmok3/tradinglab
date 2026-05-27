@@ -301,9 +301,18 @@ class FetchService:
         on_done: Callable[[Any], None],
         *,
         track_after: Callable[..., Any],
-        poll_ms: int = 20,
+        poll_ms: int = 5,
     ) -> None:
-        """Poll ``fut`` from the Tk thread via ``track_after``."""
+        """Poll ``fut`` from the Tk thread via ``track_after``.
+
+        ``poll_ms`` defaults to 5 ms — minimum useful Tk-event-loop
+        resolution. Lower latency = ticker-switch UI feels snappier
+        (saves ~15 ms per cache-miss switch vs the prior 20 ms
+        default). The trade-off is more CPU spent on idle polling
+        when the future hasn't completed yet; in practice the worker
+        completes in <50 ms for typical fetches so the poll count
+        per switch stays in the single digits.
+        """
 
         def _check() -> None:
             if fut.done():

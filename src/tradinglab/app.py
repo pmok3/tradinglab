@@ -2442,7 +2442,7 @@ class ChartApp(
         except Exception:  # noqa: BLE001
             pass
 
-    def _await_future_on_tk(self, fut, on_done, *, poll_ms: int = 20) -> None:
+    def _await_future_on_tk(self, fut, on_done, *, poll_ms: int = 5) -> None:
         """Poll a ``concurrent.futures.Future`` from the Tk main thread."""
         self._fetch_svc.await_future_on_tk(
             fut,
@@ -2555,10 +2555,9 @@ class ChartApp(
                     c = []
             # H2: piggy-back the disk-cache read onto the worker so the
             # Tk thread doesn't pay JSON parsing latency for the merge
-            # (line 2776/2780) or the network-failure fallback (line
-            # 2709/2726). disk_cache.save() uses atomic os.replace so
-            # concurrent reads on the worker are race-safe against any
-            # Tk-thread save still in flight.
+            # or the network-failure fallback. disk_cache.save() uses
+            # atomic os.replace so concurrent reads on the worker are
+            # race-safe against any Tk-thread save still in flight.
             p_disk: list | None = None
             c_disk: list | None = None
             try:
@@ -2571,7 +2570,31 @@ class ChartApp(
                     c_disk = disk_cache.load(src, raw_compare, interval)
             except Exception:  # noqa: BLE001
                 c_disk = None
-            return p, c, p_disk, c_disk
+            # H4 (audit "ticker-switch latency"): do the
+            # ``disk_cache.merge_candles`` + ``disk_cache.save`` here
+            # on the worker so ``_load_data`` doesn't pay the O(N)
+            # merge + atomic-replace I/O on the Tk thread. The new
+            # merged lists are stashed alongside the prefetch so the
+            # Tk-thread phase can short-circuit the merge block.
+            # Save is also safe to run here because ``disk_cache.save``
+            # uses ``os.replace`` (atomic on Windows + POSIX), so a
+            # concurrent read on a sibling worker thread either sees
+            # the OLD file or the NEW file — never a torn one.
+            p_merged: list | None = None
+            c_merged: list | None = None
+            try:
+                if p:
+                    p_merged = disk_cache.merge_candles(p_disk, p)
+                    disk_cache.save(src, raw_primary, interval, p_merged)
+            except Exception:  # noqa: BLE001
+                p_merged = None
+            try:
+                if c:
+                    c_merged = disk_cache.merge_candles(c_disk, c)
+                    disk_cache.save(src, raw_compare, interval, c_merged)
+            except Exception:  # noqa: BLE001
+                c_merged = None
+            return p, c, p_disk, c_disk, p_merged, c_merged
 
         try:
             fut = executor.submit(_work)
@@ -2586,8 +2609,14 @@ class ChartApp(
             if result is None:
                 p_raw, c_raw = None, None
                 p_disk, c_disk = None, None
+                p_merged, c_merged = None, None
+            elif len(result) == 6:
+                p_raw, c_raw, p_disk, c_disk, p_merged, c_merged = result
             else:
+                # Back-compat with any out-of-tree call site that still
+                # uses the old 4-tuple shape.
                 p_raw, c_raw, p_disk, c_disk = result
+                p_merged, c_merged = None, None
             self._prefetched_raw = {
                 "token": token,
                 "src": src,
@@ -2601,6 +2630,11 @@ class ChartApp(
                 "primary_disk": p_disk,
                 "compare_disk": c_disk,
                 "disk_preloaded": True,
+                # H4: pre-merged + pre-saved by the worker so
+                # _load_data can skip its merge_candles + save block.
+                "primary_merged": p_merged,
+                "compare_merged": c_merged,
+                "merge_preloaded": True,
             }
             try:
                 self._load_data()
@@ -2843,14 +2877,35 @@ class ChartApp(
         # provider's current window (e.g. yfinance's 60-day intraday cap)
         # are retained across sessions. New bars always win on overlap so
         # provider revisions propagate.
+        #
+        # H4 (audit "ticker-switch latency"): when ``_load_data_async``
+        # ran the merge + ``disk_cache.save`` on the worker thread,
+        # ``prefetched["primary_merged"]`` / ``["compare_merged"]`` is
+        # the already-merged list and the on-disk file is already
+        # up-to-date. Consume the pre-merged result and skip the
+        # ``merge_candles`` + ``disk_cache.save`` calls below — those
+        # would re-do work the worker just finished.
+        merge_preloaded = bool(prefetched_valid and prefetched.get("merge_preloaded"))
+        primary_merged_cached = (
+            prefetched.get("primary_merged") if merge_preloaded else None
+        )
+        compare_merged_cached = (
+            prefetched.get("compare_merged") if merge_preloaded else None
+        )
         if primary_raw and mem_primary is not primary_raw:
-            primary_raw = disk_cache.merge_candles(
-                _disk_for(primary_key, "primary"), primary_raw,
-            )
+            if merge_preloaded and primary_merged_cached is not None:
+                primary_raw = primary_merged_cached
+            else:
+                primary_raw = disk_cache.merge_candles(
+                    _disk_for(primary_key, "primary"), primary_raw,
+                )
         if compare_key and compare_raw and mem_compare is not compare_raw:
-            compare_raw = disk_cache.merge_candles(
-                _disk_for(compare_key, "compare"), compare_raw,
-            )
+            if merge_preloaded and compare_merged_cached is not None:
+                compare_raw = compare_merged_cached
+            else:
+                compare_raw = disk_cache.merge_candles(
+                    _disk_for(compare_key, "compare"), compare_raw,
+                )
 
         primary_raw_ref = primary_raw
         compare_raw_ref = compare_raw
@@ -2864,17 +2919,22 @@ class ChartApp(
         # caches faithful, so the next provider fetch that includes
         # today's real daily bar simply lands here and overwrites our
         # synth at the next render boundary.
+        #
+        # H4: skip the ``disk_cache.save`` when the worker already did
+        # it. Memory cache still gets updated here (the worker's merge
+        # is per-side and the memory cache write needs to happen on
+        # the Tk thread for the token-gated visibility contract).
         if primary_raw:
             self._full_cache[primary_key] = primary_raw
             self._trim_full_cache()
             self._confirmed_primary_ticker = raw_primary
-            if mem_primary is not primary_raw:
+            if mem_primary is not primary_raw and not merge_preloaded:
                 disk_cache.save(*primary_key, primary_raw)
         if compare_key and compare_raw:
             self._full_cache[compare_key] = compare_raw
             self._trim_full_cache()
             self._confirmed_compare_ticker = raw_compare
-            if mem_compare is not compare_raw:
+            if mem_compare is not compare_raw and not merge_preloaded:
                 disk_cache.save(*compare_key, compare_raw)
 
         # Today's-bar upsampling for daily-class views: most providers
@@ -2949,13 +3009,27 @@ class ChartApp(
         # in the events subsystem must NOT block the chart render. The
         # bundle lands in ``self._events_cache`` on arrival and triggers
         # a glyph-only redraw via :meth:`_request_redraw_for_events`.
+        #
+        # H4 (audit "ticker-switch latency"): defer the submission to
+        # ``after_idle`` so the events-fetch executor.submit() +
+        # await_future scheduling don't block the post-render path on
+        # the Tk thread. The events bundle is purely decorative
+        # (glyphs only) — it's safe for the user to see the chart
+        # paint before the events fetch even starts.
+        def _kick_events() -> None:
+            try:
+                if raw_primary:
+                    self._load_events_async(raw_primary)
+                if raw_compare:
+                    self._load_events_async(raw_compare)
+            except Exception:  # noqa: BLE001
+                pass
         try:
-            if raw_primary:
-                self._load_events_async(raw_primary)
-            if raw_compare:
-                self._load_events_async(raw_compare)
+            self.after_idle(_kick_events)
         except Exception:  # noqa: BLE001
-            pass
+            # Fall back to synchronous submission if after_idle is
+            # unavailable (headless tests without a running mainloop).
+            _kick_events()
         # Update notebook tabs to reflect the actually-loaded tickers.
         try:
             self._refresh_tab_labels()
