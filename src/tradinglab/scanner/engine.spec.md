@@ -56,8 +56,35 @@ to the empty-fold (AND→True, OR→False).
 
 ## Operator dispatch
 
-All 19 operators dispatch on named params per
-`OPERATOR_PARAM_SCHEMA[op]`:
+All 19 operators dispatch through the **registry** in
+[`scanner/operators.py`](operators.spec.md) — a `dict[str, OpHandler]`
+keyed by operator id, with each handler bundling
+`evaluate(cond, ctx, i) -> bool | None` plus an `is_transition` flag
+read by the forming-bar guard.
+
+`_evaluate_condition_at` is now a tiny dispatcher:
+
+```python
+handler = OPERATOR_EVALUATORS.get(cond.op)
+if handler is None:
+    LOG.error(...); return None
+if handler.is_transition and _in_lookback_walk \
+        and index == ctx.current_index and ctx.is_forming:
+    return None  # forming-bar skip, ops with is_transition=True only
+return handler.evaluate(cond, ctx, index)
+```
+
+The named-params schema continues to live in
+`model.OPERATOR_PARAM_SCHEMA`; the registry-completeness test in
+`tests/scanner/test_operators_registry.py` pins that every op declared
+there has a matching `OpHandler`, and vice versa.
+
+`_TRANSITION_OPS` is preserved as a back-compat re-export at the top of
+this module, derived from `{op for op, h in OPERATOR_EVALUATORS.items()
+if h.is_transition}` — out-of-tree code that imported it from `engine`
+keeps working.
+
+The named params per op:
 
 | op                 | params                      |
 | ------------------ | --------------------------- |

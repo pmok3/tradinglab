@@ -58,6 +58,7 @@ import numpy as np
 from ..core.params_key import freeze_params as _freeze_params
 from ..indicators.base import compute_via_bars, factory_by_kind_id
 from ..models import Candle
+from . import operators as _operators
 from .fields import (
     BarsNp,
     builtin_compute,
@@ -69,25 +70,6 @@ from .model import (
     FIELD_KIND_BUILTIN,
     FIELD_KIND_INDICATOR,
     FIELD_KIND_LITERAL,
-    OP_BETWEEN,
-    OP_CROSSES_ABOVE,
-    OP_CROSSES_BELOW,
-    OP_EQ,
-    OP_GE,
-    OP_GT,
-    OP_HOLDING_ABOVE,
-    OP_HOLDING_BELOW,
-    OP_INSIDE_BAR,
-    OP_IS_FALLING,
-    OP_IS_RISING,
-    OP_LE,
-    OP_LT,
-    OP_NE,
-    OP_NEW_HIGH_N,
-    OP_NEW_LOW_N,
-    OP_NR7,
-    OP_OUTSIDE_BAR,
-    OP_WITHIN_PCT,
     WITHIN_LAST_MODE_ALL,
     WITHIN_LAST_MODE_EXACTLY,
     Condition,
@@ -96,6 +78,8 @@ from .model import (
     MatchEvidence,
     ScanDefinition,
 )
+from .operators import OPERATOR_EVALUATORS
+from .operators import TRANSITION_OPS as _TRANSITION_OPS  # noqa: F401  (back-compat re-export)
 from .session import find_session_open_index
 
 LOG = logging.getLogger(__name__)
@@ -303,10 +287,11 @@ class EvaluationContext:
     evidence: list[MatchEvidence] = dc_field(default_factory=list)
 
 
-# Transition operators — gated by the forming-bar skip rule when the
-# within-last-N-bars walk is active. Module-level so the gate test is
-# a single set lookup.
-_TRANSITION_OPS = frozenset({OP_CROSSES_ABOVE, OP_CROSSES_BELOW})
+# Note: ``_TRANSITION_OPS`` is now derived from the operator registry
+# and re-exported at the top of this module via
+# ``from .operators import TRANSITION_OPS as _TRANSITION_OPS``. The
+# source of truth is the ``is_transition`` flag on each
+# :class:`OpHandler` in :mod:`.operators`.
 
 
 def make_context(
@@ -745,144 +730,28 @@ def _evaluate_condition_at(
     unless they specifically need to evaluate at a non-current index
     inside a look-back walk.
     """
-    op = cond.op
-    p = cond.params
-    i = index
-    bars = ctx.bars
+    handler = OPERATOR_EVALUATORS.get(cond.op)
+    if handler is None:
+        LOG.error(
+            "_evaluate_condition_at: unknown op %r on cond %s", cond.op, cond.id
+        )
+        return None
 
     # Forming-bar skip for transitions, only when within a look-back
     # walk (the comparisons-stay-live invariant). Outside a walk this
-    # is a no-op so today's behavior is preserved.
+    # is a no-op so today's behavior is preserved. The ``is_transition``
+    # flag on the handler replaces the prior ``op in _TRANSITION_OPS``
+    # set lookup; ``_TRANSITION_OPS`` remains as a back-compat re-export
+    # imported at the top of this module.
     if (
-        _in_lookback_walk
-        and op in _TRANSITION_OPS
-        and i == ctx.current_index
+        handler.is_transition
+        and _in_lookback_walk
+        and index == ctx.current_index
         and ctx.is_forming
     ):
         return None
 
-    # --- 6 binary comparisons -----------------------------------------------
-    if op in (OP_GT, OP_LT, OP_GE, OP_LE, OP_EQ, OP_NE):
-        l = evaluate_field_at(cond.left, ctx, i)
-        r = evaluate_field_at(p["right"], ctx, i)
-        if l is None or r is None:
-            return None
-        if op == OP_GT: return l >  r
-        if op == OP_LT: return l <  r
-        if op == OP_GE: return l >= r
-        if op == OP_LE: return l <= r
-        if op == OP_EQ: return l == r
-        return l != r  # OP_NE
-
-    # --- between ------------------------------------------------------------
-    if op == OP_BETWEEN:
-        l  = evaluate_field_at(cond.left, ctx, i)
-        lo = evaluate_field_at(p["low"], ctx, i)
-        hi = evaluate_field_at(p["high"], ctx, i)
-        if l is None or lo is None or hi is None:
-            return None
-        return lo <= l <= hi
-
-    # --- crosses ------------------------------------------------------------
-    if op in (OP_CROSSES_ABOVE, OP_CROSSES_BELOW):
-        lookback = int(p["lookback"])
-        if lookback < 1 or i - lookback < 0:
-            return None
-        prev_l = evaluate_field_at(cond.left, ctx, i - lookback)
-        prev_r = evaluate_field_at(p["right"], ctx, i - lookback)
-        cur_l  = evaluate_field_at(cond.left, ctx, i)
-        cur_r  = evaluate_field_at(p["right"], ctx, i)
-        if None in (prev_l, prev_r, cur_l, cur_r):
-            return None
-        if op == OP_CROSSES_ABOVE:
-            return prev_l <= prev_r and cur_l > cur_r
-        return prev_l >= prev_r and cur_l < cur_r
-
-    # --- monotonic ----------------------------------------------------------
-    if op in (OP_IS_RISING, OP_IS_FALLING):
-        lookback = int(p["lookback"])
-        if lookback < 1 or i - lookback < 0:
-            return None
-        vals: list[float | None] = [
-            evaluate_field_at(cond.left, ctx, j) for j in range(i - lookback, i + 1)
-        ]
-        if any(v is None for v in vals):
-            return None
-        if op == OP_IS_RISING:
-            return all(vals[k] < vals[k + 1] for k in range(len(vals) - 1))
-        return all(vals[k] > vals[k + 1] for k in range(len(vals) - 1))
-
-    # --- within_pct ---------------------------------------------------------
-    if op == OP_WITHIN_PCT:
-        l = evaluate_field_at(cond.left, ctx, i)
-        t = evaluate_field_at(p["target"], ctx, i)
-        if l is None or t is None:
-            return None
-        if t == 0.0:
-            return None  # zero-target → undefined per spec.
-        try:
-            tol = float(p["tolerance_pct"])
-        except (TypeError, ValueError):
-            return None
-        return abs((l - t) / t) * 100.0 <= tol
-
-    # --- new high / low over n bars -----------------------------------------
-    if op in (OP_NEW_HIGH_N, OP_NEW_LOW_N):
-        n = int(p["n"])
-        if n < 1 or i - n < 0:
-            return None
-        cur = evaluate_field_at(cond.left, ctx, i)
-        if cur is None:
-            return None
-        prior_vals: list[float | None] = [
-            evaluate_field_at(cond.left, ctx, j) for j in range(i - n, i)
-        ]
-        if any(v is None for v in prior_vals):
-            return None
-        if op == OP_NEW_HIGH_N:
-            return cur > max(prior_vals)
-        return cur < min(prior_vals)
-
-    # --- holding above / below ----------------------------------------------
-    if op in (OP_HOLDING_ABOVE, OP_HOLDING_BELOW):
-        bars_n = int(p["bars"])
-        if bars_n < 1 or i - bars_n + 1 < 0:
-            return None
-        for j in range(i - bars_n + 1, i + 1):
-            l = evaluate_field_at(cond.left, ctx, j)
-            r = evaluate_field_at(p["reference"], ctx, j)
-            if l is None or r is None:
-                return None
-            if op == OP_HOLDING_ABOVE and not (l > r):
-                return False
-            if op == OP_HOLDING_BELOW and not (l < r):
-                return False
-        return True
-
-    # --- structural: inside / outside / NR7 ---------------------------------
-    if op in (OP_INSIDE_BAR, OP_OUTSIDE_BAR):
-        if i < 1:
-            return None
-        h_now, h_prev = bars.high[i], bars.high[i - 1]
-        l_now, l_prev = bars.low[i],  bars.low[i - 1]
-        if any(_is_nan_like(x) for x in (h_now, h_prev, l_now, l_prev)):
-            return None
-        if op == OP_INSIDE_BAR:
-            return bool(h_now < h_prev and l_now > l_prev)
-        return bool(h_now > h_prev and l_now < l_prev)
-
-    if op == OP_NR7:
-        if i < 6:
-            return None
-        ranges = bars.high[i - 6 : i + 1] - bars.low[i - 6 : i + 1]
-        if np.any(np.isnan(ranges)):
-            return None
-        cur_range = float(ranges[-1])
-        prior_min = float(ranges[:-1].min())
-        return bool(cur_range <= prior_min)
-
-    LOG.error("_evaluate_condition_at: unknown op %r on cond %s", op, cond.id)
-    return None
+    return handler.evaluate(cond, ctx, index)
 
 
 # ---------------------------------------------------------------------------
@@ -1287,3 +1156,13 @@ __all__ = [
     "evaluate_scan",
     "validate_scan",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Late-bind the two helpers :mod:`.operators` needs. Done at the bottom of
+# this module so ``evaluate_field_at`` and ``_is_nan_like`` already exist.
+# The operators module imports nothing from engine; this wire-up is the
+# single point of indirection that breaks the would-be import cycle.
+# ---------------------------------------------------------------------------
+_operators._evaluate_field_at = evaluate_field_at
+_operators._is_nan_like = _is_nan_like
