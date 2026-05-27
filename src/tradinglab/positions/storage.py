@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from ..core.io_helpers import atomic_write_json
+from ..core.json_list_store import JsonListStore
 from ..disk_cache import _cache_dir
 from .model import Position
 
@@ -73,33 +74,24 @@ def _read_json(path: Path) -> dict | None:
 # Open positions
 # ---------------------------------------------------------------------------
 
+_OPEN_STORE: JsonListStore[Position] = JsonListStore(
+    path=open_positions_path,
+    items_key="positions",
+    to_dict=lambda p: p.to_dict(),
+    from_dict=Position.from_dict,
+    schema_version=SCHEMA_VERSION,
+    kind_label="positions.storage",
+)
+
 
 def save_open_positions(positions: list[Position]) -> Path:
     """Persist the list of open positions atomically."""
-    payload = {
-        "schema_version": SCHEMA_VERSION,
-        "positions": [p.to_dict() for p in positions],
-    }
-    path = open_positions_path()
-    atomic_write_json(path, payload)
-    return path
+    return _OPEN_STORE.save(positions)
 
 
 def load_open_positions() -> list[Position]:
     """Load + parse open positions. Lenient: returns ``[]`` on any failure."""
-    data = _read_json(open_positions_path())
-    if data is None:
-        return []
-    if int(data.get("schema_version", 1)) > SCHEMA_VERSION:
-        LOG.warning("positions.storage: open.json schema_version too new; ignoring")
-        return []
-    out: list[Position] = []
-    for raw in data.get("positions", []) or []:
-        try:
-            out.append(Position.from_dict(raw))
-        except Exception as e:  # noqa: BLE001
-            LOG.warning("positions.storage: skipping malformed position: %s", e)
-    return out
+    return _OPEN_STORE.load()
 
 
 # ---------------------------------------------------------------------------

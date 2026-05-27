@@ -25,6 +25,7 @@ Both files are UTF-8 JSON with a `schema_version` discriminator. Loads are lenie
 
 ## Design Decisions
 - **Atomic writes via `atomic_write_json`**: tmp-file + `os.replace` so a power loss never produces a half-written file. Required because `open.json` is loaded at every app start.
+- **Open-positions list now delegates to `JsonListStore[Position]`**; trail-state stays a direct file because it's an opaque dict singleton, not a per-record collection. The generic owns the envelope shape (`{"schema_version": N, "positions": [...]}`), the future-version refuse contract, atomic write, and lenient per-record parsing. Public API is preserved exactly — every existing call site is unchanged.
 - **Two files, not one**: position state and trail state evolve independently — the exit evaluator can refresh its trail snapshot without touching the positions list (and vice versa for an edit). Separation also lets tests reset trail state via `clear_trail_state()` without nuking open positions.
 - **Lenient loads everywhere**: on malformed JSON / missing file / future schema version, return the empty case + log a warning. A stale positions file is a degraded state, not a crash condition.
 - **`schema_version > SCHEMA_VERSION` is a hard skip**: future formats fall back to empty rather than mis-parse. Backwards-compat (older schema_version) is owner of a future `migrate()` function; v1 has none.
