@@ -37,7 +37,7 @@ from ..preload.fundamental_filter import (
     is_filter_active,
     passes_fundamental_filter,
 )
-from ._modal_keys import bind_modal_keys
+from ._modal_base import BaseModalDialog, protect_combobox_wheel
 from .colors import MUTED_GREY
 
 # ---------------------------------------------------------------------------
@@ -152,7 +152,7 @@ def compute_run_estimate(
     }
 
 
-class UniversePrepareDialog(tk.Toplevel):
+class UniversePrepareDialog(BaseModalDialog):
     """Modal preload dialog. Blocks the caller until closed.
 
     Args:
@@ -181,33 +181,28 @@ class UniversePrepareDialog(tk.Toplevel):
         fetcher: Callable[[str, str], list[Candle] | None],
         on_finished: Callable[[_manifest.UniverseManifest | None], None] | None = None,
     ) -> None:
-        super().__init__(app)
-        self.app = app
-        self._source_name = source_name
-        self._fetcher = fetcher
-        self._on_finished = on_finished
-
-        self.title("Prepare Universe Data")
-        self.transient(app)
         # Width is fixed (the form fields are sized in characters), but
         # vertical growth is allowed so users on low-DPI / scaled
         # Windows displays can drag the dialog taller when the Start
         # and Close buttons would otherwise be clipped by the title bar
         # plus the now-larger universe selector (3 LabelFrames + amber
         # survivorship banner + reactive ETA line).
-        self.resizable(False, True)
-        self.protocol("WM_DELETE_WINDOW", self._on_close_request)
-        # Geometry persistence. Default bumped 560x620 -> 560x780 to fit
-        # the post-NYSE/NASDAQ universe selector (3 LabelFrames + banner
-        # + reactive ETA line) plus the progress + status rows + the
-        # Start/Close button row. The persistence key is suffixed with
-        # ``_v2`` so users who already have the old 560x620 cached do
-        # NOT inherit the too-short window after upgrading.
-        try:
-            from .geometry_store import attach_persistent_geometry
-            attach_persistent_geometry(self, "dlg.universe_prepare_v2", "560x780")
-        except tk.TclError:
-            pass
+        #
+        # Geometry persistence key suffixed ``_v2`` so users who already
+        # have the old 560x620 cached do NOT inherit the too-short
+        # window after upgrading.
+        super().__init__(
+            app,
+            title="Prepare Universe Data",
+            geometry_key="dlg.universe_prepare_v2",
+            default_geometry="560x780",
+            resizable=(False, True),
+        )
+        self.app = app
+        self._source_name = source_name
+        self._fetcher = fetcher
+        self._on_finished = on_finished
+
         # Hard floor so users can never shrink to the point where the
         # bottom button row falls below the screen.
         try:
@@ -255,13 +250,10 @@ class UniversePrepareDialog(tk.Toplevel):
         self._refresh_kind_specific_state()
         self._center_on_parent()
 
-        # Modal grab AFTER the window is realised so geometry is sane.
-        self.update_idletasks()
-        self.grab_set()
-        bind_modal_keys(
-            self,
-            cancel=self._on_close_request,
+        protect_combobox_wheel(self)
+        self._finalize_modal(
             primary=self._on_start,
+            cancel=self._on_close_request,
         )
 
     # ---- result accessor ----

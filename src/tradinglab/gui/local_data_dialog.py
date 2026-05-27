@@ -31,6 +31,7 @@ from collections.abc import Callable
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
+from ._modal_base import BaseModalDialog, protect_combobox_wheel
 from ._modal_keys import bind_modal_keys
 from .colors import MUTED_GREY
 
@@ -128,7 +129,7 @@ def _validate_root_name(name: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-class LocalDataDialog(tk.Toplevel):
+class LocalDataDialog(BaseModalDialog):
     """Configure-local-data dialog (Tools → Configure Local Data…)."""
 
     def __init__(
@@ -137,11 +138,12 @@ class LocalDataDialog(tk.Toplevel):
         *,
         on_changed: Callable[[], None] | None = None,
     ) -> None:
-        super().__init__(parent)
-        self.title("Configure Local Data")
-        self.transient(parent)
-        self.grab_set()
-        self.resizable(True, True)
+        super().__init__(
+            parent,
+            title="Configure Local Data",
+            geometry_key="dlg.local_data",
+            default_geometry="560x420",
+        )
         self.minsize(560, 360)
 
         self._on_changed = on_changed
@@ -150,15 +152,8 @@ class LocalDataDialog(tk.Toplevel):
         self._roots: list[RootRow] = list(roots)
 
         self._build_widgets()
-        bind_modal_keys(self, cancel=self._on_cancel, primary=self._on_save)
-
-        self.update_idletasks()
-        try:
-            x = parent.winfo_rootx() + (parent.winfo_width() // 2) - (self.winfo_width() // 2)
-            y = parent.winfo_rooty() + (parent.winfo_height() // 4)
-            self.geometry(f"+{max(0, x)}+{max(0, y)}")
-        except tk.TclError:
-            pass
+        protect_combobox_wheel(self)
+        self._finalize_modal(primary=self._on_save, cancel=self._on_cancel)
 
     def _build_widgets(self) -> None:
         outer = ttk.Frame(self, padding=12)

@@ -53,7 +53,7 @@ from ..backtest.performance import (
     write_trade_rows_csv,
 )
 from ..backtest.session import SessionResult
-from ._modal_keys import bind_modal_keys
+from ._modal_base import BaseModalDialog, protect_combobox_wheel
 
 _TRADE_COLUMNS = (
     ("entry_ts", "Entry", 130, "center"),
@@ -118,22 +118,18 @@ def _truncate(s: str, n: int = 60) -> str:
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
-class PerformanceView(tk.Toplevel):
+class PerformanceView(BaseModalDialog):
     """Read-only Toplevel showing trades + per-setup aggregates."""
 
     def __init__(self, parent: Any, result: SessionResult,
                  *, title: str = "Sandbox — Performance",
                  screenshot_dir: Path | None = None):
-        super().__init__(parent)
-        self.title(title)
-        self.transient(parent)
-        # Geometry persistence: restores last-used size/position;
-        # defaults to the legacy 1100x780 for first-time users.
-        try:
-            from .geometry_store import attach_persistent_geometry
-            attach_persistent_geometry(self, "dlg.performance_view", "1100x780")
-        except tk.TclError:
-            self.geometry("1100x780")
+        super().__init__(
+            parent,
+            title=title,
+            geometry_key="dlg.performance_view",
+            default_geometry="1100x780",
+        )
 
         self._result = result
         self._screenshot_dir: Path | None = (
@@ -164,7 +160,12 @@ class PerformanceView(tk.Toplevel):
         self._populate_aggregates()
         self._populate_proximity()
         self._populate_summary()
-        bind_modal_keys(self, cancel=self.destroy, primary=None)
+        protect_combobox_wheel(self)
+        # Read-only view: no primary action. ESC / WM_DELETE destroy.
+        # Non-modal (no grab) — original Toplevel did not grab_set; the
+        # user must be able to interact with the parent chart while
+        # reviewing performance.
+        self._finalize_modal(primary=None, cancel=self.destroy, grab=False)
 
     # ------------------------------------------------------------------ build
     def _build(self) -> None:

@@ -48,6 +48,7 @@ from ..scanner.model import (
     ScanDefinition,
 )
 from ..scanner.runner import MatchRow, ScanResult
+from ._modal_base import BaseModalDialog, protect_combobox_wheel
 from .scanner_block_editor import BlockEditor
 
 LOG = logging.getLogger(__name__)
@@ -1143,7 +1144,7 @@ def _default_new_scan(name: str) -> ScanDefinition:
 # ---------------------------------------------------------------------------
 
 
-class _LoadScanDialog(tk.Toplevel):
+class _LoadScanDialog(BaseModalDialog):
     """Modal Listbox chooser used by *Load…*. Returns the chosen scan id
     (or None on cancel) via :meth:`ask`. Sorted by name."""
 
@@ -1152,18 +1153,13 @@ class _LoadScanDialog(tk.Toplevel):
         parent: tk.Misc,
         candidates: list[tuple[str, ScanDefinition]],
     ) -> None:
-        super().__init__(parent)
-        self.title("Load scan")
-        self.transient(parent)
-        self.resizable(True, True)
+        super().__init__(
+            parent,
+            title="Load scan",
+            geometry_key="dlg.load_scan",
+            default_geometry="420x360",
+        )
         self._result: str | None = None
-        # Geometry persistence — small chooser dialog defaults to a
-        # compact size but users can grow it on dense scan libraries.
-        try:
-            from .geometry_store import attach_persistent_geometry
-            attach_persistent_geometry(self, "dlg.load_scan", "420x360")
-        except tk.TclError:
-            pass
         # Sorted by name (case-insensitive); ids hidden in a parallel list.
         self._items = sorted(candidates, key=lambda p: p[1].name.lower())
 
@@ -1198,18 +1194,8 @@ class _LoadScanDialog(tk.Toplevel):
         ttk.Button(button_frame, text="Load",
                    command=self._on_ok).pack(side=tk.RIGHT, padx=(0, 4))
 
-        # ESC dismisses, Return loads the selection. Routed through the
-        # shared modal-keys helper so the multi-line-Text guard
-        # (irrelevant here, but cheap) is consistent with every other
-        # dialog. The listbox-local <Return> binding is preserved
-        # above so the keyboard journey "type to select -> Enter to
-        # load" still works while the listbox itself has focus.
-        try:
-            from ._modal_keys import bind_modal_keys
-            bind_modal_keys(self, cancel=self._on_cancel, primary=self._on_ok)
-        except tk.TclError:
-            pass
-        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+        protect_combobox_wheel(self)
+        self._finalize_modal(primary=self._on_ok, cancel=self._on_cancel)
 
     def _on_ok(self) -> None:
         sel = self._listbox.curselection()
@@ -1231,11 +1217,6 @@ class _LoadScanDialog(tk.Toplevel):
         if not candidates:
             return None
         dlg = cls(parent, candidates)
-        dlg.update_idletasks()
-        try:
-            dlg.grab_set()
-        except tk.TclError:
-            pass
         try:
             dlg.wait_window()
         except tk.TclError:

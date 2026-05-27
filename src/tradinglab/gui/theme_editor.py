@@ -62,7 +62,7 @@ from tkinter import colorchooser, ttk
 from typing import TYPE_CHECKING
 
 from ..constants import CUSTOMIZABLE_THEME_KEYS, DEFAULT_THEMES
-from ._modal_keys import bind_modal_keys
+from ._modal_base import BaseModalDialog, protect_combobox_wheel
 
 if TYPE_CHECKING:
     from ..app import ChartApp
@@ -102,7 +102,7 @@ _PRESETS = (
 # Dialog
 # ---------------------------------------------------------------------------
 
-class ThemeEditorDialog(tk.Toplevel):
+class ThemeEditorDialog(BaseModalDialog):
     """Modeless theme-editing Toplevel.
 
     Opened from ``View → Theme…``. The dialog mutates the parent app's
@@ -116,21 +116,13 @@ class ThemeEditorDialog(tk.Toplevel):
     """
 
     def __init__(self, parent: ChartApp) -> None:
-        super().__init__(parent)
-        self.title("Theme Editor")
-        try:
-            self.transient(parent)
-        except tk.TclError:
-            pass
+        super().__init__(
+            parent,
+            title="Theme Editor",
+            geometry_key="dlg.theme_editor",
+            default_geometry="560x320",
+        )
         self._parent_app = parent
-        try:
-            from .geometry_store import attach_persistent_geometry
-            attach_persistent_geometry(self, "dlg.theme_editor", "560x320")
-        except tk.TclError:
-            try:
-                self.geometry("560x320")
-            except tk.TclError:
-                pass
         self.minsize(440, 260)
 
         self._swatch_buttons: dict[str, dict[str, tk.Button]] = {
@@ -152,8 +144,8 @@ class ThemeEditorDialog(tk.Toplevel):
             self._dark_initial = False
 
         self._build_layout()
-        bind_modal_keys(self, cancel=self._on_cancel, primary=self._on_save_and_close)
-        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+        protect_combobox_wheel(self)
+        self._finalize_modal(primary=self._on_save_and_close, cancel=self._on_cancel)
 
     # ------------------------------------------------------------------
     # Layout
