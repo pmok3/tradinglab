@@ -54,6 +54,7 @@ from collections.abc import Callable
 from tkinter import ttk
 from typing import Any
 
+from ..indicators.base import ParamDef
 from ..scanner.fields import all_fields, get_field
 from ..scanner.model import (
     ALL_OPERATORS,
@@ -74,6 +75,7 @@ from ..scanner.model import (
     FieldRef,
     Group,
 )
+from ._param_widgets import build_param_widget, label_text_for
 from ._widget_metrics import (
     _CHAR_PX,
     _CHECKBOX_PX,
@@ -1025,40 +1027,41 @@ class _FieldRefPicker(ttk.Frame):
         with the underscore-snake ``pdef.name`` as the fallback when
         ``description`` is empty. This keeps the row narrow enough to
         fit RVOL's 6 trigger-relevant params on typical dialog widths.
+
+        Per-kind widget construction delegates to
+        :func:`gui._param_widgets.build_param_widget` (eager commit
+        policy: every variable write fires ``_commit_indicator``).
         """
         parent_widget = parent if parent is not None else self._value_pane
         wrap = ttk.Frame(parent_widget)
-        label_text = (getattr(pdef, "description", "") or pdef.name) + ":"
-        ttk.Label(wrap, text=label_text).pack(side="left")
+        ttk.Label(wrap, text=label_text_for(pdef)).pack(side="left")
         seed = (self._ref.params or {}).get(pdef.name, pdef.default)
-        if pdef.kind == "bool":
-            var = tk.BooleanVar(value=bool(seed))
-            cb = ttk.Checkbutton(wrap, variable=var,
-                                 command=self._commit_indicator)
-            cb.pack(side="left")
-        elif pdef.kind == "choice":
-            var = tk.StringVar(value=str(seed))
-            cb = ttk.Combobox(wrap, textvariable=var, state="readonly",
-                              values=tuple(str(c) for c in pdef.choices), width=8)
-            cb.pack(side="left")
-            cb.bind("<<ComboboxSelected>>", lambda _e: self._commit_indicator())
-        elif pdef.kind in ("int", "float"):
-            var = tk.StringVar(value=_format_number(seed))
-            kwargs: dict[str, Any] = {"textvariable": var, "width": 6}
-            kwargs["from_"] = pdef.min if pdef.min is not None else -1e12
-            kwargs["to"]    = pdef.max if pdef.max is not None else  1e12
-            kwargs["increment"] = pdef.step if pdef.step is not None \
-                else (1 if pdef.kind == "int" else 0.1)
-            sb = ttk.Spinbox(wrap, command=self._commit_indicator, **kwargs)
-            sb.pack(side="left")
-            sb.bind("<FocusOut>", lambda _e: self._commit_indicator())
-            sb.bind("<Return>",   lambda _e: self._commit_indicator())
+        # Width matches the historical scanner-side defaults:
+        # choice/str comboboxes 8 chars, int/float spinboxes 6.
+        kind = getattr(pdef, "kind", "str")
+        if kind == "choice":
+            width: int | None = 8
+        elif kind in ("int", "float"):
+            width = 6
+        elif kind == "str":
+            width = 8
         else:
-            var = tk.StringVar(value=str(seed))
-            ent = ttk.Entry(wrap, textvariable=var, width=8)
-            ent.pack(side="left")
-            ent.bind("<FocusOut>", lambda _e: self._commit_indicator())
-            ent.bind("<Return>",   lambda _e: self._commit_indicator())
+            width = None
+        var, widget = build_param_widget(
+            wrap, pdef, seed,
+            on_change=self._commit_indicator,
+            commit_policy="eager",
+            width=width,
+        )
+        widget.pack(side="left")
+        # The scanner picker historically also commits on Spinbox /
+        # Entry FocusOut + Return so a tab-out always persists even
+        # when the eager trace already fired. Re-bind those events
+        # here so behaviour is preserved for the still-unfocused
+        # widget cases.
+        if isinstance(widget, (ttk.Spinbox, ttk.Entry)):
+            widget.bind("<FocusOut>", lambda _e: self._commit_indicator())
+            widget.bind("<Return>",   lambda _e: self._commit_indicator())
         self._param_widgets[pdef.name] = var
         return wrap
 
@@ -1824,16 +1827,26 @@ class _ConditionFrame(ttk.Frame):
                 seed = current if isinstance(current, (int, float)) else (
                     1 if kind == "int" else 1.0
                 )
-                var = tk.StringVar(value=_format_number(seed))
-                kwargs: dict[str, Any] = {
-                    "textvariable": var, "width": 6,
-                    "from_": -1e12, "to": 1e12,
-                    "increment": 1 if kind == "int" else 0.1,
-                }
-                sb = ttk.Spinbox(wrap, command=self._commit_params, **kwargs)
-                sb.pack(side="left")
-                sb.bind("<FocusOut>", lambda _e: self._commit_params())
-                sb.bind("<Return>",   lambda _e: self._commit_params())
+                # Synthesize a ParamDef so we can route through the
+                # shared widget builder. The OPERATOR_PARAM_SCHEMA
+                # uses bare (name, kind) tuples — no min/max/step,
+                # no description — so the helper applies defaults
+                # (from_=-1e12, to=1e12, increment=1 / 0.1, width=6).
+                synth = ParamDef(name=name, kind=kind, default=seed)
+                var, widget = build_param_widget(
+                    wrap, synth, seed,
+                    commit_policy="manual",
+                )
+                widget.pack(side="left")
+                # ConditionFrame consumes ``var.get()`` on its own
+                # schedule via ``_commit_params``; bind FocusOut /
+                # Return / spinbox-arrow to trigger that commit
+                # explicitly so the manual policy still fires when
+                # the user tabs out or arrow-spams.
+                if isinstance(widget, ttk.Spinbox):
+                    widget.configure(command=self._commit_params)
+                    widget.bind("<FocusOut>", lambda _e: self._commit_params())
+                    widget.bind("<Return>",   lambda _e: self._commit_params())
                 self._param_widgets[name] = (kind, var)
                 scalar_col += 1
 

@@ -70,6 +70,7 @@ from ..indicators.config import (
     IndicatorManager,
 )
 from ._modal_base import BaseModalDialog, make_scrollable_form, protect_combobox_wheel
+from ._param_widgets import build_param_widget, label_text_for
 from ._widget_metrics import _CHAR_PX
 from .color_palette import pick_color
 from .colors import WARN_AMBER
@@ -1454,12 +1455,15 @@ class IndicatorDialog(BaseModalDialog):
     ) -> None:
         """Render a single ParamDef as label + appropriate widget.
 
-        ``grid_pos`` is an optional ``(row, column)`` placement inside
-        the param subframe. When provided, the wrapper frame is gridded
-        instead of packed so the caller can wrap multi-param schemas
-        across multiple visual rows. Falls back to side-by-side packing
-        if ``grid_pos`` is omitted (preserves the legacy single-call
-        sites used by tests / extensions).
+        Delegates the per-kind dispatcher to
+        :func:`gui._param_widgets.build_param_widget` — the single
+        source of truth shared with ``scanner_block_editor``. This
+        method retains responsibility for the ``param_subframe``
+        layout (grid vs pack), label rendering, recording the
+        ``param_vars`` / ``param_widgets`` entries on the row, and
+        the Anchored VWAP ``anchor_ts`` special-case (the inner
+        Button must remain individually addressable so the dialog
+        disables it on read-only rows).
         """
         sub = row.param_subframe
         wrap = tk.Frame(sub)
@@ -1469,48 +1473,13 @@ class IndicatorDialog(BaseModalDialog):
                       sticky="w", padx=(0, 12), pady=(0, 2))
         else:
             wrap.pack(side="left", padx=(0, 8))
-        # Use the description as the visible label when present,
-        # falling back to the param name. The name itself is what the
-        # factory expects as a kwarg.
-        label_text = (pdef.description or pdef.name) + ":"
-        ttk.Label(wrap, text=label_text).pack(side="left")
-        # Determine the seed value for this param: caller-provided
-        # value if compatible, else the schema default. The seed must
-        # be representable as a string for spinbox/entry widgets.
+        ttk.Label(wrap, text=label_text_for(pdef)).pack(side="left")
         seed = seed_values.get(pdef.name, pdef.default)
-        if pdef.kind == "bool":
-            var = tk.BooleanVar(value=bool(seed))
-            cb = ttk.Checkbutton(
-                wrap, variable=var,
-                command=lambda r=row: self._commit_now(r),
-            )
-            cb.pack(side="left", padx=(2, 0))
-            row.param_vars[pdef.name] = var
-            row.param_widgets[pdef.name] = cb
-        elif pdef.kind == "choice":
-            var = tk.StringVar(value=str(seed))
-            cb = ttk.Combobox(
-                wrap, textvariable=var,
-                state="readonly",
-                values=tuple(str(c) for c in pdef.choices),
-                width=_combo_width_for_choices(pdef.choices),
-            )
-            cb.pack(side="left", padx=(2, 0))
-            cb.bind("<<ComboboxSelected>>",
-                    lambda _e, r=row: self._commit_now(r))
-            row.param_vars[pdef.name] = var
-            row.param_widgets[pdef.name] = cb
-        elif pdef.kind == "str" and pdef.name == "anchor_ts":
-            # Special-case: Anchored VWAP's anchor_ts param is not a
-            # free-text Entry — it's a read-only label showing the
-            # currently-bound bar timestamp plus a "Pick Anchor…"
-            # button that arms a one-shot chart-click capture
-            # (see ``ChartApp._begin_anchor_pick``). The StringVar is
-            # still registered in ``row.param_vars`` so
-            # ``_collect_param_values`` returns the current anchor
-            # verbatim — the value is mutated only by the manager
-            # update path triggered from a chart click, never typed
-            # directly.
+
+        # Anchor_ts kept inline (not delegated): the inner Button
+        # must be stored in ``param_widgets[name]`` directly so the
+        # unknown-row read-only path can ``configure(state=…)`` it.
+        if pdef.kind == "str" and pdef.name == "anchor_ts":
             var = tk.StringVar(value=str(seed))
             display = tk.StringVar(value=_format_anchor_label(str(seed)))
             lbl = ttk.Label(wrap, textvariable=display, width=18)
@@ -1519,76 +1488,38 @@ class IndicatorDialog(BaseModalDialog):
                 wrap, text="Pick Anchor…",
                 command=lambda r=row: self._on_pick_anchor(r),
             )
-            btn.pack(side="left", padx=(0, 0))
+            btn.pack(side="left")
             var.trace_add(
                 "write",
-                lambda *_a, v=var, d=display: d.set(
-                    _format_anchor_label(v.get())
-                ),
+                lambda *_a, v=var, d=display: d.set(_format_anchor_label(v.get())),
             )
             row.param_vars[pdef.name] = var
             row.param_widgets[pdef.name] = btn
-        elif pdef.kind == "str" and getattr(pdef, "choices", ()):
-            # Editable combobox: the ``"str"`` kind with a non-empty
-            # ``choices`` tuple renders as a free-text Combobox seeded
-            # with the choices as convenience picks. Used by RRVOL's
-            # ``compare_symbol`` param so the user can either pick from
-            # SPY/QQQ/IWM/DIA/XL* sector ETFs or type any ticker the
-            # data source can resolve. Validation runs on Save and
-            # Close (see :meth:`_on_save_close`); live edits during
-            # typing follow the standard debounced-commit + silent-
-            # revert flow so a half-typed "AAP" doesn't fire a
-            # validation popup until the user actually clicks Save and
-            # Close. Audit ``rrvol-compare-symbol``.
-            var = tk.StringVar(value=str(seed))
-            cb = ttk.Combobox(
-                wrap, textvariable=var,
-                state="normal",
-                values=tuple(str(c) for c in pdef.choices),
-                width=max(_combo_width_for_choices(pdef.choices), 8),
-            )
-            cb.pack(side="left", padx=(2, 0))
-            cb.bind("<<ComboboxSelected>>",
-                    lambda _e, r=row: self._commit_now(r))
-            var.trace_add("write",
-                          lambda *_a, r=row: self._commit_debounced(r))
-            row.param_vars[pdef.name] = var
-            row.param_widgets[pdef.name] = cb
-        elif pdef.kind in ("int", "float"):
-            var = tk.StringVar(value=str(seed))
-            kwargs: dict[str, Any] = {
-                "textvariable": var, "width": _spinbox_width_for(pdef),
-            }
-            if pdef.min is not None:
-                kwargs["from_"] = pdef.min
-            else:
-                kwargs["from_"] = -1e12
-            if pdef.max is not None:
-                kwargs["to"] = pdef.max
-            else:
-                kwargs["to"] = 1e12
-            if pdef.step is not None:
-                kwargs["increment"] = pdef.step
-            else:
-                kwargs["increment"] = 1 if pdef.kind == "int" else 0.1
-            sb = ttk.Spinbox(wrap, **kwargs)
-            sb.pack(side="left", padx=(2, 0))
-            # Spinbox arrow / typed change. ``command=`` only fires
-            # on the arrow buttons — typing fires the variable trace
-            # instead (debounced).
-            sb.configure(command=lambda r=row: self._commit_now(r))
-            var.trace_add("write",
-                          lambda *_a, r=row: self._commit_debounced(r))
-            row.param_vars[pdef.name] = var
-            row.param_widgets[pdef.name] = sb
-        else:  # "str"
-            var = tk.StringVar(value=str(seed))
-            ent = ttk.Entry(wrap, textvariable=var, width=14)
-            ent.pack(side="left", padx=(2, 0))
-            var.trace_add("write",
-                          lambda *_a, r=row: self._commit_debounced(r))
-            row.param_vars[pdef.name] = var
-            row.param_widgets[pdef.name] = ent
+            return
+
+        # Pre-compute per-kind width to preserve the schema-driven
+        # cell sizing the dialog has historically used.
+        kind = getattr(pdef, "kind", "str")
+        if kind == "choice":
+            width: int | None = _combo_width_for_choices(pdef.choices)
+        elif kind == "str" and getattr(pdef, "choices", ()):
+            width = max(_combo_width_for_choices(pdef.choices), 8)
+        elif kind in ("int", "float"):
+            width = _spinbox_width_for(pdef)
+        else:
+            width = None
+
+        var, widget = build_param_widget(
+            wrap, pdef, seed,
+            on_change=lambda r=row: self._commit_debounced(r),
+            on_commit_eager=lambda r=row: self._commit_now(r),
+            commit_policy="debounced",
+            debounce_ms=_TYPING_DEBOUNCE_MS,
+            width=width,
+        )
+        widget.pack(side="left", padx=(2, 0))
+        row.param_vars[pdef.name] = var
+        row.param_widgets[pdef.name] = widget
 
     # ------------------------------------------------------------------
     # Manager event reconciliation

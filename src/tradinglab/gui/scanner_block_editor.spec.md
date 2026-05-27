@@ -101,6 +101,16 @@ Produces a `FieldRef`. Layout:
   on `<Destroy>`. Param labels source from `ParamDef.description`
   (e.g. `"Include current in denom"`) with `pdef.name` as fallback
   when description is empty.
+- **`_build_param_widget` delegates per-kind dispatch to
+  `gui._param_widgets.build_param_widget`** (audit #3). The shared
+  helper is the single source of truth across `indicator_dialog`
+  and `scanner_block_editor` for the bool / choice / int / float /
+  str widget construction. The picker's wrapper still owns the
+  enclosing `ttk.Frame` + label and stores the returned `var` into
+  `self._param_widgets[pdef.name]`. Commit policy is `"eager"`
+  (every variable write fires `_commit_indicator`); the FocusOut /
+  Return bindings on Spinbox / Entry are kept locally because the
+  picker historically commits on tab-out too.
 - **`layout_hint: Literal["inline", "stacked"]`** (default `"inline"`):
   optional `__init__` param + `set_layout_hint(hint)` method.
   Owned by the parent `_ConditionFrame` which propagates the
@@ -221,6 +231,15 @@ inline↔stacked flip that originates from a left- or param-field
 change (because the field-wrap orientation inside
 `_params_fields_frame` differs between layouts: horizontal in
 inline, vertical in stacked).
+
+The scalar branch of `_build_params_row()` synthesizes a
+`ParamDef(name=name, kind=kind, default=seed)` from the bare
+`(name, kind)` tuple in `OPERATOR_PARAM_SCHEMA` and routes through
+`gui._param_widgets.build_param_widget(commit_policy="manual")`
+(audit #3). The ConditionFrame consumes `var.get()` on its own
+schedule via `_commit_params`, so it wires FocusOut / Return /
+spinbox-arrow `command=` bindings directly on the returned widget
+to trigger that commit explicitly.
 
 Change handlers and their fire/re-layout responsibilities:
 

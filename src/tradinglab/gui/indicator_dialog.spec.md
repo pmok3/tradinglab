@@ -121,6 +121,20 @@ checkbox groups, called from `_on_menu_sandbox_start` / `_on_menu_sandbox_end`.
   col)`; legacy callers fall back to `side="left"` packing.
   `ParamDef.description` is used verbatim as label — must stay a noun
   phrase ≤ ~14 chars.
+- **Per-kind dispatcher delegates to `gui._param_widgets.build_param_widget`.**
+  Audit #3 consolidated the bool / choice / int / float / str widget
+  construction into a shared helper (also used by
+  `scanner_block_editor`). `_build_one_param_widget` retains
+  responsibility for the `param_subframe` grid/pack layout, label
+  rendering, and the `param_vars` / `param_widgets` bookkeeping; it
+  also keeps the `anchor_ts` special-case inline so the inner Button
+  remains individually addressable for the unknown-row read-only
+  path. Commit policy is `"debounced"` with
+  `on_commit_eager=_commit_now` to preserve the
+  click-checkbox/pick-combobox/arrow-spinbox commits-instantly UX
+  while keeping typing debounced 250 ms. Width is computed up-front
+  via the existing `_combo_width_for_choices` / `_spinbox_width_for`
+  helpers and passed through.
 - **No upper column-count clamp.** `_compute_max_cols_for_schema` floors
   to an integer column count with no cap — the fit-based math itself
   prevents overflow, and a hard cap (the legacy `min(4, cols)`) just
