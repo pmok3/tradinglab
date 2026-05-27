@@ -115,12 +115,12 @@ _RTH_SPAN_MIN = _RTH_CLOSE_MIN - _RTH_OPEN_MIN  # 390
 
 
 def _et_zoneinfo():
-    """Return ``ZoneInfo("America/New_York")`` or ``None`` on missing tzdata."""
-    try:
-        from zoneinfo import ZoneInfo
-        return ZoneInfo("America/New_York")
-    except Exception:  # noqa: BLE001 — tzdata missing on Windows is non-fatal
-        return None
+    """Return ``ZoneInfo("America/New_York")`` or ``None`` on missing tzdata.
+
+    Thin back-compat wrapper around :func:`tradinglab.core.timezones.get_et`.
+    """
+    from ..core.timezones import get_et
+    return get_et()
 
 
 def _candle_date_key(c: Candle) -> date | None:

@@ -46,16 +46,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-try:
-    from zoneinfo import ZoneInfo
-except ImportError:  # pragma: no cover - py<3.9
-    ZoneInfo = None  # type: ignore[assignment,misc]
-
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 from matplotlib.ticker import FuncFormatter, MaxNLocator
 
 from ..backtest.performance import TradeRow
+from ..core.timezones import ET as _ET
 from ..entries.model import EntryStrategy
 from ..exits.model import ExitStrategy
 from ..models import Candle
@@ -122,8 +118,8 @@ EXIT_GUIDE_COLOR = "#888888"    # vertical guide line at exit index
 ENTRY_MARKER_SIZE = 180
 EXIT_MARKER_SIZE = 170
 
-# Eastern Time zone (used for human-readable timestamp labels).
-_ET = ZoneInfo("America/New_York") if ZoneInfo is not None else None
+# Eastern Time zone — re-exported from ``core.timezones`` (None when tzdata
+# is missing). Imported at the top of the module.
 
 
 # Light theme that mirrors the live chart's default palette closely

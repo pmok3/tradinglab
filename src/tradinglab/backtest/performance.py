@@ -30,6 +30,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..core.timezones import ET as _ET
 from .journal import PostTradeReview, PreTradeEntry
 from .session import SessionResult
 
@@ -342,11 +343,7 @@ def _iso_utc(ts: int) -> str:
 
 # Eastern Time zone (one cache; ``_ET`` is None on platforms without
 # zoneinfo, in which case the formatter falls back to UTC labelling).
-try:
-    from zoneinfo import ZoneInfo as _ZoneInfo
-    _ET: _dt.tzinfo | None = _ZoneInfo("America/New_York")
-except Exception:  # noqa: BLE001 — best-effort
-    _ET = None
+# Imported from ``core.timezones`` at module top.
 
 
 def _ordinal(n: int) -> str:

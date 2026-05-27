@@ -165,16 +165,12 @@ __all__ = [
 def _et_zoneinfo():
     """Return ``ZoneInfo('America/New_York')`` or ``None`` on missing tzdata.
 
-    Cached at module load via :func:`functools.lru_cache`-equivalent — the
-    ``ZoneInfo`` constructor itself caches identical zone names, so
-    repeated calls are O(1).
+    Thin back-compat wrapper around :func:`tradinglab.core.timezones.get_et`.
+    New call sites should import ``get_et`` (or the eager ``ET`` constant)
+    directly.
     """
-    if ZoneInfo is None:
-        return None
-    try:
-        return ZoneInfo("America/New_York")
-    except Exception:  # noqa: BLE001 — missing tzdata, fall through
-        return None
+    from ..core.timezones import get_et
+    return get_et()
 
 
 _ET = _et_zoneinfo()

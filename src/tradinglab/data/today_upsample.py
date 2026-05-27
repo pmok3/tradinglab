@@ -46,12 +46,13 @@ SUPPORTED_INTERVALS: frozenset[str] = frozenset({"1d"})
 
 
 def _et_zoneinfo():
-    """Return ``ZoneInfo('America/New_York')`` or None on missing tzdata."""
-    try:
-        from zoneinfo import ZoneInfo
-        return ZoneInfo("America/New_York")
-    except Exception:  # noqa: BLE001
-        return None
+    """Return ``ZoneInfo('America/New_York')`` or None on missing tzdata.
+
+    Thin back-compat wrapper around :func:`tradinglab.core.timezones.get_et`.
+    New call sites should import ``get_et`` directly.
+    """
+    from ..core.timezones import get_et
+    return get_et()
 
 
 def _et_date_of(dt: datetime) -> date:
