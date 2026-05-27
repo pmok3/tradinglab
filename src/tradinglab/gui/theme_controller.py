@@ -18,6 +18,7 @@ from ..constants import (
     ttk_combobox_listbox_options,
 )
 from ..rendering import style_axes
+from ._widget_metrics import invalidate_metrics_cache
 from .menu_theme import apply_menu_theme
 
 
@@ -73,6 +74,12 @@ class ThemeController:
         theme = resolve_theme(mode, self._theme_overrides)
         self._theme.clear()
         self._theme.update(theme)
+        # Drop the cached font-measured widget metrics so the next
+        # _ConditionFrame / IndicatorDialog layout pass re-measures
+        # against the freshly-applied font. Cheap (one dict.clear);
+        # called BEFORE any redraw so consumers re-measure with the
+        # new font on their next read.
+        invalidate_metrics_cache()
         self._apply_window_theme(self._theme)
         self._apply_axes_theme(self._theme)
         self._apply_ttk_style(self._theme)
