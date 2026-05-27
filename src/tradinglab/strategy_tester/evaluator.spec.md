@@ -7,7 +7,8 @@ Headless trigger-evaluation kernel for the Strategy Tester. The live `EntryEvalu
 - `evaluate_symbol(*, symbol, candles, interval, entry_strategy, exit_strategy, starting_cash, cost_model, deck_seed=0, cancel_token=None, warmup_until_ts=None) -> SessionResult` — primary entry point. Side-effect-free apart from creating an engine in-process. Returns a standard `SessionResult` that the existing `performance.py` builders + Sandbox post-mortem renderer consume verbatim. When `cancel_token` is supplied the per-bar loop polls `cancel_token.is_cancelled()` every `_CANCEL_POLL_INTERVAL=256` bars (power-of-2 → bitmask AND on the hot path) and exits early on trip — the returned `SessionResult` is well-formed but truncated. A token whose `is_cancelled()` raises is swallowed (duck-typed contract; never gate evaluation on a probe failure). When `warmup_until_ts` is supplied (UTC epoch seconds) the per-bar loop **still ticks the engine** for bars with `ts < warmup_until_ts` (so indicators hydrate + scanner state stays consistent) but **no entry or exit triggers are checked** for those bars; the returned `SessionResult.equity_curve` is trimmed to entries with `ts >= warmup_until_ts`. `None` (the default) keeps the legacy behaviour (no warmup gate).
 - `EvalContext` — dataclass; mutable per-symbol state. Internal but exposed for test fixtures.
 - `class UnsupportedTriggerKind(NotImplementedError)` — typed signal for trigger kinds the headless path doesn't yet handle. Runner catches and marks the symbol as `error` without aborting the rest of the Run.
-- `_ENTRY_HANDLERS` / `_EXIT_HANDLERS` — registry dicts mapping `TriggerKind → handler`. Future kinds light up the GUI's "Supported" list by adding a handler.
+- `_ENTRY_HANDLERS` — **back-compat alias** for `entries.dispatch._ENTRY_DISPATCH` (literally the same dict object). Audit item #4: the live `EntryEvaluator` and this mechanical evaluator now share a single registry, so adding a new entry-`TriggerKind` lights up both call sites at once and drift is structurally impossible. See `entries/dispatch.spec.md`. Existing tests that pop from `_ENTRY_HANDLERS` to simulate "unsupported kind" still work because the alias is the same object.
+- `_EXIT_HANDLERS` — registry dict mapping exit `TriggerKind → handler`. Exits are not (yet) unified with the live `ExitEvaluator`; same shape as the old `_ENTRY_HANDLERS`.
 
 ## Decision contract
 For each bar `i`:
@@ -29,13 +30,17 @@ For each bar `i`:
 
 ## Trigger scope (all wired)
 Wired:
-- **Entry**: MARKET, LIMIT, STOP, STOP_LIMIT, INDICATOR, **SCANNER_ALERT**
+- **Entry**: MARKET, LIMIT, STOP, STOP_LIMIT, INDICATOR, **SCANNER_ALERT** — dispatched via the shared `entries.dispatch._ENTRY_DISPATCH` registry (aliased as `_ENTRY_HANDLERS`). The mechanical `_check_entry` builds an `entries.dispatch.TriggerContext` (filling in `scanner_eval_ctx` once per symbol, `normalized_conditions` once per evaluator, `scanner_alert_prev_match` per-bar) and calls `entries.dispatch.check_trigger_fires`. Same code path as the live `EntryEvaluator`. See `entries/dispatch.spec.md`.
 - **Exit**: MARKET, LIMIT, STOP, STOP_LIMIT, INDICATOR, **TRAILING_STOP**, **TIME_OF_DAY**, **CHANDELIER**
 - `eod_kill_switch` (synthetic flatten on last bar)
 
 Every `TriggerKind` enum value has a handler. `UnsupportedTriggerKind` is now
 the defensive "missing-handler" fallback only — it should never fire in
-practice unless a new kind is added to the schema before its handler.
+practice unless a new kind is added to the schema before its handler. The
+mechanical `_check_entry` raises `UnsupportedTriggerKind` BEFORE invoking
+dispatch when `trigger.kind not in _ENTRY_DISPATCH` so the typed
+contract is preserved even though shared dispatch silently no-fires on
+unknown kinds.
 
 ### TRAILING_STOP / TIME_OF_DAY / CHANDELIER exits
 All three delegate to the **pure-function evaluators in `exits/spec.py`** —

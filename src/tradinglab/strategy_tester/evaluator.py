@@ -72,6 +72,18 @@ from ..backtest.bars import from_candles
 from ..backtest.engine import SandboxEngine
 from ..backtest.orders import Order, Side
 from ..backtest.session import ENGINE_VERSION, SessionResult, SessionSpec
+from ..entries.dispatch import (
+    _ENTRY_DISPATCH,
+)
+from ..entries.dispatch import (
+    BarView as _BarView,
+)
+from ..entries.dispatch import (
+    TriggerContext as _TriggerContext,
+)
+from ..entries.dispatch import (
+    check_trigger_fires as _check_trigger_fires,
+)
 from ..entries.model import Direction as EntryDirection
 from ..entries.model import (
     EntryStrategy,
@@ -633,184 +645,42 @@ def _compute_quantity(
 # Trigger handlers
 # ---------------------------------------------------------------------------
 #
-# Each handler returns True/False to indicate "fired against this bar"
-# (i.e. should an order be queued for the next bar's open). Handlers
-# are stateless — they consume the trigger spec + current bar state
-# and return a verdict. The runner owns state advancement.
-
+# Entry-trigger fire decisions are delegated to the shared
+# :mod:`tradinglab.entries.dispatch` registry (audit item #4) so adding
+# a new :class:`TriggerKind` lights up both the live and the mechanical
+# evaluators at once. The mechanical-only orchestration (sizing,
+# arm-window gates, per-ET-day session reset, cooldown, EOD kill,
+# etc.) stays here — only the "does this bar fire?" decision is
+# centralized.
+#
+# Exit handlers below are NOT yet shared with the live ``ExitEvaluator``;
+# they remain mechanical-only adapters that delegate to
+# :mod:`tradinglab.exits.spec` pure functions. Unifying the exit-side
+# registry is a follow-on audit item.
 
 _BarTuple = tuple[float, float, float, float]   # open, high, low, close
 
 
-def _entry_market(trigger: EntryTrigger, bar: _BarTuple, **_kw: object) -> bool:
-    """MARKET entry fires on every bar (caller throttles via cooldown / max_fires)."""
-    return True
+def _entry_unsupported(trigger: EntryTrigger, *, side: str = "entry") -> bool:
+    """Defensive raise for unsupported entry trigger kinds.
 
-
-def _entry_limit(
-    trigger: EntryTrigger, bar: _BarTuple, *, side: Side, **_kw: object
-) -> bool:
-    """LIMIT entry: LONG fires if bar.low <= price; SHORT fires if bar.high >= price."""
-    price = trigger.price
-    if price is None:
-        return False
-    _o, hi, lo, _c = bar
-    if side is Side.BUY:
-        return lo <= float(price)
-    return hi >= float(price)
-
-
-def _entry_stop(
-    trigger: EntryTrigger, bar: _BarTuple, *, side: Side, **_kw: object
-) -> bool:
-    """STOP entry: LONG fires if bar.high >= stop; SHORT fires if bar.low <= stop."""
-    stop = trigger.stop_price
-    if stop is None:
-        return False
-    _o, hi, lo, _c = bar
-    if side is Side.BUY:
-        return hi >= float(stop)
-    return lo <= float(stop)
-
-
-def _entry_stop_limit(
-    trigger: EntryTrigger, bar: _BarTuple, *, side: Side, **_kw: object
-) -> bool:
-    """STOP_LIMIT entry: stop touched AND price acceptable as limit ceiling/floor."""
-    if not _entry_stop(trigger, bar, side=side):
-        return False
-    limit = trigger.price
-    if limit is None:
-        return True
-    _o, hi, lo, _c = bar
-    if side is Side.BUY:
-        return lo <= float(limit)
-    return hi >= float(limit)
-
-
-def _entry_unsupported(trigger: EntryTrigger, bar: _BarTuple, **_kw: object) -> bool:
-    raise UnsupportedTriggerKind(trigger.kind, side="entry")
-
-
-def _entry_indicator(
-    trigger: EntryTrigger,
-    bar: _BarTuple,
-    *,
-    eval_ctx: _ScannerEvalContext | None = None,
-    normalized_conditions: dict[str, _ScannerGroup] | None = None,
-    **_kw: object,
-) -> bool:
-    """INDICATOR entry: evaluate ``trigger.condition`` at the current bar.
-
-    Uses the same :func:`scanner.engine.evaluate_group` kernel the live
-    :class:`EntryEvaluator` uses, so semantics — tri-valued AND/OR,
-    within-last-N-bars look-back, transition operators — match exactly.
-    The decision is made against ``bar i``'s close (mirrors the
-    decide-at-close / fill-next-open contract for the rest of the
-    handlers). If the condition is missing or evaluation raises, the
-    trigger silently does NOT fire (defensive — a broken indicator
-    shouldn't abort the entire Run; the scanner kernel already logs
-    indicator errors via ``IndicatorMemo.errors``).
-
-    ``normalized_conditions`` maps ``trigger.id`` → condition tree
-    with all per-Condition / per-FieldRef intervals forced to the
-    test's outer interval. Built once per symbol by
-    :func:`_build_normalized_conditions`. Without it, conditions
-    authored at a different default interval (e.g. ``"5m"``) silently
-    no-fire against the test's interval (e.g. ``"1d"``) due to the
-    scanner's cross-interval gate.
+    Kept as a free function so ``_check_entry`` can dispatch through
+    a typed exception when ``trigger.kind`` is missing from the
+    shared :data:`_ENTRY_HANDLERS` registry. Mirrors the previous
+    sentinel handler's behaviour for back-compat with tests that
+    pop entries from the registry to simulate "kind added before
+    handler ships".
     """
-    if eval_ctx is None or trigger.condition is None:
-        return False
-    condition: _ScannerGroup = trigger.condition  # type: ignore[assignment]
-    if normalized_conditions is not None:
-        condition = normalized_conditions.get(trigger.id, condition)
-    try:
-        result = _scanner_evaluate_group(condition, eval_ctx)
-    except NotImplementedError:
-        # Cross-interval / unimplemented indicator path — treat as "no fire".
-        return False
-    except Exception:  # noqa: BLE001
-        LOG.exception(
-            "strategy_tester._entry_indicator: evaluate_group raised "
-            "(symbol=%s, idx=%d)", eval_ctx.symbol, eval_ctx.current_index,
-        )
-        return False
-    return result is True
+    raise UnsupportedTriggerKind(trigger.kind, side=side)
 
 
-def _entry_scanner_alert(
-    trigger: EntryTrigger,
-    bar: _BarTuple,
-    *,
-    eval_ctx: _ScannerEvalContext | None = None,
-    normalized_conditions: dict[str, _ScannerGroup] | None = None,
-    eval_state: EvalContext | None = None,
-    **_kw: object,
-) -> bool:
-    """SCANNER_ALERT entry: evaluate the referenced Scan per bar with
-    edge-trigger semantics (False/None → True transition fires).
-
-    ``trigger.scanner_id`` is resolved via :func:`scanner.storage.load`
-    once per symbol and stashed in ``normalized_conditions`` keyed by
-    trigger.id. Per-Condition / per-FieldRef intervals on the Scan are
-    forced to the test's outer interval (same single-interval-mode
-    convention as INDICATOR triggers).
-
-    Bar 0 records the current match into
-    :attr:`EvalContext.scanner_alert_prev_match` without firing — this
-    avoids the "every symbol already matching fires on day 1" backtest
-    gotcha while still letting fresh transitions during the test
-    period fire normally.
-
-    Silently no-fire on:
-
-    * missing scanner_id field
-    * scan file not found / corrupt
-    * scanner_engine raising NotImplementedError (e.g. cross-interval)
-    * any other scanner-engine exception (logged)
-    """
-    if eval_ctx is None or eval_state is None:
-        return False
-    if not trigger.scanner_id:
-        return False
-    if normalized_conditions is None:
-        return False
-    condition = normalized_conditions.get(trigger.id)
-    if condition is None:
-        # The scan failed to load at evaluate_symbol startup
-        # (FileNotFoundError, etc.) — silently no-fire.
-        return False
-    try:
-        result = _scanner_evaluate_group(condition, eval_ctx)
-    except NotImplementedError:
-        return False
-    except Exception:  # noqa: BLE001
-        LOG.exception(
-            "strategy_tester._entry_scanner_alert: evaluate_group raised "
-            "(symbol=%s, idx=%d, scanner_id=%s)",
-            eval_ctx.symbol, eval_ctx.current_index, trigger.scanner_id,
-        )
-        return False
-    matched_now = result is True
-
-    prev = eval_state.scanner_alert_prev_match.get(trigger.id)
-    eval_state.scanner_alert_prev_match[trigger.id] = matched_now
-    if prev is None:
-        # Bar 0: just observe, never fire (avoids the "already-matching
-        # on day 1 fires unintentionally" trap).
-        return False
-    return matched_now and not prev
-
-
-_ENTRY_HANDLERS: dict[EntryTriggerKind, Callable[..., bool]] = {
-    EntryTriggerKind.MARKET: _entry_market,
-    EntryTriggerKind.LIMIT: _entry_limit,
-    EntryTriggerKind.STOP: _entry_stop,
-    EntryTriggerKind.STOP_LIMIT: _entry_stop_limit,
-    EntryTriggerKind.INDICATOR: _entry_indicator,
-    EntryTriggerKind.SCANNER_ALERT: _entry_scanner_alert,
-}
+# Back-compat alias: the canonical registry now lives in
+# :mod:`tradinglab.entries.dispatch`. Existing tests / docs that
+# reference ``_ENTRY_HANDLERS`` continue to work because we expose
+# the SAME dict object — mutations affect both the live evaluator
+# and the mechanical evaluator simultaneously (which is precisely
+# the structural drift guarantee we want).
+_ENTRY_HANDLERS: dict[EntryTriggerKind, Callable[..., Any]] = _ENTRY_DISPATCH
 
 
 def _resolve_exit_price(
@@ -1295,12 +1165,23 @@ def _check_entry(
         else Side.SELL
     )
 
-    handler = _ENTRY_HANDLERS.get(trigger.kind, _entry_unsupported)
-    fired = handler(
-        trigger, bar, side=side, eval_ctx=eval_ctx,
-        normalized_conditions=normalized_conditions,
-        eval_state=ctx,
+    if trigger.kind not in _ENTRY_DISPATCH:
+        _entry_unsupported(trigger, side="entry")
+
+    direction = (
+        EntryDirection.LONG
+        if ctx.entry_strategy.direction is EntryDirection.LONG
+        else EntryDirection.SHORT
     )
+    trigger_ctx = _TriggerContext(
+        direction=direction,
+        bar=_BarView.from_any(bar),
+        is_close=True,
+        scanner_eval_ctx=eval_ctx,
+        normalized_conditions=normalized_conditions,
+        scanner_alert_prev_match=ctx.scanner_alert_prev_match,
+    )
+    fired, _evidence = _check_trigger_fires(trigger, trigger_ctx)
     if not fired:
         return False, side, 0.0
 

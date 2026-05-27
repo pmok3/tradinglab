@@ -87,9 +87,20 @@ from ..core.thread_guard import require_tk_thread
 from ..exits.model import OrderSide
 from ..positions.model import Position, PositionEvent, PositionEventKind
 from ..positions.tracker import PositionTracker
-from ..scanner.engine import evaluate_group, make_context
+from ..scanner.engine import make_context
 from ..scanner.model import MatchEvidence
 from .audit import AuditLog
+from .dispatch import (
+    BarView,
+    TriggerContext,
+    check_trigger_fires,
+)
+from .dispatch import (
+    reference_price as _dispatch_reference_price,
+)
+from .dispatch import (
+    signal_price_for_kind as _dispatch_signal_price_for_kind,
+)
 from .model import (
     Direction,
     EntryStrategy,
@@ -105,12 +116,6 @@ from .signals import (
     EntrySignalSink,
 )
 from .sizing import InvalidSizing, compute_qty
-from .spec import (
-    should_fire_limit,
-    should_fire_market,
-    should_fire_stop,
-    should_fire_stop_limit,
-)
 
 LOG = logging.getLogger(__name__)
 
@@ -844,6 +849,13 @@ class EntryEvaluator:
     ) -> tuple[bool, list[MatchEvidence]]:
         """Evaluate the trigger; return ``(fired, evidence_list)``.
 
+        Delegates to :func:`entries.dispatch.check_trigger_fires` —
+        the shared registry that the mechanical strategy_tester also
+        consults. The live evaluator's job here is to build the
+        kind-specific :class:`TriggerContext` (scanner eval-ctx from
+        the BarsRegistry for INDICATOR; scanner_row for SCANNER_ALERT)
+        then hand off the actual "does this bar fire?" decision.
+
         ``evidence_list`` is empty for non-INDICATOR triggers and for
         INDICATOR triggers without a within-last-N-bars look-back walk.
         Populated only when the engine's walk fires; downstream
@@ -855,41 +867,55 @@ class EntryEvaluator:
         direction = strategy.direction
         trig = strategy.trigger
 
-        if kind == TriggerKind.MARKET:
-            return should_fire_market(trig, bar, is_close=is_close), []
-        if kind == TriggerKind.LIMIT:
-            return should_fire_limit(trig, bar, direction=direction), []
-        if kind == TriggerKind.STOP:
-            return should_fire_stop(trig, bar, direction=direction), []
-        if kind == TriggerKind.STOP_LIMIT:
-            return should_fire_stop_limit(trig, bar, direction=direction), []
-        if kind == TriggerKind.SCANNER_ALERT:
-            # Reached only via _on_scan_results, where the row presence
-            # implies the trigger fired. The is_close check is enforced
-            # by the scanner only emitting on closed bars. The scanner
-            # itself owns the look-back evidence; surface it through
-            # the row payload (Phase 6) rather than duplicating walk
-            # work here.
-            row_evidence = list(getattr(scanner_row, "evidence", []) or [])
-            return scanner_row is not None, row_evidence
-        if kind == TriggerKind.INDICATOR:
-            return self._evaluate_indicator(strategy, symbol, bar, is_close)
-        return False, []
+        ctx = TriggerContext(
+            direction=direction,
+            bar=BarView.from_any(bar),
+            is_close=is_close,
+            scanner_row=scanner_row,
+        )
 
-    def _evaluate_indicator(
+        if kind == TriggerKind.INDICATOR:
+            scanner_eval_ctx = self._build_indicator_context(
+                strategy=strategy, symbol=symbol, is_close=is_close,
+            )
+            if scanner_eval_ctx is None:
+                return False, []
+            ctx.scanner_eval_ctx = scanner_eval_ctx
+
+        try:
+            return check_trigger_fires(trig, ctx)
+        except Exception:
+            self._stats.errors += 1
+            LOG.exception(
+                "EntryEvaluator: dispatch raised for %s/%s",
+                strategy.id, symbol,
+            )
+            return False, []
+
+    def _build_indicator_context(
         self,
+        *,
         strategy: EntryStrategy,
         symbol: str,
-        bar: Any,
         is_close: bool,
-    ) -> tuple[bool, list[MatchEvidence]]:
+    ) -> Any | None:
+        """Build the per-bar scanner :class:`EvaluationContext` for INDICATOR.
+
+        Returns ``None`` (silent no-fire upstream) when any of the
+        required prerequisites are missing: forming bar, no
+        :class:`BarsRegistry`, no condition tree, no view for
+        ``(symbol, interval)``, or no candles in the view's memo.
+        Counts a successful build as one ``indicator_evaluations``
+        stat tick — the dispatch handler still owns the
+        :func:`scanner.engine.evaluate_group` call itself.
+        """
         if not is_close:
-            return False, []
+            return None
         if self._bars_registry is None:
-            return False, []
+            return None
         condition = strategy.trigger.condition
         if condition is None:
-            return False, []
+            return None
         interval = strategy.trigger.interval or self._default_interval
         try:
             view = self._bars_registry.get_view(symbol, interval)
@@ -899,12 +925,12 @@ class EntryEvaluator:
                 "EntryEvaluator: bars_registry.get_view raised for %s/%s",
                 symbol, interval,
             )
-            return False, []
+            return None
         if view is None:
-            return False, []
+            return None
         candles = view.memo.candles if hasattr(view, "memo") else None
         if not candles:
-            return False, []
+            return None
         try:
             ctx = make_context(
                 symbol=symbol,
@@ -914,19 +940,15 @@ class EntryEvaluator:
                 bars=getattr(view, "bars", None),
                 bars_registry=self._bars_registry,
             )
-            self._stats.indicator_evaluations += 1
-            result = evaluate_group(condition, ctx)
-            evidence = list(ctx.evidence)
-        except NotImplementedError:
-            return False, []
         except Exception:
             self._stats.errors += 1
             LOG.exception(
-                "EntryEvaluator: indicator evaluation raised for %s",
+                "EntryEvaluator: make_context raised for %s",
                 strategy.id,
             )
-            return False, []
-        return (result is True), evidence
+            return None
+        self._stats.indicator_evaluations += 1
+        return ctx
 
     # ------------------------------------------------------------------
     # Universe / arm window helpers
@@ -993,42 +1015,24 @@ class EntryEvaluator:
 
     @staticmethod
     def _reference_price(trigger: EntryTrigger, bar: Any) -> float | None:
-        """Pick the price used for sizing + risk gate."""
-        # MARKET / INDICATOR / SCANNER_ALERT: bar.close.
-        # LIMIT / STOP_LIMIT: trigger.price (limit price).
-        # STOP: trigger.stop_price.
-        kind = trigger.kind
-        try:
-            if kind == TriggerKind.LIMIT:
-                return float(trigger.price) if trigger.price else None
-            if kind == TriggerKind.STOP_LIMIT:
-                return float(trigger.price) if trigger.price else None
-            if kind == TriggerKind.STOP:
-                return (
-                    float(trigger.stop_price) if trigger.stop_price else None
-                )
-            return float(getattr(bar, "close", 0.0))
-        except (TypeError, ValueError):
-            return None
+        """Pick the price used for sizing + risk gate.
+
+        Thin wrapper around :func:`entries.dispatch.reference_price`
+        so live + mechanical + post-fill-review screens share one
+        price-resolution helper.
+        """
+        return _dispatch_reference_price(trigger, bar)
 
     @staticmethod
     def _signal_price_for_kind(
         kind: TriggerKind, trigger: EntryTrigger, bar: Any,
     ) -> tuple[EntryOrderKind, float | None, float | None]:
-        """Return (order_kind, signal.price, signal.limit_price)."""
-        if kind == TriggerKind.LIMIT:
-            return (EntryOrderKind.LIMIT, trigger.price, None)
-        if kind == TriggerKind.STOP:
-            return (EntryOrderKind.STOP, trigger.stop_price, None)
-        if kind == TriggerKind.STOP_LIMIT:
-            return (
-                EntryOrderKind.STOP_LIMIT,
-                trigger.stop_price,
-                trigger.price,
-            )
-        # MARKET, INDICATOR, SCANNER_ALERT all collapse to MARKET on the
-        # paper engine — no working price (engine fills at bar.close).
-        return (EntryOrderKind.MARKET, None, None)
+        """Return ``(order_kind, signal.price, signal.limit_price)``.
+
+        Thin wrapper around
+        :func:`entries.dispatch.signal_price_for_kind`.
+        """
+        return _dispatch_signal_price_for_kind(kind, trigger, bar)
 
     # ------------------------------------------------------------------
     # Tracker subscriber → on-fill bracket bind

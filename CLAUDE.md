@@ -331,6 +331,9 @@ which double-counted. The aggregate's per-symbol stats use
 `build_trade_rows` which correctly pairs fills, so the per-symbol
 section was right and the manifest's `trade_count` was wrong.
 
+See also §7.20 (shared entry-dispatch — the OTHER mechanical-vs-live
+drift trap retired by the same audit pass).
+
 ### 7.9 Mechanical evaluator emits NO PreTradeEntry records
 The strategy_tester evaluator path never calls
 `submit_order_with_pre_trade`, so `result.pre_trades` is always empty
@@ -342,6 +345,9 @@ The mechanical evaluator does set `ref_pre_trade_id` to `None` too,
 so the entry-timestamp fallback is the practical one. This caused the
 "180 trades collapsed onto 3 PNGs" bug (all PNGs named
 `<SYM>_unknown_post.png`).
+
+See also §7.20 (the audit pass that retired the per-handler drift
+between live and mechanical entry evaluators).
 
 ### 7.10 `_ramp()` fixture in test_runner.py uses Saturday timestamps
 `tests/unit/strategy_tester/test_runner.py:_ramp()` constructs candles
@@ -428,6 +434,10 @@ compat, TIME_OF_DAY trigger isolation).
 (separate code path) and still fires at its authored cutoff regardless
 of RTH membership. Don't accidentally extend the RTH gate to that
 handler.
+
+See also §7.20 (entry-trigger dispatch is now shared between live and
+mechanical evaluators — exit dispatch is NOT yet unified and stays
+mechanical-only here).
 
 ### 7.13 Strategy tester defaults to RTH-only filtering
 `TestConfig.include_extended_hours` defaults to `False` — meaning the
@@ -711,9 +721,16 @@ in the chart Add Indicator menu + entry/exit trigger dropdowns,
 without restart. `unregister_indicator(name)` pops both `INDICATORS`
 and `_BY_KIND_ID` on delete.
 
-**Scanner caveat.** Scanner dropdowns are gated by the hand-curated
-`scanner.fields.SCANNABLE_INDICATORS` allowlist; custom indicators
-do NOT auto-appear there. Add to the allowlist manually if needed.
+**Scanner opt-in.** The dialog exposes an **"Expose to scanner"**
+checkbox next to *Overlay on price pane*. When ticked, the codegen
+emits `scannable_outputs = (("value", "numeric"),)` on the generated
+indicator class — and because `scanner.fields._indicator_field_specs`
+walks the indicator registry (not a hand-curated allowlist) projecting
+every factory whose `scannable_outputs` ClassVar is non-empty, the
+indicator becomes pickable in scanner / entries / exits / ranking
+dropdowns immediately on registration. Header-field `scannable: True |
+False` round-trips the checkbox state. Fail-closed by default: an
+indicator without the checkbox stays chart-only.
 
 **Perf note.** Conditions-mode `compute_arr` is O(n) Python overhead
 per bar (one `evaluate_group` call per index, no vectorization). For a
@@ -772,13 +789,20 @@ a strategy_tester Run will resolve to `None` and the user will see
 failure mode while the runner-side work is in flight.
 
 **GUI surface.** `gui/scanner_block_editor.py:_FieldRefPicker` shows
-an optional `@ [Symbol ▾]` combo at the end of the
-Indicator / Builtin branches (NOT Number — literals are
-symbol-independent). Default = `(active)` sentinel (literal string)
-which maps to `ref.symbol = ""`. The combo is freely typeable and
-its dropdown shows the user's recent cross-symbol picks (LRU
-persisted to `_settings.set("recent_cross_symbols", [...])`, capped
-at 20). The pin survives Builtin↔Indicator type toggles.
+an `@ [ticker]` Entry at the end of the Indicator / Builtin branches
+(NOT Number — literals are symbol-independent). It is a **plain
+`ttk.Entry`** — NO dropdown, NO history, NO LRU, NO hardcoded
+suggestions. The user types ANY ticker on demand; that's the whole
+point of cross-symbol pinning. Placeholder behavior: when the entry
+is empty, the displayed text is `(active)` in muted grey (the
+`_ACTIVE_SYMBOL_SENTINEL` constant, aliased as
+`_SYMBOL_PLACEHOLDER`). Clicking the entry (FocusIn) clears the
+placeholder; tabbing out (FocusOut) commits the typed value AND
+restores the placeholder if empty. Typed text is uppercased on
+commit. The `_symbol_is_placeholder` flag tracks placeholder vs
+real-value state so FocusIn doesn't wipe a real typed ticker. The
+pin survives Builtin↔Indicator type toggles (`_on_type_change`
+carries `prev_symbol` forward).
 
 **Warmup walker.** `strategy_tester/warmup.py:_walk_field_kinds`
 emits `(symbol, kind_id, params)` triples (symbol-first). The new
@@ -805,9 +829,71 @@ back-compat + symbol round-trip),
 resolution, bar-time-snap rule, HA streak, combined cross-symbol +
 cross-interval),
 `tests/unit/gui/test_field_ref_picker_symbol_combo.py` (Symbol
-combo presence, commit, LRU persistence, type-toggle preservation),
+entry presence, plain-text input, placeholder behavior on FocusIn /
+FocusOut, type-toggle preservation, NO history / LRU /
+suggestions),
 `tests/unit/strategy_tester/test_warmup_cross_symbol.py` (per-symbol
 walker + by-symbol aggregator).
+
+### 7.20 Shared entry-dispatch eliminates live-vs-mechanical drift
+Audit item #4. Before this landmine was retired, the live
+`EntryEvaluator` (`src/tradinglab/entries/evaluator.py`) and the
+mechanical strategy_tester evaluator
+(`src/tradinglab/strategy_tester/evaluator.py`) each shipped their
+own per-`TriggerKind` handler functions. Adding a new kind required
+two edits in lockstep and drift between them was a recurring source
+of "the live app says yes, the tester says no" bugs (or worse, vice
+versa — silent backtest miss).
+
+**Now:** both evaluators delegate to
+`src/tradinglab/entries/dispatch.py` (`_ENTRY_DISPATCH` dict).
+`strategy_tester/evaluator.py` literally does
+`_ENTRY_HANDLERS = _ENTRY_DISPATCH` — same dict object, so anything
+appended to the registry lights up both call sites at once. Each
+evaluator keeps its own context-building logic (live = `Candle` +
+`BarsRegistry` view + ScanRunner row; mechanical = `_BarTuple` +
+per-symbol `_ScannerEvalContext` + `normalized_conditions` cache +
+`scanner_alert_prev_match` state) but the actual fire decision is
+centralized in `dispatch.check_trigger_fires`.
+
+**SCANNER_ALERT is one handler, two paths.** `_h_scanner_alert`
+short-circuits to "fired" when `ctx.scanner_row` is non-None (live
+path — ScanRunner already filtered new_rows) and otherwise does
+per-bar `evaluate_group` + False/None→True edge-detection using
+`ctx.scanner_alert_prev_match[trigger.id]` (mechanical path). Bar-0
+records without firing to avoid the "every already-matching symbol
+fires on the first bar" gotcha.
+
+**INDICATOR context is the caller's responsibility.** The shared
+`_h_indicator` requires a pre-built `scanner_eval_ctx`; it does not
+synthesize one from a `BarsRegistry`. The live evaluator's new
+`_build_indicator_context` helper does that work (bumping the
+`indicator_evaluations` stat as a side effect); the mechanical
+evaluator builds one per-symbol outside the bar loop.
+
+**`UnsupportedTriggerKind` contract preserved.** Shared dispatch
+silently returns `(False, [])` for unknown kinds. The mechanical
+`_check_entry` explicitly checks `trigger.kind not in _ENTRY_DISPATCH`
+and raises the typed exception BEFORE calling dispatch. The existing
+test `test_unsupported_entry_kind_raises` (pops MARKET from
+`_ENTRY_HANDLERS`, asserts the raise, restores in `finally`) still
+works because the alias points at the same dict.
+
+**If you add a new entry `TriggerKind`:** register a handler in
+`_ENTRY_DISPATCH` in `entries/dispatch.py`. That's it. Both
+evaluators will pick it up. Add a test in
+`tests/entries/test_dispatch.py::TestRegistryContract` to pin the
+new kind into the registry-completeness invariant.
+
+**Specs:** `src/tradinglab/entries/dispatch.spec.md` is the source of
+truth. `entries/evaluator.spec.md` (Trigger dispatch / INDICATOR /
+SCANNER_ALERT sections) and `strategy_tester/evaluator.spec.md`
+(Trigger scope section) both point back to it.
+
+See also §7.8 / §7.9 (mechanical-evaluator outputs) and §7.12 (EOD
+kill RTH-only walk — orthogonal to entry dispatch but lives in the
+same mechanical evaluator and is the other big "don't let it drift"
+landmine).
 
 ---
 

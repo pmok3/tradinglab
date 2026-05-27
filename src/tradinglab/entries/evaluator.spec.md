@@ -72,6 +72,16 @@ Refusals are audited (`entry_blocked` / `entry_cooldown` /
 
 ## Trigger dispatch
 
+**Source of truth is `entries/dispatch.py` (`_ENTRY_DISPATCH` registry).**
+Both this live evaluator AND the mechanical
+`strategy_tester/evaluator.py` delegate the per-bar fire decision to
+the shared registry, so adding a new `TriggerKind` lights up both call
+sites at once. See `entries/dispatch.spec.md` for the registry
+contract.
+
+`_evaluate_trigger` here builds a `TriggerContext` and calls
+`check_trigger_fires(trigger, ctx)`. Kind-specific logic:
+
 | `TriggerKind`     | Logic                                                |
 |-------------------|------------------------------------------------------|
 | `MARKET`          | `entries.spec.should_fire_market` (next CLOSED bar)  |
@@ -80,6 +90,9 @@ Refusals are audited (`entry_blocked` / `entry_cooldown` /
 | `STOP_LIMIT`      | `entries.spec.should_fire_stop_limit`                |
 | `INDICATOR`       | `scanner.engine.evaluate_group` over `BarsRegistry`  |
 | `SCANNER_ALERT`   | `scan_runner` `new_rows` subscription                |
+
+`_reference_price` and `_signal_price_for_kind` are now thin staticmethod
+wrappers around `dispatch.reference_price` / `dispatch.signal_price_for_kind`.
 
 ## SCANNER_ALERT path
 
@@ -93,10 +106,13 @@ by `MatchHistory` — re-arming uses `disarm` + `arm` to reset.
 
 ## INDICATOR path
 
-Cross-interval condition trees evaluate via `evaluate_group(condition,
-ctx)` against an `EvaluationContext` built from the `BarsRegistry`
-view for `(symbol, trigger.interval or default_interval)`. Failures
-log via `entry_blocked`; never crash.
+`_build_indicator_context(symbol, trigger)` builds an
+`EvaluationContext` from `BarsRegistry.get_view` for
+`(symbol, trigger.interval or default_interval)` and bumps the
+`indicator_evaluations` stat counter. The context is threaded to
+`dispatch._h_indicator` via `TriggerContext.scanner_eval_ctx`; the
+shared handler calls `evaluate_group(condition, ctx)` and returns the
+evidence list. Failures log via `entry_blocked`; never crash.
 
 ## On-fill bracket chain
 
