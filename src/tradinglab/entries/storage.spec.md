@@ -36,15 +36,29 @@ records preserved for GUI recovery.
 
 ## Dependencies
 
-- `..core.io_helpers.atomic_write_json` — tmp + rename + fsync.
+- `..core.json_collection_store.JsonObjectStore` — generic
+  implementation. This module is a thin wrapper around a
+  module-level `_STORE` instance.
+- `..core.io_helpers.atomic_write_json` — re-exported via `_STORE` but
+  also kept as `_atomic_write_json` for any legacy import.
 - `..disk_cache._cache_dir`.
-- `.model.{EntryStrategy, validate_strategy}`.
+- `.model.{EntryStrategy, validate_strategy, _new_id}`.
 
 ## Design Decisions
 
-- **Mirrors `exits.storage` precisely.** Same atomic-write contract,
-  `BrokenStrategy` UX. Promoting to a shared base was rejected (too
-  much regression blast radius for v1).
+- **Delegates to the generic store.** The hand-rolled implementation
+  (~150 LOC of try/except + path glue + index management) was retired
+  in favour of `core.json_collection_store.JsonObjectStore`. Public
+  function signatures and `BrokenStrategy` dataclass are preserved
+  byte-for-byte — every existing test passes unmodified.
+- **`BrokenStrategy` kept as a back-compat alias.** Callers that do
+  `from tradinglab.entries.storage import BrokenStrategy` keep
+  working. `load_all` repackages generic `BrokenRecord` instances
+  into `BrokenStrategy` so isinstance checks still match.
+- **Rename-on-import behavior stays subsystem-specific.** The generic
+  store accepts a `rename_fn` callable; entries supplies
+  `_rename_on_import` (new id + " (imported)" suffix) preserving the
+  exact historical UX.
 - **Index is best-effort.** `_load_index` returns `{}` on missing /
   corrupt; `load_all` falls back to directory scan. Never a
   correctness gate.
