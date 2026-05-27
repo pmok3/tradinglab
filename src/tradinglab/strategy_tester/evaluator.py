@@ -72,8 +72,10 @@ except ImportError:  # pragma: no cover — Python <3.9 fallback
 
 from ..backtest.bars import from_candles
 from ..backtest.engine import SandboxEngine
-from ..backtest.orders import Order, Side
+from ..backtest.orders import Order
+from ..backtest.orders import Side as OrderSide
 from ..backtest.session import ENGINE_VERSION, SessionResult, SessionSpec
+from ..core.side import Side
 from ..entries.dispatch import (
     _ENTRY_DISPATCH,
 )
@@ -840,21 +842,19 @@ def _resolve_exit_price(
     if trigger.price is not None:
         return float(trigger.price)
 
+    side = Side.from_str(position_side)
     if trigger.offset_pct is not None:
         pct = float(trigger.offset_pct) / 100.0
-        if position_side == "buy":
-            # LONG: limit is above entry, stop is below entry
-            sign = +1.0 if trigger.kind is ExitTriggerKind.LIMIT else -1.0
-        else:
-            sign = -1.0 if trigger.kind is ExitTriggerKind.LIMIT else +1.0
+        # LONG limit is above entry / stop is below entry; SHORT flips.
+        # ``side.sign`` is +1 LONG / -1 SHORT; LIMIT keeps the sign, STOP flips it.
+        leg_sign = 1.0 if trigger.kind is ExitTriggerKind.LIMIT else -1.0
+        sign = side.sign * leg_sign
         return float(ref_price * (1.0 + sign * pct))
 
     if trigger.offset_dollar is not None:
         dollars = float(trigger.offset_dollar)
-        if position_side == "buy":
-            sign = +1.0 if trigger.kind is ExitTriggerKind.LIMIT else -1.0
-        else:
-            sign = -1.0 if trigger.kind is ExitTriggerKind.LIMIT else +1.0
+        leg_sign = 1.0 if trigger.kind is ExitTriggerKind.LIMIT else -1.0
+        sign = side.sign * leg_sign
         return float(ref_price + sign * dollars)
 
     return None
@@ -881,9 +881,11 @@ def _exit_limit(
     if target is None:
         return False
     _o, hi, lo, _c = bar
-    if position_side == "buy":
-        return hi >= float(target)
-    return lo <= float(target)
+    side = Side.from_str(position_side)
+    # Favorable extreme: high for long, low for short — take-profit fires
+    # when the favorable side crosses the target.
+    fav = hi if side.is_long else lo
+    return (fav >= float(target)) if side.is_long else (fav <= float(target))
 
 
 def _exit_stop(
@@ -901,9 +903,11 @@ def _exit_stop(
     if stop is None:
         return False
     _o, hi, lo, _c = bar
-    if position_side == "buy":
-        return lo <= float(stop)
-    return hi >= float(stop)
+    side = Side.from_str(position_side)
+    # Adverse extreme: low for long, high for short — stop fires when the
+    # adverse side crosses the stop.
+    adv = lo if side.is_long else hi
+    return (adv <= float(stop)) if side.is_long else (adv >= float(stop))
 
 
 def _exit_stop_limit(
@@ -975,7 +979,7 @@ def _ctx_to_position(ctx: EvalContext) -> _Position:
     placeholders so the dataclass can be constructed. The result is
     NOT meant to leak outside the handler — it's a per-call adapter.
     """
-    side: str = "long" if ctx.position_side == "buy" else "short"
+    side: str = Side.from_str(ctx.position_side).as_long_short()
     return _Position(
         id=f"strat-test-pos-{ctx.symbol}",
         symbol=ctx.symbol,
@@ -1265,27 +1269,27 @@ def _check_entry(
     back to ``_is_regular_session(et_now)`` when not supplied.
     """
     if not ctx.entry_strategy.enabled:
-        return False, Side.BUY, 0.0
+        return False, OrderSide.BUY, 0.0
     if ctx.position_open and (
         ctx.entry_strategy.position_already_open_policy
         is PositionAlreadyOpenPolicy.BLOCK
     ):
-        return False, Side.BUY, 0.0
+        return False, OrderSide.BUY, 0.0
     if (
         ctx.entry_strategy.max_fires_per_session_total is not None
         and ctx.fires_total >= ctx.entry_strategy.max_fires_per_session_total
     ):
-        return False, Side.BUY, 0.0
+        return False, OrderSide.BUY, 0.0
     if (
         ctx.fires_by_symbol
         >= ctx.entry_strategy.max_fires_per_session_per_symbol
     ):
-        return False, Side.BUY, 0.0
+        return False, OrderSide.BUY, 0.0
     # Arm-window gate (ET HH:MM). Blank → no gate. The default template
     # cooks 09:35–15:30 ET, so without this gate a 24/7 fictional bar
     # series would fire pre-market.
     if et_now is not None and not _within_arm_window(ctx.entry_strategy, et_now):
-        return False, Side.BUY, 0.0
+        return False, OrderSide.BUY, 0.0
     # Require-market-open gate (Mon–Fri AND 09:30 ≤ ET time ≤ 16:00).
     # Holidays are not enforced — synthetic data with a Christmas-day
     # bar will fire, matching the strategy's "any RTH-shaped bar is
@@ -1294,7 +1298,7 @@ def _check_entry(
         if is_rth is None and et_now is not None:
             is_rth = _is_regular_session(et_now)
         if is_rth is False:
-            return False, Side.BUY, 0.0
+            return False, OrderSide.BUY, 0.0
     # Cooldown-since-last-fire gate. ``cooldown_secs == 0`` is the
     # "no cooldown" default. ``last_fire_ts is None`` means "no prior
     # fire" — always passes.
@@ -1303,13 +1307,13 @@ def _check_entry(
         and ctx.last_fire_ts is not None
         and (bar_ts - ctx.last_fire_ts) < ctx.entry_strategy.cooldown_secs
     ):
-        return False, Side.BUY, 0.0
+        return False, OrderSide.BUY, 0.0
 
     trigger = ctx.entry_strategy.trigger
     side = (
-        Side.BUY
+        OrderSide.BUY
         if ctx.entry_strategy.direction is EntryDirection.LONG
-        else Side.SELL
+        else OrderSide.SELL
     )
 
     if trigger.kind not in _ENTRY_DISPATCH:
@@ -1605,7 +1609,7 @@ def evaluate_symbol(
             ):
                 prior_ts = int(bars.ts[prior_idx])
                 prior_close = float(bars.close[prior_idx])
-                exit_side = Side.SELL if ctx.position_side == "buy" else Side.BUY
+                exit_side = Side.from_str(ctx.position_side).opposite().as_order_side()
                 # Use ``apply_fills`` to honour the cost model (slippage
                 # + commission) — same shape as the end-of-run kill.
                 from ..backtest.fills import apply_fills as _apply_fills
@@ -1669,7 +1673,7 @@ def evaluate_symbol(
                 bar_ts=ts,
             )
             if exit_fired:
-                exit_side = Side.SELL if ctx.position_side == "buy" else Side.BUY
+                exit_side = Side.from_str(ctx.position_side).opposite().as_order_side()
                 exit_order = Order(
                     order_id=ctx.mint_order_id(),
                     symbol=symbol,
@@ -1716,7 +1720,7 @@ def evaluate_symbol(
         )) >= 0
     ):
         last_ts = int(bars.ts[last_idx])
-        exit_side = Side.SELL if ctx.position_side == "buy" else Side.BUY
+        exit_side = Side.from_str(ctx.position_side).opposite().as_order_side()
         # Append a synthetic fill at the last bar's close so the position
         # is closed in the result; the engine has no further ticks so a
         # queued order would never fill. We use the engine's last-bar-flush
@@ -1778,5 +1782,5 @@ def _sync_position_state_from_engine(
     qty = float(pos.quantity)
     ctx.position_open = True
     ctx.position_qty = abs(qty)
-    ctx.position_side = "buy" if qty > 0 else "sell"
+    ctx.position_side = Side.from_sign(qty).as_buy_sell()
     ctx.position_avg_price = float(pos.avg_cost)

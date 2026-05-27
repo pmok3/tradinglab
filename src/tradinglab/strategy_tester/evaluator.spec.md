@@ -126,7 +126,8 @@ Multi-leg OCO is reduced to first-leg-to-fire in PR 1. Proper OCO semantics ship
 ## Dependencies
 - `backtest.engine.SandboxEngine`, `backtest.session.SessionResult / SessionSpec / ENGINE_VERSION`
 - `backtest.bars.from_candles`
-- `backtest.orders.Order / Side`
+- `backtest.orders.Order / Side` (imported as `OrderSide` to disambiguate from `core.side.Side`)
+- `core.side.Side` — position-direction value type. Pilot adopter per audit #10 / `core/side.spec.md`. All `position_side` string compares (`"buy"` / `"sell"`) inside the evaluator route through `Side.from_str(...)` at the function entry; the persisted `_BarTuple` / `ctx.position_side` / `PostTradeReview.side` strings stay unchanged.
 - `backtest.fills.apply_fills` (only for the EOD kill-switch flatten path)
 - `entries.model` / `exits.model` enums + dataclasses
 - `models.Candle`

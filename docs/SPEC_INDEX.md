@@ -31,6 +31,7 @@ A one-spec-per-`.py` documentation set. Each spec follows a fixed 9-section layo
 | `core/viewport.spec.md` | `y_limits_for_slice` — min/max over a slice with padding. |
 | `core/lru_dict.spec.md` | **`LRUDict[K, V]`** — bounded-capacity `OrderedDict` subclass with LRU eviction on insert + LRU-touch on `.get()` hit. Used at `strategy_tester/warmup.py::_WARMUP_CACHE` (maxsize=256) and `app.py::_events_cache` (maxsize=200). See CLAUDE.md §7.21. |
 | `core/json_collection_store.spec.md` | **`JsonObjectStore[T]`** — generic per-subsystem JSON-collection store collapsing 6 hand-rolled `storage.py` copies. Save/load/delete + `load_all() -> (good, broken)` triage + import/export. Pilot: `entries/storage.py` (294 → 168 LOC). See CLAUDE.md §7.22. |
+| `core/side.spec.md` | **`Side`** — canonical position-direction value type (LONG / SHORT). Unifies the `"long"`/`"short"`/`"buy"`/`"sell"`/`OrderSide.BUY/SELL` vocabularies. Helpers: `sign`, `is_long`, `favorable_price(bar)`, `unfavorable_price(bar)`, `adverse_excursion_price` / `favorable_excursion_price` aliases. Pilot: `strategy_tester/evaluator.py` (~10 sites). Audit #10. |
 
 ## `data/` — fetchers and normalization
 | Spec | Covers |
