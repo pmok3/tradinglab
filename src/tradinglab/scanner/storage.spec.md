@@ -5,6 +5,26 @@
 Per-scan JSON persistence under `<cache_dir>/scans/`. One file per
 scan, UUID4-keyed filename, atomic writes, lenient bulk load.
 
+## Implementation
+
+Delegates per-id save / load / delete / path-resolution / export to
+the shared `core.json_collection_store.JsonObjectStore[ScanDefinition]`
+(see CLAUDE.md §7.22 for the migration pattern). Scanner-specific
+concerns kept locally:
+
+* `_from_dict_checked` wraps `ScanDefinition.from_dict` with the
+  future-`schema_version` refusal so both `load` (via the store) and
+  `_load_path` (file-on-disk path) enforce it.
+* `load_all` is NOT delegated — it filters via `_FILENAME_RE`
+  (UUIDs + `tmpl*` only, excluding `_index.json` / `README.txt` etc.)
+  and logs `"skipping corrupt scan file ..."` per the historical
+  warning shape that callers grep on.
+* `import_scan` keeps its two-phase `CollisionDecision`
+  (id-collision then name-collision) logic.
+* `find_by_name` walks `load_all()` for a case-insensitive match.
+* `save(scan)` calls `scan.touch()` first to refresh `updated_at`,
+  then defers to the generic store.
+
 ## Layout
 
 ```

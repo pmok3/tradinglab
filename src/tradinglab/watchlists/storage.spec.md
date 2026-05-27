@@ -47,4 +47,5 @@ normalize_tickers(tickers):
 
 ## Known limitations / Future work
 - No migration path from a hypothetical v3; `load_all()` would need an explicit version-switch.
+- **`JsonObjectStore[T]` migration deferred.** The watchlists storage uses a single consolidated JSON file (schema v2: `{version, watchlists, pinned}`) which doesn't fit the `core.json_collection_store.JsonObjectStore[T]` generic (which assumes one-record-per-file plus an `_index.json`). The watchlists shape also carries a sibling `pinned` ordered list that has no per-record `id` to key on. Migration deferred until either (a) we split into per-watchlist files (would require moving `pinned` to a separate index file and reworking `WatchlistManager` re-ordering semantics) or (b) we extend the generic to support a consolidated-file mode with a sidecar metadata list. Other JSON-collection subsystems (entries / exits / scanner / strategy_tester / positions) all use one-record-per-file and migrate cleanly — see CLAUDE.md §7.22.
 

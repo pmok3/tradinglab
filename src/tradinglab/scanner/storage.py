@@ -1,32 +1,26 @@
 """Scanner persistence: UUID-keyed JSON files in ``<cache_dir>/scans/``.
 
+Delegates per-id save / load / delete / path-resolution / export to
+:class:`tradinglab.core.json_collection_store.JsonObjectStore` — the
+shared generic store. Scanner-specific concerns kept here:
+
+* ``schema_version`` refusal on future-version files (raised from the
+  custom ``from_dict`` wrapper so both :func:`load` and :func:`_load_path`
+  enforce it),
+* ``_FILENAME_RE`` filter for ``load_all`` (only UUID-style or
+  ``tmpl*`` files participate; ``_index.json`` / ``README.txt`` ignored),
+* :class:`CollisionDecision` two-phase id/name collision handling for
+  :func:`import_scan`,
+* :func:`find_by_name` case-insensitive lookup,
+* :meth:`ScanDefinition.touch` on every save (refreshes ``updated_at``).
+
 Single scan = single file ``<uuid>.json``. The UUID is the
-:attr:`ScanDefinition.id`; this means renaming a scan never moves the
-file, so external tooling and import/export references stay stable.
+:attr:`ScanDefinition.id`; renaming a scan never moves the file, so
+external tooling and import/export references stay stable.
 
-Layout::
-
-    <cache_dir>/scans/
-        a3f4b2...-....json
-        b8e1c2...-....json
-
-Atomic write via temp-file + ``os.replace`` so a crash mid-save can't
-leave a half-written JSON. Reads tolerate missing / corrupt files
-(skipped + logged) — we never destroy user data on a failed parse.
-
-Public API
-----------
-
-- :func:`scans_dir`             — directory path (created on demand)
-- :func:`save`                  — atomic write, returns final path
-- :func:`load`                  — strict, raises on missing / invalid
-- :func:`load_all`              — lenient, skips corrupt files
-- :func:`delete`                — returns True iff a file was removed
-- :func:`find_by_name`          — case-insensitive name lookup
-- :func:`export_scan`           — write to arbitrary path
-- :func:`import_scan`           — read from arbitrary path; collision
-  resolution delegated to caller via callback (Overwrite / Rename /
-  Cancel returned as a :class:`CollisionDecision`)
+Public API surface is preserved verbatim (function signatures, error
+types, ``CollisionDecision`` semantics) so callers and tests need no
+edits.
 """
 
 from __future__ import annotations
@@ -38,8 +32,10 @@ from collections.abc import Callable
 from dataclasses import replace
 from enum import Enum
 from pathlib import Path
+from typing import Any
 
 from ..core.io_helpers import atomic_write_json
+from ..core.json_collection_store import JsonObjectStore
 from ..disk_cache import _cache_dir
 from .model import SCHEMA_VERSION, ScanDefinition
 
@@ -47,6 +43,20 @@ LOG = logging.getLogger(__name__)
 
 _SCANS_DIR_NAME = "scans"
 _FILENAME_RE = re.compile(r"^([0-9a-fA-F-]{8,}|tmpl[A-Za-z0-9_-]*)\.json$")
+
+
+__all__ = [
+    "CollisionDecision",
+    "scans_dir",
+    "scan_path",
+    "save",
+    "load",
+    "load_all",
+    "delete",
+    "find_by_name",
+    "export_scan",
+    "import_scan",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -61,11 +71,51 @@ def scans_dir() -> Path:
     return d
 
 
+def _atomic_write_json(path: Path, payload: dict) -> None:
+    """Back-compat shim. Prefer ``core.io_helpers.atomic_write_json``.
+
+    The generic store writes with ``sort_keys=True``; this shim
+    preserves the historical scanner default (``indent=2``,
+    ``sort_keys=False``, ``ensure_ascii=False``) for any caller that
+    imported the private name directly.
+    """
+    atomic_write_json(path, payload)
+
+
+def _from_dict_checked(d: Any) -> ScanDefinition:
+    """``ScanDefinition.from_dict`` + future-schema refusal.
+
+    Used as the ``from_dict`` callback on the generic store so both
+    :func:`load` (delegating) and :func:`_load_path` (scanner-specific)
+    enforce the same schema-version guard.
+    """
+    if not isinstance(d, dict):
+        raise ValueError("scan payload is not a JSON object")
+    version = int(d.get("schema_version", 1))
+    if version > SCHEMA_VERSION:
+        raise ValueError(
+            f"scan schema_version {version} > supported {SCHEMA_VERSION}; "
+            f"created by a newer build of the app"
+        )
+    try:
+        return ScanDefinition.from_dict(d)
+    except Exception as e:  # noqa: BLE001
+        raise ValueError(f"scan failed to deserialize: {e}") from e
+
+
+_STORE: JsonObjectStore[ScanDefinition] = JsonObjectStore(
+    storage_dir=scans_dir,
+    kind_label="scan",
+    to_dict=lambda s: s.to_dict(),
+    from_dict=_from_dict_checked,
+    id_of=lambda s: s.id,
+    index_value_of=lambda s: s.name,
+)
+
+
 def scan_path(scan_id: str) -> Path:
     """Return the on-disk path for a given scan id."""
-    if not scan_id:
-        raise ValueError("scan_id must be non-empty")
-    return scans_dir() / f"{scan_id}.json"
+    return _STORE.path_for(scan_id)
 
 
 # ---------------------------------------------------------------------------
@@ -73,40 +123,35 @@ def scan_path(scan_id: str) -> Path:
 # ---------------------------------------------------------------------------
 
 
-def _atomic_write_json(path: Path, payload: dict) -> None:
-    """Write ``payload`` as JSON to ``path`` atomically.
-
-    Thin shim over :func:`tradinglab.core.io_helpers.atomic_write_json`
-    that fixes the storage-module convention (``indent=2``,
-    ``sort_keys=False``, ``ensure_ascii=False``, fsync). Kept as a
-    private alias because ``scanner/storage.spec.md`` documents the
-    atomic-write contract here, and external callers in this module
-    would otherwise need to know the kwarg shape.
-    """
-    atomic_write_json(path, payload)
-
-
 def save(scan: ScanDefinition) -> Path:
     """Persist ``scan`` to ``<cache_dir>/scans/<id>.json``. Returns the path.
 
     Touches ``updated_at`` to "now" before writing. Atomic.
+
+    Uses the generic store for path resolution but writes the file
+    directly — scanner historically does NOT maintain an ``_index.json``
+    (see ``storage.spec.md`` Layout section), and callers / tests
+    assert that no auxiliary files appear in ``scans_dir()`` after a
+    save. ``_STORE.save`` would auto-write an index entry which would
+    break that invariant.
     """
     fresh = scan.touch()
-    path = scan_path(fresh.id)
-    _atomic_write_json(path, fresh.to_dict())
+    path = _STORE.path_for(fresh.id)
+    atomic_write_json(path, fresh.to_dict())
     return path
 
 
 def load(scan_id: str) -> ScanDefinition:
     """Load one scan by id. Raises :class:`FileNotFoundError` / :class:`ValueError`."""
-    path = scan_path(scan_id)
-    if not path.exists():
-        raise FileNotFoundError(f"no scan with id={scan_id!r} at {path}")
-    return _load_path(path)
+    return _STORE.load(scan_id)
 
 
 def _load_path(path: Path) -> ScanDefinition:
-    """Strict load from an arbitrary path. Raises :class:`ValueError`."""
+    """Strict load from an arbitrary path. Raises :class:`ValueError`.
+
+    Kept scanner-specific (not delegated) so the error message includes
+    the path — callers reading corrupt files want to see which one.
+    """
     try:
         with path.open("r", encoding="utf-8") as fh:
             d = json.load(fh)
@@ -131,6 +176,11 @@ def load_all() -> list[ScanDefinition]:
 
     Order: alphabetical by ``ScanDefinition.name`` (case-insensitive),
     ties broken by id. Stable across runs.
+
+    Kept scanner-specific (not delegated to ``_STORE.load_all``) so the
+    ``_FILENAME_RE`` filter (allows UUIDs + ``tmpl*``, excludes everything
+    else) and the historical "skipping corrupt scan file" warning text
+    are preserved.
     """
     out: list[ScanDefinition] = []
     d = scans_dir()
@@ -154,12 +204,7 @@ def load_all() -> list[ScanDefinition]:
 
 def delete(scan_id: str) -> bool:
     """Delete the scan file. Returns True if a file was removed."""
-    path = scan_path(scan_id)
-    try:
-        path.unlink()
-        return True
-    except FileNotFoundError:
-        return False
+    return _STORE.delete(scan_id)
 
 
 def find_by_name(name: str) -> ScanDefinition | None:
@@ -188,9 +233,7 @@ class CollisionDecision(str, Enum):
 
 def export_scan(scan: ScanDefinition, dst_path: Path) -> Path:
     """Write ``scan`` to ``dst_path`` (atomic). Returns ``dst_path``."""
-    dst_path = Path(dst_path)
-    _atomic_write_json(dst_path, scan.to_dict())
-    return dst_path
+    return _STORE.export_to_path(scan, Path(dst_path))
 
 
 def _make_unique_name(base: str) -> str:
@@ -275,17 +318,3 @@ def import_scan(
     # No collision — straight save.
     save(incoming)
     return incoming
-
-
-__all__ = [
-    "CollisionDecision",
-    "scans_dir",
-    "scan_path",
-    "save",
-    "load",
-    "load_all",
-    "delete",
-    "find_by_name",
-    "export_scan",
-    "import_scan",
-]

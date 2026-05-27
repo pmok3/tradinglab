@@ -47,6 +47,22 @@ On-disk persistence for Strategy Tester Runs. Atomic writes only — no in-fligh
 ## Testing
 - `tests/unit/strategy_tester/test_storage.py` — round-trip config + manifest, list_runs ordering, deleted runs disappear.
 
+## Known limitations / Future work
+- **Not migrated to `core.json_collection_store.JsonObjectStore[T]`** (the
+  shared generic adopted by entries / exits / scanner / watchlists /
+  positions — see CLAUDE.md §7.22). Each Run is stored as a *directory*
+  containing multiple heterogeneous artifacts (`config.json` +
+  `manifest.json` + `per_symbol/<SYMBOL>.json` + `aggregate.json` +
+  `trades.csv` + `screenshots/*.png` + `report.html` + `report.pdf`),
+  which doesn't fit the `JsonObjectStore[T]` one-record-per-file
+  assumption. The public API here is also path-based (`runs_dir()`,
+  `run_dir_for()`, `save_config(run_dir, ...)`,
+  `save_session_result_for_symbol(run_dir, symbol, ...)`,
+  `list_runs_with_paths()`) rather than the collection shape
+  (`save(obj)` / `load(id)` / `load_all()`) the generic provides.
+  Migration deferred; if a shared generic for multi-file-per-record
+  directories ever lands, revisit then.
+
 ## See also
 - [model](model.spec.md) — TestRun/TestConfig schemas.
 - [runner](runner.spec.md) — primary writer.

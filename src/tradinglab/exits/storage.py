@@ -1,18 +1,21 @@
-"""Exit-strategy persistence: UUID-keyed JSON files in
-``<cache_dir>/exit_strategies/``.
+"""JSON storage for exit strategies.
 
-Mirrors :mod:`scanner.storage` deliberately — same atomic-write pattern,
-same UUID-keyed filename convention, same import-collision protocol —
-so the user-facing import/export experience matches between scans and
-exit strategies. The single substantive difference is in
-:func:`load_all`, which returns ``(strategies, broken)``: a strategy
-that JSON-parses but fails :func:`exits.model.validate_strategy`
-becomes a :class:`BrokenStrategy` rather than getting silently dropped.
-This matters because an open position may *reference* a strategy id
-on disk; if that strategy has gone broken (e.g. the user edited the
-JSON by hand and broke the OCO disjointness rule, or upgraded the app
-to a build with stricter validation), we want a "needs attention"
-banner, not a silent re-arm with default settings.
+Delegates the path/atomic-write/per-id strict-load mechanics to
+:class:`tradinglab.core.json_collection_store.JsonObjectStore`. Public
+surface is preserved verbatim (function signatures, ``BrokenStrategy``
+dataclass shape, ``CollisionDecision`` enum, two-tier collision
+semantics in :func:`import_strategy`) so callers and existing tests
+need no edits.
+
+Exits intentionally does NOT maintain an ``_index.json`` (see
+``storage.spec.md`` — strategy counts are O(10-50), directory scan
+is cheap, and the index file would be visible to atomicity-checking
+tests). The generic store is therefore used as a helper for
+``path_for`` / ``load`` / ``delete`` / ``export_to_path`` but the
+``save`` / ``load_all`` / ``import_strategy`` paths remain bespoke
+to preserve exit-strategy-specific semantics (schema-version
+rejection, filename regex filter, dict-shaped raw_json in broken
+records, two-tier id-then-name collision protocol).
 """
 
 from __future__ import annotations
@@ -28,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from ..core.io_helpers import atomic_write_json
+from ..core.json_collection_store import JsonObjectStore
 from ..disk_cache import _cache_dir
 from .model import (
     CURRENT_SCHEMA_VERSION,
@@ -60,8 +64,8 @@ __all__ = [
 class BrokenStrategy:
     """A strategy that was JSON-loadable but failed validation.
 
-    The full raw JSON is preserved so the GUI can offer "open in editor
-    to repair" without losing data.
+    The full raw JSON dict is preserved so the GUI can offer "open
+    in editor to repair" without losing data.
     """
 
     id: str
@@ -82,26 +86,47 @@ def exit_strategies_dir() -> Path:
     return d
 
 
+def _from_raw(d: dict[str, Any], where: str) -> ExitStrategy:
+    """Schema-version-guarded constructor used by both load + load_all."""
+    version = int(d.get("schema_version", CURRENT_SCHEMA_VERSION))
+    if version > CURRENT_SCHEMA_VERSION:
+        raise ValueError(
+            f"strategy {where} schema_version {version} > supported "
+            f"{CURRENT_SCHEMA_VERSION}; created by a newer build"
+        )
+    try:
+        return ExitStrategy.from_dict(d)
+    except Exception as e:  # noqa: BLE001
+        raise ValueError(f"strategy {where} failed to deserialize: {e}") from e
+
+
+def _validate(strategy: ExitStrategy) -> None:
+    errs = validate_strategy(strategy)
+    if errs:
+        raise ValueError(
+            f"refusing to save invalid ExitStrategy {strategy.name!r}: "
+            + "; ".join(errs)
+        )
+
+
+_STORE: JsonObjectStore[ExitStrategy] = JsonObjectStore(
+    storage_dir=exit_strategies_dir,
+    kind_label="exit strategy",
+    to_dict=lambda s: s.to_dict(),
+    from_dict=lambda d: _from_raw(d, "<load>"),
+    id_of=lambda s: s.id,
+    validate=_validate,
+    index_value_of=lambda s: s.name,
+)
+
+
 def strategy_path(strategy_id: str) -> Path:
     """Return the on-disk path for a given strategy id."""
-    if not strategy_id:
-        raise ValueError("strategy_id must be non-empty")
-    return exit_strategies_dir() / f"{strategy_id}.json"
-
-
-# ---------------------------------------------------------------------------
-# Atomic write
-# ---------------------------------------------------------------------------
+    return _STORE.path_for(strategy_id)
 
 
 def _atomic_write_json(path: Path, payload: dict) -> None:
-    """Thin shim over :func:`core.io_helpers.atomic_write_json`.
-
-    Kept as a private alias to preserve the call-site shape used
-    throughout this module; the storage convention defaults
-    (``indent=2``, ``sort_keys=False``, ``ensure_ascii=False``,
-    fsync) live in the shared helper.
-    """
+    """Back-compat shim. Prefer :func:`core.io_helpers.atomic_write_json`."""
     atomic_write_json(path, payload)
 
 
@@ -113,32 +138,22 @@ def _atomic_write_json(path: Path, payload: dict) -> None:
 def save(strategy: ExitStrategy) -> Path:
     """Persist ``strategy`` to ``<cache_dir>/exit_strategies/<id>.json``.
 
-    Refuses-to-save invalid strategies — calls :func:`validate_strategy`
-    first and raises :class:`ValueError` listing all errors.
+    Refuses-to-save invalid strategies. Does NOT write an
+    ``_index.json`` (intentional — see module docstring).
     """
-    errs = validate_strategy(strategy)
-    if errs:
-        raise ValueError(
-            f"refusing to save invalid ExitStrategy {strategy.name!r}: "
-            + "; ".join(errs)
-        )
+    _validate(strategy)
     path = strategy_path(strategy.id)
-    _atomic_write_json(path, strategy.to_dict())
+    atomic_write_json(path, strategy.to_dict())
     return path
 
 
 def load(strategy_id: str) -> ExitStrategy:
-    """Load one strategy by id. Raises on missing / invalid."""
+    """Load one strategy by id. Raises on missing / invalid / future schema."""
     path = strategy_path(strategy_id)
     if not path.exists():
         raise FileNotFoundError(f"no exit strategy with id={strategy_id!r} at {path}")
-    return _load_path(path)
-
-
-def _load_path(path: Path) -> ExitStrategy:
-    """Strict load. Raises :class:`ValueError` on JSON / schema problems."""
     raw = _read_json(path)
-    return _from_raw(raw, path)
+    return _from_raw(raw, str(path))
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -152,34 +167,13 @@ def _read_json(path: Path) -> dict[str, Any]:
     return d
 
 
-def _from_raw(d: dict[str, Any], path: Path) -> ExitStrategy:
-    version = int(d.get("schema_version", CURRENT_SCHEMA_VERSION))
-    if version > CURRENT_SCHEMA_VERSION:
-        raise ValueError(
-            f"strategy {path} schema_version {version} > supported "
-            f"{CURRENT_SCHEMA_VERSION}; created by a newer build"
-        )
-    try:
-        return ExitStrategy.from_dict(d)
-    except Exception as e:  # noqa: BLE001
-        raise ValueError(f"strategy {path} failed to deserialize: {e}") from e
-
-
 def load_all() -> tuple[list[ExitStrategy], list[BrokenStrategy]]:
     """Load every strategy in :func:`exit_strategies_dir`.
 
-    Returns ``(strategies, broken)``:
-
-    - ``strategies``: validated, ready-to-use :class:`ExitStrategy` list,
-      sorted by name (case-insensitive), id as tiebreaker.
-    - ``broken``: strategies that JSON-parsed but failed validation.
-      Position-strategy resolution can use the ids to surface a
-      "needs attention" banner without losing data.
-
-    Files that fail to even JSON-parse (totally corrupt) are skipped
-    with a warning log — these typically only happen if the user
-    crashed mid-write or the disk was full. The atomic-write path
-    makes this very rare.
+    Returns ``(strategies, broken)``. Files that fail to even
+    JSON-parse are skipped with a warning log; files that parse
+    but fail construction or validation become :class:`BrokenStrategy`
+    records with the raw JSON dict preserved.
     """
     strategies: list[ExitStrategy] = []
     broken: list[BrokenStrategy] = []
@@ -195,15 +189,13 @@ def load_all() -> tuple[list[ExitStrategy], list[BrokenStrategy]]:
             continue
         if not _FILENAME_RE.match(entry.name):
             continue
-        # Step 1: try to parse JSON. Hard skip on parse failure.
         try:
             raw = _read_json(entry)
         except ValueError as e:
             LOG.warning("exits.storage: skipping unparseable strategy %s: %s", entry, e)
             continue
-        # Step 2: try to construct ExitStrategy.
         try:
-            strat = _from_raw(raw, entry)
+            strat = _from_raw(raw, str(entry))
         except ValueError as e:
             broken.append(
                 BrokenStrategy(
@@ -214,7 +206,6 @@ def load_all() -> tuple[list[ExitStrategy], list[BrokenStrategy]]:
                 )
             )
             continue
-        # Step 3: structural validation.
         errs = validate_strategy(strat)
         if errs:
             broken.append(
@@ -234,13 +225,15 @@ def load_all() -> tuple[list[ExitStrategy], list[BrokenStrategy]]:
 
 
 def delete(strategy_id: str) -> bool:
-    """Delete the strategy file. Returns True if a file was removed."""
-    path = strategy_path(strategy_id)
-    try:
-        path.unlink()
-        return True
-    except FileNotFoundError:
-        return False
+    """Delete the strategy file. Returns True if a file was removed.
+
+    Delegates to :meth:`JsonObjectStore.delete`; safe wrt the no-index
+    policy because the generic only touches ``_index.json`` if the id
+    is present in a non-empty in-memory index (we never write one,
+    so the on-disk index is always missing and ``load_index`` returns
+    ``{}``).
+    """
+    return _STORE.delete(strategy_id)
 
 
 def find_by_name(name: str) -> ExitStrategy | None:
@@ -268,9 +261,7 @@ class CollisionDecision(str, Enum):
 
 def export_strategy(strategy: ExitStrategy, dst_path: Path) -> Path:
     """Write ``strategy`` to ``dst_path`` (atomic). Returns the path."""
-    dst_path = Path(dst_path)
-    _atomic_write_json(dst_path, strategy.to_dict())
-    return dst_path
+    return _STORE.export_to_path(strategy, Path(dst_path))
 
 
 def _make_unique_name(base: str, existing_names: set) -> str:
@@ -302,7 +293,8 @@ def import_strategy(
     Returns the saved strategy, or ``None`` if cancelled.
     """
     src_path = Path(src_path)
-    incoming = _load_path(src_path)
+    raw = _read_json(src_path)
+    incoming = _from_raw(raw, str(src_path))
     errs = validate_strategy(incoming)
     if errs:
         raise ValueError(
