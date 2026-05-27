@@ -393,10 +393,16 @@ Idempotent — safe to re-apply.
 layout. Handlers like `_on_kind_changed`, `_render_trigger_params`,
 `_reconcile_from_manager`, `_on_block_editor_changed`, `_on_click_add`
 tear down old widgets and create new ones whose bindings start empty;
-the guard re-application must follow the rebuild. Guarded dialogs
-today: `entries_dialog.py`, `dialogs.py` `_SettingsDialog`,
-`indicator_dialog.py`. Other GUI files use only local widget wheel
-bindings (no `bind_all`), so they don't share this hazard.
+the guard re-application must follow the rebuild.
+
+**Audit #4 (commits `72a0e72` .. `cc2fefe`) closes this landmine
+globally.** All 19 dialogs that previously inherited `tk.Toplevel`
+directly now inherit `BaseModalDialog` and apply `protect_combobox_wheel`
+at the end of `__init__`. Per-dialog rebuild handlers that destroy +
+recreate widgets still need to re-apply the guard, but the initial
+"is the guard applied at all?" question is now uniformly Yes. The
+guarded-dialog inventory is no longer a manual list — it's "all of
+them".
 
 Regression tests: `tests/unit/gui/test_combobox_wheel_guard.py`
 (baseline + EntriesDialog),
