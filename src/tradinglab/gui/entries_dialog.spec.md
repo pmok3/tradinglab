@@ -22,7 +22,7 @@ half-validated continuously; final validation runs on Save via
 ## Public API
 
 ```python
-class EntriesDialog(tk.Toplevel):
+class EntriesDialog(BaseModalDialog):
     def __init__(self, master, *, app, strategy: Optional[EntryStrategy],
                  on_save: Optional[Callable[[EntryStrategy], None]] = None) -> None
     def _build_tab_identity(self) -> ttk.Frame
@@ -33,8 +33,27 @@ class EntriesDialog(tk.Toplevel):
     def _build_tab_lifecycle(self) -> ttk.Frame
     def _collect(self) -> EntryStrategy   # raises ValueError on missing fields
     def _on_save(self) -> None
-    def _on_cancel(self) -> None
+    def _on_cancel(self) -> None          # BaseModalDialog ESC / WM_DELETE hook
+    def _on_primary(self) -> None         # BaseModalDialog Return hook
 ```
+
+## Modal plumbing (BaseModalDialog)
+
+Subclasses :class:`gui._modal_base.BaseModalDialog` (audit item #4).
+The base owns ``title`` / ``transient`` / ``grab_set`` / geometry
+persistence (``geometry_key="dlg.entries"``, default ``1400x780``) /
+ESC + Return bindings. ``__init__`` calls :meth:`_finalize_modal`
+**at the very end** (after every widget is realized) with
+``primary=lambda: self._on_save_clicked(close=True)`` and
+``cancel=self._on_cancel_clicked`` so Enter mirrors the rightmost
+footer button and ESC / WM_DELETE invoke the dirty-state-aware
+cancel handler. Overrides of :meth:`_on_cancel` / :meth:`_on_primary`
+forward to the same handlers (belt-and-suspenders for any code
+path that bypasses the explicit `_finalize_modal` arguments).
+
+Caller callbacks are stored as ``self._on_save_cb`` /
+``self._on_cancel_cb`` — the ``_cb`` suffix avoids the
+:meth:`BaseModalDialog._on_cancel` method-name collision.
 
 ## Dependencies
 

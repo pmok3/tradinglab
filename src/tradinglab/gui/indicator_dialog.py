@@ -68,8 +68,7 @@ from ..indicators.config import (
     IndicatorConfig,
     IndicatorManager,
 )
-from ._modal_base import make_scrollable_form, protect_combobox_wheel
-from ._modal_keys import bind_modal_keys
+from ._modal_base import BaseModalDialog, make_scrollable_form, protect_combobox_wheel
 from ._widget_metrics import _CHAR_PX
 from .color_palette import pick_color
 from .colors import WARN_AMBER
@@ -314,13 +313,19 @@ class _IndicatorRow:
         self.debounce_after_id: str | None = None
 
 
-class IndicatorDialog(tk.Toplevel):
+class IndicatorDialog(BaseModalDialog):
     """Modeless editor over :class:`IndicatorManager`.
 
     Lifetime: lives on the app as ``app._indicator_dialog`` until the
     user closes it (``WM_DELETE_WINDOW``) or the app shuts down. The
     manager subscription is registered in ``__init__`` and unhooked
     in ``destroy``.
+
+    Migrated from :class:`tk.Toplevel` to :class:`BaseModalDialog`;
+    ``BaseModalDialog`` owns ``title`` / ``transient`` / geometry
+    persistence / ESC + WM_DELETE wiring via ``_finalize_modal``.
+    Crucially we pass ``grab=False`` to keep the dialog **modeless**
+    so the user can still interact with the chart while it's open.
     """
 
     #: Per-app-session memory of the last-picked MA type. Persisted in
@@ -338,10 +343,25 @@ class IndicatorDialog(tk.Toplevel):
         *,
         restricted_to_config_id: int | None = None,
     ) -> None:
-        super().__init__(app)
-        self.title("Manage Indicators")
-        self.transient(app)
-        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+        # ``BaseModalDialog`` handles title / transient / geometry
+        # persistence (``dlg.indicator`` → 980x560) and (via
+        # ``_finalize_modal`` at the bottom of __init__)
+        # WM_DELETE_WINDOW + ESC. The default geometry is large enough
+        # to host the widest built-in indicator row (Bollinger Bands:
+        # kind dropdown + Primary/Compare scope checkboxes + 4 param
+        # widgets including the ``Moving Average`` choice combobox +
+        # per-interval checkbox strip + per-output color swatches).
+        # Without it the Toplevel auto-sizes to the canvas's narrow
+        # requested width and the rightmost widgets get clipped — most
+        # visibly the Bollinger Bands ``Moving Average`` dropdown.
+        # ``minsize`` keeps the user from shrinking the dialog into the
+        # same broken state.
+        super().__init__(
+            app,
+            title="Manage Indicators",
+            geometry_key="dlg.indicator",
+            default_geometry="980x560",
+        )
         # When non-None this dialog only ever displays / reconciles the
         # one matching config — used by ``gui.per_indicator_dialog``
         # for the per-row popup spawned by double-clicking an overlay
@@ -349,21 +369,6 @@ class IndicatorDialog(tk.Toplevel):
         # ``_reconcile_from_manager`` so the initial seed honours the
         # filter.
         self._restricted_to_config_id: int | None = restricted_to_config_id
-        # Default + minimum size large enough to host the widest
-        # built-in indicator row (Bollinger Bands: kind dropdown +
-        # Primary/Compare scope checkboxes + 4 param widgets including
-        # the ``Moving Average`` choice combobox + per-interval
-        # checkbox strip + per-output color swatches). Without an
-        # explicit geometry the Toplevel auto-sizes to the canvas's
-        # narrow requested width and the rightmost widgets get
-        # clipped — most visibly the Bollinger Bands ``Moving
-        # Average`` dropdown. ``minsize`` keeps the user from
-        # shrinking the dialog into the same broken state.
-        try:
-            from .geometry_store import attach_persistent_geometry
-            attach_persistent_geometry(self, "dlg.indicator", "980x560")
-        except tk.TclError:
-            self.geometry("980x560")
         self.minsize(880, 420)
         self._app = app
         self._manager: IndicatorManager = app._indicator_manager
@@ -447,8 +452,9 @@ class IndicatorDialog(tk.Toplevel):
             pass
         # Modeless editor: ESC cancels (reverts + closes), Ctrl+S saves
         # and closes. Return is NOT bound (committing edits is per-row,
-        # not dialog-wide).
-        bind_modal_keys(self, cancel=self._on_cancel, primary=None)
+        # not dialog-wide). ESC + WM_DELETE_WINDOW are wired by the
+        # ``_finalize_modal`` call at the end of __init__; Ctrl+S is
+        # an IndicatorDialog-specific extension layered on top.
         self.bind("<Control-s>", lambda _e: self._on_save_close())
         # Resize reactivity (audit item #1): bind the Toplevel's
         # ``<Configure>`` event so dragging the dialog edge re-flows
@@ -462,6 +468,13 @@ class IndicatorDialog(tk.Toplevel):
         except tk.TclError:
             self._rows_resize_bind_id = None
         self.bind("<Destroy>", self._on_destroy_resize_binding, add="+")
+
+        # Final modal wiring — wire ESC/WM_DELETE to ``_on_cancel`` and
+        # leave Return unbound (``primary=None``). ``grab=False`` is
+        # non-negotiable: this dialog is **modeless** by design (the
+        # user must be able to interact with the chart while it's
+        # open). See class docstring + CLAUDE.md notes.
+        self._finalize_modal(primary=None, cancel=self._on_cancel, grab=False)
 
     # ------------------------------------------------------------------
     # Theme

@@ -53,8 +53,7 @@ from ..entries.model import (
 )
 from ..exits.model import ExitStrategy
 from ..scanner.model import Group as ConditionGroup
-from ._modal_base import make_scrollable_form, protect_combobox_wheel
-from ._modal_keys import bind_modal_keys
+from ._modal_base import BaseModalDialog, make_scrollable_form, protect_combobox_wheel
 from .colors import ERROR_RED, MUTED_GREY
 from .scanner_block_editor import BlockEditor
 
@@ -108,8 +107,16 @@ _INDICATOR_INTERVAL_CHOICES: tuple[str, ...] = (
 # ---------------------------------------------------------------------------
 
 
-class EntriesDialog(tk.Toplevel):
-    """Modal-ish editor for a single :class:`EntryStrategy`."""
+class EntriesDialog(BaseModalDialog):
+    """Modal-ish editor for a single :class:`EntryStrategy`.
+
+    Migrated to :class:`BaseModalDialog` (audit item #4): the base
+    owns ``title`` / ``transient`` / geometry persistence
+    (``dlg.entries``) / grab / ESC+Return keys via
+    :meth:`_finalize_modal`. The combobox wheel guard
+    (CLAUDE.md §7.11) is still re-applied after every dynamic
+    rebuild — base does NOT do that.
+    """
 
     def __init__(
         self,
@@ -120,23 +127,19 @@ class EntriesDialog(tk.Toplevel):
         on_save: Callable[[EntryStrategy], None] | None = None,
         on_cancel: Callable[[], None] | None = None,
     ) -> None:
-        super().__init__(master)
-        self.title("Edit Entry Strategy")
-        try:
-            self.transient(master)
-        except tk.TclError:
-            pass
-        # Geometry persistence — restore last-used size + position;
-        # fall back to legacy 1400x780.
-        try:
-            from .geometry_store import attach_persistent_geometry
-            attach_persistent_geometry(self, "dlg.entries", "1400x780")
-        except tk.TclError:
-            self.geometry("1400x780")
+        super().__init__(
+            master,
+            title="Edit Entry Strategy",
+            geometry_key="dlg.entries",
+            default_geometry="1400x780",
+        )
         self.minsize(900, 500)
 
-        self._on_save = on_save
-        self._on_cancel = on_cancel
+        # Caller callbacks — renamed with ``_cb`` suffix so they
+        # don't collide with :class:`BaseModalDialog`'s ``_on_cancel``
+        # method hook (overridden below).
+        self._on_save_cb = on_save
+        self._on_cancel_cb = on_cancel
         self._exit_strategies: list[ExitStrategy] = list(exit_strategies)
 
         # Deep-clone the incoming strategy so unsaved edits don't bleed
@@ -170,10 +173,13 @@ class EntriesDialog(tk.Toplevel):
         # corrupted strategy is then persisted on Save — see the
         # ``protect_combobox_wheel`` docstring for the full story.
         self._protect_combobox_wheel()
-        bind_modal_keys(
-            self,
-            cancel=self._on_cancel_clicked,
+        # BaseModalDialog wiring — installs WM_DELETE / ESC / Return
+        # bindings, performs grab_set, restores persisted geometry.
+        # Must run AFTER all widgets exist so geometry restore reads
+        # the laid-out requested sizes.
+        self._finalize_modal(
             primary=lambda: self._on_save_clicked(close=True),
+            cancel=self._on_cancel_clicked,
         )
 
     # ------------------------------------------------------------------
@@ -904,9 +910,9 @@ class EntriesDialog(tk.Toplevel):
         if self._draft.created_with.template and self._is_new is False:
             # Editing a template-derived strategy is fine; flag stays.
             pass
-        if self._on_save is not None:
+        if self._on_save_cb is not None:
             try:
-                self._on_save(self._draft)
+                self._on_save_cb(self._draft)
             except Exception:  # noqa: BLE001
                 logger.exception("EntriesDialog: on_save raised")
                 self._status_var.set("Save callback raised — see log")
@@ -916,9 +922,21 @@ class EntriesDialog(tk.Toplevel):
             self.destroy()
 
     def _on_cancel_clicked(self) -> None:
-        if self._on_cancel is not None:
+        if self._on_cancel_cb is not None:
             try:
-                self._on_cancel()
+                self._on_cancel_cb()
             except Exception:  # noqa: BLE001
                 logger.exception("EntriesDialog: on_cancel raised")
         self.destroy()
+
+    # ------------------------------------------------------------------
+    # BaseModalDialog hooks
+    # ------------------------------------------------------------------
+
+    def _on_cancel(self) -> None:
+        """ESC / WM_DELETE_WINDOW → run the dialog's cancel handler."""
+        self._on_cancel_clicked()
+
+    def _on_primary(self) -> None:
+        """Return key → match the rightmost button (Save & Close)."""
+        self._on_save_clicked(close=True)

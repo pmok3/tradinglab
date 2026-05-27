@@ -12,7 +12,7 @@ settings popup via `restricted_to_config_id`.
 - `open_indicator_dialog(app) -> IndicatorDialog` — singleton factory: returns
   the existing instance focused if open, else creates one and stashes it on
   `app._indicator_dialog`.
-- `class IndicatorDialog(tk.Toplevel)`:
+- `class IndicatorDialog(BaseModalDialog)`:
   - `IndicatorDialog(app, *, restricted_to_config_id: Optional[int] = None)`
     — when non-`None`, `_reconcile_from_manager` filters `manager.list()` to
     that id, and `_on_manager_event` auto-closes if the restricted config is
@@ -27,7 +27,9 @@ settings popup via `restricted_to_config_id`.
 - Internal: `indicators` registry + `IndicatorConfig` / `IndicatorManager`;
   `app._indicator_manager`; `gui.color_palette.HexColorPalette`;
   `gui.indicator_acronyms.explain_kind_id`; `gui.tooltip.ToolTip`;
-  `_modal_keys.bind_modal_keys`.
+  `_modal_base.BaseModalDialog` (modal boilerplate: title / transient /
+  geometry persistence / ESC + WM_DELETE wiring via `_finalize_modal`,
+  invoked with `grab=False` to stay **modeless**).
 - External: `tkinter`, `tkinter.ttk`.
 
 ## Design decisions
@@ -73,8 +75,10 @@ checkbox groups, called from `_on_menu_sandbox_start` / `_on_menu_sandbox_end`.
   CLAUDE.md §7.11; baseline regression test:
   `tests/unit/gui/test_combobox_wheel_guard.py`; per-dialog regression test:
   `tests/unit/gui/test_indicator_dialog_wheel_guard.py`).
-- **Modeless singleton**, `Toplevel.transient(app)` — chart edits land while
-  dialog stays open.
+- **Modeless singleton**, `BaseModalDialog` with `grab=False` — chart
+  edits land while dialog stays open. `transient(app)` is set by the
+  base class so the Toplevel stacks with the main window without
+  modally grabbing input.
 - **Manager subscription, not snapshot ownership** — reconciles on every
   manager event (`add`/`remove`/`update`/`clear`/`reorder`/`preset_loaded`/
   `preset_saved`/`preset_deleted`/`loaded`). Only `redraw` is filtered.

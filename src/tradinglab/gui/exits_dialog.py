@@ -68,8 +68,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-from ._modal_base import make_scrollable_form  # noqa: E402
-from ._modal_keys import bind_modal_keys  # noqa: E402
+from ._modal_base import BaseModalDialog, make_scrollable_form, protect_combobox_wheel  # noqa: E402
 from .colors import ERROR_RED  # noqa: E402
 from .exits_dialog_widgets import (  # noqa: E402
     _OCO_CANCEL_ON_CHOICES,
@@ -187,8 +186,17 @@ def make_bracket_strategy(
 # ---------------------------------------------------------------------------
 
 
-class ExitsDialog(tk.Toplevel):
-    """The Edit Exit Strategies window."""
+class ExitsDialog(BaseModalDialog):
+    """The Edit Exit Strategies window.
+
+    Migrated from raw ``tk.Toplevel`` to :class:`BaseModalDialog` —
+    title / transient / geometry-persistence / ESC+Return / grab are
+    all owned by the base class. ``protect_combobox_wheel`` is
+    applied (a) once after the initial build and (b) after every
+    ``_rebuild_editor`` pass, since leg / OCO rebuilds destroy and
+    recreate the per-leg widget tree including comboboxes / spinboxes
+    (see CLAUDE.md §7.11).
+    """
 
     def __init__(
         self,
@@ -196,19 +204,12 @@ class ExitsDialog(tk.Toplevel):
         *,
         on_library_changed: Callable[[], None] | None = None,
     ) -> None:
-        super().__init__(master)
-        self.title("Edit Exit Strategies")
-        try:
-            self.transient(master)
-        except tk.TclError:
-            pass
-        # Geometry persistence — restore last-used size + position;
-        # fall back to legacy 1400x780.
-        try:
-            from .geometry_store import attach_persistent_geometry
-            attach_persistent_geometry(self, "dlg.exits", "1400x780")
-        except tk.TclError:
-            self.geometry("1400x780")
+        super().__init__(
+            master,
+            title="Edit Exit Strategies",
+            geometry_key="dlg.exits",
+            default_geometry="1400x780",
+        )
         self.minsize(900, 500)
         self._on_library_changed = on_library_changed
 
@@ -226,7 +227,29 @@ class ExitsDialog(tk.Toplevel):
         self.refresh_library()
         # Initial state: no draft loaded yet → disable add buttons + clear form.
         self._rebuild_editor()
-        bind_modal_keys(self, cancel=self.destroy, primary=self._on_save)
+        # CLAUDE.md §7.11 — guard every Combobox / Spinbox under the
+        # dialog tree. ``_rebuild_editor`` re-applies this after each
+        # subsequent rebuild to catch freshly-created widgets.
+        protect_combobox_wheel(self, scroll_target=self._legs_canvas)
+        self._finalize_modal(primary=self._on_save, cancel=self._on_cancel)
+
+    # ----- BaseModalDialog hooks -----
+
+    def _on_cancel(self) -> None:
+        """ESC / [Close] / WM_DELETE — dismiss without committing.
+
+        Edits live in ``self._draft`` (a deep clone via dict
+        round-trip) and are never written to disk until the user
+        clicks Save, so cancel needs no explicit revert step.
+        """
+        try:
+            self.destroy()
+        except tk.TclError:
+            pass
+
+    def _on_primary(self) -> None:
+        """Return-key handler — same as the [Save] button."""
+        self._on_save()
 
     # ----- Public test/UX hooks -----
 
@@ -374,7 +397,7 @@ class ExitsDialog(tk.Toplevel):
         # (Close) rightmost. ``side="right"`` reverses pack order,
         # so pack Close first (lands rightmost), then Save, then
         # Validate.
-        ttk.Button(footer, text="Close",    command=self.destroy).pack(side="right", padx=(2, 0))
+        ttk.Button(footer, text="Close",    command=self._on_cancel).pack(side="right", padx=(2, 0))
         ttk.Button(footer, text="Save",     command=self._on_save).pack(side="right", padx=(2, 0))
         ttk.Button(footer, text="Validate", command=self._on_validate).pack(side="right", padx=(2, 0))
 
@@ -528,6 +551,16 @@ class ExitsDialog(tk.Toplevel):
             row = _OCOGroupRow(self._oco_inner, oco=oco, dialog=self)
             row.pack(fill="x", pady=1)
         self._refresh_oco_disjoint_validation()
+        # CLAUDE.md §7.11 — every rebuild destroys + recreates the
+        # per-leg widget tree (comboboxes for trigger-kind / interval,
+        # spinboxes for offsets / qty-pct). Re-bind wheel guard on the
+        # fresh widgets, otherwise mouse-wheel over them silently
+        # rotates the value. Idempotent — safe on the initial build
+        # path too (called once more after this from ``__init__``).
+        try:
+            protect_combobox_wheel(self, scroll_target=self._legs_canvas)
+        except tk.TclError:
+            pass
 
     def _on_add_leg(self) -> None:
         if self._draft is None:
