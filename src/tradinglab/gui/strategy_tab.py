@@ -1750,3 +1750,20 @@ class StrategyTab(ttk.Frame):
                 self.after_cancel(self._export_poll_after_id)
         except Exception:  # noqa: BLE001
             pass
+        # Audit Tier 1.7 — best-effort join on the export daemon thread
+        # so deterministic-teardown tests don't trip on a thread that
+        # outlives the dialog. 2-second ceiling — the export polls
+        # ``cancel_token.is_cancelled()`` between pages (PDF) or before
+        # render/write (HTML), so cancellation observation latency is
+        # bounded by ``_CANCEL_POLL_INTERVAL`` ~256 bars (microseconds)
+        # for the strategy_tester evaluator path, and one matplotlib
+        # render cycle for export (<1s). The 2s ceiling is intentionally
+        # loose so a stuck-but-uncancelled thread can't hang dialog
+        # destroy indefinitely; daemon=True ensures the process can
+        # still exit cleanly if the join times out.
+        try:
+            thread = self._export_thread
+            if thread is not None and thread.is_alive():
+                thread.join(timeout=2.0)
+        except Exception:  # noqa: BLE001
+            pass
