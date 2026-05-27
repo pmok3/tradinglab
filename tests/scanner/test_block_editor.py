@@ -485,15 +485,14 @@ def test_field_ref_picker_reflow_wraps_when_narrow(root):
             picker._reflow_value_pane()
         finally:
             root.winfo_width = original_winfo_width  # type: ignore[method-assign]
-        rows = sorted(
-            int(w.grid_info().get("row", 0))
-            for w in picker._flow_children
-            if w.grid_info()
-        )
+        # New layout uses per-row sub-frames (each widget is packed
+        # ``side="left"`` inside its row Frame). Verify wrapping by
+        # asserting >1 row frames exist.
         # At 400px toplevel, budget = max(180, (400-280)//2) = 180.
         # 9 widgets averaging ~80-120px each can't all fit on row 0.
-        assert max(rows) > 0, (
-            f"Expected wrapping at 400px toplevel, got rows={rows}")
+        assert len(picker._flow_row_frames) > 1, (
+            f"Expected wrapping at 400px toplevel, got "
+            f"{len(picker._flow_row_frames)} row frame(s)")
     finally:
         picker.destroy()
 
@@ -511,15 +510,11 @@ def test_field_ref_picker_reflow_single_row_when_wide(root):
             picker._reflow_value_pane()
         finally:
             root.winfo_width = original_winfo_width  # type: ignore[method-assign]
-        rows = [
-            int(w.grid_info().get("row", 0))
-            for w in picker._flow_children
-            if w.grid_info()
-        ]
         # At 3000px toplevel: budget = max(180, (3000-280)//2) = 1360.
         # 9 widgets at ~80-120px (≈800 total + padding) all fit on row 0.
-        assert max(rows) == 0, (
-            f"Expected single-row layout at 3000px toplevel, got rows={rows}")
+        assert len(picker._flow_row_frames) == 1, (
+            f"Expected single-row layout at 3000px toplevel, got "
+            f"{len(picker._flow_row_frames)} row frame(s)")
     finally:
         picker.destroy()
 

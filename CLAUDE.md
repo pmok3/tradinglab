@@ -835,6 +835,153 @@ suggestions),
 `tests/unit/strategy_tester/test_warmup_cross_symbol.py` (per-symbol
 walker + by-symbol aggregator).
 
+### 7.19 Auto-stack ConditionFrame contract (fit-based, resize-reactive)
+
+The Condition row widget (`gui/scanner_block_editor.py
+_ConditionFrame`) is shared by Scanner / Entries / Exits /
+Custom Indicator Builder dialogs. Historically it laid every
+control out on a single horizontal row:
+
+```
+[✓] [LEFT picker] [op] [params] [lookback] [interval] [✕]
+```
+
+That row overflowed the right edge of non-scrollable dialogs
+(EntriesDialog ≈ 1000–1200 px wide) when the LEFT picker
+contained an indicator with many trigger-relevant params —
+RVOL has 6, BBANDS / ADX / SMI / MACD pile on multi-output
+combos — pushing the per-op RHS picker, op combo, lookback,
+interval, and delete button past the dialog edge.
+
+**Fix: dual layout, fit-based selection** — `_classify_layout()`
+returns `"stacked"` (3 rows: top = enabled + LEFT + interval +
+delete; mid = op + scalar-params + lookback; bottom = field-params
+spanning the full width, vertically stacked when there are
+multiple, e.g. BETWEEN's low/high) when EITHER:
+
+1. `cond.op == OP_BETWEEN` (two RHS field pickers can't fit
+   alongside the LEFT picker even when both are simple — semantic
+   override), OR
+2. `_estimate_condition_inline_width(cond) > _get_available_width()`
+   — the estimated inline-rendered pixel width of the row
+   overflows the BlockEditor's available width.
+
+`_estimate_condition_inline_width(cond)` sums:
+
+- chrome (enabled + op combo + lookback + interval + delete +
+  paddings) ≈ 420 px,
+- `_estimate_picker_width(cond.left)` (when not in `_NO_LEFT_OPS`),
+- for each per-op param: scalar width OR `"name:" label +
+  _estimate_picker_width(field_ref)`.
+
+`_estimate_picker_width(ref)` uses calibrated font/widget metrics
+(`_CHAR_PX = 7`, `_COMBO_OVERHEAD = 25`, etc.) to compute a pure
+function of the ref. Picks up `pdef.description` first (falling
+back to `pdef.name`) for the label, matching what the runtime
+renders.
+
+`_get_available_width()` walks up the widget tree looking for the
+nearest `BlockEditor` ancestor and returns its `winfo_width() - 20`
+padding. Falls back to `Toplevel.winfo_width() - 80` and finally
+to `_DEFAULT_DIALOG_WIDTH_PX = 1200` when the window hasn't been
+realized yet (initial build before WM has mapped). The first real
+`<Configure>` event after mapping triggers a reclassification.
+
+**Hysteresis** (`_HYSTERESIS_PX = 80`): when currently stacked,
+flip back to inline ONLY when
+`inline_estimate < available - _HYSTERESIS_PX`. Prevents
+flip-flopping during a slow drag at the fit boundary.
+
+**Resize reactivity.** `_ConditionFrame.__init__` binds to its
+Toplevel's `<Configure>` event via `_on_toplevel_resize`, which
+debounces with `after(100, _do_resize_reclassify)`. On layout
+flip, fires an extra `on_change` so the consumer dialog's
+wheel-guard re-applies on the freshly rebuilt per-op pickers
+(see CLAUDE.md §7.11). The picker also has its own Toplevel
+`<Configure>` binding for its internal flow-wrap reflow — both
+fire independently; the picker reflows its inner widget rows
+while the ConditionFrame decides inline vs stacked at the outer
+level. Bindings + pending `after_id`s are cleaned up on
+`<Destroy>`.
+
+`_NO_LEFT_OPS = {OP_INSIDE_BAR, OP_OUTSIDE_BAR, OP_NR7}` hide
+the LEFT picker entirely; the classifier excludes LEFT
+complexity in that case so a stale complex `cond.left` doesn't
+force stacked.
+
+**The legacy helper `_picker_ref_is_complex(ref)`** is preserved
+for backward compatibility but is NO LONGER consulted by
+`_classify_layout`. Tests that previously asserted "param-count
+≥ 3 → stacked" or "cross-symbol pin → stacked" should be
+updated to test the new fit-based rule (stub
+`_get_available_width` to control the comparison).
+
+**Widget-identity preservation across flips.** Shared chrome
+widgets (`enabled_chk`, `left_picker`, `op_combo`,
+`params_scalar_frame`, `params_fields_frame`, `lookback`,
+`interval_combo`, `delete_btn`) are built **once** in
+`_build_shared_widgets()` and re-gridded by `_apply_layout()`
+on every flip — they're never destroyed. This is required by
+the wheel-guard contract (§7.11): the consumer dialog binds
+`protect_combobox_wheel` on every `on_change` and cannot
+re-find widgets that were swapped out without a fire-ack.
+
+Per-op param widgets ARE destroyed + recreated by
+`_build_params_row()` when:
+
+- the op changes (schema changes), OR
+- a left- or param-field change flips the classification (the
+  field-wrap **orientation** inside `_params_fields_frame`
+  differs between layouts — horizontal in inline, vertical in
+  stacked, so the existing field-picker wraps can't just be
+  re-gridded).
+
+**Fire/relayout contract for change handlers:**
+
+| Handler                  | Re-classify? | Rebuild params? | `_fire()` count   |
+|--------------------------|--------------|-----------------|-------------------|
+| `_on_left_change`        | yes          | only if flipped | 1 (2 on flip)     |
+| `_on_op_change`          | always       | always          | 1                 |
+| `_on_param_field_change` | yes          | only if flipped | 1 (2 on flip)     |
+| `_on_toplevel_resize`    | yes (debounced 100 ms) | only if flipped | 0 (1 on flip) |
+
+The extra `_fire()` on flip is the wheel-guard re-application
+contract — the consumer's `on_change` callback re-binds
+`protect_combobox_wheel` idempotently on the brand-new picker
+widgets.
+
+`_relayout_if_needed() -> bool` returns True when a flip
+happened so callers can decide to issue the extra `_fire()`.
+
+**Reflow budget propagation.** Every layout flip calls
+`picker.set_layout_hint(layout)` on the LEFT picker and every
+field-kind per-op param picker. `_FieldRefPicker
+._reflow_value_pane` reads `self._layout_hint`: inline pickers
+use `max(180, (toplevel_width - 280) // 2)` (sharing a row with
+a sibling), stacked pickers use `max(180, (toplevel_width - 280))`
+(full row). For BETWEEN's two stacked field pickers, both have
+`layout_hint == "stacked"` and stack vertically inside
+`_params_fields_frame`, so each gets the full budget on its own row.
+
+**Tests pinning the contract:**
+
+- `tests/unit/gui/test_condition_row_classification.py` (29
+  tests) — pure classification rule pinning: fit-based logic
+  driven by stubbed `_get_available_width`, BETWEEN semantic
+  override, hysteresis at boundary, narrow-vs-wide flips,
+  transitions across op / left / param-field changes,
+  `inside_bar` inline despite complex hidden LEFT.
+- `tests/unit/gui/test_condition_row_layout.py` (10 tests) —
+  geometric reachability in a 1200 px Toplevel: every visible
+  control fits inside the dialog right edge for RVOL,
+  cross-symbol pin (at narrow width), BETWEEN, and
+  indicator-on-RHS; layout flips triggered by left- and
+  op-changes preserve reachability; the extra `on_change`
+  fires on flip.
+- `tests/smoke/test_smoke_full.py::check_d81_rvol_rhs_reachable`
+  — end-to-end via EntriesDialog at native window size,
+  skipped on macOS per §7.1 (`transient()` deadlock).
+
 ### 7.20 Shared entry-dispatch eliminates live-vs-mechanical drift
 Audit item #4. Before this landmine was retired, the live
 `EntryEvaluator` (`src/tradinglab/entries/evaluator.py`) and the

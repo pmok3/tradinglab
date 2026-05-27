@@ -17121,12 +17121,18 @@ def check_e0_disk_cache_persist(app) -> None:
     from tradinglab.models import Candle
 
     # Counter-wrapped fetcher producing fresh-dated bars so the
-    # staleness check in _load_data sees them as current.
+    # staleness check in _load_data sees them as current. Counts only
+    # TESTCACHE-targeted invocations — the smoke fixture has a
+    # background watchlist preload thread that fires `(AMD, 5m)`,
+    # `(NVDA, 5m)` etc. asynchronously, and we don't want that to
+    # contaminate the "in-session revisit must hit memory cache for
+    # OUR test ticker" assertion below.
     calls = {"n": 0}
     original = _data_pkg.DATA_SOURCES[app.source_var.get()]
 
     def counted(ticker, interval):
-        calls["n"] += 1
+        if ticker == "TESTCACHE":
+            calls["n"] += 1
         # End "now" so _cache_is_stale returns False on revisit.
         end = datetime.now().replace(second=0, microsecond=0)
         out = []
@@ -18799,6 +18805,157 @@ def check_d80_horizontal_lines(app) -> None:
     print("  [OK] non-empty labels render as Text artists (C3)")
 
 
+def check_d81_rvol_rhs_reachable(app) -> None:
+    """Auto-stack ConditionFrame: complex LEFT picker (RVOL) must NOT
+    push the RHS picker / op / interval / delete past the dialog's
+    right edge.
+
+    Regression for the v0.1.0 bug where putting RVOL on the LEFT of
+    a Condition inside an Entries-strategy indicator trigger pushed
+    the RHS controls off the right side of the dialog scroll
+    canvas. The fix (CLAUDE.md §7.19) is per-row dual layout —
+    ``_classify_layout()`` returns ``"stacked"`` when the LEFT
+    picker is complex, OR a per-op field picker is complex, OR the
+    op is ``between``. This check exercises the wiring end-to-end
+    by spawning an :class:`EntriesDialog`, mounting a BlockEditor
+    via the INDICATOR trigger kind, adding a Condition with
+    LEFT=rvol, and asserting:
+
+    1. The row's ``_current_layout`` is ``"stacked"``.
+    2. The dialog's BlockEditor scroll canvas does not need to grow
+       wider than the dialog frame to make every shared widget
+       reachable.
+
+    macOS skip per §7.1: ``EntriesDialog.__init__`` calls
+    ``self.transient(master)`` which deadlocks the headless
+    ``macos-15-arm64`` runner. The dialog is unit-tested on every
+    platform; the smoke layer's job is end-to-end reachability,
+    which is already covered on Linux + Windows.
+    """
+    if sys.platform == "darwin":
+        print("  [SKIP] d81: macOS Tk dialog deadlock (transient + headless)")
+        return
+
+    import tkinter as tk
+
+    from tradinglab.entries.model import (
+        EntryStrategy,
+        TriggerKind,
+    )
+    from tradinglab.gui.entries_dialog import EntriesDialog
+    from tradinglab.scanner.model import (
+        OP_GT,
+        Condition,
+        FieldRef,
+        Group,
+    )
+
+    # --- Build a fresh draft strategy with an INDICATOR trigger ----
+    strat = EntryStrategy(
+        name="(smoke d81)",
+        # trigger.kind starts MARKET by default; we'll flip it below.
+    )
+
+    dlg: EntriesDialog | None = None
+    try:
+        dlg = EntriesDialog(app, strategy=strat)
+        # Force the dialog to a known width — 1200px is the documented
+        # minimum that exposed the original bug, and large enough to
+        # ensure ``_classify_layout`` is the only thing that can
+        # decide stacked vs inline (i.e. it's not a width-clipping
+        # artifact).
+        target_width_px = 1200
+        dlg.geometry(f"{target_width_px}x780+50+50")
+        # Many pumps to give the WM time to actually realise the
+        # geometry — withdrawn / iconified parents make
+        # ``winfo_width`` return 1 for several event-loop ticks.
+        for _ in range(20):
+            dlg.update_idletasks()
+            dlg.update()
+            if dlg.winfo_width() > 1:
+                break
+
+        # Flip trigger kind to INDICATOR so BlockEditor is mounted.
+        dlg._draft.trigger.kind = TriggerKind.INDICATOR
+        # Seed condition with a complex LEFT (rvol) so the very first
+        # ConditionFrame already classifies as stacked.
+        dlg._draft.trigger.condition = Group(
+            combinator="and",
+            children=[
+                Condition(
+                    left=FieldRef.indicator("rvol"),
+                    op=OP_GT,
+                    params={"right": FieldRef.literal(1.5)},
+                    interval="5m",
+                ),
+            ],
+        )
+        # Trigger rebuild so the embedded BlockEditor picks up the
+        # seeded condition.
+        dlg._render_trigger_params()
+        for _ in range(5):
+            dlg.update_idletasks()
+            dlg.update()
+
+        editor = dlg.block_editor
+        assert editor is not None, (
+            "INDICATOR trigger kind must mount a BlockEditor on the "
+            "dialog (entries_dialog.py _render_trigger_params path)")
+        assert editor._root_frame is not None
+        cf = editor._root_frame._child_frames[0]
+        assert cf.__class__.__name__ == "_ConditionFrame", (
+            f"first child must be a _ConditionFrame, got "
+            f"{cf.__class__.__name__}")
+
+        # --- Stacked layout assertion ----------------------------------
+        assert cf._current_layout == "stacked", (
+            f"RVOL LEFT must trigger stacked layout per CLAUDE.md "
+            f"§7.19; got {cf._current_layout!r}")
+
+        # --- Geometric reachability -----------------------------------
+        # Force one more pump so all the picker's internal reflow
+        # callbacks settle.
+        for _ in range(3):
+            dlg.update_idletasks()
+            dlg.update()
+
+        # The dialog's reported ``winfo_width`` is sometimes still
+        # stale (1px) on headless runners — fall back to the
+        # geometry we explicitly set so the assertion is meaningful.
+        dialog_width = max(dlg.winfo_width(), target_width_px)
+        dlg_right = dlg.winfo_rootx() + dialog_width
+        # The original bug pushed RHS controls 150–300+ px past the
+        # dialog edge, so a generous 32-pixel slop for window-manager
+        # decorations + sub-pixel rounding still catches it while
+        # tolerating Tk's own padding artefacts on headless runners.
+        slop_px = 32
+        # Every shared chrome widget must have its right edge within
+        # the dialog. The delete button is the rightmost widget in
+        # both layouts; the interval combo is just left of it.
+        for label, widget in (
+            ("delete_btn", cf._delete_btn),
+            ("interval_combo", cf._interval_combo),
+            ("left_picker", cf._left_picker),
+            ("op_combo", cf._op_combo),
+        ):
+            try:
+                right = widget.winfo_rootx() + widget.winfo_reqwidth()
+            except tk.TclError:
+                continue
+            assert right <= dlg_right + slop_px, (
+                f"d81: {label} right edge {right} exceeds dialog right "
+                f"edge {dlg_right} (dialog_width={dialog_width}, "
+                f"slop={slop_px}) — stacked layout did not contain it")
+        print("  [OK] d81: RVOL LEFT triggers stacked layout; all "
+              "shared chrome stays within dialog width")
+    finally:
+        if dlg is not None:
+            try:
+                dlg.destroy()
+            except tk.TclError:
+                pass
+
+
 # ---------------------------------------------------------------------- Main
 
 
@@ -18961,6 +19118,7 @@ def _run_all_checks(app) -> None:
     check_b71_macd(app)
     check_b72_chandelier_stops(app)
     check_d80_horizontal_lines(app)
+    check_d81_rvol_rhs_reachable(app)
     check_e0_disk_cache_persist(app)
 
 

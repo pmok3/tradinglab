@@ -60,6 +60,7 @@ from ..scanner.model import (
     FIELD_KIND_BUILTIN,
     FIELD_KIND_INDICATOR,
     FIELD_KIND_LITERAL,
+    OP_BETWEEN,
     OP_CROSSES_ABOVE,
     OP_CROSSES_BELOW,
     OP_INSIDE_BAR,
@@ -72,6 +73,14 @@ from ..scanner.model import (
     Condition,
     FieldRef,
     Group,
+)
+from ._widget_metrics import (
+    _CHAR_PX,
+    _CHECKBOX_PX,
+    _COMBO_OVERHEAD,
+    _ENTRY_OVERHEAD,
+    _FRAME_PAD_PX,
+    _SPINBOX_OVERHEAD,
 )
 
 LOG = logging.getLogger(__name__)
@@ -98,76 +107,15 @@ _NO_LEFT_OPS = frozenset({OP_INSIDE_BAR, OP_OUTSIDE_BAR, OP_NR7})
 #: glyph keeps the dropdown self-explanatory at a glance.
 _ACTIVE_SYMBOL_SENTINEL: str = "(active)"
 
-#: Maximum number of distinct cross-symbol picks remembered in the
-#: settings-backed LRU. 20 covers the realistic ceiling — even a
-#: heavy multi-symbol relative-strength workflow rarely pins more
-#: than ~6-8 reference tickers.
-_RECENT_CROSS_SYMBOLS_CAP: int = 20
-
-# Module-level cache mirroring the persisted LRU. Loaded lazily on
-# first access; ``_remember_cross_symbol`` writes through both this
-# cache AND the settings file so a re-mounted picker sees the new
-# entry without reloading from disk. Tests reset via ``_reset_recent``.
-_recent_cross_symbols: list[str] | None = None
-
-
-def _load_recent_cross_symbols() -> list[str]:
-    """Return the persisted recent-cross-symbols LRU.
-
-    Settings access is wrapped in a broad except because the picker
-    may be instantiated in test contexts (or before the settings
-    module is initialized) where ``_settings.get`` raises. Failing
-    safe to an empty list keeps the combo functional in every
-    environment — only the persistence layer degrades.
-    """
-    global _recent_cross_symbols
-    if _recent_cross_symbols is not None:
-        return _recent_cross_symbols
-    try:
-        from .. import settings as _settings
-        raw = _settings.get("recent_cross_symbols", []) or []
-        cleaned: list[str] = []
-        seen: set[str] = set()
-        for s in raw:
-            if not isinstance(s, str):
-                continue
-            sym = s.strip().upper()
-            if not sym or sym in seen:
-                continue
-            seen.add(sym)
-            cleaned.append(sym)
-        _recent_cross_symbols = cleaned[:_RECENT_CROSS_SYMBOLS_CAP]
-    except Exception:  # noqa: BLE001 — degrade silently per design above
-        _recent_cross_symbols = []
-    return _recent_cross_symbols
-
-
-def _remember_cross_symbol(sym: str) -> None:
-    """Push ``sym`` to the front of the recent LRU (MRU first).
-
-    No-op for empty / active-sentinel values. Writes through to the
-    settings file via ``_settings.set`` so the pick survives restart.
-    """
-    s = (sym or "").strip().upper()
-    if not s or s == _ACTIVE_SYMBOL_SENTINEL.upper():
-        return
-    recent = _load_recent_cross_symbols()
-    # Move-to-front; preserve order for the rest.
-    if s in recent:
-        recent.remove(s)
-    recent.insert(0, s)
-    del recent[_RECENT_CROSS_SYMBOLS_CAP:]
-    try:
-        from .. import settings as _settings
-        _settings.set("recent_cross_symbols", list(recent))
-    except Exception:  # noqa: BLE001 — best-effort persistence
-        LOG.debug("recent_cross_symbols persistence failed", exc_info=True)
-
-
-def _reset_recent_cross_symbols_for_tests() -> None:
-    """Test hook — drops the module-level cache so the next load re-reads."""
-    global _recent_cross_symbols
-    _recent_cross_symbols = None
+#: Placeholder text shown in the ``@`` Entry when the user hasn't
+#: pinned a cross-symbol. Visually grey (see
+#: :meth:`_FieldRefPicker._symbol_placeholder_fg`). Empty entry ==
+#: active symbol (no cross-symbol pin); typing any ticker overrides.
+#: Cleared on FocusIn so the user can start typing immediately;
+#: re-applied on FocusOut if the field is still empty. Alias of the
+#: legacy ``_ACTIVE_SYMBOL_SENTINEL`` constant for back-compat with
+#: existing test imports.
+_SYMBOL_PLACEHOLDER: str = _ACTIVE_SYMBOL_SENTINEL
 
 
 # ---------------------------------------------------------------------------
@@ -223,6 +171,181 @@ def _compute_flow_rows(
     return out
 
 
+#: Min indicator-param count that flips :class:`_ConditionFrame` to
+#: ``"stacked"`` layout. Picked at 3 so EMA / SMA / RSI / ATR / VWAP
+#: / AVWAP / LRSI (all 1-2 params) stay on the simple inline row
+#: while RVOL (6 trigger-relevant) / Bollinger (2) and friends with
+#: multi-output get the bigger 3-row layout. See
+#: :meth:`_ConditionFrame._classify_layout` for the full rule.
+_COMPLEX_INDICATOR_PARAM_THRESHOLD: int = 3
+
+
+#: Empirically-derived font/widget metrics for the inline-width
+#: estimator live in :mod:`._widget_metrics` so the indicator-dialog
+#: param-wrap classifier can share the same calibration (avoiding the
+#: previous "7-px-per-char heuristic duplicated in two places" hazard
+#: called out in the generalisation audit). The ``_CHAR_PX`` /
+#: ``_COMBO_OVERHEAD`` / etc names are imported at module scope above
+#: so existing call sites and tests work unchanged.
+
+
+def _estimate_pdef_width(pdef: Any) -> int:
+    """Estimate pixel width of one ParamDef wrap (label + widget).
+
+    Reads ``pdef.description or pdef.name`` for the label and
+    ``pdef.kind`` for the widget shape. Pure function — no Tk calls.
+    """
+    label = (getattr(pdef, "description", "") or pdef.name) + ":"
+    label_px = len(label) * _CHAR_PX + 4
+    kind = pdef.kind
+    if kind == "bool":
+        return label_px + _CHECKBOX_PX
+    if kind == "choice":
+        # Combobox width=8 chars (default in _build_param_widget).
+        return label_px + 8 * _CHAR_PX + _COMBO_OVERHEAD
+    if kind in ("int", "float"):
+        # Spinbox width=6 chars (default in _build_param_widget).
+        return label_px + 6 * _CHAR_PX + _SPINBOX_OVERHEAD
+    # Fallback Entry width=8.
+    return label_px + 8 * _CHAR_PX + _ENTRY_OVERHEAD
+
+
+def _estimate_picker_width(ref: FieldRef | None) -> int:
+    """Estimate inline pixel width of a ``_FieldRefPicker`` for ``ref``.
+
+    Sum of the type combo + value widgets (combo / spinbox / entry
+    / param wraps) + optional output combo + optional Symbol cluster
+    + per-gap padding. Pure function — no Tk calls.
+
+    Drives :meth:`_ConditionFrame._classify_layout` for fit-based
+    inline-vs-stacked selection. Falls back to a safe value for
+    unknown indicator IDs (treats them as "wide enough to stack").
+    """
+    type_combo = 9 * _CHAR_PX + _COMBO_OVERHEAD  # picker type combo width=9
+    if ref is None or ref.kind == FIELD_KIND_LITERAL:
+        return type_combo + 10 * _CHAR_PX + _ENTRY_OVERHEAD + _FRAME_PAD_PX
+    symbol_cluster = 0
+    if ref.symbol:
+        # "@" label + space + combo width=11
+        symbol_cluster = (1 * _CHAR_PX + 2) + (11 * _CHAR_PX + _COMBO_OVERHEAD) + _FRAME_PAD_PX
+    if ref.kind == FIELD_KIND_BUILTIN:
+        builtin_combo = 18 * _CHAR_PX + _COMBO_OVERHEAD
+        return type_combo + builtin_combo + symbol_cluster + _FRAME_PAD_PX
+    # Indicator
+    spec = get_field(ref.id, kind="indicator")
+    if spec is None:
+        # Unknown indicator — assume wide to be safe (forces stacked).
+        return 9999
+    ind_combo = 14 * _CHAR_PX + _COMBO_OVERHEAD  # indicator combo width=14
+    params_total = sum(_estimate_pdef_width(p) for p in spec.params_schema)
+    output_combo = (
+        8 * _CHAR_PX + _COMBO_OVERHEAD if len(spec.output_keys) > 1 else 0
+    )
+    # Indicator picker always has a Symbol cluster (defaults to active).
+    indicator_symbol_cluster = (
+        (1 * _CHAR_PX + 2) + (11 * _CHAR_PX + _COMBO_OVERHEAD)
+    )
+    n_widgets = 2 + len(spec.params_schema) + (
+        1 if len(spec.output_keys) > 1 else 0
+    ) + 1  # type combo, ind combo, params..., output?, symbol
+    padding = (n_widgets - 1) * _FRAME_PAD_PX
+    return (
+        type_combo + ind_combo + params_total
+        + output_combo + indicator_symbol_cluster + padding
+    )
+
+
+#: Estimated chrome width of a :class:`_ConditionFrame` rendered
+#: inline (everything except the LEFT picker and any RHS field
+#: pickers): enabled checkbox + op combo + lookback cluster +
+#: interval combo + delete button + paddings. Used by
+#: :func:`_estimate_condition_inline_width`.
+_CONDITION_CHROME_PX: int = (
+    22                                # enabled checkbox
+    + (14 * _CHAR_PX + _COMBO_OVERHEAD)  # op combo width=14
+    + 150                             # lookback cluster (rough)
+    + (5 * _CHAR_PX + _COMBO_OVERHEAD)   # interval combo width=5
+    + 30                              # delete button
+    + 6 * _FRAME_PAD_PX               # 6 gaps between chrome widgets
+)
+
+
+def _estimate_scalar_param_width(name: str, kind: str) -> int:
+    """Estimate width of a single scalar (int/float) op param wrap.
+
+    Uses the *operator* param name (e.g. ``lookback``, ``n``,
+    ``bars``, ``tolerance_pct``) since those don't have descriptions
+    in :data:`OPERATOR_PARAM_SCHEMA` — only kinds.
+    """
+    label_px = (len(name) + 1) * _CHAR_PX + 4  # name + colon
+    if kind in ("int", "float"):
+        return label_px + 6 * _CHAR_PX + _SPINBOX_OVERHEAD
+    return label_px + 8 * _CHAR_PX + _ENTRY_OVERHEAD
+
+
+def _estimate_condition_inline_width(cond: Condition) -> int:
+    """Estimate pixel width of a full inline-mode condition row.
+
+    Sums chrome + LEFT picker (when not hidden by ``_NO_LEFT_OPS``)
+    + all per-op field/scalar param widgets. Pure function — used by
+    :meth:`_ConditionFrame._classify_layout` to decide whether the
+    row can comfortably fit on the dialog's available width.
+    """
+    width = _CONDITION_CHROME_PX
+    if cond.op not in _NO_LEFT_OPS:
+        width += _estimate_picker_width(cond.left) + _FRAME_PAD_PX
+    schema = OPERATOR_PARAM_SCHEMA.get(cond.op, ())
+    for name, kind in schema:
+        if kind == "field":
+            field_ref = cond.params.get(name)
+            if isinstance(field_ref, FieldRef):
+                # field-typed op params get a "name:" label prefix in
+                # ``_build_params_row``; account for that label too.
+                label_px = (len(name) + 1) * _CHAR_PX + 4
+                width += label_px + _estimate_picker_width(field_ref) + _FRAME_PAD_PX
+        else:
+            width += _estimate_scalar_param_width(name, kind) + _FRAME_PAD_PX
+    return width
+
+
+#: Hysteresis buffer for stacked → inline transition. When the
+#: condition is currently stacked, we only flip back to inline if
+#: ``estimated_inline_width < available_width - _HYSTERESIS_PX`` so
+#: a slow drag at the boundary doesn't cause continuous flipping.
+_HYSTERESIS_PX: int = 80
+
+#: Default assumed available width when the Toplevel hasn't been
+#: realized yet (initial build before WM has mapped the window).
+#: Picked to bracket typical TradingLab dialogs (entries/exits at
+#: 1400 px, scanner at 1200 px, custom indicator's BlockEditor at
+#: ~760 px). With 1200 px assumed: simple `close > 100` (~900 est)
+#: classifies as inline; RVOL (~1900 est) as stacked. The first
+#: real ``<Configure>`` after the window is mapped triggers a
+#: reclassification against the actual width.
+_DEFAULT_DIALOG_WIDTH_PX: int = 1200
+
+
+def _picker_ref_is_complex(ref: FieldRef | None) -> bool:
+    """DEPRECATED: kept only for backward compatibility with existing
+    callers (tests). The classification is now fit-based —
+    :meth:`_ConditionFrame._classify_layout` calls
+    :func:`_estimate_condition_inline_width` and compares to the
+    available dialog width. Returns True iff the picker would need
+    multiple lines to render itself OR has a cross-symbol pin —
+    effectively the same signal as before but for legacy uses only.
+    """
+    if ref is None:
+        return False
+    if ref.symbol:
+        return True
+    if ref.kind != FIELD_KIND_INDICATOR:
+        return False
+    spec = get_field(ref.id, kind="indicator")
+    if spec is None:
+        return False
+    return len(spec.params_schema) >= 3 or len(spec.output_keys) > 1
+
+
 # ---------------------------------------------------------------------------
 # FieldRef picker
 # ---------------------------------------------------------------------------
@@ -238,6 +361,20 @@ class _FieldRefPicker(ttk.Frame):
     The picker is *self-driving*: once instantiated, it owns its
     internal :class:`FieldRef` and offers :meth:`get` / :meth:`set` to
     interrogate / replace it. Mutations fire ``on_change`` if given.
+
+    Adaptive flow layout
+    --------------------
+    The indicator branch's children (indicator combo + param wraps +
+    optional output combo + optional Symbol cluster) live in
+    ``self._flow_children`` and are re-gridded by
+    :meth:`_reflow_value_pane` on Toplevel resize. The width budget
+    splits the row in half by default (``// 2``) because two sibling
+    pickers — LEFT and RHS — usually compete for the row inside a
+    :class:`_ConditionFrame`. When the parent flips to its stacked
+    layout (because the picker IS complex enough that the parent
+    decided to give it its own row), the parent calls
+    :meth:`set_layout_hint` with ``"stacked"`` and the budget skips
+    the ``// 2`` split — see :meth:`_reflow_value_pane`.
     """
 
     _TYPE_LABELS = {
@@ -253,20 +390,32 @@ class _FieldRefPicker(ttk.Frame):
         *,
         ref: FieldRef | None = None,
         on_change: Callable[[], None] | None = None,
+        layout_hint: str = "inline",
     ) -> None:
         super().__init__(master)
         self._on_change = on_change
         self._ref: FieldRef = ref or FieldRef.builtin("close")
+        # ``layout_hint`` is "inline" (default — picker shares its
+        # row with a sibling RHS picker, so the flow budget halves)
+        # or "stacked" (parent gave the picker its own row; flow
+        # budget uses the full row width). Mutated by the parent
+        # :class:`_ConditionFrame` via :meth:`set_layout_hint` when
+        # it flips between inline and stacked.
+        self._layout_hint: str = layout_hint if layout_hint in (
+            "inline", "stacked") else "inline"
         # Cache: last numeric the user typed, restored when toggling
         # back to Number from another type.
         self._last_literal: float = 0.0
-        # Cross-symbol combo state. ``_symbol_var`` holds either the
-        # ``(active)`` sentinel or an uppercased ticker. Recreated per
-        # ``_rebuild_value_pane`` call.
+        # Cross-symbol entry state. ``_symbol_var`` holds either the
+        # empty placeholder text or an uppercased user-typed ticker.
+        # ``_symbol_is_placeholder`` tracks whether the var currently
+        # shows the placeholder (so FocusIn knows to clear it).
+        # Recreated per ``_rebuild_value_pane`` call.
         self._symbol_var: tk.StringVar = tk.StringVar(
-            value=self._ref.symbol or _ACTIVE_SYMBOL_SENTINEL
+            value=self._ref.symbol or _SYMBOL_PLACEHOLDER
         )
-        self._symbol_combo: ttk.Combobox | None = None
+        self._symbol_is_placeholder: bool = not bool(self._ref.symbol)
+        self._symbol_combo: ttk.Entry | None = None
 
         # ----- type selector -------------------------------------------------
         self._type_var = tk.StringVar(value=self._TYPE_BY_KIND[self._ref.kind])
@@ -292,6 +441,11 @@ class _FieldRefPicker(ttk.Frame):
         # wrap, optional output combo). Empty for non-indicator branches —
         # those use a single row=0 layout that doesn't need wrapping.
         self._flow_children: list[tk.Widget] = []
+        # Per-row container frames built by ``_reflow_value_pane`` for
+        # the flow layout (one ttk.Frame per logical row). Recycled on
+        # every reflow; cleaned up on ``_rebuild_value_pane`` /
+        # ``_on_destroy``.
+        self._flow_row_frames: list[tk.Widget] = []
         # Pending after_id for the debounced reflow callback. Tracked so
         # ``_rebuild_value_pane`` can cancel before destroying children
         # (avoids the callback running against destroyed widgets).
@@ -338,6 +492,30 @@ class _FieldRefPicker(ttk.Frame):
         self._type_var.set(self._TYPE_BY_KIND[ref.kind])
         self._rebuild_value_pane()
 
+    def set_layout_hint(self, hint: str) -> None:
+        """Update the layout hint and re-flow if changed.
+
+        Called by the parent :class:`_ConditionFrame` when it flips
+        between inline and stacked layouts. The hint informs
+        :meth:`_reflow_value_pane` whether to halve the budget (the
+        picker shares a row with a sibling) or use the full available
+        width (the picker owns its row).
+        """
+        if hint not in ("inline", "stacked") or hint == self._layout_hint:
+            return
+        self._layout_hint = hint
+        if self._reflow_after_id is not None:
+            try:
+                self.after_cancel(self._reflow_after_id)
+            except tk.TclError:
+                pass
+            self._reflow_after_id = None
+        try:
+            if self.winfo_exists() and self._flow_children:
+                self._reflow_after_id = self.after_idle(self._reflow_value_pane)
+        except tk.TclError:
+            pass
+
     # -- internals ------------------------------------------------------------
 
     def _on_type_change(self) -> None:
@@ -383,12 +561,16 @@ class _FieldRefPicker(ttk.Frame):
                 pass
         self._param_widgets = {}
         self._flow_children = []
+        # Row frames are children of value_pane and destroyed above,
+        # but clear our handle list so we don't keep dead references.
+        self._flow_row_frames = []
         self._symbol_combo = None
         # Re-seed the cross-symbol var from the ref each rebuild so the
-        # combo shows the persisted value (e.g. after .set(ref)).
+        # entry shows the persisted value (e.g. after .set(ref)).
         self._symbol_var = tk.StringVar(
-            value=self._ref.symbol or _ACTIVE_SYMBOL_SENTINEL
+            value=self._ref.symbol or _SYMBOL_PLACEHOLDER
         )
+        self._symbol_is_placeholder = not bool(self._ref.symbol)
         kind = self._ref.kind
         if kind == FIELD_KIND_LITERAL:
             self._literal_var = tk.StringVar(
@@ -411,9 +593,10 @@ class _FieldRefPicker(ttk.Frame):
             )
             cb.grid(row=0, column=0, padx=(0, 4))
             cb.bind("<<ComboboxSelected>>", lambda _e: self._commit_builtin())
-            # Cross-symbol combo for Builtin branch: placed at the end
+            # Cross-symbol combo for Builtin branch: gridded at col=1
             # so layout of existing non-cross-symbol rows is unchanged.
-            self._build_symbol_combo(col=1)
+            sym_wrap = self._build_symbol_combo(parent=self._value_pane)
+            sym_wrap.grid(row=0, column=1, padx=(6, 0))
             return
 
         # FIELD_KIND_INDICATOR
@@ -429,49 +612,10 @@ class _FieldRefPicker(ttk.Frame):
             return
         if self._ref.id not in ids:
             self._ref = FieldRef.indicator(ids[0])
-        self._field_id_var = tk.StringVar(value=self._ref.id)
-        ind_combo = ttk.Combobox(
-            self._value_pane, textvariable=self._field_id_var,
-            state="readonly", values=tuple(ids), width=14,
-        )
-        ind_combo.grid(row=0, column=0, padx=(0, 4))
-        ind_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_indicator_change())
-        self._flow_children.append(ind_combo)
-
-        # Indicator params (length, etc.). For indicators with many
-        # params (RVOL has 8) the params + indicator combo + output
-        # combo can exceed any reasonable window width on a single
-        # row, so they're laid out via the adaptive flow algorithm in
-        # ``_reflow_value_pane`` (called via ``after_idle`` below and
-        # on every Toplevel resize).
-        spec = get_field(self._ref.id, kind="indicator")
-        if spec is None:
-            return
-        for i, pdef in enumerate(spec.params_schema):
-            wrap = self._build_param_widget(pdef, col=1 + i)
-            if wrap is not None:
-                self._flow_children.append(wrap)
-
-        # Output-key combo (only if >1 output).
-        if len(spec.output_keys) > 1:
-            current = self._ref.output_key or spec.default_output_key
-            self._output_var = tk.StringVar(value=current)
-            out_combo = ttk.Combobox(
-                self._value_pane, textvariable=self._output_var,
-                state="readonly", values=tuple(spec.output_keys), width=8,
-            )
-            out_combo.grid(row=0, column=1 + len(spec.params_schema), padx=(4, 0))
-            out_combo.bind("<<ComboboxSelected>>", lambda _e: self._commit_indicator())
-            self._flow_children.append(out_combo)
-
-        # Cross-symbol combo: placed at the very end of the indicator
-        # branch flow so existing rows' layout is unchanged for the
-        # common "(active)" case. Joins ``_flow_children`` so the
-        # adaptive wrap layout includes it on narrow dialogs.
-        sym_col_start = 1 + len(spec.params_schema) + (
-            1 if len(spec.output_keys) > 1 else 0
-        )
-        self._build_symbol_combo(col=sym_col_start)
+        # Build the indicator branch into a single row frame initially.
+        # ``_reflow_value_pane`` may subsequently tear this down and
+        # rebuild with multiple row frames if the dialog is too narrow.
+        self._build_indicator_branch_into_rows(target_row_count=1)
 
         # Schedule the initial flow layout. ``after_idle`` runs after
         # Tk has had a chance to compute requested widths, so each
@@ -480,6 +624,221 @@ class _FieldRefPicker(ttk.Frame):
             self._reflow_after_id = self.after_idle(self._reflow_value_pane)
         except tk.TclError:
             self._reflow_after_id = None
+
+    def _build_indicator_branch_into_rows(self, *, target_row_count: int) -> None:
+        """Build all flow children (ind combo, params, output, symbol)
+        into ``target_row_count`` row Frames packed top-to-bottom
+        inside ``self._value_pane``. ``target_row_count == 1`` packs
+        every widget into a single row Frame; higher counts distribute
+        widgets across multiple row Frames via the same flow algorithm
+        used by ``_reflow_value_pane`` (so the first widget on each
+        row is a left-edge anchor).
+
+        This method is called from:
+        * ``_rebuild_value_pane`` (indicator branch) with ``target_row_count=1``
+        * ``_reflow_value_pane`` when the wrap layout needs more rows
+
+        It tears down any existing ``_flow_children`` / ``_flow_row_frames``
+        before building.
+        """
+        # Tear down everything inside the value pane.
+        for w in self._value_pane.winfo_children():
+            try:
+                w.destroy()
+            except tk.TclError:
+                pass
+        self._param_widgets = {}
+        self._flow_children = []
+        self._flow_row_frames = []
+        self._symbol_combo = None
+        # Re-seed cross-symbol var from ref.
+        self._symbol_var = tk.StringVar(
+            value=self._ref.symbol or _SYMBOL_PLACEHOLDER
+        )
+        self._symbol_is_placeholder = not bool(self._ref.symbol)
+
+        ids = sorted(
+            (s.id for s in all_fields() if s.kind == "indicator"),
+            key=str.casefold,
+        )
+        spec = get_field(self._ref.id, kind="indicator")
+        if spec is None:
+            return
+
+        # Create row frames.
+        for ri in range(max(1, target_row_count)):
+            rf = ttk.Frame(self._value_pane)
+            rf.grid(
+                row=ri, column=0, sticky="w",
+                pady=(0 if ri == 0 else 2, 0),
+            )
+            self._flow_row_frames.append(rf)
+
+        # Build flow widgets first as a flat list (parented to
+        # self._value_pane temporarily) so we can compute placements.
+        # When target_row_count == 1, we know all go into row 0; skip
+        # the placement math and just pack into row 0.
+        if target_row_count <= 1:
+            row0 = self._flow_row_frames[0]
+            self._build_flat_indicator_widgets(parent=row0, ids=ids, spec=spec)
+            for w in self._flow_children:
+                try:
+                    w.pack(side="left", padx=(0, 6), anchor="w")
+                except tk.TclError:
+                    pass
+            return
+
+        # Multi-row: build temporarily into row 0 to MEASURE widths,
+        # then redistribute into row_frames according to placements.
+        # We use a fresh hidden measurement frame to avoid disturbing
+        # the visible layout during the measurement pass.
+        measure_frame = ttk.Frame(self._value_pane)
+        measure_frame.grid(row=0, column=1)  # off the visible flow
+        try:
+            self._build_flat_indicator_widgets(
+                parent=measure_frame, ids=ids, spec=spec,
+            )
+            for w in self._flow_children:
+                try:
+                    w.pack(side="left")
+                except tk.TclError:
+                    pass
+            self._value_pane.update_idletasks()
+            widths = [max(1, int(w.winfo_reqwidth())) for w in self._flow_children]
+        finally:
+            measure_frame.destroy()
+
+        # Reset and build for real into the row_frames.
+        self._param_widgets = {}
+        self._flow_children = []
+        self._symbol_combo = None
+        # Re-seed cross-symbol var again (the measure pass destroyed
+        # the previous one along with the measure_frame children).
+        self._symbol_var = tk.StringVar(
+            value=self._ref.symbol or _SYMBOL_PLACEHOLDER
+        )
+        self._symbol_is_placeholder = not bool(self._ref.symbol)
+
+        # Recompute placements based on width budget.
+        try:
+            top = self._toplevel_for_reflow or self.winfo_toplevel()
+            win_w = top.winfo_width() if top is not None else 0
+        except tk.TclError:
+            win_w = 0
+        budget = max(180, (win_w - 280)) if self._layout_hint == "stacked" \
+            else max(180, (win_w - 280) // 2)
+        placements = _compute_flow_rows(widths, budget=budget, pad=6)
+
+        # Group widget order indices by row.
+        row_for_index: list[int] = [r for (r, _c) in placements]
+
+        # Now build for real, parenting each widget under its assigned
+        # row_frame so packing is local.
+        # We need to know in advance which row each widget goes to;
+        # use a generator over self._build_flat_indicator_widgets that
+        # respects the per-widget parent.
+        self._build_indicator_widgets_into_rows(
+            ids=ids, spec=spec, row_for_index=row_for_index,
+        )
+
+    def _build_flat_indicator_widgets(
+        self, *, parent: tk.Misc, ids: list[str], spec: Any,
+    ) -> None:
+        """Create indicator-branch widgets as children of ``parent``,
+        appending each to ``self._flow_children`` in left-to-right
+        order: [ind_combo, *param_wraps, optional output_combo,
+        symbol_combo].
+
+        The caller is responsible for packing/gridding each created
+        widget within ``parent`` (this method intentionally doesn't
+        place them so we can reuse the build logic for both the
+        single-row and multi-row layouts).
+        """
+        self._field_id_var = tk.StringVar(value=self._ref.id)
+        ind_combo = ttk.Combobox(
+            parent, textvariable=self._field_id_var,
+            state="readonly", values=tuple(ids), width=14,
+        )
+        ind_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_indicator_change())
+        self._flow_children.append(ind_combo)
+
+        for pdef in spec.params_schema:
+            wrap = self._build_param_widget(pdef, parent=parent)
+            if wrap is not None:
+                self._flow_children.append(wrap)
+
+        if len(spec.output_keys) > 1:
+            current = self._ref.output_key or spec.default_output_key
+            self._output_var = tk.StringVar(value=current)
+            out_combo = ttk.Combobox(
+                parent, textvariable=self._output_var,
+                state="readonly", values=tuple(spec.output_keys), width=8,
+            )
+            out_combo.bind("<<ComboboxSelected>>", lambda _e: self._commit_indicator())
+            self._flow_children.append(out_combo)
+
+        sym_wrap = self._build_symbol_combo(parent=parent)
+        self._flow_children.append(sym_wrap)
+
+    def _build_indicator_widgets_into_rows(
+        self, *, ids: list[str], spec: Any, row_for_index: list[int],
+    ) -> None:
+        """Same as :meth:`_build_flat_indicator_widgets` but each
+        widget is created as a child of ``self._flow_row_frames[row]``
+        per the ``row_for_index`` list. Pack ``side="left"`` inside
+        each row frame.
+        """
+        # Compute the widget order: [ind_combo, *params, output?, sym].
+        # row_for_index has the same length and ordering.
+        order: list[tuple[str, Any]] = [("ind_combo", None)]
+        for pdef in spec.params_schema:
+            order.append(("param", pdef))
+        if len(spec.output_keys) > 1:
+            order.append(("output", spec))
+        order.append(("symbol", None))
+
+        if len(order) != len(row_for_index):
+            # Mismatch — fall back to single row.
+            row_for_index = [0] * len(order)
+
+        for (kind, payload), row_idx in zip(order, row_for_index, strict=False):
+            row_idx = max(0, min(row_idx, len(self._flow_row_frames) - 1))
+            row_frame = self._flow_row_frames[row_idx]
+            if kind == "ind_combo":
+                self._field_id_var = tk.StringVar(value=self._ref.id)
+                w = ttk.Combobox(
+                    row_frame, textvariable=self._field_id_var,
+                    state="readonly", values=tuple(ids), width=14,
+                )
+                w.bind("<<ComboboxSelected>>", lambda _e: self._on_indicator_change())
+                w.pack(side="left", padx=(0, 6), anchor="w")
+                self._flow_children.append(w)
+            elif kind == "param":
+                wrap = self._build_param_widget(payload, parent=row_frame)
+                if wrap is not None:
+                    wrap.pack(side="left", padx=(0, 6), anchor="w")
+                    self._flow_children.append(wrap)
+            elif kind == "output":
+                current = self._ref.output_key or payload.default_output_key
+                self._output_var = tk.StringVar(value=current)
+                w = ttk.Combobox(
+                    row_frame, textvariable=self._output_var,
+                    state="readonly", values=tuple(payload.output_keys), width=8,
+                )
+                w.bind("<<ComboboxSelected>>", lambda _e: self._commit_indicator())
+                w.pack(side="left", padx=(0, 6), anchor="w")
+                self._flow_children.append(w)
+            else:  # symbol
+                sym_wrap = self._build_symbol_combo(parent=row_frame)
+                sym_wrap.pack(side="left", padx=(0, 6), anchor="w")
+                self._flow_children.append(sym_wrap)
+
+    def _rebuild_indicator_branch_into_rows(self, target_row_count: int) -> None:
+        """Tear down + rebuild the indicator branch with the requested
+        number of row frames. Called by :meth:`_reflow_value_pane`
+        when the wrap row count changes.
+        """
+        self._build_indicator_branch_into_rows(target_row_count=target_row_count)
 
     # -- value commit handlers ------------------------------------------------
 
@@ -534,52 +893,108 @@ class _FieldRefPicker(ttk.Frame):
         )
         self._fire()
 
-    # -- cross-symbol combo --------------------------------------------------
+    # -- cross-symbol entry --------------------------------------------------
 
     def _current_symbol_from_combo(self) -> str:
-        """Read the current Symbol combo value, mapping sentinel → ``""``."""
+        """Read the current Symbol entry value, mapping placeholder → ``""``."""
         try:
             raw = self._symbol_var.get()
         except tk.TclError:
             return self._ref.symbol or ""
         s = (raw or "").strip().upper()
-        if not s or s == _ACTIVE_SYMBOL_SENTINEL.upper():
+        if not s or s == _SYMBOL_PLACEHOLDER.upper():
             return ""
         return s
 
-    def _build_symbol_combo(self, *, col: int) -> None:
-        """Build the optional ``@ [Symbol ▾]`` cluster.
+    def _build_symbol_combo(self, parent: tk.Misc | None = None) -> ttk.Frame:
+        """Build the ``@ [ticker entry]`` cluster wrap and return it.
 
-        Placed at ``(row=0, column=col)`` in the value pane (regridded
-        by the flow walker on narrow dialogs). Combobox is
-        ``state="normal"`` so the user can type any ticker; the
-        dropdown is pre-populated with the persisted recent-cross
-        LRU. On commit, the picked / typed value is remembered.
+        Plain ``ttk.Entry`` with placeholder behavior — NO dropdown,
+        NO history, NO suggestions. The user types ANY ticker on
+        demand; that's the whole point of cross-symbol pinning. An
+        empty entry means "use the active symbol" (no pin).
+
+        Placeholder behavior:
+
+        * Empty + unfocused → shows ``(active)`` in muted grey.
+        * Click / FocusIn → placeholder clears, ready for typing.
+        * FocusOut with empty content → placeholder re-displays;
+          ref commits with ``symbol=""``.
+        * Typed text → uppercased on commit (Return / FocusOut).
+
+        Wrap is created as a child of ``parent`` (defaulting to
+        ``self._value_pane``) and packed by the caller — this lets
+        the flow-layout walker place it inside a per-row sub-frame.
         """
-        wrap = ttk.Frame(self._value_pane)
-        wrap.grid(row=0, column=col, padx=(6, 0))
+        parent_widget = parent if parent is not None else self._value_pane
+        wrap = ttk.Frame(parent_widget)
         ttk.Label(wrap, text="@").pack(side="left", padx=(0, 2))
-        values = (_ACTIVE_SYMBOL_SENTINEL, *tuple(_load_recent_cross_symbols()))
-        combo = ttk.Combobox(
-            wrap, textvariable=self._symbol_var,
-            state="normal", values=values, width=9,
+        entry = ttk.Entry(
+            wrap, textvariable=self._symbol_var, width=11,
+            foreground=self._symbol_placeholder_fg(),
         )
-        combo.pack(side="left")
-        combo.bind("<<ComboboxSelected>>", lambda _e: self._commit_symbol())
-        combo.bind("<FocusOut>", lambda _e: self._commit_symbol())
-        combo.bind("<Return>", lambda _e: self._commit_symbol())
-        self._symbol_combo = combo
-        self._flow_children.append(wrap)
+        entry.pack(side="left")
+        # Seed initial display: real value if pinned, else placeholder.
+        if not self._ref.symbol:
+            self._symbol_var.set(_SYMBOL_PLACEHOLDER)
+            self._symbol_is_placeholder = True
+        else:
+            self._symbol_var.set(self._ref.symbol)
+            self._symbol_is_placeholder = False
+            try:
+                entry.configure(foreground=self._symbol_active_fg())
+            except tk.TclError:
+                pass
+        entry.bind("<FocusIn>", self._on_symbol_focus_in)
+        entry.bind("<FocusOut>", self._on_symbol_focus_out)
+        entry.bind("<Return>", lambda _e: self._commit_symbol())
+        self._symbol_combo = entry
+        return wrap
+
+    @staticmethod
+    def _symbol_placeholder_fg() -> str:
+        """Grey foreground for the ``(active)`` placeholder text."""
+        return "#888888"
+
+    @staticmethod
+    def _symbol_active_fg() -> str:
+        """Normal foreground for a real ticker pin (theme-default-ish)."""
+        return "black"
+
+    def _on_symbol_focus_in(self, _event: Any | None = None) -> None:
+        """Clear the placeholder when the user clicks into the entry."""
+        if not self._symbol_is_placeholder:
+            return
+        try:
+            self._symbol_var.set("")
+            self._symbol_combo.configure(foreground=self._symbol_active_fg())
+        except tk.TclError:
+            return
+        self._symbol_is_placeholder = False
+
+    def _on_symbol_focus_out(self, _event: Any | None = None) -> None:
+        """Restore the placeholder if the user leaves the entry empty.
+
+        Also commits the ref (so a typed ticker is captured on tab-out).
+        """
+        self._commit_symbol()
+        try:
+            raw = (self._symbol_var.get() or "").strip()
+        except tk.TclError:
+            return
+        if not raw:
+            try:
+                self._symbol_var.set(_SYMBOL_PLACEHOLDER)
+                self._symbol_combo.configure(foreground=self._symbol_placeholder_fg())
+            except tk.TclError:
+                return
+            self._symbol_is_placeholder = True
 
     def _commit_symbol(self) -> None:
-        """Commit a Symbol combo change. Routes through kind-specific commit."""
+        """Commit the typed ticker into the ref's ``symbol`` field."""
         new_sym = self._current_symbol_from_combo()
         if new_sym == (self._ref.symbol or ""):
             return
-        # Persist the recent-cross LRU when the user picks a real
-        # ticker (not the active sentinel).
-        if new_sym:
-            _remember_cross_symbol(new_sym)
         # Rebuild the ref with the new symbol. The kind-specific
         # commit path also picks up the latest param/output state in
         # case the user changed both before tabbing out.
@@ -588,23 +1003,33 @@ class _FieldRefPicker(ttk.Frame):
         elif self._ref.kind == FIELD_KIND_BUILTIN:
             self._commit_builtin()
         else:
-            # Literal: shouldn't happen — symbol combo isn't shown.
+            # Literal: shouldn't happen — symbol entry isn't shown.
             self._fire()
 
     # -- helpers --------------------------------------------------------------
 
-    def _build_param_widget(self, pdef: Any, *, col: int) -> ttk.Frame | None:
+    def _build_param_widget(
+        self,
+        pdef: Any,
+        *,
+        parent: tk.Misc | None = None,
+    ) -> ttk.Frame | None:
         """Build one parameter wrap (label + widget); return the wrap.
 
-        The wrap is gridded at ``(row=0, column=col)`` for the initial
-        layout pass; ``_reflow_value_pane`` may regrid to a different
-        ``(row, col)`` when the dialog is too narrow for one row.
-        Returning the wrap lets the caller append it to
-        ``self._flow_children`` for the flow-layout walk.
+        Wrap is created as a child of ``parent`` (defaulting to
+        ``self._value_pane``). The caller is responsible for placing
+        the returned wrap via ``pack()`` / ``grid()``.
+
+        The label is sourced from :attr:`ParamDef.description` (the
+        short user-facing text — e.g. ``"Include current in denom"``)
+        with the underscore-snake ``pdef.name`` as the fallback when
+        ``description`` is empty. This keeps the row narrow enough to
+        fit RVOL's 6 trigger-relevant params on typical dialog widths.
         """
-        wrap = ttk.Frame(self._value_pane)
-        wrap.grid(row=0, column=col, padx=(2, 0))
-        ttk.Label(wrap, text=pdef.name + ":").pack(side="left")
+        parent_widget = parent if parent is not None else self._value_pane
+        wrap = ttk.Frame(parent_widget)
+        label_text = (getattr(pdef, "description", "") or pdef.name) + ":"
+        ttk.Label(wrap, text=label_text).pack(side="left")
         seed = (self._ref.params or {}).get(pdef.name, pdef.default)
         if pdef.kind == "bool":
             var = tk.BooleanVar(value=bool(seed))
@@ -683,6 +1108,23 @@ class _FieldRefPicker(ttk.Frame):
         params frame, interval combo, delete button, plus padding)
         and assumes the budget is split between two pickers when the
         right-hand side of the comparison is also field-typed.
+
+        Implementation: widgets live inside ``self._flow_row_frames``
+        — one row Frame per logical row of widgets, packed
+        ``side="top", anchor="w"`` inside ``self._value_pane``. Each
+        widget packs ``side="left"`` inside its row Frame. When the
+        target row count changes (e.g. dialog resized so a single-row
+        layout no longer fits) the widgets are TORN DOWN and rebuilt
+        with the new row count — needed because Tk doesn't support
+        widget reparenting and the column-width-inheritance problem
+        of a single shared grid wastes ~80 px on RVOL's narrower top
+        row (where ``Mode:`` only needs ~110 px but the column is
+        sized to fit ``Include current in denom:`` at ~165 px below).
+
+        Rebuild on row-count-change is rare in practice (user picks
+        an indicator → first reflow may flip from 1→N rows). Mid-
+        edit rebuild can lose focus on a spinbox; this is an
+        accepted trade-off for the correctness of the visual layout.
         """
         self._reflow_after_id = None
         if not self._flow_children:
@@ -697,47 +1139,39 @@ class _FieldRefPicker(ttk.Frame):
             win_w = top.winfo_width() if top is not None else 0
         except tk.TclError:
             return
-        # Heuristic reservation. Empirically derived from the chrome
-        # of :class:`_ConditionFrame` (≈30 enabled + 120 op + 70
-        # interval + 30 delete + 30 dialog padding ≈ 280) plus a bit
-        # for the picker's own type combo (~80 px) factored into the
-        # split. The ``// 2`` accounts for two pickers competing for
-        # row width when both sides of the comparison are fields.
         nonpicker_chrome_px = 280
         if win_w < 100:
-            # Toplevel not yet realized — bail, will re-fire on the
-            # first real Configure once the window has a real size.
             return
         available = max(220, win_w - nonpicker_chrome_px)
-        budget = max(180, available // 2)
+        if self._layout_hint == "stacked":
+            budget = max(180, available)
+        else:
+            budget = max(180, available // 2)
 
-        # Measure each child's required width with a fresh idletasks
-        # pass so spinbox/combobox widths are correct.
         widths: list[int] = []
-        live_children: list[tk.Widget] = []
         for w in self._flow_children:
             try:
                 if not w.winfo_exists():
+                    widths.append(1)
                     continue
                 w.update_idletasks()
-                req = max(1, int(w.winfo_reqwidth()))
+                widths.append(max(1, int(w.winfo_reqwidth())))
             except tk.TclError:
-                continue
-            widths.append(req)
-            live_children.append(w)
-        if not live_children:
+                widths.append(1)
+        if not widths:
             return
         placements = _compute_flow_rows(widths, budget=budget, pad=6)
-        for w, (row, col) in zip(live_children, placements, strict=False):
-            try:
-                w.grid_configure(
-                    row=row, column=col,
-                    padx=(2, 0),
-                    pady=(0 if row == 0 else 2, 0),
-                    sticky="nw",
-                )
-            except tk.TclError:
-                pass
+        target_row_count = max((p[0] for p in placements), default=0) + 1
+        current_row_count = len(self._flow_row_frames)
+        if target_row_count == current_row_count and target_row_count >= 1:
+            # No reflow needed — widgets are already in the right
+            # number of row frames. (We do not need to re-grid them
+            # within their row frame because horizontal packing is
+            # automatic via pack side="left".)
+            return
+
+        # Row count changed — tear down + rebuild.
+        self._rebuild_indicator_branch_into_rows(target_row_count)
 
     def _on_destroy(self, _event: Any | None = None) -> None:
         """Tear down pending callbacks + Toplevel binding on destroy.
@@ -926,7 +1360,33 @@ class _LookbackCluster(ttk.Frame):
 
 
 class _ConditionFrame(ttk.Frame):
-    """Render and edit one :class:`Condition` leaf."""
+    """Render and edit one :class:`Condition` leaf.
+
+    Two visual layouts:
+
+    * ``"inline"`` — historical 7-column single row used for simple
+      conditions like ``close > 100`` or ``ema(20) > 100``.
+    * ``"stacked"`` — 3-row layout used when the LEFT picker is
+      "complex" (cross-symbol pin, indicator with 3+ params, or
+      multi-output indicator), the op is ``between`` (which has two
+      field params on its own row), or any of the per-op field
+      params (``right`` / ``low`` / ``high`` / ``target`` /
+      ``reference``) is complex itself.
+
+    The layout is selected by :meth:`_classify_layout` at build time
+    and re-evaluated whenever the user changes the op (``_on_op_change``),
+    the LEFT picker (``_on_left_change``), or a per-op field param
+    (``_on_param_field_change``). Layout flips fire ``on_change`` so
+    the consumer dialog's wheel-guard re-applies — see
+    CLAUDE.md §7.11 / §7.19.
+
+    Widget identity is preserved across layout flips: the same
+    Checkbutton / op Combobox / lookback cluster / interval combo /
+    delete button instances are simply re-gridded into new
+    ``(row, column)`` positions. The per-op param widgets are the
+    one exception — they rebuild on every op change because the
+    schema changes.
+    """
 
     def __init__(
         self,
@@ -942,8 +1402,34 @@ class _ConditionFrame(ttk.Frame):
         self._on_change = on_change
         self._on_delete = on_delete
         self._default_interval = default_interval
+        # Debounced resize-reclassify state.
+        self._resize_after_id: str | None = None
+        self._toplevel_for_resize: tk.Misc | None = None
+        self._toplevel_resize_bind_id: str | None = None
 
         self._build()
+
+        # Bind to the Toplevel ``<Configure>`` so window resize
+        # triggers a re-classification (fit-based inline ↔ stacked
+        # flip when the dialog gets narrower/wider). The picker also
+        # binds for its own internal flow wrap; this binding is
+        # specifically for the OUTER ConditionFrame layout decision.
+        try:
+            top = self.winfo_toplevel()
+        except tk.TclError:
+            top = None
+        if top is not None and top is not self:
+            try:
+                self._toplevel_for_resize = top
+                self._toplevel_resize_bind_id = top.bind(
+                    "<Configure>",
+                    self._on_toplevel_resize,
+                    add="+",
+                )
+            except tk.TclError:
+                self._toplevel_for_resize = None
+                self._toplevel_resize_bind_id = None
+        self.bind("<Destroy>", self._on_destroy_resize_binding)
 
     # -- public API -----------------------------------------------------------
 
@@ -953,86 +1439,388 @@ class _ConditionFrame(ttk.Frame):
     # -- layout ---------------------------------------------------------------
 
     def _build(self) -> None:
-        # Enabled checkbox.
-        # NOTE: ``sticky="nw"`` on every cell keeps the chrome
-        # (checkbox / op / params / interval / delete) anchored to
-        # the top of row 0 even when the left ``_FieldRefPicker``
-        # grows to multiple sub-rows via its adaptive flow layout.
-        # Without it, Tk's default centring would visually float the
-        # operator combo halfway down the picker on RVOL-with-many-
-        # params conditions.
-        self._enabled_var = tk.BooleanVar(value=self.cond.enabled)
-        ttk.Checkbutton(self, variable=self._enabled_var,
-                        command=self._on_enabled_toggle)\
-            .grid(row=0, column=0, padx=(0, 4), sticky="nw")
+        # Decide the layout FIRST so ``_build_params_row`` can render
+        # field-param wraps in the correct orientation (horizontal for
+        # inline, vertical for stacked).
+        self._current_layout: str = self._classify_layout()
+        self._build_shared_widgets()
+        self._build_params_row()
+        self._apply_layout()
 
-        # Left field picker.
+    def _build_shared_widgets(self) -> None:
+        """Create the widgets that participate in BOTH inline and stacked layouts.
+
+        These widgets are gridded into different (row, column)
+        positions by :meth:`_apply_inline_layout` /
+        :meth:`_apply_stacked_layout`; they're never destroyed by a
+        layout flip.
+
+        ``sticky="nw"`` on every cell keeps the chrome
+        (checkbox / op / params / interval / delete) anchored to
+        the top of row 0 even when the left ``_FieldRefPicker``
+        grows to multiple sub-rows via its adaptive flow layout.
+        Without it, Tk's default centring would visually float the
+        operator combo halfway down the picker on RVOL-with-many-
+        params conditions.
+        """
+        self._enabled_var = tk.BooleanVar(value=self.cond.enabled)
+        self._enabled_chk = ttk.Checkbutton(
+            self, variable=self._enabled_var,
+            command=self._on_enabled_toggle,
+        )
+
         self._left_picker = _FieldRefPicker(
             self, ref=self.cond.left, on_change=self._on_left_change,
+            layout_hint="inline",
         )
-        self._left_picker.grid(row=0, column=1, padx=(0, 6), sticky="nw")
 
-        # Operator dropdown.
         self._op_var = tk.StringVar(value=self.cond.op)
         self._op_combo = ttk.Combobox(
             self, textvariable=self._op_var, state="readonly",
             values=ALL_OPERATORS, width=14,
         )
-        self._op_combo.grid(row=0, column=2, padx=(0, 6), sticky="nw")
-        self._op_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_op_change())
+        self._op_combo.bind("<<ComboboxSelected>>",
+                            lambda _e: self._on_op_change())
 
-        # Per-op named-params row.
-        self._params_frame = ttk.Frame(self)
-        self._params_frame.grid(row=0, column=3, padx=(0, 6), sticky="nw")
+        # Two sub-frames inside the params region: scalar widgets
+        # (int / float — e.g. lookback, n, bars, tolerance_pct) stay
+        # next to the op combo; field widgets (right / low / high /
+        # target / reference) move to their own row in the stacked
+        # layout.
+        self._params_scalar_frame = ttk.Frame(self)
+        self._params_fields_frame = ttk.Frame(self)
         self._param_widgets: dict[str, Any] = {}
-        self._build_params_row()
 
-        # Look-back cluster: [bars: N ▾mode]. Sits between the per-op
-        # params and the interval picker. Always visible; muted when
-        # bars=0 so the screen real-estate is honest about feature
-        # discoverability without screaming at users who don't use it.
         self._lookback = _LookbackCluster(
             self, node=self.cond, op=self.cond.op,
             on_change=self._fire,
         )
-        self._lookback.grid(row=0, column=4, padx=(0, 6), sticky="nw")
 
-        # Interval picker.
-        self._interval_var = tk.StringVar(value=self.cond.interval or self._default_interval)
-        ttk.Combobox(
+        self._interval_var = tk.StringVar(
+            value=self.cond.interval or self._default_interval)
+        self._interval_combo = ttk.Combobox(
             self, textvariable=self._interval_var, state="readonly",
             values=_INTERVALS, width=5,
-        ).grid(row=0, column=5, padx=(0, 6), sticky="nw")
-        self._interval_var.trace_add("write", lambda *_a: self._on_interval_change())
+        )
+        self._interval_var.trace_add(
+            "write", lambda *_a: self._on_interval_change())
 
-        # Delete button.
-        ttk.Button(self, text="✕", width=3, command=self._do_delete)\
-            .grid(row=0, column=6, padx=(0, 0), sticky="nw")
+        self._delete_btn = ttk.Button(
+            self, text="✕", width=3, command=self._do_delete)
 
-        # Conditional left visibility for structural ops.
-        self._update_left_visibility()
+    def _apply_layout(self) -> None:
+        """(Re)grid every shared widget to match ``self._current_layout``.
 
-    def _build_params_row(self) -> None:
-        for w in self._params_frame.winfo_children():
+        Idempotent: safe to call any time. ``grid_forget`` is called
+        on every shared widget first so re-gridding doesn't pile
+        ghost cells.
+
+        Does NOT rebuild the per-op param widgets — the orientation
+        of the field wraps inside ``_params_fields_frame`` depends
+        on the layout (vertical in stacked, horizontal in inline)
+        so callers that flip layouts must call
+        :meth:`_build_params_row` separately, BEFORE this method,
+        with ``self._current_layout`` already updated.
+        """
+        for w in (
+            self._enabled_chk, self._left_picker, self._op_combo,
+            self._params_scalar_frame, self._params_fields_frame,
+            self._lookback, self._interval_combo, self._delete_btn,
+        ):
             try:
-                w.destroy()
+                w.grid_forget()
             except tk.TclError:
                 pass
+
+        layout = self._current_layout
+
+        # Propagate the layout hint to every embedded picker so its
+        # internal flow-layout budget reflects the row's true width.
+        try:
+            self._left_picker.set_layout_hint(layout)
+        except (AttributeError, tk.TclError):
+            pass
+        for _name, (kind, widget) in self._param_widgets.items():
+            if kind == "field":
+                try:
+                    widget.set_layout_hint(layout)
+                except (AttributeError, tk.TclError):
+                    pass
+
+        if layout == "stacked":
+            self._apply_stacked_layout()
+        else:
+            self._apply_inline_layout()
+
+        self._update_left_visibility()
+
+    def _apply_inline_layout(self) -> None:
+        """Historical 7-column single-row layout.
+
+        Used for simple conditions like ``close > 100``. Every
+        chrome widget shares row 0 with the LEFT picker; the picker
+        gets the half-row flow budget for its internal wrap.
+        """
+        self._enabled_chk.grid(row=0, column=0, padx=(0, 4), sticky="nw")
+        self._left_picker.grid(row=0, column=1, padx=(0, 6), sticky="nw")
+        self._op_combo.grid(row=0, column=2, padx=(0, 6), sticky="nw")
+        self._params_scalar_frame.grid(
+            row=0, column=3, padx=(0, 6), sticky="nw")
+        self._params_fields_frame.grid(
+            row=0, column=4, padx=(0, 6), sticky="nw")
+        self._lookback.grid(row=0, column=5, padx=(0, 6), sticky="nw")
+        self._interval_combo.grid(row=0, column=6, padx=(0, 6), sticky="nw")
+        self._delete_btn.grid(row=0, column=7, padx=(0, 0), sticky="nw")
+
+    def _apply_stacked_layout(self) -> None:
+        """3-row layout used when the LEFT picker or any RHS picker is complex.
+
+        Visual structure::
+
+            row 0: [enabled] [LEFT picker (columnspan 3) .........] [interval] [✕]
+            row 1:           [op]   [scalar params]   [lookback]
+            row 2:           [field params (RHS)]
+
+        The LEFT picker takes columnspan 3 so it expands all the way
+        to the interval combo. Field params (row 2) also columnspan
+        3 — they vertically stack inside ``_params_fields_frame``
+        for ops with multiple field params (e.g. ``between``).
+        """
+        self._enabled_chk.grid(row=0, column=0, padx=(0, 4), sticky="nw")
+        self._left_picker.grid(
+            row=0, column=1, columnspan=3, padx=(0, 6), sticky="new")
+        self._interval_combo.grid(
+            row=0, column=4, padx=(0, 6), sticky="nw")
+        self._delete_btn.grid(
+            row=0, column=5, padx=(0, 0), sticky="nw")
+
+        self._op_combo.grid(
+            row=1, column=1, padx=(0, 6), pady=(2, 0), sticky="nw")
+        self._params_scalar_frame.grid(
+            row=1, column=2, padx=(0, 6), pady=(2, 0), sticky="nw")
+        self._lookback.grid(
+            row=1, column=3, padx=(0, 6), pady=(2, 0), sticky="nw")
+
+        self._params_fields_frame.grid(
+            row=2, column=1, columnspan=3, padx=(0, 6),
+            pady=(2, 0), sticky="new")
+
+    def _classify_layout(self) -> str:
+        """Return ``"stacked"`` if the row should use the 3-row layout, else ``"inline"``.
+
+        **Fit-based** classification (new generalised rule):
+
+        * ``op == between`` → stacked (two RHS field pickers stack
+          vertically reads better than horizontally).
+        * Otherwise: compare :func:`_estimate_condition_inline_width`
+          to :meth:`_get_available_width`. If the inline rendering
+          would overflow the dialog's available width → stacked. If
+          it fits comfortably → inline.
+
+        **Hysteresis**: when currently stacked, require an
+        ``_HYSTERESIS_PX`` buffer before flipping back to inline.
+        This prevents flip-flopping during a slow drag at the
+        boundary between fits and doesn't-fit.
+
+        **Fallback when toplevel not realized**: assume a 1200 px
+        available width — typical of the dialogs that mount the
+        BlockEditor (entries / exits at 1400 px, scanner at 1200 px,
+        custom indicator at 980 px right pane). This makes the
+        classifier deterministic during the initial build before
+        the window has been mapped; the first real ``<Configure>``
+        will trigger reclassification against the actual width.
+
+        Window-resize reactive: bound to the Toplevel ``<Configure>``
+        event via :meth:`_on_toplevel_resize`, so the user dragging
+        the dialog wider or narrower automatically flips the layout.
+        """
+        op = self.cond.op
+        if op == OP_BETWEEN:
+            return "stacked"
+        try:
+            inline_width = _estimate_condition_inline_width(self.cond)
+            available = self._get_available_width()
+        except Exception:  # noqa: BLE001
+            return getattr(self, "_current_layout", "inline")
+        if available < 100:
+            available = _DEFAULT_DIALOG_WIDTH_PX
+        current = getattr(self, "_current_layout", None)
+        if current == "stacked":
+            return "inline" if inline_width < (available - _HYSTERESIS_PX) else "stacked"
+        # Currently inline (or unset) — flip to stacked on overflow.
+        return "stacked" if inline_width > available else "inline"
+
+    def _get_available_width(self) -> int:
+        """Return the actual width available for the condition row.
+
+        Walks up the widget tree looking for the nearest
+        :class:`BlockEditor` ancestor (which is packed
+        ``fill="both", expand=True`` inside the dialog scroll
+        canvas). Falls back to the Toplevel width minus a small
+        chrome reservation when the BlockEditor is not yet realized.
+        """
+        # Walk up looking for BlockEditor.
+        try:
+            w: tk.Misc | None = self
+            while w is not None:
+                if isinstance(w, BlockEditor):
+                    be_width = int(w.winfo_width())
+                    if be_width > 100:
+                        return be_width - 20  # small padding allowance
+                    break
+                w = w.master
+        except tk.TclError:
+            pass
+        # Fallback: Toplevel.
+        try:
+            top = self.winfo_toplevel()
+            top_w = int(top.winfo_width())
+            if top_w > 100:
+                return max(400, top_w - 80)
+        except tk.TclError:
+            pass
+        return 0  # unrealized — caller treats as "unknown"
+
+    def _relayout_if_needed(self) -> bool:
+        """If the classification has changed, rebuild params + re-grid.
+
+        Returns True when a flip happened (caller may want to fire an
+        extra ``on_change`` so the consumer's wheel-guard re-applies
+        on the freshly rebuilt field-picker widgets — see
+        CLAUDE.md §7.19).
+
+        The rebuild path destroys the existing field-param pickers
+        and creates new ones with the correct orientation
+        (vertical in stacked, horizontal in inline). Scalar-param
+        widgets share the same single-row inside
+        ``_params_scalar_frame`` in both layouts but are rebuilt
+        alongside for simplicity.
+        """
+        new_layout = self._classify_layout()
+        if new_layout == self._current_layout:
+            return False
+        self._current_layout = new_layout
+        # Rebuild params so field-wrap orientation flips and the
+        # in-flight picker is destroyed (it would still carry its
+        # old layout_hint reflow budget otherwise).
+        self._build_params_row()
+        self._apply_layout()
+        return True
+
+    def _on_toplevel_resize(self, event: Any | None = None) -> None:
+        """Debounced ``<Configure>`` handler — re-classify on resize.
+
+        Triggered when the user drags the dialog edge. We debounce
+        with ``after(100, ...)`` so a continuous drag results in
+        ONE final reclassification rather than dozens. Each call
+        cancels the prior scheduled one.
+
+        Re-fires ``on_change`` when the layout actually flips so the
+        consumer dialog's wheel-guard re-applies on the freshly
+        rebuilt per-op pickers (CLAUDE.md §7.19).
+        """
+        if self._toplevel_for_resize is None:
+            return
+        # Filter to only the bound Toplevel — descendant Configure
+        # events shouldn't reach here under standard Tk binding
+        # semantics, but defensively check anyway.
+        if event is not None and getattr(event, "widget", None) is not self._toplevel_for_resize:
+            return
+        if self._resize_after_id is not None:
+            try:
+                self.after_cancel(self._resize_after_id)
+            except tk.TclError:
+                pass
+            self._resize_after_id = None
+        try:
+            if not self.winfo_exists():
+                return
+            self._resize_after_id = self.after(100, self._do_resize_reclassify)
+        except tk.TclError:
+            pass
+
+    def _do_resize_reclassify(self) -> None:
+        """Run the deferred reclassification + fire ``on_change`` on flip."""
+        self._resize_after_id = None
+        try:
+            if not self.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        flipped = self._relayout_if_needed()
+        if flipped:
+            self._fire()
+
+    def _on_destroy_resize_binding(self, _event: Any | None = None) -> None:
+        """Tear down pending resize callback + Toplevel <Configure> binding."""
+        if self._resize_after_id is not None:
+            try:
+                self.after_cancel(self._resize_after_id)
+            except tk.TclError:
+                pass
+            self._resize_after_id = None
+        if self._toplevel_for_resize is not None and self._toplevel_resize_bind_id:
+            try:
+                self._toplevel_for_resize.unbind(
+                    "<Configure>", self._toplevel_resize_bind_id)
+            except tk.TclError:
+                pass
+        self._toplevel_for_resize = None
+        self._toplevel_resize_bind_id = None
+
+    def _build_params_row(self) -> None:
+        """Tear down and re-render the per-op param widgets.
+
+        Scalar params (int / float) go into ``_params_scalar_frame``
+        — they sit next to the op combo in both layouts. Field
+        params (FieldRef-typed slots) go into ``_params_fields_frame``
+        — they share the op row in inline mode but move to their own
+        row in stacked mode.
+
+        In stacked mode field params are gridded vertically inside
+        ``_params_fields_frame`` (one per row) so an operator like
+        ``between`` shows ``low`` and ``high`` stacked rather than
+        side-by-side. In inline mode they sit horizontally.
+        """
+        for frame in (self._params_scalar_frame, self._params_fields_frame):
+            for w in frame.winfo_children():
+                try:
+                    w.destroy()
+                except tk.TclError:
+                    pass
         self._param_widgets = {}
         schema = OPERATOR_PARAM_SCHEMA.get(self.cond.op, ())
-        for i, (name, kind) in enumerate(schema):
-            wrap = ttk.Frame(self._params_frame)
-            wrap.grid(row=0, column=i, padx=(0, 6))
-            ttk.Label(wrap, text=name + ":").pack(side="left")
-            current = self.cond.params.get(name)
+        layout = getattr(self, "_current_layout", "inline")
+        is_stacked = layout == "stacked"
+        scalar_col = 0
+        field_idx = 0
+        for name, kind in schema:
             if kind == "field":
-                ref = current if isinstance(current, FieldRef) else FieldRef.literal(0.0)
-                picker = _FieldRefPicker(wrap, ref=ref,
-                                         on_change=self._commit_params)
+                wrap = ttk.Frame(self._params_fields_frame)
+                if is_stacked:
+                    wrap.grid(row=field_idx, column=0,
+                              padx=(0, 6), pady=(2 if field_idx else 0, 0),
+                              sticky="nw")
+                else:
+                    wrap.grid(row=0, column=field_idx,
+                              padx=(0, 6), sticky="nw")
+                ttk.Label(wrap, text=name + ":").pack(side="left")
+                current = self.cond.params.get(name)
+                ref = current if isinstance(current, FieldRef) \
+                    else FieldRef.literal(0.0)
+                picker = _FieldRefPicker(
+                    wrap, ref=ref,
+                    on_change=self._on_param_field_change,
+                    layout_hint=layout,
+                )
                 picker.pack(side="left")
                 self._param_widgets[name] = ("field", picker)
+                field_idx += 1
             else:
-                # int / float
+                wrap = ttk.Frame(self._params_scalar_frame)
+                wrap.grid(row=0, column=scalar_col, padx=(0, 6))
+                ttk.Label(wrap, text=name + ":").pack(side="left")
+                current = self.cond.params.get(name)
                 seed = current if isinstance(current, (int, float)) else (
                     1 if kind == "int" else 1.0
                 )
@@ -1047,6 +1835,7 @@ class _ConditionFrame(ttk.Frame):
                 sb.bind("<FocusOut>", lambda _e: self._commit_params())
                 sb.bind("<Return>",   lambda _e: self._commit_params())
                 self._param_widgets[name] = (kind, var)
+                scalar_col += 1
 
     def _update_left_visibility(self) -> None:
         """Hide left picker for purely structural ops (inside_bar / outside_bar / nr7)."""
@@ -1063,6 +1852,9 @@ class _ConditionFrame(ttk.Frame):
 
     def _on_left_change(self) -> None:
         self.cond.left = self._left_picker.get()
+        # LEFT picker is the dominant classifier — flipping rvol →
+        # close MUST collapse the row back to inline (and vice versa).
+        self._relayout_if_needed()
         self._fire()
 
     def _on_op_change(self) -> None:
@@ -1082,8 +1874,13 @@ class _ConditionFrame(ttk.Frame):
         # attribute assignment is safe.
         self.cond.op = new_op
         self.cond.params = new_params
+        # Op changed → may transition between inline and stacked
+        # (e.g. binary → between). Update the classification BEFORE
+        # rebuilding the params row so the field-wrap orientation
+        # matches the new layout.
+        self._current_layout = self._classify_layout()
         self._build_params_row()
-        self._update_left_visibility()
+        self._apply_layout()
         # Notify the look-back cluster so it can refresh its mode list
         # (and coerce 'all' → 'any' if the new op is a transition).
         try:
@@ -1092,6 +1889,21 @@ class _ConditionFrame(ttk.Frame):
             # Cluster may not exist yet during early construction.
             pass
         self._fire()
+
+    def _on_param_field_change(self) -> None:
+        """RHS / per-op field picker changed — commit + maybe re-layout.
+
+        Toggling a per-op field picker from Number to an Indicator
+        with 3+ params can flip the classification stacked ↔ inline,
+        so re-check after each commit. When a flip happens the
+        ``_relayout_if_needed`` rebuild destroys the field-picker
+        widgets and creates new ones, so we ``_fire()`` once more
+        afterwards to give the consumer's wheel-guard a chance to
+        re-apply on the new widgets (CLAUDE.md §7.19).
+        """
+        self._commit_params()
+        if self._relayout_if_needed():
+            self._fire()
 
     def _on_interval_change(self) -> None:
         v = self._interval_var.get()

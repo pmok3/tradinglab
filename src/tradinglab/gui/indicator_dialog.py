@@ -68,8 +68,9 @@ from ..indicators.config import (
     IndicatorConfig,
     IndicatorManager,
 )
-from ._modal_base import protect_combobox_wheel
+from ._modal_base import make_scrollable_form, protect_combobox_wheel
 from ._modal_keys import bind_modal_keys
+from ._widget_metrics import _CHAR_PX
 from .color_palette import pick_color
 from .colors import WARN_AMBER
 from .indicator_acronyms import explain_kind_id
@@ -222,6 +223,7 @@ class _IndicatorRow:
         "drag_handle",
         "kind_var", "kind_combo", "kind_tooltip", "help_label",
         "param_subframe", "param_vars", "param_widgets",
+        "param_max_cols_applied",
         "primary_var", "compare_var",
         "preserved_extra_scopes",
         "preserved_active_scopes",
@@ -259,6 +261,13 @@ class _IndicatorRow:
         # Per-param Tk variable (BooleanVar / StringVar) and its widget.
         self.param_vars: dict[str, tk.Variable] = {}
         self.param_widgets: dict[str, tk.Widget] = {}
+        # Most-recently-applied param-grid column count for this row.
+        # Tracked so :meth:`IndicatorDialog._do_resize_reflow_rows`
+        # can implement hysteresis — it only re-grids when the target
+        # column count actually changes (audit item #1; CLAUDE.md
+        # §7.19 hysteresis pattern adapted to discrete int column
+        # counts).
+        self.param_max_cols_applied: int | None = None
         self.primary_var: tk.BooleanVar | None = None
         self.compare_var: tk.BooleanVar | None = None
         # Scope members other than ``main`` / ``compare`` (today only
@@ -398,6 +407,14 @@ class IndicatorDialog(tk.Toplevel):
         # the dialog so they don't get garbage-collected while a row
         # is alive.
         self._tooltips: list[ToolTip] = []
+        # Debounced resize-reflow state (audit item #1 / CLAUDE.md
+        # §7.19 hysteresis pattern). On every <Configure> we
+        # schedule a 100 ms-deferred re-flow of every row's param
+        # grid; if the resulting column count for a row is unchanged
+        # from ``row.param_max_cols_applied`` we skip the re-grid
+        # so steady-state drags don't thrash the layout.
+        self._rows_resize_after_id: str | None = None
+        self._rows_resize_bind_id: str | None = None
         # Snapshot the manager state for cancel/revert semantics.
         # On "Cancel" the dialog restores this snapshot so the chart
         # reverts to its pre-dialog state.
@@ -433,6 +450,18 @@ class IndicatorDialog(tk.Toplevel):
         # not dialog-wide).
         bind_modal_keys(self, cancel=self._on_cancel, primary=None)
         self.bind("<Control-s>", lambda _e: self._on_save_close())
+        # Resize reactivity (audit item #1): bind the Toplevel's
+        # ``<Configure>`` event so dragging the dialog edge re-flows
+        # each row's param grid. Debounced 100 ms; uses the
+        # ``param_max_cols_applied`` per-row hysteresis so we only
+        # re-grid when the column count actually changes.
+        try:
+            self._rows_resize_bind_id = self.bind(
+                "<Configure>", self._on_toplevel_resize, add="+",
+            )
+        except tk.TclError:
+            self._rows_resize_bind_id = None
+        self.bind("<Destroy>", self._on_destroy_resize_binding, add="+")
 
     # ------------------------------------------------------------------
     # Theme
@@ -719,38 +748,22 @@ class IndicatorDialog(tk.Toplevel):
             state="disabled",
         )
         self._save_close_btn.pack(side="right", padx=(0, 6))
-        # --- Scrollable rows region --- fills the remaining middle space
+        # --- Scrollable rows region --- fills the remaining middle space.
+        # Canvas + Scrollbar + inner Frame triple is built by
+        # :func:`_modal_base.make_scrollable_form` (audit item #5).
+        # ``bind_mousewheel=False`` because this dialog keeps a
+        # specialised wheel install path (``_install_wheel_bindings``
+        # / ``_uninstall_wheel_bindings`` plus the per-button
+        # ``_on_mousewheel`` / ``_on_button4`` / ``_on_button5``
+        # methods below) that the unit tests in
+        # ``test_indicator_dialog_mousewheel.py`` drive directly —
+        # they predate the helper.
         scroll_wrap = tk.Frame(outer)
         scroll_wrap.pack(fill="both", expand=True)
-        canvas = tk.Canvas(scroll_wrap, highlightthickness=0,
-                           borderwidth=0, height=320)
-        vsb = ttk.Scrollbar(scroll_wrap, orient="vertical",
-                            command=canvas.yview)
-        canvas.configure(yscrollcommand=vsb.set)
-        vsb.pack(side="right", fill="y")
-        canvas.pack(side="left", fill="both", expand=True)
-        # The inner frame is what holds row containers; we install it
-        # as a window in the canvas and re-sync scrollregion + width
-        # whenever its size changes (rows added / removed / param
-        # subframe rebuilt).
-        inner = tk.Frame(canvas)
-        inner_win = canvas.create_window((0, 0), window=inner,
-                                         anchor="nw")
-
-        def _on_inner_configure(_event: tk.Event) -> None:
-            try:
-                canvas.configure(scrollregion=canvas.bbox("all"))
-            except tk.TclError:
-                pass
-
-        def _on_canvas_configure(event: tk.Event) -> None:
-            try:
-                canvas.itemconfigure(inner_win, width=event.width)
-            except tk.TclError:
-                pass
-
-        inner.bind("<Configure>", _on_inner_configure)
-        canvas.bind("<Configure>", _on_canvas_configure)
+        inner, canvas = make_scrollable_form(
+            scroll_wrap, bind_mousewheel=False,
+        )
+        canvas.configure(height=320)
 
         # Mouse-wheel scrolling. The dialog is modeless, so we
         # install the global ``<MouseWheel>`` handler only while the
@@ -1204,6 +1217,7 @@ class IndicatorDialog(tk.Toplevel):
         # ``ParamDef.description`` short (≤ ~12 chars); long prose
         # belongs in the indicator's colocated ``.spec.md``.
         max_cols = self._compute_max_cols_for_schema(schema)
+        row.param_max_cols_applied = max_cols
         for i, pdef in enumerate(schema):
             grid_row = i // max_cols
             grid_col = i % max_cols
@@ -1223,14 +1237,19 @@ class IndicatorDialog(tk.Toplevel):
         """How many parameter cells should one visual row hold?
 
         Estimates the natural cell width per ParamDef (label text +
-        widget content) using approximate Tk font metrics (~7 px per
-        char), divides the dialog's inner-frame width by the widest
-        estimate, then clamps to ``[1, 4]``. The clamp keeps the
-        layout looking dialog-like even on very wide windows (more
-        than 4 narrow params side-by-side becomes hard to scan).
+        widget content) using the shared font metrics from
+        :mod:`gui._widget_metrics` (`_CHAR_PX`), divides the dialog's
+        inner-frame width by the widest estimate, and floors to an
+        integer column count clamped at 1. The fit-based math itself
+        already prevents overflow — there is no upper clamp, so on a
+        wide screen ATR's 6-param schema may sit on a single row.
 
-        Falls back to 4 when the dialog hasn't laid out yet (early
-        first paint) — the same fallback the legacy fixed-grid used.
+        Falls back to the dialog's own width (minus chrome) when
+        ``_rows_inner`` hasn't been laid out yet (first paint during
+        ``__init__`` happens before the WM maps the dialog). The first
+        real ``<Configure>`` after mapping triggers
+        :meth:`_do_resize_reflow_rows` which re-grids each row to the
+        correct column count.
         """
         if not schema:
             return 1
@@ -1260,22 +1279,159 @@ class IndicatorDialog(tk.Toplevel):
             return label_chars + 4 + widget_chars + 4
 
         widest_chars = max(_cell_chars(p) for p in schema)
-        # ~7 px per char is a good ttk-default heuristic on Windows
-        # (Segoe UI 9pt). Slightly conservative so we under-pack
-        # rather than overflow.
-        widest_px = max(80, int(widest_chars * 7.0))
+        # Use the shared ``_CHAR_PX`` constant from
+        # :mod:`gui._widget_metrics` so a future font-metric tuning
+        # propagates into both this dialog and the
+        # ``_ConditionFrame`` inline-vs-stacked classifier
+        # (CLAUDE.md §7.19).
+        widest_px = max(80, int(widest_chars * _CHAR_PX))
 
         try:
             avail_px = self._rows_inner.winfo_width()
         except Exception:  # noqa: BLE001
             avail_px = 0
+        if avail_px <= 1:
+            # ``_rows_inner`` isn't realised yet — fall back to the
+            # dialog's own width so the initial paint uses a sane
+            # column count instead of legacy-frozen-at-4. After the
+            # WM maps the window, ``_on_toplevel_resize`` will
+            # re-flow each row to the correct count.
+            try:
+                avail_px = self.winfo_width()
+            except Exception:  # noqa: BLE001
+                avail_px = 0
+        if avail_px <= 1:
+            # Still pre-realisation (e.g. headless unit test). Use
+            # the explicit ``minsize`` width as a deterministic
+            # fallback instead of returning a hardcoded col count.
+            avail_px = 880
         # Subtract a safety budget (canvas border + scrollbar gutter).
         avail_px = max(0, avail_px - 32)
         if avail_px <= 1:
-            return 4  # not laid out yet — assume legacy behavior
+            return 1
 
         cols = max(1, avail_px // widest_px)
-        return int(min(4, cols))
+        return int(cols)
+
+    # ------------------------------------------------------------------
+    # Resize-reactive layout (audit item #1; CLAUDE.md §7.19 pattern)
+    # ------------------------------------------------------------------
+
+    def _on_toplevel_resize(self, event: Any | None = None) -> None:
+        """Debounced ``<Configure>`` handler — re-flow param grids on resize.
+
+        Filters to only the dialog Toplevel itself (Tk's ``<Configure>``
+        only fires on the bound widget, so this is defence in depth)
+        and schedules :meth:`_do_resize_reflow_rows` ~100 ms later.
+        Re-firing within the debounce window cancels the prior pending
+        callback so a continuous drag results in ONE final reflow pass
+        rather than dozens.
+
+        Mirrors :meth:`_ConditionFrame._on_toplevel_resize` in
+        ``scanner_block_editor.py``.
+        """
+        if event is not None and getattr(event, "widget", None) is not self:
+            return
+        if self._rows_resize_after_id is not None:
+            try:
+                self.after_cancel(self._rows_resize_after_id)
+            except tk.TclError:
+                pass
+            self._rows_resize_after_id = None
+        try:
+            if not self.winfo_exists():
+                return
+            self._rows_resize_after_id = self.after(
+                100, self._do_resize_reflow_rows,
+            )
+        except tk.TclError:
+            pass
+
+    def _do_resize_reflow_rows(self) -> None:
+        """Per-row hysteresis-gated re-grid of param-wrap frames.
+
+        For each row, recomputes the fit-based column count via
+        :meth:`_compute_max_cols_for_schema` and re-grids the existing
+        param-wrap frames if (and only if) the target column count
+        differs from ``row.param_max_cols_applied``. The hysteresis
+        gate is the discrete integer column count itself — dragging
+        the dialog edge does NOT thrash rows whose schemas continue
+        to fit at the same column count.
+
+        Does NOT destroy or rebuild the param widgets — preserving
+        focus and partial input. The wrap frames are children of
+        ``row.param_subframe`` in creation order (matching the
+        ParamDef schema order); we just call ``grid_configure`` to
+        move them to the new ``(row, col)``.
+        """
+        self._rows_resize_after_id = None
+        try:
+            if not self.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        for row in self._rows:
+            self._maybe_regrid_row_params(row)
+
+    def _maybe_regrid_row_params(self, row: _IndicatorRow) -> None:
+        """Re-grid one row's param wraps if its column count changed."""
+        sub = row.param_subframe
+        if sub is None:
+            return
+        try:
+            if not sub.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        if row.is_unknown or row.kind_var is None:
+            return
+        display = (row.kind_var.get() or "").strip()
+        kind_id = self._kinds_by_display.get(display)
+        if not kind_id:
+            return
+        pair = factory_by_kind_id(kind_id)
+        if pair is None:
+            return
+        _name, factory_cls = pair
+        schema = getattr(factory_cls, "params_schema", ()) or ()
+        if not schema:
+            return
+        new_max_cols = self._compute_max_cols_for_schema(schema)
+        if new_max_cols == row.param_max_cols_applied:
+            return
+        # Wrap frames live as direct children of ``param_subframe``
+        # in creation order; ``_build_one_param_widget`` made one
+        # ``tk.Frame`` per ParamDef in schema order.
+        try:
+            children = [w for w in sub.winfo_children()
+                        if isinstance(w, tk.Frame)]
+        except tk.TclError:
+            return
+        for i, wrap in enumerate(children):
+            try:
+                wrap.grid_configure(
+                    row=i // new_max_cols,
+                    column=i % new_max_cols,
+                )
+            except tk.TclError:
+                pass
+        row.param_max_cols_applied = new_max_cols
+
+    def _on_destroy_resize_binding(self, _event: Any | None = None) -> None:
+        """Tear down pending resize callback + ``<Configure>`` binding."""
+        if self._rows_resize_after_id is not None:
+            try:
+                self.after_cancel(self._rows_resize_after_id)
+            except tk.TclError:
+                pass
+            self._rows_resize_after_id = None
+        if self._rows_resize_bind_id:
+            try:
+                self.unbind("<Configure>", self._rows_resize_bind_id)
+            except tk.TclError:
+                pass
+            self._rows_resize_bind_id = None
+
 
     def _build_one_param_widget(
         self, row: _IndicatorRow, pdef: Any,

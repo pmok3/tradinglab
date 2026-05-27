@@ -109,10 +109,35 @@ checkbox groups, called from `_on_menu_sandbox_start` / `_on_menu_sandbox_end`.
   into open dialogs.
 - **Param subframe wraps via grid**, dynamic via
   `_compute_max_cols_for_schema(schema)` based on inner-frame width and
-  per-ParamDef cell-width estimates. `_build_one_param_widget` accepts
-  optional `grid_pos=(row, col)`; legacy callers fall back to `side="left"`
-  packing. `ParamDef.description` is used verbatim as label — must stay a
-  noun phrase ≤ ~14 chars.
+  per-ParamDef cell-width estimates. The widget metrics (`_CHAR_PX`,
+  `_COMBO_OVERHEAD`, etc.) come from `gui/_widget_metrics.py` and are
+  shared with `_ConditionFrame`'s inline-vs-stacked classifier (CLAUDE.md
+  §7.19) so a future font-metric tweak propagates to both classifiers in
+  one edit. `_build_one_param_widget` accepts optional `grid_pos=(row,
+  col)`; legacy callers fall back to `side="left"` packing.
+  `ParamDef.description` is used verbatim as label — must stay a noun
+  phrase ≤ ~14 chars.
+- **No upper column-count clamp.** `_compute_max_cols_for_schema` floors
+  to an integer column count with no cap — the fit-based math itself
+  prevents overflow, and a hard cap (the legacy `min(4, cols)`) just
+  left whitespace on wide screens. Pre-realisation fallback chains
+  `_rows_inner.winfo_width()` → `self.winfo_width()` → 880 (the
+  explicit `minsize` width) so the first paint uses a sane column
+  count instead of a hard-coded constant.
+- **Resize-reactive param grid.** `IndicatorDialog.__init__` binds the
+  Toplevel `<Configure>` event to `_on_toplevel_resize`, which
+  debounces with `after(100, _do_resize_reflow_rows)`. The handler
+  walks every row, recomputes the fit-based column count, and
+  re-grids each row's param-wrap frames in place IF (and only if)
+  the new column count differs from `row.param_max_cols_applied`.
+  Per-row hysteresis: the discrete integer column count itself
+  prevents thrashing — dragging the dialog edge does NOT re-grid
+  rows whose schemas continue to fit at the same column count.
+  Re-gridding does NOT destroy / rebuild the param widgets, so
+  in-progress focus + typed input is preserved. Pending `after_id`
+  and the `<Configure>` binding are cleaned up on `<Destroy>` via
+  `_on_destroy_resize_binding`. Mirrors the
+  `_ConditionFrame._on_toplevel_resize` pattern (CLAUDE.md §7.19).
 - **Explicit dialog geometry**: `geometry("980x560")`, `minsize(880, 420)`.
   Without it the canvas auto-sized to its declared `height=320` only and
   `_on_canvas_configure` clipped wide rows (most visibly Bollinger's MA combobox).
