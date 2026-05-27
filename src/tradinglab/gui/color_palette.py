@@ -36,6 +36,8 @@ import math
 import tkinter as tk
 from tkinter import colorchooser, ttk
 
+from ._modal_base import BaseModalDialog, protect_combobox_wheel
+
 # 19-swatch honeycomb laid out as: index 0 = center; indices 1-6 =
 # ring 1 in CW order starting at axial (1, 0); indices 7-18 = ring 2
 # in CW order starting at axial (2, 0).
@@ -115,7 +117,7 @@ def _hex_polygon_points(cx: float, cy: float, size: float) -> list[float]:
     return pts
 
 
-class HexColorPalette(tk.Toplevel):
+class HexColorPalette(BaseModalDialog):
     """Modal honeycomb color picker.
 
     Use :func:`pick_color` instead of constructing this class
@@ -124,10 +126,13 @@ class HexColorPalette(tk.Toplevel):
 
     def __init__(self, parent: tk.Misc, initial: str = "#888888",
                  title: str = "Pick a color") -> None:
-        super().__init__(parent)
-        self.title(title)
-        self.transient(parent)
-        self.resizable(False, False)
+        super().__init__(
+            parent,
+            title=title,
+            geometry_key="dlg.color_palette",
+            default_geometry="260x260",
+            resizable=(False, False),
+        )
         self.result: str | None = None
         self._initial: str = self._normalise(initial)
         # ``_cell_items`` maps (canvas_id, color_hex) so we can
@@ -135,56 +140,10 @@ class HexColorPalette(tk.Toplevel):
         # re-stroke the previously selected cell on click.
         self._cell_items: list[tuple[int, str]] = []
         self._build_ui()
-        # Geometry persistence — if a position was stored from a prior
-        # open, use it; otherwise center on parent (legacy default).
-        from .geometry_store import store as _gs_store
-        try:
-            stored = _gs_store().get_window("dlg.color_palette")
-        except Exception:  # noqa: BLE001
-            stored = None
-        if stored:
-            try:
-                from .geometry_store import attach_persistent_geometry
-                # Use stored geometry's size if any; for this fixed-size
-                # dialog, only the position portion really matters.
-                attach_persistent_geometry(
-                    self, "dlg.color_palette", stored,
-                )
-            except tk.TclError:
-                pass
-        else:
-            try:
-                self.update_idletasks()
-                px = parent.winfo_rootx() + parent.winfo_width() // 2
-                py = parent.winfo_rooty() + parent.winfo_height() // 2
-                self.geometry(f"+{max(0, px - self.winfo_width() // 2)}"
-                              f"+{max(0, py - self.winfo_height() // 2)}")
-            except tk.TclError:
-                pass
-            # Wire the save-on-Configure binding so subsequent opens
-            # remember the user's preferred screen position.
-            try:
-                from .geometry_store import attach_persistent_geometry
-                # Pass the current (just-applied centered) geometry as
-                # the default so restore-on-bind doesn't move us yet.
-                current = self.winfo_geometry()
-                attach_persistent_geometry(
-                    self, "dlg.color_palette", current or "260x260+0+0",
-                )
-            except tk.TclError:
-                pass
-        try:
-            self.grab_set()
-        except tk.TclError:
-            pass
-        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
-        # Match the rest of the modal-dialog inventory: ESC dismisses
-        # the picker (no primary commit — selection happens on click).
-        try:
-            from ._modal_keys import bind_modal_keys
-            bind_modal_keys(self, cancel=self._on_cancel, primary=None)
-        except tk.TclError:
-            pass
+        # No primary action (selection happens on click), so suppress
+        # the Return binding. ESC dismisses via the default cancel.
+        protect_combobox_wheel(self)
+        self._finalize_modal(primary=None, cancel=self._on_cancel)
 
     # ------------------------------------------------------------------
     # UI construction

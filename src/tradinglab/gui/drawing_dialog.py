@@ -29,6 +29,7 @@ from typing import Any
 
 from ..drawings import DrawingStore
 from ..drawings.model import Drawing, _coerce_width
+from ._modal_base import BaseModalDialog, protect_combobox_wheel
 
 # Debounce window (ms) between the last key-up / slider tweak and
 # the actual ``store.update`` call. Matches the ~250 ms feel used by
@@ -72,7 +73,7 @@ _LIVE_COMMIT_HINT: str = "Changes apply immediately."
 _LIVE_COMMIT_HINT_COLOR: str = "#888888"
 
 
-class DrawingDialog(tk.Toplevel):
+class DrawingDialog(BaseModalDialog):
     """Edit-properties popup for a single :class:`Drawing`.
 
     Parameters
@@ -102,7 +103,20 @@ class DrawingDialog(tk.Toplevel):
         drawing: Drawing,
         on_close: Callable[[], None] | None = None,
     ) -> None:
-        super().__init__(parent)
+        # Modeless dialog — pass ``grab=False`` to _finalize_modal.
+        # Inherits the base class's title / transient / geometry
+        # persistence wiring; the ``_close`` method still owns the
+        # debounced-commit flush + unsubscribe + on_close callback.
+        super().__init__(
+            parent,
+            title=self._title_for(drawing),
+            geometry_key="dlg.drawing",
+            default_geometry=_DIALOG_GEOMETRY,
+        )
+        try:
+            self.minsize(*_DIALOG_MINSIZE)
+        except tk.TclError:
+            pass
         # Stash the parent (typically ``ChartApp``) so ``_apply_theme``
         # can re-read the resolved palette on light↔dark toggle. The
         # parent's ``_theme`` attribute is the canonical source — same
@@ -126,20 +140,11 @@ class DrawingDialog(tk.Toplevel):
         # Subscribe to store events so we auto-close when the
         # drawing is removed externally.
         self._unsubscribe = store.subscribe(self._on_store_event)
-        try:
-            self.title(self._title_for(drawing))
-            self.geometry(_DIALOG_GEOMETRY)
-            self.minsize(*_DIALOG_MINSIZE)
-        except tk.TclError:
-            pass
-        try:
-            self.transient(parent)
-        except tk.TclError:
-            pass
         self._build_layout()
-        # Standard lifecycle bindings.
-        self.protocol("WM_DELETE_WINDOW", self._close)
-        self.bind("<Escape>", lambda _e: self._close())
+        protect_combobox_wheel(self)
+        # Modeless: no grab, no Return-key primary. WM_DELETE / ESC
+        # both route through ``_close`` which flushes pending commits.
+        self._finalize_modal(primary=None, cancel=self._close, grab=False)
 
     # ------------------------------------------------------------
     # Layout

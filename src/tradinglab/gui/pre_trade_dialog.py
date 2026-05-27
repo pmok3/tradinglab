@@ -18,11 +18,11 @@ import tkinter as tk
 from tkinter import ttk
 from typing import Any
 
-from ._modal_keys import bind_modal_keys
+from ._modal_base import BaseModalDialog, protect_combobox_wheel
 from .colors import WARN_AMBER
 
 
-class PreTradeFormDialog(tk.Toplevel):
+class PreTradeFormDialog(BaseModalDialog):
     """Modal: capture mandatory pre-trade journal entry + side/size."""
 
     def __init__(
@@ -36,21 +36,16 @@ class PreTradeFormDialog(tk.Toplevel):
         notice: str = "",
         suggested_tags: list[str] | None = None,
     ):
-        super().__init__(app)
+        super().__init__(
+            app,
+            title=f"Pre-Trade Form — {symbol}",
+            geometry_key="dlg.pre_trade",
+            default_geometry="380x420",
+            resizable=(False, False),
+        )
         self.app = app
         self.result: dict[str, Any] | None = None
         self._symbol = symbol
-
-        self.title(f"Pre-Trade Form — {symbol}")
-        self.transient(app)
-        self.resizable(False, False)
-        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
-        # Geometry persistence (position only; size is fixed).
-        try:
-            from .geometry_store import attach_persistent_geometry
-            attach_persistent_geometry(self, "dlg.pre_trade", "380x420")
-        except tk.TclError:
-            pass
 
         pad = {"padx": 8, "pady": 4}
         frame = ttk.Frame(self)
@@ -144,13 +139,9 @@ class PreTradeFormDialog(tk.Toplevel):
         ttk.Button(btns, text="Submit", command=self._on_submit) \
             .pack(side=tk.RIGHT, padx=4)
 
-        try:
-            self.update_idletasks()
-            self.grab_set()
-        except tk.TclError:
-            pass
         self._thesis_text.focus_set()
-        bind_modal_keys(self, cancel=self._on_cancel, primary=self._on_submit)
+        protect_combobox_wheel(self)
+        self._finalize_modal(primary=self._on_submit, cancel=self._on_cancel)
 
     def _on_submit(self) -> None:
         side = self._side_var.get().strip().lower()

@@ -22,10 +22,10 @@ from collections.abc import Callable
 from tkinter import ttk
 from typing import Any
 
-from ._modal_keys import bind_modal_keys
+from ._modal_base import BaseModalDialog, protect_combobox_wheel
 
 
-class SandboxStartDialog(tk.Toplevel):
+class SandboxStartDialog(BaseModalDialog):
     """Modal: configure and start an open-universe sandbox session.
 
     The dialog DOES NOT pick tickers. The reference symbol (master
@@ -72,7 +72,13 @@ class SandboxStartDialog(tk.Toplevel):
         default_selected_intervals: list[str] | None = None,
         manifest_provider: Callable[[], list[Any]] | None = None,
     ):
-        super().__init__(app)
+        super().__init__(
+            app,
+            title="Start Sandbox Session",
+            geometry_key="dlg.sandbox_start",
+            default_geometry="480x520",
+            resizable=(False, False),
+        )
         self.app = app
         self.reference_symbol = reference_symbol
         self._intervals = list(intervals) or ["5m"]
@@ -113,20 +119,8 @@ class SandboxStartDialog(tk.Toplevel):
             initial_checked, key=self._minutes_for)[0]
         self.result: dict[str, Any] | None = None
 
-        self.title("Start Sandbox Session")
-        self.transient(app)
-        self.resizable(False, False)
-        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
-        # Geometry persistence (position only; size is fixed).
-        try:
-            from .geometry_store import attach_persistent_geometry
-            attach_persistent_geometry(self, "dlg.sandbox_start", "480x520")
-        except tk.TclError:
-            pass
-
         self._build()
         self._refresh_eligible_count()
-        bind_modal_keys(self, cancel=self._on_cancel, primary=self._on_start)
         # If the primary interval has no cache, kick off a lazy fetch
         # right after the dialog renders so Random / Blind paths work
         # without forcing the user to toggle checkboxes first.
@@ -137,12 +131,9 @@ class SandboxStartDialog(tk.Toplevel):
         except tk.TclError:
             pass
 
-        try:
-            self.update_idletasks()
-            self.grab_set()
-        except tk.TclError:
-            pass
         self.focus_set()
+        protect_combobox_wheel(self)
+        self._finalize_modal(primary=self._on_start, cancel=self._on_cancel)
 
     @staticmethod
     def _minutes_for(itv: str) -> int:

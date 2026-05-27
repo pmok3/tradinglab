@@ -15,45 +15,44 @@ from datetime import datetime, timezone
 from tkinter import ttk
 from typing import Any
 
-from ._modal_keys import bind_modal_keys
+from ._modal_base import BaseModalDialog, protect_combobox_wheel
 from .colors import DOWN_RED, UP_GREEN
 
 
-class PostTradeReviewDialog(tk.Toplevel):
+class PostTradeReviewDialog(BaseModalDialog):
     """Modal: capture mandatory user review for a closed trade."""
 
     def __init__(self, app: Any, post_trade: Any):
-        super().__init__(app)
+        side = post_trade.side.upper()
+        super().__init__(
+            app,
+            title=f"Post-Trade Review — {post_trade.symbol} {side}",
+            geometry_key="dlg.post_trade_review",
+            default_geometry="440x420",
+            resizable=(False, False),
+        )
         self.app = app
         self.post_trade = post_trade
         self.result: str | None = None
 
-        side = post_trade.side.upper()
-        self.title(f"Post-Trade Review — {post_trade.symbol} {side}")
-        self.transient(app)
-        self.resizable(False, False)
-        # Override close (X) so it doesn't dismiss without input.
-        self.protocol("WM_DELETE_WINDOW", self._on_attempted_close)
-        # Geometry persistence — non-resizable so width/height are
-        # effectively ignored, but position still follows the user.
-        try:
-            from .geometry_store import attach_persistent_geometry
-            attach_persistent_geometry(self, "dlg.post_trade_review", "440x420")
-        except tk.TclError:
-            pass
-
         self._build()
 
+        self._review_text.focus_set()
+        protect_combobox_wheel(self)
+        # WM_DELETE / X-button MUST refuse to dismiss until a review is
+        # entered — route close gestures through ``_on_attempted_close``.
+        # The base class's _finalize_modal binds both ESC and the close
+        # protocol to the supplied cancel callback. To preserve the
+        # legacy "ESC is intentionally NOT bound" contract we unbind
+        # ESC explicitly after finalize.
+        self._finalize_modal(
+            primary=self._on_submit,
+            cancel=self._on_attempted_close,
+        )
         try:
-            self.update_idletasks()
-            self.grab_set()
+            self.unbind("<Escape>")
         except tk.TclError:
             pass
-        self._review_text.focus_set()
-        # NOTE: ESC is intentionally NOT bound. Closing this dialog is
-        # gated by ``_on_attempted_close`` to enforce mandatory
-        # journaling per plan.md. Only Return → Submit is wired.
-        bind_modal_keys(self, cancel=None, primary=self._on_submit)
 
     def _build(self) -> None:
         pad = {"padx": 8, "pady": 4}
@@ -121,36 +120,27 @@ class PostTradeReviewDialog(tk.Toplevel):
         self.destroy()
 
 
-class TagsEditorDialog(tk.Toplevel):
+class TagsEditorDialog(BaseModalDialog):
     """Modal: add / remove sandbox setup tags."""
 
     def __init__(self, app: Any, tag_store: Any):
-        super().__init__(app)
+        super().__init__(
+            app,
+            title="Sandbox Setup Tags",
+            geometry_key="dlg.tags_editor",
+            default_geometry="420x360",
+            resizable=(False, False),
+        )
         self.app = app
         self.tag_store = tag_store
         self.result: bool | None = None  # True if applied; False/None if cancelled
 
-        self.title("Sandbox Setup Tags")
-        self.transient(app)
-        self.resizable(False, False)
-        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
-        # Geometry persistence (position only — fixed size).
-        try:
-            from .geometry_store import attach_persistent_geometry
-            attach_persistent_geometry(self, "dlg.tags_editor", "420x360")
-        except tk.TclError:
-            pass
-
         self._build()
         self._refresh_listbox()
 
-        try:
-            self.update_idletasks()
-            self.grab_set()
-        except tk.TclError:
-            pass
         self._new_var_entry.focus_set()
-        bind_modal_keys(self, cancel=self._on_cancel, primary=self._on_ok)
+        protect_combobox_wheel(self)
+        self._finalize_modal(primary=self._on_ok, cancel=self._on_cancel)
 
     def _build(self) -> None:
         pad = {"padx": 8, "pady": 4}

@@ -36,7 +36,7 @@ import sys
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from ._modal_keys import bind_modal_keys
+from ._modal_base import BaseModalDialog, protect_combobox_wheel
 from .colors import MUTED_GREY
 
 # Map (env_var -> dialog field). The label is what the user sees;
@@ -154,7 +154,7 @@ def prime_environment_from_dpapi() -> str:
 # ---------------------------------------------------------------------------
 
 
-class CredentialsDialog(tk.Toplevel):
+class CredentialsDialog(BaseModalDialog):
     """Modal dialog with one row per credential field.
 
     Layout:
@@ -175,41 +175,20 @@ class CredentialsDialog(tk.Toplevel):
     """
 
     def __init__(self, parent: tk.Misc) -> None:
-        super().__init__(parent)
-        self.title("Configure Credentials")
-        self.transient(parent)
-        self.grab_set()
-        self.resizable(False, False)
+        super().__init__(
+            parent,
+            title="Configure Credentials",
+            geometry_key="dlg.credentials",
+            default_geometry="560x420",
+            resizable=(False, False),
+        )
 
         self._entries: dict[str, tk.Entry] = {}
         self._show_vars: dict[str, tk.BooleanVar] = {}
         self._build_widgets()
         self._populate_from_environment()
-        bind_modal_keys(self, cancel=self._on_cancel, primary=self._on_save)
-
-        # Center over parent.
-        self.update_idletasks()
-        try:
-            x = parent.winfo_rootx() + (parent.winfo_width() // 2) - (self.winfo_width() // 2)
-            y = parent.winfo_rooty() + (parent.winfo_height() // 4)
-            self.geometry(f"+{max(0, x)}+{max(0, y)}")
-        except tk.TclError:
-            pass
-        # Geometry persistence: position only (resizable False ignores
-        # restored width/height). Wire AFTER the initial centering so
-        # subsequent opens follow the user's preferred screen position.
-        try:
-            from .geometry_store import attach_persistent_geometry, store
-            stored = store().get_window("dlg.credentials")
-            if stored:
-                attach_persistent_geometry(self, "dlg.credentials", stored)
-            else:
-                current = self.winfo_geometry()
-                attach_persistent_geometry(
-                    self, "dlg.credentials", current or "560x420+0+0",
-                )
-        except tk.TclError:
-            pass
+        protect_combobox_wheel(self)
+        self._finalize_modal(primary=self._on_save, cancel=self._on_cancel)
 
     def _build_widgets(self) -> None:
         frm = ttk.Frame(self, padding=12)

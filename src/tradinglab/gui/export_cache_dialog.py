@@ -21,7 +21,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from ._modal_keys import bind_modal_keys
+from ._modal_base import BaseModalDialog, protect_combobox_wheel
 from .colors import MUTED_GREY
 
 
@@ -37,7 +37,7 @@ def _load_cache_candles(source: str, ticker: str, interval: str):
     return disk_cache.load(source, ticker, interval)
 
 
-class ExportCacheDialog(tk.Toplevel):
+class ExportCacheDialog(BaseModalDialog):
     """Pick-and-export dialog over the disk cache."""
 
     # Treeview column ids.
@@ -47,11 +47,13 @@ class ExportCacheDialog(tk.Toplevel):
     _COL_INTERVAL = "interval"
 
     def __init__(self, parent: tk.Misc) -> None:
-        super().__init__(parent)
-        self.title("Export Bars to CSV")
-        self.transient(parent)
-        self.grab_set()
-        self.resizable(True, True)
+        super().__init__(
+            parent,
+            title="Export Bars to CSV",
+            geometry_key="dlg.export_cache",
+            default_geometry="560x420",
+            resizable=(True, True),
+        )
         self.minsize(560, 420)
 
         self._entries: list[tuple[str, str, str]] = _load_cache_index()
@@ -61,15 +63,8 @@ class ExportCacheDialog(tk.Toplevel):
         self._destination: Path | None = None
 
         self._build_widgets()
-        bind_modal_keys(self, cancel=self._on_cancel, primary=self._on_export)
-
-        self.update_idletasks()
-        try:
-            x = parent.winfo_rootx() + (parent.winfo_width() // 2) - (self.winfo_width() // 2)
-            y = parent.winfo_rooty() + (parent.winfo_height() // 4)
-            self.geometry(f"+{max(0, x)}+{max(0, y)}")
-        except tk.TclError:
-            pass
+        protect_combobox_wheel(self)
+        self._finalize_modal(primary=self._on_export, cancel=self._on_cancel)
 
     @staticmethod
     def _key(source: str, ticker: str, interval: str) -> str:
