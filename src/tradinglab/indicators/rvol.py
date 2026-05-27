@@ -113,9 +113,9 @@ from typing import Any, ClassVar
 import numpy as np
 
 from ..core.bars import Bars
-from ..models import Candle
 from .base import (
     Availability,
+    BaseIndicator,
     LineStyle,
     ParamDef,
     intraday_only,
@@ -548,7 +548,7 @@ def _dispatch_compute(
 # ---------------------------------------------------------------------------
 
 
-class RVOL:
+class RVOL(BaseIndicator):
     """Unified Relative Volume indicator covering all three modes
     (simple / cumulative / time_of_day) plus optional rolling z-score.
 
@@ -688,5 +688,3 @@ class RVOL:
             ),
         }
 
-    def compute(self, candles: list[Candle]) -> dict[str, np.ndarray]:
-        return self.compute_arr(Bars.from_candles(candles))

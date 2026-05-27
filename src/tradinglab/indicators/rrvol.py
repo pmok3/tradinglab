@@ -79,9 +79,9 @@ import numpy as np
 from ..core.bars import Bars
 from ..core.reference_data import get_reference_bars
 from ..core.render_context import current_context
-from ..models import Candle
 from .base import (
     Availability,
+    BaseIndicator,
     LineStyle,
     ParamDef,
     intraday_only,
@@ -248,7 +248,7 @@ def _compute_rrvol_arr(
     return out
 
 
-class RRVOL:
+class RRVOL(BaseIndicator):
     """Unified Relative-Relative Volume indicator (vs. a configurable benchmark).
 
     Mirrors :class:`tradinglab.indicators.rvol.RVOL`'s parameter
@@ -405,5 +405,3 @@ class RRVOL:
             ),
         }
 
-    def compute(self, candles: list[Candle]) -> dict[str, np.ndarray]:
-        return self.compute_arr(Bars.from_candles(candles))

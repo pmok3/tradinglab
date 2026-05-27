@@ -28,14 +28,13 @@ from typing import ClassVar
 import numpy as np
 
 from ..core.bars import Bars
-from ..models import Candle
-from .base import LineStyle, ParamDef
+from .base import BaseIndicator, LineStyle, ParamDef
 from .sessions import is_intraday_np, session_groups_np
 
 _PRICE_SOURCES: tuple[str, ...] = ("typical", "close", "ohlc4")
 
 
-class VWAP:
+class VWAP(BaseIndicator):
     """Session-anchored Volume-Weighted Average Price.
 
     ``compute`` returns ``{"vwap": ndarray}``. Indices where VWAP is
@@ -105,8 +104,6 @@ class VWAP:
             out[grp] = vw
         return {"vwap": out}
 
-    def compute(self, candles: list[Candle]) -> dict[str, np.ndarray]:
-        return self.compute_arr(Bars.from_candles(candles))
 
 
 # --- helpers -----------------------------------------------------------

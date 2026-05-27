@@ -7,12 +7,11 @@ from typing import ClassVar
 import numpy as np
 
 from ..core.bars import Bars
-from ..models import Candle
-from .base import LineStyle, ParamDef
+from .base import BaseIndicator, LineStyle, ParamDef
 from .wilder import wilder_smooth_avg
 
 
-class RSI:
+class RSI(BaseIndicator):
     """Wilder's RSI over closes.
 
     ``compute`` returns ``{"rsi": ndarray}`` in ``[0, 100]``. The first
@@ -88,6 +87,4 @@ class RSI:
         out[n:] = rsi
         return {"rsi": out}
 
-    def compute(self, candles: list[Candle]) -> dict[str, np.ndarray]:
-        return self.compute_arr(Bars.from_candles(candles))
 

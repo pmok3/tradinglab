@@ -54,8 +54,7 @@ from typing import ClassVar
 import numpy as np
 
 from ..core.bars import Bars
-from ..models import Candle
-from .base import LineStyle, ParamDef
+from .base import BaseIndicator, LineStyle, ParamDef
 from .ma_kernels import MA_TYPES, apply_ma
 from .sessions import (
     is_intraday_np,
@@ -95,7 +94,7 @@ def _aggregate(values: np.ndarray, aggregator: str) -> float:
     return v
 
 
-class ATR:
+class ATR(BaseIndicator):
     """Average True Range with user-selectable mode + smoothing.
 
     ``compute`` returns ``{"atr": ndarray}``.
@@ -199,8 +198,6 @@ class ATR:
         # mode == "tod" — session bucketing path.
         return self._compute_tod_arr(bars, tr)
 
-    def compute(self, candles: list[Candle]) -> dict[str, np.ndarray]:
-        return self.compute_arr(Bars.from_candles(candles))
 
     def _compute_tod_arr(self, bars: Bars, tr: np.ndarray) -> dict[str, np.ndarray]:
         n = len(bars)

@@ -42,12 +42,11 @@ from typing import ClassVar
 import numpy as np
 
 from ..core.bars import Bars
-from ..models import Candle
-from .base import Availability, LineStyle, ParamDef, intraday_only
+from .base import Availability, BaseIndicator, LineStyle, ParamDef, intraday_only
 from .sessions import is_intraday_np, session_groups_np
 
 
-class PriorDayHLC:
+class PriorDayHLC(BaseIndicator):
     """Prior Day High / Low / Close reference lines.
 
     ``compute_arr`` returns ``{"pdh": ndarray, "pdl": ndarray,
@@ -147,5 +146,3 @@ class PriorDayHLC:
 
         return result
 
-    def compute(self, candles: list[Candle]) -> dict[str, np.ndarray]:
-        return self.compute_arr(Bars.from_candles(candles))

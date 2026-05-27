@@ -161,6 +161,55 @@ class Indicator(Protocol):
 
 
 # ---------------------------------------------------------------------------
+# BaseIndicator — concrete mixin providing the canonical compute(candles) shim
+# ---------------------------------------------------------------------------
+#
+# 17 of the 17 built-in indicators (plus the codegen template in
+# ``indicators/expression.py``) used to ship a byte-identical 2-line
+# ``compute(candles) -> dict[str, np.ndarray]`` that built a ``Bars``
+# from the candle list and forwarded to ``compute_arr(bars)``. That
+# was duplication waiting to drift — and it was a footgun for new
+# indicators (forget the shim → ``IndicatorMemo`` raises at runtime
+# because ``compute`` is the documented public entry point).
+#
+# Solution: a tiny concrete mixin. Indicator classes inherit from
+# :class:`BaseIndicator` so the shim is provided for free. They keep
+# implementing ``compute_arr(bars)`` (the fast path); the mixin's
+# ``compute(candles)`` just builds a ``Bars`` and forwards.
+
+
+class BaseIndicator:
+    """Default ``compute(candles)`` implementation.
+
+    Subclasses MUST implement ``compute_arr(bars: Bars) -> dict[str,
+    np.ndarray]``. The mixin's ``compute(candles)`` is a thin shim
+    that builds a ``Bars`` from the candle list and forwards.
+
+    Pre-mixin, every indicator class hand-rolled the same 2-line
+    shim — see CLAUDE.md for the audit trail. The mixin is purely
+    additive: indicators that already inherited from nothing now
+    inherit from ``BaseIndicator``; the shim body and any explicit
+    declaration is removed; behaviour and tests unchanged.
+
+    Note: ``BaseIndicator`` does NOT supply ``compute_arr`` — that's
+    the indicator-specific math. It also does NOT supply the
+    ``kind_id`` / ``kind_version`` / ``params_schema`` /
+    ``default_style`` / ``scannable_outputs`` ClassVars — those
+    remain per-indicator. The mixin owns only the
+    ``Bars.from_candles`` boilerplate.
+    """
+
+    def compute(self, candles: list[Candle]) -> dict[str, np.ndarray]:
+        return self.compute_arr(Bars.from_candles(candles))
+
+    def compute_arr(self, bars: Bars) -> dict[str, np.ndarray]:  # pragma: no cover
+        """Subclasses MUST override. Never called directly here."""
+        raise NotImplementedError(
+            f"{type(self).__name__} must implement compute_arr(bars)"
+        )
+
+
+# ---------------------------------------------------------------------------
 # compute_arr dispatch
 # ---------------------------------------------------------------------------
 #

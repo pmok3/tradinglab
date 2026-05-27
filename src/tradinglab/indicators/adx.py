@@ -46,8 +46,7 @@ from typing import ClassVar
 import numpy as np
 
 from ..core.bars import Bars
-from ..models import Candle
-from .base import LineStyle, ParamDef
+from .base import BaseIndicator, LineStyle, ParamDef
 from .wilder import (
     true_range as _true_range,
 )
@@ -59,7 +58,7 @@ from .wilder import (
 )
 
 
-class ADX:
+class ADX(BaseIndicator):
     """Average Directional Index (Wilder).
 
     ``compute`` returns ``{"plus_di": ndarray, "minus_di": ndarray,
@@ -198,5 +197,3 @@ class ADX:
         return {"plus_di": plus_di_out, "minus_di": minus_di_out,
                 "adx": adx_out}
 
-    def compute(self, candles: list[Candle]) -> dict[str, np.ndarray]:
-        return self.compute_arr(Bars.from_candles(candles))

@@ -59,8 +59,7 @@ from ..core.chandelier_math import (
 from ..core.chandelier_math import (
     compute_chandelier_short as _compute_short,
 )
-from ..models import Candle
-from .base import LineStyle, ParamDef
+from .base import BaseIndicator, LineStyle, ParamDef
 from .ma_kernels import MA_TYPES
 
 # Locked-in defaults (per the user's design decisions).
@@ -84,7 +83,7 @@ _DEFAULT_LONG_COLOR = "#2e7d32"   # darker green
 _DEFAULT_SHORT_COLOR = "#c62828"  # darker red
 
 
-class ChandelierStops:
+class ChandelierStops(BaseIndicator):
     """Chandelier Stops — long + short volatility-trailing overlay.
 
     ``compute`` returns ``{"long_stop": ndarray, "short_stop": ndarray}``.
@@ -207,5 +206,3 @@ class ChandelierStops:
         )
         return {"long_stop": long_stop, "short_stop": short_stop}
 
-    def compute(self, candles: list[Candle]) -> dict[str, np.ndarray]:
-        return self.compute_arr(Bars.from_candles(candles))

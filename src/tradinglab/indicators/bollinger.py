@@ -34,8 +34,7 @@ from typing import ClassVar
 import numpy as np
 
 from ..core.bars import Bars
-from ..models import Candle
-from .base import LineStyle, ParamDef
+from .base import BaseIndicator, LineStyle, ParamDef
 from .ma_kernels import MA_TYPES, apply_ma
 
 # Per-MA color palette so a chart with multiple BB configs reads at a
@@ -49,7 +48,7 @@ _DEFAULT_COLOR_BY_MA: dict[str, str] = {
 }
 
 
-class BollingerBands:
+class BollingerBands(BaseIndicator):
     kind_id: ClassVar[str] = "bbands"
     kind_version: ClassVar[int] = 3
     params_schema: ClassVar[tuple[ParamDef, ...]] = (
@@ -137,5 +136,3 @@ class BollingerBands:
 
         return {"middle": middle, "upper": upper, "lower": lower}
 
-    def compute(self, candles: list[Candle]) -> dict[str, np.ndarray]:
-        return self.compute_arr(Bars.from_candles(candles))

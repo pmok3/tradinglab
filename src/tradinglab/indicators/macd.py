@@ -35,7 +35,7 @@ from typing import ClassVar
 import numpy as np
 
 from ..core.bars import Bars
-from .base import LineStyle, ParamDef
+from .base import BaseIndicator, LineStyle, ParamDef
 from .ma_kernels import MA_TYPES, apply_ma
 
 #: Source selector — which price series feeds the fast/slow MAs.
@@ -118,7 +118,7 @@ def classify_histogram(hist: np.ndarray) -> np.ndarray:
     return out
 
 
-class MACD:
+class MACD(BaseIndicator):
     """Moving Average Convergence Divergence (Appel).
 
     ``compute`` returns ``{"macd": ndarray, "signal": ndarray,
@@ -231,10 +231,6 @@ class MACD:
         src_tag = "" if self.source == _DEFAULT_SOURCE else f",{self.source}"
         return f"{base}{ma_tag}{src_tag})"
 
-    def compute(self, candles) -> dict[str, np.ndarray]:
-        """Compute from a candle sequence (canonical entry point)."""
-        bars = Bars.from_candles(candles)
-        return self.compute_arr(bars)
 
     def compute_arr(self, bars: Bars) -> dict[str, np.ndarray]:
         n = len(bars)

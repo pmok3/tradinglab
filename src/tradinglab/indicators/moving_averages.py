@@ -7,11 +7,10 @@ from typing import ClassVar
 import numpy as np
 
 from ..core.bars import Bars
-from ..models import Candle
-from .base import LineStyle, ParamDef
+from .base import BaseIndicator, LineStyle, ParamDef
 
 
-class SMA:
+class SMA(BaseIndicator):
     """Simple moving average over closes.
 
     ``compute`` returns ``{"sma": ndarray}`` where the first ``length-1``
@@ -48,8 +47,6 @@ class SMA:
             out[n - 1:] = (csum[n:] - csum[:-n]) / n
         return {"sma": out}
 
-    def compute(self, candles: list[Candle]) -> dict[str, np.ndarray]:
-        return self.compute_arr(Bars.from_candles(candles))
 
     # --- incremental protocol -------------------------------------------
     # Closed-bar append fast path. Forming-bar updates fall back to full
@@ -104,7 +101,7 @@ class SMA:
         return {"output": {"sma": new_out}, "len": n}
 
 
-class EMA:
+class EMA(BaseIndicator):
     """Exponential moving average over closes, recursive form.
 
     Seeded with the SMA of the first ``length`` closes, published at
@@ -155,8 +152,6 @@ class EMA:
             out[i] = prev
         return {"ema": out}
 
-    def compute(self, candles: list[Candle]) -> dict[str, np.ndarray]:
-        return self.compute_arr(Bars.from_candles(candles))
 
     # --- incremental protocol -------------------------------------------
 
@@ -289,7 +284,7 @@ def _source_array(bars: Bars, source: str) -> np.ndarray:
     return bars.close
 
 
-class MovingAverage:
+class MovingAverage(BaseIndicator):
     """Single unified moving-average overlay.
 
     ``compute`` returns ``{"ma": ndarray}``. The legend label encodes
@@ -375,8 +370,6 @@ class MovingAverage:
         out = apply_ma(self.ma_type, arr, self.length)
         return {"ma": out}
 
-    def compute(self, candles: list[Candle]) -> dict[str, np.ndarray]:
-        return self.compute_arr(Bars.from_candles(candles))
 
     def _can_inc(self) -> bool:
         return self.source == "Close" and self.ma_type in ("SMA", "EMA")

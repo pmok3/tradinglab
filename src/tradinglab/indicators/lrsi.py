@@ -48,11 +48,10 @@ from typing import ClassVar
 import numpy as np
 
 from ..core.bars import Bars
-from ..models import Candle
-from .base import LineStyle, ParamDef
+from .base import BaseIndicator, LineStyle, ParamDef
 
 
-class LRSI:
+class LRSI(BaseIndicator):
     """Laguerre RSI (Ehlers).
 
     ``compute`` returns ``{"lrsi": ndarray}`` in the range ``[0, 100]``.
@@ -185,5 +184,3 @@ class LRSI:
                 out[i] = 100.0 * (cu / denom)
         return {"lrsi": out}
 
-    def compute(self, candles: list[Candle]) -> dict[str, np.ndarray]:
-        return self.compute_arr(Bars.from_candles(candles))

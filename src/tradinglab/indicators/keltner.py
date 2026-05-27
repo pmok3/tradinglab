@@ -45,8 +45,7 @@ from typing import ClassVar
 import numpy as np
 
 from ..core.bars import Bars
-from ..models import Candle
-from .base import LineStyle, ParamDef
+from .base import BaseIndicator, LineStyle, ParamDef
 from .ma_kernels import MA_TYPES, apply_ma
 from .wilder import true_range as _true_range
 
@@ -82,7 +81,7 @@ _DEFAULT_COLOR_BY_MA: dict[str, str] = {
 }
 
 
-class KeltnerChannels:
+class KeltnerChannels(BaseIndicator):
     """Keltner Channels — three overlay lines around a MA centerline.
 
     Outputs ``{"middle": ndarray, "upper": ndarray, "lower": ndarray}``.
@@ -230,5 +229,3 @@ class KeltnerChannels:
         lower[:] = mid - self.multiplier * atr
         return {"middle": middle, "upper": upper, "lower": lower}
 
-    def compute(self, candles: list[Candle]) -> dict[str, np.ndarray]:
-        return self.compute_arr(Bars.from_candles(candles))

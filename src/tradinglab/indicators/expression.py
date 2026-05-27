@@ -651,9 +651,8 @@ def _scannable_outputs_block(scannable: bool) -> str:
 
 
 _BUILDER_TEMPLATE = '''{header}
-from tradinglab.indicators.base import register_indicator
+from tradinglab.indicators.base import BaseIndicator, register_indicator
 from tradinglab.indicators.expression import evaluate, parse_expression
-from tradinglab.core.bars import Bars
 
 
 _EXPRESSION = {expr_literal!r}
@@ -661,7 +660,7 @@ _PARSED = parse_expression(_EXPRESSION)
 _WARMUP = {warmup}
 
 
-class _Indicator:
+class _Indicator(BaseIndicator):
     name = {name_literal!r}
     kind_id = {name_literal!r}
     kind_version = 1
@@ -673,9 +672,6 @@ class _Indicator:
 
     def compute_arr(self, bars):
         return evaluate(_PARSED, bars)
-
-    def compute(self, candles):
-        return self.compute_arr(Bars.from_candles(candles))
 
     @property
     def warmup_bars(self):
@@ -746,8 +742,7 @@ import json
 
 import numpy as np
 
-from tradinglab.indicators.base import register_indicator
-from tradinglab.core.bars import Bars
+from tradinglab.indicators.base import BaseIndicator, register_indicator
 from tradinglab.scanner.engine import IndicatorMemo, EvaluationContext, evaluate_group
 from tradinglab.scanner.model import Group
 
@@ -774,7 +769,7 @@ def _resolve_warmup(group):
     return max(warmup_bars_for_kind(kid, params) for _sym, kid, params in pairs)
 
 
-class _CustomCondition:
+class _CustomCondition(BaseIndicator):
     name = {name_literal!r}
     kind_id = {name_literal!r}
     kind_version = 1
@@ -815,9 +810,6 @@ class _CustomCondition:
             elif v is False:
                 out[i] = 0.0
         return {{"value": out}}
-
-    def compute(self, candles):
-        return self.compute_arr(Bars.from_candles(candles))
 
     @property
     def warmup_bars(self):

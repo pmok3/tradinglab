@@ -46,14 +46,13 @@ import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
 
 from ..core.bars import Bars
-from ..models import Candle
-from .base import LineStyle, ParamDef
+from .base import BaseIndicator, LineStyle, ParamDef
 
 # Minimum range to avoid division by zero on doji bars.
 _MIN_RANGE = 0.01
 
 
-class OverlapScoreInverted:
+class OverlapScoreInverted(BaseIndicator):
     """Weighted range overlap indicator (inverted: high = new territory).
 
     ``compute_arr`` returns ``{"osi": ndarray}`` in ``[0, 100]``.
@@ -122,5 +121,3 @@ class OverlapScoreInverted:
         out[L:] = (1.0 - weighted) * 100.0
         return {"osi": out}
 
-    def compute(self, candles: list[Candle]) -> dict[str, np.ndarray]:
-        return self.compute_arr(Bars.from_candles(candles))

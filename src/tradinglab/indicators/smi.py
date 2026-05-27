@@ -36,11 +36,10 @@ import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
 
 from ..core.bars import Bars
-from ..models import Candle
-from .base import LineStyle, ParamDef
+from .base import BaseIndicator, LineStyle, ParamDef
 
 
-class SMI:
+class SMI(BaseIndicator):
     """Stochastic Momentum Index (Blau).
 
     ``compute`` returns ``{"smi": ndarray, "signal": ndarray}``.
@@ -160,8 +159,6 @@ class SMI:
 
         return {"smi": smi, "signal": signal}
 
-    def compute(self, candles: list[Candle]) -> dict[str, np.ndarray]:
-        return self.compute_arr(Bars.from_candles(candles))
 
 
 # --- helpers -----------------------------------------------------------

@@ -37,7 +37,7 @@ import numpy as np
 
 from ..core.bars import Bars
 from ..models import Candle
-from .base import LineStyle, ParamDef
+from .base import BaseIndicator, LineStyle, ParamDef
 
 _PRICE_SOURCES: tuple[str, ...] = ("typical", "close", "ohlc4")
 _BANDS_CHOICES: tuple[str, ...] = ("off", "1σ", "2σ", "both")
@@ -47,7 +47,7 @@ _BANDS_CHOICES: tuple[str, ...] = ("off", "1σ", "2σ", "both")
 _OUTPUT_KEYS: tuple[str, ...] = ("avwap", "upper1", "lower1", "upper2", "lower2")
 
 
-class AnchoredVWAP:
+class AnchoredVWAP(BaseIndicator):
     """Anchored Volume-Weighted Average Price with optional ±σ bands."""
 
     kind_id: ClassVar[str] = "avwap"
@@ -183,8 +183,6 @@ class AnchoredVWAP:
 
         return out
 
-    def compute(self, candles: list[Candle]) -> dict[str, np.ndarray]:
-        return self.compute_arr(Bars.from_candles(candles))
 
 
 # --- helpers -----------------------------------------------------------
