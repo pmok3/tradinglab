@@ -43,12 +43,12 @@ Public surface:
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
 
 from ..core.lru_dict import LRUDict
+from ..core.params_key import freeze_params as _freeze_params
 from ..entries.model import EntryStrategy
 from ..entries.model import TriggerKind as EntryTriggerKind
 from ..exits.model import ExitStrategy
@@ -80,22 +80,6 @@ WARMUP_SAFETY_MULTIPLIER: float = 1.5
 # configuration; small enough that the per-indicator probe is cheap
 # (<1 ms typical) and the result is cached anyway.
 _EMPIRICAL_SAMPLE_N: int = 500
-
-
-def _freeze_params(p: Mapping[str, Any] | None) -> tuple[tuple[str, Any], ...]:
-    """Hashable, deterministic key for a params dict (mirrors scanner.engine)."""
-    if not p:
-        return ()
-    out: list[tuple[str, Any]] = []
-    for k, v in p.items():
-        # Frozenset/tuple-ify list/dict values so the result stays hashable
-        # even for the rare plugin that accepts container-valued params.
-        if isinstance(v, list):
-            v = tuple(v)
-        elif isinstance(v, dict):
-            v = tuple(sorted(v.items()))
-        out.append((str(k), v))
-    return tuple(sorted(out))
 
 
 # Module-level memo: (kind_id, frozen_params) → bar count. Strategy Tester

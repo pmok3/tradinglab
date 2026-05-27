@@ -55,6 +55,7 @@ from typing import Any
 
 import numpy as np
 
+from ..core.params_key import freeze_params as _freeze_params
 from ..indicators.base import compute_via_bars, factory_by_kind_id
 from ..models import Candle
 from .fields import (
@@ -103,11 +104,6 @@ LOG = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Indicator memo
 # ---------------------------------------------------------------------------
-
-
-def _freeze_params(p: Mapping[str, Any]) -> tuple[tuple[str, Any], ...]:
-    """Hashable, deterministic key for an indicator's params dict."""
-    return tuple(sorted((str(k), v) for k, v in (p or {}).items()))
 
 
 @dataclass
