@@ -135,17 +135,30 @@ class IndicatorMenuMixin:
         ``"delete"`` (entries call :meth:`delete_preset`). For
         ``"load"`` we tag the active preset with a ``✓`` prefix so
         the user can see which set they're currently looking at.
+
+        Cached by ``(action, tuple(names), active)`` on the menu
+        widget itself: if neither the preset list nor the active
+        preset has changed since the last open, we skip the
+        ``menu.delete(0, "end") + add_command(...)`` churn entirely
+        (audit Tier 1.5). The cache key IS the invalidation — any
+        ``save_preset`` / ``delete_preset`` / ``set_preset`` mutates
+        ``names`` or ``active``, so the next open detects the diff
+        and rebuilds. No manual ``cache_clear`` hook needed.
         """
+        mgr = self._indicator_manager
+        names = mgr.list_presets()
+        active = mgr.active_preset()
+        cache_key = (action, tuple(names), active)
+        if getattr(menu, "_tlab_preset_cache_key", None) == cache_key:
+            return
         try:
             menu.delete(0, "end")
         except tk.TclError:
             return
-        mgr = self._indicator_manager
-        names = mgr.list_presets()
         if not names:
             menu.add_command(label="(no presets saved)", state="disabled")
+            menu._tlab_preset_cache_key = cache_key
             return
-        active = mgr.active_preset()
         for name in names:
             if action == "load":
                 label = ("\u2713 " if name == active else "  ") + name
@@ -169,6 +182,7 @@ class IndicatorMenuMixin:
                 getattr(self, "_theme", None) or LIGHT_THEME)
         except Exception:  # noqa: BLE001
             pass
+        menu._tlab_preset_cache_key = cache_key
 
     def _on_menu_save_indicator_preset(self) -> None:
         from tkinter import simpledialog
