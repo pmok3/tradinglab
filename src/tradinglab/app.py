@@ -44,6 +44,7 @@ from .constants import (
     LIGHT_THEME,
     is_intraday,
 )
+from .core.lru_dict import LRUDict
 from .core.series import (
     SeriesArrays as _SeriesArrays,
 )
@@ -405,11 +406,21 @@ class ChartApp(
         # First-run seeding of bundled starter-pack templates (5 entries,
         # 5 exits, 5 scanners) into the user-local library. No-op once
         # the sentinel exists. Failures are logged but non-fatal.
+        # Deferred to ``after_idle`` so the first paint isn't blocked
+        # on first-run file I/O (~50-200ms on cold install). Safe to
+        # defer because the user can't open the Templates menu before
+        # the first idle event processes; subsequent launches are
+        # already no-ops via the sentinel guard.
+        def _seed_templates_idle() -> None:
+            try:
+                from .templates import seed_default_templates_if_empty
+                seed_default_templates_if_empty()
+            except Exception:  # noqa: BLE001 - first-run seeding is best-effort
+                pass
         try:
-            from .templates import seed_default_templates_if_empty
-            seed_default_templates_if_empty()
-        except Exception:  # noqa: BLE001 - first-run seeding is best-effort
-            pass
+            self.after_idle(_seed_templates_idle)
+        except Exception:  # noqa: BLE001 - in headless tests Tk may not be ready
+            _seed_templates_idle()
         # yfinance keeps a small SQLite cache of ticker → timezone
         # mappings (``platformdirs.user_cache_dir("py-yfinance")/tkr-tz.db``).
         # Concurrent access from a parallel Python process (e.g. a
@@ -656,7 +667,15 @@ class ChartApp(
         #   * the watchlist tab's "Next Earn" column;
         # Token-gated by ``_events_fetch_token`` so a superseded load's
         # late callback doesn't overwrite a fresher bundle.
-        self._events_cache: dict[str, Any] = {}
+        # Bounded LRU (cap = 200 symbols) so a user drilling through
+        # many tickers in a long session doesn't grow the cache without
+        # eviction — the LRU touch on ``.get()`` ensures the active
+        # ticker + watchlist never evict each other under normal use.
+        # ``LRUDict`` preserves the plain-dict ABI (``get`` / ``[k]`` /
+        # ``in`` / ``pop`` / ``clear``) so existing call sites in
+        # gui/watchlist_tab.py + gui/chartstack/panel.py + the smoke
+        # ``check_b65_events_cache_disk_roundtrip`` test work unchanged.
+        self._events_cache: LRUDict[str, Any] = LRUDict(maxsize=200)
         self._events_fetch_token: int = 0
         self._events_fetch_inflight: set = set()
         # Watchlist tab debounce (spec §18.4)

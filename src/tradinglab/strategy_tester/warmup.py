@@ -48,6 +48,7 @@ from typing import Any
 
 import numpy as np
 
+from ..core.lru_dict import LRUDict
 from ..entries.model import EntryStrategy
 from ..entries.model import TriggerKind as EntryTriggerKind
 from ..exits.model import ExitStrategy
@@ -99,9 +100,13 @@ def _freeze_params(p: Mapping[str, Any] | None) -> tuple[tuple[str, Any], ...]:
 
 # Module-level memo: (kind_id, frozen_params) → bar count. Strategy Tester
 # Runs typically mention the same EMA/RSI twice (entry + exit), so caching
-# halves the empirical-compute cost. Cleared via tests by calling
-# ``_WARMUP_CACHE.clear()`` if isolation is required.
-_WARMUP_CACHE: dict[tuple[str, tuple[tuple[str, Any], ...]], int] = {}
+# halves the empirical-compute cost. Bounded LRU (capacity = 256) so a
+# user running many indicator-param sweeps over days doesn't accumulate
+# entries forever. Tests can isolate via ``_WARMUP_CACHE.clear()``.
+_WARMUP_CACHE_MAX_SIZE: int = 256
+_WARMUP_CACHE: LRUDict[tuple[str, tuple[tuple[str, Any], ...]], int] = LRUDict(
+    maxsize=_WARMUP_CACHE_MAX_SIZE,
+)
 
 
 def _warmup_bars_via_attribute(instance: object) -> int | None:
