@@ -598,6 +598,10 @@ class RVOL:
     default_style: ClassVar[dict[str, LineStyle]] = {
         "rvol": LineStyle(color="#aec7e8", width=1.4),
     }
+    scannable_outputs: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("rvol", "numeric"),
+    )
+    resets_daily: ClassVar[bool] = True
     reference_levels: ClassVar[tuple[float, ...]] = ()
 
     @classmethod

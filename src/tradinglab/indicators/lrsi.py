@@ -83,6 +83,9 @@ class LRSI:
         # the "smarter cousin" of RSI.
         "lrsi": LineStyle(color="#bcbd22", width=1.4),
     }
+    scannable_outputs: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("lrsi", "numeric"),
+    )
 
     overlay = False  # pane indicator
 

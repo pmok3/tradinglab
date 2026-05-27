@@ -25,6 +25,7 @@ population-σ window regardless of kernel.
   (middle width 1.2, upper/lower 1.0). Per-MA palette
   (`SMA→#2ca02c`, `EMA→#d62728`, `WMA→#9467bd`, `RMA→#1f77b4`)
   defined for future per-instance default swapping.
+- `scannable_outputs = (("middle","numeric"),("upper","numeric"),("lower","numeric"))` — exposes the three lines to the scanner registry.
 - `compute(candles) -> {"middle", "upper", "lower"}`. First
   `max(length, std_length) - 1` entries of the bands are NaN; the
   centerline alone is defined from `length-1` onward (so for

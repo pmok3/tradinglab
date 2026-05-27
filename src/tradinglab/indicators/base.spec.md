@@ -4,7 +4,7 @@
 Declares the `Indicator` Protocol, the `INDICATORS` display registry, and the typed-parameter schema (`ParamDef`, `LineStyle`) that drives both the auto-generated Add Indicator dialog and persistence-time validation. An indicator transforms an OHLCV series into one or more named line series (e.g. `{"sma": ndarray}`, `{"upper": ..., "middle": ..., "lower": ...}`), all the same length as the input candles, NaN-padded where undefined.
 
 ## Public API
-- `class Indicator(Protocol)` — class-level: `kind_id: str` (stable persistence id, e.g. `"sma"`), `kind_version: int`, `params_schema: Tuple[ParamDef, ...]`, `default_style: Dict[str, LineStyle]`. Instance: `name: str`, `overlay: bool`. Method: `compute(candles) -> Dict[str, np.ndarray]`.
+- `class Indicator(Protocol)` — class-level: `kind_id: str` (stable persistence id, e.g. `"sma"`), `kind_version: int`, `params_schema: Tuple[ParamDef, ...]`, `default_style: Dict[str, LineStyle]`. Optional class-level (ClassVar) scanner opt-in: `scannable_outputs: Tuple[Tuple[str, str], ...] = ()` — list of `(output_key, dtype)` pairs the scanner / entries / exits / ranking UI should surface. Empty tuple (the default) means "chart-only — invisible to the scanner". `dtype` is `"numeric"` or `"bool"`. `resets_daily: bool = False` — set True for session-anchored indicators (VWAP, RVOL, RRVOL) so condition validators can warn cross-interval mismatches. Instance: `name: str`, `overlay: bool`. Method: `compute(candles) -> Dict[str, np.ndarray]`.
 - `ParamDef(name, kind, default, min=None, max=None, step=None, choices=(), description="")` — `kind ∈ {"int","float","bool","str","choice"}`. Drives the dialog widget by kind.
 - `LineStyle(color="#888888", width=1.2, visible=True)` — per-output-key visual default. Per-instance overrides live on `IndicatorConfig`.
 - `IndicatorFactory = Callable[..., Indicator]`.
@@ -13,6 +13,9 @@ Declares the `Indicator` Protocol, the `INDICATORS` display registry, and the ty
 - `register_legacy_indicator(name, factory)` — idempotent; adds to `_BY_KIND_ID` ONLY. Used for indicator families that consolidated into a single replacement (e.g. SMA + EMA → MovingAverage): the legacy class stays discoverable for in-memory configs and tests, but is excluded from the Add Indicator menu.
 - `factory_by_kind_id(kind_id) -> Optional[(name, factory)]` — stable-id lookup for persistence rehydration.
 - `kind_id_for(name) -> Optional[str]`.
+- `iter_indicator_factories() -> Iterator[(kind_id, name, factory)]` — registration-ordered walk over `_BY_KIND_ID`. Used by `scanner.fields._indicator_field_specs` to project ClassVar opt-ins into FieldSpecs (replaces the old hand-curated `SCANNABLE_INDICATORS` dict).
+- `indicator_scannable_outputs(factory) -> Tuple[Tuple[str, str], ...]` — safe getattr on the factory's `scannable_outputs` ClassVar (empty tuple if missing). Empty tuple means the indicator opted out of the scanner.
+- `indicator_resets_daily(factory) -> bool` — safe getattr on the `resets_daily` ClassVar (False default).
 - `migrate_kind_id(kind_id, params) -> (kind_id, params)` — applies the
   `_KIND_ID_MIGRATIONS` registry to upgrade legacy persisted configs.
   Current mappings (all additive, user-supplied params win):

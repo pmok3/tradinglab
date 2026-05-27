@@ -171,3 +171,82 @@ def test_conditions_codegen_warmup_round_trip() -> None:
     finally:
         ind_base.INDICATORS.pop("warmup_rt", None)
         ind_base._BY_KIND_ID.pop("warmup_rt", None)
+
+
+# ---------------------------------------------------------------------------
+# scannable=True opt-in: header round-trip + generated ClassVar
+# ---------------------------------------------------------------------------
+
+
+def test_expression_to_python_no_scannable_by_default() -> None:
+    """Default (scannable=False) MUST NOT emit a ``scannable_outputs`` line.
+
+    Pinning the fail-closed default — a generated indicator that the user
+    didn't opt in should stay invisible to the scanner registry.
+    """
+    src = expression_to_python(
+        name="test_default_not_scannable",
+        expression="close",
+    )
+    assert "scannable_outputs" not in src
+    # Header still records the flag explicitly for round-tripping.
+    assert "# scannable: False" in src
+
+
+def test_expression_to_python_emits_scannable_outputs_when_opted_in() -> None:
+    """``scannable=True`` embeds the ClassVar so the scanner discovers it."""
+    src = expression_to_python(
+        name="test_optin_scannable",
+        expression="ema(close, 9) - sma(close, 20)",
+        scannable=True,
+    )
+    assert "# scannable: True" in src
+    assert 'scannable_outputs = (("value", "numeric"),)' in src
+    # The generated class must still be valid Python and registerable.
+    ns: dict = {}
+    try:
+        exec(compile(src, "<custom>", "exec"), ns)
+        assert "test_optin_scannable" in ind_base.INDICATORS
+        factory = ind_base.INDICATORS["test_optin_scannable"]
+        ind = factory()
+        # The ClassVar is on the class, not the instance — but both
+        # access patterns must work because :func:`scanner.fields.
+        # indicator_scannable_outputs` reads via getattr on the factory.
+        from tradinglab.indicators.base import indicator_scannable_outputs
+        assert indicator_scannable_outputs(type(ind)) == (("value", "numeric"),)
+        # Now project through the scanner registry to confirm the
+        # indicator surfaces as a scannable field.
+        from tradinglab.scanner.fields import all_fields
+        ids = {f.id for f in all_fields() if f.kind == "indicator"}
+        assert "test_optin_scannable" in ids
+    finally:
+        ind_base.INDICATORS.pop("test_optin_scannable", None)
+        ind_base._BY_KIND_ID.pop("test_optin_scannable", None)
+
+
+def test_conditions_to_python_scannable_round_trip() -> None:
+    """Conditions-mode codegen honors the scannable flag too."""
+    from tradinglab.indicators.expression import conditions_to_python
+    from tradinglab.scanner.model import Condition, FieldRef, Group
+    g = Group(combinator="and", children=[
+        Condition(
+            left=FieldRef.builtin("close"),
+            op=">",
+            params={"right": FieldRef.indicator("ema", params={"length": 14})},
+            interval="1d",
+        ),
+    ])
+    src_off = conditions_to_python(
+        name="test_cond_not_scannable", group_dict=g.to_dict(), scannable=False,
+    )
+    src_on = conditions_to_python(
+        name="test_cond_scannable", group_dict=g.to_dict(), scannable=True,
+    )
+    assert "scannable_outputs" not in src_off
+    assert "# scannable: False" in src_off
+    assert 'scannable_outputs = (("value", "numeric"),)' in src_on
+    assert "# scannable: True" in src_on
+    # Both compile.
+    compile(src_off, "<a>", "exec")
+    compile(src_on, "<b>", "exec")
+

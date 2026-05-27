@@ -49,6 +49,11 @@ that series. The shared output key keeps dialog and persistence
 simple — scanner users querying `output_key="rvol"` on a `z_score=True`
 config receive z-score values.
 
+### Scanner registration
+
+- `scannable_outputs = (("rvol","numeric"),)` — opts the indicator into the scanner / entries / exits dropdowns via `scanner.fields._indicator_field_specs`.
+- `resets_daily = True` — declares the indicator as session-anchored (cumulative & time-of-day modes are intraday-only and reset each regular session). `condition_uses_daily_reset_field` walks this flag for prefix-cache pruning.
+
 ## Algorithm
 
 ### Time-of-day key

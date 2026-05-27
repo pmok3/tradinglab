@@ -79,6 +79,11 @@ class ADX:
         "minus_di": LineStyle(color="#d62728", width=1.2),
         "adx":      LineStyle(color="#7f7f7f", width=1.6),
     }
+    scannable_outputs: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("adx", "numeric"),
+        ("+di", "numeric"),
+        ("-di", "numeric"),
+    )
 
     #: Horizontal guide line at 25 (canonical "trending" threshold).
     reference_levels: ClassVar[tuple[float, ...]] = (25.0,)

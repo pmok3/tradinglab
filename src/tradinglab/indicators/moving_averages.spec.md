@@ -56,6 +56,7 @@ dispatcher:
   and the legacy incremental-protocol tests in `tests/unit/`.
 - NOT registered as menu entries. The unified `MovingAverage` is the
   only one users see.
+- **Scanner opt-in:** `SMA.scannable_outputs = (("sma","numeric"),)` and `EMA.scannable_outputs = (("ema","numeric"),)`. The unified `MovingAverage` (kind_id `"ma"`) deliberately does NOT declare `scannable_outputs` — the scanner keeps SMA/EMA as separate field ids (`_CHART_ONLY_MIGRATION_KIND_IDS = {"sma","ema"}` in `indicators/base.py` preserves the asymmetry: chart configs migrate `sma`/`ema` → `ma`, scanner FieldRefs stay at `sma`/`ema`).
 
 ## Dependencies
 - Internal: `..models.Candle`, `..core.bars.Bars`,

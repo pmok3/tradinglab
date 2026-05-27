@@ -20,6 +20,7 @@ flat-market regimes. Drawn in its own pane.
     instance reports an empty `reference_levels`.
 - `default_style.lrsi`: olive `#bcbd22`, width 1.4 (distinct from
   RSI's purple).
+- `scannable_outputs = (("lrsi","numeric"),)` — opts the indicator into the scanner.
 - Instance `reference_levels`: `(oversold, overbought)` when
   `show_reference_lines` else `()`. Class-level `reference_levels = ()`
   so static introspection without instantiation correctly reports

@@ -19,6 +19,7 @@ the result. Output bounded in roughly `[-100, +100]`; signal line
   - `signal_length: int` (default 3, min 1, max 200) — EMA of SMI.
 - `default_style`: `smi` teal `#17becf` width 1.4; `signal` orange
   `#ff7f0e` width 1.2.
+- `scannable_outputs = (("smi","numeric"),("signal","numeric"))` — both lines exposed to the scanner.
 - `reference_levels = (-40.0, 0.0, 40.0)` (class attribute).
 - `compute(candles) -> {"smi": ndarray, "signal": ndarray}`.
 

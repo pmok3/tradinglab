@@ -197,6 +197,12 @@ class CustomIndicatorDialog(BaseModalDialog):
         self._desc_var = tk.StringVar(value="")
         self._mode_var = tk.StringVar(value=_CONDITIONS_MODE)
         self._overlay_var = tk.BooleanVar(value=False)
+        # "Expose to scanner" — when True, the generated source embeds
+        # ``scannable_outputs = (("value", "numeric"),)`` so the indicator
+        # opts into the scanner / entries / exits dropdowns. Defaults to
+        # OFF so the fail-closed policy from
+        # :mod:`tradinglab.scanner.fields` still holds.
+        self._scannable_var = tk.BooleanVar(value=False)
         self._status_var = tk.StringVar(value="")
         # Currently-loaded file path (None for "new").
         self._current_path: Path | None = None
@@ -262,12 +268,17 @@ class CustomIndicatorDialog(BaseModalDialog):
         ttk.Checkbutton(
             meta, text="Overlay on price pane", variable=self._overlay_var,
         ).grid(row=0, column=4, sticky="w", padx=(12, 0))
+        ttk.Checkbutton(
+            meta,
+            text="Expose to scanner",
+            variable=self._scannable_var,
+        ).grid(row=0, column=5, sticky="w", padx=(12, 0))
 
         ttk.Label(meta, text="Description:").grid(
             row=1, column=0, sticky="w", padx=(0, 4), pady=(4, 0),
         )
         ttk.Entry(meta, textvariable=self._desc_var, width=64).grid(
-            row=1, column=1, columnspan=4, sticky="we", pady=(4, 0),
+            row=1, column=1, columnspan=5, sticky="we", pady=(4, 0),
         )
         meta.columnconfigure(1, weight=1)
 
@@ -494,6 +505,11 @@ class CustomIndicatorDialog(BaseModalDialog):
         overlay_str = meta.get("overlay", "").strip().lower()
         if overlay_str in ("true", "false"):
             self._overlay_var.set(overlay_str == "true")
+        scannable_str = meta.get("scannable", "").strip().lower()
+        if scannable_str in ("true", "false"):
+            self._scannable_var.set(scannable_str == "true")
+        else:
+            self._scannable_var.set(False)
         if mode == "conditions":
             self._mode_var.set(_CONDITIONS_MODE)
             group_json = meta.get("conditions_json", "")
@@ -545,6 +561,7 @@ class CustomIndicatorDialog(BaseModalDialog):
         self._desc_var.set("")
         self._mode_var.set(_CONDITIONS_MODE)
         self._overlay_var.set(False)
+        self._scannable_var.set(False)
         # Reset cached body states so the next mode-switch doesn't restore
         # stale composition from a prior load.
         self._group_root = Group(combinator="and", children=[])
@@ -832,6 +849,7 @@ class CustomIndicatorDialog(BaseModalDialog):
 
         try:
             mode = self._mode_var.get()
+            scannable = bool(self._scannable_var.get())
             if mode == _CONDITIONS_MODE:
                 source = conditions_to_python(
                     name=name,
@@ -840,6 +858,7 @@ class CustomIndicatorDialog(BaseModalDialog):
                     overlay=self._overlay_var.get(),
                     created=created,
                     updated=updated,
+                    scannable=scannable,
                 )
             elif mode == _EXPRESSION_MODE:
                 source = expression_to_python(
@@ -849,6 +868,7 @@ class CustomIndicatorDialog(BaseModalDialog):
                     overlay=self._overlay_var.get(),
                     created=created,
                     updated=updated,
+                    scannable=scannable,
                 )
             else:
                 source = python_mode_wrapper(
@@ -857,6 +877,7 @@ class CustomIndicatorDialog(BaseModalDialog):
                     description=self._desc_var.get().strip(),
                     created=created,
                     updated=updated,
+                    scannable=scannable,
                 )
         except ExpressionError as exc:
             self._set_status(str(exc), level="error")

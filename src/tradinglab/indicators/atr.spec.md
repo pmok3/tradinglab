@@ -24,6 +24,7 @@ across the last N regular sessions). Output is in price units
   - `aggregator: choice` (default `"mean"`, choices `mean | median`)
     — tod only.
 - `default_style.atr`: light orange `#ffbb78`, width 1.4.
+- `scannable_outputs = (("atr","numeric"),)` — opts the indicator into the scanner registry.
 - `compute(candles) -> {"atr": ndarray}`.
 - `name`: `ATR(N)` (default `RMA` rolling), `ATR-{KIND}(N)` (other
   rolling kernel), `ATR ToD(N)` (tod regardless of kernel).

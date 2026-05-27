@@ -112,11 +112,26 @@ class Indicator(Protocol):
     """Compute one or more line series from a candle history.
 
     Class-level attributes (declared on the *class*, not instance):
-      ``kind_id``       — stable persistence id (e.g. ``"sma"``).
-      ``kind_version``  — bumped when persisted ``params`` schema changes.
-      ``params_schema`` — tuple of :class:`ParamDef` describing
-                          factory parameters; drives the dialog.
-      ``default_style`` — ``{output_key: LineStyle}`` defaults.
+      ``kind_id``           — stable persistence id (e.g. ``"sma"``).
+      ``kind_version``      — bumped when persisted ``params`` schema changes.
+      ``params_schema``     — tuple of :class:`ParamDef` describing
+                              factory parameters; drives the dialog.
+      ``default_style``     — ``{output_key: LineStyle}`` defaults.
+      ``scannable_outputs`` — tuple of ``(output_key, dtype)`` pairs that
+                              the scanner should expose. Empty (the
+                              default) means the indicator is NOT
+                              surfaced as a scanner field — preserves the
+                              fail-closed policy so categorical/boolean
+                              outputs don't silently leak into numeric
+                              comparisons. See
+                              :mod:`tradinglab.scanner.fields` for the
+                              dtype string contract (``"numeric"`` /
+                              ``"bool"``).
+      ``resets_daily``      — ``True`` when the indicator's output is
+                              anchored to the regular session (resets at
+                              session open). Used by the scanner's
+                              within-last-N-bars walk to clamp look-back
+                              windows to the current session.
 
     Instance attributes:
       ``name``          — human-readable label (e.g. ``"SMA(20)"``);
@@ -135,6 +150,8 @@ class Indicator(Protocol):
     kind_version: ClassVar[int]
     params_schema: ClassVar[tuple[ParamDef, ...]]
     default_style: ClassVar[dict[str, LineStyle]]
+    scannable_outputs: ClassVar[tuple[tuple[str, str], ...]] = ()
+    resets_daily: ClassVar[bool] = False
 
     name: str
     overlay: bool
@@ -354,6 +371,47 @@ def kind_id_for(name: str) -> str | None:
     """Return the ``kind_id`` for an indicator registered under ``name``."""
     f = INDICATORS.get(name)
     return getattr(f, "kind_id", None) if f else None
+
+
+# --- Scanner-facing introspection helpers -----------------------------------
+
+
+def iter_indicator_factories() -> list[tuple[str, str, IndicatorFactory]]:
+    """Return ``[(kind_id, display_name, factory), ...]`` in registration order.
+
+    Walks the kind_id index so legacy-registered classes (e.g. SMA / EMA
+    behind the unified MovingAverage display) are still discoverable.
+    Used by the scanner field registry to project indicators with a
+    non-empty :attr:`Indicator.scannable_outputs` ClassVar into
+    :class:`FieldSpec`s without a hand-curated allowlist.
+    """
+    return [(kid, name, fac) for kid, (name, fac) in _BY_KIND_ID.items()]
+
+
+def indicator_scannable_outputs(factory: Any) -> tuple[tuple[str, str], ...]:
+    """Return a factory's ``scannable_outputs`` tuple (empty by default).
+
+    Defensive — accepts any factory-like object (test stubs, plugin
+    classes, lambdas wrapping a class) and falls back to ``()`` when the
+    ClassVar is missing or not a tuple-of-pairs. Empty means the
+    indicator opted out / never opted in: the scanner registry skips it.
+    """
+    raw = getattr(factory, "scannable_outputs", ())
+    if not raw:
+        return ()
+    try:
+        out: list[tuple[str, str]] = []
+        for entry in raw:
+            key, dtype = entry
+            out.append((str(key), str(dtype)))
+        return tuple(out)
+    except (TypeError, ValueError):
+        return ()
+
+
+def indicator_resets_daily(factory: Any) -> bool:
+    """Return True iff ``factory.resets_daily`` is truthy (default False)."""
+    return bool(getattr(factory, "resets_daily", False))
 
 
 # --- Deprecated kind_id migrations -----------------------------------------

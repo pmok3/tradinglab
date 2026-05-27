@@ -48,12 +48,24 @@ followed by `# mode: conditions | building_blocks | python` and metadata
 lines:
 
 - **Conditions** — `# mode: conditions`, plus `description`, `created`,
-  `updated`, `overlay`, and `conditions_json` (compact JSON of the
+  `updated`, `overlay`, `scannable`, and `conditions_json` (compact JSON of the
   serialized `Group` tree, source of truth for round-tripping the
   visual editor on reopen).
 - **Expression** (header label `building_blocks`) — `expression`,
-  `description`, `created`, `updated`.
-- **Python** — `description`, `created`, `updated`.
+  `description`, `created`, `updated`, `scannable`.
+- **Python** — `description`, `created`, `updated`, `scannable`.
+
+The `scannable: True | False` header field (default False on legacy
+files without the line) round-trips the "Expose to scanner" checkbox
+in the dialog. When True, the generated source declares
+`scannable_outputs = (("value", "numeric"),)` on the indicator class,
+which `scanner.fields._indicator_field_specs` projects into a
+FieldSpec so the indicator becomes pickable in scanner / entries /
+exits dropdowns immediately on registration. When False (the
+fail-closed default), the class declares no `scannable_outputs` and
+remains chart-only. Python-mode users are responsible for declaring
+their own `scannable_outputs` ClassVar — the codegen only emits the
+header field for round-trip.
 
 The loader uses the marker (see `indicators/loader.py:BUILDER_HEADER_MARKER`)
 to switch the exec namespace from the locked-down `_SAFE_BUILTINS` to real

@@ -19,8 +19,9 @@ auto-registers the indicator via the existing loader.
 - `ALLOWED_FUNCTIONS: dict[str, int | None]` — `ema` / `sma` / `wma` /
   `rma` (2 args), `rsi` (2), `atr` (1), `vwap` (0), `bollinger` /
   `bollinger_upper` / `bollinger_lower` (3), `macd` / `macd_signal` /
-  `macd_hist` (3), `highest` / `lowest` (2), `abs` / `sqrt` / `log` /
-  `exp` (1), `max` / `min` (2), `where` (3).
+  `macd_hist` (4 — `series, fast, slow, signal`), `highest` / `lowest`
+  (2), `abs` / `sqrt` / `log` / `exp` (1), `max` / `min` (2),
+  `where` (3).
 - `parse_expression(source) -> ParsedExpression` — validates via `ast`
   whitelist walk; raises `ExpressionError` with `(line, column)` on
   any rejection.
@@ -29,19 +30,23 @@ auto-registers the indicator via the existing loader.
 - `estimate_warmup(expr) -> int` — walks AST for max length-bearing
   argument across all indicator calls; adds the signal length for
   `macd*` so the EMA-of-EMA chain converges.
-- `expression_to_python(...) -> str` — round-trip code generator. Emits
+- `expression_to_python(*, name, expression, description="", overlay=False, created="", updated="", scannable=False) -> str` — round-trip code generator. Emits
   a file with a `# tradinglab-custom-indicator` comment header (mode +
-  expression + description + created / updated timestamps) plus a
-  `class _Indicator` definition and `register_indicator(name, ...)`
-  call.
+  expression + description + created / updated + scannable timestamps) plus a
+  `class _Indicator` definition and `register_indicator(name, _Indicator)`
+  call. When `scannable=True` the class declares
+  `scannable_outputs = (("value", "numeric"),)` so the scanner registry
+  surfaces it automatically; when False (default) the class declares
+  no `scannable_outputs` and stays chart-only.
 - `conditions_to_python(*, name, group_dict, description="", overlay=False,
-  created="", updated="") -> str` — alternate code generator for the
+  created="", updated="", scannable=False) -> str` — alternate code generator for the
   **Conditions** mode of the Custom Indicator Builder. ``group_dict`` is a
   serialized :class:`scanner.model.Group` (the visual Conditions/Groups
   tree used by entries/exits). The generated module:
   - Carries header lines `# mode: conditions` plus
-    `# conditions_json: <compact JSON>` so the dialog can round-trip the
-    tree back into the visual editor on reopen.
+    `# conditions_json: <compact JSON>` and `# scannable: True|False` so
+    the dialog can round-trip the tree and the scanner opt-in back into
+    the visual editor on reopen.
   - Embeds the same JSON as a module constant and reconstructs the Group
     via `Group.from_dict(...)`.
   - Per-bar walks `evaluate_group(group, ctx)` and emits a single
@@ -49,6 +54,7 @@ auto-registers the indicator via the existing loader.
     insufficient data). NaN-padded warmup is sized via
     :func:`warmup_for_conditions` at indicator-instantiation time so the
     output matches the strategy_tester warmup contract (§7.16).
+  - When `scannable=True`, declares `scannable_outputs = (("value", "numeric"),)` on the class.
   Raises `ExpressionError` for invalid names, malformed group dicts, or
   references to unknown indicator kind_ids.
 - `warmup_for_conditions(group_dict) -> int` — companion helper that
@@ -57,8 +63,11 @@ auto-registers the indicator via the existing loader.
   `warmup_bars_for_kind`. Used both by the dialog's Validate step
   ("Warmup: N bars") and by the generated module's `warmup_bars`
   property.
-- `python_mode_wrapper(name=, body=, ...)` — alternate generator for
-  user-authored Python bodies; prepends the header verbatim.
+- `python_mode_wrapper(name=, body=, ..., scannable=False)` — alternate generator for
+  user-authored Python bodies; prepends the header verbatim (including
+  the `scannable` field for round-trip). Python-mode users are
+  responsible for declaring `scannable_outputs` on their own class — the
+  wrapper does not inject it because the body is opaque to the parser.
 - `safe_indicator_filename(name) -> str` — validates name is
   `[A-Za-z_][A-Za-z0-9_]{0,31}` and not a built-in kind_id (`sma`,
   `ema`, `rsi`, `bbands`, `macd`, ...).

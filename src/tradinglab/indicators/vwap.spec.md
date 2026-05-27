@@ -15,6 +15,7 @@ own session), so the line auto-hides.
     `typical | close | ohlc4`) — `typical = (H+L+C)/3`,
     `ohlc4 = (O+H+L+C)/4`.
 - `default_style.vwap`: purple `#9467bd`, width 1.6.
+- `scannable_outputs = (("vwap","numeric"),)` and `resets_daily = True` — opts the indicator into the scanner AND declares it as session-anchored so engine/runner know to evict cached prefixes at session boundaries (see `scanner.fields.field_ref_resets_daily`).
 - `compute(candles) -> {"vwap": ndarray}`. Indices where VWAP is
   undefined (warmup, pre/post bars, gap fillers, daily+ intervals)
   are NaN.

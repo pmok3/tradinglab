@@ -123,6 +123,9 @@ class ATR:
     default_style: ClassVar[dict[str, LineStyle]] = {
         "atr": LineStyle(color=_DEFAULT_COLOR_BY_MA["RMA"], width=1.4),
     }
+    scannable_outputs: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("atr", "numeric"),
+    )
     reference_levels: ClassVar[tuple[float, ...]] = ()
     overlay = False
 

@@ -27,6 +27,9 @@ class SMA:
     default_style: ClassVar[dict[str, LineStyle]] = {
         "sma": LineStyle(color="#1f77b4", width=1.4),
     }
+    scannable_outputs: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("sma", "numeric"),
+    )
 
     overlay = True
 
@@ -123,6 +126,9 @@ class EMA:
     default_style: ClassVar[dict[str, LineStyle]] = {
         "ema": LineStyle(color="#ff7f0e", width=1.4),
     }
+    scannable_outputs: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("ema", "numeric"),
+    )
 
     overlay = True
 

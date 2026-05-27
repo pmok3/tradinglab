@@ -112,19 +112,42 @@ matches).
 
 Shares compute with the chart's *View → Highlight Key Bars* toggle.
 
-### Allowlisted indicators (`SCANNABLE_INDICATORS`)
+### Scanner opt-in via `Indicator.scannable_outputs` ClassVar
 
-Map of `kind_id → ((output_key, dtype), ...)`. Indicators present here
-are projected over `indicators.base.INDICATORS` as scanner fields;
-others are NOT surfaced even if chart-registered. First output key is
-the default when `FieldRef.output_key` is empty.
+Each indicator class declares its own scanner exposure via two
+ClassVars on `indicators.base.Indicator` (Protocol):
 
-**Fail-closed by design.** New indicator authors must opt-in, killing
-the footgun where a categorical/boolean output gets picked in a
-numeric comparison and silently returns `None`.
+- `scannable_outputs: Tuple[Tuple[str, str], ...] = ()` — list of
+  `(output_key, dtype)` pairs. Empty tuple (the default) means
+  "chart-only — invisible to the scanner". `dtype` is `"numeric"` or
+  `"bool"`. First entry is the default output key when
+  `FieldRef.output_key` is empty.
+- `resets_daily: bool = False` — set True for session-anchored
+  indicators (VWAP, RVOL, RRVOL) so `field_ref_resets_daily` /
+  `condition_uses_daily_reset_field` flag cross-interval mismatches.
 
-v1 allowlist: sma, ema, rsi, bbands (middle/upper/lower), atr,
-adx (adx/+di/-di), vwap, avwap, smi (smi/signal), lrsi, rvol, rrvol.
+`_indicator_field_specs` walks `iter_indicator_factories()` (the
+ordered `_BY_KIND_ID` registry, which sees both `register_indicator`
+and `register_legacy_indicator` entries) and projects every factory
+whose `scannable_outputs` is non-empty into a `FieldSpec`.
+
+**Fail-closed by design.** New indicator authors must opt-in by
+declaring the ClassVar on the class. This kills the footgun where a
+categorical/boolean output gets picked in a numeric comparison and
+silently returns `None`. It also lets v0.3.0 Custom Indicator Builder
+users tick "Expose to scanner" in the dialog and have their indicator
+appear in scanner / entries / exits dropdowns without editing any
+hand-curated allowlist.
+
+v1 indicators that opt in: sma, ema, rsi, bbands (middle/upper/lower),
+atr, adx (adx/+di/-di — pre-existing key inconsistency vs compute's
+`plus_di`/`minus_di`, preserved for back-compat), vwap (daily-reset),
+avwap, smi (smi/signal), lrsi, rvol (daily-reset), rrvol (daily-reset).
+
+The unified `MovingAverage` (kind_id `"ma"`) intentionally does NOT
+opt in — `_CHART_ONLY_MIGRATION_KIND_IDS = {"sma", "ema"}` keeps the
+legacy SMA/EMA classes scannable as separate field ids so persisted
+scanner / entries / exits FieldRefs don't break.
 
 Unified `rvol`/`rrvol` ids cover all flavours (simple / cumulative /
 time_of_day, optional z-score) via the indicator's own `mode` and
@@ -132,8 +155,24 @@ time_of_day, optional z-score) via the indicator's own `mode` and
 `rvol_z_*`, `rrvol_*`) are migrated transparently by
 `FieldRef.from_dict`.
 
+#### Back-compat shims
+
+`SCANNABLE_INDICATORS` (dict) and `INDICATORS_RESETTING_DAILY`
+(tuple) are kept as **lazy module-level attributes** resolved via
+`__getattr__` (PEP 562). Reading either re-walks the registry on each
+access, so a custom indicator registered after module import becomes
+visible immediately. These names are pre-migration test fixtures
+only; new code should call `scannable_indicators()` /
+`indicators_resetting_daily()` directly.
+
 ## Public API
 
+- `scannable_indicators() -> dict[str, tuple[tuple[str, str], ...]]` —
+  registry projection in `_BY_KIND_ID` order. Same shape as the legacy
+  `SCANNABLE_INDICATORS` constant. Re-computed on each call so plugin
+  indicators registered after import become visible.
+- `indicators_resetting_daily() -> tuple[str, ...]` — kind_ids of
+  scannable indicators whose `resets_daily` ClassVar is True.
 - `all_fields() -> list[FieldSpec]` — full catalog, builtins first.
 - `get_field(id, kind="") -> FieldSpec | None` — lookup by stable id.
 - `is_scannable(ref) -> bool` — quick truthy check.
@@ -159,9 +198,9 @@ time_of_day, optional z-score) via the indicator's own `mode` and
 ## Extension contract
 
 New indicator output:
-1. Register the indicator under `INDICATORS`.
-2. Add `kind_id` to `SCANNABLE_INDICATORS` with each numerically
-   scannable output key.
+1. Declare `scannable_outputs: ClassVar[tuple[tuple[str, str], ...]] = ((output_key, "numeric"), ...)` on the indicator class — this is the registration; no further wiring needed.
+2. If the indicator is session-anchored (resets at the start of every regular session), also declare `resets_daily: ClassVar[bool] = True`.
+3. Register the indicator under `INDICATORS` as usual (`register_indicator(name, IndicatorClass)`).
 
 New builtin scalar:
 1. Implement `_b_<name>(bars, i, params) -> Optional[float]`.

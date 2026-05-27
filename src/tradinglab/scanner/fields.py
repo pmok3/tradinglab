@@ -12,16 +12,22 @@ Two field kinds are surfaced:
    ``gap_pct``, ``hod``, ``lod``, ``time_of_day``, ``bars_since_open``.
 
 2. **Allowlisted indicators** — projected from
-   :data:`tradinglab.indicators.base.INDICATORS` via an explicit
-   ``SCANNABLE_INDICATORS`` allowlist that maps each ``kind_id`` to the
-   output keys that are numerically scannable (e.g. Bollinger has
-   ``upper`` / ``middle`` / ``lower``; SMA has just ``sma``).
+   :data:`tradinglab.indicators.base.INDICATORS` via each indicator
+   class's :attr:`Indicator.scannable_outputs` ClassVar (a tuple of
+   ``(output_key, dtype)`` pairs that the scanner should expose).
 
-   **Fail-closed policy:** indicators not in the allowlist are NOT
-   surfaced to the scanner, even if registered chartable. This kills
-   the footgun where a user picks a categorical/boolean indicator
-   output in a numeric comparison and gets silent ``None`` everywhere.
-   See ``scanner/fields.spec.md`` for the rationale.
+   **Fail-closed policy:** the ClassVar defaults to an empty tuple, so
+   indicators that don't opt-in are NOT surfaced to the scanner, even
+   if registered chartable. This kills the footgun where a user picks
+   a categorical/boolean indicator output in a numeric comparison and
+   gets silent ``None`` everywhere. See ``scanner/fields.spec.md`` for
+   the rationale.
+
+   Custom indicators authored via the **Custom Indicator Builder**
+   dialog can opt in via the "Expose to scanner" checkbox; the
+   generated source embeds ``scannable_outputs`` so the indicator
+   appears in the scanner / entries / exits dropdowns on the next
+   load.
 
 The compute callables here all accept a ``BarsNp`` view (OHLCV as NumPy
 columns) plus the current bar index. Returning ``None`` means
@@ -38,7 +44,13 @@ import numpy as np
 
 from ..core.bars import Bars
 from ..core.heikin_ashi import ha_arrays
-from ..indicators.base import INDICATORS, ParamDef, factory_by_kind_id
+from ..indicators.base import (
+    INDICATORS,
+    ParamDef,
+    indicator_resets_daily,
+    indicator_scannable_outputs,
+    iter_indicator_factories,
+)
 from .model import FIELD_KIND_INDICATOR, FieldRef
 
 # ---------------------------------------------------------------------------
@@ -640,73 +652,86 @@ _BUILTINS: tuple[FieldSpec, ...] = (
 # Indicator allowlist
 # ---------------------------------------------------------------------------
 
-# Map indicator ``kind_id`` → tuple of (output_key, dtype) pairs that are
-# scannable. The first entry's ``output_key`` is taken as the default
-# when :attr:`FieldRef.output_key` is empty.
+# Scanner-facing indicator metadata is no longer a hand-curated allowlist.
+# Each indicator class declares its own ``scannable_outputs`` ClassVar
+# (tuple of ``(output_key, dtype)`` pairs) on the
+# :class:`tradinglab.indicators.base.Indicator` Protocol; the empty tuple
+# default keeps the fail-closed policy intact (a new indicator that
+# doesn't opt in is NOT surfaced in the scanner, regardless of whether
+# it's registered in :data:`INDICATORS`).
 #
-# Indicators not in this dict are NOT surfaced to the scanner. Adding a
-# new indicator to the chart does NOT automatically add it here — that's
-# intentional: indicator authors must opt their indicator into scanning.
-SCANNABLE_INDICATORS: dict[str, tuple[tuple[str, str], ...]] = {
-    "sma":  (("sma",  DTYPE_NUMERIC),),
-    "ema":  (("ema",  DTYPE_NUMERIC),),
-    "rsi":  (("rsi",  DTYPE_NUMERIC),),
-    "bbands": (("middle", DTYPE_NUMERIC),
-               ("upper",  DTYPE_NUMERIC),
-               ("lower",  DTYPE_NUMERIC)),
-    "atr":  (("atr",  DTYPE_NUMERIC),),
-    "adx":  (("adx",  DTYPE_NUMERIC),
-             ("+di",  DTYPE_NUMERIC),
-             ("-di",  DTYPE_NUMERIC)),
-    "vwap": (("vwap", DTYPE_NUMERIC),),
-    "avwap":(("avwap",DTYPE_NUMERIC),),
-    "smi":  (("smi",  DTYPE_NUMERIC),
-             ("signal", DTYPE_NUMERIC)),
-    "lrsi": (("lrsi", DTYPE_NUMERIC),),
-    "rvol":  (("rvol", DTYPE_NUMERIC),),
-    "rrvol": (("rvol", DTYPE_NUMERIC),),
-}
+# Custom indicators authored via the **Custom Indicator Builder** dialog
+# can opt in by checking "Expose to scanner" when saving — the generated
+# Python source embeds ``scannable_outputs = (("value", "numeric"),)``
+# which lights them up in the scanner / entries / exits dropdowns the
+# next time the file is loaded.
+#
+# For back-compat, two module-level names are still resolvable via
+# ``__getattr__`` and emit the registry-projected views:
+#
+# * ``SCANNABLE_INDICATORS`` — ``{kind_id: ((output_key, dtype), ...)}``
+# * ``INDICATORS_RESETTING_DAILY`` — ``tuple[str, ...]`` of session-anchored
+#   indicator kind_ids
+#
+# Both are computed on each access, so a custom indicator registered
+# after module import is reflected immediately.
 
 
-# Indicators whose output is anchored to the current trading session
-# (i.e. resets at the session open). Within-last-N-bars walks clamp to
-# session-open when any FieldRef in the (sub)condition is in this set,
-# so a 9:35 AM "VWAP reclaim within last 5 bars" check doesn't peek at
-# yesterday's close.
-#
-# * ``vwap``: textbook session VWAP — anchored to today's open.
-# * ``rvol``/``rrvol``: dominantly used in cumulative or time-of-day
-#   modes which are daily-reset; rolling mode is the minority and the
-#   clamp is conservative-safe (it only narrows the window).
-#
-# Path-dependent indicators (``sma``, ``ema``, ``rsi``, ``atr``, ``adx``,
-# ``bbands``, ``smi``, ``lrsi``) carry across session boundaries and are
-# intentionally NOT in this set — clamping them would distort the
-# look-back semantics in setups that legitimately need cross-day context.
-#
-# ``avwap`` (anchored VWAP) is also not in this set: the anchor can be
-# arbitrary (not necessarily session-open), and we don't want to falsely
-# clamp a multi-day-anchored AVWAP to today only.
-INDICATORS_RESETTING_DAILY: tuple[str, ...] = (
-    "vwap",
-    "rvol",
-    "rrvol",
-)
+def scannable_indicators() -> dict[str, tuple[tuple[str, str], ...]]:
+    """Return the projection ``{kind_id: scannable_outputs}`` over the registry.
+
+    Walks :func:`iter_indicator_factories` and includes only entries
+    whose ``scannable_outputs`` ClassVar is non-empty. Order matches
+    registration order.
+    """
+    out: dict[str, tuple[tuple[str, str], ...]] = {}
+    for kind_id, _name, factory in iter_indicator_factories():
+        outputs = indicator_scannable_outputs(factory)
+        if outputs:
+            out[kind_id] = outputs
+    return out
+
+
+def indicators_resetting_daily() -> tuple[str, ...]:
+    """Return the tuple of kind_ids whose indicator output resets each session.
+
+    Walks :func:`iter_indicator_factories` and includes only entries
+    whose ``resets_daily`` ClassVar is truthy AND whose
+    ``scannable_outputs`` is non-empty (an indicator that's not
+    surfaced to the scanner has no business influencing the
+    scanner's look-back clamp).
+    """
+    out: list[str] = []
+    for kind_id, _name, factory in iter_indicator_factories():
+        if indicator_resets_daily(factory) and indicator_scannable_outputs(factory):
+            out.append(kind_id)
+    return tuple(out)
+
+
+def __getattr__(name: str):
+    # PEP 562 module-level __getattr__ — lazy back-compat aliases. Tests
+    # and downstream code that imported the old constants by name keep
+    # working without ever caching a stale snapshot.
+    if name == "SCANNABLE_INDICATORS":
+        return scannable_indicators()
+    if name == "INDICATORS_RESETTING_DAILY":
+        return indicators_resetting_daily()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _indicator_field_specs() -> list[FieldSpec]:
-    """Project the allowlist over the live indicator registry.
+    """Project the registry over each indicator's ``scannable_outputs`` ClassVar.
 
-    Indicators present in the allowlist but not in ``INDICATORS`` (e.g.
-    not yet imported) are skipped silently. Indicators present in
-    ``INDICATORS`` but not in the allowlist are not surfaced.
+    Indicators whose ``scannable_outputs`` is empty (the default) are
+    NOT surfaced — preserves the fail-closed policy that kept the old
+    hand-curated allowlist safe. Indicators present in the registry but
+    not yet imported are simply absent from iteration.
     """
     out: list[FieldSpec] = []
-    for kind_id, outputs in SCANNABLE_INDICATORS.items():
-        entry = factory_by_kind_id(kind_id)
-        if entry is None:
+    for kind_id, display_name, factory in iter_indicator_factories():
+        outputs = indicator_scannable_outputs(factory)
+        if not outputs:
             continue
-        display_name, factory = entry
         full_schema = tuple(getattr(factory, "params_schema", ()) or ())
         # Indicators may opt into a smaller schema for the trigger /
         # scanner block-editor form by declaring TRIGGER_RELEVANT_PARAMS.
@@ -736,7 +761,7 @@ def _indicator_field_specs() -> list[FieldSpec]:
             output_keys=keys,
             default_output_key=default_key,
             description=getattr(factory, "__doc__", "") or "",
-            resets_daily=(kind_id in INDICATORS_RESETTING_DAILY),
+            resets_daily=indicator_resets_daily(factory),
         ))
     return out
 
@@ -857,8 +882,10 @@ __all__ = [
     "FieldSpec",
     "DTYPE_NUMERIC",
     "DTYPE_BOOL",
-    "SCANNABLE_INDICATORS",
-    "INDICATORS_RESETTING_DAILY",
+    "SCANNABLE_INDICATORS",  # noqa: F822 — resolved via module __getattr__
+    "INDICATORS_RESETTING_DAILY",  # noqa: F822 — resolved via module __getattr__
+    "scannable_indicators",
+    "indicators_resetting_daily",
     "all_fields",
     "get_field",
     "is_scannable",

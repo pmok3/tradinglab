@@ -11,6 +11,7 @@ Wilder's Relative Strength Index over close prices. Values in `[0, 100]`. Non-ov
   - `params_schema = (ParamDef("length", "int", 14, min=2,
     max=2000),)` — schema enforces `length >= 2` at dialog level.
   - `default_style = {"rsi": LineStyle(color="#d62728", width=1.4)}`.
+  - `scannable_outputs = (("rsi", "numeric"),)` — opts the indicator into the scanner / entries / exits dropdowns via the registry-driven projection in `scanner.fields`.
 
 ## Dependencies
 - Internal: `..models.Candle`.

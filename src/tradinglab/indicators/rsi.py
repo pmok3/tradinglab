@@ -29,6 +29,9 @@ class RSI:
     default_style: ClassVar[dict[str, LineStyle]] = {
         "rsi": LineStyle(color="#d62728", width=1.4),
     }
+    scannable_outputs: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("rsi", "numeric"),
+    )
 
     overlay = False
 

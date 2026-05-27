@@ -25,6 +25,7 @@ variance. Overlay on price axis. Anchor is picked via the dialog's
   (`upper1`, `lower1`, `upper2`, `lower2`) mid-blue `#4393c3` width
   1.0. The mid-blue clears WCAG-AA non-text contrast in both themes
   (~3.39:1 on white, ~4.92:1 on dark `#1e1e1e`).
+- `scannable_outputs = (("avwap","numeric"),)` — only the AVWAP line is exposed to the scanner; bands are visual-only.
 - `compute(candles) -> {"avwap", "upper1", "lower1", "upper2", "lower2"}`.
   Always returns all five keys; unrequested band keys are NaN-filled.
 - `first_eligible_anchor_ts(candles) -> str` — ISO date of the first

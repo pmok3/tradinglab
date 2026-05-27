@@ -635,7 +635,19 @@ _HEADER_TEMPLATE = (
     "# description: {description}\n"
     "# created: {created}\n"
     "# updated: {updated}\n"
+    "# scannable: {scannable}\n"
 )
+
+
+# Inserted into the generated class body when the user opted the
+# indicator into the scanner. Empty string when not scannable so the
+# class default (from the :class:`Indicator` Protocol) keeps the
+# indicator fail-closed.
+_SCANNABLE_OUTPUTS_LINE = '    scannable_outputs = (("value", "numeric"),)\n'
+
+
+def _scannable_outputs_block(scannable: bool) -> str:
+    return _SCANNABLE_OUTPUTS_LINE if scannable else ""
 
 
 _BUILDER_TEMPLATE = '''{header}
@@ -655,7 +667,7 @@ class _Indicator:
     kind_version = 1
     overlay = {overlay!r}
     pane_group = ""
-
+{scannable_outputs_block}
     def __init__(self):
         self.expression = _EXPRESSION
 
@@ -670,7 +682,7 @@ class _Indicator:
         return _WARMUP
 
 
-register_indicator({name_literal!r}, lambda: _Indicator())
+register_indicator({name_literal!r}, _Indicator)
 '''
 
 
@@ -682,6 +694,7 @@ def expression_to_python(
     overlay: bool = True,
     created: str = "",
     updated: str = "",
+    scannable: bool = False,
 ) -> str:
     """Compile a building-blocks expression to a self-contained ``.py`` source.
 
@@ -691,7 +704,9 @@ def expression_to_python(
       building_blocks`` so the dialog can round-trip it on next open.
     * A class ``_Indicator`` that exposes the standard
       ``name`` / ``overlay`` / ``compute_arr`` / ``compute`` /
-      ``warmup_bars`` surface.
+      ``warmup_bars`` surface, plus (when ``scannable`` is True) a
+      ``scannable_outputs = (("value", "numeric"),)`` ClassVar so the
+      indicator opts into the scanner field registry.
     * A trailing ``register_indicator(...)`` call so the file
       auto-registers when exec'd by :func:`indicators.loader.
       discover_user_indicators`.
@@ -709,6 +724,7 @@ def expression_to_python(
         description=safe_desc or "(no description)",
         created=created or "",
         updated=updated or "",
+        scannable=bool(scannable),
     )
     return _BUILDER_TEMPLATE.format(
         header=header,
@@ -716,6 +732,7 @@ def expression_to_python(
         warmup=int(warmup),
         name_literal=name,
         overlay=bool(overlay),
+        scannable_outputs_block=_scannable_outputs_block(scannable),
     )
 
 
@@ -763,7 +780,7 @@ class _CustomCondition:
     kind_version = 1
     overlay = {overlay!r}
     pane_group = ""
-
+{scannable_outputs_block}
     def __init__(self):
         self._group = _build_group()
         self._warmup = _resolve_warmup(self._group)
@@ -807,7 +824,7 @@ class _CustomCondition:
         return int(self._warmup or 0)
 
 
-register_indicator({name_literal!r}, lambda: _CustomCondition())
+register_indicator({name_literal!r}, _CustomCondition)
 '''
 
 
@@ -841,6 +858,7 @@ def conditions_to_python(
     overlay: bool = False,
     created: str = "",
     updated: str = "",
+    scannable: bool = False,
 ) -> str:
     """Compile a Conditions-mode (visual Groups/Conditions tree) into a self-contained ``.py``.
 
@@ -894,6 +912,7 @@ def conditions_to_python(
         f"# created: {created or ''}",
         f"# updated: {updated or ''}",
         f"# overlay: {bool(overlay)}",
+        f"# scannable: {bool(scannable)}",
         f"# conditions_json: {group_json}",
     ]
     header = "\n".join(header_lines) + "\n"
@@ -902,6 +921,7 @@ def conditions_to_python(
         group_json_literal=group_json,
         name_literal=name,
         overlay=bool(overlay),
+        scannable_outputs_block=_scannable_outputs_block(scannable),
     )
 
 
@@ -912,6 +932,7 @@ def python_mode_wrapper(
     description: str = "",
     created: str = "",
     updated: str = "",
+    scannable: bool = False,
 ) -> str:
     """Prepend the comment-header to a user-authored Python module.
 
@@ -920,6 +941,12 @@ def python_mode_wrapper(
     ``register_indicator(...)``. We only add the metadata header so
     the dialog can detect on next open that this file is a custom
     indicator and which mode it was authored in.
+
+    ``scannable`` is round-tripped through the header so the dialog
+    can restore the "Expose to scanner" checkbox; Python-mode bodies
+    are user-authored and the user is responsible for declaring
+    ``scannable_outputs`` on their class if they want the indicator
+    in the scanner. The header flag is informational only.
     """
     safe_indicator_filename(name)
     safe_desc = description.replace("\n", " ").strip()
@@ -929,6 +956,7 @@ def python_mode_wrapper(
         description=safe_desc or "(no description)",
         created=created or "",
         updated=updated or "",
+        scannable=bool(scannable),
     )
     body_str = body if body.endswith("\n") else body + "\n"
     return header + "\n" + body_str

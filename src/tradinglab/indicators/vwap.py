@@ -54,6 +54,10 @@ class VWAP:
     default_style: ClassVar[dict[str, LineStyle]] = {
         "vwap": LineStyle(color="#9467bd", width=1.6),
     }
+    scannable_outputs: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("vwap", "numeric"),
+    )
+    resets_daily: ClassVar[bool] = True
 
     overlay = True
 

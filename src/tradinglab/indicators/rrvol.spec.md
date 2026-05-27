@@ -33,6 +33,11 @@ scanner forms by `scanner.fields._build_indicator_specs`.
 Single output key `"rvol"` (matches RVOL). Raw ratio when
 `z_score=False`; rolling z when `True`.
 
+### Scanner registration
+
+- `scannable_outputs = (("rvol","numeric"),)` — opts the indicator into the scanner / entries / exits dropdowns. Note the output key is `"rvol"` (same as RVOL, intentional).
+- `resets_daily = True` — declares the indicator as session-anchored so `condition_uses_daily_reset_field` evicts cached prefixes at session boundaries.
+
 ## Algorithm
 
 1. Compute `RVOL(mode=…)` on the primary bars (numerator).

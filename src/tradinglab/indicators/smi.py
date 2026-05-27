@@ -66,6 +66,10 @@ class SMI:
         "smi":    LineStyle(color="#17becf", width=1.4),
         "signal": LineStyle(color="#ff7f0e", width=1.2),
     }
+    scannable_outputs: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("smi", "numeric"),
+        ("signal", "numeric"),
+    )
 
     #: Horizontal guide lines drawn on the indicator pane by the
     #: render layer (axhline at each level). Empty tuple ⇒ no guides.

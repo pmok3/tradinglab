@@ -70,6 +70,11 @@ class BollingerBands:
         "upper":  LineStyle(color=_DEFAULT_COLOR_BY_MA["SMA"], width=1.0),
         "lower":  LineStyle(color=_DEFAULT_COLOR_BY_MA["SMA"], width=1.0),
     }
+    scannable_outputs: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("middle", "numeric"),
+        ("upper", "numeric"),
+        ("lower", "numeric"),
+    )
 
     overlay = True
 

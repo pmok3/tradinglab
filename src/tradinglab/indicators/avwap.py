@@ -75,6 +75,9 @@ class AnchoredVWAP:
         "upper2": LineStyle(color="#4393c3", width=1.0),
         "lower2": LineStyle(color="#4393c3", width=1.0),
     }
+    scannable_outputs: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("avwap", "numeric"),
+    )
 
     overlay = True
 

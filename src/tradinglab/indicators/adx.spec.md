@@ -13,6 +13,7 @@ in its own pane; a horizontal guide at 25 marks the canonical
   min 2, max 2000).
 - `default_style`: `plus_di` green `#2ca02c`, `minus_di` red
   `#d62728`, `adx` grey `#7f7f7f` (widths 1.2 / 1.2 / 1.6).
+- `scannable_outputs = (("adx","numeric"),("+di","numeric"),("-di","numeric"))` — exposes ADX line and DI lines to the scanner. **Pre-existing key inconsistency:** the keys `+di`/`-di` declared here do NOT match `compute()`'s output keys (`plus_di`/`minus_di`); queries for `+di`/`-di` resolve to `None` through `out.get(key)`. Preserved verbatim for back-compat with existing scanner / entries / exits FieldRef persistence; `tests/unit/gui/test_scanner_tab_rank_presets.py` pins the names. Use `plus_di`/`minus_di` if you need numeric values — those are unrouted but available on the indicator's compute output dict.
 - `compute(candles) -> {"plus_di": ndarray, "minus_di": ndarray,
   "adx": ndarray}`. Raises `ValueError` on `length < 2`.
 
