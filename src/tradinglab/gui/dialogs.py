@@ -27,8 +27,7 @@ from ..watchlists import (
 from ..watchlists import (
     import_from_file as _import_watchlists_from_file,
 )
-from ._modal_base import make_scrollable_form, protect_combobox_wheel
-from ._modal_keys import bind_modal_keys
+from ._modal_base import BaseModalDialog, make_scrollable_form, protect_combobox_wheel
 from .colors import MUTED_GREY
 
 if TYPE_CHECKING:
@@ -49,26 +48,29 @@ def _prompt_string(parent: tk.Misc, title: str, prompt: str,
 
 # --- settings dialog ----------------------------------------------------
 
-class _SettingsDialog(tk.Toplevel):
-    """Modal-ish dialog for editing worker-pool size and other settings."""
+class _SettingsDialog(BaseModalDialog):
+    """Modal-ish dialog for editing worker-pool size and other settings.
+
+    Migrated to :class:`BaseModalDialog` — the base class owns
+    ``transient`` / ``grab_set`` / ESC+Return keybindings / geometry
+    persistence via ``_finalize_modal``. Cancel-revert semantics are
+    preserved via the :meth:`_on_cancel` override (restores the
+    ``_overrides_initial`` / ``_startup_initial`` snapshots BEFORE
+    destroying).
+    """
 
     def __init__(self, parent: ChartApp) -> None:
-        super().__init__(parent)
-        self.title("Settings")
-        self.transient(parent)
+        super().__init__(
+            parent,
+            title="Settings",
+            geometry_key="dlg.settings",
+            default_geometry="720x640",
+        )
         self._parent_app = parent
         # Cap dialog height so it stays usable on 1080p screens; the
         # scrollable inner frame below handles overflow.
         screen_h = self.winfo_screenheight()
         self.maxsize(900, max(400, screen_h - 120))
-        self.resizable(True, True)
-        # Geometry persistence — Settings is a complex resizable
-        # dialog; users want last-used size restored.
-        try:
-            from .geometry_store import attach_persistent_geometry
-            attach_persistent_geometry(self, "dlg.settings", "720x640")
-        except tk.TclError:
-            pass
 
         # Snapshot the override dict at dialog-open so Cancel can revert
         # every color picker in one shot. ``deepcopy`` is overkill for
@@ -430,19 +432,22 @@ class _SettingsDialog(tk.Toplevel):
         btns.grid(row=8, column=0, columnspan=2, pady=(12, 0), sticky="e")
         ttk.Button(btns, text="Cancel", command=self._on_cancel).pack(side=tk.RIGHT, padx=4)
         ttk.Button(btns, text="Save and Close", command=self._on_ok).pack(side=tk.RIGHT)
-        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
-        bind_modal_keys(self, cancel=self._on_cancel, primary=self._on_ok)
 
         # Block wheel-over-Combobox / wheel-over-Spinbox from silently
         # mutating values (see ``protect_combobox_wheel`` docstring and
         # CLAUDE.md §7.11). Settings is built once in __init__ with no
         # partial widget rebuilds, so a single call after every widget
         # exists is sufficient. Idempotent — safe if a future refactor
-        # adds a rebuild handler that re-calls this method.
+        # adds a rebuild handler that re-calls this method. Must run
+        # BEFORE ``_finalize_modal`` so the walker sees every widget.
         try:
             protect_combobox_wheel(self, scroll_target=self._form_canvas)
         except tk.TclError:
             pass
+
+        # BaseModalDialog: wires WM_DELETE_WINDOW + ESC → _on_cancel
+        # (override below restores snapshots) and Enter → _on_ok.
+        self._finalize_modal(primary=self._on_ok, cancel=self._on_cancel)
 
     def _on_open_theme_editor(self) -> None:
         """Open the dedicated Theme Editor Toplevel from Settings."""
@@ -946,22 +951,26 @@ class _SettingsDialog(tk.Toplevel):
 
 # --- watchlist dialog ---------------------------------------------------
 
-class _WatchlistDialog(tk.Toplevel):
-    """CRUD + import/export dialog for named watchlists."""
+class _WatchlistDialog(BaseModalDialog):
+    """CRUD + import/export dialog for named watchlists.
+
+    Migrated to :class:`BaseModalDialog` — the base class owns
+    ``transient`` / ``grab_set`` / ESC+Return keybindings / geometry
+    persistence via ``_finalize_modal``. Close semantics (rebuild
+    pinned sub-tabs when pin state changed) live in :meth:`_on_close`,
+    wired as the ``cancel`` callback so WM_DELETE / ESC both route
+    through it.
+    """
 
     def __init__(self, parent: ChartApp) -> None:
-        super().__init__(parent)
-        self.title("Watchlists")
-        self.transient(parent)
+        super().__init__(
+            parent,
+            title="Watchlists",
+            geometry_key="dlg.watchlists",
+            default_geometry="720x500",
+        )
         self._parent_app = parent
         self._mgr: WatchlistManager | None = parent._watchlists
-        # Geometry persistence — this is a power-user dialog; users
-        # frequently resize it to see more rows in the symbols pane.
-        try:
-            from .geometry_store import attach_persistent_geometry
-            attach_persistent_geometry(self, "dlg.watchlists", "720x500")
-        except tk.TclError:
-            pass
 
         frm = ttk.Frame(self, padding=8)
         frm.pack(fill=tk.BOTH, expand=True)
@@ -1035,10 +1044,14 @@ class _WatchlistDialog(tk.Toplevel):
         ).pack(side=tk.RIGHT, padx=(0, 6))
 
         self._refresh_names()
-        # Ensure closing the dialog by any means (OK button, window X)
-        # rebuilds pinned sub-tabs when pins changed.
-        self.protocol("WM_DELETE_WINDOW", self._on_close)
-        bind_modal_keys(self, cancel=self._on_close, primary=None)
+        # BaseModalDialog: wires WM_DELETE_WINDOW + ESC → _on_close
+        # (rebuilds pinned sub-tabs if pin state changed) and
+        # Enter → _on_save_and_close. Both routes pass through the
+        # pin-rebuild path so a user dismissing with any gesture sees
+        # an up-to-date sub-tab strip.
+        self._finalize_modal(
+            primary=self._on_save_and_close, cancel=self._on_close,
+        )
 
     # --- lifecycle -----------------------------------------------------
     def _on_close(self) -> None:
