@@ -29,7 +29,7 @@ from ..exits.model import (
     TriggerKind,
 )
 from ..scanner.model import Group as ConditionGroup
-from ._modal_keys import bind_modal_keys
+from ._modal_base import BaseModalDialog, protect_combobox_wheel
 from .colors import ERROR_RED, MUTED_GREY
 from .scanner_block_editor import BlockEditor
 
@@ -173,25 +173,24 @@ _FIELD_SPECS_BY_KIND: dict[TriggerKind, tuple[_FieldSpec, ...]] = {
 # ---------------------------------------------------------------------------
 
 
-class _BracketDialog(tk.Toplevel):
-    """Tiny modal asking for target/stop unit+value + qty% allocation."""
+class _BracketDialog(BaseModalDialog):
+    """Tiny modal asking for target/stop unit+value + qty% allocation.
+
+    Migrated to ``BaseModalDialog`` in commit ``audit-4-pilot`` —
+    `BaseModalDialog` owns ``transient`` / ``grab_set`` / geometry
+    persistence / ESC+Return keys via ``_finalize_modal``. We just
+    build the body + footer; the wheel guard catches the two
+    Comboboxes (target_unit, stop_unit) for free per CLAUDE.md §7.11.
+    """
 
     def __init__(self, parent: tk.Misc) -> None:
-        super().__init__(parent)
-        self.title("Bracket template")
-        try:
-            self.transient(parent)
-            self.grab_set()
-        except tk.TclError:
-            pass
+        super().__init__(
+            parent,
+            title="Bracket template",
+            geometry_key="dlg.bracket",
+            default_geometry="340x260",
+        )
         self.result: dict[str, Any] | None = None
-        # Geometry persistence: bracket dialog opens at a small fixed
-        # size by default but users may resize on small screens.
-        try:
-            from .geometry_store import attach_persistent_geometry
-            attach_persistent_geometry(self, "dlg.bracket", "340x260")
-        except tk.TclError:
-            pass
 
         frm = ttk.Frame(self)
         frm.pack(padx=8, pady=8)
@@ -226,7 +225,14 @@ class _BracketDialog(tk.Toplevel):
         btnrow.pack(fill="x", padx=8, pady=(0, 8))
         ttk.Button(btnrow, text="Cancel", command=self._cancel).pack(side="right", padx=(2, 0))
         ttk.Button(btnrow, text="Create", command=self._ok).pack(side="right")
-        bind_modal_keys(self, cancel=self._cancel, primary=self._ok)
+        # CLAUDE.md §7.11 — must come AFTER all widgets exist so the
+        # walker can find the two ``state="readonly"`` Comboboxes.
+        protect_combobox_wheel(self)
+        self._finalize_modal(primary=self._ok, cancel=self._cancel)
+
+    def _on_cancel(self) -> None:
+        """BaseModalDialog hook: ESC / WM_DELETE = treat as cancel."""
+        self._cancel()
 
     def _ok(self) -> None:
         try:

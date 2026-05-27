@@ -1,14 +1,13 @@
 """Regression tests for geometry persistence on Toplevel dialogs.
 
 Big bet #2 wired ``geometry_store.attach_persistent_geometry`` into
-every Toplevel that isn't on :class:`BaseModalDialog`. These tests
-lock that contract in by asserting the geometry-store interaction at
-construction time — specifically:
-
-1. Each dialog calls ``restore_window`` with a stable key (the test
-   tracks every call against a fake store).
-2. Each dialog calls ``bind_window`` with the same key so
-   ``<Configure>`` events auto-persist.
+every Toplevel that isn't on :class:`BaseModalDialog`. Audit #4
+(commit ``audit-4-pilot`` onwards) is migrating those dialogs onto
+``BaseModalDialog``, which exposes geometry persistence via the
+``geometry_key=...`` constructor argument instead of a direct
+``attach_persistent_geometry`` call. These tests lock the contract
+that EITHER mechanism is wired, with a stable key string, in the
+expected source file.
 
 We don't actually instantiate every dialog (some need elaborate
 fixtures — IndicatorManager, WatchlistManager, ChartApp, etc.). The
@@ -19,15 +18,15 @@ GUI fixture pyramid.
 
 from __future__ import annotations
 
-import ast
 import re
 from pathlib import Path
 
 import pytest
 
 # Source files known to host a Toplevel that must persist geometry.
-# (path, expected_geometry_key) — key matches the
-# ``attach_persistent_geometry`` call in the source.
+# (path, expected_geometry_key) — key matches the call (either
+# ``attach_persistent_geometry`` directly or the
+# ``geometry_key=`` constructor argument on ``BaseModalDialog``).
 EXPECTED = [
     ("src/tradinglab/status.py",                      "dlg.status_history"),
     ("src/tradinglab/gui/performance_view.py",        "dlg.performance_view"),
@@ -63,17 +62,25 @@ def _read(rel: str) -> str:
 @pytest.mark.parametrize("rel,key", EXPECTED, ids=lambda v: str(v))
 def test_dialog_has_attach_persistent_geometry_call(rel: str, key: str) -> None:
     src = _read(rel)
-    # The exact idiom is
+    # Legacy idiom:
     #   attach_persistent_geometry(self|<var>, "dlg.<name>", "WxH")
-    # Match by literal key — that's what we care about.
-    pattern = re.compile(
+    # Or BaseModalDialog idiom (audit #4):
+    #   super().__init__(parent, ..., geometry_key="dlg.<name>", ...)
+    legacy_pattern = re.compile(
         r"attach_persistent_geometry\([^,]+,\s*[\"']"
         + re.escape(key)
         + r"[\"']",
     )
-    assert pattern.search(src), (
-        f"{rel} must call attach_persistent_geometry with key {key!r}; "
-        "either the wiring was removed or the key drifted"
+    base_modal_pattern = re.compile(
+        r"geometry_key\s*=\s*[\"']"
+        + re.escape(key)
+        + r"[\"']",
+    )
+    assert legacy_pattern.search(src) or base_modal_pattern.search(src), (
+        f"{rel} must persist geometry with key {key!r} — either via "
+        "the legacy ``attach_persistent_geometry(...)`` helper OR via "
+        "the ``geometry_key=`` argument on ``BaseModalDialog``; "
+        "the wiring was removed or the key drifted"
     )
 
 
