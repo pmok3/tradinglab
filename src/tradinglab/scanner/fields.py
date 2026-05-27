@@ -126,14 +126,58 @@ class FieldSpec:
 # ---------------------------------------------------------------------------
 
 
-def _at(arr: np.ndarray, i: int) -> float | None:
-    """Return ``arr[i]`` as a Python float, or ``None`` for OOB / NaN."""
+def _scalar_at(
+    arr: np.ndarray,
+    i: int,
+    *,
+    sentinel: float | int | None = None,
+    sentinel_predicate: Callable[[Any], bool] | None = None,
+) -> float | None:
+    """Single-bar safe scalar access.
+
+    Returns None for OOB index, non-finite value, or sentinel match.
+    Replaces 30+ inline ``if i<0 or i>=arr.size: return None; v=arr[i];
+    if not np.isfinite(v): return None; return float(v)`` blocks.
+
+    ``sentinel`` is a literal value to compare against (e.g. ``-128`` for
+    the int8 key-bar cache); ``sentinel_predicate`` is a callable for
+    more complex sentinels (e.g. ``lambda v: v < 0`` for the int64
+    bars-since cache). Pass at most one; pass neither for a plain
+    float-finite check.
+    """
     if i < 0 or i >= arr.size:
         return None
     v = arr[i]
-    if isinstance(v, float) and v != v:  # NaN
+    if sentinel is not None and v == sentinel:
+        return None
+    if sentinel_predicate is not None and sentinel_predicate(v):
+        return None
+    if not np.isfinite(v):
         return None
     return float(v)
+
+
+def _two_finite(a: np.ndarray, b: np.ndarray, i: int) -> tuple[float, float] | None:
+    """Both ``a[i]`` and ``b[i]`` finite, OR None.
+
+    Common pattern for builtins that need a pair of array values (e.g.
+    HA open/close, HA open/high). Replaces the inline guard pattern at
+    multiple sites.
+    """
+    if i < 0 or i >= a.size or i >= b.size:
+        return None
+    va, vb = a[i], b[i]
+    if not (np.isfinite(va) and np.isfinite(vb)):
+        return None
+    return float(va), float(vb)
+
+
+def _at(arr: np.ndarray, i: int) -> float | None:
+    """Return ``arr[i]`` as a Python float, or ``None`` for OOB / NaN.
+
+    Back-compat thin wrapper around :func:`_scalar_at`.
+    """
+    return _scalar_at(arr, i)
 
 
 def _b_close (b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None: return _at(b.close,  i)
@@ -308,11 +352,10 @@ def _b_ha_close(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:
 def _b_ha_color(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:
     """+1.0 if HA bar is bullish (HA_C >= HA_O), -1.0 if bearish, None on NaN."""
     ha_o, _hh, _hl, ha_c = _ha_for(b)
-    if i < 0 or i >= ha_c.size:
+    pair = _two_finite(ha_o, ha_c, i)
+    if pair is None:
         return None
-    o = ha_o[i]; c = ha_c[i]
-    if not (np.isfinite(o) and np.isfinite(c)):
-        return None
+    o, c = pair
     return 1.0 if c >= o else -1.0
 
 
@@ -324,40 +367,38 @@ def _ha_flat_eps(price: float) -> float:
 def _b_ha_flat_top(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:
     """1.0 iff HA_High[i] == HA_Open[i] (no upper wick → bearish continuation)."""
     ha_o, ha_h, _hl, _hc = _ha_for(b)
-    if i < 0 or i >= ha_h.size:
+    pair = _two_finite(ha_o, ha_h, i)
+    if pair is None:
         return None
-    o = ha_o[i]; h = ha_h[i]
-    if not (np.isfinite(o) and np.isfinite(h)):
-        return None
+    o, h = pair
     return 1.0 if abs(h - o) <= _ha_flat_eps(o) else 0.0
 
 
 def _b_ha_flat_bottom(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:
     """1.0 iff HA_Low[i] == HA_Open[i] (no lower wick → bullish continuation)."""
     ha_o, _hh, ha_l, _hc = _ha_for(b)
-    if i < 0 or i >= ha_l.size:
+    pair = _two_finite(ha_o, ha_l, i)
+    if pair is None:
         return None
-    o = ha_o[i]; lo = ha_l[i]
-    if not (np.isfinite(o) and np.isfinite(lo)):
-        return None
+    o, lo = pair
     return 1.0 if abs(o - lo) <= _ha_flat_eps(o) else 0.0
 
 
 def _ha_streak_signed(b: BarsNp, i: int) -> int | None:
     """Length of the run of same-color HA bars ending at i; positive bull, negative bear."""
     ha_o, _hh, _hl, ha_c = _ha_for(b)
-    if i < 0 or i >= ha_c.size:
+    pair = _two_finite(ha_o, ha_c, i)
+    if pair is None:
         return None
-    o_i = ha_o[i]; c_i = ha_c[i]
-    if not (np.isfinite(o_i) and np.isfinite(c_i)):
-        return None
+    o_i, c_i = pair
     bull = c_i >= o_i
     n = 1
     j = i - 1
     while j >= 0:
-        oj = ha_o[j]; cj = ha_c[j]
-        if not (np.isfinite(oj) and np.isfinite(cj)):
+        pj = _two_finite(ha_o, ha_c, j)
+        if pj is None:
             break
+        oj, cj = pj
         bull_j = cj >= oj
         if bull_j != bull:
             break
@@ -374,14 +415,15 @@ def _b_ha_streak(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:
 def _ha_flat_run(b: BarsNp, i: int, *, want_top: bool) -> int | None:
     """Count consecutive flat-top (or flat-bottom) bars ending at i."""
     ha_o, ha_h, ha_l, _hc = _ha_for(b)
-    if i < 0 or i >= ha_h.size:
+    ref_arr = ha_h if want_top else ha_l
+    if i < 0 or i >= ref_arr.size:
         return None
     n = 0
     for j in range(i, -1, -1):
-        oj = ha_o[j]
-        ref = ha_h[j] if want_top else ha_l[j]
-        if not (np.isfinite(oj) and np.isfinite(ref)):
+        pj = _two_finite(ha_o, ref_arr, j)
+        if pj is None:
             break
+        oj, ref = pj
         eps = _ha_flat_eps(oj)
         is_flat = abs(ref - oj) <= eps if want_top else abs(oj - ref) <= eps
         if not is_flat:
@@ -502,22 +544,13 @@ def _kb_for(b: BarsNp) -> KeyBarArrays:
 
 
 def _kb_at_int8(arr: np.ndarray, i: int) -> float | None:
-    if i < 0 or i >= arr.size:
-        return None
-    v = int(arr[i])
-    # KEY_BAR_UNKNOWN sentinel → tri-valued None.
-    if v == -128:
-        return None
-    return float(v)
+    # KEY_BAR_UNKNOWN sentinel (-128) → tri-valued None.
+    return _scalar_at(arr, i, sentinel=-128)
 
 
 def _kb_at_int64(arr: np.ndarray, i: int) -> float | None:
-    if i < 0 or i >= arr.size:
-        return None
-    v = int(arr[i])
-    if v < 0:  # -1 means "no key bar yet"
-        return None
-    return float(v)
+    # Negative values (e.g. -1 = "no key bar yet") → tri-valued None.
+    return _scalar_at(arr, i, sentinel_predicate=lambda v: v < 0)
 
 
 def _b_key_bar(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:

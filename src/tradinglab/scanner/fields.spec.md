@@ -53,6 +53,40 @@ OHLCV NumPy arrays. v1 set:
 
 `hod`/`lod` are **prefix-restricted** to bars `[0..i]` (no look-ahead).
 
+### Safe-scalar helpers
+
+To keep the ~30 single-bar builtins free of repeated OOB / NaN /
+sentinel boilerplate, `fields.py` exposes two internal helpers near
+the top of the module:
+
+- `_scalar_at(arr, i, *, sentinel=None, sentinel_predicate=None)` —
+  the canonical "give me `arr[i]` as a Python float, or `None` if I
+  shouldn't trust it" guard. Returns `None` for OOB indices,
+  non-finite values (NaN / ±inf via `np.isfinite`), literal sentinel
+  matches (`sentinel=`), or predicate-matching sentinels
+  (`sentinel_predicate=`). Pass at most one of `sentinel` /
+  `sentinel_predicate`; pass neither for a plain float-finite check.
+- `_two_finite(a, b, i)` — returns `(float(a[i]), float(b[i]))` when
+  both arrays have a finite value at `i`, else `None`. Used by HA
+  builtins that need an open/close or open/high pair.
+
+Back-compat thin wrappers preserved so existing call sites keep
+working:
+
+- `_at(arr, i)` → `_scalar_at(arr, i)` (no sentinel; plain finite
+  check).
+- `_kb_at_int8(arr, i)` → `_scalar_at(arr, i, sentinel=-128)` —
+  decodes the `KEY_BAR_UNKNOWN = -128` sentinel used by the int8
+  signed key-bar array as tri-valued `None`.
+- `_kb_at_int64(arr, i)` → `_scalar_at(arr, i,
+  sentinel_predicate=lambda v: v < 0)` — decodes the "no bull/bear
+  key bar yet" sentinel (`-1`) used by the int64 `bars_since_*`
+  arrays as tri-valued `None`.
+
+The helpers are private (leading underscore) but the *names* are
+stable — they're called from sibling builtins module-internally and
+relied upon by the colocated tests in `tests/scanner/`.
+
 ### Session-day cache
 
 `hod`, `lod`, and `bars_since_open` all need to know "which bars share
