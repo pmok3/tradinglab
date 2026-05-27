@@ -1175,13 +1175,16 @@ for `tmp_path` sandboxing in tests — no monkey-patching of
 UNMODIFIED (the public API was preserved exactly, including
 `BrokenStrategy` aliased to `BrokenRecord`).
 
-**Pending mechanical migrations** (each follows the
-entries-pilot template; ship one per commit):
-- `exits/storage.py` — `JsonObjectStore[ExitStrategy]`
-- `scanner/storage.py` — `JsonObjectStore[Scan]`
-- `watchlists/storage.py` — `JsonObjectStore[Watchlist]`
-- `strategy_tester/storage.py` — `JsonObjectStore[StrategyTestRun]`
-- `positions/storage.py` — `JsonObjectStore[Position]`
+**Migration status** (as of `357631c`):
+
+| Subsystem | Status | Notes |
+|---|---|---|
+| `entries/storage.py` | ✅ Migrated (pilot) | 294→168 LOC. ~80 of that is delegators + back-compat shims. |
+| `exits/storage.py` | ✅ Migrated (partial) | 361→331 LOC. `save` + `load_all` stay hand-rolled — 5 documented divergences (no `_index.json` per atomic-file test, silent-skip-on-parse-error vs add-to-broken, `BrokenStrategy.raw_json` is a parsed `dict` not raw `str`, filename regex excludes non-UUID, 2-tier collision in import). |
+| `scanner/storage.py` | ✅ Migrated (partial) | 292→308 LOC. `path_for`/`load`/`delete`/`export_to_path` delegate. `save` + `load_all` hand-rolled (no `_index.json`, custom `_FILENAME_RE`, grep-friendly warning text, schema-version check). |
+| `watchlists/storage.py` | ⏸️ Deferred | Single consolidated JSON envelope `{version, watchlists, pinned}` — generic assumes one-record-per-file. Migration would need a sibling `JsonEnvelopeStore` primitive or a per-watchlist-file format break. |
+| `strategy_tester/storage.py` | ⏸️ Deferred | Directory-per-Run layout (config + manifest + per-symbol JSONs + aggregate.json + trades.csv + screenshots/ + report.{html,pdf}). Generic assumes `save(obj) → one file`. |
+| `positions/storage.py` | ⏸️ Deferred | Two singleton blob files (`open.json` containing a list, `trail_state.json` containing an opaque dict). No per-id collection. Would need a sibling `JsonListStore[T]` primitive. |
 
 **Logging policy:** one `WARNING` per broken record (not `ERROR`)
 — broken records are expected occasionally (user editing JSON by
@@ -1198,6 +1201,60 @@ Tests: `tests/core/test_json_collection_store.py` (28 tests
 covering save round-trip, missing/malformed load, delete returns
 bool, `load_all` triage, import/export round-trip, index refresh
 on missing/corrupt index).
+
+### 7.23 Single ET zoneinfo helper via `core.timezones`
+
+11+ places in the codebase historically constructed
+``ZoneInfo("America/New_York")`` at module scope or inside helpers,
+with subtly drifting fallback policies for missing-`tzdata`
+environments (Docker minimal images, Windows builds where `tzdata`
+is a separately installable wheel). Some returned `None`, some
+raised, some silently dropped to naive datetimes — drift waiting
+to bite.
+
+**`core/timezones.py`** is the single source of truth:
+
+- `ET: tzinfo | None` — eagerly-resolved module-level constant.
+  Most call sites import this.
+- `get_et() -> tzinfo | None` — lazy accessor, one-time cached;
+  identical to `ET` after first call.
+- `now_et() -> datetime` — convenience wrapper around
+  `datetime.now(ET)` with naive-datetime fallback when tzdata is
+  missing.
+- `to_et(epoch_seconds) -> datetime` — convenience wrapper
+  around `datetime.fromtimestamp(ts, ET)` with UTC-aware fallback
+  when tzdata is missing.
+
+**Migrated call sites** (commit `c538f79`):
+`app.py::_intraday_session_open`, `updates.py::_is_rth_now`,
+`gui/polling.py` (2 sites), `gui/chartstack/alerts.py`,
+`gui/watchlist_tab.py::_watchlist_poll_in_rth_now`,
+`gui/sandbox_panel.py::_get_tz_for_label`.
+
+**Deferred** (have bespoke `_get_et()`/`_et_zoneinfo()` helpers
+that wrap try/except in slightly different ways — followup
+migration sprint):
+`data/today_upsample.py`, `strategy_tester/evaluator.py`,
+`strategy_tester/screenshot.py`, `backtest/performance.py`,
+`gui/volume_tod_overlay.py`. Each of these should also be
+collapsed into `core.timezones` eventually.
+
+**When you need ET:** use `from .core.timezones import ET` (and
+branch on `ET is None` for the missing-tzdata path). DO NOT
+construct `ZoneInfo("America/New_York")` directly — that's how
+the drift started.
+
+**Test pattern for missing tzdata:** monkey-patch
+`tradinglab.core.timezones.ET` to `None`. The old
+`patch.object(builtins, "__import__", ...)` pattern from per-site
+in-function imports NO LONGER WORKS because the import is now
+cached at module load in `core/timezones.py`. See
+`tests/unit/gui/test_polling_helpers.py` and
+`tests/unit/gui/test_watchlist_poll.py` for the canonical pattern.
+
+Tests: `tests/core/test_timezones.py` (8 tests covering cached
+identity, summer/winter DST offsets, all 3 missing-tzdata fallback
+paths).
 
 ---
 
