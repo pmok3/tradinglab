@@ -566,6 +566,41 @@ optimization in `_b_bars_since_open` uses `np.searchsorted` for
 today's session-start lookup → O(log N + K) where K is bars-per-day,
 down from O(N). Tests: `tests/scanner/test_today_mask_cache.py`.
 
+**Related live-chart perf — ticker-switch latency (audit "H4"):**
+Tk-thread blocking time on a cache-miss ticker switch was
+profiled at 48 ms (the audit's "400 ms" claim was stale; the prior
+async push to `FetchService` already eliminated the network +
+heavy I/O cost). The 609 ms wall-clock that remained was async
+machinery + render kickoff. Three surgical fixes cut wall-clock
+to 184 ms (-70%):
+
+1. **`disk_cache.merge_candles` + `disk_cache.save` moved to the
+   worker.** Was done on the Tk thread inside `_load_data` after
+   the async fetcher returned. Now `_load_data_async._work()`
+   merges + saves on the worker and stashes the result as
+   `prefetched_raw["primary_merged"]` / `["compare_merged"]`.
+   `_load_data` consumes the pre-merged list and skips the
+   merge + save block. Safe because `disk_cache.save` uses
+   `os.replace` (atomic on Windows + POSIX) — sibling reads
+   see OLD or NEW, never torn.
+2. **`await_future_on_tk` poll_ms default 20 → 5 ms.** 5 ms is
+   the minimum useful Tk-event-loop resolution; saves ~15 ms per
+   cache-miss switch from the first poll-cycle wait.
+3. **`_load_events_async` submission deferred via `after_idle`.**
+   Events fetch is purely decorative (glyph overlay). Submitting
+   AFTER the first render lets the user see the chart paint
+   before any HTTP fetch starts.
+
+Profile tool: `tools/profile_ticker_switch.py` (stubbed fetcher,
+captures wall-clock + Tk-thread breakdown per switch). Re-runnable
+for future perf work.
+
+*Caveat:* the 184 ms remaining wall-clock is now mostly the
+`_render()` figure rebuild + matplotlib re-draw. The deepest
+perf wins from here require the deferred multi-week items
+(``_render()`` partial-update path, topology-preserving paint
+pipeline) — see "Architectural items deferred" in checkpoint 005.
+
 ### 7.15 Strategy Tester exports (PDF/HTML/CSV) run on a background thread
 `strategy_tester.export.export_pdf` renders 3 fixed pages (cover +
 breakouts + equity) plus up to `max_screenshots=200` landscape pages,
