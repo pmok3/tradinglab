@@ -4,7 +4,7 @@ A one-spec-per-`.py` documentation set. Each spec follows a fixed 9-section layo
 
 **Style guide:** see [`SPEC_STYLE.md`](SPEC_STYLE.md) for the canonical layout every spec follows.
 
-**Count: 68 specs (one per `.py` module).**
+**Count: 247 specs (one per `.py` module — the count here is the canonical authority; this index table is a curated subset listing the most-accessed specs, not an exhaustive enumeration).**
 
 ## Top-level (`tradinglab/`)
 | Spec | Covers |
@@ -22,13 +22,15 @@ A one-spec-per-`.py` documentation set. Each spec follows a fixed 9-section layo
 | `rendering.spec.md` | `draw_candlesticks`, `draw_volume`, `draw_session_shading` — pure figure-drawing primitives. |
 | `status.spec.md` | Status-bar formatter — composes "N bars / last time / last close" + `● LIVE` prefix; pure-function string builder. |
 
-## `core/` — slice math and series containers
+## `core/` — slice math, series containers, and shared primitives
 | Spec | Covers |
 |---|---|
 | `core/__init__.spec.md` | Re-exports. |
 | `core/pairing.spec.md` | `apply_pair_filter` — aligns primary/compare candle lists by date, identity-preserving on no-op. |
 | `core/series.spec.md` | `SeriesArrays` cache object (aliased as `_SeriesArrays` in `app.py`) — numpy arrays built from `Candle` list; `__init__` legacy path + `from_arrays` classmethod fast path; `build_series_safe` worker-thread builder. |
 | `core/viewport.spec.md` | `y_limits_for_slice` — min/max over a slice with padding. |
+| `core/lru_dict.spec.md` | **`LRUDict[K, V]`** — bounded-capacity `OrderedDict` subclass with LRU eviction on insert + LRU-touch on `.get()` hit. Used at `strategy_tester/warmup.py::_WARMUP_CACHE` (maxsize=256) and `app.py::_events_cache` (maxsize=200). See CLAUDE.md §7.21. |
+| `core/json_collection_store.spec.md` | **`JsonObjectStore[T]`** — generic per-subsystem JSON-collection store collapsing 6 hand-rolled `storage.py` copies. Save/load/delete + `load_all() -> (good, broken)` triage + import/export. Pilot: `entries/storage.py` (294 → 168 LOC). See CLAUDE.md §7.22. |
 
 ## `data/` — fetchers and normalization
 | Spec | Covers |
@@ -129,11 +131,13 @@ A one-spec-per-`.py` documentation set. Each spec follows a fixed 9-section layo
 | `gui/__init__.spec.md` | Subpackage marker; avoids `tradinglab.app` back-imports. |
 | `gui/color_palette.spec.md` | Per-scope indicator colour palette + assignment helpers; deterministic next-colour selection per (scope, kind). |
 | `gui/menu_theme.spec.md` | Classic `tk.Menu` palette helper; recursively themes menus and appends the U+203A cascade-chevron workaround for Windows dark mode. |
+| `gui/_modal_base.spec.md` | `BaseModalDialog` (geometry persistence + ESC/Return wiring) + `make_scrollable_form(parent, *, horizontal, bind_mousewheel, on_destroy) -> (inner_frame, canvas)` — collapsed Canvas+Scrollbar+create_window+MouseWheel boilerplate from 4 dialogs (`_SettingsDialog`, `EntriesDialog` ×2, `ExitsDialog`, `IndicatorDialog`). Plus `protect_combobox_wheel(root, scroll_target=)` — the §7.11 wheel-guard helper. |
+| `gui/_widget_metrics.spec.md` | Calibrated font/widget pixel constants (`_CHAR_PX = 7`, `_COMBO_OVERHEAD = 25`, `_SPINBOX_OVERHEAD`, `_ENTRY_OVERHEAD`, `_FRAME_PAD_PX`). Pure helpers; no Tk round-trip; safe to call before any widget is realized. Consumed by `scanner_block_editor.py` (auto-stack ConditionFrame fit estimator) + `indicator_dialog.py` (param-grid column count). See CLAUDE.md §7.19. |
 | `gui/dialogs.spec.md` | `_SettingsDialog` (live preview, cancel-revert) + `_WatchlistDialog` (CRUD + pin column + import/export). |
 | `gui/interaction.spec.md` | `InteractionMixin` — pan (blit), zoom (rubber band), hover, crosshair, click-to-type, Y-autoscale. |
 | `gui/watchlist_tab.spec.md` | `WatchlistTabMixin` — nested-notebook with one sub-tab per pinned watchlist (cap 5); snapshot-driven Treeview per sub-tab, click-to-sort (per-tab), debounced repaint. |
 | `gui/workers.spec.md` | `WorkerPoolMixin` — `ThreadPoolExecutor` lifecycle + live swap. |
-| `gui/indicator_dialog.spec.md` | Modeless "Manage Indicators…" Toplevel — singleton, manager-subscribed, debounced live commit, scope checkboxes preserve drilldown, unknown-kind rows read-only. Supports `restricted_to_config_id` mode for single-row reuse by `per_indicator_dialog`. |
+| `gui/indicator_dialog.spec.md` | Modeless "Manage Indicators…" Toplevel — singleton, manager-subscribed, debounced live commit, scope checkboxes preserve drilldown, unknown-kind rows read-only. Supports `restricted_to_config_id` mode for single-row reuse by `per_indicator_dialog`. Resize-reactive param-grid reflow via the `_widget_metrics` font constants (see CLAUDE.md §7.19 hysteresis pattern). |
 | `gui/per_indicator_dialog.spec.md` | Per-indicator settings popup spawned by double-clicking an overlay-legend row — singleton-per-`config_id`, reuses `IndicatorDialog._build_row` widgets, auto-closes on remove / clear / preset_load. |
 | `gui/sandbox_dialog.spec.md` | `SandboxStartDialog` (open-universe start, eligibility-aware, blind ⇒ auto-cycle) + `PreTradeFormDialog` (mandatory thesis + positive size). |
 | `gui/sandbox_panel.spec.md` | `SandboxPanel` sidebar — clock / cash / positions / focus / Buy-Sell / Next-bar / End-session; dumb panel, smart controller. |
@@ -142,6 +146,7 @@ A one-spec-per-`.py` documentation set. Each spec follows a fixed 9-section layo
 | `gui/local_data_dialog.spec.md` | BYOD: `Configure Local Data…` Toplevel — enabled toggle + roots list + Save-and-Close paradigm. |
 | `gui/export_cache_dialog.spec.md` | BYOD: `Export Bars to CSV…` Toplevel — Treeview + checkbox column, Select All/None, atomic export. |
 | `gui/universe_prepare_dialog.spec.md` | `UniversePrepareDialog` Toplevel — 4-basket picker (SP500/QQQ/NYSE/NASDAQ) + watchlist option, reactive ETA/size estimate, amber survivorship banner for full-exchange baskets, Stop-safe-to-resume cancel paradigm, fundamental-filter prepass. See [`docs/UNIVERSES.md`](UNIVERSES.md). |
+| `gui/scanner_block_editor.spec.md` | `BlockEditor` + `_ConditionFrame` + `_FieldRefPicker` widgets shared by Scanner / Entries / Exits / Custom Indicator Builder dialogs. Auto-stack ConditionFrame fit-based resize-reactive layout (see CLAUDE.md §7.19). |
 | `gui/strategy_tab.spec.md` | `StrategyTab` notebook tab — full Configure → Running → Result UX loop for the Strategy Tester. Entry/exit pickers, 3-mode universe picker (Symbols/Watchlist/Preset), date-range preset, advanced cost model, Run / Stop, headline metrics + per-symbol & per-year Treeviews. Runs the strategy_tester kernel on a daemon thread; loads `aggregate.json` via `report.load_aggregate`. Recent Runs sidebar (top-50 disk runs, Load / Refresh / Delete actions). Export HTML / PDF buttons (delegate to `strategy_tester.export`). Survivorship + sample-size banners. |
 
 ## `preload/` — Sandbox universe preload pipeline

@@ -472,7 +472,7 @@ JSON: missing `include_extended_hours` key in old manifests
 deserialises to `False` (back-compat).
 
 ### 7.14 Strategy tester perf design
-Three knobs cooperate to keep Runs fast (in order of impact):
+Four knobs cooperate to keep Runs fast (in order of impact):
 
 1. **Disk-cached fetches.** `runner.fetch_candles_for_symbol` routes
    through `tradinglab.disk_cache` keyed by
@@ -517,10 +517,48 @@ Three knobs cooperate to keep Runs fast (in order of impact):
    evaluation continues. We choose "safe-default to keep running"
    over "abort on a duck-typed probe failure".
 
+4. **Vectorized ET-date + RTH-mask precompute.** `evaluator.
+   _compute_et_arrays(timestamps)` is called ONCE per symbol before
+   the main bar loop and returns three numpy arrays:
+   `(et_date_ints, rth_mask, et_offsets_sec)`. The main loop then
+   reads `et_date_ints[i]` (int compare for ET-day-rollover detection
+   in the EOD kill switch) and `rth_mask[i]` (bool, for the
+   `require_market_open` gate) per bar — never allocates a `datetime`
+   object on the hot path. `_find_last_rth_bar_at_or_before(...,
+   rth_mask=rth_mask)` is a single `np.flatnonzero` scan, replacing
+   what used to be a Python backward loop calling
+   `datetime.fromtimestamp(ts, tz=_ET)` per bar.
+   DST safety: groups bars by UTC day, probes each unique day's
+   tz offset at 00:00 UTC AND 23:59:59 UTC; agreement (~363 days/yr)
+   broadcasts via numpy, disagreement (~2 transition days/yr)
+   per-bar slow path. Bit-for-bit identical to the slow reference
+   across both 2024 transitions — pinned by
+   `test_year_long_5min_against_reference`.
+   *Perf:* Snapdragon ARM64 micro-benchmark on 25k bars:
+   16.3 ms slow → 0.9 ms vectorized = **18.5× speedup** per symbol
+   on the ET-conversion path. Linear scaling with symbol count.
+   *Caveat:* the legacy `_bar_ts_to_et(ts) -> datetime` /
+   `_is_regular_session(et_dt) -> bool` helpers are intentionally
+   preserved for rare callers (TIME_OF_DAY exit construction,
+   arm_window HH:MM compare, slow fallback). Don't call them in
+   any new hot-loop code.
+   `runner._filter_rth_only` uses the same helper.
+
 Tests pinning the contract:
 `tests/unit/strategy_tester/test_fetch_caching.py`,
 `tests/unit/strategy_tester/test_parallel_screenshots.py`,
-`tests/unit/strategy_tester/test_cancel_responsiveness.py`.
+`tests/unit/strategy_tester/test_cancel_responsiveness.py`,
+`tests/unit/strategy_tester/test_vectorized_et_arrays.py`.
+
+**Related scanner perf:** `scanner/fields.py:_today_mask` is the
+analogous fix on the scanner side — was O(N²) (every per-bar call
+rebuilt `b.timestamps.astype("datetime64[D]")` over the full N-bar
+array). Now O(N) via a `BarsKeyedCache(max_size=64)` keyed by
+`id(BarsNp)` with `extra_key=int(b.timestamps.size)` for the
+identity-recycle guard (same pattern as `_ha_cache`). The bonus
+optimization in `_b_bars_since_open` uses `np.searchsorted` for
+today's session-start lookup → O(log N + K) where K is bars-per-day,
+down from O(N). Tests: `tests/scanner/test_today_mask_cache.py`.
 
 ### 7.15 Strategy Tester exports (PDF/HTML/CSV) run on a background thread
 `strategy_tester.export.export_pdf` renders 3 fixed pages (cover +
@@ -1041,6 +1079,125 @@ See also §7.8 / §7.9 (mechanical-evaluator outputs) and §7.12 (EOD
 kill RTH-only walk — orthogonal to entry dispatch but lives in the
 same mechanical evaluator and is the other big "don't let it drift"
 landmine).
+
+### 7.21 Bounded LRU caches via `core.lru_dict.LRUDict`
+
+Process-lifetime memos that accumulate keys over a long-running
+session (multi-day chart usage, repeated strategy-tester runs with
+varying indicator params) MUST be bounded — unbounded `dict[...]`
+caches are a documented leak source. Use `core.lru_dict.LRUDict`
+as the one source of truth.
+
+**API surface:** subclass of `OrderedDict[K, V]`, preserves the
+full dict ABI (`get` / `[k]` / `in` / `pop` / `clear` /
+`__delitem__` / iter). Two semantic differences:
+
+- `__setitem__(k, v)` moves `k` to the MRU end + evicts the LRU
+  end while `len(self) > maxsize`.
+- `get(k, default)` LRU-touches on hit; miss returns default
+  WITHOUT inserting (would silently inflate `len` past `maxsize`).
+
+`k in cache` is plain `OrderedDict.__contains__` — does NOT touch
+recency. Callers that want touch-on-membership must switch to
+`.get`. This matches `OrderedDict` semantics; documented in
+`core/lru_dict.spec.md`.
+
+**Adoption sites (today):**
+- `strategy_tester/warmup.py::_WARMUP_CACHE` — `LRUDict(maxsize=256)`
+  keyed by `(kind_id, frozen_params)`. Bounded so a user running
+  many indicator-param sweeps doesn't accumulate entries forever.
+- `app.py::_events_cache` — `LRUDict(maxsize=200)` keyed by ticker
+  symbol. The active ticker + watchlist tickers never evict each
+  other under normal use thanks to the `.get()` LRU touch on every
+  read (see `gui/watchlist_tab.py:208`, `gui/chartstack/panel.py:541`,
+  `app.py:5251`).
+
+**When you add a new cache:** if it's per-process and the key space
+grows unbounded over a multi-day session, USE `LRUDict`. Don't
+write a plain `dict[...]` cache without an eviction strategy.
+
+**Thread safety:** `LRUDict` is NOT thread-safe by itself.
+Existing call sites are single-threaded (warmup cache is
+module-level + worker-pool-write-then-tk-thread-read; events_cache
+is tk-thread-only). A future multi-threaded caller must layer its
+own lock.
+
+Tests: `tests/core/test_lru_dict.py` (14 tests covering capacity,
+LRU touch on hit, no-touch on miss, set-existing-key refreshes
+recency, membership doesn't touch, clear preserves maxsize, etc.).
+
+### 7.22 JSON-backed object stores via `core.json_collection_store.JsonObjectStore[T]`
+
+Six subsystems historically reimplemented the same JSON-collection
+storage pattern with subtly drifting error taxonomies and
+index-refresh policies (~150 LOC each, ~900 LOC total). The
+generic `core.json_collection_store.JsonObjectStore[T]` is now the
+one source of truth.
+
+**Pattern recap:** every subsystem (entries / exits / scanner /
+watchlists / strategy_tester / positions) used to ship its own
+hand-rolled `storage.py` with: `storage_dir()`, `_path_for(id)`,
+`_index_path()`, `_load_index()` / `_save_index()` /
+`_refresh_index()`, `save(obj)` / `load(id)` / `delete(id)`,
+`load_all() -> (good, broken)` triage, `BrokenStrategy(path, error,
+raw_json)` dataclass, `import_from_path` / `export_to_path`, and
+the canonical `(OSError, JSONDecodeError, ValueError)` try/except.
+
+**Generic surface** (preserve the import names at each call site
+for back-compat):
+
+```python
+_STORE = JsonObjectStore[EntryStrategy](
+    storage_dir=_entries_storage_dir,
+    kind_label="entry strategy",
+    to_dict=EntryStrategy.to_dict,
+    from_dict=EntryStrategy.from_dict,
+    validate=validate_entry_strategy,   # optional; raises on invalid
+    id_of=lambda s: s.id,
+    # index_value_of=…                  # optional; what _index.json stores per id
+)
+
+def save(strategy):    return _STORE.save(strategy)
+def load(sid):         return _STORE.load(sid)
+def delete(sid):       return _STORE.delete(sid)
+def load_all():        return _STORE.load_all()
+def import_from_path(p): return _STORE.import_from_path(p, rename_fn=_rename_on_import)
+def export_to_path(p, sid): _STORE.export_to_path(sid, p)
+```
+
+Every `JsonObjectStore` method accepts optional `root: Path | None`
+for `tmp_path` sandboxing in tests — no monkey-patching of
+`storage_dir()` needed.
+
+**Pilot migration shipped:** `entries/storage.py` was 294 LOC →
+168 LOC of which ~80 is delegators + back-compat shims + docstrings
+(actual logic ≈ 15 LOC). All 223 existing entries tests pass
+UNMODIFIED (the public API was preserved exactly, including
+`BrokenStrategy` aliased to `BrokenRecord`).
+
+**Pending mechanical migrations** (each follows the
+entries-pilot template; ship one per commit):
+- `exits/storage.py` — `JsonObjectStore[ExitStrategy]`
+- `scanner/storage.py` — `JsonObjectStore[Scan]`
+- `watchlists/storage.py` — `JsonObjectStore[Watchlist]`
+- `strategy_tester/storage.py` — `JsonObjectStore[StrategyTestRun]`
+- `positions/storage.py` — `JsonObjectStore[Position]`
+
+**Logging policy:** one `WARNING` per broken record (not `ERROR`)
+— broken records are expected occasionally (user editing JSON by
+hand, abandoned writes from a killed process). Index ops are
+best-effort: corrupt `_index.json` is ignored + logged;
+`refresh_index` skips broken files instead of aborting the whole
+scan.
+
+**When you add a new JSON-collection store:** USE the generic.
+Don't copy `entries/storage.py` and edit — that's how the
+drift started. The 6 lambdas + 1 resolver are usually <30 LOC.
+
+Tests: `tests/core/test_json_collection_store.py` (28 tests
+covering save round-trip, missing/malformed load, delete returns
+bool, `load_all` triage, import/export round-trip, index refresh
+on missing/corrupt index).
 
 ---
 
