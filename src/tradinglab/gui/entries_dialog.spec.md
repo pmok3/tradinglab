@@ -71,6 +71,17 @@ Caller callbacks are stored as ``self._on_save_cb`` /
   scanner condition-tree editor to avoid duplicating the
   operator/threshold UX. The dialog binds the editor's
   `Group` back into `EntryTrigger.condition` on save.
+- **Trigger-params rendering is schema-driven (audit item #8).**
+  Per-kind field declarations live in module-level
+  ``_ENTRY_TRIGGER_SPECS: dict[TriggerKind, tuple[_FieldSpec, …]]``
+  and are dispatched through the shared
+  ``gui._trigger_field_renderer.render_kind_params`` helper —
+  same primitive the exits-side ``_TriggerRow`` consumes. The
+  per-kind ``_render_price_field`` helper is retained for
+  back-compat but is no longer called by ``_render_trigger_params``;
+  the INDICATOR ``block_editor`` field delegates to
+  ``_build_indicator_block_editor`` (which owns the interval
+  picker + intrabar checkbox + nested ``BlockEditor``).
 - **`threshold_warn` / `threshold_extreme` fields are NOT shown**
   on the RVOL / RRVOL operator subforms for indicator triggers —
   removed in the recent five-item UX batch. They were always purely

@@ -54,6 +54,7 @@ from ..entries.model import (
 from ..exits.model import ExitStrategy
 from ..scanner.model import Group as ConditionGroup
 from ._modal_base import BaseModalDialog, make_scrollable_form, protect_combobox_wheel
+from ._trigger_field_renderer import _FieldSpec, render_kind_params
 from .colors import ERROR_RED, MUTED_GREY
 from .scanner_block_editor import BlockEditor
 
@@ -100,6 +101,50 @@ _POLICY_BY_LABEL = {lbl: p for p, lbl in _POLICY_CHOICES}
 _INDICATOR_INTERVAL_CHOICES: tuple[str, ...] = (
     "1m", "5m", "15m", "30m", "1h", "1d",
 )
+
+
+# ---------------------------------------------------------------------------
+# Per-kind trigger-param field schema (audit item #8)
+# ---------------------------------------------------------------------------
+#
+# Mirrors the exits-side ``_FIELD_SPECS_BY_KIND`` (in
+# ``exits_dialog_widgets.py``) so the shared
+# :func:`gui._trigger_field_renderer.render_kind_params` can drive
+# both dialogs from the same schema-driven primitive.
+#
+# Three trigger kinds need extra glue beyond the schema:
+#
+# * ``TriggerKind.MARKET`` — no params; the dialog draws a muted
+#   "fires on next CLOSED bar" placeholder label instead of an
+#   empty row. Tuple is empty so the orchestrator renders nothing.
+# * ``TriggerKind.SCANNER_ALERT`` — single ``scanner_id`` Entry
+#   with a leading "Scanner id:" label; handled via the ``"str"``
+#   field kind (verbatim string, no coercion).
+# * ``TriggerKind.INDICATOR`` — embeds a :class:`BlockEditor`
+#   alongside an interval picker + intrabar checkbox. The
+#   ``"block_editor"`` kind delegates to a builder closure that the
+#   dialog supplies (see ``_build_indicator_block_editor`` below).
+
+
+_ENTRY_TRIGGER_SPECS: dict[TriggerKind, tuple[_FieldSpec, ...]] = {
+    TriggerKind.MARKET: (),
+    TriggerKind.LIMIT: (
+        _FieldSpec("price", "Price:", "float", width=14),
+    ),
+    TriggerKind.STOP: (
+        _FieldSpec("stop_price", "Stop price:", "float", width=14),
+    ),
+    TriggerKind.STOP_LIMIT: (
+        _FieldSpec("stop_price", "Stop price:", "float", width=14),
+        _FieldSpec("price", "Limit price:", "float", width=14),
+    ),
+    TriggerKind.INDICATOR: (
+        _FieldSpec("__indicator__", "", "block_editor"),
+    ),
+    TriggerKind.SCANNER_ALERT: (
+        _FieldSpec("scanner_id", "Scanner id:", "str", width=30),
+    ),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -432,6 +477,9 @@ class EntriesDialog(BaseModalDialog):
         self._block_editor = None
 
         kind = self._draft.trigger.kind
+
+        # MARKET keeps its dedicated "no parameters" placeholder
+        # label rather than rendering a bare empty row.
         if kind == TriggerKind.MARKET:
             ttk.Label(
                 self._trigger_params,
@@ -440,77 +488,86 @@ class EntriesDialog(BaseModalDialog):
             ).pack(anchor="w")
             return
 
-        if kind == TriggerKind.LIMIT:
-            self._render_price_field("price", self._draft.trigger.price)
+        render_kind_params(
+            self._trigger_params, kind, self._trigger_param_vars,
+            specs_by_kind=_ENTRY_TRIGGER_SPECS,
+            get_value=lambda attr: getattr(self._draft.trigger, attr),
+            on_change=self._on_trigger_field_changed,
+            block_editor_builder=self._build_indicator_block_editor,
+        )
+
+    def _on_trigger_field_changed(self, attr: str, value: object) -> None:
+        """Callback fired by the shared trigger-field renderer.
+
+        Writes ``value`` onto ``self._draft.trigger.<attr>`` and
+        normalizes a few attr-specific edge cases (empty
+        ``scanner_id`` → ``None``).
+        """
+        if attr == "scanner_id":
+            v = (value or "").strip() if isinstance(value, str) else value
+            self._draft.trigger.scanner_id = v or None
             return
+        try:
+            setattr(self._draft.trigger, attr, value)
+        except AttributeError:
+            pass
 
-        if kind == TriggerKind.STOP:
-            self._render_price_field(
-                "stop_price", self._draft.trigger.stop_price,
-                label="Stop price:")
-            return
+    def _build_indicator_block_editor(
+        self, parent: tk.Misc, _spec: _FieldSpec,
+    ) -> tk.Widget:
+        """``block_editor_builder`` for the INDICATOR trigger kind.
 
-        if kind == TriggerKind.STOP_LIMIT:
-            self._render_price_field(
-                "stop_price", self._draft.trigger.stop_price,
-                label="Stop price:")
-            self._render_price_field(
-                "price", self._draft.trigger.price,
-                label="Limit price:")
-            return
+        Builds the interval-picker + intrabar-checkbox bar above
+        the embedded :class:`BlockEditor` and stashes the editor
+        on ``self._block_editor`` for the save path.
+        """
+        # Interval + intrabar header row
+        row = ttk.Frame(parent)
+        row.pack(fill="x")
+        ttk.Label(row, text="Interval:").pack(side="left")
+        interval = self._draft.trigger.interval or "1m"
+        v_int = tk.StringVar(value=interval)
+        self._trigger_param_vars["interval"] = v_int
+        ttk.Combobox(
+            row, textvariable=v_int, state="readonly",
+            values=_INDICATOR_INTERVAL_CHOICES, width=6,
+        ).pack(side="left", padx=(6, 12))
+        v_int.trace_add(
+            "write", lambda *_: self._on_trigger_interval_changed())
 
-        if kind == TriggerKind.INDICATOR:
-            row = ttk.Frame(self._trigger_params)
-            row.pack(fill="x")
-            ttk.Label(row, text="Interval:").pack(side="left")
-            interval = self._draft.trigger.interval or "1m"
-            v_int = tk.StringVar(value=interval)
-            self._trigger_param_vars["interval"] = v_int
-            ttk.Combobox(
-                row, textvariable=v_int, state="readonly",
-                values=_INDICATOR_INTERVAL_CHOICES, width=6,
-            ).pack(side="left", padx=(6, 12))
-            v_int.trace_add(
-                "write", lambda *_: self._on_trigger_interval_changed())
+        self._intrabar_var = tk.BooleanVar(
+            value=bool(self._draft.trigger.evaluate_intrabar))
+        ttk.Checkbutton(
+            row, text="Evaluate intrabar (forming bar)",
+            variable=self._intrabar_var,
+            command=self._on_intrabar_changed,
+        ).pack(side="left")
 
-            self._intrabar_var = tk.BooleanVar(
-                value=bool(self._draft.trigger.evaluate_intrabar))
-            ttk.Checkbutton(
-                row, text="Evaluate intrabar (forming bar)",
-                variable=self._intrabar_var,
-                command=self._on_intrabar_changed,
-            ).pack(side="left")
-
-            cond = self._draft.trigger.condition or ConditionGroup(
-                combinator="and", children=[])
-            # Persist the (possibly-defaulted) condition back onto the
-            # draft so callers / tests can rely on it being non-None for
-            # INDICATOR triggers.
-            self._draft.trigger.condition = cond
-            self._block_editor = BlockEditor(
-                self._trigger_params,
-                root=cond,
-                on_change=self._on_block_editor_changed,
-                default_interval=interval,
-            )
-            self._block_editor.pack(fill="both", expand=True, pady=(6, 0))
-            return
-
-        if kind == TriggerKind.SCANNER_ALERT:
-            row = ttk.Frame(self._trigger_params)
-            row.pack(fill="x")
-            ttk.Label(row, text="Scanner id:").pack(side="left")
-            v = tk.StringVar(value=self._draft.trigger.scanner_id or "")
-            self._trigger_param_vars["scanner_id"] = v
-            ttk.Entry(row, textvariable=v, width=30).pack(
-                side="left", padx=(6, 0))
-            v.trace_add(
-                "write", lambda *_: self._on_trigger_scanner_id_changed())
-            return
+        cond = self._draft.trigger.condition or ConditionGroup(
+            combinator="and", children=[])
+        # Persist the (possibly-defaulted) condition back onto the
+        # draft so callers / tests can rely on it being non-None for
+        # INDICATOR triggers.
+        self._draft.trigger.condition = cond
+        self._block_editor = BlockEditor(
+            parent,
+            root=cond,
+            on_change=self._on_block_editor_changed,
+            default_interval=interval,
+        )
+        self._block_editor.pack(fill="both", expand=True, pady=(6, 0))
+        return self._block_editor
 
     def _render_price_field(
         self, attr: str, current: float | None, *, label: str = "Price:",
     ) -> None:
+        """Legacy single-price renderer.
+
+        Retained for back-compat; not called by the new
+        schema-driven :meth:`_render_trigger_params`. Tests or
+        external callers that still reference this method get the
+        original behavior.
+        """
         row = ttk.Frame(self._trigger_params)
         row.pack(fill="x", pady=(2, 0))
         ttk.Label(row, text=label).pack(side="left")

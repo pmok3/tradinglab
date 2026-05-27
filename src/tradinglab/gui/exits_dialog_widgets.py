@@ -15,7 +15,6 @@ These are private (``_`` prefix) — callers should go through
 from __future__ import annotations
 
 import tkinter as tk
-from dataclasses import dataclass
 from tkinter import messagebox, ttk
 from typing import TYPE_CHECKING, Any
 
@@ -30,6 +29,7 @@ from ..exits.model import (
 )
 from ..scanner.model import Group as ConditionGroup
 from ._modal_base import BaseModalDialog, protect_combobox_wheel
+from ._trigger_field_renderer import _FieldSpec, render_field
 from .colors import ERROR_RED, MUTED_GREY
 from .scanner_block_editor import BlockEditor
 
@@ -116,16 +116,12 @@ _OCO_CANCEL_ON_CHOICES: tuple[str, ...] = ("full_closeout", "any_fire")
 # (``"| limit:"``, ``"| activation:"``, ``"| basis:"``).
 
 
-@dataclass(frozen=True)
-class _FieldSpec:
-    """One trigger-row input widget, declaratively described."""
-
-    attr: str
-    label: str
-    kind: str
-    width: int = 8
-    choices: tuple[Any, ...] | None = None
-    separator: bool = False
+# The shared :class:`_FieldSpec` is imported from
+# :mod:`gui._trigger_field_renderer` (audit item #8). The
+# ``_FIELD_SPECS_BY_KIND`` registry below still lives here — it is
+# exits-specific. Adding a new exits-side trigger kind: declare a
+# new tuple of :class:`_FieldSpec` rows here; the shared
+# :func:`render_field` does the actual widget construction.
 
 
 _FIELD_SPECS_BY_KIND: dict[TriggerKind, tuple[_FieldSpec, ...]] = {
@@ -445,121 +441,23 @@ class _TriggerRow(ttk.Frame):
             self._render_field(spec)
 
     def _render_field(self, spec: _FieldSpec) -> None:
-        """Render one schema-described field into ``_params_frame``."""
-        label_text = (
-            f"| {spec.label}" if spec.separator and spec.label else spec.label
+        """Render one schema-described field into ``_params_frame``.
+
+        Thin delegator over the shared
+        :func:`gui._trigger_field_renderer.render_field` (audit
+        item #8). The render itself is identical to what this
+        method used to do inline; the trigger-attribute reads /
+        writes flow through ``get_value`` / ``on_change``
+        closures so the shared renderer stays decoupled from
+        :class:`ExitTrigger`.
+        """
+        var, _widget = render_field(
+            self._params_frame, spec,
+            get_value=lambda attr: getattr(self._trigger, attr),
+            on_change=lambda attr, value: setattr(self._trigger, attr, value),
         )
-        if label_text:
-            ttk.Label(self._params_frame, text=label_text).pack(
-                side="left", padx=((8 if spec.separator else 0), 0),
-            )
-        elif spec.separator:
-            ttk.Label(self._params_frame, text="|").pack(side="left", padx=(8, 0))
-
-        kind = spec.kind
-        attr = spec.attr
-        if kind == "float":
-            cur = getattr(self._trigger, attr)
-            var = tk.StringVar(value="" if cur is None else f"{cur:g}")
-            self._param_vars[attr] = var
-            ttk.Entry(
-                self._params_frame, textvariable=var, width=spec.width,
-            ).pack(side="left", padx=(2, 6))
-            var.trace_add(
-                "write", lambda *_a, name=attr: self._set_float_attr(name))
-        elif kind == "int":
-            cur = getattr(self._trigger, attr)
-            var = tk.StringVar(value=str(cur))
-            self._param_vars[attr] = var
-            ttk.Entry(
-                self._params_frame, textvariable=var, width=spec.width,
-            ).pack(side="left", padx=(2, 6))
-            var.trace_add(
-                "write", lambda *_a, name=attr: self._set_int_attr(name))
-        elif kind == "time_str":
-            cur = getattr(self._trigger, attr) or ""
-            var = tk.StringVar(value=cur)
-            self._param_vars[attr] = var
-            ttk.Entry(
-                self._params_frame, textvariable=var, width=spec.width,
-            ).pack(side="left", padx=(2, 4))
-
-            def _on_change(*_, name=attr, v=var):
-                txt = v.get().strip()
-                setattr(self._trigger, name, txt or None)
-            var.trace_add("write", _on_change)
-        elif kind == "enum":
-            choices = spec.choices or ()
-            labels = [lbl for _, lbl in choices]
-            cur_label = next(
-                (lbl for value, lbl in choices
-                 if value == getattr(self._trigger, attr)),
-                labels[0] if labels else "",
-            )
-            var = tk.StringVar(value=cur_label)
-            self._param_vars[attr] = var
-            cb = ttk.Combobox(
-                self._params_frame, textvariable=var, state="readonly",
-                values=labels, width=spec.width,
-            )
-            cb.pack(side="left", padx=(2, 4))
-            cb.bind(
-                "<<ComboboxSelected>>",
-                lambda _e, name=attr, v=var, c=choices:
-                    self._set_enum_attr(name, v, c),
-            )
-        elif kind == "enum_with_none":
-            choices = spec.choices or ()
-            labels = ["(none)"] + [lbl for _, lbl in choices]
-            cur_value = getattr(self._trigger, attr)
-            cur_label = next(
-                (lbl for value, lbl in choices if value == cur_value),
-                "(none)",
-            )
-            var = tk.StringVar(value=cur_label)
-            self._param_vars[attr] = var
-            cb = ttk.Combobox(
-                self._params_frame, textvariable=var, state="readonly",
-                values=labels, width=spec.width,
-            )
-            cb.pack(side="left", padx=(2, 4))
-            cb.bind(
-                "<<ComboboxSelected>>",
-                lambda _e, name=attr, v=var, c=choices:
-                    self._set_enum_with_none_attr(name, v, c),
-            )
-        elif kind == "enum_str":
-            options = tuple(spec.choices or ())
-            cur = (getattr(self._trigger, attr) or "").upper()
-            if cur not in options:
-                cur = options[0] if options else ""
-            var = tk.StringVar(value=cur)
-            self._param_vars[attr] = var
-            cb = ttk.Combobox(
-                self._params_frame, textvariable=var, state="readonly",
-                values=list(options), width=spec.width,
-            )
-            cb.pack(side="left", padx=(2, 4))
-            cb.bind(
-                "<<ComboboxSelected>>",
-                lambda _e, name=attr, v=var:
-                    setattr(self._trigger, name, v.get()),
-            )
-
-    def _set_enum_with_none_attr(
-        self,
-        attr: str,
-        var: tk.StringVar,
-        choices: tuple[tuple[Any, str], ...],
-    ) -> None:
-        label = var.get()
-        if label == "(none)":
-            setattr(self._trigger, attr, None)
-            return
-        for value, lbl in choices:
-            if lbl == label:
-                setattr(self._trigger, attr, value)
-                return
+        if var is not None:
+            self._param_vars[spec.attr] = var
 
     def _render_indicator(self) -> None:
         # Interval picker
@@ -612,43 +510,13 @@ class _TriggerRow(ttk.Frame):
             self._trigger.interval = v
 
     # ----- Generic attribute setters -----
-
-    def _set_float_attr(self, attr: str) -> None:
-        var = self._param_vars.get(attr)
-        if var is None:
-            return
-        raw = var.get().strip()
-        if raw == "":
-            setattr(self._trigger, attr, None)
-            return
-        try:
-            setattr(self._trigger, attr, float(raw))
-        except ValueError:
-            pass  # silent — user is mid-typing
-
-    def _set_int_attr(self, attr: str) -> None:
-        var = self._param_vars.get(attr)
-        if var is None:
-            return
-        raw = var.get().strip()
-        if raw == "":
-            return
-        try:
-            setattr(self._trigger, attr, int(raw))
-        except ValueError:
-            pass  # silent — user is mid-typing
-
-    def _set_enum_attr(
-        self,
-        attr: str,
-        var: tk.StringVar,
-        choices: tuple[tuple[Any, str], ...],
-    ) -> None:
-        label = var.get()
-        for value, lbl in choices:
-            if lbl == label:
-                setattr(self._trigger, attr, value)
-                return
+    #
+    # The previous ``_set_float_attr`` / ``_set_int_attr`` /
+    # ``_set_enum_attr`` / ``_set_enum_with_none_attr`` helpers were
+    # retired in audit item #8 — the shared
+    # :func:`gui._trigger_field_renderer.render_field` now closes
+    # over the per-field ``on_change`` callback directly, so the
+    # row no longer needs per-kind setter methods.
 
 
 # ---------------------------------------------------------------------------

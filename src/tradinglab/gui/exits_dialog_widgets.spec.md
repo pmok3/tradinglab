@@ -10,19 +10,10 @@ orchestration; widgets focus on rendering one schema element.
 ## Widget catalogue
 
 ```python
-@dataclass(frozen=True)
-class _FieldSpec:
-    """Declarative metadata for one form field: label, key, kind
-    (entry/spinbox/combobox/check/textarea), parser, formatter,
-    optional choices, optional validator."""
-    label: str
-    key: str
-    kind: str
-    parser: Callable[[str], Any]
-    formatter: Callable[[Any], str]
-    choices: Optional[Sequence[str]] = None
-    validator: Optional[Callable[[Any], Optional[str]]] = None
-    width: int = 12
+# _FieldSpec is now imported from gui._trigger_field_renderer
+# (audit item #8 lift). Its fields:
+#   attr / label / kind / width / choices / separator
+# See _trigger_field_renderer.spec.md for the kind taxonomy.
 
 class _BracketDialog(tk.Toplevel):
     """One-shot modal: prompts for (target_pct, stop_pct, qty),
@@ -61,6 +52,18 @@ class _OCOGroupRow(ttk.Frame):
   param is a one-line addition to a `_FieldSpec` list; the row's
   `collect`/`validate` introspect the spec list, keeping
   layout + parse + format + validate in lockstep.
+- **Renderer lifted to `gui._trigger_field_renderer` (audit #8).**
+  ``_FieldSpec`` and the per-kind widget construction (formerly
+  ``_TriggerRow._render_field``) now live in
+  ``gui/_trigger_field_renderer.py`` so the entries-side dialog
+  can drive its own ``_ENTRY_TRIGGER_SPECS`` through the same
+  primitive. The local ``_render_field`` is a thin delegator that
+  bridges the shared renderer's ``get_value`` / ``on_change``
+  callbacks to ``getattr``/``setattr`` on ``self._trigger`` and
+  stashes the returned ``tk.Variable`` in ``self._param_vars``.
+  The exits-side ``_FIELD_SPECS_BY_KIND`` registry stays here
+  (it is exits-specific). The kind taxonomy is documented in
+  [`_trigger_field_renderer.spec.md`](_trigger_field_renderer.spec.md).
 - **`threshold_warn` / `threshold_extreme` removed** from RVOL /
   RRVOL operator subforms (cosmetic chart-overlay reference lines
   only, never read by any trigger evaluation path). Still on the
