@@ -24,7 +24,6 @@ import math
 import queue
 import time
 import tkinter as tk
-import webbrowser
 from collections import OrderedDict
 from collections.abc import Callable, Iterable
 from datetime import datetime
@@ -132,6 +131,7 @@ from .gui.splash import (
 )
 from .gui.theme_controller import ThemeController
 from .gui.toolbar_controller import ToolbarController
+from .gui.update_check import UpdateCheckMixin
 from .gui.watchlist_tab import WatchlistTabMixin
 from .gui.workers import WorkerPoolMixin
 from .gui.x_axis_locator import _adaptive_x_locator_class, _make_x_formatter
@@ -244,6 +244,7 @@ class ChartApp(
     LivePriceOverlayAppMixin,
     RecentMenusMixin,
     SnapshotMixin,
+    UpdateCheckMixin,
     tk.Tk,
 ):
     """Top-level Tk window hosting the chart, controls, and data flow."""
@@ -6395,76 +6396,6 @@ class ChartApp(
 
     def _maybe_prompt_sandbox_resume(self) -> None:
         self._sandbox_ctrl.maybe_prompt_resume(app=self)
-
-    def _on_update_check_result(self, result: Any) -> None:
-        """Handle the async update-check result on the Tk main thread."""
-        try:
-            if getattr(result, "status", "") != "available":
-                return
-            latest = str(getattr(result, "latest", "") or "")
-            if not latest:
-                return
-            url = str(getattr(result, "url", "") or "")
-            self._show_update_banner(latest, url=url)
-        except Exception:  # noqa: BLE001
-            pass
-
-    def _show_update_banner(self, new_version: str, *, url: str = "") -> None:
-        """Display a passive one-line banner about an available update.
-
-        Pattern mirrors :class:`FirstRunBannerMixin` — a dismissable
-        ttk.Frame at the top of the window with a single-line
-        message, optional release-link button, and a dismiss button.
-
-        Idempotent: a second update notification (or a duplicate
-        call from a re-run check) is silently swallowed if the
-        banner is already visible.
-        """
-        existing = getattr(self, "_update_banner_frame", None)
-        if existing is not None:
-            return
-        try:
-            frame = ttk.Frame(self, padding=(8, 4))
-            frame.pack(side=tk.TOP, fill=tk.X)
-            display_version = (
-                new_version if new_version.lower().startswith("v")
-                else f"v{new_version}"
-            )
-            ttk.Label(
-                frame,
-                text=(
-                    f"Update {display_version} available "
-                    f"— Help → Check for Updates"),
-                anchor="w",
-            ).pack(side=tk.LEFT, fill=tk.X, expand=True)
-
-            def _dismiss() -> None:
-                try:
-                    frame.destroy()
-                except tk.TclError:
-                    pass
-                self._update_banner_frame = None
-
-            ttk.Button(
-                frame, text="Dismiss", command=_dismiss,
-            ).pack(side=tk.RIGHT, padx=(6, 0))
-
-            if url:
-
-                def _open_release() -> None:
-                    try:
-                        webbrowser.open(url)
-                    except Exception:  # noqa: BLE001
-                        pass
-
-                ttk.Button(
-                    frame, text="View release", command=_open_release,
-                ).pack(side=tk.RIGHT, padx=(6, 0))
-
-            self._update_banner_frame = frame
-        except Exception:  # noqa: BLE001
-            # A banner failure must never break the chart.
-            self._update_banner_frame = None
 
     def _on_close(self) -> None:
         """Stop stream, cancel after jobs, shut down executor, destroy."""
