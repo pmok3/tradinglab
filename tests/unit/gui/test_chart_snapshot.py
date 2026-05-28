@@ -167,10 +167,10 @@ class TestSaveChartSnapshot:
         stub = _StubApp()
 
         with mock.patch(
-            "tradinglab.app.filedialog.asksaveasfilename",
+            "tradinglab.gui.snapshot.filedialog.asksaveasfilename",
             return_value="",
         ) as ask, mock.patch(
-            "tradinglab.app.messagebox",
+            "tradinglab.gui.snapshot.messagebox",
         ) as mbox:
             result = save(stub)
 
@@ -189,10 +189,10 @@ class TestSaveChartSnapshot:
         out = tmp_path / "shot.png"
 
         with mock.patch(
-            "tradinglab.app.filedialog.asksaveasfilename",
+            "tradinglab.gui.snapshot.filedialog.asksaveasfilename",
             return_value=str(out),
         ), mock.patch(
-            "tradinglab.app.messagebox",
+            "tradinglab.gui.snapshot.messagebox",
         ) as mbox:
             result = save(stub)
 
@@ -210,10 +210,10 @@ class TestSaveChartSnapshot:
         out = tmp_path / "shot.png"
 
         with mock.patch(
-            "tradinglab.app.filedialog.asksaveasfilename",
+            "tradinglab.gui.snapshot.filedialog.asksaveasfilename",
             return_value=str(out),
         ), mock.patch(
-            "tradinglab.app.messagebox",
+            "tradinglab.gui.snapshot.messagebox",
         ) as mbox:
             result = save(stub)
 
@@ -229,10 +229,10 @@ class TestSaveChartSnapshot:
         out = tmp_path / "shot.png"
 
         with mock.patch(
-            "tradinglab.app.filedialog.asksaveasfilename",
+            "tradinglab.gui.snapshot.filedialog.asksaveasfilename",
             return_value=str(out),
         ), mock.patch(
-            "tradinglab.app.messagebox",
+            "tradinglab.gui.snapshot.messagebox",
         ) as mbox:
             result = save(stub)
 
@@ -246,10 +246,10 @@ class TestSaveChartSnapshot:
         stub = _StubApp()
 
         with mock.patch(
-            "tradinglab.app.filedialog.asksaveasfilename",
+            "tradinglab.gui.snapshot.filedialog.asksaveasfilename",
             side_effect=RuntimeError("no display"),
         ), mock.patch(
-            "tradinglab.app.messagebox",
+            "tradinglab.gui.snapshot.messagebox",
         ) as mbox:
             result = save(stub)
 
@@ -264,10 +264,10 @@ class TestSaveChartSnapshot:
         stub = _StubApp(primary_ticker="NVDA")
 
         with mock.patch(
-            "tradinglab.app.filedialog.asksaveasfilename",
+            "tradinglab.gui.snapshot.filedialog.asksaveasfilename",
             return_value="",
         ) as ask, mock.patch(
-            "tradinglab.app.messagebox",
+            "tradinglab.gui.snapshot.messagebox",
         ):
             save(stub, "primary")
 
@@ -284,10 +284,10 @@ class TestSaveChartSnapshot:
         stub = _StubApp(primary_ticker="AAPL", compare_ticker="TSLA")
 
         with mock.patch(
-            "tradinglab.app.filedialog.asksaveasfilename",
+            "tradinglab.gui.snapshot.filedialog.asksaveasfilename",
             return_value="",
         ) as ask, mock.patch(
-            "tradinglab.app.messagebox",
+            "tradinglab.gui.snapshot.messagebox",
         ):
             save(stub, "compare")
 
