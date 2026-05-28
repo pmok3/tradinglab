@@ -227,6 +227,12 @@ class TestProductionClosureMatchesHarness:
     def test_app_py_closure_has_confirm_call(self):
         path = Path(tradinglab.app.__file__)
         src = path.read_text(encoding="utf-8")
+        # The remove-all closure lives in DrawingsAppMixin since the
+        # canvas/per-drawing right-click menu extraction; include that
+        # module's source so the regression assertion still anchors
+        # on the production code path.
+        from tradinglab.gui import drawings_app as _drawings_app_mod
+        src += "\n" + Path(_drawings_app_mod.__file__).read_text(encoding="utf-8")
         # The closure must call askyesno BEFORE clear_symbol.
         idx_yesno = src.find("askyesno")
         idx_clear = src.find("clear_symbol(sym)")
@@ -245,6 +251,8 @@ class TestProductionClosureMatchesHarness:
     def test_app_py_closure_uses_warning_default_no(self):
         path = Path(tradinglab.app.__file__)
         src = path.read_text(encoding="utf-8")
+        from tradinglab.gui import drawings_app as _drawings_app_mod
+        src += "\n" + Path(_drawings_app_mod.__file__).read_text(encoding="utf-8")
         # The dialog must use the NO default + WARNING icon so an
         # accidental Enter / Tab confirms cancel-by-default and the
         # icon signals destructiveness.

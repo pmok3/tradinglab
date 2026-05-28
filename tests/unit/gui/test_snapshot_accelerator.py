@@ -73,7 +73,17 @@ class TestSourceLevelBindings:
     """Source-level assertions catch drift without needing a Tk root."""
 
     def _src(self) -> str:
-        return Path(_app_mod.__file__).read_text(encoding="utf-8")
+        # The Snapshot menu item now lives in DrawingsAppMixin
+        # (gui/drawings_app.py); the accelerator binding remains in
+        # app.py. Return the concatenation so the assertions below
+        # cover the canvas-menu source regardless of which file holds
+        # the relevant block.
+        from tradinglab.gui import drawings_app as _drawings_app_mod
+        return (
+            Path(_app_mod.__file__).read_text(encoding="utf-8")
+            + "\n"
+            + Path(_drawings_app_mod.__file__).read_text(encoding="utf-8")
+        )
 
     def test_app_py_binds_control_shift_s(self):
         src = self._src()
