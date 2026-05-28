@@ -41,9 +41,17 @@ tradinglab/
 ├── src/tradinglab/           # the package (src layout)
 │   ├── __main__.py            # `python -m tradinglab` entry; also exposed as `tradinglab` console script
 │   ├── _version.py            # SINGLE SOURCE OF TRUTH for __version__ (read by pyproject + build_exe.ps1)
-│   ├── app.py                 # ChartApp god-object (long; many subsystems still live here)
+│   ├── app.py                 # ChartApp god-object (6147 LOC after waves 1+2 mixin extraction; was 7790)
 │   ├── backtest/ core/ data/ drawings/ entries/ events/ exits/
 │   ├── gui/                   # dialogs, menus, widgets (e.g. dialogs.py, help_menu.py, watchlist_dialog.py)
+│   │   ├── drawings_app.py        # DrawingsAppMixin (wave 1)
+│   │   ├── live_price_overlay_app.py # LivePriceOverlayAppMixin (wave 1)
+│   │   ├── recent_menus.py        # RecentMenusMixin (wave 1)
+│   │   ├── snapshot.py            # SnapshotMixin (wave 1)
+│   │   ├── config_menu.py         # ConfigMenuMixin (wave 2)
+│   │   └── update_check.py        # UpdateCheckMixin (wave 2)
+│   ├── backtest/
+│   │   └── sandbox_app_aliases.py # SandboxAliasMixin (wave 2)
 │   ├── indicators/            # 15+ built-in indicators, plus user-plugin loader
 │   ├── positions/             # paper-trading position bookkeeping
 │   ├── preload/               # universe (NYSE/NASDAQ/SPY/QQQ) preloaders
@@ -60,6 +68,7 @@ tradinglab/
 │       ├── test_smoke_full.py # the mega-test (~88s Win / ~120-200s macOS)
 │       └── test_smoke_<feature>.py   # per-feature subset files for fast iteration
 ├── docs/                      # ONBOARDING.md, BUILDING_EXE.md, ENTRIES_EXITS.md, etc. + SPEC_INDEX.md
+│                               # + PAINT_PIPELINE_REFACTOR.md (multi-week scope doc)
 ├── tools/build_exe.ps1        # PyInstaller wrapper — handles venv, git metadata, splash, zipping
 ├── TradingLab.spec            # hand-written PyInstaller spec — touch deliberately
 ├── .github/workflows/ci.yml   # lint + 6-entry smoke matrix
@@ -1304,6 +1313,188 @@ Tests: `tests/core/test_timezones.py` (8 tests covering cached
 identity, summer/winter DST offsets, all 3 missing-tzdata fallback
 paths).
 
+### 7.24 ChartApp MRO — 18 mixins, alphabetical insertion, no `__init__`
+
+`ChartApp` (in `src/tradinglab/app.py`) inherits from **18 mixins +
+`tk.Tk`** after waves 1+2 of the god-file extraction (commits
+`358ad16`, `d0cdadc`, `73a4adb`, `bfe80fc`, `e9fa1b2`, `a1f11ba`,
+`9393301`). The MRO declaration lives at L229-250:
+
+```python
+class ChartApp(
+    PollingMixin, InteractionMixin, WatchlistTabMixin, WorkerPoolMixin,
+    IndicatorMenuMixin, SandboxMenuMixin, ConfigMenuMixin, DrilldownMixin,
+    EntriesAppMixin, ExitsAppMixin, HelpMenuMixin, FirstRunBannerMixin,
+    DrawingsAppMixin, LivePriceOverlayAppMixin, RecentMenusMixin,
+    SandboxAliasMixin, SnapshotMixin, UpdateCheckMixin,
+    tk.Tk,
+):
+```
+
+**Hard rules** (verified by gate):
+
+1. **No `__init__`, no `super().__init__()`** on any mixin. All
+   instance state lives in `ChartApp.__init__`. Mixins are pure
+   method bags that read/write `self.<attr>` for state owned by
+   ChartApp. Adding an `__init__` would break MRO chaining at
+   `tk.Tk` (which is positional-arg sensitive).
+2. **`tk.Tk` MUST stay last.** It's the only non-mixin base.
+3. **Insert new mixins alphabetically among the mixin block.** Keeps
+   the diff stable across multiple sprints. Wave 2 inserted
+   ConfigMenu / SandboxAlias / UpdateCheck alphabetically; future
+   extractions follow the same rule.
+4. **Mixin files MUST have colocated `.spec.md`** (HARD RULE per §2).
+   Use neighbour specs as templates: `gui/snapshot.spec.md`,
+   `gui/drawings_app.spec.md`, etc.
+5. **Source-grep tests must be updated when extracting.** Search
+   for `tradinglab.app\b|app\.py` in `tests/unit/` before merging —
+   any test that greps `app.py` for a moved method needs its source
+   list extended to also scan the new mixin file. Wave 1 missed 5
+   tests this way (later cleanup in commit `f675951`); wave 2's
+   agent now bakes the grep into its procedure.
+6. **Module-level re-exports stay as patch-seams.** If a test mocks
+   `tradinglab.app.filedialog` etc., the `from tkinter import
+   filedialog` line in `app.py` MUST stay (with `# noqa: F401` if
+   needed) even when no in-file code references it.
+
+**Pending extractions** (LOW-MED risk, ~1100 LOC removable, see
+checkpoint 006 for backlog): WatchlistsAppMixin (section L5841-6092),
+ScannerAppMixin (section L6939-7390), SandboxAppMixin (the big one
+at L7390-7791 + scattered methods). Multi-week scope items
+(DataLoadController, RenderController, topology-preserving paint
+pipeline) are documented in `docs/PAINT_PIPELINE_REFACTOR.md` —
+read that before attempting any cut into `_load_data_async`,
+`_panel_state`, or `_render`.
+
+### 7.25 Internal data sources: `register_source(..., internal=True)`
+
+Synthetic data sources (`synthetic`, `synthetic-stream`) are
+scaffolding for smoke tests, sandbox replay, and offline scenarios.
+They are dispatchable programmatically (smoke tests + sandbox replay
++ strategy_tester all read `DATA_SOURCES[name]` directly) but MUST
+NOT appear in any user-facing dropdown:
+
+- toolbar source-selector combobox (`app.py:_build_ui`)
+- Settings → Startup parameters source dropdown
+  (`gui/dialogs.py:_build_startup_section`)
+- ConfigManager source allow-list (`app.py:__init__` → would
+  otherwise honour a hand-edited `settings.json` with
+  `source="synthetic"`)
+- post-BYOD-registration refresh (`app.py:_refresh_data_source_combobox`)
+
+**Contract** (`src/tradinglab/data/base.py`):
+
+- `register_source(name, fetcher, *, internal=False)` — set
+  `internal=True` to keep the entry out of every UI surface.
+  Flag survives repeat registrations with the same `internal=True`.
+  Plain re-registration WITHOUT the flag clears it (documented;
+  tests that rely on this MUST restore in a `finally`).
+- `is_internal_source(name) -> bool` — predicate.
+- `user_visible_sources() -> list[str]` — `DATA_SOURCES` keys with
+  internal entries filtered out, insertion-order preserved.
+
+**Invariants** (pinned by
+`tests/unit/data/test_user_visible_sources.py`, 8 tests):
+
+- `"synthetic" in DATA_SOURCES` ✓ but
+  `"synthetic" not in user_visible_sources()` ✓
+- `next(iter(user_visible_sources())) == "yfinance"` — first
+  user-visible source is the default selection.
+- `AppState._resolve_source` demotes internal / unregistered /
+  empty source values to the first user-visible source (handles
+  old `settings.json` files that hand-edited `source="synthetic"`
+  back when it was selectable).
+
+**When adding a new internal-only source** (e.g. a future replay-
+recorder source for QA): `register_source("replay-recorder",
+fetcher, internal=True)`. No UI changes needed — `user_visible_sources()`
+filters it automatically. To re-enable an internal source in the UI,
+re-register without `internal=True` (and update the call site to
+re-add it to `_INTERNAL_SOURCES` if it should still hide from a
+sub-UI). To programmatically check: use `is_internal_source(name)`
+NOT `name == "synthetic"` — the hardcoded check would miss future
+internal sources.
+
+### 7.26 Smoke "wait for in-flight" anchor pattern (d38 fix)
+
+Many smoke sub-tests need to assert state during an in-flight async
+operation (e.g. "5m prefetch is mid-flight when the user clicks
+drill-down"). The naive pattern was:
+
+```python
+state["delay_5m"] = 0.4
+app._schedule_reload(delay_ms=0)
+_pump(app, 0.05)  # ← hope the worker started in 50ms
+assert (src, ticker, "5m") not in app._full_cache  # ← brittle
+```
+
+This races the multi-hop chain `_schedule_reload` →
+`_load_data_async` → `_prefetch_companion_intervals` → executor
+pickup → `slow_fetch`. On a slow runner or under contention the
+worker hasn't started yet; on a fast runner or under recent perf
+improvements (worker-side merge+save, deferred events) the worker
+finished before the 50ms pump completes. **Both directions cause
+flakes.**
+
+**Robust pattern** (used in `check_d38_drilldown_race_and_coverage`
+sub-tests A, C-H, commit `3cf0790`):
+
+```python
+def wait_for_5m_inflight(timeout: float = 3.0) -> bool:
+    """Pump until state['calls_5m'] increments — proves slow_fetch
+    worker is actually mid-sleep before the test clicks drill-down."""
+    return _pump_until(
+        app,
+        lambda: state["calls_5m"] >= 1,
+        timeout=timeout,
+    )
+
+# ...
+state["delay_5m"] = 2.0  # generous, worker can stay mid-sleep
+app._schedule_reload(delay_ms=0)
+_pump(app, 0.05)
+worker_started = wait_for_5m_inflight(timeout=3.0)
+if not worker_started:
+    print("[SKIP X] worker did not start within 3s; race path not "
+          "exercisable on this run — see sub-test Y for variant.")
+else:
+    # ...actual sub-test body...
+```
+
+**Three rules:**
+1. **Anchor on an observable counter** (here `state["calls_5m"]`)
+   that increments at the TOP of the stubbed slow_fetch (before
+   its cancellable sleep). That counter advancing proves the worker
+   is genuinely mid-sleep.
+2. **Bump the delay generously** — 2-5s — so the worker stays
+   mid-sleep through click + grace + UI-deadline + ERROR window
+   even on contended CI executors.
+3. **Skip gracefully when the anchor can't be hit.** Log a clear
+   `[SKIP X reason]` message and continue with the rest of the
+   sub-tests. The race-handling code is exercised by sibling
+   sub-tests with different timing windows; a skip on any one
+   doesn't leave the code unverified.
+
+**Perf-budget assertions: use min-of-N, not median-of-N.** Smoke
+perf checks (e.g. `check_d59 sub-test M`) flake under full-suite
+contention because the median sample is pushed up 5-10× by GC
+pauses + GIL contention + memory pressure from concurrent tests.
+Switch from `median(samples_ms) < BUDGET` to `min(samples_ms) <
+BUDGET` with a larger sample count (11+) — the min represents
+"best-case algorithmic timing" which:
+- catches real regressions (which slow every sample, including min)
+- ignores transient noise (which only slows SOME samples)
+
+See `check_d59` sub-test M for the canonical example (min-of-11 <
+500ms catches any ~14× regression over the 35ms baseline).
+
+**Out of scope:** the mega-test
+(`tests/smoke/test_smoke_full.py::test_smoke_full`) has additional
+intermittent flakes from 60+ checks sharing a single ChartApp's
+accumulated state. The per-feature smoke gate (140 tests across
+`test_smoke_<feature>.py` files) is the canonical pre-push gate;
+the mega-test is best-effort coverage.
+
 ---
 
 ## 8. Build & release flow
@@ -1398,7 +1589,16 @@ These files are **never** committed to git. Use them for working memory.
 |---|---|
 | Version number | `src/tradinglab/_version.py` |
 | App entry point | `src/tradinglab/__main__.py` → `app.py` `ChartApp` |
+| ChartApp MRO declaration | `src/tradinglab/app.py:229-250` (18 mixins + `tk.Tk`; see §7.24) |
+| Drawing canvas-menu + Alt+H + snap helpers | `src/tradinglab/gui/drawings_app.py` (DrawingsAppMixin, wave 1) |
+| Live-price overlay glue | `src/tradinglab/gui/live_price_overlay_app.py` (LivePriceOverlayAppMixin) |
+| Recent-symbols / recent-intervals menus | `src/tradinglab/gui/recent_menus.py` (RecentMenusMixin) |
+| Chart snapshot save flow | `src/tradinglab/gui/snapshot.py` (SnapshotMixin) |
+| Config menu handlers + close-when-dirty | `src/tradinglab/gui/config_menu.py` (ConfigMenuMixin, wave 2) |
+| Update-check banner + banner cleanup | `src/tradinglab/gui/update_check.py` (UpdateCheckMixin, wave 2) |
+| Sandbox property aliases | `src/tradinglab/backtest/sandbox_app_aliases.py` (SandboxAliasMixin, wave 2) |
 | Fetch executor / cache | `src/tradinglab/data/fetch_service.py`, `app.py` `_load_data_async` / `_load_events_async` |
+| Data source registry + `internal` flag | `src/tradinglab/data/base.py` (see §7.25 — `register_source(..., internal=True)`, `user_visible_sources()`) |
 | Polling / next-bar tick | `src/tradinglab/gui/polling.py` |
 | Dialogs (Settings, Watchlist, Credentials) | `src/tradinglab/gui/dialogs.py`, `gui/credentials_dialog.py`, `gui/watchlist_dialog.py` |
 | Menus | `src/tradinglab/gui/help_menu.py`, `gui/file_menu.py`, etc. |
@@ -1418,6 +1618,7 @@ These files are **never** committed to git. Use them for working memory.
 | Build wrapper | `tools/build_exe.ps1` |
 | Onboarding docs | `docs/ONBOARDING.md` |
 | Build docs | `docs/BUILDING_EXE.md` |
+| Paint-pipeline refactor scope | `docs/PAINT_PIPELINE_REFACTOR.md` (multi-week, requires user-design session) |
 
 ---
 
@@ -1442,9 +1643,32 @@ guessing — recent checkpoints include:
   + multi-row Recent Runs delete + trade-count fill-vs-trade fix
 - Strategy Tester: HTML report screenshot links + PDF page-1
   formatting + per-year 1970 + equity-curve x-axis fixes
+- LRUDict + JsonObjectStore + JsonListStore primitives (§7.21, §7.22) +
+  migrations (entries, exits, scanner, positions); deferred:
+  watchlists (consolidated envelope), strategy_tester (dir-per-Run)
+- Shared entry-dispatch (§7.20) — live + mechanical evaluators now
+  share `_ENTRY_DISPATCH` registry; adding a new TriggerKind = single
+  registry insert
+- Auto-stack ConditionFrame (§7.19) + scrollable-form helper + global
+  BaseModalDialog migration (19 dialogs) closing the §7.11 wheel-guard
+  landmine codebase-wide
+- Ticker-switch perf sprint: wall-clock 609ms → 184ms (-70%) via
+  worker-side merge+save + await poll 20→5ms + deferred events_async
+- App.py god-file mixin extraction waves 1+2: 7790 → 6147 LOC
+  (-21.1%); 7 new mixins shipped, MRO now 18 mixins + `tk.Tk`
+  (commits `358ad16` through `9393301`, see §7.24)
+- Smoke flake fixes: d38 drilldown race + d59 RVOL perf budget
+  loosened via wait-for-in-flight anchor + min-of-N statistic
+  (commit `3cf0790`, see §7.26)
+- Internal data sources hidden from UI: synthetic / synthetic-stream
+  filtered from toolbar + Settings dropdown via
+  `register_source(internal=True)` (commit `9fb2c96`, see §7.25)
 
 ---
 
-*Last updated: 2026-05-23. If you change the build/test/release flow,
+*Last updated: 2026-05-28. If you change the build/test/release flow,
 update §3 / §4 / §8 in the same PR. Strategy Tester landmines are in
-§7.7–§7.10 — read those before touching `strategy_tester/`.*
+§7.7–§7.10 — read those before touching `strategy_tester/`. App.py
+mixin extraction conventions are in §7.24; if you extract a new mixin,
+also update the §2 layout tree, the §11 cheatsheet, the §12 prior
+context, and add a colocated `.spec.md`.*

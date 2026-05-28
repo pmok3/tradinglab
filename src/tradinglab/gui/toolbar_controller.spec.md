@@ -16,6 +16,7 @@ Move the top toolbar widget construction out of `app.py` while keeping the exist
   - Builds the packed toolbar widgets.
   - Exposes `frame` for the host to pack.
   - Exposes compatibility widget handles used elsewhere (`ticker_label`, `compare_label`, `compare_check`, `source_combo`, `interval_combo`, `prepost_tooltip`).
+  - `sources` is the user-visible source list (callers MUST pass `data.user_visible_sources()`, NOT `data.DATA_SOURCES.keys()`, so internal-only sources like `synthetic` / `synthetic-stream` are filtered out of the combobox — see `data/base.spec.md`).
 - `lock_for_sandbox(allowed_intervals)` — temporarily restrict the interval combobox values.
 - `unlock()` — restore the saved full interval list.
 

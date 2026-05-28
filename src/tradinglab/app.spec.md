@@ -175,8 +175,12 @@ helper-mixin methods on `HelpMenuMixin`:
   cache.
 
 `_refresh_data_source_combobox()` delegates to
-`self._toolbar.set_sources(tuple(DATA_SOURCES.keys()))` — defined on
-`ToolbarController` for this purpose.
+`self._toolbar.set_sources(tuple(user_visible_sources()))` — defined on
+`ToolbarController` for this purpose. The helper filters out
+`internal=True` registrations (synthetic / synthetic-stream) so the
+toolbar dropdown never offers a scaffolding-only source. See
+`data/base.spec.md` for the `register_source(..., internal=False)`
+contract.
 
 ### Startup parameters (persisted defaults)
 Settings dialog → "Startup parameters" sub-frame. Builtins: `constants.BUILTIN_STARTUP_DEFAULTS` (AMD / SPY / 1d / yfinance / light). Stored sparsely under `settings.json["startup_defaults"]`. `constants.resolve_startup_defaults(...)` validates per-key (interval / source allow-lists, theme ∈ {light, dark}, ticker upper-strip). Public: `set_startup_default` / `clear_startup_defaults` / `replace_startup_defaults`. Changes apply on next launch.
