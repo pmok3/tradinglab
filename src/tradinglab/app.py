@@ -40,6 +40,7 @@ from matplotlib.figure import Figure
 from . import disk_cache
 from . import settings as _settings
 from .backtest.sandbox_app import SandboxAppController
+from .backtest.sandbox_app_aliases import SandboxAliasMixin
 from .constants import (
     BUILTIN_STARTUP_DEFAULTS,
     LIGHT_THEME,
@@ -243,6 +244,7 @@ class ChartApp(
     DrawingsAppMixin,
     LivePriceOverlayAppMixin,
     RecentMenusMixin,
+    SandboxAliasMixin,
     SnapshotMixin,
     UpdateCheckMixin,
     tk.Tk,
@@ -1837,54 +1839,6 @@ class ChartApp(
         self._set_sandbox_alias(
             "last_screenshot_dir", "__sandbox_last_screenshot_dir", value,
         )
-
-    @property
-    def _sandbox_panel(self):
-        return self._get_sandbox_alias("panel", "__sandbox_panel")
-
-    @_sandbox_panel.setter
-    def _sandbox_panel(self, value) -> None:
-        self._set_sandbox_alias("panel", "__sandbox_panel", value)
-
-    @property
-    def _sandbox_panel_window(self) -> tk.Toplevel | None:
-        return self._get_sandbox_alias("panel_window", "__sandbox_panel_window")
-
-    @_sandbox_panel_window.setter
-    def _sandbox_panel_window(self, value: tk.Toplevel | None) -> None:
-        self._set_sandbox_alias("panel_window", "__sandbox_panel_window", value)
-
-    @property
-    def _sandbox_tag_store(self):
-        return self._get_sandbox_alias("tag_store", "__sandbox_tag_store")
-
-    @_sandbox_tag_store.setter
-    def _sandbox_tag_store(self, value) -> None:
-        self._set_sandbox_alias("tag_store", "__sandbox_tag_store", value)
-
-    @property
-    def _sandbox_universe(self) -> frozenset:
-        return self._get_sandbox_alias("universe", "__sandbox_universe", frozenset())
-
-    @_sandbox_universe.setter
-    def _sandbox_universe(self, value: frozenset) -> None:
-        self._set_sandbox_alias("universe", "__sandbox_universe", value)
-
-    @property
-    def _sandbox_universe_id(self) -> str:
-        return self._get_sandbox_alias("universe_id", "__sandbox_universe_id", "")
-
-    @_sandbox_universe_id.setter
-    def _sandbox_universe_id(self, value: str) -> None:
-        self._set_sandbox_alias("universe_id", "__sandbox_universe_id", value)
-
-    @property
-    def _sandbox_strict_offline(self) -> bool:
-        return bool(self._get_sandbox_alias("strict_offline", "__sandbox_strict_offline", False))
-
-    @_sandbox_strict_offline.setter
-    def _sandbox_strict_offline(self, value: bool) -> None:
-        self._set_sandbox_alias("strict_offline", "__sandbox_strict_offline", value)
 
     def _bump_fetch_token(self) -> int:
         token = self._data_ctrl.bump_token()
@@ -6387,15 +6341,6 @@ class ChartApp(
             manager.refresh_title(**kwargs)
             return
         ConfigManager.refresh_title_for(**kwargs)
-
-    # ------------------------------------------------------------------
-    # Feature B — sandbox auto-resume + update-check helpers
-    # ------------------------------------------------------------------
-    def _maybe_write_sandbox_resume_metadata(self) -> None:
-        self._sandbox_ctrl.maybe_write_resume_metadata()
-
-    def _maybe_prompt_sandbox_resume(self) -> None:
-        self._sandbox_ctrl.maybe_prompt_resume(app=self)
 
     def _on_close(self) -> None:
         """Stop stream, cancel after jobs, shut down executor, destroy."""

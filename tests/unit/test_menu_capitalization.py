@@ -30,6 +30,23 @@ from pathlib import Path
 
 APP_PY = Path(__file__).resolve().parents[2] / "src" / "tradinglab" / "app.py"
 
+# Several menu labels have migrated out of app.py during the mixin
+# extraction sprints (wave 1: DrawingsAppMixin, RecentMenusMixin;
+# wave 2: ConfigMenuMixin etc.). The pinned-literal sweep below
+# searches across app.py + any mixin file the wave authors flagged
+# as a relocation target.
+_EXTRACTED_MIXIN_PATHS = [
+    APP_PY.parent / "gui" / "drawings_app.py",
+    APP_PY.parent / "gui" / "recent_menus.py",
+    APP_PY.parent / "gui" / "interaction.py",
+    APP_PY.parent / "gui" / "config_menu.py",
+    APP_PY.parent / "gui" / "update_check.py",
+    APP_PY.parent / "gui" / "snapshot.py",
+    APP_PY.parent / "gui" / "live_price_overlay_app.py",
+    APP_PY.parent / "backtest" / "sandbox_app_aliases.py",
+]
+_PINNED_SOURCES = [APP_PY] + _EXTRACTED_MIXIN_PATHS
+
 
 # ---------------------------------------------------------------------------
 # 1) Pinned-string sweep
@@ -80,12 +97,14 @@ FORBIDDEN_OLD_LABELS = (
 
 
 def test_required_titlecase_labels_present_in_app_py() -> None:
-    src = APP_PY.read_text(encoding="utf-8")
+    src = "\n".join(
+        p.read_text(encoding="utf-8") for p in _PINNED_SOURCES if p.exists()
+    )
     missing = [s for s in REQUIRED_LITERALS if s not in src]
     assert not missing, (
         "menu-capitalization regression: these Title-Case labels are no "
-        f"longer present in app.py: {missing!r}. Did a refactor revert "
-        "the audit fix?"
+        f"longer present in app.py (or extracted mixins): {missing!r}. "
+        "Did a refactor revert the audit fix?"
     )
 
 
