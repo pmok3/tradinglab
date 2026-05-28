@@ -117,6 +117,7 @@ from .gui.named_fonts import (
 
 # Polling / scheduling lives in ``gui.polling``.
 from .gui.polling import PollingMixin
+from .gui.recent_menus import RecentMenusMixin
 from .gui.sandbox_menu import SandboxMenuMixin
 from .gui.splash import (
     STAGE_BUILDING_UI,
@@ -236,6 +237,7 @@ class ChartApp(
     FirstRunBannerMixin,
     DrawingsAppMixin,
     LivePriceOverlayAppMixin,
+    RecentMenusMixin,
     tk.Tk,
 ):
     """Top-level Tk window hosting the chart, controls, and data flow."""
@@ -6507,32 +6509,6 @@ class ChartApp(
 
     def _on_menu_save_watchlists_as(self) -> None:
         self._config_manager.save_watchlists_as(self)
-
-    def _push_recent(self, kind: str, path: Any) -> None:
-        self._config_manager.push_recent(kind, path)
-
-    def _refresh_recent_menu(
-        self,
-        menu: tk.Menu,
-        kind: str,
-        *,
-        on_pick: Any,
-    ) -> None:
-        self._config_manager.refresh_recent_menu(
-            menu,
-            kind,
-            on_pick,
-            clear_label="Clear List",
-        )
-
-    def _clear_recent_kind(self, kind: str) -> None:
-        self._config_manager.clear_recent_kind(kind)
-
-    def _on_recent_config_pick(self, path: str) -> None:
-        self._config_manager.on_recent_config_pick(self, path)
-
-    def _on_recent_watchlist_pick(self, path: str) -> None:
-        self._config_manager.on_recent_watchlist_pick(self, path)
 
     def _confirm_close_when_dirty(self) -> bool:
         manager = getattr(self, "_config_manager", None)
