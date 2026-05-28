@@ -82,6 +82,7 @@ from .gui.app_state import AppState
 from .gui.banner import FirstRunBannerMixin
 from .gui.chart_renderer import ChartRenderer
 from .gui.config_manager import ConfigManager
+from .gui.config_menu import ConfigMenuMixin
 from .gui.dialog_manager import DialogManager
 
 # ``_SettingsDialog`` / ``_WatchlistDialog`` are constructed only when the
@@ -233,6 +234,7 @@ class ChartApp(
     WorkerPoolMixin,
     IndicatorMenuMixin,
     SandboxMenuMixin,
+    ConfigMenuMixin,
     DrilldownMixin,
     EntriesAppMixin,
     ExitsAppMixin,
@@ -6384,41 +6386,6 @@ class ChartApp(
             manager.refresh_title(**kwargs)
             return
         ConfigManager.refresh_title_for(**kwargs)
-
-    def _apply_loaded_config(self) -> None:
-        self._config_manager.apply_loaded_config(self)
-
-    def _on_menu_load_config(self) -> None:
-        self._config_manager.load_config(self)
-
-    def _on_menu_save_config(self) -> None:
-        self._config_manager.save_config(self)
-
-    def _on_menu_save_config_as(self) -> None:
-        self._config_manager.save_config_as(self)
-
-    # ----------------------------------------------------------------- watchlists
-
-    def _on_menu_load_watchlists(self) -> None:
-        self._config_manager.load_watchlists(self)
-
-    def _on_menu_save_watchlists(self) -> None:
-        self._config_manager.save_watchlists(self)
-
-    def _on_menu_save_watchlists_as(self) -> None:
-        self._config_manager.save_watchlists_as(self)
-
-    def _confirm_close_when_dirty(self) -> bool:
-        manager = getattr(self, "_config_manager", None)
-        kwargs = dict(
-            parent=self,
-            watchlists=getattr(self, "_watchlists", None),
-            save_config=getattr(self, "_on_menu_save_config", None),
-            save_watchlists=getattr(self, "_on_menu_save_watchlists", None),
-        )
-        if manager is not None:
-            return manager.confirm_close_when_dirty(**kwargs)
-        return ConfigManager.confirm_close_when_dirty_for(**kwargs)
 
     # ------------------------------------------------------------------
     # Feature B — sandbox auto-resume + update-check helpers
