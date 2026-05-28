@@ -81,7 +81,8 @@ def test_copy_price_clipboard_format_stays_machine_parseable() -> None:
     locale-specific decimal vs. thousand-separator confusion that
     ensues is exactly the kind of nit the audit's reviewer persona
     would file a 1-star review over)."""
-    src = (SRC / "app.py").read_text(encoding="utf-8")
+    src = (SRC / "app.py").read_text(encoding="utf-8") + "\n" + (
+        SRC / "gui" / "drawings_app.py").read_text(encoding="utf-8")
     # Find both ``_copy_price`` callbacks and verify their format
     # strings are bare ``:.2f`` (no comma).
     copy_price_block = re.search(

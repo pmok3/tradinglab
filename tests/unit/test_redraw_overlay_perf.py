@@ -144,8 +144,16 @@ def test_clear_drawing_artists_ignores_no_gid_artists():
 # ChartApp._repaint_drawings_only — source wiring
 # ---------------------------------------------------------------------------
 
-APP_SRC = (Path(__file__).resolve().parents[2]
-           / "src" / "tradinglab" / "app.py").read_text(encoding="utf-8")
+_SRC_ROOT = Path(__file__).resolve().parents[2] / "src" / "tradinglab"
+# Drawing-event subscriber + fast-path repaint were extracted from
+# app.py to gui/drawings_app.py (DrawingsAppMixin). Concatenate
+# both sources so the source pins below still anchor on the
+# production code path.
+APP_SRC = (
+    (_SRC_ROOT / "app.py").read_text(encoding="utf-8")
+    + "\n"
+    + (_SRC_ROOT / "gui" / "drawings_app.py").read_text(encoding="utf-8")
+)
 
 
 def test_chartapp_defines_repaint_drawings_only():

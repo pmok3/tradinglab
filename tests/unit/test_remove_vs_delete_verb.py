@@ -29,12 +29,22 @@ import tradinglab
 import tradinglab.app
 import tradinglab.drawings.store
 import tradinglab.gui.drawing_dialog
+import tradinglab.gui.drawings_app
 import tradinglab.gui.help_menu
 import tradinglab.gui.interaction
 
 
 def _read(mod) -> str:
-    return Path(mod.__file__).read_text(encoding="utf-8")
+    text = Path(mod.__file__).read_text(encoding="utf-8")
+    # Canvas-menu + per-line context menu builders were extracted
+    # from app.py to gui/drawings_app.py (DrawingsAppMixin).
+    # Concatenate so the verb-convention pins still anchor on the
+    # production code path.
+    if mod is tradinglab.app:
+        text += "\n" + Path(
+            tradinglab.gui.drawings_app.__file__
+        ).read_text(encoding="utf-8")
+    return text
 
 
 # ---------------------------------------------------------------------------

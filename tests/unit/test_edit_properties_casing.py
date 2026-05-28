@@ -23,7 +23,15 @@ import tradinglab
 
 def _read(rel: str) -> str:
     pkg = Path(tradinglab.__file__).resolve().parent
-    return (pkg / rel).read_text(encoding="utf-8")
+    text = (pkg / rel).read_text(encoding="utf-8")
+    # The drawing right-click context menu was extracted from app.py
+    # to gui/drawings_app.py (DrawingsAppMixin). Concatenate when
+    # reading app.py so casing pins still anchor on the production
+    # code path.
+    if rel == "app.py":
+        text += "\n" + (pkg / "gui" / "drawings_app.py").read_text(
+            encoding="utf-8")
+    return text
 
 
 class TestEditPropertiesCasing:

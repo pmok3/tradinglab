@@ -131,11 +131,18 @@ def test_default_threshold_is_eight():
 # ChartApp integration — source pin
 # ---------------------------------------------------------------------------
 
-APP_SRC = (Path(__file__).resolve().parents[2]
-           / "src" / "tradinglab" / "app.py").read_text(encoding="utf-8")
-DIALOGS_SRC = (Path(__file__).resolve().parents[2]
-               / "src" / "tradinglab" / "gui" / "dialogs.py").read_text(
-                   encoding="utf-8")
+_SRC_ROOT = Path(__file__).resolve().parents[2] / "src" / "tradinglab"
+# Drawing canvas-menu / Alt+H placement / snap helpers were extracted
+# from app.py to gui/drawings_app.py (DrawingsAppMixin). Concatenate
+# both sources so the per-mixin source pins below still anchor on
+# the production code path regardless of which file holds the
+# extracted method.
+APP_SRC = (
+    (_SRC_ROOT / "app.py").read_text(encoding="utf-8")
+    + "\n"
+    + (_SRC_ROOT / "gui" / "drawings_app.py").read_text(encoding="utf-8")
+)
+DIALOGS_SRC = (_SRC_ROOT / "gui" / "dialogs.py").read_text(encoding="utf-8")
 
 
 def test_chartapp_loads_snap_setting_at_init():
