@@ -22,7 +22,13 @@ Normalization + parallelism helpers (shared across providers)::
 """
 
 from .alpaca_source import candles_from_alpaca_response, fetch_alpaca_data
-from .base import DATA_SOURCES, DataFetcher, register_source
+from .base import (
+    DATA_SOURCES,
+    DataFetcher,
+    is_internal_source,
+    register_source,
+    user_visible_sources,
+)
 from .controller import DataController
 from .credentials import (
     AlpacaCredentials,
@@ -47,10 +53,16 @@ from .synthetic_source import fetch_synthetic_data, fetch_synthetic_stream_boots
 from .yfinance_source import fetch_live_data
 
 # Register the built-ins in the same order the old flat module did — the
-# UI's default source selection keys off the first entry (``yfinance``).
+# UI's default source selection keys off the first user-visible entry
+# (``yfinance``). The synthetic sources stay in DATA_SOURCES so smoke
+# tests / sandbox replay / offline scaffolding can still dispatch to
+# them programmatically (via ``DATA_SOURCES["synthetic"]``), but the
+# ``internal=True`` flag keeps them out of the source-selector
+# combobox and the Settings → Startup parameters source dropdown so
+# the end user never sees an option meant for internal use.
 register_source("yfinance", fetch_live_data)
-register_source("synthetic", fetch_synthetic_data)
-register_source("synthetic-stream", fetch_synthetic_stream_bootstrap)
+register_source("synthetic", fetch_synthetic_data, internal=True)
+register_source("synthetic-stream", fetch_synthetic_stream_bootstrap, internal=True)
 
 # Register OAuth/API-key vendors only when credentials are present, so
 # the source-selector dropdown stays uncluttered for users who only
@@ -133,6 +145,8 @@ __all__ = [
     "DataController",
     "FetchService",
     "register_source",
+    "is_internal_source",
+    "user_visible_sources",
     "register_local_sources",
     "make_local_fetcher",
     "discover_subsources",

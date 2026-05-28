@@ -20,7 +20,7 @@ from ..constants import (
     INTERVAL_PERIODS,
     STARTUP_DEFAULT_KEYS,
 )
-from ..data import DATA_SOURCES
+from ..data import user_visible_sources
 from ..watchlists import (
     WatchlistManager,
 )
@@ -467,7 +467,11 @@ class _SettingsDialog(BaseModalDialog):
         against, so the user can't pick something the loader will drop.
         """
         intervals = list(INTERVAL_PERIODS.keys())
-        sources = list(DATA_SOURCES.keys())
+        # Use the user-visible source list so the Settings dropdown
+        # mirrors the toolbar combobox — synthetic / synthetic-stream
+        # are dispatchable programmatically (smoke tests, sandbox
+        # replay) but never user-selectable.
+        sources = user_visible_sources()
         choices_by_key = {
             "interval": intervals,
             "source": sources,

@@ -4,7 +4,7 @@ import tkinter as tk
 
 from .. import defaults as _defaults
 from .. import settings as _settings
-from ..data import DATA_SOURCES
+from ..data import DATA_SOURCES, is_internal_source, user_visible_sources
 from ..watchlists import DEFAULT_WATCHLIST_NAME as _DEFAULT_WATCHLIST_NAME
 
 _DEFAULT_TICKER = "AMD"
@@ -89,7 +89,16 @@ class AppState:
 
     @staticmethod
     def _resolve_source(startup_defaults: dict[str, str]) -> str:
+        """Resolve the active data source from persisted startup defaults.
+
+        Demotes to the first user-visible source if the persisted value
+        is missing, unregistered, or flagged internal (e.g. an old
+        settings.json from when synthetic was user-selectable). Final
+        fallback is the literal ``"yfinance"`` so a degenerate
+        DATA_SOURCES (empty in unit tests) doesn't crash app startup.
+        """
         source = startup_defaults.get("source", "")
-        if source not in DATA_SOURCES:
-            return next(iter(DATA_SOURCES), "synthetic")
+        if not source or source not in DATA_SOURCES or is_internal_source(source):
+            visible = user_visible_sources()
+            return visible[0] if visible else "yfinance"
         return source

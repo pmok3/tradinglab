@@ -4,10 +4,12 @@
 Aggregates the data-source plugins (yfinance, synthetic, synthetic-stream bootstrap) into a single importable registry. Also re-exports the normalization helpers (`candles_from_dataframe`, `CandleArrays`, `stash_arrays`/`pop_prebuilt_arrays`) and the parallel-fetch primitive, all at `tradinglab.data.*` for backward compatibility with the flat pre-split layout (`tradinglab.data_sources`).
 
 ## Public API
-- `DATA_SOURCES: Dict[str, DataFetcher]` — the registry, re-exported from `.base`. UI uses the first inserted key as default.
+- `DATA_SOURCES: Dict[str, DataFetcher]` — the registry, re-exported from `.base`. Holds EVERY registered source including internal ones (synthetic / synthetic-stream). Smoke tests and sandbox replay dispatch through it directly.
+- `user_visible_sources() -> list[str]` — re-exported from `.base`; the subset of `DATA_SOURCES` keys safe to show in user UI surfaces (toolbar combobox, Settings → Startup parameters dropdown). Excludes synthetic / synthetic-stream (registered with `internal=True`). First entry remains the default.
+- `is_internal_source(name) -> bool` — re-exported from `.base`; True for `"synthetic"` and `"synthetic-stream"`.
 - `DataFetcher` — type alias `Callable[[str, str], Optional[List[Candle]]]`.
-- `register_source(name, fetcher)` — imperative registration.
-- `fetch_live_data` (yfinance), `fetch_synthetic_data`, `fetch_synthetic_stream_bootstrap` — the three deterministically-registered built-in fetchers.
+- `register_source(name, fetcher, *, internal=False)` — imperative registration. Pass `internal=True` to keep the source out of every user-facing dropdown.
+- `fetch_live_data` (yfinance), `fetch_synthetic_data`, `fetch_synthetic_stream_bootstrap` — the three deterministically-registered built-in fetchers. **Synthetic sources are registered with `internal=True`** so the end user never sees an option meant for offline testing / sandbox replay.
 - `fetch_schwab_data`, `fetch_alpaca_data`, `fetch_polygon_data` — vendor adapters. `"alpaca"` and `"polygon"` are registered when their respective credentials are available, else inert. **`"schwab"` is currently NOT registered** even when credentials are configured — `schwab_source._http_get_pricehistory` is still a `NotImplementedError` stub, so the registration line in `data/__init__.py` is commented out to keep a broken option out of the source-selector dropdown. Re-enable once the REST GET lands. Each adapter builds requests against the vendor's REST endpoint and routes the response through `candles_from_json_rows` for normalization.
 - `candles_from_schwab_response`, `candles_from_alpaca_response`, `candles_from_polygon_response` — vendor-specific response-shape adapters that produce the `(rows, keymap, ts_unit)` triple consumed by `candles_from_json_rows`. Exported for unit-testing parity with the live adapters.
 - `candles_from_dataframe`, `candles_from_json_rows`, `CandleArrays`, `pop_prebuilt_arrays`, `stash_arrays` — normalization surface (see `data/normalize.spec.md`).
@@ -45,7 +47,10 @@ Aggregates the data-source plugins (yfinance, synthetic, synthetic-stream bootst
   responsiveness identically to remote sources.
 
 ## Invariants
-- `next(iter(DATA_SOURCES))` is `"yfinance"` on fresh package load.
+- `next(iter(user_visible_sources()))` is `"yfinance"` on fresh package load (synthetic sources are filtered out by their `internal=True` flag).
+- `next(iter(DATA_SOURCES))` is also `"yfinance"` on fresh package load (registration order: yfinance → synthetic → synthetic-stream → credentialed vendors → BYOD).
+- `"synthetic" in DATA_SOURCES` and `"synthetic-stream" in DATA_SOURCES` are True at runtime (smoke tests and sandbox replay dispatch through the registry directly).
+- `"synthetic" not in user_visible_sources()` and `"synthetic-stream" not in user_visible_sources()` — they never appear in the toolbar combobox or Settings → Startup parameters source dropdown.
 - `fetch_live_data`, `fetch_synthetic_data`, `fetch_synthetic_stream_bootstrap` all match the `DataFetcher` shape.
 
 ## Testing

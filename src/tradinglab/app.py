@@ -59,7 +59,7 @@ from .core.viewport import (
 from .core.viewport import (
     remap_window_by_time as _remap_window_by_time,
 )
-from .data import DATA_SOURCES, DataController, FetchService
+from .data import DATA_SOURCES, DataController, FetchService, user_visible_sources
 from .data.stream_controller import StreamController
 from .data.today_upsample import (
     SUPPORTED_INTERVALS as _DAILY_UPSAMPLE_INTERVALS,
@@ -458,7 +458,7 @@ class ChartApp(
         self._config_manager = ConfigManager(
             self,
             _INTERVALS,
-            list(DATA_SOURCES.keys()),
+            user_visible_sources(),
         )
         sd = self._startup_defaults
 
@@ -989,7 +989,7 @@ class ChartApp(
             self._state,
             callbacks=self,
             intervals=_INTERVALS,
-            sources=tuple(DATA_SOURCES.keys()),
+            sources=tuple(user_visible_sources()),
         )
         self._toolbar.frame.pack(side=tk.TOP, fill=tk.X)
         self._ticker_label = self._toolbar.ticker_label
@@ -6318,12 +6318,15 @@ class ChartApp(
         """Repopulate the source combobox after BYOD registrations change.
 
         Called by ``_on_help_configure_local_data`` once the local-data
-        dialog finishes saving. Reads the current ``DATA_SOURCES`` keys
-        (post-`register_local_sources()`) and pushes them into the
-        toolbar widget. Selection is preserved if still valid.
+        dialog finishes saving. Reads the current user-visible source
+        list (post-``register_local_sources()``) and pushes it into
+        the toolbar widget. Selection is preserved if still valid.
+        Internal-flagged sources (synthetic / synthetic-stream) are
+        always filtered out — they are dispatchable programmatically
+        but never user-selectable.
         """
         try:
-            self._toolbar.set_sources(tuple(DATA_SOURCES.keys()))
+            self._toolbar.set_sources(tuple(user_visible_sources()))
         except Exception:  # noqa: BLE001
             pass
 
