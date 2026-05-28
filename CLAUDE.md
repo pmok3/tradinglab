@@ -599,7 +599,14 @@ for future perf work.
 `_render()` figure rebuild + matplotlib re-draw. The deepest
 perf wins from here require the deferred multi-week items
 (``_render()`` partial-update path, topology-preserving paint
-pipeline) — see "Architectural items deferred" in checkpoint 005.
+pipeline). **The topology-preserving paint pipeline is fully
+scoped in [`docs/PAINT_PIPELINE_REFACTOR.md`](../docs/PAINT_PIPELINE_REFACTOR.md)**
+— ~3-5 focused days of work with explicit staging (Stages 1-7),
+test coverage requirements, and risk inventory. Read that doc
+before starting; the refactor is NOT autopilot-friendly because
+`_panel_state` is read from 14+ sites and every transition
+(compare toggle, indicator add, interval change, drill-down) is
+a potential silent regression in pan/zoom/streaming.
 
 ### 7.15 Strategy Tester exports (PDF/HTML/CSV) run on a background thread
 `strategy_tester.export.export_pdf` renders 3 fixed pages (cover +
