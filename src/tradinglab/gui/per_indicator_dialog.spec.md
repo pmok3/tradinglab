@@ -90,6 +90,18 @@ popup can never drift from the canonical editor.
 - **No geometry persistence**. Center-on-cursor on open. Persisting
   popup geometry by `IndicatorConfig.id` would silently apply a
   saved position to an unrelated indicator after a preset load.
+- **Screen-aware content fit**. The popup starts from the compact
+  default geometry but calls `_fit_to_content()` after initial row
+  reconciliation, after kind changes, and before centering. The helper
+  measures the row's requested size, clamps to the current screen
+  (`screen_width - 40`, `screen_height - 80`), then reflows the
+  inherited parameter grid at the final width. Unlike the full manager
+  dialog, focused popups force a single parameter column for
+  readability and guaranteed reachability; parameter-heavy indicators
+  such as RRVOL grow vertically instead of risking clipped right-edge
+  widgets on lower-resolution displays. The interval checkbox strip is
+  also wrapped with a conservative popup-specific budget, so the full
+  interval list remains visible instead of running off the right edge.
 - **Window title mirrors `display_name`**. `_refresh_title()` re-runs
   on every `update` event on the tracked config. Base
   `_on_manager_event` is super()-chained to keep the auto-close path
@@ -117,6 +129,9 @@ popup can never drift from the canonical editor.
    the underlying config has 2+ scopes from `SCOPES`. Unmapped
    immediately after a successful split.
 8. `_scope_split_done` is monotonic: once True, never reset.
+9. Popup width never exceeds the screen clamp returned by
+   `_popup_size_for_content`; small content still respects the compact
+   minimum size.
 
 ## Data Flow
 

@@ -1,0 +1,74 @@
+{
+  "arm_window_end": "15:30",
+  "arm_window_start": "09:35",
+  "cooldown_secs": 60,
+  "created_at": "2026-05-29T21:56:00Z",
+  "created_with": {
+    "app": "tradinglab",
+    "template": true,
+    "version": "1.0.0"
+  },
+  "direction": "short",
+  "enabled": true,
+  "extra": {
+    "functional_series": "reversal_down",
+    "template_pack": "expanded-2026-05"
+  },
+  "id": "tmpl-sma-20-50-cross-short",
+  "max_fires_per_session_per_symbol": 1,
+  "max_fires_per_session_total": null,
+  "name": "20/50 SMA cross (short)",
+  "on_fill_exit_ids": [],
+  "position_already_open_policy": "block",
+  "require_market_open": true,
+  "schema_version": 1,
+  "sizing": {
+    "kind": "fixed_qty",
+    "qty": 100.0,
+    "share_rounding": "down"
+  },
+  "trigger": {
+    "condition": {
+      "children": [
+        {
+          "enabled": true,
+          "id": "tmpl-sma-20-50-cross-short-c1",
+          "interval": "5m",
+          "left": {
+            "id": "sma",
+            "kind": "indicator",
+            "params": {
+              "length": 20
+            }
+          },
+          "op": "crosses_below",
+          "params": {
+            "lookback": 5,
+            "right": {
+              "id": "sma",
+              "kind": "indicator",
+              "params": {
+                "length": 50
+              }
+            }
+          },
+          "type": "condition"
+        }
+      ],
+      "combinator": "and",
+      "enabled": true,
+      "id": "tmpl-sma-20-50-cross-short-group",
+      "type": "group"
+    },
+    "evaluate_intrabar": false,
+    "id": "tmpl-sma-20-50-cross-short-trigger",
+    "interval": "5m",
+    "kind": "indicator",
+    "label": "20/50 SMA cross (short)",
+    "time_in_force": "day"
+  },
+  "universe": {
+    "from_attached_chart": true
+  },
+  "updated_at": "2026-05-29T21:56:00Z"
+}

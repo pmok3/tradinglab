@@ -1,0 +1,36 @@
+{
+  "description": "EMA 9/20, VWAP, and RSI for pullback continuation setups.",
+  "indicators": [
+    {
+      "id": "ema-9",
+      "kind": "ema",
+      "panel": "overlay",
+      "params": {
+        "length": 9
+      }
+    },
+    {
+      "id": "ema-20",
+      "kind": "ema",
+      "panel": "overlay",
+      "params": {
+        "length": 20
+      }
+    },
+    {
+      "id": "vwap",
+      "kind": "vwap",
+      "panel": "overlay",
+      "params": {}
+    },
+    {
+      "id": "rsi-14",
+      "kind": "rsi",
+      "panel": "rsi",
+      "params": {
+        "length": 14
+      }
+    }
+  ],
+  "name": "Pullback Toolkit"
+}

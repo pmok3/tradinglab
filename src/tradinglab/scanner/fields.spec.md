@@ -89,17 +89,27 @@ relied upon by the colocated tests in `tests/scanner/`.
 
 ### Session-day cache
 
-`hod`, `lod`, and `bars_since_open` all need to know "which bars share
-the same ET calendar date as bar `i`". Computing
+`hod`, `lod`, `time_of_day`, and `bars_since_open` all need session-day
+derivations from `b.timestamps` / `b.session`. Computing
 `b.timestamps.astype("datetime64[D]")` fresh per call was O(N) per bar,
 making scanner evaluation O(N²) over a strategy_tester Run. The
 `_days_for(b)` helper caches one `datetime64[D]` array per `BarsNp` on
 the same `BarsKeyedCache` LRU pattern (max 64 entries, `id(bars)` +
 length key, identity-recycle guard) used by the HA / key-bar clusters.
-`_today_mask` and `_b_bars_since_open` both consume the cached array;
-`_b_bars_since_open` additionally uses `np.searchsorted` over the
-monotonic days array to find today's first bar in O(log N), then
-scans only today's bars for the first regular-session entry.
+
+`_session_day_arrays_for(b)` builds a second cached bundle in one O(N)
+pass:
+
+- prefix high-of-day, skipping non-finite highs,
+- prefix low-of-day, skipping non-finite lows,
+- UTC minutes since midnight,
+- bars since first `session == "regular"` bar of the same calendar day
+  (premarket bars before the first regular print remain `0.0`).
+
+The individual builtins read one scalar from that bundle, so repeated
+per-bar evaluation no longer builds boolean day masks or scans the
+same day prefix. `_today_mask` is retained for tests/back-compat and
+still consumes `_days_for(b)`.
 
 ### Heikin-Ashi builtins
 

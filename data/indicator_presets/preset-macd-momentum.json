@@ -1,0 +1,30 @@
+{
+  "description": "MACD with EMA 20 and VWAP context.",
+  "indicators": [
+    {
+      "id": "macd-12-26-9",
+      "kind": "macd",
+      "panel": "macd",
+      "params": {
+        "fast_length": 12,
+        "signal_length": 9,
+        "slow_length": 26
+      }
+    },
+    {
+      "id": "ema-20",
+      "kind": "ema",
+      "panel": "overlay",
+      "params": {
+        "length": 20
+      }
+    },
+    {
+      "id": "vwap",
+      "kind": "vwap",
+      "panel": "overlay",
+      "params": {}
+    }
+  ],
+  "name": "MACD Momentum"
+}

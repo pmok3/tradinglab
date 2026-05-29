@@ -51,6 +51,7 @@ import math
 import os
 import random
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -95,6 +96,7 @@ BOOTSTRAP_SAMPLES_DEFAULT = 10_000
 # Sample-size thresholds for the GUI's banner system.
 INSUFFICIENT_SAMPLE_THRESHOLD = 30
 LOW_SAMPLE_THRESHOLD = 100
+_ROW_LOAD_WORKER_CAP = 32
 
 # Standard discretionary-trader risk-free rate proxy (annual). The
 # Sharpe ratio is interpreted relative to a deposit account return,
@@ -754,6 +756,7 @@ def aggregate_run(
     bootstrap_samples: int = BOOTSTRAP_SAMPLES_DEFAULT,
     rng_seed: int = 1337,
     interval_overrides: list[str] | None = None,
+    write_csv: bool = False,
 ) -> RunAggregate:
     """Walk ``run_dir/per_symbol/*.json``, compute aggregate, write ``aggregate.json``.
 
@@ -765,6 +768,10 @@ def aggregate_run(
     from ``cfg.interval`` and was rewritten by
     :func:`~tradinglab.strategy_tester.evaluator._normalize_intervals`).
     Surfaced on the report as a banner.
+
+    ``write_csv`` writes ``trades.csv`` from the same loaded
+    :class:`TradeRow` objects used for aggregation, avoiding a second
+    pass over ``per_symbol/*.json`` during runner finalisation.
     """
     run_dir = Path(run_dir)
     manifest = storage.load_manifest(run_dir)
@@ -775,19 +782,7 @@ def aggregate_run(
         )
     cfg = manifest.config
 
-    rows_by_symbol: dict[str, list[TradeRow]] = {}
-    per_symbol_dir = run_dir / "per_symbol"
-    if per_symbol_dir.is_dir():
-        for path in sorted(per_symbol_dir.glob("*.json")):
-            try:
-                result = SessionResult.from_dict(json.loads(path.read_text(encoding="utf-8")))
-            except Exception:
-                # Corrupt per-symbol JSON is logged by the caller; skip.
-                continue
-            sym = path.stem
-            rows = build_trade_rows(result)
-            if rows:
-                rows_by_symbol[sym] = rows
+    rows_by_symbol = _load_rows_by_symbol(run_dir)
 
     agg = compute_aggregate(
         run_id=manifest.run_id,
@@ -798,6 +793,8 @@ def aggregate_run(
         interval_overrides=interval_overrides,
     )
     save_aggregate(run_dir, agg)
+    if write_csv:
+        write_run_csv(run_dir, rows=_flatten_rows(rows_by_symbol))
     return agg
 
 
@@ -840,17 +837,7 @@ def write_run_csv(
     feed Strategy Tester output into the same downstream pipelines.
     """
     if rows is None:
-        rows = []
-        per_symbol_dir = Path(run_dir) / "per_symbol"
-        if per_symbol_dir.is_dir():
-            for path in sorted(per_symbol_dir.glob("*.json")):
-                try:
-                    result = SessionResult.from_dict(
-                        json.loads(path.read_text(encoding="utf-8"))
-                    )
-                except Exception:
-                    continue
-                rows.extend(build_trade_rows(result))
+        rows = _flatten_rows(_load_rows_by_symbol(Path(run_dir)))
     target = Path(run_dir) / TRADES_CSV_FILENAME
     write_trade_rows_csv(rows, csv_path=target)
     return target
@@ -859,6 +846,60 @@ def write_run_csv(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _row_load_workers(file_count: int) -> int:
+    if file_count < 4:
+        return 1
+    cpu = os.cpu_count() or 2
+    return max(1, min(file_count, cpu, _ROW_LOAD_WORKER_CAP))
+
+
+def _load_rows_from_symbol_path(path: Path) -> tuple[str, list[TradeRow]] | None:
+    try:
+        result = SessionResult.from_dict(json.loads(path.read_text(encoding="utf-8")))
+    except Exception:
+        # Corrupt per-symbol JSON is logged by the caller; skip.
+        return None
+    rows = build_trade_rows(result)
+    if not rows:
+        return None
+    return (path.stem, rows)
+
+
+def _load_rows_by_symbol(run_dir: Path) -> dict[str, list[TradeRow]]:
+    per_symbol_dir = Path(run_dir) / "per_symbol"
+    if not per_symbol_dir.is_dir():
+        return {}
+    paths = sorted(per_symbol_dir.glob("*.json"))
+    if not paths:
+        return {}
+
+    workers = _row_load_workers(len(paths))
+    if workers == 1:
+        loaded = (_load_rows_from_symbol_path(path) for path in paths)
+        out: dict[str, list[TradeRow]] = {}
+        for item in loaded:
+            if item is not None:
+                sym, rows = item
+                out[sym] = rows
+        return out
+
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="report-load") as pool:
+        loaded = pool.map(_load_rows_from_symbol_path, paths)
+        out: dict[str, list[TradeRow]] = {}
+        for item in loaded:
+            if item is not None:
+                sym, rows = item
+                out[sym] = rows
+        return out
+
+
+def _flatten_rows(rows_by_symbol: dict[str, list[TradeRow]]) -> list[TradeRow]:
+    rows: list[TradeRow] = []
+    for symbol_rows in rows_by_symbol.values():
+        rows.extend(symbol_rows)
+    return rows
 
 
 def _atomic_write_json(target: Path, payload: dict[str, Any]) -> Path:

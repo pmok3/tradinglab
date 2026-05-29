@@ -4,7 +4,7 @@ A one-spec-per-`.py` documentation set. Each spec follows a fixed 9-section layo
 
 **Style guide:** see [`SPEC_STYLE.md`](SPEC_STYLE.md) for the canonical layout every spec follows.
 
-**Count: 247 specs (one per `.py` module — the count here is the canonical authority; this index table is a curated subset listing the most-accessed specs, not an exhaustive enumeration).**
+**Count: 263 specs (one per `.py` module — the count here is the canonical authority; this index table is a curated subset listing the most-accessed specs, not an exhaustive enumeration).**
 
 ## Top-level (`tradinglab/`)
 | Spec | Covers |
@@ -94,8 +94,8 @@ A one-spec-per-`.py` documentation set. Each spec follows a fixed 9-section layo
 | `strategy_tester/acceptance.spec.md` | `AcceptanceToken` — cancellation wrapper around `threading.Event` + `RunCancelled` sentinel. |
 | `strategy_tester/model.spec.md` | `TestConfig` / `TestRun` / `UniverseSpec` / `CostModel` / `RunStatus` / `UniverseKind` / `DatePreset` + `validate_config` + `make_run_id` (sha256-12 over canonical_json + engine_version). |
 | `strategy_tester/universe.spec.md` | `resolve` + `resolve_preset` + `resolve_watchlist` + `PRESETS` (megacaps / sp500_seed / nasdaq100_seed / dow30_seed). |
-| `strategy_tester/evaluator.spec.md` | Headless trigger-evaluation kernel — registry-based dispatch on `EntryTrigger.kind` / `ExitTrigger.kind`; PR-1 wires MARKET/LIMIT/STOP/STOP_LIMIT + eod_kill_switch; unsupported kinds raise `UnsupportedTriggerKind`. |
-| `strategy_tester/runner.spec.md` | `run(cfg, *, cancel_token, progress, candles_fetcher, entry_loader, exit_loader, max_workers, today, screenshot_spec) -> RunResult` orchestrator — ThreadPoolExecutor fan-out, per-symbol independent capital, atomic manifest writes, partial results on cancel/error. Screenshots are opt-in via `screenshot_spec`. |
+| `strategy_tester/evaluator.spec.md` | Headless trigger-evaluation kernel — shared entry/exit dispatch registries, warmup gate, cross-symbol dependency registry, RTH/session gates, and unsupported-kind worker isolation. |
+| `strategy_tester/runner.spec.md` | `run(cfg, *, cancel_token, progress, candles_fetcher, entry_loader, exit_loader, max_workers, today, screenshot_spec) -> RunResult` orchestrator — ThreadPoolExecutor fan-out, per-symbol independent capital, cross-symbol companion fetches, atomic manifest writes, partial results on cancel/error. Screenshots are opt-in via `screenshot_spec`. |
 | `strategy_tester/screenshot.spec.md` | Headless per-trade PNG rendering — `render_trade_screenshot` composes `rendering.draw_candlesticks` / `draw_volume` on a `FigureCanvasAgg` (no Tk, no pyplot); annotates entry / exit / MAE / MFE / optional target line. `<run_dir>/screenshots/<SYM>_<order_id>_post.png`. |
 | `strategy_tester/report.spec.md` | Whole-Run aggregation kernel — `compute_aggregate` (pure) + `aggregate_run` (disk driver) compute Wilson score CI on win rate, 10K-sample bootstrap CIs on expectancy + profit factor (fixed `rng_seed=1337`), daily-Sharpe / daily-Sortino annualised by `sqrt(252)`, max DD, per-symbol + per-year breakouts, best/worst-month-removed P&L, sample-size banners (N<30 / N<100). Persists `aggregate.json` + `trades.csv` (22-column). |
 | `strategy_tester/storage.spec.md` | `run_dir_for` / `save_config` / `save_manifest` / `save_session_result_for_symbol` / `list_runs` / `list_runs_with_paths` / `delete_run` — persists under `%LOCALAPPDATA%/TradingLab/strategy_tests/<run_id>-<iso_ts>/`. |

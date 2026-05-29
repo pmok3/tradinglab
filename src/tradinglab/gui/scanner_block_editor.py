@@ -49,6 +49,7 @@ editor never re-keys an existing node.
 from __future__ import annotations
 
 import logging
+import math
 import tkinter as tk
 from collections.abc import Callable
 from tkinter import ttk
@@ -75,7 +76,15 @@ from ..scanner.model import (
     FieldRef,
     Group,
 )
-from ._param_widgets import build_param_widget, label_text_for
+from ._param_widgets import (
+    build_param_widget,
+    combo_width_for_choices,
+    label_text_for,
+    param_group_for,
+    spinbox_width_for,
+    tooltip_text_for,
+    validate_param_value,
+)
 from ._widget_metrics import (
     _CHAR_PX,
     _CHECKBOX_PX,
@@ -84,6 +93,7 @@ from ._widget_metrics import (
     _FRAME_PAD_PX,
     _SPINBOX_OVERHEAD,
 )
+from .tooltip import ToolTip
 
 LOG = logging.getLogger(__name__)
 
@@ -118,6 +128,10 @@ _ACTIVE_SYMBOL_SENTINEL: str = "(active)"
 #: legacy ``_ACTIVE_SYMBOL_SENTINEL`` constant for back-compat with
 #: existing test imports.
 _SYMBOL_PLACEHOLDER: str = _ACTIVE_SYMBOL_SENTINEL
+
+VIEW_AUTO = "Auto layout"
+VIEW_COMPACT = "Compact rows"
+VIEW_DETAILED = "Detailed cards"
 
 
 # ---------------------------------------------------------------------------
@@ -171,6 +185,24 @@ def _compute_flow_rows(
         col += 1
         used += cost
     return out
+
+
+def _filter_field_specs_for_query(specs: list[Any], query: str) -> tuple[str, ...]:
+    """Return field ids matching ``query`` in id, label, or description."""
+    needle = str(query or "").strip().casefold()
+    if not needle:
+        return tuple(str(s.id) for s in specs)
+    tokens = [t for t in needle.split() if t]
+    out: list[str] = []
+    for spec in specs:
+        haystack = " ".join((
+            str(getattr(spec, "id", "")),
+            str(getattr(spec, "label", "")),
+            str(getattr(spec, "description", "")),
+        )).casefold()
+        if needle in haystack or (tokens and all(t in haystack for t in tokens)):
+            out.append(str(spec.id))
+    return tuple(out)
 
 
 #: Min indicator-param count that flips :class:`_ConditionFrame` to
@@ -393,10 +425,12 @@ class _FieldRefPicker(ttk.Frame):
         ref: FieldRef | None = None,
         on_change: Callable[[], None] | None = None,
         layout_hint: str = "inline",
+        data_status_provider: Callable[[FieldRef], tuple[bool, str]] | None = None,
     ) -> None:
         super().__init__(master)
         self._on_change = on_change
         self._ref: FieldRef = ref or FieldRef.builtin("close")
+        self._data_status_provider = data_status_provider
         # ``layout_hint`` is "inline" (default — picker shares its
         # row with a sibling RHS picker, so the flow budget halves)
         # or "stacked" (parent gave the picker its own row; flow
@@ -418,6 +452,13 @@ class _FieldRefPicker(ttk.Frame):
         )
         self._symbol_is_placeholder: bool = not bool(self._ref.symbol)
         self._symbol_combo: ttk.Entry | None = None
+        self._symbol_badge: ttk.Label | None = None
+        self._validation_var = tk.StringVar(value="")
+        self._validation_label: ttk.Label | None = None
+        self._applicability_var = tk.StringVar(value="")
+        self._applicability_label: ttk.Label | None = None
+        self._badge_frame: ttk.Frame | None = None
+        self._status_badges: list[ttk.Label] = []
 
         # ----- type selector -------------------------------------------------
         self._type_var = tk.StringVar(value=self._TYPE_BY_KIND[self._ref.kind])
@@ -428,6 +469,7 @@ class _FieldRefPicker(ttk.Frame):
         )
         self._type_combo.grid(row=0, column=0, padx=(0, 4))
         self._type_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_type_change())
+        self.bind("<Escape>", self._on_escape)
 
         # ----- value widgets (built lazily by _rebuild_value_pane) -----------
         self._value_pane = ttk.Frame(self)
@@ -436,6 +478,7 @@ class _FieldRefPicker(ttk.Frame):
         self._output_var = tk.StringVar()
         self._field_id_var = tk.StringVar()
         self._literal_var = tk.StringVar()
+        self._indicator_combo: ttk.Combobox | None = None
 
         # ----- adaptive flow layout state -----------------------------------
         # ``_flow_children`` is the ordered list of widgets that participate
@@ -448,6 +491,14 @@ class _FieldRefPicker(ttk.Frame):
         # every reflow; cleaned up on ``_rebuild_value_pane`` /
         # ``_on_destroy``.
         self._flow_row_frames: list[tk.Widget] = []
+        # Row assignment per ``_flow_children`` index from the last
+        # applied layout. Row count alone is insufficient: a narrower
+        # budget can keep the same number of rows but move widgets to
+        # earlier/later rows, which otherwise leaves stale clipped rows.
+        self._flow_row_for_index: list[int] = []
+        self._flow_widths_cache: tuple[int, ...] | None = None
+        self._flow_widths_cache_ids: tuple[int, ...] = ()
+        self._tooltips: list[ToolTip] = []
         # Pending after_id for the debounced reflow callback. Tracked so
         # ``_rebuild_value_pane`` can cancel before destroying children
         # (avoids the callback running against destroyed widgets).
@@ -524,13 +575,18 @@ class _FieldRefPicker(ttk.Frame):
         new_kind = self._TYPE_LABELS[self._type_var.get()]
         if new_kind == self._ref.kind:
             return
-        # Preserve the user's cross-symbol pin across Builtin↔Indicator
-        # toggles. Literal has no symbol slot so it's dropped there.
+        # Preserve the user's cross-symbol pin and interval override across
+        # Builtin<->Indicator toggles. Literal has no such slots, so both drop there.
         prev_symbol = self._ref.symbol
+        prev_interval = self._ref.interval
         if new_kind == FIELD_KIND_LITERAL:
             self._ref = FieldRef.literal(self._last_literal)
         elif new_kind == FIELD_KIND_BUILTIN:
-            self._ref = FieldRef.builtin("close", symbol=prev_symbol)
+            self._ref = FieldRef.builtin(
+                "close",
+                symbol=prev_symbol,
+                interval=prev_interval,
+            )
         else:
             # Pick the first registered indicator alphabetically (so
             # the default seed matches the user-visible dropdown
@@ -540,9 +596,17 @@ class _FieldRefPicker(ttk.Frame):
                 key=str.casefold,
             )
             if ids:
-                self._ref = FieldRef.indicator(ids[0], symbol=prev_symbol)
+                self._ref = FieldRef.indicator(
+                    ids[0],
+                    symbol=prev_symbol,
+                    interval=prev_interval,
+                )
             else:
-                self._ref = FieldRef.builtin("close", symbol=prev_symbol)
+                self._ref = FieldRef.builtin(
+                    "close",
+                    symbol=prev_symbol,
+                    interval=prev_interval,
+                )
         self._rebuild_value_pane()
         self._fire()
 
@@ -556,6 +620,7 @@ class _FieldRefPicker(ttk.Frame):
             except tk.TclError:
                 pass
             self._reflow_after_id = None
+        self._clear_tooltips()
         for w in self._value_pane.winfo_children():
             try:
                 w.destroy()
@@ -563,10 +628,22 @@ class _FieldRefPicker(ttk.Frame):
                 pass
         self._param_widgets = {}
         self._flow_children = []
+        self._invalidate_flow_width_cache()
         # Row frames are children of value_pane and destroyed above,
         # but clear our handle list so we don't keep dead references.
         self._flow_row_frames = []
+        self._flow_row_for_index = []
         self._symbol_combo = None
+        self._symbol_badge = None
+        self._validation_label = None
+        self._indicator_combo = None
+        self._badge_frame = None
+        self._status_badges = []
+        self._validation_var.set("")
+        self._applicability_label = None
+        self._applicability_var.set("")
+        self._badge_frame = None
+        self._status_badges = []
         # Re-seed the cross-symbol var from the ref each rebuild so the
         # entry shows the persisted value (e.g. after .set(ref)).
         self._symbol_var = tk.StringVar(
@@ -582,6 +659,8 @@ class _FieldRefPicker(ttk.Frame):
             entry.grid(row=0, column=0, padx=(0, 4))
             entry.bind("<FocusOut>", lambda _e: self._commit_literal())
             entry.bind("<Return>", lambda _e: self._commit_literal())
+            self._build_applicability_label(row_index=1)
+            self._refresh_applicability()
             return
 
         if kind == FIELD_KIND_BUILTIN:
@@ -599,6 +678,8 @@ class _FieldRefPicker(ttk.Frame):
             # so layout of existing non-cross-symbol rows is unchanged.
             sym_wrap = self._build_symbol_combo(parent=self._value_pane)
             sym_wrap.grid(row=0, column=1, padx=(6, 0))
+            self._build_applicability_label(row_index=1)
+            self._refresh_applicability()
             return
 
         # FIELD_KIND_INDICATOR
@@ -613,7 +694,11 @@ class _FieldRefPicker(ttk.Frame):
             ttk.Label(self._value_pane, text="(no indicators registered)").grid(row=0, column=0)
             return
         if self._ref.id not in ids:
-            self._ref = FieldRef.indicator(ids[0])
+            self._ref = FieldRef.indicator(
+                ids[0],
+                symbol=self._ref.symbol,
+                interval=self._ref.interval,
+            )
         # Build the indicator branch into a single row frame initially.
         # ``_reflow_value_pane`` may subsequently tear this down and
         # rebuild with multiple row frames if the dialog is too narrow.
@@ -626,6 +711,14 @@ class _FieldRefPicker(ttk.Frame):
             self._reflow_after_id = self.after_idle(self._reflow_value_pane)
         except tk.TclError:
             self._reflow_after_id = None
+
+    def _clear_tooltips(self) -> None:
+        for tip in getattr(self, "_tooltips", []):
+            try:
+                tip.detach()
+            except tk.TclError:
+                pass
+        self._tooltips = []
 
     def _build_indicator_branch_into_rows(self, *, target_row_count: int) -> None:
         """Build all flow children (ind combo, params, output, symbol)
@@ -644,6 +737,7 @@ class _FieldRefPicker(ttk.Frame):
         before building.
         """
         # Tear down everything inside the value pane.
+        self._invalidate_flow_width_cache()
         for w in self._value_pane.winfo_children():
             try:
                 w.destroy()
@@ -653,6 +747,11 @@ class _FieldRefPicker(ttk.Frame):
         self._flow_children = []
         self._flow_row_frames = []
         self._symbol_combo = None
+        self._symbol_badge = None
+        self._validation_label = None
+        self._indicator_combo = None
+        self._badge_frame = None
+        self._status_badges = []
         # Re-seed cross-symbol var from ref.
         self._symbol_var = tk.StringVar(
             value=self._ref.symbol or _SYMBOL_PLACEHOLDER
@@ -675,6 +774,7 @@ class _FieldRefPicker(ttk.Frame):
                 pady=(0 if ri == 0 else 2, 0),
             )
             self._flow_row_frames.append(rf)
+        self._build_validation_label(row_index=max(1, target_row_count))
 
         # Build flow widgets first as a flat list (parented to
         # self._value_pane temporarily) so we can compute placements.
@@ -688,6 +788,7 @@ class _FieldRefPicker(ttk.Frame):
                     w.pack(side="left", padx=(0, 6), anchor="w")
                 except tk.TclError:
                     pass
+            self._flow_row_for_index = [0] * len(self._flow_children)
             return
 
         # Multi-row: build temporarily into row 0 to MEASURE widths,
@@ -714,6 +815,9 @@ class _FieldRefPicker(ttk.Frame):
         self._param_widgets = {}
         self._flow_children = []
         self._symbol_combo = None
+        self._symbol_badge = None
+        self._validation_label = None
+        self._indicator_combo = None
         # Re-seed cross-symbol var again (the measure pass destroyed
         # the previous one along with the measure_frame children).
         self._symbol_var = tk.StringVar(
@@ -722,17 +826,12 @@ class _FieldRefPicker(ttk.Frame):
         self._symbol_is_placeholder = not bool(self._ref.symbol)
 
         # Recompute placements based on width budget.
-        try:
-            top = self._toplevel_for_reflow or self.winfo_toplevel()
-            win_w = top.winfo_width() if top is not None else 0
-        except tk.TclError:
-            win_w = 0
-        budget = max(180, (win_w - 280)) if self._layout_hint == "stacked" \
-            else max(180, (win_w - 280) // 2)
+        budget = self._flow_budget_px()
         placements = _compute_flow_rows(widths, budget=budget, pad=6)
 
         # Group widget order indices by row.
         row_for_index: list[int] = [r for (r, _c) in placements]
+        self._flow_row_for_index = list(row_for_index)
 
         # Now build for real, parenting each widget under its assigned
         # row_frame so packing is local.
@@ -742,6 +841,46 @@ class _FieldRefPicker(ttk.Frame):
         self._build_indicator_widgets_into_rows(
             ids=ids, spec=spec, row_for_index=row_for_index,
         )
+        self._flow_widths_cache = tuple(widths)
+        self._flow_widths_cache_ids = self._flow_child_ids()
+
+    def _build_validation_label(self, *, row_index: int) -> None:
+        """Create the inline validation label under indicator params."""
+        label = ttk.Label(
+            self._value_pane,
+            textvariable=self._validation_var,
+            foreground="#b42318",
+        )
+        label.grid(row=row_index, column=0, sticky="w", pady=(2, 0))
+        self._validation_label = label
+        self._build_badge_frame(row_index=row_index + 1)
+        self._build_applicability_label(row_index=row_index + 2)
+        self._refresh_applicability()
+
+    def _build_badge_frame(self, *, row_index: int) -> None:
+        frame = ttk.Frame(self._value_pane)
+        frame.grid(row=row_index, column=0, sticky="w", pady=(2, 0))
+        self._badge_frame = frame
+        self._refresh_status_badges()
+
+    def _build_applicability_label(self, *, row_index: int) -> None:
+        """Create the text-only applicability line under picker controls."""
+        if self._badge_frame is None:
+            self._build_badge_frame(row_index=row_index)
+            row_index += 1
+        label = ttk.Label(
+            self._value_pane,
+            textvariable=self._applicability_var,
+            foreground="#666666",
+        )
+        label.grid(row=row_index, column=0, sticky="w", pady=(2, 0))
+        self._applicability_label = label
+
+    def _refresh_applicability(self) -> None:
+        self._applicability_var.set(
+            _applicability_text_for_ref(self._ref, self._data_status_provider)
+        )
+        self._refresh_status_badges()
 
     def _build_flat_indicator_widgets(
         self, *, parent: tk.Misc, ids: list[str], spec: Any,
@@ -759,12 +898,22 @@ class _FieldRefPicker(ttk.Frame):
         self._field_id_var = tk.StringVar(value=self._ref.id)
         ind_combo = ttk.Combobox(
             parent, textvariable=self._field_id_var,
-            state="readonly", values=tuple(ids), width=14,
+            state="normal", values=tuple(ids), width=18,
         )
         ind_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_indicator_change())
+        ind_combo.bind("<KeyRelease>", self._on_indicator_combo_keyrelease)
+        ind_combo.bind("<Return>", lambda _e: self._on_indicator_change())
+        ind_combo.bind("<FocusOut>", lambda _e: self._on_indicator_change())
+        self._indicator_combo = ind_combo
         self._flow_children.append(ind_combo)
 
+        last_group = ""
         for pdef in spec.params_schema:
+            group = param_group_for(pdef)
+            if group != last_group:
+                header = self._build_param_group_header(parent=parent, text=group)
+                self._flow_children.append(header)
+                last_group = group
             wrap = self._build_param_widget(pdef, parent=parent)
             if wrap is not None:
                 self._flow_children.append(wrap)
@@ -793,7 +942,12 @@ class _FieldRefPicker(ttk.Frame):
         # Compute the widget order: [ind_combo, *params, output?, sym].
         # row_for_index has the same length and ordering.
         order: list[tuple[str, Any]] = [("ind_combo", None)]
+        last_group = ""
         for pdef in spec.params_schema:
+            group = param_group_for(pdef)
+            if group != last_group:
+                order.append(("group", group))
+                last_group = group
             order.append(("param", pdef))
         if len(spec.output_keys) > 1:
             order.append(("output", spec))
@@ -810,16 +964,24 @@ class _FieldRefPicker(ttk.Frame):
                 self._field_id_var = tk.StringVar(value=self._ref.id)
                 w = ttk.Combobox(
                     row_frame, textvariable=self._field_id_var,
-                    state="readonly", values=tuple(ids), width=14,
+                    state="normal", values=tuple(ids), width=18,
                 )
                 w.bind("<<ComboboxSelected>>", lambda _e: self._on_indicator_change())
+                w.bind("<KeyRelease>", self._on_indicator_combo_keyrelease)
+                w.bind("<Return>", lambda _e: self._on_indicator_change())
+                w.bind("<FocusOut>", lambda _e: self._on_indicator_change())
                 w.pack(side="left", padx=(0, 6), anchor="w")
+                self._indicator_combo = w
                 self._flow_children.append(w)
             elif kind == "param":
                 wrap = self._build_param_widget(payload, parent=row_frame)
                 if wrap is not None:
                     wrap.pack(side="left", padx=(0, 6), anchor="w")
                     self._flow_children.append(wrap)
+            elif kind == "group":
+                header = self._build_param_group_header(parent=row_frame, text=str(payload))
+                header.pack(side="left", padx=(0, 6), anchor="w")
+                self._flow_children.append(header)
             elif kind == "output":
                 current = self._ref.output_key or payload.default_output_key
                 self._output_var = tk.StringVar(value=current)
@@ -834,6 +996,10 @@ class _FieldRefPicker(ttk.Frame):
                 sym_wrap = self._build_symbol_combo(parent=row_frame)
                 sym_wrap.pack(side="left", padx=(0, 6), anchor="w")
                 self._flow_children.append(sym_wrap)
+
+    @staticmethod
+    def _build_param_group_header(*, parent: tk.Misc, text: str) -> ttk.Label:
+        return ttk.Label(parent, text=text)
 
     def _rebuild_indicator_branch_into_rows(self, target_row_count: int) -> None:
         """Tear down + rebuild the indicator branch with the requested
@@ -859,15 +1025,68 @@ class _FieldRefPicker(ttk.Frame):
         new_id = self._field_id_var.get()
         sym = self._current_symbol_from_combo()
         if new_id and (new_id != self._ref.id or sym != self._ref.symbol):
-            self._ref = FieldRef.builtin(new_id, symbol=sym)
+            self._ref = FieldRef.builtin(new_id, symbol=sym, interval=self._ref.interval)
+            self._refresh_applicability()
             self._fire()
 
     def _on_indicator_change(self) -> None:
         new_id = self._field_id_var.get()
+        ids = self._indicator_ids()
+        if new_id not in ids:
+            matches = _filter_field_specs_for_query(self._indicator_specs(), new_id)
+            if len(matches) == 1:
+                new_id = matches[0]
+                self._field_id_var.set(new_id)
+            else:
+                return
         if new_id and new_id != self._ref.id:
-            self._ref = FieldRef.indicator(new_id, symbol=self._ref.symbol)
+            self._ref = FieldRef.indicator(
+                new_id,
+                symbol=self._ref.symbol,
+                interval=self._ref.interval,
+            )
             self._rebuild_value_pane()
             self._fire()
+
+    def _on_indicator_combo_keyrelease(self, _event: Any | None = None) -> None:
+        combo = self._indicator_combo
+        if combo is None:
+            return
+        query = self._field_id_var.get()
+        values = _filter_field_specs_for_query(self._indicator_specs(), query)
+        if not values:
+            values = self._indicator_ids()
+        try:
+            combo.configure(values=values)
+        except tk.TclError:
+            pass
+
+    def _on_escape(self, _event: Any | None = None) -> str:
+        """Restore current displayed values and clear inline validation."""
+        self._validation_var.set("")
+        if self._ref.kind == FIELD_KIND_INDICATOR:
+            self._field_id_var.set(self._ref.id)
+            if self._indicator_combo is not None:
+                try:
+                    self._indicator_combo.configure(values=self._indicator_ids())
+                except tk.TclError:
+                    pass
+        elif self._ref.kind == FIELD_KIND_BUILTIN:
+            self._field_id_var.set(self._ref.id)
+        elif self._ref.kind == FIELD_KIND_LITERAL:
+            self._literal_var.set(_format_number(self._ref.value))
+        return "break"
+
+    @staticmethod
+    def _indicator_specs() -> list[Any]:
+        return sorted(
+            (s for s in all_fields() if s.kind == "indicator"),
+            key=lambda s: str(s.id).casefold(),
+        )
+
+    @classmethod
+    def _indicator_ids(cls) -> tuple[str, ...]:
+        return tuple(str(s.id) for s in cls._indicator_specs())
 
     def _commit_indicator(self) -> None:
         params: dict[str, Any] = {}
@@ -882,7 +1101,12 @@ class _FieldRefPicker(ttk.Frame):
                 raw = var.get()
             except tk.TclError:
                 continue
-            params[pdef.name] = _coerce_paramdef_value(pdef, raw)
+            ok, value, message = validate_param_value(pdef, raw)
+            if not ok:
+                self._validation_var.set(message)
+                return
+            params[pdef.name] = value
+        self._validation_var.set("")
         output_key = ""
         if len(spec.output_keys) > 1:
             try:
@@ -891,8 +1115,13 @@ class _FieldRefPicker(ttk.Frame):
                 pass
         sym = self._current_symbol_from_combo()
         self._ref = FieldRef.indicator(
-            self._ref.id, params=params, output_key=output_key, symbol=sym,
+            self._ref.id,
+            params=params,
+            output_key=output_key,
+            symbol=sym,
+            interval=self._ref.interval,
         )
+        self._refresh_applicability()
         self._fire()
 
     # -- cross-symbol entry --------------------------------------------------
@@ -951,7 +1180,55 @@ class _FieldRefPicker(ttk.Frame):
         entry.bind("<FocusOut>", self._on_symbol_focus_out)
         entry.bind("<Return>", lambda _e: self._commit_symbol())
         self._symbol_combo = entry
+        self._tooltips.append(ToolTip(
+            entry,
+            "Leave blank to use the active ticker. Type SPY, QQQ, etc. "
+            "to compare another ticker at the same bar time.",
+        ))
+        self._refresh_symbol_badge()
         return wrap
+
+    def _refresh_symbol_badge(self) -> None:
+        """Show a text badge for cross-symbol refs."""
+        symbol = str(self._ref.symbol or "").strip().upper()
+        if self._symbol_badge is not None:
+            try:
+                self._symbol_badge.destroy()
+            except tk.TclError:
+                pass
+            self._symbol_badge = None
+        if not symbol or self._symbol_combo is None:
+            return
+        badge = ttk.Label(self._symbol_combo.master, text=f"@{symbol}")
+        badge.pack(side="left", padx=(4, 0))
+        self._symbol_badge = badge
+        self._status_badges.append(badge)
+        self._tooltips.append(ToolTip(
+            badge,
+            f"Evaluates this value on {symbol}.",
+        ))
+        self._refresh_status_badges()
+
+    def _refresh_status_badges(self) -> None:
+        frame = self._badge_frame
+        symbol_badge = self._symbol_badge
+        self._status_badges = []
+        if symbol_badge is not None:
+            self._status_badges.append(symbol_badge)
+        if frame is None:
+            return
+        for child in list(frame.winfo_children()):
+            try:
+                child.destroy()
+            except tk.TclError:
+                pass
+
+        for text, tip in _badges_for_ref(self._ref, self._data_status_provider):
+            badge = ttk.Label(frame, text=text)
+            badge.pack(side="left", padx=(0, 4))
+            self._status_badges.append(badge)
+            if tip:
+                self._tooltips.append(ToolTip(badge, tip))
 
     @staticmethod
     def _symbol_placeholder_fg() -> str:
@@ -996,7 +1273,11 @@ class _FieldRefPicker(ttk.Frame):
         """Commit the typed ticker into the ref's ``symbol`` field."""
         new_sym = self._current_symbol_from_combo()
         if new_sym == (self._ref.symbol or ""):
+            if new_sym:
+                self._normalize_symbol_display(new_sym)
             return
+        if new_sym:
+            self._normalize_symbol_display(new_sym)
         # Rebuild the ref with the new symbol. The kind-specific
         # commit path also picks up the latest param/output state in
         # case the user changed both before tabbing out.
@@ -1007,6 +1288,17 @@ class _FieldRefPicker(ttk.Frame):
         else:
             # Literal: shouldn't happen — symbol entry isn't shown.
             self._fire()
+        self._refresh_symbol_badge()
+        self._refresh_applicability()
+
+    def _normalize_symbol_display(self, symbol: str) -> None:
+        try:
+            self._symbol_var.set(symbol)
+            if self._symbol_combo is not None:
+                self._symbol_combo.configure(foreground=self._symbol_active_fg())
+            self._symbol_is_placeholder = False
+        except tk.TclError:
+            pass
 
     # -- helpers --------------------------------------------------------------
 
@@ -1034,17 +1326,23 @@ class _FieldRefPicker(ttk.Frame):
         """
         parent_widget = parent if parent is not None else self._value_pane
         wrap = ttk.Frame(parent_widget)
-        ttk.Label(wrap, text=label_text_for(pdef)).pack(side="left")
+        label = ttk.Label(wrap, text=label_text_for(pdef))
+        label.pack(side="left")
         seed = (self._ref.params or {}).get(pdef.name, pdef.default)
-        # Width matches the historical scanner-side defaults:
-        # choice/str comboboxes 8 chars, int/float spinboxes 6.
+        # Width follows the same schema-driven sizing as the chart
+        # indicator dialog: dropdowns fit their longest option and
+        # spinboxes fit their declared numeric range. The flow layout
+        # will add rows as needed instead of clipping long RRVOL/RVOL
+        # params such as "Include current in denom".
         kind = getattr(pdef, "kind", "str")
         if kind == "choice":
-            width: int | None = 8
+            width: int | None = combo_width_for_choices(getattr(pdef, "choices", ()))
         elif kind in ("int", "float"):
-            width = 6
+            width = spinbox_width_for(pdef)
+        elif kind == "str" and getattr(pdef, "choices", ()):
+            width = max(combo_width_for_choices(getattr(pdef, "choices", ())), 8)
         elif kind == "str":
-            width = 8
+            width = 14
         else:
             width = None
         var, widget = build_param_widget(
@@ -1054,6 +1352,10 @@ class _FieldRefPicker(ttk.Frame):
             width=width,
         )
         widget.pack(side="left")
+        tip_text = tooltip_text_for(pdef)
+        if tip_text:
+            self._tooltips.append(ToolTip(label, tip_text))
+            self._tooltips.append(ToolTip(widget, tip_text))
         # The scanner picker historically also commits on Spinbox /
         # Entry FocusOut + Return so a tab-out always persists even
         # when the eager trace already fired. Re-bind those events
@@ -1066,6 +1368,36 @@ class _FieldRefPicker(ttk.Frame):
         return wrap
 
     # -- adaptive flow layout ------------------------------------------------
+
+    def _invalidate_flow_width_cache(self) -> None:
+        self._flow_widths_cache = None
+        self._flow_widths_cache_ids = ()
+
+    def _flow_child_ids(self) -> tuple[int, ...]:
+        return tuple(id(w) for w in self._flow_children)
+
+    def _flow_widths_for_children(self) -> list[int]:
+        ids = self._flow_child_ids()
+        if self._flow_widths_cache is not None and ids == self._flow_widths_cache_ids:
+            try:
+                if all(w.winfo_exists() for w in self._flow_children):
+                    return list(self._flow_widths_cache)
+            except tk.TclError:
+                self._invalidate_flow_width_cache()
+
+        widths: list[int] = []
+        for w in self._flow_children:
+            try:
+                if not w.winfo_exists():
+                    widths.append(1)
+                    continue
+                w.update_idletasks()
+                widths.append(max(1, int(w.winfo_reqwidth())))
+            except tk.TclError:
+                widths.append(1)
+        self._flow_widths_cache = tuple(widths)
+        self._flow_widths_cache_ids = ids
+        return widths
 
     def _on_toplevel_configure(self, event: Any | None = None) -> None:
         """Debounced ``<Configure>`` handler bound to the Toplevel.
@@ -1137,44 +1469,50 @@ class _FieldRefPicker(ttk.Frame):
                 return
         except tk.TclError:
             return
-        try:
-            top = self._toplevel_for_reflow or self.winfo_toplevel()
-            win_w = top.winfo_width() if top is not None else 0
-        except tk.TclError:
-            return
-        nonpicker_chrome_px = 280
-        if win_w < 100:
-            return
-        available = max(220, win_w - nonpicker_chrome_px)
-        if self._layout_hint == "stacked":
-            budget = max(180, available)
-        else:
-            budget = max(180, available // 2)
+        budget = self._flow_budget_px()
 
-        widths: list[int] = []
-        for w in self._flow_children:
-            try:
-                if not w.winfo_exists():
-                    widths.append(1)
-                    continue
-                w.update_idletasks()
-                widths.append(max(1, int(w.winfo_reqwidth())))
-            except tk.TclError:
-                widths.append(1)
+        widths = self._flow_widths_for_children()
         if not widths:
             return
         placements = _compute_flow_rows(widths, budget=budget, pad=6)
         target_row_count = max((p[0] for p in placements), default=0) + 1
+        row_for_index = [r for (r, _c) in placements]
         current_row_count = len(self._flow_row_frames)
-        if target_row_count == current_row_count and target_row_count >= 1:
+        if (
+            target_row_count == current_row_count
+            and target_row_count >= 1
+            and row_for_index == self._flow_row_for_index
+        ):
             # No reflow needed — widgets are already in the right
-            # number of row frames. (We do not need to re-grid them
-            # within their row frame because horizontal packing is
-            # automatic via pack side="left".)
+            # row frames. (We do not need to re-grid them within their
+            # row frame because horizontal packing is automatic via
+            # pack side="left".)
             return
 
         # Row count changed — tear down + rebuild.
         self._rebuild_indicator_branch_into_rows(target_row_count)
+
+    def _flow_budget_px(self) -> int:
+        """Return the current pixel budget for one picker flow row.
+
+        When Tk has not mapped the Toplevel yet, ``winfo_width()``
+        can be 1. Use requested width as a fallback so the initial
+        RRVOL/RVOL layout still wraps instead of rendering one clipped
+        mega-row until the user manually resizes the dialog.
+        """
+        try:
+            top = self._toplevel_for_reflow or self.winfo_toplevel()
+            win_w = top.winfo_width() if top is not None else 0
+            if win_w < 100 and top is not None:
+                win_w = max(win_w, int(top.winfo_reqwidth() or 0))
+        except tk.TclError:
+            win_w = 0
+        if win_w < 100:
+            win_w = 1000
+        available = max(220, win_w - 280)
+        if self._layout_hint == "stacked":
+            return max(180, available)
+        return max(180, available // 2)
 
     def _on_destroy(self, _event: Any | None = None) -> None:
         """Tear down pending callbacks + Toplevel binding on destroy.
@@ -1399,12 +1737,18 @@ class _ConditionFrame(ttk.Frame):
         on_change: Callable[[], None] | None = None,
         on_delete: Callable[[_ConditionFrame], None] | None = None,
         default_interval: str = "5m",
+        view_mode: str = VIEW_AUTO,
+        data_status_provider: Callable[[FieldRef], tuple[bool, str]] | None = None,
     ) -> None:
         super().__init__(master, padding=(4, 2))
         self.cond = cond
         self._on_change = on_change
         self._on_delete = on_delete
         self._default_interval = default_interval
+        self._view_mode = view_mode if view_mode in (
+            VIEW_AUTO, VIEW_COMPACT, VIEW_DETAILED,
+        ) else VIEW_AUTO
+        self._data_status_provider = data_status_provider
         # Debounced resize-reclassify state.
         self._resize_after_id: str | None = None
         self._toplevel_for_resize: tk.Misc | None = None
@@ -1446,6 +1790,7 @@ class _ConditionFrame(ttk.Frame):
         # field-param wraps in the correct orientation (horizontal for
         # inline, vertical for stacked).
         self._current_layout: str = self._classify_layout()
+        self._summary_label: ttk.Label | None = None
         self._build_shared_widgets()
         self._build_params_row()
         self._apply_layout()
@@ -1475,6 +1820,7 @@ class _ConditionFrame(ttk.Frame):
         self._left_picker = _FieldRefPicker(
             self, ref=self.cond.left, on_change=self._on_left_change,
             layout_hint="inline",
+            data_status_provider=self._data_status_provider,
         )
 
         self._op_var = tk.StringVar(value=self.cond.op)
@@ -1510,6 +1856,7 @@ class _ConditionFrame(ttk.Frame):
 
         self._delete_btn = ttk.Button(
             self, text="✕", width=3, command=self._do_delete)
+        self._summary_label = ttk.Label(self, text=_condition_summary_text(self.cond))
 
     def _apply_layout(self) -> None:
         """(Re)grid every shared widget to match ``self._current_layout``.
@@ -1529,6 +1876,7 @@ class _ConditionFrame(ttk.Frame):
             self._enabled_chk, self._left_picker, self._op_combo,
             self._params_scalar_frame, self._params_fields_frame,
             self._lookback, self._interval_combo, self._delete_btn,
+            self._summary_label,
         ):
             try:
                 w.grid_forget()
@@ -1536,6 +1884,9 @@ class _ConditionFrame(ttk.Frame):
                 pass
 
         layout = self._current_layout
+        if self._view_mode == VIEW_COMPACT:
+            self._apply_compact_layout()
+            return
 
         # Propagate the layout hint to every embedded picker so its
         # internal flow-layout budget reflects the row's true width.
@@ -1556,6 +1907,13 @@ class _ConditionFrame(ttk.Frame):
             self._apply_inline_layout()
 
         self._update_left_visibility()
+
+    def _apply_compact_layout(self) -> None:
+        self._enabled_chk.grid(row=0, column=0, padx=(0, 4), sticky="nw")
+        if self._summary_label is not None:
+            self._summary_label.configure(text=_condition_summary_text(self.cond))
+            self._summary_label.grid(row=0, column=1, padx=(0, 6), sticky="w")
+        self._delete_btn.grid(row=0, column=2, sticky="ne")
 
     def _apply_inline_layout(self) -> None:
         """Historical 7-column single-row layout.
@@ -1638,6 +1996,10 @@ class _ConditionFrame(ttk.Frame):
         the dialog wider or narrower automatically flips the layout.
         """
         op = self.cond.op
+        if self._view_mode == VIEW_DETAILED:
+            return "stacked"
+        if self._view_mode == VIEW_COMPACT:
+            return "compact"
         if op == OP_BETWEEN:
             return "stacked"
         try:
@@ -1815,6 +2177,7 @@ class _ConditionFrame(ttk.Frame):
                     wrap, ref=ref,
                     on_change=self._on_param_field_change,
                     layout_hint=layout,
+                    data_status_provider=self._data_status_provider,
                 )
                 picker.pack(side="left")
                 self._param_widgets[name] = ("field", picker)
@@ -1931,14 +2294,24 @@ class _ConditionFrame(ttk.Frame):
                 new_params[name] = widget.get()
             elif kind == "int":
                 try:
-                    new_params[name] = int(float(widget.get()))
-                except (TypeError, ValueError):
+                    numeric = float(widget.get())
+                except (TypeError, ValueError, OverflowError):
                     new_params[name] = self.cond.params.get(name, 1)
+                    continue
+                if not math.isfinite(numeric) or not numeric.is_integer():
+                    new_params[name] = self.cond.params.get(name, 1)
+                    continue
+                new_params[name] = int(numeric)
             else:  # float
                 try:
-                    new_params[name] = float(widget.get())
-                except (TypeError, ValueError):
+                    numeric = float(widget.get())
+                except (TypeError, ValueError, OverflowError):
                     new_params[name] = self.cond.params.get(name, 1.0)
+                    continue
+                if not math.isfinite(numeric):
+                    new_params[name] = self.cond.params.get(name, 1.0)
+                    continue
+                new_params[name] = numeric
         self.cond.params = new_params
         self._fire()
 
@@ -1971,6 +2344,8 @@ class _GroupFrame(ttk.Frame):
         on_delete: Callable[[_GroupFrame], None] | None = None,
         default_interval: str = "5m",
         is_root: bool = False,
+        view_mode: str = VIEW_AUTO,
+        data_status_provider: Callable[[FieldRef], tuple[bool, str]] | None = None,
     ) -> None:
         super().__init__(master, padding=(6, 4),
                          relief="solid", borderwidth=1)
@@ -1979,6 +2354,8 @@ class _GroupFrame(ttk.Frame):
         self._on_delete = on_delete
         self._default_interval = default_interval
         self._is_root = is_root
+        self._view_mode = view_mode
+        self._data_status_provider = data_status_provider
         self._child_frames: list[_GroupFrame | _ConditionFrame] = []
 
         self._build()
@@ -2085,6 +2462,8 @@ class _GroupFrame(ttk.Frame):
                     on_change=self._on_change,
                     on_delete=self._remove_child_widget,
                     default_interval=self._default_interval,
+                    view_mode=self._view_mode,
+                    data_status_provider=self._data_status_provider,
                 )
             elif isinstance(child, Condition):
                 wf = _ConditionFrame(
@@ -2092,6 +2471,8 @@ class _GroupFrame(ttk.Frame):
                     on_change=self._on_change,
                     on_delete=self._remove_child_widget,
                     default_interval=self._default_interval,
+                    view_mode=self._view_mode,
+                    data_status_provider=self._data_status_provider,
                 )
             else:
                 continue
@@ -2184,12 +2565,27 @@ class BlockEditor(ttk.Frame):
         root: Group | None = None,
         on_change: Callable[[], None] | None = None,
         default_interval: str = "5m",
+        data_status_provider: Callable[[FieldRef], tuple[bool, str]] | None = None,
     ) -> None:
         super().__init__(master)
         self._on_change = on_change
         self._default_interval = default_interval
+        self._data_status_provider = data_status_provider
         self._root_group: Group = root or Group(combinator="and", children=[])
         self._root_frame: _GroupFrame | None = None
+        self._view_var = tk.StringVar(value=VIEW_AUTO)
+        header = ttk.Frame(self)
+        header.pack(fill="x", pady=(0, 4))
+        ttk.Label(header, text="Builder view:").pack(side="left", padx=(0, 4))
+        self._view_combo = ttk.Combobox(
+            header,
+            textvariable=self._view_var,
+            state="readonly",
+            values=(VIEW_AUTO, VIEW_COMPACT, VIEW_DETAILED),
+            width=16,
+        )
+        self._view_combo.pack(side="left")
+        self._view_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_view_mode_change())
         self._render_root()
 
     # -- public API -----------------------------------------------------------
@@ -2204,6 +2600,15 @@ class BlockEditor(ttk.Frame):
     def set_default_interval(self, interval: str) -> None:
         """Update the default interval used for newly-added Conditions."""
         self._default_interval = interval
+
+    def set_view_mode(self, mode: str) -> None:
+        if mode not in (VIEW_AUTO, VIEW_COMPACT, VIEW_DETAILED):
+            mode = VIEW_AUTO
+        self._view_var.set(mode)
+        self._render_root()
+
+    def _on_view_mode_change(self) -> None:
+        self.set_view_mode(self._view_var.get())
 
     # -- internals ------------------------------------------------------------
 
@@ -2220,6 +2625,8 @@ class BlockEditor(ttk.Frame):
             on_delete=None,  # root cannot be deleted
             default_interval=self._default_interval,
             is_root=True,
+            view_mode=self._view_var.get(),
+            data_status_provider=self._data_status_provider,
         )
         self._root_frame.pack(fill="x", expand=True)
 
@@ -2257,6 +2664,104 @@ def _coerce_paramdef_value(pdef: Any, raw: Any) -> Any:
     if kind == "choice":
         return raw if raw in pdef.choices else pdef.default
     return raw
+
+
+def _applicability_text_for_ref(
+    ref: FieldRef,
+    data_status_provider: Callable[[FieldRef], tuple[bool, str]] | None = None,
+) -> str:
+    """Return text-only applicability summary for one FieldRef."""
+    if ref.kind == FIELD_KIND_LITERAL:
+        return "No data dependency."
+    symbol = str(ref.symbol or "").strip().upper()
+    interval = str(ref.interval or "").strip()
+    symbol_part = f"Requires {symbol} data" if symbol else "Uses active symbol"
+    interval_part = f"at {interval} interval" if interval else "at default interval"
+    parts = [f"{symbol_part} {interval_part}."]
+    if ref.kind == FIELD_KIND_INDICATOR:
+        warmup = _warmup_bars_for_field_ref(ref)
+        if warmup is not None and warmup > 0:
+            parts.append(f"Warmup: about {warmup} bars.")
+    if data_status_provider is not None:
+        ok, message = _data_status_for_ref(ref, data_status_provider)
+        state = "yes" if ok else "no"
+        parts.append(f"Can run now: {state}. {message}")
+    return " ".join(parts)
+
+
+def _badges_for_ref(
+    ref: FieldRef,
+    data_status_provider: Callable[[FieldRef], tuple[bool, str]] | None = None,
+) -> list[tuple[str, str]]:
+    if ref.kind == FIELD_KIND_LITERAL:
+        return []
+    badges: list[tuple[str, str]] = []
+    if ref.symbol:
+        badges.append(("Dep", f"Requires companion symbol data for {ref.symbol}."))
+    if ref.interval:
+        badges.append((str(ref.interval), "Uses a non-default interval."))
+    if ref.kind == FIELD_KIND_INDICATOR:
+        warmup = _warmup_bars_for_field_ref(ref)
+        if warmup is not None and warmup > 0:
+            badges.append((f"Warmup {warmup}", f"Needs about {warmup} bars before reliable."))
+    if data_status_provider is not None:
+        ok, message = _data_status_for_ref(ref, data_status_provider)
+        badges.append(("Data OK" if ok else "Missing data", message))
+    elif ref.symbol:
+        badges.append(("Data ?", "Dependency data availability has not been checked."))
+    return badges
+
+
+def _data_status_for_ref(
+    ref: FieldRef,
+    provider: Callable[[FieldRef], tuple[bool, str]],
+) -> tuple[bool, str]:
+    try:
+        ok, message = provider(ref)
+        return bool(ok), str(message or ("Latest data available." if ok else "Missing required data."))
+    except Exception:  # noqa: BLE001
+        return False, "Data status check failed."
+
+
+def _warmup_bars_for_field_ref(ref: FieldRef) -> int | None:
+    try:
+        from ..strategy_tester.warmup import warmup_bars_for_kind
+        return int(warmup_bars_for_kind(ref.id, dict(ref.params or {})))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _condition_summary_text(cond: Condition) -> str:
+        left = _field_ref_summary(cond.left)
+        params = cond.params or {}
+        rhs = ""
+        for key in ("right", "low", "high", "target", "reference"):
+            if key in params:
+                value = params[key]
+                rhs = _field_ref_summary(value) if isinstance(value, FieldRef) else str(value)
+                break
+        interval = cond.interval or ""
+        bits = [left, cond.op]
+        if rhs:
+            bits.append(rhs)
+        if interval:
+            bits.append(f"@ {interval}")
+        if not cond.enabled:
+            bits.append("(disabled)")
+        return " ".join(bits)
+
+
+def _field_ref_summary(ref: FieldRef | None) -> str:
+        if ref is None:
+            return "(value)"
+        if ref.kind == FIELD_KIND_LITERAL:
+            return _format_number(ref.value)
+        base = ref.id
+        if ref.output_key:
+            base = f"{base}.{ref.output_key}"
+        if ref.symbol:
+            base = f"{ref.symbol}:{base}"
+        return base
 
 
 __all__ = ["BlockEditor"]

@@ -34,6 +34,12 @@ def _app():
     # Importing inside the fixture keeps the heavy import cost off
     # collection time when this file is skipped (no Tk display).
     try:
+        import tkinter as tk
+        if tk._default_root is not None:  # type: ignore[attr-defined]
+            pytest.skip(
+                "ChartApp wiring tests require owning the only Tk root; "
+                "run tests/scanner separately for this coverage."
+            )
         from tradinglab.app import ChartApp
         app = ChartApp()
     except Exception as e:  # noqa: BLE001

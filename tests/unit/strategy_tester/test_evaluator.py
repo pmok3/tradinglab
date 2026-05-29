@@ -5,6 +5,10 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+import numpy as np
+
+from tradinglab.core.bars_registry import BarsRegistry
+from tradinglab.data.multi_interval_cache import MultiIntervalCache
 from tradinglab.entries.model import (
     Direction,
     EntryStrategy,
@@ -27,12 +31,22 @@ from tradinglab.exits.model import (
 from tradinglab.exits.model import (
     TriggerKind as ExitTriggerKind,
 )
+from tradinglab.indicators.base import (
+    _BY_KIND_ID,
+    INDICATORS,
+    BaseIndicator,
+    LineStyle,
+    register_indicator,
+)
 from tradinglab.models import Candle
+from tradinglab.scanner.engine import make_context as scanner_make_context
+from tradinglab.scanner.model import OP_GT, OP_LT, Condition, FieldRef, Group
 from tradinglab.strategy_tester import (
     CostModel,
     UnsupportedTriggerKind,
     evaluate_symbol,
 )
+from tradinglab.strategy_tester import evaluator as evaluator_module
 
 _ET = ZoneInfo("America/New_York")
 
@@ -281,6 +295,98 @@ def test_indicator_entry_fires_when_condition_becomes_true() -> None:
     # be at or above the bar where the condition first became true.
     # (Threshold=105; ramp closes pass 105 around bar 4 → fill on bar 5+.)
     assert buys[0].fill_price >= 105.0
+
+
+def test_prewarm_indicator_memos_deduplicates_active_indicator_refs() -> None:
+    calls = {"count": 0}
+    display_name = "Counting Perf Active"
+    kind_id = "counting_perf_active"
+
+    class CountingIndicator(BaseIndicator):
+        kind_id = "counting_perf_active"
+        kind_version = 1
+        params_schema = ()
+        default_style = {"value": LineStyle()}
+        scannable_outputs = (("value", "numeric"),)
+        overlay = True
+        name = "Counting Perf Active"
+
+        def compute_arr(self, bars):
+            calls["count"] += 1
+            return {"value": np.asarray(bars.close, dtype=float)}
+
+    register_indicator(display_name, CountingIndicator)
+    try:
+        candles = _ramp_candles(n=12)
+        eval_ctx = scanner_make_context("TEST", "5m", list(candles), current_index=0)
+        ref = FieldRef.indicator(kind_id)
+        grp = Group(combinator="and", children=[
+            Condition(left=ref, op=OP_GT, params={"right": FieldRef.literal(100.0)}),
+            Condition(left=ref, op=OP_LT, params={"right": FieldRef.literal(999.0)}),
+        ])
+
+        evaluator_module._prewarm_indicator_memos(eval_ctx, {"trigger": grp})
+
+        assert calls["count"] == 1
+        assert eval_ctx.memo.get(kind_id, {}) is eval_ctx.memo.get(kind_id, {})
+        assert calls["count"] == 1
+    finally:
+        INDICATORS.pop(display_name, None)
+        _BY_KIND_ID.pop(kind_id, None)
+
+
+def test_prewarm_indicator_memos_warms_dependency_indicator_refs() -> None:
+    calls = {"count": 0}
+    display_name = "Counting Perf Dependency"
+    kind_id = "counting_perf_dependency"
+
+    class CountingIndicator(BaseIndicator):
+        kind_id = "counting_perf_dependency"
+        kind_version = 1
+        params_schema = ()
+        default_style = {"value": LineStyle()}
+        scannable_outputs = (("value", "numeric"),)
+        overlay = True
+        name = "Counting Perf Dependency"
+
+        def compute_arr(self, bars):
+            calls["count"] += 1
+            return {"value": np.asarray(bars.close, dtype=float)}
+
+    register_indicator(display_name, CountingIndicator)
+    try:
+        candles = _ramp_candles(n=12)
+        dep_candles = _ramp_candles(n=12, start=200.0)
+        cache = MultiIntervalCache()
+        cache.set_bars("TEST", "5m", list(candles))
+        cache.set_bars("SPY", "5m", list(dep_candles))
+        registry = BarsRegistry(cache)
+        eval_ctx = scanner_make_context(
+            "TEST",
+            "5m",
+            list(candles),
+            current_index=0,
+            bars_registry=registry,
+        )
+        grp = Group(combinator="and", children=[
+            Condition(
+                left=FieldRef.indicator(kind_id, symbol="SPY"),
+                op=OP_GT,
+                params={"right": FieldRef.literal(100.0)},
+            ),
+        ])
+
+        evaluator_module._prewarm_indicator_memos(eval_ctx, {"trigger": grp})
+
+        assert calls["count"] == 1
+        assert eval_ctx.memo.cache == {}
+        dep_view = registry.get_view("SPY", "5m")
+        assert dep_view is not None
+        assert dep_view.memo.get(kind_id, {}) is dep_view.memo.get(kind_id, {})
+        assert calls["count"] == 1
+    finally:
+        INDICATORS.pop(display_name, None)
+        _BY_KIND_ID.pop(kind_id, None)
 
 
 def test_indicator_entry_fires_when_condition_authored_at_different_interval() -> None:

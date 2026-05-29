@@ -17,7 +17,9 @@ from tradinglab.backtest.journal import PostTradeReview, PreTradeEntry
 from tradinglab.backtest.performance import TradeRow
 from tradinglab.models import Candle
 from tradinglab.strategy_tester.screenshot import (
+    CandleTimestampIndex,
     ScreenshotSpec,
+    build_candle_timestamp_index,
     render_trade_screenshot,
     select_window,
     trade_filename,
@@ -632,3 +634,90 @@ def test_indicator_overlay_backcompat_when_strategy_none(tmp_path) -> None:
     assert p1.read_bytes() == p2.read_bytes()
 
 
+def test_indicator_overlay_cache_reuses_computed_series(tmp_path, monkeypatch) -> None:
+    """Per-symbol screenshot batches should compute strategy overlays once."""
+    import numpy as np
+
+    from tradinglab.strategy_tester import screenshot as ss
+
+    bars = _ramp_candles(40)
+    row_a = _trade_row(bars, entry_idx=10, exit_idx=20, order_id="a")
+    row_b = _trade_row(bars, entry_idx=12, exit_idx=22, order_id="b")
+
+    class _FakeOverlay:
+        name = "Fake Overlay"
+        overlay = True
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def compute(self, candles):
+            self.calls += 1
+            return {"value": np.arange(len(candles), dtype=float)}
+
+    fake = _FakeOverlay()
+    monkeypatch.setattr(
+        ss,
+        "_collect_overlay_indicators",
+        lambda _entry, _exit: [("fake", {}, fake)],
+    )
+
+    cache = ss.build_indicator_overlay_cache(bars, object(), None)
+    assert fake.calls == 1
+
+    def _raise_if_recomputed(_entry, _exit):  # pragma: no cover - failure path
+        raise AssertionError("overlay collection should not run when cache is supplied")
+
+    monkeypatch.setattr(ss, "_collect_overlay_indicators", _raise_if_recomputed)
+    spec = ScreenshotSpec(width_in=5.0, height_in=3.0, dpi=72, draw_volume_pane=False)
+    ss.render_trade_screenshot(
+        candles=bars,
+        trade_row=row_a,
+        output_path=tmp_path / "a.png",
+        spec=spec,
+        indicator_overlay_cache=cache,
+    )
+    ss.render_trade_screenshot(
+        candles=bars,
+        trade_row=row_b,
+        output_path=tmp_path / "b.png",
+        spec=spec,
+        indicator_overlay_cache=cache,
+    )
+
+    assert fake.calls == 1
+    assert (tmp_path / "a.png").exists()
+    assert (tmp_path / "b.png").exists()
+
+
+def test_candle_timestamp_index_handles_seconds_milliseconds_and_fallback() -> None:
+    bars = _ramp_candles(20)
+    index = build_candle_timestamp_index(bars)
+
+    assert index.index_of(int(bars[5].date.timestamp())) == 5
+    assert index.index_of(int(bars[6].date.timestamp() * 1000.0)) == 6
+    assert index.index_of(int(bars[7].date.timestamp()) + 2) == 7
+    assert index.index_of(0) == -1
+
+
+def test_render_trade_screenshot_uses_supplied_timestamp_index(tmp_path, monkeypatch) -> None:
+    from tradinglab.strategy_tester import screenshot as ss
+
+    bars = _ramp_candles(30)
+    row = _trade_row(bars, entry_idx=8, exit_idx=16)
+    index = build_candle_timestamp_index(bars)
+
+    def _raise_if_scanned(_candles, _ts):  # pragma: no cover - failure path
+        raise AssertionError("render should use supplied timestamp_index")
+
+    monkeypatch.setattr(ss, "_index_of_ts", _raise_if_scanned)
+    out = render_trade_screenshot(
+        candles=bars,
+        trade_row=row,
+        output_path=tmp_path / "indexed.png",
+        spec=ScreenshotSpec(width_in=5.0, height_in=3.0, dpi=72),
+        timestamp_index=index,
+    )
+
+    assert out.exists()
+    assert isinstance(index, CandleTimestampIndex)

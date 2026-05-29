@@ -1,0 +1,32 @@
+{
+  "description": "ATR, Chandelier Stops, and EMA trend for risk planning.",
+  "indicators": [
+    {
+      "id": "atr-14",
+      "kind": "atr",
+      "panel": "atr",
+      "params": {
+        "length": 14
+      }
+    },
+    {
+      "id": "chandelier-22-3",
+      "kind": "chandelier",
+      "panel": "overlay",
+      "params": {
+        "atr_period": 22,
+        "lookback": 22,
+        "multiplier": 3.0
+      }
+    },
+    {
+      "id": "ema-20",
+      "kind": "ema",
+      "panel": "overlay",
+      "params": {
+        "length": 20
+      }
+    }
+  ],
+  "name": "ATR Risk"
+}

@@ -337,3 +337,33 @@ def test_on_change_fires_when_op_change_flips_layout(root):
     cf._op_var.set(OP_BETWEEN)
     cf._on_op_change()
     assert len(fires) >= 1
+
+
+def test_block_editor_exposes_condition_view_toggle(root):
+    c = Condition(left=FieldRef.builtin("close"), op=OP_GT,
+                  params={"right": FieldRef.literal(100.0)}, interval="5m")
+    ed = BlockEditor(root, root=Group(combinator="and", children=[c]))
+    values = tuple(ed._view_combo.cget("values"))
+    assert values == ("Auto layout", "Compact rows", "Detailed cards")
+    assert ed._view_var.get() == "Auto layout"
+
+
+def test_detailed_cards_forces_stacked_layout(root):
+    c = Condition(left=FieldRef.builtin("close"), op=OP_GT,
+                  params={"right": FieldRef.literal(100.0)}, interval="5m")
+    ed = BlockEditor(root, root=Group(combinator="and", children=[c]))
+    ed.set_view_mode("Detailed cards")
+    cf = ed._root_frame._child_frames[0]
+    assert cf._current_layout == "stacked"
+
+
+def test_compact_rows_show_trader_summary(root):
+    c = Condition(left=FieldRef.builtin("close", symbol="SPY"), op=OP_GT,
+                  params={"right": FieldRef.literal(100.0)}, interval="5m")
+    ed = BlockEditor(root, root=Group(combinator="and", children=[c]))
+    ed.set_view_mode("Compact rows")
+    cf = ed._root_frame._child_frames[0]
+    assert cf._summary_label is not None
+    summary = cf._summary_label.cget("text")
+    assert "SPY" in summary
+    assert ">" in summary

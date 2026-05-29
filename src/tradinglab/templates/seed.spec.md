@@ -22,13 +22,16 @@ The return dict shape is
 
 | Bundled subdir under `data/` | User-local target dir | Kinds |
 | --- | --- | --- |
-| `entry_strategy_templates/` | `<cache_dir>/entry_strategies/` | 5 entries |
-| `exit_strategy_templates/` | `<cache_dir>/exit_strategies/` | 5 exits |
+| `entry_strategy_templates/` | `<cache_dir>/entry_strategies/` | 20+ entries |
+| `exit_strategy_templates/` | `<cache_dir>/exit_strategies/` | 20+ exits |
 | `scanner_templates/` | `<cache_dir>/scans/` | 5 scanners |
 
 Indicator presets in `data/indicator_presets/` are bundled but NOT
 auto-seeded; they're consumed by a future Indicators → Load preset
-from file… affordance.
+from file… affordance. Strategy-combination templates in
+`data/strategy_combination_templates/` are also bundled but not
+auto-seeded because strategy-tester runs do not yet have a user-local
+template library.
 
 ## Guards
 

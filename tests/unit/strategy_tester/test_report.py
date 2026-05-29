@@ -14,10 +14,22 @@ import pytest
 
 from tradinglab.backtest.journal import PostTradeReview, PreTradeEntry
 from tradinglab.backtest.performance import TradeRow
+from tradinglab.backtest.session import SessionResult, SessionSpec
+from tradinglab.strategy_tester import report as report_module
+from tradinglab.strategy_tester import storage
+from tradinglab.strategy_tester.model import (
+    DatePreset,
+    RunStatus,
+    TestConfig,
+    TestRun,
+    UniverseKind,
+    UniverseSpec,
+)
 from tradinglab.strategy_tester.report import (
     AGGREGATE_FILENAME,
     ConfidenceInterval,
     PerSymbolStats,
+    aggregate_run,
     bootstrap_ci,
     compute_aggregate,
     daily_sharpe,
@@ -79,6 +91,31 @@ def _row(
 
 def _ts(year: int, month: int = 1, day: int = 1) -> int:
     return int(datetime(year, month, day, 15, 30, tzinfo=timezone.utc).timestamp())
+
+
+def _config() -> TestConfig:
+    return TestConfig(
+        entry_strategy_id="e1",
+        exit_strategy_id="x1",
+        universe=UniverseSpec(kind=UniverseKind.SYMBOLS, symbols=("AAPL", "MSFT")),
+        start_date="2024-01-01",
+        end_date="2024-12-31",
+        date_preset=DatePreset.CUSTOM,
+    )
+
+
+def _session_result(symbol: str, rows: list[TradeRow]) -> SessionResult:
+    return SessionResult(
+        spec=SessionSpec(
+            deck_seed=0,
+            tickers=(symbol,),
+            start_clock_iso="",
+            slippage_bps=0.0,
+            commission=0.0,
+        ),
+        pre_trades=[row.pre for row in rows if row.pre is not None],
+        post_trades=[row.post for row in rows],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -451,3 +488,64 @@ def test_per_year_epoch_seconds_produces_correct_years() -> None:
     years = [y.year for y in agg.per_year]
     assert years == [2024, 2025, 2026], f"Expected real years, got {years}"
     assert 1970 not in years, "per_year must not show epoch year 1970"
+
+
+def test_aggregate_run_can_write_csv_without_reloading_symbol_json(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    run = TestRun(
+        run_id="singlepass",
+        config=_config(),
+        status=RunStatus.DONE,
+        symbol_count_total=2,
+        symbol_count_done=2,
+        trade_count=2,
+    )
+    storage.save_manifest(tmp_path, run)
+    (tmp_path / "per_symbol").mkdir()
+    storage.save_session_result_for_symbol(
+        tmp_path,
+        "AAPL",
+        _session_result("AAPL", [
+            _row(symbol="AAPL", pnl=100.0, exit_ts=_ts(2024, 1, 5)),
+        ]),
+    )
+    storage.save_session_result_for_symbol(
+        tmp_path,
+        "MSFT",
+        _session_result("MSFT", [
+            _row(symbol="MSFT", pnl=-50.0, exit_ts=_ts(2024, 1, 6)),
+        ]),
+    )
+
+    original_from_dict = report_module.SessionResult.from_dict
+    parse_calls = {"count": 0}
+
+    def counted_from_dict(payload):
+        parse_calls["count"] += 1
+        return original_from_dict(payload)
+
+    monkeypatch.setattr(
+        report_module.SessionResult,
+        "from_dict",
+        staticmethod(counted_from_dict),
+    )
+
+    agg = aggregate_run(tmp_path, bootstrap_samples=10, write_csv=True)
+
+    assert agg.trade_count == 2
+    assert parse_calls["count"] == 2
+    assert (tmp_path / AGGREGATE_FILENAME).exists()
+    csv_body = (tmp_path / "trades.csv").read_text(encoding="utf-8")
+    assert "AAPL" in csv_body
+    assert "MSFT" in csv_body
+
+
+def test_report_row_loader_parallelizes_larger_runs(monkeypatch) -> None:
+    monkeypatch.setattr(report_module.os, "cpu_count", lambda: 16)
+    assert report_module._row_load_workers(3) == 1
+    assert report_module._row_load_workers(20) == 16
+
+    monkeypatch.setattr(report_module.os, "cpu_count", lambda: 128)
+    assert report_module._row_load_workers(100) == 32

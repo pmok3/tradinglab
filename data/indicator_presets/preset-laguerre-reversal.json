@@ -1,0 +1,31 @@
+{
+  "description": "Laguerre RSI with Bollinger Bands and VWAP.",
+  "indicators": [
+    {
+      "id": "lrsi-0-5",
+      "kind": "lrsi",
+      "panel": "lrsi",
+      "params": {
+        "gamma": 0.5
+      }
+    },
+    {
+      "id": "bbands-20-2",
+      "kind": "bbands",
+      "panel": "overlay",
+      "params": {
+        "length": 20,
+        "ma_type": "SMA",
+        "num_std": 2.0,
+        "std_length": 20
+      }
+    },
+    {
+      "id": "vwap",
+      "kind": "vwap",
+      "panel": "overlay",
+      "params": {}
+    }
+  ],
+  "name": "Laguerre Reversal"
+}

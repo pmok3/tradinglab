@@ -18,6 +18,7 @@ from tradinglab.gui._param_widgets import (
     _format_anchor_label,
     build_param_widget,
     label_text_for,
+    validate_param_value,
 )
 from tradinglab.indicators.base import ParamDef
 
@@ -193,6 +194,67 @@ def test_manual_never_fires(root):
     widget.event_generate("<FocusOut>")
     root.update()
     assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# Param validation
+# ---------------------------------------------------------------------------
+
+
+def test_validate_int_rejects_below_minimum():
+    pdef = ParamDef(name="length", kind="int", default=14, min=1, max=200,
+                    description="Length")
+    ok, value, message = validate_param_value(pdef, "0")
+    assert ok is False
+    assert value == 14
+    assert message == "Enter Length greater than or equal to 1."
+
+
+def test_validate_int_rejects_fractional_decimal_without_truncating():
+    pdef = ParamDef(name="length", kind="int", default=14, min=1, max=200,
+                    description="Length")
+    ok, value, message = validate_param_value(pdef, "1.5")
+    assert ok is False
+    assert value == 14
+    assert message == "Enter a whole number for Length."
+
+
+def test_validate_int_accepts_whole_decimal_text():
+    pdef = ParamDef(name="length", kind="int", default=14, min=1, max=200,
+                    description="Length")
+    ok, value, message = validate_param_value(pdef, "2.0")
+    assert ok is True
+    assert value == 2
+    assert message == ""
+
+
+def test_validate_float_accepts_value_in_range():
+    pdef = ParamDef(name="mult", kind="float", default=2.0, min=0.1, max=10.0,
+                    description="Multiplier")
+    ok, value, message = validate_param_value(pdef, "1.5")
+    assert ok is True
+    assert value == 1.5
+    assert message == ""
+
+
+@pytest.mark.parametrize("raw", ["nan", "inf", "-inf"])
+def test_validate_float_rejects_non_finite_values(raw: str):
+    pdef = ParamDef(name="mult", kind="float", default=2.0, min=0.1, max=10.0,
+                    description="Multiplier")
+    ok, value, message = validate_param_value(pdef, raw)
+    assert ok is False
+    assert value == 2.0
+    assert message == "Enter a finite number for Multiplier."
+
+
+def test_validate_choice_rejects_unknown_value():
+    pdef = ParamDef(name="mode", kind="choice", default="simple",
+                    choices=("simple", "time_of_day"),
+                    description="Mode")
+    ok, value, message = validate_param_value(pdef, "bogus")
+    assert ok is False
+    assert value == "simple"
+    assert message == "Choose a valid Mode."
 
 
 # ---------------------------------------------------------------------------

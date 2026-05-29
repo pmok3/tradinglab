@@ -25,6 +25,10 @@ Coverage matrix:
 
 from __future__ import annotations
 
+import math
+
+import pytest
+
 import tradinglab.indicators  # noqa: F401  -- registers indicators
 from tradinglab.gui.scanner_block_editor import (
     BlockEditor,
@@ -32,8 +36,10 @@ from tradinglab.gui.scanner_block_editor import (
 )
 from tradinglab.scanner.model import (
     OP_BETWEEN,
+    OP_CROSSES_ABOVE,
     OP_GT,
     OP_INSIDE_BAR,
+    OP_WITHIN_PCT,
     Condition,
     FieldRef,
     Group,
@@ -235,6 +241,42 @@ def test_left_change_close_to_rvol_expands_to_stacked(root):
     cf.cond.left = cf._left_picker.get()
     cf._on_left_change()
     assert cf._current_layout == "stacked"
+
+
+def test_int_scalar_param_rejects_fractional_decimal_without_truncating(root):
+    c = Condition(
+        left=FieldRef.builtin("close"),
+        op=OP_CROSSES_ABOVE,
+        params={"right": FieldRef.literal(100.0), "lookback": 3},
+        interval="5m",
+    )
+    cf = _cond_frame_for(c, root)
+    kind, var = cf._param_widgets["lookback"]
+    assert kind == "int"
+
+    var.set("1.5")
+    cf._commit_params()
+
+    assert cf.cond.params["lookback"] == 3
+
+
+@pytest.mark.parametrize("raw", ["nan", "inf", "-inf"])
+def test_float_scalar_param_rejects_non_finite_values(root, raw: str):
+    c = Condition(
+        left=FieldRef.builtin("close"),
+        op=OP_WITHIN_PCT,
+        params={"target": FieldRef.literal(100.0), "tolerance_pct": 2.5},
+        interval="5m",
+    )
+    cf = _cond_frame_for(c, root)
+    kind, var = cf._param_widgets["tolerance_pct"]
+    assert kind == "float"
+
+    var.set(raw)
+    cf._commit_params()
+
+    assert cf.cond.params["tolerance_pct"] == 2.5
+    assert not math.isnan(cf.cond.params["tolerance_pct"])
 
 
 # ---------------------------------------------------------------------------

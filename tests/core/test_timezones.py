@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import ast
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
 from tradinglab.core import timezones
+from tradinglab.core.lru_dict import LRUDict
 
 
 class TestET:
@@ -48,6 +51,35 @@ class TestET:
         assert offset is not None
         assert offset.total_seconds() == -5 * 3600
 
+    def test_get_zoneinfo_returns_named_zone_and_caches_identity(self):
+        london_a = timezones.get_zoneinfo("Europe/London")
+        london_b = timezones.get_zoneinfo("Europe/London")
+        assert london_a is not None
+        assert london_a is london_b
+        assert "London" in str(london_a)
+
+    def test_get_zoneinfo_routes_et_through_cached_et_constant(self):
+        assert timezones.get_zoneinfo("America/New_York") is timezones.get_et()
+
+    def test_get_zoneinfo_returns_none_for_blank_or_bad_name(self):
+        assert timezones.get_zoneinfo("") is None
+        assert timezones.get_zoneinfo("Bogus/Not_A_Zone") is None
+
+    def test_get_zoneinfo_cache_is_bounded(self, monkeypatch):
+        class _FakeZone:
+            def __init__(self, name: str):
+                self.name = name
+
+        monkeypatch.setattr(timezones, "ZoneInfo", _FakeZone)
+        monkeypatch.setattr(timezones, "_ZONE_CACHE", LRUDict(maxsize=3))
+
+        for name in ("Test/A", "Test/B", "Test/C", "Test/D"):
+            assert timezones.get_zoneinfo(name) is not None
+
+        assert len(timezones._ZONE_CACHE) == 3
+        assert "Test/A" not in timezones._ZONE_CACHE
+        assert "Test/D" in timezones._ZONE_CACHE
+
 
 class TestMissingTzdataFallback:
     def test_get_et_returns_none_when_zoneinfo_raises(self, monkeypatch):
@@ -77,6 +109,39 @@ class TestMissingTzdataFallback:
         dt = timezones.now_et()
         assert dt.tzinfo is None
 
+    def test_get_zoneinfo_returns_none_when_zoneinfo_raises(self, monkeypatch):
+        monkeypatch.setattr(timezones, "_ZONE_CACHE", LRUDict(maxsize=3))
+
+        class _Bad:
+            def __init__(self, *_a, **_kw):
+                raise Exception("simulated missing tzdata")
+
+        monkeypatch.setattr(timezones, "ZoneInfo", _Bad)
+        assert timezones.get_zoneinfo("Europe/London") is None
+
+
+class TestAdoptionInvariant:
+    def test_core_timezones_is_the_only_production_zoneinfo_importer(self):
+        src_root = Path(__file__).resolve().parents[2] / "src" / "tradinglab"
+        allowed = {src_root / "core" / "timezones.py"}
+        offenders: list[str] = []
+
+        for path in sorted(src_root.rglob("*.py")):
+            if path in allowed:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            rel = path.relative_to(src_root)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and node.module == "zoneinfo":
+                    names = ", ".join(alias.name for alias in node.names)
+                    offenders.append(f"{rel}: imports {names} from zoneinfo")
+                elif isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name == "zoneinfo":
+                            offenders.append(f"{rel}: imports zoneinfo")
+
+        assert offenders == []
+
 
 @pytest.fixture(autouse=True)
 def reset_timezone_cache():
@@ -85,4 +150,5 @@ def reset_timezone_cache():
     # Restore real ET after any monkeypatch
     timezones._ET_CACHE = None
     timezones._ET_RESOLVED = False
+    timezones._ZONE_CACHE = LRUDict(maxsize=timezones._ZONE_CACHE_MAX_SIZE)
     timezones.ET = timezones.get_et()

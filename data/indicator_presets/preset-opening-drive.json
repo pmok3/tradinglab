@@ -1,0 +1,35 @@
+{
+  "description": "VWAP, RVOL time-of-day, EMA 9, and prior-day levels.",
+  "indicators": [
+    {
+      "id": "vwap",
+      "kind": "vwap",
+      "panel": "overlay",
+      "params": {}
+    },
+    {
+      "id": "rvol-tod-20",
+      "kind": "rvol",
+      "panel": "rvol",
+      "params": {
+        "length": 20,
+        "mode": "time_of_day"
+      }
+    },
+    {
+      "id": "ema-9",
+      "kind": "ema",
+      "panel": "overlay",
+      "params": {
+        "length": 9
+      }
+    },
+    {
+      "id": "pdh-pdl-pdc",
+      "kind": "prior_day_hlc",
+      "panel": "overlay",
+      "params": {}
+    }
+  ],
+  "name": "Opening Drive"
+}

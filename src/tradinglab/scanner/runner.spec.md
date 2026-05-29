@@ -28,9 +28,10 @@ across scans, and tracks edge-triggered "new" matches via
   single-scan, single-thread path (tests, scripts).
 - `class ScanRunner`:
   - `__init__(max_workers=None, *, bars_registry=None)` — workers
-    default to `min(cpu_count-1, 4)`. With `bars_registry`, the runner
-    pulls `(bars, memo)` from the registry instead of building local
-    state.
+    default to the persisted `worker_count` setting when positive,
+    clamped to 64; otherwise auto-detects `min(cpu_count-1, 64)`.
+    With `bars_registry`, the runner pulls `(bars, memo)` from the
+    registry instead of building local state.
   - `run(scans, candles_by_symbol, *, interval, tick_id,
     timestamp=None) -> Dict[scan_id, ScanResult]`. Caller passes only
     the scans they want evaluated — the runner consults no library.
@@ -57,8 +58,13 @@ would otherwise re-fire the new-row sound on the next valid tick.
 
 ## Threading model
 
-- One task per `(scan, symbol)` to a private `ThreadPoolExecutor`.
-  Default workers: `min(os.cpu_count()-1, 4)`.
+- One task per symbol to a private `ThreadPoolExecutor`; each task
+  evaluates all scans that care about that symbol against a shared
+  per-symbol `EvaluationContext`.
+- Default workers honour the Settings `worker_count` tunable when set
+  (same knob used by Strategy Tester), clamped to 64. Auto mode uses
+  `min(os.cpu_count()-1, 64)` so high-core machines are not silently
+  capped at 4 scanner workers.
 - **Per-symbol `IndicatorMemo` shared across scans on the same tick**
   via `memos: Dict[symbol, IndicatorMemo]` allocated fresh per
   `run()`. 6 scans referencing `SMA(50)` on AAPL → 1 compute per tick.

@@ -1,0 +1,37 @@
+{
+  "created_at": "2026-05-29T21:56:00Z",
+  "created_with": {
+    "app": "tradinglab",
+    "template": true,
+    "version": "1.0.0"
+  },
+  "eod_kill_switch": false,
+  "eod_offset_min": 5,
+  "extra": {
+    "functional_series": "bearish_ramp",
+    "template_pack": "expanded-2026-05"
+  },
+  "id": "tmpl-exit-stop-1pct",
+  "legs": [
+    {
+      "enabled": true,
+      "id": "stop1",
+      "label": "hard-stop -1%",
+      "triggers": [
+        {
+          "enabled": true,
+          "id": "stop1-t",
+          "kind": "stop",
+          "label": "-1% from entry",
+          "offset_pct": -1.0,
+          "qty_pct": 100.0,
+          "time_in_force": "day"
+        }
+      ]
+    }
+  ],
+  "name": "Hard stop -1%",
+  "oco_groups": [],
+  "schema_version": 2,
+  "updated_at": "2026-05-29T21:56:00Z"
+}

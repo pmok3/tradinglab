@@ -29,6 +29,7 @@ times. Failures raise; the GUI catches and surfaces via messagebox.
 
 from __future__ import annotations
 
+import heapq
 import html
 import logging
 import math
@@ -232,22 +233,23 @@ def export_html(
     )
 
     # Gather screenshots from the screenshots/ dir.
-    shots_dir = run_dir / "screenshots"
     shot_imgs = ""
-    if shots_dir.is_dir():
-        png_files = sorted(shots_dir.glob("*.png"))
-        if png_files:
-            shot_imgs = "<h2>Trade screenshots</h2>\n<div class='screenshots'>\n"
-            for f in png_files:
-                rel = f"screenshots/{f.name}"
-                shot_imgs += (
-                    f"  <figure><a href='{html.escape(rel)}' "
-                    f"target='_blank' rel='noopener'>"
-                    f"<img src='{html.escape(rel)}' alt='trade'></a>"
-                    f"<figcaption>{html.escape(f.name)}</figcaption>"
-                    f"</figure>\n"
-                )
-            shot_imgs += "</div>\n"
+    png_files = _screenshot_png_files(run_dir / "screenshots")
+    if png_files:
+        figures: list[str] = []
+        for f in png_files:
+            rel = f"screenshots/{f.name}"
+            figures.append(
+                f"  <figure><a href='{html.escape(rel)}' "
+                f"target='_blank' rel='noopener'>"
+                f"<img src='{html.escape(rel)}' alt='trade'></a>"
+                f"<figcaption>{html.escape(f.name)}</figcaption>"
+                f"</figure>\n"
+            )
+        shot_imgs = (
+            "<h2>Trade screenshots</h2>\n<div class='screenshots'>\n"
+            f"{''.join(figures)}</div>\n"
+        )
 
     css = """\
 body { font-family: -apple-system, Segoe UI, sans-serif;
@@ -546,22 +548,34 @@ def _draw_equity_curve_page(
     """Equity curve line plot, one page."""
     if not agg.equity_curve:
         return
-    import datetime as _dt
     fig = _mpl_figure.Figure(figsize=(11.0, 8.5))  # landscape
     fig.subplots_adjust(left=0.08, right=0.96, top=0.92, bottom=0.10)
     ax = fig.add_subplot(111)
-    xs = [
-        _dt.datetime.fromtimestamp(ts_s, tz=_dt.timezone.utc)
-        for ts_s, _ in agg.equity_curve
-    ]
-    ys = [eq for _, eq in agg.equity_curve]
+    xs, ys = _equity_curve_xy(agg.equity_curve)
     ax.plot(xs, ys, color="#2360c8", linewidth=1.2)
+    ax.xaxis_date()
     ax.set_title("Equity curve", fontsize=12, loc="left")
     ax.set_xlabel("Date (UTC)")
     ax.set_ylabel("Equity ($)")
     ax.grid(True, alpha=0.3)
     fig.autofmt_xdate()
     pdf.savefig(fig)
+
+
+def _equity_curve_xy(equity_curve: list[tuple[int, float]]) -> tuple[list[float], list[float]]:
+    import datetime as _dt
+
+    import matplotlib.dates as _mpl_dates
+
+    epoch_day = _mpl_dates.date2num(
+        _dt.datetime(1970, 1, 1, tzinfo=_dt.timezone.utc)
+    )
+    xs: list[float] = []
+    ys: list[float] = []
+    for ts_s, equity in equity_curve:
+        xs.append(epoch_day + float(ts_s) / 86_400.0)
+        ys.append(float(equity))
+    return xs, ys
 
 
 def _draw_screenshot_page(pdf: PdfPages, png_path: Path) -> None:
@@ -640,9 +654,10 @@ def export_pdf(
 
     png_files: list[Path] = []
     if include_screenshots:
-        shots_dir = run_dir / "screenshots"
-        if shots_dir.is_dir():
-            png_files = sorted(shots_dir.glob("*.png"))[:max_screenshots]
+        png_files = _screenshot_png_files(
+            run_dir / "screenshots",
+            limit=max_screenshots,
+        )
     total_pages = 3 + len(png_files)
 
     if _cancelled(cancel_token):
@@ -670,3 +685,14 @@ def export_pdf(
             _draw_screenshot_page(pdf, f)
             _emit(progress_callback, 4 + i, total_pages, f.name)
     return out_path
+
+
+def _screenshot_png_files(shots_dir: Path, *, limit: int | None = None) -> list[Path]:
+    if not shots_dir.is_dir():
+        return []
+    if limit is not None:
+        limit = max(0, int(limit))
+        if limit <= 0:
+            return []
+        return heapq.nsmallest(limit, shots_dir.glob("*.png"), key=lambda p: p.name)
+    return sorted(shots_dir.glob("*.png"), key=lambda p: p.name)

@@ -8,7 +8,8 @@ Tiny module of display-formatting helpers shared across the GUI tables, tooltips
 - `format_dt(dt, fmt: str, tz_name: str = "") -> str` — `dt.strftime(fmt)` with optional IANA-tz conversion in front. Empty `tz_name` (default), naive `dt`, or a missing/typo IANA name all silently fall through to a plain `strftime` so the helper can never break the render path. Used at intraday clock-text sites only — daily/weekly/monthly bar dates stay raw because a daily bar is a trading-date label, not an instant. Callers: `app.py` x-axis fine-label formatter (`%H:%M` branch) + `_format_candle_date` (intraday branch — drives hover tooltip cache and OHLC table rows).
 
 ## Dependencies
-- Internal: none.
+- Internal: `core.timezones.get_zoneinfo` for user-selectable display
+  timezone resolution.
 - External: none.
 
 ## Design Decisions
@@ -23,4 +24,4 @@ Tiny module of display-formatting helpers shared across the GUI tables, tooltips
 
 ## Known limitations / Future work
 - No `"T"` (trillion) case — would only matter for crypto aggregate volumes.
-- `format_dt(dt, fmt, tz_name="")` supports the user-selectable display timezone feature. One helper, three call sites in `app.py`, no constants module — bad/empty/naive inputs fall through to raw `strftime` rather than raise. Daily-bar formatters intentionally do not call it (would shift trading-date labels across the date line).
+- `format_dt(dt, fmt, tz_name="")` supports the user-selectable display timezone feature. One helper, three call sites in `app.py`; bad/empty/naive inputs fall through to raw `strftime` rather than raise. Timezone construction is delegated to `core.timezones.get_zoneinfo` so missing-tzdata behavior stays centralized. Daily-bar formatters intentionally do not call it (would shift trading-date labels across the date line).

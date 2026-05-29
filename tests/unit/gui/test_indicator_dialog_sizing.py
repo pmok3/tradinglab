@@ -14,6 +14,7 @@ import pytest
 
 from tradinglab.gui.indicator_dialog import (
     _combo_width_for_choices,
+    _filter_indicator_kind_displays,
     _spinbox_width_for,
 )
 
@@ -57,6 +58,22 @@ class TestComboWidthForChoices:
         # ChoiceParam.choices is often a list of strings, but
         # defensive: any iterable of stringifiable objects works.
         assert _combo_width_for_choices([1, 22, 333]) == 8
+
+
+class TestFilterIndicatorKindDisplays:
+    def test_searches_display_kind_id_and_tooltip_text(self):
+        mapping = {
+            "EMA": "ema",
+            "RRVOL": "rrvol",
+            "ATR": "atr",
+        }
+        assert _filter_indicator_kind_displays(mapping, "rrvol") == ("RRVOL",)
+        assert _filter_indicator_kind_displays(mapping, "moving average") == ("EMA",)
+        assert _filter_indicator_kind_displays(mapping, "atr") == ("ATR",)
+
+    def test_empty_query_returns_all_displays(self):
+        mapping = {"EMA": "ema", "RRVOL": "rrvol"}
+        assert _filter_indicator_kind_displays(mapping, "") == ("EMA", "RRVOL")
 
 
 # ------------------------------------------------------------- spinbox widths

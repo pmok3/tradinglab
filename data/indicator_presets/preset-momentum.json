@@ -1,5 +1,5 @@
 {
-  "description": "RSI(14) + SMI(10,3) sub-panes for momentum reads.",
+  "description": "RSI(14) + SMI(14,3,3,3) sub-panes for momentum reads.",
   "indicators": [
     {
       "id": "rsi-14",
@@ -10,12 +10,14 @@
       }
     },
     {
-      "id": "smi-10-3",
+      "id": "smi-14-3-3-3",
       "kind": "smi",
       "panel": "smi",
       "params": {
-        "d": 3,
-        "k": 10
+        "length": 14,
+        "signal_length": 3,
+        "smooth1": 3,
+        "smooth2": 3
       }
     }
   ],

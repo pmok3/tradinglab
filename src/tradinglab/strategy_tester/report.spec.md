@@ -13,10 +13,12 @@ to `manifest.json`. The Strategy tab's Report view reads this file
   per-symbol / per-year breakouts, banners).
 - `PerSymbolStats` / `PerYearStats` — rows in the per-X breakouts.
 - `ConfidenceInterval(lo, hi, point, confidence)` — 2-sided CI.
-- `aggregate_run(run_dir, *, bootstrap_samples=10_000, rng_seed=1337)
-  -> RunAggregate` — disk-aware driver. Reads
+- `aggregate_run(run_dir, *, bootstrap_samples=10_000, rng_seed=1337,
+  write_csv=False) -> RunAggregate` — disk-aware driver. Reads
   `manifest.json` + `per_symbol/*.json` → builds aggregate → writes
-  `aggregate.json` atomically → returns the aggregate.
+  `aggregate.json` atomically → returns the aggregate. When
+  `write_csv=True`, writes `trades.csv` from the same in-memory
+  `TradeRow` list so finalization does not re-read per-symbol JSON.
 - `compute_aggregate(*, run_id, rows_by_symbol, starting_cash,
   bootstrap_samples=10_000, rng_seed=1337, schema_version=1)
   -> RunAggregate` — pure-function math kernel. The unit-test entry
@@ -25,7 +27,8 @@ to `manifest.json`. The Strategy tab's Report view reads this file
   `load_aggregate(run_dir) -> RunAggregate | None` — disk round-trip.
 - `write_run_csv(run_dir, rows=None) -> Path` — writes the canonical
   22-column trades CSV via
-  `backtest.performance.write_trade_rows_csv`.
+  `backtest.performance.write_trade_rows_csv`. Passing `rows` avoids
+  loading `per_symbol/*.json`; omitting it loads rows on demand.
 - Stat primitives: `wilson_score_ci`, `bootstrap_ci`,
   `profit_factor`, `expectancy`, `max_drawdown`, `daily_sharpe`,
   `daily_sortino`.
@@ -100,12 +103,22 @@ to `manifest.json`. The Strategy tab's Report view reads this file
 }
 ```
 
+## Disk loading / finalization performance
+- `aggregate_run` and `write_run_csv(rows=None)` share a single
+  per-symbol row-loading helper. Runs with fewer than 4 symbol JSON
+  files load serially to avoid thread overhead; larger runs load
+  `per_symbol/*.json` on a `ThreadPoolExecutor` capped at 32 workers,
+  preserving sorted filename order when building `rows_by_symbol`.
+- The helper skips corrupt per-symbol JSON or symbols with no closed
+  trades, matching the previous tolerant aggregation behavior.
+
 ## Integration with `runner.run`
-- The runner calls `report.aggregate_run(run_dir)` and
-  `report.write_run_csv(run_dir)` after the symbol loop completes,
-  on both DONE and CANCELLED status. Failures are logged but do not
-  alter the Run status — the Run is judged on `SessionResult` JSON
-  correctness; the aggregate is a derived artifact.
+- The runner calls `report.aggregate_run(run_dir, write_csv=True)`
+  after the symbol loop completes, on both DONE and CANCELLED status.
+  That single pass writes both `aggregate.json` and `trades.csv`.
+  Failures are logged but do not alter the Run status — the Run is
+  judged on `SessionResult` JSON correctness; the aggregate and CSV are
+  derived artifacts.
 
 ## Testing
 - `tests/unit/strategy_tester/test_report.py` —
@@ -126,6 +139,9 @@ to `manifest.json`. The Strategy tab's Report view reads this file
   - `compute_aggregate` permutation invariance.
   - `save_aggregate` / `load_aggregate` round-trip.
   - `aggregate_run(run_dir)` end-to-end against PR-1 test fixtures.
+  - `aggregate_run(write_csv=True)` writes `trades.csv` without a
+    second per-symbol JSON parse pass; row-loader worker sizing is
+    pinned for small and large runs.
 
 ## See also
 - [evaluator](evaluator.spec.md) — produces the SessionResult that

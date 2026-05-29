@@ -1,0 +1,28 @@
+{
+  "description": "Prior-day high/low/close, VWAP, and anchored VWAP shell.",
+  "indicators": [
+    {
+      "id": "pdh-pdl-pdc",
+      "kind": "prior_day_hlc",
+      "panel": "overlay",
+      "params": {}
+    },
+    {
+      "id": "vwap",
+      "kind": "vwap",
+      "panel": "overlay",
+      "params": {}
+    },
+    {
+      "id": "avwap-manual",
+      "kind": "avwap",
+      "panel": "overlay",
+      "params": {
+        "anchor_ts": "",
+        "bands": "off",
+        "price_source": "typical"
+      }
+    }
+  ],
+  "name": "Daily Levels"
+}

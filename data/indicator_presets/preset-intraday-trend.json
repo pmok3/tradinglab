@@ -1,0 +1,37 @@
+{
+  "description": "EMA 9/21, VWAP, and simple RVOL for trend-following tape reads.",
+  "indicators": [
+    {
+      "id": "ema-9",
+      "kind": "ema",
+      "panel": "overlay",
+      "params": {
+        "length": 9
+      }
+    },
+    {
+      "id": "ema-21",
+      "kind": "ema",
+      "panel": "overlay",
+      "params": {
+        "length": 21
+      }
+    },
+    {
+      "id": "vwap",
+      "kind": "vwap",
+      "panel": "overlay",
+      "params": {}
+    },
+    {
+      "id": "rvol-20",
+      "kind": "rvol",
+      "panel": "rvol",
+      "params": {
+        "length": 20,
+        "mode": "simple"
+      }
+    }
+  ],
+  "name": "Intraday Trend"
+}

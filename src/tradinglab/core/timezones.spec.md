@@ -1,10 +1,11 @@
 # timezones.py — Spec
 
 ## Purpose
-Single source of truth for the US-Eastern :class:`zoneinfo.ZoneInfo`.
-Replaces 11+ ad-hoc ``ZoneInfo("America/New_York")`` constructions
-(some wrapped in try/except for missing-tzdata environments, with
-subtly drifting fallback policies) with one cached primitive.
+Single source of truth for :class:`zoneinfo.ZoneInfo` resolution.
+Replaces ad-hoc ``ZoneInfo("America/New_York")`` and display-timezone
+constructions (some wrapped in try/except for missing-tzdata
+environments, with subtly drifting fallback policies) with cached
+primitives.
 
 ## Public API
 - `ET: tzinfo | None` — eagerly resolved at import. `None` when
@@ -12,6 +13,11 @@ subtly drifting fallback policies) with one cached primitive.
 - `get_et() -> tzinfo | None` — lazy accessor; identical to `ET`
   after first call (cached). Slow-path for "I might be imported
   before tzdata is installed" callers.
+- `get_zoneinfo(name: str | None) -> tzinfo | None` — cached generic
+  IANA-zone resolver for user-selectable display timezones. Blank,
+  invalid, or unavailable names return `None`; `"America/New_York"`
+  delegates to `get_et()`. Non-ET lookups are kept in a bounded
+  `LRUDict(maxsize=64)`.
 - `now_et() -> datetime` — current wall-clock time in ET. Falls
   back to a naive (no-tz) datetime when tzdata is missing.
 - `to_et(epoch_seconds: float) -> datetime` — convert a UTC epoch
@@ -19,7 +25,7 @@ subtly drifting fallback policies) with one cached primitive.
   missing.
 
 ## Dependencies
-- Internal: none.
+- Internal: `core.lru_dict.LRUDict` for the generic timezone cache.
 - External: `zoneinfo` (stdlib, Python 3.9+); `datetime` (stdlib).
 
 ## Design Decisions
@@ -30,10 +36,17 @@ subtly drifting fallback policies) with one cached primitive.
 - **Cached after first resolution.** Constructing `ZoneInfo` is
   cheap (microseconds), but importing tzdata is non-trivial; caching
   amortises across the long-running session.
+- **Generic zone cache is bounded.** Display timezone names come from
+  user settings; keep the cache at 64 entries so malformed/manual
+  churn cannot grow process memory for the lifetime of the app.
 - **Returns `None` on missing tzdata, not raises.** Matches the prior
   consensus fallback in `app.py::_intraday_session_open` (which
   returns `True` conservatively when zoneinfo is unavailable). Callers
   branch on `et is None` to choose their own degraded behaviour.
+- **Production zoneinfo imports are centralized here.** Callers that
+  need ET use `ET` / `get_et`; callers that need an arbitrary user
+  display timezone use `get_zoneinfo`. This keeps missing-tzdata and
+  invalid-name behavior consistent.
 - **`now_et()` and `to_et()` are convenience helpers, not the
   primary surface.** Most call sites want a `tzinfo` object to pass
   into `datetime.fromtimestamp(ts, tz=)` or `datetime.now(tz=)`. The
@@ -49,10 +62,16 @@ subtly drifting fallback policies) with one cached primitive.
   module-level read populates the cache).
 - `get_et()` returns the SAME object on every call within one process
   — never re-constructs.
+- `get_zoneinfo("America/New_York") is get_et()`.
+- Non-ET `get_zoneinfo` cache never grows past 64 entries.
+- No production module outside `core/timezones.py` imports `zoneinfo`
+  directly.
 - `to_et(0).tzinfo is not None` is True when tzdata is installed.
 
 ## Testing
 - `tests/core/test_timezones.py` — cover: ET non-None when tzdata
   installed; cached identity across calls; now_et returns tz-aware
-  datetime; to_et roundtrip; graceful behaviour when ZoneInfo
-  raises (simulate via monkeypatch).
+  datetime; generic timezone lookup; bounded generic cache; to_et
+  roundtrip; graceful behaviour when ZoneInfo raises (simulate via
+  monkeypatch); source invariant that production ZoneInfo imports stay
+  centralized here.

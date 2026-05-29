@@ -1,0 +1,43 @@
+{
+  "description": "Configurable MA, EMA 50, SMI, and ADX for cleaner trend reads.",
+  "indicators": [
+    {
+      "id": "ma-rma-34",
+      "kind": "ma",
+      "panel": "overlay",
+      "params": {
+        "length": 34,
+        "ma_type": "RMA",
+        "source": "Close"
+      }
+    },
+    {
+      "id": "ema-50",
+      "kind": "ema",
+      "panel": "overlay",
+      "params": {
+        "length": 50
+      }
+    },
+    {
+      "id": "smi-14",
+      "kind": "smi",
+      "panel": "smi",
+      "params": {
+        "length": 14,
+        "signal_length": 3,
+        "smooth1": 3,
+        "smooth2": 3
+      }
+    },
+    {
+      "id": "adx-14",
+      "kind": "adx",
+      "panel": "adx",
+      "params": {
+        "length": 14
+      }
+    }
+  ],
+  "name": "Smoothed Trend"
+}

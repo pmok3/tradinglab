@@ -113,6 +113,98 @@ def test_restore_window_accepts_reasonable_saved_main_geometry(tmp_path: Path) -
     assert top.applied == [stored]
 
 
+def test_restore_window_size_uses_saved_size_with_default_position(tmp_path: Path) -> None:
+    store = gs.GeometryStore(path=tmp_path / "geometry.json")
+    store.load()
+    store.set_window_size("dlg.entries", 1100, 700)
+
+    top = _FakeTopLevel(screen_w=1920, screen_h=1080)
+    applied = store.restore_window_size(
+        top, "dlg.entries", default="900x500+40+50", min_size=(800, 400),
+    )
+
+    assert applied == "1100x700+40+50"
+    assert top.applied == ["1100x700+40+50"]
+
+
+def test_window_size_write_through_persists_round_trip(tmp_path: Path) -> None:
+    p = tmp_path / "geometry.json"
+    store = gs.GeometryStore(path=p)
+    store.load()
+    store.set_window_size("dlg.entries", 1100, 700)
+
+    other = gs.GeometryStore(path=p)
+    other.load()
+    assert other.get_window_size("dlg.entries") == (1100, 700)
+
+
+def test_set_window_size_clamps_positive_and_persists(tmp_path: Path) -> None:
+    p = tmp_path / "geometry.json"
+    store = gs.GeometryStore(path=p)
+    store.load()
+    store.set_window_size("dlg.entries", 0, -20)
+
+    other = gs.GeometryStore(path=p)
+    other.load()
+    assert other.get_window_size("dlg.entries") == (1, 1)
+
+
+def test_clear_window_size_resets_to_default(tmp_path: Path) -> None:
+    store = gs.GeometryStore(path=tmp_path / "geometry.json")
+    store.load()
+    store.set_window_size("dlg.entries", 1100, 700)
+    assert store.get_window_size("dlg.entries") == (1100, 700)
+
+    store.clear_window_size("dlg.entries")
+
+    top = _FakeTopLevel(screen_w=1920, screen_h=1080)
+    applied = store.restore_window_size(top, "dlg.entries", default="900x500+40+50")
+    assert applied == "900x500+40+50"
+    assert store.get_window_size("dlg.entries") is None
+
+
+def test_clear_window_size_write_through_removes_persisted_value(tmp_path: Path) -> None:
+    p = tmp_path / "geometry.json"
+    store = gs.GeometryStore(path=p)
+    store.load()
+    store.set_window_size("dlg.entries", 1100, 700)
+    store.clear_window_size("dlg.entries")
+
+    other = gs.GeometryStore(path=p)
+    other.load()
+    assert other.get_window_size("dlg.entries") is None
+    raw = json.loads(p.read_text(encoding="utf-8"))
+    assert "window_size.dlg.entries" not in raw["kv"]
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        None,
+        123,
+        "1100x700",
+        [1100],
+        [1100, "bad"],
+        [-1, 700],
+        [1100, 0],
+    ],
+)
+def test_get_window_size_rejects_malformed_payloads(tmp_path: Path, raw) -> None:
+    p = tmp_path / "geometry.json"
+    p.write_text(
+        json.dumps({
+            "version": gs.SCHEMA_VERSION,
+            "windows": {},
+            "sashes": {},
+            "kv": {"window_size.dlg.entries": raw},
+        }),
+        encoding="utf-8",
+    )
+    store = gs.GeometryStore(path=p)
+    store.load()
+    assert store.get_window_size("dlg.entries") is None
+
+
 def test_load_missing_file_is_empty(tmp_path: Path) -> None:
     store = gs.GeometryStore(path=tmp_path / "nope.json")
     store.load()  # must not raise
@@ -280,4 +372,3 @@ def test_restore_sash_no_min_pane_widths_keeps_legacy_behavior(tmp_path: Path) -
         # no min_pane_widths kwarg
     )
     assert paned.applied == [(0, 50)]
-

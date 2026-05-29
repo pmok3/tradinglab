@@ -1,0 +1,61 @@
+{
+  "created_at": "2026-05-29T21:56:00Z",
+  "created_with": {
+    "app": "tradinglab",
+    "template": true,
+    "version": "1.0.0"
+  },
+  "eod_kill_switch": true,
+  "eod_offset_min": 5,
+  "extra": {
+    "functional_series": "bullish_ramp",
+    "template_pack": "expanded-2026-05"
+  },
+  "id": "tmpl-exit-bracket-3-1-5",
+  "legs": [
+    {
+      "enabled": true,
+      "id": "pt",
+      "label": "profit-target +3%",
+      "triggers": [
+        {
+          "enabled": true,
+          "id": "br315-pt",
+          "kind": "limit",
+          "label": "+3% from entry",
+          "offset_pct": 3.0,
+          "qty_pct": 100.0,
+          "time_in_force": "day"
+        }
+      ]
+    },
+    {
+      "enabled": true,
+      "id": "stop",
+      "label": "hard-stop -1.5%",
+      "triggers": [
+        {
+          "enabled": true,
+          "id": "br315-stop",
+          "kind": "stop",
+          "label": "-1.5% from entry",
+          "offset_pct": -1.5,
+          "qty_pct": 100.0,
+          "time_in_force": "day"
+        }
+      ]
+    }
+  ],
+  "name": "Bracket +3% / -1.5%",
+  "oco_groups": [
+    {
+      "cancel_on": "full_closeout",
+      "leg_ids": [
+        "pt",
+        "stop"
+      ]
+    }
+  ],
+  "schema_version": 2,
+  "updated_at": "2026-05-29T21:56:00Z"
+}

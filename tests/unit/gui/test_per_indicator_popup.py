@@ -16,6 +16,7 @@ ttk = pytest.importorskip("tkinter.ttk")
 from tradinglab.gui.indicator_dialog import IndicatorDialog  # noqa: E402
 from tradinglab.gui.per_indicator_dialog import (  # noqa: E402
     _PerIndicatorDialog,
+    _popup_size_for_content,
     open_per_indicator_dialog,
 )
 from tradinglab.indicators.base import LineStyle  # noqa: E402
@@ -81,7 +82,98 @@ def _make_ema_cfg() -> IndicatorConfig:
     )
 
 
+def _make_rrvol_cfg() -> IndicatorConfig:
+    return IndicatorConfig(
+        kind_id="rrvol",
+        display_name="RRVOL(SPY)",
+        params={
+            "mode": "simple",
+            "length": 20,
+            "aggregator": "mean",
+            "session_filter": "regular_plus_premarket",
+            "denominator_includes_current": False,
+            "z_score": False,
+            "compare_symbol": "SPY",
+        },
+        style={"rrvol": LineStyle(color="#b59bd5", width=1.2, visible=True)},
+        intervals=(),
+        scopes=frozenset({"main"}),
+        visible=True,
+    )
+
+
 # ---------------------------------------------------------------- open / singleton
+
+
+class TestPopupSizing:
+    def test_popup_expands_to_content_on_wide_screen(self):
+        width, height = _popup_size_for_content(
+            req_width=1120,
+            req_height=380,
+            screen_width=1920,
+            screen_height=1080,
+        )
+        assert width == 1120
+        assert height == 380
+
+    def test_popup_clamps_to_low_resolution_screen(self):
+        width, height = _popup_size_for_content(
+            req_width=1120,
+            req_height=380,
+            screen_width=800,
+            screen_height=600,
+        )
+        assert width == 760
+        assert height == 380
+
+    def test_popup_respects_minimum_for_small_content(self):
+        width, height = _popup_size_for_content(
+            req_width=320,
+            req_height=160,
+            screen_width=1920,
+            screen_height=1080,
+        )
+        assert width == 640
+        assert height == 280
+
+    def test_rrvol_popup_reflows_params_and_intervals_at_700px(self, root_with_manager):
+        cfg = _make_rrvol_cfg()
+        root_with_manager._indicator_manager.add(cfg)
+        dlg = open_per_indicator_dialog(root_with_manager, cfg.id, slot="primary")
+        assert dlg is not None
+        try:
+            dlg.geometry("700x520")
+            dlg.update_idletasks()
+            dlg._do_resize_reflow_rows()
+            dlg.update_idletasks()
+            row = dlg._rows[0]
+            dlg.update()
+            dlg.update_idletasks()
+            assert row.param_subframe is not None
+            param_width = max(row.param_subframe.winfo_width(), row.param_subframe.winfo_reqwidth())
+            for child in row.param_subframe.winfo_children():
+                child_width = max(child.winfo_width(), child.winfo_reqwidth())
+                assert child.winfo_x() + child_width <= param_width
+            assert row.interval_subframe is not None
+            interval_width = max(row.interval_subframe.winfo_width(), row.interval_subframe.winfo_reqwidth())
+            for child in row.interval_subframe.winfo_children():
+                child_width = max(child.winfo_width(), child.winfo_reqwidth())
+                assert child.winfo_x() + child_width <= interval_width
+        finally:
+            dlg._on_close()
+
+    def test_rrvol_popup_has_advanced_param_tooltip(self, root_with_manager):
+        cfg = _make_rrvol_cfg()
+        root_with_manager._indicator_manager.add(cfg)
+        dlg = open_per_indicator_dialog(root_with_manager, cfg.id, slot="primary")
+        assert dlg is not None
+        try:
+            assert any(
+                "Include current bar in average" in getattr(t, "_text", "")
+                for t in dlg._tooltips
+            )
+        finally:
+            dlg._on_close()
 
 
 class TestOpenSingleton:

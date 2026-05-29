@@ -263,13 +263,60 @@ def merge_candles(
     if not new:
         return list(old)
     try:
-        by_date = {c.date: c for c in old}
-        for c in new:
-            by_date[c.date] = c  # new wins on overlap
-        return sorted(by_date.values(), key=lambda c: c.date)
+        if _is_sorted_by_date(old) and _is_sorted_by_date(new):
+            return _merge_sorted_candles(old, new)
+        return _merge_candles_dict_sort(old, new)
     except TypeError:
         # tz-aware vs tz-naive comparison — give up on merge, use new.
         return list(new)
+
+
+def _is_sorted_by_date(candles: list[Candle]) -> bool:
+    return all(candles[i - 1].date <= candles[i].date for i in range(1, len(candles)))
+
+
+def _merge_candles_dict_sort(old: list[Candle], new: list[Candle]) -> list[Candle]:
+    by_date = {c.date: c for c in old}
+    for c in new:
+        by_date[c.date] = c  # new wins on overlap
+    return sorted(by_date.values(), key=lambda c: c.date)
+
+
+def _next_date_run(candles: list[Candle], idx: int) -> tuple[Any, Candle, int]:
+    date = candles[idx].date
+    last = candles[idx]
+    idx += 1
+    while idx < len(candles) and candles[idx].date == date:
+        last = candles[idx]
+        idx += 1
+    return date, last, idx
+
+
+def _merge_sorted_candles(old: list[Candle], new: list[Candle]) -> list[Candle]:
+    """Linear merge for sorted inputs; collapses duplicate dates, new wins."""
+    out: list[Candle] = []
+    i = 0
+    j = 0
+    while i < len(old) and j < len(new):
+        old_date, old_candle, next_i = _next_date_run(old, i)
+        new_date, new_candle, next_j = _next_date_run(new, j)
+        if old_date < new_date:
+            out.append(old_candle)
+            i = next_i
+        elif new_date < old_date:
+            out.append(new_candle)
+            j = next_j
+        else:
+            out.append(new_candle)
+            i = next_i
+            j = next_j
+    while i < len(old):
+        _date, candle, i = _next_date_run(old, i)
+        out.append(candle)
+    while j < len(new):
+        _date, candle, j = _next_date_run(new, j)
+        out.append(candle)
+    return out
 
 
 def list_entries() -> list[tuple[str, str, str]]:

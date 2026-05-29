@@ -1,0 +1,39 @@
+{
+  "created_at": "2026-05-29T21:56:00Z",
+  "created_with": {
+    "app": "tradinglab",
+    "template": true,
+    "version": "1.0.0"
+  },
+  "eod_kill_switch": false,
+  "eod_offset_min": 5,
+  "extra": {
+    "template_pack": "expanded-2026-05"
+  },
+  "id": "tmpl-exit-chandelier-10-1-5",
+  "legs": [
+    {
+      "enabled": true,
+      "id": "chandelier",
+      "label": "chandelier 10/1.5",
+      "triggers": [
+        {
+          "chandelier_atr_period": 10,
+          "chandelier_lookback": 10,
+          "chandelier_ma_type": "RMA",
+          "chandelier_multiplier": 1.5,
+          "enabled": true,
+          "id": "chandelier10-t",
+          "kind": "chandelier",
+          "label": "10/1.5 chandelier",
+          "qty_pct": 100.0,
+          "time_in_force": "day"
+        }
+      ]
+    }
+  ],
+  "name": "Chandelier stop (10, 1.5x)",
+  "oco_groups": [],
+  "schema_version": 2,
+  "updated_at": "2026-05-29T21:56:00Z"
+}

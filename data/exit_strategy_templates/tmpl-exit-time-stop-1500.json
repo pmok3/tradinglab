@@ -1,0 +1,37 @@
+{
+  "created_at": "2026-05-29T21:56:00Z",
+  "created_with": {
+    "app": "tradinglab",
+    "template": true,
+    "version": "1.0.0"
+  },
+  "eod_kill_switch": true,
+  "eod_offset_min": 5,
+  "extra": {
+    "functional_series": "time_stop_day",
+    "template_pack": "expanded-2026-05"
+  },
+  "id": "tmpl-exit-time-stop-1500",
+  "legs": [
+    {
+      "enabled": true,
+      "id": "time",
+      "label": "time stop 15:00",
+      "triggers": [
+        {
+          "enabled": true,
+          "id": "time1500-t",
+          "kind": "time_of_day",
+          "label": "flatten at 15:00",
+          "qty_pct": 100.0,
+          "time_in_force": "day",
+          "time_of_day": "15:00"
+        }
+      ]
+    }
+  ],
+  "name": "Time stop @ 15:00",
+  "oco_groups": [],
+  "schema_version": 2,
+  "updated_at": "2026-05-29T21:56:00Z"
+}

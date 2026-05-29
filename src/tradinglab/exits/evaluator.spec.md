@@ -55,15 +55,20 @@ requires a fresh `attach_strategy`.
 
 ## Trigger dispatch
 
-| Kind             | Spec function                                          | Result kind |
+All trigger fire decisions route through `exits.dispatch`.
+`ExitEvaluator` owns live-only context construction (per-position
+`TriggerState`, scanner `EvaluationContext`, bar-close/intrabar flag,
+and `now`) then calls `dispatch.check_trigger_decision`.
+
+| Kind             | Dispatch behavior                                      | Result kind |
 |------------------|--------------------------------------------------------|-------------|
 | `MARKET`         | `evaluate_market`                                      | MARKET      |
 | `LIMIT`          | `evaluate_limit`                                       | LIMIT       |
 | `STOP`           | `evaluate_stop`                                        | STOP        |
 | `STOP_LIMIT`     | `evaluate_stop_limit`                                  | STOP_LIMIT  |
 | `TRAILING_STOP`  | `update_trail_state` + `evaluate_trailing_stop`        | MARKET      |
-| `TIME_OF_DAY`    | `evaluate_time_of_day`                                 | MARKET      |
-| `INDICATOR`      | `scanner.engine.evaluate_group`                        | MARKET      |
+| `TIME_OF_DAY`    | `evaluate_time_of_day` with `bar.date` / clock `now`   | MARKET      |
+| `INDICATOR`      | `scanner.engine.evaluate_group` on caller-built ctx    | MARKET      |
 | `CHANDELIER`     | `update_chandelier_state` + `evaluate_chandelier_stop` | MARKET      |
 
 Trailing/TOD/indicator/chandelier collapse to MARKET on fire — the
@@ -94,7 +99,8 @@ market exit.
 3. Pull `BarsView` for `(symbol, trigger.interval or default_interval)`.
 4. Build `EvaluationContext` via `make_context`, threading
    `bars_registry` so cross-interval `FieldRef`s resolve.
-5. `evaluate_group(condition, ctx)`; fire on True.
+5. Pass that context to `exits.dispatch`, which calls
+   `evaluate_group(condition, ctx)` and fires on True.
 
 Scanner-pipeline failures mark the trigger broken + audit; never crash.
 

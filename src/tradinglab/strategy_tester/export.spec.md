@@ -81,7 +81,10 @@ the out_path themselves in their `except Cancelled` branch.
 6. Optional `<h2>Trade screenshots</h2>` grid with one `<figure>`
    per PNG under `<run_dir>/screenshots/`, using *relative* paths
    (`screenshots/<file>.png`). No base64 inlining — zipping the
-   run dir gives a portable, lightweight bundle.
+   run dir gives a portable, lightweight bundle. Screenshot markup is
+   assembled from a list of fragments and joined once so large
+   screenshot directories do not repeatedly copy an ever-growing HTML
+   string.
 
 ## PDF layout
 
@@ -100,10 +103,16 @@ Built via `matplotlib.backends.backend_pdf.PdfPages`. Pages in order:
    per-symbol on the top half, per-year on the bottom half.
 3. **Equity curve page** — Letter landscape, single line plot of
    `agg.equity_curve` (`(ts_ms, equity)` tuples) with `autofmt_xdate`.
-   Skipped if the curve is empty.
+   Skipped if the curve is empty. Dense curves are plotted from
+   matplotlib numeric day values (`epoch_seconds / 86400`) rather than
+   allocating one `datetime` object per equity point.
 4. **Trade screenshots** — one landscape page per PNG, in
    `sorted(screenshots/*.png)` order. Capped at `max_screenshots`
-   (default 200) so 500-trade reports don't balloon past ~50 MB.
+   (default 200) so 500-trade reports don't balloon past ~50 MB. When
+   capped, PDF export uses bounded `heapq.nsmallest` selection instead
+   of sorting every PNG in the directory; this preserves the first
+   `max_screenshots` filenames in sorted order while reducing work for
+   large screenshot folders.
 
 ## Determinism / threading
 

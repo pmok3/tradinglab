@@ -35,13 +35,18 @@ Owns:
 - **Two-stage prefetch apply**: the network fetch runs on the worker pool, but the final merge/apply step is re-entered through the app's worker inbox so Tk-thread cache mutations stay centralized.
 - **Legacy attribute compatibility**: `ChartApp` keeps exposing `_executor`, `_fetch_executor`, `_prefetch_inflight`, `_prefetch_futures`, `_poll_job`, `_reload_job`, `_poll_retry_count`, and `_poll_retry_expected_min_ts`, but those are now backed by this service.
 - **Reference-data path stays async**: RRVOL-style secondary-symbol requests still use the general worker pool and trigger redraw through `core.reference_data`'s arrival callback.
+- **No-op prefetch writes are skipped**: `apply_prefetch_result` still
+  applies the merged candles to the in-memory cache, but it compares the
+  merged output with the disk-loaded list and avoids `disk_cache.save`
+  when the on-disk cache is already identical.
 
 ## Invariants
 - Prefetches are deduped by `(source, ticker, interval)` and capped by the caller-provided inflight limit.
 - Empty/failed prefetches clear their inflight slot.
+- A prefetch whose merged candle list equals the disk-loaded list must
+  not rewrite the JSONL file.
 - `shutdown()` leaves both executors unusable and clears fetch-related bookkeeping.
 - `await_future_on_tk()` never uses `Future.add_done_callback()` to call Tk APIs from a worker thread.
 
 ## Testing
 - Covered by existing smoke/unit paths that exercise compare warming, drilldown prefetch reuse, poll-tick async fetches, reference-data redraws, and close-time executor shutdown.
-

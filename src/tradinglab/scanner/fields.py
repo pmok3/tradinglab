@@ -224,6 +224,19 @@ def _b_gap_pct(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:
 _days_cache: BarsKeyedCache[np.ndarray] = BarsKeyedCache(max_size=64)
 
 
+@dataclass(frozen=True)
+class _SessionDayArrays:
+    """Per-bar session-day values shared by multiple builtins."""
+
+    hod: np.ndarray
+    lod: np.ndarray
+    minutes_since_midnight: np.ndarray
+    bars_since_open: np.ndarray
+
+
+_session_day_cache: BarsKeyedCache[_SessionDayArrays] = BarsKeyedCache(max_size=64)
+
+
 def _days_for(b: BarsNp) -> np.ndarray:
     """Return cached ``datetime64[D]`` array (one entry per timestamp).
 
@@ -235,6 +248,70 @@ def _days_for(b: BarsNp) -> np.ndarray:
     return _days_cache.get_or_compute(
         b,
         lambda x: x.timestamps.astype("datetime64[D]"),
+        extra_key=int(b.timestamps.size),
+    )
+
+
+def _compute_session_day_arrays(b: BarsNp) -> _SessionDayArrays:
+    n = int(b.timestamps.size)
+    if n == 0:
+        empty_f = np.empty(0, dtype=np.float64)
+        return _SessionDayArrays(
+            hod=empty_f,
+            lod=empty_f,
+            minutes_since_midnight=empty_f,
+            bars_since_open=empty_f,
+        )
+
+    days = _days_for(b)
+    day_starts_ns = days.astype("datetime64[ns]")
+    deltas = (b.timestamps - day_starts_ns).astype("timedelta64[s]").astype(np.int64)
+    minutes = (deltas // 60).astype(np.float64)
+
+    hod = np.full(n, np.nan, dtype=np.float64)
+    lod = np.full(n, np.nan, dtype=np.float64)
+    bars_since_open = np.zeros(n, dtype=np.float64)
+
+    day_breaks = np.flatnonzero(days[1:] != days[:-1]) + 1
+    starts = np.concatenate(([0], day_breaks))
+    ends = np.concatenate((day_breaks, [n]))
+
+    for start, end in zip(starts, ends, strict=True):
+        high = b.high[start:end]
+        low = b.low[start:end]
+
+        finite_high = np.where(np.isfinite(high), high, -np.inf)
+        high_prefix = np.maximum.accumulate(finite_high)
+        high_prefix[~np.isfinite(high_prefix)] = np.nan
+        hod[start:end] = high_prefix
+
+        finite_low = np.where(np.isfinite(low), low, np.inf)
+        low_prefix = np.minimum.accumulate(finite_low)
+        low_prefix[~np.isfinite(low_prefix)] = np.nan
+        lod[start:end] = low_prefix
+
+        regular = b.session[start:end] == "regular"
+        if np.any(regular):
+            first_regular = start + int(np.argmax(regular))
+            bars_since_open[first_regular:end] = np.arange(
+                end - first_regular, dtype=np.float64,
+            )
+
+    return _SessionDayArrays(
+        hod=hod,
+        lod=lod,
+        minutes_since_midnight=minutes,
+        bars_since_open=bars_since_open,
+    )
+
+
+def _session_day_arrays_for(b: BarsNp) -> _SessionDayArrays:
+    """Return cached HOD/LOD/time/session-open arrays for ``b``."""
+    if not b.timestamps.size:
+        return _compute_session_day_arrays(b)
+    return _session_day_cache.get_or_compute(
+        b,
+        _compute_session_day_arrays,
         extra_key=int(b.timestamps.size),
     )
 
@@ -252,31 +329,24 @@ def _today_mask(b: BarsNp, i: int) -> np.ndarray | None:
 
 
 def _b_hod(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:
-    mask = _today_mask(b, i)
-    if mask is None or not mask.any():
+    if i < 0 or i >= b.high.size:
         return None
-    h = b.high[mask]
-    h = h[np.isfinite(h)]
-    return float(h.max()) if h.size else None
+    value = _session_day_arrays_for(b).hod[i]
+    return float(value) if np.isfinite(value) else None
 
 
 def _b_lod(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:
-    mask = _today_mask(b, i)
-    if mask is None or not mask.any():
+    if i < 0 or i >= b.low.size:
         return None
-    lo = b.low[mask]
-    lo = lo[np.isfinite(lo)]
-    return float(lo.min()) if lo.size else None
+    value = _session_day_arrays_for(b).lod[i]
+    return float(value) if np.isfinite(value) else None
 
 
 def _b_time_of_day(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:
     """Minutes since UTC midnight at the current bar's timestamp."""
     if i < 0 or i >= b.timestamps.size:
         return None
-    ts = b.timestamps[i]
-    day_start = ts.astype("datetime64[D]").astype("datetime64[ns]")
-    delta = (ts - day_start).astype("timedelta64[s]").astype(np.int64)
-    return float(delta // 60)
+    return float(_session_day_arrays_for(b).minutes_since_midnight[i])
 
 
 def _b_bars_since_open(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:
@@ -288,17 +358,7 @@ def _b_bars_since_open(b: BarsNp, i: int, p: Mapping[str, Any]) -> float | None:
     """
     if i < 0 or i >= b.timestamps.size:
         return None
-    days = _days_for(b)
-    today = days[i]
-    # ``days`` is non-decreasing (timestamps are sorted ascending), so
-    # ``searchsorted`` gives the start of today's block in O(log N). We
-    # then scan only today's bars [day_start..i] for the first regular
-    # session bar — bounded by bars-per-day (≪ N).
-    day_start = int(np.searchsorted(days, today, side="left"))
-    for j in range(day_start, i + 1):
-        if b.session[j] == "regular":
-            return float(i - j)
-    return 0.0
+    return float(_session_day_arrays_for(b).bars_since_open[i])
 
 
 # ---------------------------------------------------------------------------

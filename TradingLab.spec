@@ -43,14 +43,16 @@ if _templates_src.exists():
     datas.append((str(_templates_src), "data/entry_strategy_templates"))
 
 # Sibling starter-pack template directories shipped with M11 of the
-# big-bets audit: 5 exit-strategy JSONs, 5 scanner JSONs, 5 indicator
-# preset JSONs. Bundled the same way as entry templates so
+# big-bets audit and later catalog expansions: exit-strategy JSONs,
+# scanner JSONs, indicator preset JSONs, and strategy-combination JSONs.
+# Bundled the same way as entry templates so
 # :mod:`tradinglab.templates` can resolve them via
 # :func:`_resources.resource_path` in frozen mode.
 for _sub in (
     "exit_strategy_templates",
     "scanner_templates",
     "indicator_presets",
+    "strategy_combination_templates",
 ):
     _src = _REPO_ROOT / "data" / _sub
     if _src.exists():

@@ -1,0 +1,36 @@
+{
+  "description": "Bollinger Bands, Keltner Channels, and RVOL expansion.",
+  "indicators": [
+    {
+      "id": "bbands-20-2",
+      "kind": "bbands",
+      "panel": "overlay",
+      "params": {
+        "length": 20,
+        "ma_type": "SMA",
+        "num_std": 2.0,
+        "std_length": 20
+      }
+    },
+    {
+      "id": "keltner-20-1-5",
+      "kind": "keltner",
+      "panel": "overlay",
+      "params": {
+        "atr_length": 10,
+        "length": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "id": "rvol-20",
+      "kind": "rvol",
+      "panel": "rvol",
+      "params": {
+        "length": 20,
+        "mode": "simple"
+      }
+    }
+  ],
+  "name": "Squeeze Watch"
+}

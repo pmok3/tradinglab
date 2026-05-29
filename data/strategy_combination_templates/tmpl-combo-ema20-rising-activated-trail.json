@@ -1,0 +1,33 @@
+{
+  "cost_model": {
+    "commission_per_share": 0.0,
+    "commission_per_trade": 0.0,
+    "slippage_bps": 5.0
+  },
+  "created_with": {
+    "app": "tradinglab",
+    "template": true,
+    "version": "1.0.0"
+  },
+  "date_preset": "custom",
+  "end_date": "2025-12-31",
+  "entry_strategy_id": "tmpl-ema20-rising-long",
+  "exit_strategy_id": "tmpl-exit-activated-trailing-1pct-after-2pct",
+  "id": "tmpl-combo-ema20-rising-activated-trail",
+  "include_extended_hours": false,
+  "interval": "5m",
+  "rng_seed": 0,
+  "schema_version": 1,
+  "start_date": "2025-01-01",
+  "starting_cash": 100000.0,
+  "universe": {
+    "kind": "symbols",
+    "symbols": [
+      "AAPL",
+      "MSFT",
+      "NVDA"
+    ]
+  },
+  "user_label": "EMA20 rising + Activated trail",
+  "warmup_override_days": null
+}

@@ -134,7 +134,17 @@ checkbox groups, called from `_on_menu_sandbox_start` / `_on_menu_sandbox_end`.
   click-checkbox/pick-combobox/arrow-spinbox commits-instantly UX
   while keeping typing debounced 250 ms. Width is computed up-front
   via the existing `_combo_width_for_choices` / `_spinbox_width_for`
-  helpers and passed through.
+  helpers and passed through. Labels/widgets also attach
+  `_param_widgets.tooltip_text_for` hints and store them in
+  `_tooltips`, so advanced ParamDef fields get consistent
+  discoverability across the chart indicator dialog and shared
+  builder controls.
+- **Searchable indicator kind selector.** Row kind Comboboxes are
+  editable type-to-filter controls. KeyRelease filters display names
+  by display label, kind id, and acronym/help text; exact selections
+  and one-match Return/FocusOut commits switch the row kind. This
+  mirrors `_FieldRefPicker` search while preserving the existing
+  tooltip/help icon behavior.
 - **No upper column-count clamp.** `_compute_max_cols_for_schema` floors
   to an integer column count with no cap — the fit-based math itself
   prevents overflow, and a hard cap (the legacy `min(4, cols)`) just

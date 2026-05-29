@@ -70,7 +70,17 @@ from ..indicators.config import (
     IndicatorManager,
 )
 from ._modal_base import BaseModalDialog, make_scrollable_form, protect_combobox_wheel
-from ._param_widgets import build_param_widget, label_text_for
+from ._param_widgets import (
+    build_param_widget,
+    label_text_for,
+    tooltip_text_for,
+)
+from ._param_widgets import (
+    combo_width_for_choices as _combo_width_for_choices,
+)
+from ._param_widgets import (
+    spinbox_width_for as _spinbox_width_for,
+)
 from ._widget_metrics import _CHAR_PX
 from .color_palette import pick_color
 from .colors import WARN_AMBER
@@ -90,46 +100,25 @@ _ALL_INTERVALS: tuple[str, ...] = (
 _TYPING_DEBOUNCE_MS = 250
 
 
-def _combo_width_for_choices(choices: Any) -> int:
-    """Pick a Combobox ``width=`` value that fits the longest choice.
-
-    Returns ``min(max(len(str(c)) for c in choices) + 2, 30)`` with a
-    floor of 8. The cap of 30 prevents a pathological future indicator
-    with a 100-char enum value from blowing the dialog out
-    horizontally. The +2 accommodates the dropdown arrow + a hair of
-    inset padding.
-
-    Falls back to 10 (the legacy hardcoded value) for empty / None
-    choice lists.
-    """
-    try:
-        items = [str(c) for c in (choices or ())]
-    except TypeError:
-        items = []
-    if not items:
-        return 10
-    longest = max(len(s) for s in items)
-    return max(8, min(30, longest + 2))
-
-
-def _spinbox_width_for(pdef: Any) -> int:
-    """Pick a Spinbox ``width=`` for an int / float ``ParamDef``.
-
-    Sized to the longer of the digit-length of ``pdef.min`` and
-    ``pdef.max`` plus a 2-char fudge for decimal point / minus sign.
-    Clamped to ``[6, 14]`` so even unbounded params get a reasonable
-    cell.
-    """
-    def _digits(v: Any) -> int:
-        if v is None:
-            return 6
-        try:
-            return len(str(v))
-        except Exception:  # noqa: BLE001
-            return 6
-    width = max(_digits(getattr(pdef, "min", None)),
-                _digits(getattr(pdef, "max", None))) + 2
-    return max(6, min(14, width))
+def _filter_indicator_kind_displays(
+    kinds_by_display: dict[str, str],
+    query: str,
+) -> tuple[str, ...]:
+    """Return indicator display names matching id/display/help text."""
+    needle = str(query or "").strip().casefold()
+    if not needle:
+        return tuple(kinds_by_display.keys())
+    tokens = [t for t in needle.split() if t]
+    out: list[str] = []
+    for display, kind_id in kinds_by_display.items():
+        haystack = " ".join((
+            str(display),
+            str(kind_id),
+            explain_kind_id(kind_id),
+        )).casefold()
+        if needle in haystack or (tokens and all(t in haystack for t in tokens)):
+            out.append(display)
+    return tuple(out)
 
 
 def _format_anchor_label(ts: str) -> str:
@@ -230,6 +219,7 @@ class _IndicatorRow:
         "preserved_active_scopes",
         "interval_subframe",
         "interval_vars",
+        "interval_max_cols_applied",
         "preserved_intervals",
         "color_subframe",
         "color_buttons",
@@ -290,6 +280,7 @@ class _IndicatorRow:
         # presets keep working unchanged).
         self.interval_subframe: tk.Frame | None = None
         self.interval_vars: dict[str, tk.BooleanVar] = {}
+        self.interval_max_cols_applied: int | None = None
         self.preserved_intervals: tuple[str, ...] = ()
         # Per-output color overrides (b42). One color-swatch button
         # per indicator output key (e.g. "sma" / "upper" / "middle"
@@ -975,9 +966,9 @@ class IndicatorDialog(BaseModalDialog):
         row.kind_combo = ttk.Combobox(
             top,
             textvariable=row.kind_var,
-            state="readonly",
+            state="normal",
             values=tuple(self._kinds_by_display.keys()),
-            width=24,
+            width=28,
         )
         row.kind_combo.pack(side="left", padx=(4, 8))
         # Help icon — opens per-indicator documentation. The blue
@@ -1006,6 +997,18 @@ class IndicatorDialog(BaseModalDialog):
         self._tooltips.append(row.kind_tooltip)
         row.kind_combo.bind(
             "<<ComboboxSelected>>",
+            lambda _e, r=row: self._on_kind_changed(r),
+        )
+        row.kind_combo.bind(
+            "<KeyRelease>",
+            lambda _e, r=row: self._on_kind_combo_keyrelease(r),
+        )
+        row.kind_combo.bind(
+            "<Return>",
+            lambda _e, r=row: self._on_kind_changed(r),
+        )
+        row.kind_combo.bind(
+            "<FocusOut>",
             lambda _e, r=row: self._on_kind_changed(r),
         )
         # Scope checkboxes — Primary / Compare. Both unchecked ⇒
@@ -1301,27 +1304,7 @@ class IndicatorDialog(BaseModalDialog):
         # (CLAUDE.md §7.19).
         widest_px = max(80, int(widest_chars * _CHAR_PX))
 
-        try:
-            avail_px = self._rows_inner.winfo_width()
-        except Exception:  # noqa: BLE001
-            avail_px = 0
-        if avail_px <= 1:
-            # ``_rows_inner`` isn't realised yet — fall back to the
-            # dialog's own width so the initial paint uses a sane
-            # column count instead of legacy-frozen-at-4. After the
-            # WM maps the window, ``_on_toplevel_resize`` will
-            # re-flow each row to the correct count.
-            try:
-                avail_px = self.winfo_width()
-            except Exception:  # noqa: BLE001
-                avail_px = 0
-        if avail_px <= 1:
-            # Still pre-realisation (e.g. headless unit test). Use
-            # the explicit ``minsize`` width as a deterministic
-            # fallback instead of returning a hardcoded col count.
-            avail_px = 880
-        # Subtract a safety budget (canvas border + scrollbar gutter).
-        avail_px = max(0, avail_px - 32)
+        avail_px = self._available_row_width_px()
         if avail_px <= 1:
             return 1
 
@@ -1387,6 +1370,7 @@ class IndicatorDialog(BaseModalDialog):
             return
         for row in self._rows:
             self._maybe_regrid_row_params(row)
+            self._maybe_regrid_row_intervals(row)
 
     def _maybe_regrid_row_params(self, row: _IndicatorRow) -> None:
         """Re-grid one row's param wraps if its column count changed."""
@@ -1411,7 +1395,9 @@ class IndicatorDialog(BaseModalDialog):
         schema = getattr(factory_cls, "params_schema", ()) or ()
         if not schema:
             return
-        new_max_cols = self._compute_max_cols_for_schema(schema)
+        new_max_cols = self._compute_max_cols_for_existing_param_widgets(row)
+        if new_max_cols is None:
+            new_max_cols = self._compute_max_cols_for_schema(schema)
         if new_max_cols == row.param_max_cols_applied:
             return
         # Wrap frames live as direct children of ``param_subframe``
@@ -1431,6 +1417,88 @@ class IndicatorDialog(BaseModalDialog):
             except tk.TclError:
                 pass
         row.param_max_cols_applied = new_max_cols
+
+    def _compute_max_cols_for_existing_param_widgets(
+        self, row: _IndicatorRow,
+    ) -> int | None:
+        """Column count from actual widget request widths, if available."""
+        sub = row.param_subframe
+        if sub is None:
+            return None
+        try:
+            children = [w for w in sub.winfo_children() if isinstance(w, tk.Frame)]
+        except tk.TclError:
+            return None
+        if not children:
+            return None
+        widths: list[int] = []
+        for child in children:
+            try:
+                child.update_idletasks()
+                widths.append(max(1, int(child.winfo_reqwidth()) + 12))
+            except tk.TclError:
+                return None
+        avail_px = self._available_row_width_px()
+        if avail_px <= 1:
+            return 1
+        widest_px = max(widths)
+        return max(1, avail_px // widest_px)
+
+    def _available_row_width_px(self) -> int:
+        try:
+            avail_px = int(self._rows_inner.winfo_width() or 0)
+            if avail_px <= 1:
+                avail_px = int(self._rows_inner.winfo_reqwidth() or 0)
+        except Exception:  # noqa: BLE001
+            avail_px = 0
+        if avail_px <= 1:
+            try:
+                avail_px = int(self.winfo_width() or self.winfo_reqwidth() or 0)
+            except Exception:  # noqa: BLE001
+                avail_px = 0
+        if avail_px <= 1:
+            avail_px = 880
+        return max(0, avail_px - 32)
+
+    def _maybe_regrid_row_intervals(self, row: _IndicatorRow) -> None:
+        sf = row.interval_subframe
+        if sf is None:
+            return
+        try:
+            children = list(sf.winfo_children())
+        except tk.TclError:
+            return
+        if len(children) <= 1:
+            return
+        avail_px = self._available_row_width_px()
+        widths: list[int] = []
+        for child in children:
+            try:
+                child.update_idletasks()
+                widths.append(max(1, int(child.winfo_reqwidth()) + 4))
+            except tk.TclError:
+                return
+        row_index = 0
+        col_index = 0
+        used = 0
+        placements: list[tuple[int, int]] = []
+        for width in widths:
+            if col_index and used + width > avail_px:
+                row_index += 1
+                col_index = 0
+                used = 0
+            placements.append((row_index, col_index))
+            used += width
+            col_index += 1
+        max_cols = max((col for _row, col in placements), default=0) + 1
+        if max_cols == row.interval_max_cols_applied:
+            return
+        for child, (grid_row, grid_col) in zip(children, placements, strict=True):
+            try:
+                child.grid_configure(row=grid_row, column=grid_col)
+            except tk.TclError:
+                pass
+        row.interval_max_cols_applied = max_cols
 
     def _on_destroy_resize_binding(self, _event: Any | None = None) -> None:
         """Tear down pending resize callback + ``<Configure>`` binding."""
@@ -1473,7 +1541,8 @@ class IndicatorDialog(BaseModalDialog):
                       sticky="w", padx=(0, 12), pady=(0, 2))
         else:
             wrap.pack(side="left", padx=(0, 8))
-        ttk.Label(wrap, text=label_text_for(pdef)).pack(side="left")
+        label = ttk.Label(wrap, text=label_text_for(pdef))
+        label.pack(side="left")
         seed = seed_values.get(pdef.name, pdef.default)
 
         # Anchor_ts kept inline (not delegated): the inner Button
@@ -1518,6 +1587,10 @@ class IndicatorDialog(BaseModalDialog):
             width=width,
         )
         widget.pack(side="left", padx=(2, 0))
+        tip_text = tooltip_text_for(pdef)
+        if tip_text:
+            self._tooltips.append(ToolTip(label, tip_text))
+            self._tooltips.append(ToolTip(widget, tip_text))
         row.param_vars[pdef.name] = var
         row.param_widgets[pdef.name] = widget
 
@@ -1802,7 +1875,12 @@ class IndicatorDialog(BaseModalDialog):
         new_display = (row.kind_var.get() or "").strip()
         new_kind_id = self._kinds_by_display.get(new_display)
         if not new_kind_id:
-            return
+            matches = _filter_indicator_kind_displays(self._kinds_by_display, new_display)
+            if len(matches) != 1:
+                return
+            new_display = matches[0]
+            new_kind_id = self._kinds_by_display[new_display]
+            row.kind_var.set(new_display)
         self._refresh_kind_tooltip(row, new_kind_id)
         # Suppress while we tear down + rebuild widgets so the trace
         # callbacks fired by ``var.set`` during construction don't
@@ -1825,6 +1903,19 @@ class IndicatorDialog(BaseModalDialog):
         # Param widgets were torn down and rebuilt — re-guard the new
         # Combobox/Spinbox descendants (see CLAUDE.md §7.11).
         self._protect_combobox_wheel()
+
+    def _on_kind_combo_keyrelease(self, row: _IndicatorRow) -> None:
+        combo = row.kind_combo
+        if combo is None:
+            return
+        query = (row.kind_var.get() or "").strip()
+        values = _filter_indicator_kind_displays(self._kinds_by_display, query)
+        if not values:
+            values = tuple(self._kinds_by_display.keys())
+        try:
+            combo.configure(values=values)
+        except tk.TclError:
+            pass
 
     # ------------------------------------------------------------------
     # Commit / validation
@@ -1981,7 +2072,7 @@ class IndicatorDialog(BaseModalDialog):
         if not intervals:
             return
         try:
-            tk.Label(sf, text="Intervals:").pack(side="left", padx=(0, 4))
+            tk.Label(sf, text="Intervals:").grid(row=0, column=0, sticky="w", padx=(0, 4))
         except tk.TclError:
             return
         all_checked_default = not row.preserved_intervals
@@ -1994,13 +2085,17 @@ class IndicatorDialog(BaseModalDialog):
                 checked = (all_checked_default
                            or (itv in preserved_set))
                 var = tk.BooleanVar(value=checked)
-                ttk.Checkbutton(
+                chk = ttk.Checkbutton(
                     sf, text=itv, variable=var,
                     command=lambda r=row: self._commit_now(r),
-                ).pack(side="left", padx=(0, 4))
+                )
+                chk.grid(row=0, column=len(row.interval_vars) + 1,
+                         sticky="w", padx=(0, 4))
                 row.interval_vars[itv] = var
         finally:
             row.suppress = was_suppressed
+        row.interval_max_cols_applied = None
+        self._maybe_regrid_row_intervals(row)
         # Apply theme so the freshly-built children pick up dark mode.
         try:
             self._apply_theme()

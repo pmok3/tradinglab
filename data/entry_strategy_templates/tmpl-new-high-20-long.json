@@ -1,0 +1,81 @@
+{
+  "arm_window_end": "15:30",
+  "arm_window_start": "09:35",
+  "cooldown_secs": 60,
+  "created_at": "2026-05-29T21:56:00Z",
+  "created_with": {
+    "app": "tradinglab",
+    "template": true,
+    "version": "1.0.0"
+  },
+  "direction": "long",
+  "enabled": true,
+  "extra": {
+    "functional_series": "bullish_ramp",
+    "template_pack": "expanded-2026-05"
+  },
+  "id": "tmpl-new-high-20-long",
+  "max_fires_per_session_per_symbol": 1,
+  "max_fires_per_session_total": null,
+  "name": "20-bar new high breakout (long)",
+  "on_fill_exit_ids": [],
+  "position_already_open_policy": "block",
+  "require_market_open": true,
+  "schema_version": 1,
+  "sizing": {
+    "kind": "fixed_qty",
+    "qty": 100.0,
+    "share_rounding": "down"
+  },
+  "trigger": {
+    "condition": {
+      "children": [
+        {
+          "enabled": true,
+          "id": "tmpl-new-high-20-long-c1",
+          "interval": "5m",
+          "left": {
+            "id": "high",
+            "kind": "builtin"
+          },
+          "op": "new_high_n_bars",
+          "params": {
+            "n": 20
+          },
+          "type": "condition"
+        },
+        {
+          "enabled": true,
+          "id": "tmpl-new-high-20-long-c2",
+          "interval": "5m",
+          "left": {
+            "id": "close",
+            "kind": "builtin"
+          },
+          "op": ">",
+          "params": {
+            "right": {
+              "id": "vwap",
+              "kind": "indicator"
+            }
+          },
+          "type": "condition"
+        }
+      ],
+      "combinator": "and",
+      "enabled": true,
+      "id": "tmpl-new-high-20-long-group",
+      "type": "group"
+    },
+    "evaluate_intrabar": false,
+    "id": "tmpl-new-high-20-long-trigger",
+    "interval": "5m",
+    "kind": "indicator",
+    "label": "20-bar new high breakout (long)",
+    "time_in_force": "day"
+  },
+  "universe": {
+    "from_attached_chart": true
+  },
+  "updated_at": "2026-05-29T21:56:00Z"
+}

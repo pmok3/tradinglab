@@ -1,0 +1,33 @@
+{
+  "description": "Bollinger Bands, RSI, and ATR for stretched-price reversion reads.",
+  "indicators": [
+    {
+      "id": "bbands-20-2",
+      "kind": "bbands",
+      "panel": "overlay",
+      "params": {
+        "length": 20,
+        "ma_type": "SMA",
+        "num_std": 2.0,
+        "std_length": 20
+      }
+    },
+    {
+      "id": "rsi-14",
+      "kind": "rsi",
+      "panel": "rsi",
+      "params": {
+        "length": 14
+      }
+    },
+    {
+      "id": "atr-14",
+      "kind": "atr",
+      "panel": "atr",
+      "params": {
+        "length": 14
+      }
+    }
+  ],
+  "name": "Mean Reversion"
+}

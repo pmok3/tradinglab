@@ -37,6 +37,34 @@ widget via `grid()` / `pack()` AND for rendering the label —
 :func:`label_text_for` produces the canonical text (description or
 name + `":"`).
 
+`combo_width_for_choices(choices) -> int` returns the schema-driven
+Combobox width used by every ParamDef consumer: longest choice length
++ 2 chars, floor 8, cap 30, and legacy fallback 10 for empty choices.
+
+`spinbox_width_for(pdef) -> int` returns a Spinbox width based on the
+longer of `pdef.min` / `pdef.max`, plus a small sign/decimal buffer,
+clamped to `[6, 14]`.
+
+`tooltip_text_for(pdef) -> str` returns short, non-essential tooltip
+text for ParamDef-driven controls. It supplies specific explanations
+for known advanced params (`denominator_includes_current`,
+`session_filter`, `z_score`, `compare_symbol`) and otherwise derives a
+generic hint from label, choices, and numeric range.
+
+`validate_param_value(pdef, raw) -> (ok, value, message)` validates
+and coerces one raw Tk variable value. It returns the coerced value and
+empty message on success; on failure it returns `pdef.default` plus a
+short inline message such as `Enter Length greater than or equal to 1.`
+Callers decide whether to block save/commit. Integer params accept only
+finite whole-number text (`"2"` / `"2.0"`), never silently truncating a
+fractional decimal such as `"1.5"`. Float params reject non-finite input
+(`nan`, `inf`, `-inf`) before range checks.
+
+`param_group_for(pdef) -> "Basic" | "Advanced"` returns the simple UI
+group used by builder controls. Known advanced fields such as
+`session_filter`, `denominator_includes_current`, `z_score`, and
+`compare_symbol` are Advanced; all other fields default to Basic.
+
 ### `CommitPolicy` values
 
 | Policy          | When `on_change` fires                                                         | Use case                                                              |
@@ -56,8 +84,8 @@ by scope or scanner context. When `choices_override` is `None`,
 ### `width`
 
 Per-kind defaults: choice 10, int/float 6, str 14. Callers with
-schema-driven widths (`indicator_dialog` uses
-`_combo_width_for_choices` / `_spinbox_width_for`) pass `width=`
+schema-driven widths (`indicator_dialog` and `_FieldRefPicker` use
+`combo_width_for_choices` / `spinbox_width_for`) pass `width=`
 explicitly. Bool ignores width.
 
 ### `anchor_pick_callback`
@@ -99,6 +127,13 @@ calculations stay aligned with on-screen rendering.
 - `debounced` coalesces N rapid writes into one call.
 - `anchor_ts` special case returns the Frame + label-formatting trace.
 - `pdef.description` overrides `pdef.name` in `label_text_for`.
+- `tooltip_text_for` explains advanced RVOL/RRVOL params such as
+  `"Include current in denom"`.
+- `validate_param_value` rejects out-of-range numeric values and
+  unknown choices with actionable messages, including fractional text
+  for integer params and non-finite float values.
+- Schema-driven Combobox / Spinbox width helpers fit long choices such
+  as `"regular_plus_premarket"`.
 
 ## Wheel-guard interaction (§7.11)
 

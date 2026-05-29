@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from tradinglab.strategy_tester import export as export_module
 from tradinglab.strategy_tester.export import (
     HTML_FILENAME,
     PDF_FILENAME,
@@ -189,6 +190,30 @@ def test_export_html_skips_screenshots_section_when_dir_missing(
     assert "Trade screenshots" not in body
 
 
+def test_screenshot_png_files_uses_bounded_selection_for_pdf_cap(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    shots = tmp_path / "screenshots"
+    shots.mkdir()
+    for name in ("z.png", "b.png", "a.png", "m.png", "c.png"):
+        (shots / name).write_bytes(b"")
+
+    calls: list[int] = []
+    original = export_module.heapq.nsmallest
+
+    def counted_nsmallest(n, iterable, *, key=None):
+        calls.append(n)
+        return original(n, iterable, key=key)
+
+    monkeypatch.setattr(export_module.heapq, "nsmallest", counted_nsmallest)
+
+    files = export_module._screenshot_png_files(shots, limit=3)
+
+    assert [p.name for p in files] == ["a.png", "b.png", "c.png"]
+    assert calls == [3]
+
+
 def test_export_html_loads_aggregate_from_disk_when_omitted(
     tmp_path: Path,
 ) -> None:
@@ -239,6 +264,26 @@ def test_export_pdf_handles_empty_equity_curve(tmp_path: Path) -> None:
     out = export_pdf(tmp_path, aggregate=agg2)
     assert out.exists()
     assert _read_pdf_header(out).startswith(b"%PDF-")
+
+
+def test_equity_curve_xy_uses_matplotlib_day_numbers() -> None:
+    import datetime as _dt
+
+    import matplotlib.dates as _mpl_dates
+
+    curve = [
+        (1_704_067_200, 100_000.0),
+        (1_704_153_600, 100_500.0),
+    ]
+
+    xs, ys = export_module._equity_curve_xy(curve)
+
+    expected0 = _mpl_dates.date2num(
+        _dt.datetime.fromtimestamp(curve[0][0], tz=_dt.timezone.utc)
+    )
+    assert xs[0] == pytest.approx(expected0)
+    assert xs[1] > xs[0]
+    assert ys == [100_000.0, 100_500.0]
 
 
 def test_export_pdf_includes_screenshots(tmp_path: Path) -> None:
@@ -428,7 +473,10 @@ def test_equity_curve_x_axis_spans_multiple_months(tmp_path: Path) -> None:
 
     assert xs_captured, "No data points were plotted on the equity curve"
     span = max(xs_captured) - min(xs_captured)
-    span_days = span.days if hasattr(span, "days") else (span / _dt.timedelta(days=1))
+    span_days = (
+        span.days if hasattr(span, "days")
+        else float(span)
+    )
     assert span_days > 1, (
         f"Equity curve x-axis spans only {span_days} day(s) — "
         "timestamps may still be divided by 1000 (epoch-ms bug)."

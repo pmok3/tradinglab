@@ -41,16 +41,19 @@ import datetime as _dt
 import logging
 import os
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
+from typing import Any
 
 import numpy as np
 
 from ..backtest.performance import build_trade_rows
 from ..backtest.session import ENGINE_VERSION
+from ..core.lru_dict import LRUDict
+from ..core.params_key import freeze_params
 from ..entries.model import EntryStrategy
 from ..exits.model import ExitStrategy
 from ..models import Candle
@@ -59,6 +62,7 @@ from .acceptance import AcceptanceToken
 from .evaluator import (
     UnsupportedTriggerKind,
     _compute_et_arrays,
+    collect_dependency_symbols,
     collect_interval_overrides,
     evaluate_symbol,
 )
@@ -69,10 +73,16 @@ from .model import (
     TestRun,
     make_run_id,
 )
-from .screenshot import ScreenshotSpec, render_trade_screenshot, trade_filename
+from .screenshot import (
+    ScreenshotSpec,
+    build_candle_timestamp_index,
+    build_indicator_overlay_cache,
+    render_trade_screenshot,
+    trade_filename,
+)
 from .universe import ResolvedUniverse
 from .universe import resolve as resolve_universe
-from .warmup import bars_to_calendar_days, required_warmup_bars
+from .warmup import bars_to_calendar_days, required_warmup_bars_by_symbol
 
 __all__ = [
     "run",
@@ -111,6 +121,74 @@ def _default_max_workers() -> int:
 
 
 DEFAULT_MAX_WORKERS = _default_max_workers()
+
+
+@dataclass(frozen=True)
+class _StrategyPlan:
+    dependency_symbols: tuple[str, ...]
+    warmup_calendar_days: int
+    dependency_warmup_days: tuple[tuple[str, int], ...]
+
+
+_STRATEGY_PLAN_CACHE: LRUDict[tuple[Any, ...], _StrategyPlan] = LRUDict(maxsize=64)
+
+
+def _strategy_cache_part(strategy: EntryStrategy | ExitStrategy | None) -> tuple[tuple[str, Any], ...]:
+    if strategy is None:
+        return ()
+    try:
+        return freeze_params(strategy.to_dict())
+    except Exception:  # noqa: BLE001 - fallback keeps planning non-fatal
+        return freeze_params({
+            "id": getattr(strategy, "id", ""),
+            "name": getattr(strategy, "name", ""),
+            "repr": repr(strategy),
+        })
+
+
+def _strategy_plan_for(
+    entry_strategy: EntryStrategy,
+    exit_strategy: ExitStrategy,
+    *,
+    interval: str,
+    warmup_override_days: int | None,
+) -> _StrategyPlan:
+    """Return cached dependency + warmup planning for a strategy pair."""
+    override_key = None if warmup_override_days is None else int(warmup_override_days)
+    key = (
+        _strategy_cache_part(entry_strategy),
+        _strategy_cache_part(exit_strategy),
+        str(interval or ""),
+        override_key,
+    )
+    cached = _STRATEGY_PLAN_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    dependency_symbols = tuple(sorted(collect_dependency_symbols(entry_strategy, exit_strategy)))
+    dependency_warmup_days: dict[str, int] = {}
+    if override_key is not None and override_key > 0:
+        warmup_calendar_days = override_key
+        dependency_warmup_days = {
+            sym: warmup_calendar_days for sym in dependency_symbols
+        }
+    else:
+        warmup_by_symbol = required_warmup_bars_by_symbol(entry_strategy, exit_strategy)
+        warmup_calendar_days = bars_to_calendar_days(
+            warmup_by_symbol.get("", 0), interval,
+        )
+        dependency_warmup_days = {
+            sym: bars_to_calendar_days(warmup_by_symbol.get(sym, 0), interval)
+            for sym in dependency_symbols
+        }
+
+    plan = _StrategyPlan(
+        dependency_symbols=dependency_symbols,
+        warmup_calendar_days=warmup_calendar_days,
+        dependency_warmup_days=tuple(sorted(dependency_warmup_days.items())),
+    )
+    _STRATEGY_PLAN_CACHE[key] = plan
+    return plan
 
 
 # ---------------------------------------------------------------------------
@@ -301,6 +379,19 @@ def _filter_rth_only(candles: Sequence[Candle]) -> list[Candle]:
     return [c for c, keep in zip(candles, rth_mask.tolist(), strict=True) if keep]
 
 
+def _prepare_fetched_candles(
+    raw: Sequence[Candle],
+    *,
+    fetch_start_date: _dt.date,
+    end_date: _dt.date,
+    include_extended_hours: bool,
+) -> list[Candle]:
+    candles = _slice_to_date_range(raw, fetch_start_date, end_date)
+    if not include_extended_hours:
+        candles = _filter_rth_only(candles)
+    return candles
+
+
 # ---------------------------------------------------------------------------
 # Per-symbol outcome
 # ---------------------------------------------------------------------------
@@ -313,6 +404,49 @@ class _SymbolOutcome:
     trade_count: int
     screenshot_count: int = 0
     error: str = ""
+
+
+def _submit_shared_dependency_candle_futures(
+    *,
+    dependency_symbols: Sequence[str],
+    cfg: TestConfig,
+    start_date: _dt.date,
+    end_date: _dt.date,
+    dependency_fetch_start_dates: Mapping[str, _dt.date],
+    cancel_token: AcceptanceToken,
+    candles_fetcher: Callable[[str, str], list[Candle]],
+    pool: ThreadPoolExecutor,
+) -> dict[str, Future[tuple[str, list[Candle], str]]]:
+    """Submit one shared fetch/slice task per dependency symbol."""
+    normalized = tuple(
+        sorted({
+            str(sym or "").strip().upper()
+            for sym in dependency_symbols
+            if str(sym or "").strip()
+        })
+    )
+    if not normalized:
+        return {}
+
+    def _work(dep: str) -> tuple[str, list[Candle], str]:
+        try:
+            raw = candles_fetcher(dep, cfg.interval)
+            candles = _prepare_fetched_candles(
+                raw,
+                fetch_start_date=dependency_fetch_start_dates.get(dep, start_date),
+                end_date=end_date,
+                include_extended_hours=cfg.include_extended_hours,
+            )
+            return dep, candles, ""
+        except Exception as exc:  # noqa: BLE001 - surfaced per active worker
+            return dep, [], f"{type(exc).__name__}: {exc}"
+
+    futures: dict[str, Future[tuple[str, list[Candle], str]]] = {}
+    for dep in normalized:
+        if cancel_token.is_cancelled():
+            break
+        futures[dep] = pool.submit(_work, dep)
+    return futures
 
 
 # ---------------------------------------------------------------------------
@@ -360,6 +494,12 @@ def _render_screenshots_for_symbol(
     if not trade_rows:
         return 0
     symbol_for_log = trade_rows[0].post.symbol
+    indicator_overlay_cache = build_indicator_overlay_cache(
+        candles,
+        entry_strategy,
+        exit_strategy,
+    )
+    timestamp_index = build_candle_timestamp_index(candles)
 
     def _render_one(row) -> bool:
         if cancel_token is not None:
@@ -383,6 +523,8 @@ def _render_screenshots_for_symbol(
                 spec=screenshot_spec,
                 entry_strategy=entry_strategy,
                 exit_strategy=exit_strategy,
+                indicator_overlay_cache=indicator_overlay_cache,
+                timestamp_index=timestamp_index,
             )
             return True
         except Exception:  # noqa: BLE001
@@ -422,6 +564,9 @@ def _worker(
     cancel_token: AcceptanceToken,
     candles_fetcher: Callable[[str, str], list[Candle]],
     screenshot_spec: ScreenshotSpec | None,
+    dependency_symbols: Sequence[str] = (),
+    dependency_fetch_start_dates: Mapping[str, _dt.date] | None = None,
+    shared_dependency_futures: Mapping[str, Future[tuple[str, list[Candle], str]]] | None = None,
 ) -> _SymbolOutcome:
     """Run one symbol in isolation. Errors are captured, never raised.
 
@@ -436,9 +581,46 @@ def _worker(
                               error="cancelled before start")
     try:
         raw = candles_fetcher(symbol, cfg.interval)
-        candles = _slice_to_date_range(raw, fetch_start_date, end_date)
-        if not cfg.include_extended_hours:
-            candles = _filter_rth_only(candles)
+        candles = _prepare_fetched_candles(
+            raw,
+            fetch_start_date=fetch_start_date,
+            end_date=end_date,
+            include_extended_hours=cfg.include_extended_hours,
+        )
+        deps: dict[str, list[Candle]] = {}
+        active_symbol = symbol.strip().upper()
+        dep_fetch_starts = dependency_fetch_start_dates or {}
+        shared_futures = shared_dependency_futures or {}
+        for dep_symbol in dependency_symbols:
+            dep = str(dep_symbol or "").strip().upper()
+            if not dep or dep == active_symbol:
+                continue
+            fut = shared_futures.get(dep)
+            if fut is not None:
+                try:
+                    _resolved_dep, dep_candles, dep_error = fut.result()
+                except Exception as exc:  # noqa: BLE001 - defensive
+                    dep_error = f"{type(exc).__name__}: {exc}"
+                    dep_candles = []
+                if dep_error:
+                    return _SymbolOutcome(
+                        symbol=symbol, ok=False, trade_count=0,
+                        error=f"dependency {dep} fetch failed: {dep_error}",
+                    )
+                deps[dep] = dep_candles
+                continue
+            if cancel_token.is_cancelled():
+                return _SymbolOutcome(
+                    symbol=symbol, ok=False, trade_count=0,
+                    error="cancelled before dependency fetch",
+                )
+            dep_raw = candles_fetcher(dep, cfg.interval)
+            deps[dep] = _prepare_fetched_candles(
+                dep_raw,
+                fetch_start_date=dep_fetch_starts.get(dep, start_date),
+                end_date=end_date,
+                include_extended_hours=cfg.include_extended_hours,
+            )
         # If the fetcher returned no extra warmup bars (e.g. a smoke
         # stub whose data starts at start_date), gracefully fall back
         # to the no-warmup behaviour so old tests / fixtures keep
@@ -459,6 +641,7 @@ def _worker(
             deck_seed=cfg.rng_seed,
             cancel_token=cancel_token,
             warmup_until_ts=effective_warmup_ts,
+            dependency_candles=deps,
         )
         storage.save_session_result_for_symbol(run_dir, symbol, result)
         # Count round-trip trades (one PostTradeReview per open+close pair),
@@ -624,12 +807,15 @@ def run(
     # days) so the candle stream actually contains the warmup bars.
     # ``warmup_override_days`` on the config lets the user override the
     # auto-computed value (None = auto-compute, int = explicit override).
-    override = getattr(cfg, "warmup_override_days", None)
-    if override is not None and int(override) > 0:
-        warmup_calendar_days = int(override)
-    else:
-        warmup_bar_count = required_warmup_bars(entry_strategy, exit_strategy)
-        warmup_calendar_days = bars_to_calendar_days(warmup_bar_count, cfg.interval)
+    strategy_plan = _strategy_plan_for(
+        entry_strategy,
+        exit_strategy,
+        interval=cfg.interval,
+        warmup_override_days=getattr(cfg, "warmup_override_days", None),
+    )
+    dependency_symbols = strategy_plan.dependency_symbols
+    warmup_calendar_days = strategy_plan.warmup_calendar_days
+    dependency_warmup_days = dict(strategy_plan.dependency_warmup_days)
     if warmup_calendar_days > 0:
         fetch_start_date = start_date - _dt.timedelta(days=warmup_calendar_days)
         active_dt = _dt.datetime.combine(
@@ -639,6 +825,14 @@ def run(
     else:
         fetch_start_date = start_date
         warmup_until_ts = None
+    dependency_fetch_start_dates = {
+        sym: (
+            start_date - _dt.timedelta(days=days)
+            if days > 0
+            else start_date
+        )
+        for sym, days in dependency_warmup_days.items()
+    }
 
     # 4) Fan out per-symbol workers.
     outcomes: list[_SymbolOutcome] = []
@@ -654,6 +848,16 @@ def run(
     with ThreadPoolExecutor(
         max_workers=max_workers, thread_name_prefix="strategy-tester"
     ) as pool:
+        shared_dependency_futures = _submit_shared_dependency_candle_futures(
+            dependency_symbols=dependency_symbols,
+            cfg=cfg,
+            start_date=start_date,
+            end_date=end_date,
+            dependency_fetch_start_dates=dependency_fetch_start_dates,
+            cancel_token=cancel_token,
+            candles_fetcher=candles_fetcher,
+            pool=pool,
+        )
         futures: dict[Future[_SymbolOutcome], str] = {}
         for sym in universe.symbols:
             if cancel_token.is_cancelled():
@@ -673,6 +877,9 @@ def run(
                 cancel_token=cancel_token,
                 candles_fetcher=candles_fetcher,
                 screenshot_spec=screenshot_spec,
+                dependency_symbols=dependency_symbols,
+                dependency_fetch_start_dates=dependency_fetch_start_dates,
+                shared_dependency_futures=shared_dependency_futures,
             )
             futures[fut] = sym
 
@@ -721,8 +928,11 @@ def run(
             iv_overrides = collect_interval_overrides(
                 entry_strategy, exit_strategy, cfg.interval,
             )
-            report.aggregate_run(run_dir, interval_overrides=iv_overrides)
-            report.write_run_csv(run_dir)
+            report.aggregate_run(
+                run_dir,
+                interval_overrides=iv_overrides,
+                write_csv=True,
+            )
         except Exception:  # noqa: BLE001
             log.exception("aggregate/CSV write failed for run %s", run_dir)
 

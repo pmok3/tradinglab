@@ -9,12 +9,26 @@ holds.
 - `ScreenshotSpec` — knob bag with defaults: `pre_bars=30`,
   `post_bars=10`, `max_bars=200`, `width_in=14.5`, `height_in=8.2`,
   `dpi=110`, `dark_mode=False`, `draw_volume_pane=True`.
+- `IndicatorOverlayCache` — immutable bundle of precomputed overlay
+  lines for one candle series / strategy pair.
+- `CandleTimestampIndex` — immutable sorted lookup of non-gap candle
+  timestamps to original candle indices for one candle series.
+- `build_candle_timestamp_index(candles) -> CandleTimestampIndex` —
+  precomputes timestamp lookup data once for a batch of screenshots.
+- `build_indicator_overlay_cache(candles, entry_strategy,
+  exit_strategy) -> IndicatorOverlayCache` — walks the strategy
+  conditions and computes every drawable price-overlay indicator once.
 - `render_trade_screenshot(*, candles, trade_row, output_path,
-  spec=None, entry_strategy=None, exit_strategy=None) -> Path`
+  spec=None, entry_strategy=None, exit_strategy=None,
+  indicator_overlay_cache=None, timestamp_index=None) -> Path`
   — renders one PNG to disk; returns the actual `Path`. When
   `entry_strategy` / `exit_strategy` are supplied, every distinct
   price-overlay indicator referenced by their condition tree(s) is
-  drawn on the price pane (see "Indicator overlays" below).
+  drawn on the price pane (see "Indicator overlays" below). When a
+  precomputed `indicator_overlay_cache` is supplied, render uses it
+  directly and does not re-walk or re-compute strategy indicators.
+  When a precomputed `timestamp_index` is supplied, render uses it for
+  entry/exit candle lookup instead of rebuilding the lookup.
 - `select_window(candles, entry_index, exit_index, *, pre_bars,
   post_bars, max_bars) -> (start, end)` — pure-function window
   selection; exported for unit-testability.
@@ -117,9 +131,9 @@ holds.
 
 ## Error handling
 - **Empty candles list** → `ValueError` only when the trade refers
-  to a missing timestamp; the helper `_index_of_ts` falls back to a
-  nearest-match scan so off-by-one epoch precision doesn't crash the
-  pipeline.
+  to a missing timestamp; `CandleTimestampIndex.index_of` falls back to
+  a nearest-match lookup so off-by-one epoch precision doesn't crash
+  the pipeline.
 - **Single-bar trades** (`entry_index == exit_index`) draw a single
   candle window with the entry triangle and exit `x` stacked on the
   same bar.
@@ -146,6 +160,20 @@ holds.
   `None` (the default and current behavior of every caller until
   PR-N), the rendered PNG is byte-identical to the pre-overlay
   output — see `test_indicator_overlay_backcompat_when_strategy_none`.
+  Strategy-tester batch rendering calls
+  `build_indicator_overlay_cache(...)` once per symbol and passes the
+  immutable cache to every per-trade `render_trade_screenshot` call, so
+  a 60-trade symbol computes EMA/VWAP/Bollinger overlays once instead
+  of once per PNG. Calling `render_trade_screenshot` directly without a
+  cache preserves the old single-call behavior by building a temporary
+  cache internally.
+- *Timestamp lookup cache* — strategy-tester batch rendering calls
+  `build_candle_timestamp_index(...)` once per symbol and passes the
+  immutable cache to every per-trade `render_trade_screenshot` call, so
+  entry/exit timestamp resolution is O(log N) and the candle timestamp
+  list is not scanned twice per PNG. Direct calls without a cache build
+  a temporary cache internally. `_index_of_ts` remains as the
+  back-compat helper and delegates to the same cache implementation.
 - *Volume y-axis on zero-volume windows* — `setup_volume_axes`
   doesn't set `ylim`; matplotlib autoscales from the
   `PolyCollection` vertices the `draw_volume` adds. When every

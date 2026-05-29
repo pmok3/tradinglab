@@ -68,7 +68,12 @@ def test_all_trades_rendered_to_disk(tmp_path, monkeypatch):
     written_paths: list[Path] = []
 
     def _fake_render(*, candles, trade_row, output_path, spec,
-                    entry_strategy=None, exit_strategy=None):
+                    entry_strategy=None, exit_strategy=None,
+                    indicator_overlay_cache=None, timestamp_index=None):
+        del (
+            candles, trade_row, spec, entry_strategy, exit_strategy,
+            indicator_overlay_cache, timestamp_index,
+        )
         # Match real render_trade_screenshot: write some bytes atomically.
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"x" * 256)

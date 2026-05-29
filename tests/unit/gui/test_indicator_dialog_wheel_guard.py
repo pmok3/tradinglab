@@ -97,6 +97,39 @@ def test_wheel_storm_does_not_mutate_indicator_params(root):
             pass
 
 
+def test_kind_combobox_filters_as_user_types(root):
+    dlg = _open_dialog(root)
+    try:
+        dlg._on_click_add()
+        row = dlg._rows[-1]
+        row.kind_var.set("rrvol")
+        dlg._on_kind_combo_keyrelease(row)
+        values = tuple(row.kind_combo.cget("values"))
+        assert "RRVOL" in values
+        assert "EMA" not in values
+    finally:
+        try:
+            dlg.destroy()
+        except tk.TclError:
+            pass
+
+
+def test_kind_search_return_commits_single_match(root):
+    dlg = _open_dialog(root)
+    try:
+        dlg._on_click_add()
+        row = dlg._rows[-1]
+        row.kind_var.set("rrvol")
+        dlg._on_kind_changed(row)
+        assert row.kind_var.get() == "RRVOL"
+        assert row.last_good_params is not None
+    finally:
+        try:
+            dlg.destroy()
+        except tk.TclError:
+            pass
+
+
 def test_wheel_guard_reapplied_after_kind_change(root):
     """After ``_on_kind_changed`` rebuilds param widgets, the new
     Combobox/Spinbox widgets must also be guarded.

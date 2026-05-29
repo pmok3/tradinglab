@@ -255,6 +255,39 @@ class GeometryStore:
         self._windows[key] = geometry
         self._dirty = True
 
+    def get_window_size(self, key: str) -> tuple[int, int] | None:
+        raw = self._kv.get(f"window_size.{key}")
+        if not isinstance(raw, (list, tuple)) or len(raw) != 2:
+            return None
+        try:
+            width = int(raw[0])
+            height = int(raw[1])
+        except (TypeError, ValueError):
+            return None
+        if width <= 0 or height <= 0:
+            return None
+        return width, height
+
+    def set_window_size(self, key: str, width: int, height: int) -> None:
+        """Store size only, preserving caller/default position on restore."""
+        try:
+            size = [max(1, int(width)), max(1, int(height))]
+        except (TypeError, ValueError):
+            return
+        k = f"window_size.{key}"
+        if self._kv.get(k) == size:
+            return
+        self._kv[k] = size
+        self._dirty = True
+        self.save()
+
+    def clear_window_size(self, key: str) -> None:
+        k = f"window_size.{key}"
+        if k in self._kv:
+            del self._kv[k]
+            self._dirty = True
+            self.save()
+
     def get_sash(self, key: str) -> list[int] | None:
         """Return the stored sash positions for ``key`` (or ``None``)."""
         v = self._sashes.get(key)
@@ -296,6 +329,40 @@ class GeometryStore:
         try:
             toplevel.geometry(applied)
         except Exception:  # noqa: BLE001 - geometry rejection is non-fatal
+            pass
+        return applied
+
+    def restore_window_size(
+        self,
+        toplevel: tk.Misc,
+        key: str,
+        default: str = _DEFAULT_GEOMETRY,
+        *,
+        min_size: tuple[int, int] | None = None,
+    ) -> str:
+        """Apply stored size for ``key`` while preserving default position."""
+        if not self._loaded:
+            self.load()
+        parsed_default = _parse_geometry(_fallback_geometry(default))
+        if parsed_default is None:
+            parsed_default = _parse_geometry(_DEFAULT_GEOMETRY)
+        assert parsed_default is not None
+        _w, _h, x, y = parsed_default
+        saved_size = self.get_window_size(key)
+        if saved_size is None:
+            candidate = _fallback_geometry(default)
+        else:
+            width, height = saved_size
+            candidate = f"{width}x{height}{x:+d}{y:+d}"
+        try:
+            screen_w = int(toplevel.winfo_screenwidth())
+            screen_h = int(toplevel.winfo_screenheight())
+        except Exception:  # noqa: BLE001
+            screen_w, screen_h = 1920, 1080
+        applied = _clamp_to_screen(candidate, screen_w, screen_h, default=default, min_size=min_size)
+        try:
+            toplevel.geometry(applied)
+        except Exception:  # noqa: BLE001
             pass
         return applied
 

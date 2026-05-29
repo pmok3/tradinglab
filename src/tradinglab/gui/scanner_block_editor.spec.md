@@ -68,10 +68,11 @@ Produces a `FieldRef`. Layout:
   if empty. The `_symbol_is_placeholder` flag tracks placeholder
   vs real-value state so FocusIn doesn't wipe a real typed ticker.
 
-  Cross-symbol pin is preserved across Builtin↔Indicator type
-  toggles (`_on_type_change` carries `prev_symbol` forward). A
-  small `@` glyph label sits directly before the entry to make the
-  cross-symbol semantics visible at a glance in dense forms.
+  Cross-symbol pin and existing `FieldRef.interval` overrides are
+  preserved across Builtin↔Indicator type toggles and kind/param/symbol
+  edits (`_on_type_change` carries both forward). A small `@` glyph label
+  sits directly before the entry to make the cross-symbol semantics
+  visible at a glance in dense forms.
 - **`_last_literal` cache**: Number → Field → Number preserves
   the typed numeric value.
 - **Adaptive flow layout** (indicator branch): indicator combo +
@@ -85,7 +86,10 @@ Produces a `FieldRef`. Layout:
   `max(180, (toplevel_width - 280) // X)` where `X` depends on
   the picker's `layout_hint` (see below) — `2` when sharing a row
   with a sibling picker (inline), `1` when occupying its own row
-  (stacked). When the target row count changes (e.g. user picks
+  (stacked). If the Toplevel has not mapped yet and reports width 1,
+  the budget falls back to requested width / 1000 px so the first
+  render still wraps parameter-heavy indicators instead of showing a
+  clipped one-row layout until manual resize. When the target row count changes (e.g. user picks
   a wider indicator or resizes the dialog), `_reflow_value_pane`
   tears down all flow widgets and calls
   `_build_indicator_branch_into_rows(target_row_count)` to rebuild
@@ -98,19 +102,70 @@ Produces a `FieldRef`. Layout:
   triggers because no fixed-width container exists in the chain.
   Reflow debounced (`after(50, ...)`); pending callbacks cancelled
   in `_rebuild_value_pane` (avoid firing on destroyed widgets) and
-  on `<Destroy>`. Param labels source from `ParamDef.description`
-  (e.g. `"Include current in denom"`) with `pdef.name` as fallback
-  when description is empty.
+  on `<Destroy>`. Requested child widths are cached per
+  `_flow_children` identity tuple, so repeated resize callbacks with
+  unchanged widgets/budget do not call `update_idletasks()` for every
+  child again. The cache is invalidated whenever the branch rebuilds.
+  Param labels source from `ParamDef.description` (e.g. `"Include
+  current in denom"`) with `pdef.name` as fallback when description is
+  empty.
 - **`_build_param_widget` delegates per-kind dispatch to
   `gui._param_widgets.build_param_widget`** (audit #3). The shared
   helper is the single source of truth across `indicator_dialog`
   and `scanner_block_editor` for the bool / choice / int / float /
   str widget construction. The picker's wrapper still owns the
   enclosing `ttk.Frame` + label and stores the returned `var` into
-  `self._param_widgets[pdef.name]`. Commit policy is `"eager"`
+  `self._param_widgets[pdef.name]`. Choice and open-choice string
+  widgets use `_param_widgets.combo_width_for_choices`, and numeric
+  widgets use `_param_widgets.spinbox_width_for`, so long dropdown
+  values (e.g. RVOL/RRVOL session filters) are visible and the flow
+  layout wraps instead of clipping. Commit policy is `"eager"`
   (every variable write fires `_commit_indicator`); the FocusOut /
   Return bindings on Spinbox / Entry are kept locally because the
   picker historically commits on tab-out too.
+- **Searchable indicator dropdown.** Indicator FieldRef selection uses
+  an editable type-to-filter Combobox. KeyRelease filters available
+  values by indicator id, label, or description; exact selection /
+  one-match Return commits. `Escape` restores the combobox to the
+  current FieldRef id and clears validation text. The cross-symbol
+  ticker field remains a plain free-text Entry with no
+  history/autocomplete.
+- **Inline validation.** `_commit_indicator` calls
+  `_param_widgets.validate_param_value` for every ParamDef before
+  rebuilding the FieldRef. Invalid numeric ranges / choices show a
+  red inline label under the indicator params and block the commit,
+  preserving the previous-good `FieldRef` instead of silently
+  coercing to defaults.
+- **Tooltips / discoverability.** `_FieldRefPicker` keeps a `_tooltips`
+  list so tooltip objects survive for the life of their widgets. The
+  cross-symbol `@` Entry explains that blank means the active ticker
+  and typed symbols compare another ticker at the same bar time.
+  ParamDef-driven labels/widgets attach `_param_widgets.tooltip_text_for`
+  output, so advanced params such as RRVOL's "Include current in
+  denom" have on-demand explanations without inline clutter.
+- **Cross-symbol badge.** When a FieldRef pins `symbol`, the symbol
+  entry cluster shows a text badge such as `@SPY` with a tooltip
+  explaining that the value evaluates on that dependency symbol.
+  Additional status badges render in the shared badge row: `Dep` for
+  companion-symbol dependency, the interval text for non-default
+  interval overrides, `Warmup N` for indicator warmup estimates, and
+  `Data OK` / `Missing data` / `Data ?` depending on the optional data
+  status hook. The symbol badge is removed when the symbol field
+  returns to active/blank. Literal refs do not render data-status badges
+  even when a provider is present because they have no data dependency.
+- **Applicability line.** Every picker branch shows a text-only status
+  line. Literal refs say they have no data dependency; builtins show
+  active vs dependency symbol and interval; indicators also include an
+  approximate warmup bar count via `strategy_tester.warmup`. Callers
+  may pass `data_status_provider(ref) -> (ok, message)` to
+  `_FieldRefPicker` / `BlockEditor`; when present the line appends
+  `Can run now: yes/no` plus the provider message using active
+  chart/latest-bar context supplied by the caller.
+- **Basic / Advanced parameter groups.** Indicator ParamDefs are
+  grouped with lightweight text headers. The first implementation uses
+  `_param_widgets.param_group_for`: known advanced fields such as
+  `session_filter`, `denominator_includes_current`, `z_score`, and
+  `compare_symbol` fall under Advanced; the rest are Basic.
 - **`layout_hint: Literal["inline", "stacked"]`** (default `"inline"`):
   optional `__init__` param + `set_layout_hint(hint)` method.
   Owned by the parent `_ConditionFrame` which propagates the
@@ -133,7 +188,16 @@ Produces a `FieldRef`. Layout:
 - Param defaults: `FieldRef.literal(0.0)` for field slots; `1`
   for int; `1.0` for float.
 - Param row rebuilds from `OPERATOR_PARAM_SCHEMA[new_op]` on op change.
+- Manual scalar-param commits reject fractional decimals for int slots and
+  non-finite values for float slots, preserving the previous-good value
+  instead of truncating or persisting `NaN` / infinities.
 - Interval combo: `"" → use default`, plus standard intervals.
+- Builder view is inherited from `BlockEditor`:
+  - `Auto layout` (default) keeps the fit-based inline/stacked rule.
+  - `Detailed cards` forces the stacked/card-like layout.
+  - `Compact rows` shows enabled checkbox + trader-readable summary +
+    delete button; editable controls are hidden until the user switches
+    back to Auto/Detailed.
 
 #### Dual-mode layout (inline ↔ stacked)
 

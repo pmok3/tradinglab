@@ -161,14 +161,16 @@ class FetchService:
                         return
                 except Exception:  # noqa: BLE001
                     pass
-            merged = disk_cache_mod.merge_candles(disk_cache_mod.load(*key), fetched)
+            disk_existing = disk_cache_mod.load(*key)
+            merged = disk_cache_mod.merge_candles(disk_existing, fetched)
             if current:
                 merged = disk_cache_mod.merge_candles(current, merged)
             stash_fn(key, merged)
-            try:
-                disk_cache_mod.save(*key, merged)
-            except Exception:  # noqa: BLE001
-                pass
+            if disk_existing != merged:
+                try:
+                    disk_cache_mod.save(*key, merged)
+                except Exception:  # noqa: BLE001
+                    pass
             first = merged[0].date if merged else None
             last = merged[-1].date if merged else None
             self._status(

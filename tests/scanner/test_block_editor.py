@@ -427,7 +427,7 @@ def _make_indicator_picker(root, indicator_id: str) -> _FieldRefPicker:
 
 
 def test_field_ref_picker_records_flow_children_for_rvol(root):
-    """RVOL trigger form has 6 trigger-relevant params + indicator combo = 7 flow children.
+    """RVOL trigger form records params plus Basic/Advanced headers.
 
     The pre-pruning total was 9 (8 params + combo); see RVOL's
     ``TRIGGER_RELEVANT_PARAMS`` which hides the two cosmetic-only
@@ -436,11 +436,18 @@ def test_field_ref_picker_records_flow_children_for_rvol(root):
     """
     picker = _make_indicator_picker(root, "rvol")
     try:
-        # Indicator combo + 6 trigger-relevant params (mode, length,
+        # Indicator combo + Basic/Advanced headers + 6 trigger-relevant
+        # params (mode, length,
         # aggregator, session_filter, denominator_includes_current,
         # z_score) + 1 cross-symbol Symbol wrap. RVOL has a single
         # output key, so no output combo is added.
-        assert len(picker._flow_children) == 8
+        assert len(picker._flow_children) == 10
+        labels = [
+            w.cget("text") for w in picker._flow_children
+            if type(w).__name__ == "Label"
+        ]
+        assert "Basic" in labels
+        assert "Advanced" in labels
     finally:
         picker.destroy()
 
@@ -807,4 +814,3 @@ def test_lookback_round_trips_through_get_root(root):
         assert d["within_last_mode"] == "exactly"
     finally:
         ed.destroy()
-

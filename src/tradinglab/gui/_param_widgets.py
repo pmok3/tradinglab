@@ -13,6 +13,7 @@ a sibling helper per audit #8.
 
 from __future__ import annotations
 
+import math
 import tkinter as tk
 from collections.abc import Callable
 from tkinter import ttk
@@ -34,6 +35,33 @@ _DEFAULT_WIDTH_BY_KIND: dict[str, int] = {
 }
 
 
+def combo_width_for_choices(choices: Any) -> int:
+    """Pick a Combobox ``width=`` that fits the longest choice."""
+    try:
+        items = [str(c) for c in (choices or ())]
+    except TypeError:
+        items = []
+    if not items:
+        return 10
+    longest = max(len(s) for s in items)
+    return max(8, min(30, longest + 2))
+
+
+def spinbox_width_for(pdef: Any) -> int:
+    """Pick a Spinbox ``width=`` for an int / float ``ParamDef``."""
+    def _digits(v: Any) -> int:
+        if v is None:
+            return 6
+        try:
+            return len(str(v))
+        except Exception:  # noqa: BLE001
+            return 6
+
+    width = max(_digits(getattr(pdef, "min", None)),
+                _digits(getattr(pdef, "max", None))) + 2
+    return max(6, min(14, width))
+
+
 def label_text_for(pdef: ParamDef) -> str:
     """Return the user-facing label for ``pdef``.
 
@@ -46,6 +74,125 @@ def label_text_for(pdef: ParamDef) -> str:
     """
     label = (getattr(pdef, "description", "") or pdef.name) + ":"
     return label
+
+
+def tooltip_text_for(pdef: ParamDef) -> str:
+    """Return a concise non-essential tooltip for a parameter field."""
+    name = str(getattr(pdef, "name", "") or "")
+    label = label_text_for(pdef).rstrip(":")
+    specific: dict[str, str] = {
+        "denominator_includes_current": (
+            "Include current bar in average denominator. Turn off to compare "
+            "the current bar against prior bars only."
+        ),
+        "session_filter": "Choose which trading sessions contribute to this calculation.",
+        "z_score": "Show the value as a Z-score versus recent history.",
+        "compare_symbol": "Optional companion ticker used by relative/cross-symbol calculations.",
+    }
+    if name in specific:
+        return specific[name]
+
+    parts = [label] if label else []
+    choices = getattr(pdef, "choices", None)
+    if choices:
+        try:
+            parts.append("Choices: " + ", ".join(str(c) for c in choices))
+        except TypeError:
+            pass
+    min_v = getattr(pdef, "min", None)
+    max_v = getattr(pdef, "max", None)
+    if min_v is not None or max_v is not None:
+        if min_v is not None and max_v is not None:
+            parts.append(f"Range: {min_v} to {max_v}.")
+        elif min_v is not None:
+            parts.append(f"Minimum: {min_v}.")
+        else:
+            parts.append(f"Maximum: {max_v}.")
+    return " ".join(parts)
+
+
+def param_group_for(pdef: ParamDef) -> str:
+    """Return the simple UI group for a ParamDef: ``Basic`` or ``Advanced``."""
+    advanced_names = {
+        "session_filter",
+        "denominator_includes_current",
+        "z_score",
+        "compare_symbol",
+        "anchor_ts",
+    }
+    if str(getattr(pdef, "name", "")) in advanced_names:
+        return "Advanced"
+    return "Basic"
+
+
+def validate_param_value(pdef: ParamDef, raw: Any) -> tuple[bool, Any, str]:
+    """Validate/coerce one ParamDef value.
+
+    Returns ``(ok, value, message)``. ``value`` is the coerced value on
+    success and ``pdef.default`` on failure.
+    """
+    kind = getattr(pdef, "kind", "str")
+    label = label_text_for(pdef).rstrip(":")
+    default = getattr(pdef, "default", None)
+
+    if kind == "int":
+        try:
+            numeric = float(raw)
+        except (TypeError, ValueError, OverflowError):
+            return False, default, f"Enter a whole number for {label}."
+        if not math.isfinite(numeric) or not numeric.is_integer():
+            return False, default, f"Enter a whole number for {label}."
+        value = int(numeric)
+        return _validate_numeric_bounds(pdef, value, label)
+
+    if kind == "float":
+        try:
+            value = float(raw)
+        except (TypeError, ValueError, OverflowError):
+            return False, default, f"Enter a number for {label}."
+        if not math.isfinite(value):
+            return False, default, f"Enter a finite number for {label}."
+        return _validate_numeric_bounds(pdef, value, label)
+
+    if kind == "choice":
+        choices = tuple(getattr(pdef, "choices", ()) or ())
+        if raw in choices:
+            return True, raw, ""
+        return False, default, f"Choose a valid {label}."
+
+    if kind == "bool":
+        return True, bool(raw), ""
+
+    return True, raw, ""
+
+
+def _format_bound(value: Any) -> str:
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if f.is_integer():
+        return str(int(f))
+    return f"{f:g}"
+
+
+def _validate_numeric_bounds(pdef: ParamDef, value: int | float, label: str) -> tuple[bool, Any, str]:
+    min_v = getattr(pdef, "min", None)
+    max_v = getattr(pdef, "max", None)
+    default = getattr(pdef, "default", None)
+    if min_v is not None and value < min_v:
+        return (
+            False,
+            default,
+            f"Enter {label} greater than or equal to {_format_bound(min_v)}.",
+        )
+    if max_v is not None and value > max_v:
+        return (
+            False,
+            default,
+            f"Enter {label} less than or equal to {_format_bound(max_v)}.",
+        )
+    return True, value, ""
 
 
 def _format_anchor_label(ts: str) -> str:

@@ -12,6 +12,9 @@ Frozen-bundle-aware resource path resolution. Hides the difference between sourc
 | Source (dev) | Frozen (PyInstaller --onedir) |
 |---|---|
 | `<repo>/data/entry_strategy_templates/*.json` | `<bundle>/_internal/data/entry_strategy_templates/*.json` |
+| `<repo>/data/exit_strategy_templates/*.json` | `<bundle>/_internal/data/exit_strategy_templates/*.json` |
+| `<repo>/data/indicator_presets/*.json` | `<bundle>/_internal/data/indicator_presets/*.json` |
+| `<repo>/data/strategy_combination_templates/*.json` | `<bundle>/_internal/data/strategy_combination_templates/*.json` |
 | `<repo>/config/example_config.json` | `<bundle>/_internal/config/example_config.json` |
 | `<repo>/.env.example` | `<bundle>/_internal/.env.example` |
 

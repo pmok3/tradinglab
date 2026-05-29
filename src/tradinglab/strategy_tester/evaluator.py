@@ -58,24 +58,22 @@ from __future__ import annotations
 
 import logging
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta, timezone
 from typing import Any
 
 import numpy as np
 
-try:
-    from zoneinfo import ZoneInfo
-except ImportError:  # pragma: no cover — Python <3.9 fallback
-    ZoneInfo = None  # type: ignore[assignment]
-
 from ..backtest.bars import from_candles
 from ..backtest.engine import SandboxEngine
 from ..backtest.orders import Order
 from ..backtest.orders import Side as OrderSide
 from ..backtest.session import ENGINE_VERSION, SessionResult, SessionSpec
+from ..core.bars_registry import BarsRegistry
+from ..core.params_key import freeze_params
 from ..core.side import Side
+from ..data.multi_interval_cache import MultiIntervalCache
 from ..entries.dispatch import (
     _ENTRY_DISPATCH,
 )
@@ -97,7 +95,16 @@ from ..entries.model import (
     SizingKind,
 )
 from ..entries.model import TriggerKind as EntryTriggerKind
-from ..exits.model import ExitStrategy, ExitTrigger
+from ..exits.dispatch import (
+    _EXIT_DISPATCH,
+)
+from ..exits.dispatch import (
+    ExitTriggerContext as _ExitTriggerContext,
+)
+from ..exits.dispatch import (
+    check_trigger_decision as _check_exit_decision,
+)
+from ..exits.model import ExitStrategy
 from ..exits.model import TriggerKind as ExitTriggerKind
 from ..exits.spec import (
     Bar as _SpecBar,
@@ -106,28 +113,13 @@ from ..exits.spec import (
     TriggerState as _SpecTriggerState,
 )
 from ..exits.spec import (
-    evaluate_chandelier_stop as _spec_evaluate_chandelier,
-)
-from ..exits.spec import (
-    evaluate_time_of_day as _spec_evaluate_time_of_day,
-)
-from ..exits.spec import (
-    evaluate_trailing_stop as _spec_evaluate_trailing,
-)
-from ..exits.spec import (
     update_chandelier_state as _spec_update_chandelier,
-)
-from ..exits.spec import (
-    update_trail_state as _spec_update_trail,
 )
 from ..models import Candle
 from ..positions.model import Position as _Position
 from ..scanner import storage as _scanner_storage
 from ..scanner.engine import (
     EvaluationContext as _ScannerEvalContext,
-)
-from ..scanner.engine import (
-    evaluate_group as _scanner_evaluate_group,
 )
 from ..scanner.engine import (
     make_context as _scanner_make_context,
@@ -151,6 +143,7 @@ __all__ = [
     "EvalContext",
     "_ENTRY_HANDLERS",
     "_EXIT_HANDLERS",
+    "collect_dependency_symbols",
 ]
 
 
@@ -574,6 +567,125 @@ def _walk_authored_intervals(
     return out
 
 
+def _walk_field_symbols(
+    node: _ScannerGroup | _ScannerCondition,
+) -> list[str]:
+    """Yield every non-active ``FieldRef.symbol`` in a condition tree."""
+    out: list[str] = []
+    if isinstance(node, _ScannerCondition):
+        refs = [node.left, *list((node.params or {}).values())]
+        for ref in refs:
+            if not isinstance(ref, _ScannerFieldRef):
+                continue
+            sym = str(ref.symbol or "").strip().upper()
+            if sym:
+                out.append(sym)
+        return out
+    for child in node.children:
+        out.extend(_walk_field_symbols(child))
+    return out
+
+
+def collect_dependency_symbols(
+    entry_strategy: EntryStrategy,
+    exit_strategy: ExitStrategy,
+) -> set[str]:
+    """Return non-active ticker symbols referenced by scanner FieldRefs.
+
+    The strategy tester can evaluate cross-symbol conditions only when the
+    runner fetches those companion bars and wires a ``BarsRegistry`` into the
+    scanner evaluation context.
+    """
+    out: set[str] = set()
+
+    et = entry_strategy.trigger
+    if et.kind is EntryTriggerKind.INDICATOR and et.condition is not None:
+        out.update(_walk_field_symbols(et.condition))
+    if et.kind is EntryTriggerKind.SCANNER_ALERT and et.scanner_id:
+        try:
+            scan: _ScanDefinition = _scanner_storage.load(et.scanner_id)
+        except (FileNotFoundError, ValueError, OSError):
+            scan = None  # type: ignore[assignment]
+        if scan is not None:
+            out.update(_walk_field_symbols(scan.root))
+
+    for leg in exit_strategy.legs:
+        if not leg.enabled:
+            continue
+        for trig in leg.triggers:
+            if not trig.enabled:
+                continue
+            if trig.kind is not ExitTriggerKind.INDICATOR:
+                continue
+            if trig.condition is None:
+                continue
+            out.update(_walk_field_symbols(trig.condition))
+    return out
+
+
+def _walk_indicator_field_refs(
+    node: _ScannerGroup | _ScannerCondition,
+) -> list[_ScannerFieldRef]:
+    """Yield indicator FieldRefs from a scanner condition tree."""
+    out: list[_ScannerFieldRef] = []
+    if isinstance(node, _ScannerCondition):
+        refs = [node.left, *list((node.params or {}).values())]
+        for ref in refs:
+            if (
+                isinstance(ref, _ScannerFieldRef)
+                and ref.kind == "indicator"
+                and ref.id
+            ):
+                out.append(ref)
+        return out
+    for child in node.children:
+        out.extend(_walk_indicator_field_refs(child))
+    return out
+
+
+def _prewarm_indicator_memos(
+    eval_ctx: _ScannerEvalContext | None,
+    normalized_conditions: Mapping[str, _ScannerGroup],
+) -> None:
+    """Compute each referenced indicator output once before the bar loop.
+
+    ``IndicatorMemo`` is already lazy and deduplicated; this helper moves
+    the first compute out of the trigger-dispatch hot path and also warms
+    cross-symbol dependency memos held by the BarsRegistry.
+    """
+    if eval_ctx is None or not normalized_conditions:
+        return
+    seen: set[tuple[str, str, str, tuple[tuple[str, Any], ...]]] = set()
+    for condition in normalized_conditions.values():
+        for ref in _walk_indicator_field_refs(condition):
+            symbol = str(ref.symbol or eval_ctx.symbol).strip().upper()
+            interval = str(ref.interval or eval_ctx.interval)
+            key = (symbol, interval, ref.id, freeze_params(ref.params or {}))
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                if symbol == eval_ctx.symbol.upper() and interval == eval_ctx.interval:
+                    eval_ctx.memo.get(ref.id, ref.params or {})
+                    continue
+                registry = eval_ctx.bars_registry
+                if registry is None:
+                    continue
+                view = registry.get_view(symbol, interval)
+                if view is None:
+                    continue
+                view.memo.get(ref.id, ref.params or {})
+            except Exception:  # noqa: BLE001 - memo.get records indicator failures
+                LOG.exception(
+                    "strategy_tester._prewarm_indicator_memos: failed "
+                    "for %s/%s %s(%s)",
+                    symbol,
+                    interval,
+                    ref.id,
+                    dict(ref.params or {}),
+                )
+
+
 def collect_interval_overrides(
     entry_strategy: EntryStrategy,
     exit_strategy: ExitStrategy,
@@ -799,10 +911,11 @@ def _compute_quantity(
 # etc.) stays here — only the "does this bar fire?" decision is
 # centralized.
 #
-# Exit handlers below are NOT yet shared with the live ``ExitEvaluator``;
-# they remain mechanical-only adapters that delegate to
-# :mod:`tradinglab.exits.spec` pure functions. Unifying the exit-side
-# registry is a follow-on audit item.
+# Exit-trigger fire decisions are delegated to the shared
+# :mod:`tradinglab.exits.dispatch` registry. The mechanical evaluator keeps
+# its own orchestration (fills, EOD kill, sizing, active-period gates) and
+# passes ``legacy_signed_offsets=True`` so old strategy-tester manifests keep
+# their signed offset semantics.
 
 _BarTuple = tuple[float, float, float, float]   # open, high, low, close
 
@@ -827,147 +940,6 @@ def _entry_unsupported(trigger: EntryTrigger, *, side: str = "entry") -> bool:
 # and the mechanical evaluator simultaneously (which is precisely
 # the structural drift guarantee we want).
 _ENTRY_HANDLERS: dict[EntryTriggerKind, Callable[..., Any]] = _ENTRY_DISPATCH
-
-
-def _resolve_exit_price(
-    trigger: ExitTrigger, *, ref_price: float, position_side: str
-) -> float | None:
-    """Compute the absolute price for a limit/stop exit trigger.
-
-    Exit triggers can express price either as an absolute ``price``,
-    a ``offset_pct`` (positive = away from entry in the favourable
-    direction for LIMIT; unfavourable for STOP), or ``offset_dollar``.
-    Returns ``None`` when no usable price field is set.
-    """
-    if trigger.price is not None:
-        return float(trigger.price)
-
-    side = Side.from_str(position_side)
-    if trigger.offset_pct is not None:
-        pct = float(trigger.offset_pct) / 100.0
-        # LONG limit is above entry / stop is below entry; SHORT flips.
-        # ``side.sign`` is +1 LONG / -1 SHORT; LIMIT keeps the sign, STOP flips it.
-        leg_sign = 1.0 if trigger.kind is ExitTriggerKind.LIMIT else -1.0
-        sign = side.sign * leg_sign
-        return float(ref_price * (1.0 + sign * pct))
-
-    if trigger.offset_dollar is not None:
-        dollars = float(trigger.offset_dollar)
-        leg_sign = 1.0 if trigger.kind is ExitTriggerKind.LIMIT else -1.0
-        sign = side.sign * leg_sign
-        return float(ref_price + sign * dollars)
-
-    return None
-
-
-def _exit_market(trigger: ExitTrigger, bar: _BarTuple, **_kw: object) -> bool:
-    """MARKET exit fires on every bar (the leg becomes active immediately)."""
-    return True
-
-
-def _exit_limit(
-    trigger: ExitTrigger,
-    bar: _BarTuple,
-    *,
-    ref_price: float,
-    position_side: str,
-    **_kw: object,
-) -> bool:
-    """LIMIT exit: LONG (position=buy) fires when bar.high >= take-profit;
-    SHORT fires when bar.low <= take-profit."""
-    target = _resolve_exit_price(
-        trigger, ref_price=ref_price, position_side=position_side
-    )
-    if target is None:
-        return False
-    _o, hi, lo, _c = bar
-    side = Side.from_str(position_side)
-    # Favorable extreme: high for long, low for short — take-profit fires
-    # when the favorable side crosses the target.
-    fav = hi if side.is_long else lo
-    return (fav >= float(target)) if side.is_long else (fav <= float(target))
-
-
-def _exit_stop(
-    trigger: ExitTrigger,
-    bar: _BarTuple,
-    *,
-    ref_price: float,
-    position_side: str,
-    **_kw: object,
-) -> bool:
-    """STOP exit: LONG fires when bar.low <= stop; SHORT fires when bar.high >= stop."""
-    stop = _resolve_exit_price(
-        trigger, ref_price=ref_price, position_side=position_side
-    )
-    if stop is None:
-        return False
-    _o, hi, lo, _c = bar
-    side = Side.from_str(position_side)
-    # Adverse extreme: low for long, high for short — stop fires when the
-    # adverse side crosses the stop.
-    adv = lo if side.is_long else hi
-    return (adv <= float(stop)) if side.is_long else (adv >= float(stop))
-
-
-def _exit_stop_limit(
-    trigger: ExitTrigger,
-    bar: _BarTuple,
-    *,
-    ref_price: float,
-    position_side: str,
-    **_kw: object,
-) -> bool:
-    """STOP_LIMIT exit: stop touched AND limit acceptable for fill."""
-    if not _exit_stop(trigger, bar, ref_price=ref_price, position_side=position_side):
-        return False
-    # Limit price for stop_limit lives in `stop_limit_price` (absolute) or
-    # `stop_limit_offset` from the stop level. Use the offset semantics
-    # mirrored from the live exits.evaluator for now.
-    return True
-
-
-def _exit_unsupported(trigger: ExitTrigger, bar: _BarTuple, **_kw: object) -> bool:
-    raise UnsupportedTriggerKind(trigger.kind, side="exit")
-
-
-def _exit_indicator(
-    trigger: ExitTrigger,
-    bar: _BarTuple,
-    *,
-    eval_ctx: _ScannerEvalContext | None = None,
-    normalized_conditions: dict[str, _ScannerGroup] | None = None,
-    **_kw: object,
-) -> bool:
-    """INDICATOR exit: evaluate ``trigger.condition`` at the current bar.
-
-    Mirrors :func:`_entry_indicator`. The exit fires when the condition
-    evaluates True; defensive about None / NotImplementedError /
-    indicator-compute exceptions (no fire on error so a broken
-    indicator doesn't flatten the position prematurely).
-    """
-    if eval_ctx is None or trigger.condition is None:
-        return False
-    condition: _ScannerGroup = trigger.condition  # type: ignore[assignment]
-    if normalized_conditions is not None:
-        condition = normalized_conditions.get(trigger.id, condition)
-    try:
-        result = _scanner_evaluate_group(condition, eval_ctx)
-    except NotImplementedError:
-        return False
-    except Exception:  # noqa: BLE001
-        LOG.exception(
-            "strategy_tester._exit_indicator: evaluate_group raised "
-            "(symbol=%s, idx=%d)", eval_ctx.symbol, eval_ctx.current_index,
-        )
-        return False
-    return result is True
-
-
-# ---------------------------------------------------------------------------
-# Stateful exit handlers (TRAILING_STOP, TIME_OF_DAY, CHANDELIER)
-# delegate to pure-function evaluators in exits.spec.
-# ---------------------------------------------------------------------------
 
 
 def _ctx_to_position(ctx: EvalContext) -> _Position:
@@ -1015,137 +987,7 @@ def _bar_to_specbar(bar: _BarTuple, bar_ts: int) -> _SpecBar:
     )
 
 
-def _exit_trailing_stop(
-    trigger: ExitTrigger,
-    bar: _BarTuple,
-    *,
-    ref_price: float,
-    position_side: str,
-    eval_state: EvalContext | None = None,
-    bar_ts: int = 0,
-    **_kw: object,
-) -> bool:
-    """TRAILING_STOP exit: delegate to :func:`exits.spec.update_trail_state`
-    + :func:`exits.spec.evaluate_trailing_stop` so headless and live
-    semantics stay byte-identical (HWM ratcheting, activation gate,
-    trail_basis intrabar/close, percent/dollar units).
-
-    Per-trigger :class:`TriggerState` is stored on
-    :attr:`EvalContext.trigger_states`; reset on every position-open
-    transition by :func:`_reset_trigger_states_on_activation`.
-    """
-    if eval_state is None:
-        return False
-    if trigger.trail_unit is None or trigger.trail_value is None:
-        return False
-    state = eval_state.trigger_states.get(trigger.id)
-    if state is None:
-        state = _SpecTriggerState()
-        eval_state.trigger_states[trigger.id] = state
-    position = _ctx_to_position(eval_state)
-    spec_bar = _bar_to_specbar(bar, bar_ts)
-    try:
-        # Strategy-tester only sees end-of-bar data: pass is_close=True
-        # for both trail_basis modes (the spec gates the HWM update on
-        # trail_basis internally).
-        _spec_update_trail(state, trigger, position, spec_bar, is_close=True)
-        decision = _spec_evaluate_trailing(state, trigger, position, spec_bar)
-    except Exception:  # noqa: BLE001
-        LOG.exception(
-            "strategy_tester._exit_trailing_stop: spec evaluator raised "
-            "(symbol=%s, trigger_id=%s)", eval_state.symbol, trigger.id,
-        )
-        return False
-    return bool(decision.fire)
-
-
-def _exit_time_of_day(
-    trigger: ExitTrigger,
-    bar: _BarTuple,
-    *,
-    eval_state: EvalContext | None = None,
-    bar_ts: int = 0,
-    **_kw: object,
-) -> bool:
-    """TIME_OF_DAY exit: delegate to :func:`exits.spec.evaluate_time_of_day`.
-
-    The ``now`` parameter is built from ``bar_ts`` (epoch seconds) as a
-    UTC-aware datetime; the time-of-day comparison uses only the
-    HH:MM portion so timezone tagging is informational only. Malformed
-    or missing ``time_of_day`` results in silent no-fire (no crash).
-    """
-    if eval_state is None:
-        return False
-    if not trigger.time_of_day:
-        return False
-    position = _ctx_to_position(eval_state)
-    spec_bar = _bar_to_specbar(bar, bar_ts)
-    # TIME_OF_DAY cutoffs in saved templates are ET HH:MM (matching the
-    # ``arm_window_*`` convention). Bar timestamps are UTC epoch
-    # seconds, so we convert to ET before handing to
-    # :func:`exits.spec.evaluate_time_of_day` — otherwise a "15:55 ET"
-    # cutoff on 5m bars whose ts is e.g. ``20:55 UTC`` (= 15:55 ET in
-    # winter) would compare ``20:55 >= 15:55`` and fire too early on
-    # almost every RTH bar.
-    now = _bar_ts_to_et(int(bar_ts))
-    try:
-        decision = _spec_evaluate_time_of_day(trigger, position, spec_bar, now=now)
-    except Exception:  # noqa: BLE001
-        LOG.exception(
-            "strategy_tester._exit_time_of_day: spec evaluator raised "
-            "(symbol=%s, trigger_id=%s)", eval_state.symbol, trigger.id,
-        )
-        return False
-    return bool(decision.fire)
-
-
-def _exit_chandelier(
-    trigger: ExitTrigger,
-    bar: _BarTuple,
-    *,
-    eval_state: EvalContext | None = None,
-    bar_ts: int = 0,
-    **_kw: object,
-) -> bool:
-    """CHANDELIER exit: delegate to :func:`exits.spec.update_chandelier_state`
-    + :func:`exits.spec.evaluate_chandelier_stop`. Activation-bar handling
-    is centralized in :func:`_reset_trigger_states_on_activation`; this
-    handler always passes ``is_activation=False`` because by the time we
-    reach exit-evaluation the state has already been seeded with
-    ``is_activation=True`` for the entry bar.
-    """
-    if eval_state is None:
-        return False
-    state = eval_state.trigger_states.get(trigger.id)
-    if state is None:
-        # Shouldn't happen — the activation reset always creates state
-        # for chandelier triggers on the entry bar — but be defensive.
-        state = _SpecTriggerState()
-        eval_state.trigger_states[trigger.id] = state
-    position = _ctx_to_position(eval_state)
-    spec_bar = _bar_to_specbar(bar, bar_ts)
-    try:
-        _spec_update_chandelier(state, trigger, position, spec_bar, is_activation=False)
-        decision = _spec_evaluate_chandelier(state, trigger, position, spec_bar)
-    except Exception:  # noqa: BLE001
-        LOG.exception(
-            "strategy_tester._exit_chandelier: spec evaluator raised "
-            "(symbol=%s, trigger_id=%s)", eval_state.symbol, trigger.id,
-        )
-        return False
-    return bool(decision.fire)
-
-
-_EXIT_HANDLERS: dict[ExitTriggerKind, Callable[..., bool]] = {
-    ExitTriggerKind.MARKET: _exit_market,
-    ExitTriggerKind.LIMIT: _exit_limit,
-    ExitTriggerKind.STOP: _exit_stop,
-    ExitTriggerKind.STOP_LIMIT: _exit_stop_limit,
-    ExitTriggerKind.TRAILING_STOP: _exit_trailing_stop,
-    ExitTriggerKind.TIME_OF_DAY: _exit_time_of_day,
-    ExitTriggerKind.INDICATOR: _exit_indicator,
-    ExitTriggerKind.CHANDELIER: _exit_chandelier,
-}
+_EXIT_HANDLERS = _EXIT_DISPATCH
 
 
 def _reset_trigger_states_on_activation(
@@ -1372,24 +1214,38 @@ def _check_exits(
     if ctx.position_qty <= 0.0:
         return False, 0.0
 
+    position = _ctx_to_position(ctx)
+    spec_bar = _bar_to_specbar(bar, bar_ts)
     for leg in ctx.exit_strategy.legs:
         if not leg.enabled:
             continue
         for trigger in leg.triggers:
             if not trigger.enabled:
                 continue
-            handler = _EXIT_HANDLERS.get(trigger.kind, _exit_unsupported)
-            fired = handler(
+            if trigger.kind not in _EXIT_HANDLERS:
+                raise UnsupportedTriggerKind(trigger.kind, side="exit")
+            state = ctx.trigger_states.get(trigger.id)
+            if (
+                trigger.kind in (ExitTriggerKind.TRAILING_STOP, ExitTriggerKind.CHANDELIER)
+                and state is None
+            ):
+                state = _SpecTriggerState()
+                ctx.trigger_states[trigger.id] = state
+            now = _bar_ts_to_et(int(bar_ts)) if trigger.kind is ExitTriggerKind.TIME_OF_DAY else None
+            decision = _check_exit_decision(
                 trigger,
-                bar,
-                ref_price=ctx.position_avg_price,
-                position_side=ctx.position_side,
-                eval_ctx=eval_ctx,
-                normalized_conditions=normalized_conditions,
-                eval_state=ctx,
-                bar_ts=bar_ts,
+                _ExitTriggerContext(
+                    position=position,
+                    bar=spec_bar,
+                    is_close=True,
+                    trigger_state=state,
+                    now=now,
+                    scanner_eval_ctx=eval_ctx,
+                    normalized_conditions=normalized_conditions,
+                    legacy_signed_offsets=True,
+                ),
             )
-            if fired:
+            if decision.fire:
                 pct = max(0.0, min(100.0, float(trigger.qty_pct))) / 100.0
                 qty_to_close = ctx.position_qty * pct
                 if qty_to_close <= 0.0:
@@ -1432,6 +1288,26 @@ def _strategy_uses_indicator_trigger(
 # ---------------------------------------------------------------------------
 
 
+def _build_dependency_registry(
+    *,
+    symbol: str,
+    interval: str,
+    candles: Sequence[Candle],
+    dependency_candles: Mapping[str, Sequence[Candle]] | None,
+) -> BarsRegistry | None:
+    """Build a same-interval BarsRegistry for cross-symbol FieldRefs."""
+    if not dependency_candles:
+        return None
+    cache = MultiIntervalCache()
+    cache.set_bars(str(symbol).strip().upper(), interval, list(candles))
+    for dep_symbol, dep_candles in dependency_candles.items():
+        dep = str(dep_symbol or "").strip().upper()
+        if not dep:
+            continue
+        cache.set_bars(dep, interval, list(dep_candles))
+    return BarsRegistry(cache)
+
+
 def evaluate_symbol(
     *,
     symbol: str,
@@ -1444,6 +1320,7 @@ def evaluate_symbol(
     deck_seed: int = 0,
     cancel_token: Any | None = None,
     warmup_until_ts: int | None = None,
+    dependency_candles: Mapping[str, Sequence[Candle]] | None = None,
 ) -> SessionResult:
     """Run one symbol's mechanical-test session and return the SessionResult.
 
@@ -1473,6 +1350,11 @@ def evaluate_symbol(
     by the moment the active backtest window officially begins. Pass
     ``None`` (the default) to keep the legacy behaviour (no warmup gate;
     every bar is part of the active period).
+
+    ``dependency_candles`` supplies same-interval companion symbol bars
+    needed by cross-symbol scanner ``FieldRef.symbol`` references. When
+    present, the evaluator builds a ``BarsRegistry`` containing the active
+    symbol plus each dependency and threads it into the scanner context.
     """
     if not candles:
         spec = _build_session_spec(
@@ -1525,15 +1407,23 @@ def evaluate_symbol(
     eval_ctx: _ScannerEvalContext | None = None
     normalized_conditions: dict[str, _ScannerGroup] = {}
     if _strategy_uses_indicator_trigger(entry_strategy, exit_strategy):
+        bars_registry = _build_dependency_registry(
+            symbol=symbol,
+            interval=interval,
+            candles=candles,
+            dependency_candles=dependency_candles,
+        )
         eval_ctx = _scanner_make_context(
             symbol=symbol,
             interval=interval,
             candles=list(candles),
             current_index=0,
+            bars_registry=bars_registry,
         )
         normalized_conditions = _build_normalized_conditions(
             entry_strategy, exit_strategy, interval,
         )
+        _prewarm_indicator_memos(eval_ctx, normalized_conditions)
 
     n = len(bars)
     in_warmup_mode = warmup_until_ts is not None

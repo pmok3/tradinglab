@@ -335,8 +335,15 @@ def _filter_universe(
 
 
 def _default_workers() -> int:
+    try:
+        from ..defaults import get as _defaults_get
+        persisted = int(_defaults_get("worker_count") or 0)
+        if persisted > 0:
+            return max(1, min(persisted, 64))
+    except Exception:  # noqa: BLE001 - settings are optional for scanner tests/scripts
+        pass
     n = os.cpu_count() or 2
-    return max(1, min(n - 1, 4))
+    return max(1, min(n - 1, 64))
 
 
 # Fingerprint shape: ``(id_of_list, length, last_ts_ns, last_open,

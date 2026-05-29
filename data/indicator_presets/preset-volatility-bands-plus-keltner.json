@@ -1,0 +1,35 @@
+{
+  "description": "Bollinger/Keltner channel stack with ATR context.",
+  "indicators": [
+    {
+      "id": "bbands-20-2",
+      "kind": "bbands",
+      "panel": "overlay",
+      "params": {
+        "length": 20,
+        "ma_type": "SMA",
+        "num_std": 2.0,
+        "std_length": 20
+      }
+    },
+    {
+      "id": "keltner-20-2",
+      "kind": "keltner",
+      "panel": "overlay",
+      "params": {
+        "atr_length": 10,
+        "length": 20,
+        "multiplier": 2.0
+      }
+    },
+    {
+      "id": "atr-14",
+      "kind": "atr",
+      "panel": "atr",
+      "params": {
+        "length": 14
+      }
+    }
+  ],
+  "name": "Volatility Bands + Keltner"
+}

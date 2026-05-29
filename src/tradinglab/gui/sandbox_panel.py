@@ -21,6 +21,8 @@ from datetime import datetime, timezone
 from tkinter import ttk
 from typing import Any
 
+from ..core.timezones import get_et, get_zoneinfo
+
 _MS_PER_DAY = 86_400_000
 
 
@@ -157,21 +159,16 @@ class SandboxPanel(ttk.Frame):
         Routes through ``controller.app`` because ``self.app`` is the
         Toplevel host, not the ChartApp.
         """
-        try:
-            from zoneinfo import ZoneInfo
-        except ImportError:
-            return ("UTC", None)
         host = getattr(self.controller, "app", None)
         name = getattr(host, "_display_tz", "") or ""
         name = name.strip()
         if not name:
-            from ..core.timezones import ET
-            if ET is None:
+            et = get_et()
+            if et is None:
                 return ("UTC", None)
-            return ("ET", ET)
-        try:
-            zone = ZoneInfo(name)
-        except Exception:  # noqa: BLE001
+            return ("ET", et)
+        zone = get_zoneinfo(name)
+        if zone is None:
             return (name, None)
         if name == "America/New_York":
             label = "ET"

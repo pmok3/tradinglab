@@ -7,7 +7,9 @@
       "panel": "overlay",
       "params": {
         "length": 20,
-        "stddev": 2.0
+        "ma_type": "SMA",
+        "num_std": 2.0,
+        "std_length": 20
       }
     },
     {

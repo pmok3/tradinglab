@@ -26,10 +26,9 @@ be fully hydrated by Day 1 of the active backtest period.
   non-empty keys are cross-ticker dependencies pinned via
   `FieldRef.symbol`. Each value is the per-symbol max bar count ×
   `WARMUP_SAFETY_MULTIPLIER`. Returns `{}` when no indicator-style
-  triggers are present. Phase 3 work (strategy_tester runner
-  companion-fetcher) will consume this to extend the fetch range per
-  dependency symbol; today `required_warmup_bars` keeps returning an
-  int aggregate so the runner doesn't have to change.
+  triggers are present. The runner consumes this mapping directly:
+  `""` controls the active symbol's warmup gate and each non-empty key
+  controls that dependency symbol's companion-fetch window.
 - `_walk_field_kinds(node) -> list[tuple[str, str, dict]]` — internal
   tree walker. Emits `(symbol, kind_id, params)` triples; the leading
   `symbol` slot is `""` for active-symbol refs and the pinned ticker
@@ -110,4 +109,3 @@ warmup_bars_for_kind("chandelier", {"lookback": 22, "atr_period": 22})          
 warmup_bars_for_kind("some_user_plugin", {})                                     # empirical detection
 warmup_bars_for_kind("does_not_exist", {})                                       # 100 (DEFAULT_WARMUP_BARS)
 ```
-

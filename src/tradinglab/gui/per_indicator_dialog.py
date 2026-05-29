@@ -65,6 +65,9 @@ from .indicator_dialog import IndicatorDialog
 # canvas chrome and Add / Remove buttons.
 _POPUP_GEOMETRY: str = "780x340"
 _POPUP_MINSIZE: tuple = (640, 280)
+_POPUP_SCREEN_MARGIN_X: int = 40
+_POPUP_SCREEN_MARGIN_Y: int = 80
+_POPUP_FOOTNOTE_WRAP_MAX: int = 720
 
 # Static footnote text rendered at the bottom of the popup body. See
 # the module docstring for the rationale. Kept short so it doesn't
@@ -74,6 +77,25 @@ _FOOTNOTE_TEXT: str = (
     "Edits here affect the chart display only — "
     "exit/entry strategies use their own indicator configs."
 )
+
+
+def _popup_size_for_content(
+    *,
+    req_width: int,
+    req_height: int,
+    screen_width: int,
+    screen_height: int,
+    min_width: int = _POPUP_MINSIZE[0],
+    min_height: int = _POPUP_MINSIZE[1],
+    margin_x: int = _POPUP_SCREEN_MARGIN_X,
+    margin_y: int = _POPUP_SCREEN_MARGIN_Y,
+) -> tuple[int, int]:
+    """Return a screen-clamped popup size for requested content."""
+    max_w = max(1, int(screen_width) - int(margin_x))
+    max_h = max(1, int(screen_height) - int(margin_y))
+    width = min(max(int(req_width), int(min_width)), max_w)
+    height = min(max(int(req_height), int(min_height)), max_h)
+    return width, height
 
 # Map the originating legend pane ("primary" / "compare" / "drilldown")
 # to the :mod:`tradinglab.indicators.config` scope id stored on
@@ -139,6 +161,7 @@ class _PerIndicatorDialog(IndicatorDialog):
         # current config's scopes (may already be single-scope, in
         # which case the radio stays hidden).
         self._refresh_scope_radio()
+        self._fit_to_content()
 
     # ------------------------------------------------------------------
     # Chrome override — replaces the scrollable multi-row editor with
@@ -247,6 +270,75 @@ class _PerIndicatorDialog(IndicatorDialog):
             # evaluate radio visibility so a now-single-scope config
             # hides the radio.
             self._refresh_scope_radio()
+            self._fit_to_content()
+
+    def _on_kind_changed(self, row) -> None:
+        """Rebuild via the base path, then resize the single-row popup."""
+        super()._on_kind_changed(row)
+        self._fit_to_content()
+
+    def _compute_max_cols_for_schema(self, schema) -> int:
+        """Per-indicator popups use one parameter column.
+
+        The focused subwindow is optimized for readability and
+        guaranteed reachability over horizontal density. The full
+        manager dialog still uses the inherited fit-based multi-column
+        grid for wide windows.
+        """
+        return 1 if schema else 1
+
+    def _compute_max_cols_for_existing_param_widgets(self, row) -> int | None:
+        """Keep resize reflow single-column too.
+
+        The base class normally recomputes columns from measured widget
+        widths during resize. Focused popups intentionally opt out of
+        that horizontal densification.
+        """
+        sub = getattr(row, "param_subframe", None)
+        if sub is None:
+            return None
+        try:
+            return 1 if sub.winfo_children() else None
+        except tk.TclError:
+            return None
+
+    def _maybe_regrid_row_intervals(self, row) -> None:
+        """Wrap interval checkboxes conservatively in focused popups."""
+        sf = getattr(row, "interval_subframe", None)
+        if sf is None:
+            return
+        try:
+            children = list(sf.winfo_children())
+        except tk.TclError:
+            return
+        if len(children) <= 1:
+            return
+        budget = max(220, min(self._available_row_width_px(), 360))
+        placements: list[tuple[int, int]] = []
+        used = 0
+        grid_row = 0
+        grid_col = 0
+        for child in children:
+            try:
+                width = max(1, int(child.winfo_reqwidth()) + 4)
+            except tk.TclError:
+                return
+            if grid_col and used + width > budget:
+                grid_row += 1
+                grid_col = 0
+                used = 0
+            placements.append((grid_row, grid_col))
+            used += width
+            grid_col += 1
+        max_cols = max((col for _row, col in placements), default=0) + 1
+        if max_cols == getattr(row, "interval_max_cols_applied", None):
+            return
+        for child, (r, c) in zip(children, placements, strict=True):
+            try:
+                child.grid_configure(row=r, column=c)
+            except tk.TclError:
+                pass
+        row.interval_max_cols_applied = max_cols
 
     # ------------------------------------------------------------------
     # Scope-split radio
@@ -623,15 +715,57 @@ class _PerIndicatorDialog(IndicatorDialog):
         could silently bind to a different indicator on the next
         preset load)."""
         try:
+            self._fit_to_content()
             x = self.winfo_pointerx() - 60
             y = self.winfo_pointery() - 20
             screen_w = self.winfo_screenwidth()
             screen_h = self.winfo_screenheight()
-            req_w = int(self.winfo_reqwidth() or 780)
-            req_h = int(self.winfo_reqheight() or 320)
+            req_w = int(self.winfo_width() or self.winfo_reqwidth() or 780)
+            req_h = int(self.winfo_height() or self.winfo_reqheight() or 320)
             x = max(0, min(x, screen_w - req_w - 20))
             y = max(0, min(y, screen_h - req_h - 40))
             self.geometry(f"+{x}+{y}")
+        except tk.TclError:
+            pass
+
+    def _fit_to_content(self) -> None:
+        """Resize the popup to its row content without exceeding the screen."""
+        try:
+            if not self.winfo_exists():
+                return
+            screen_w = int(self.winfo_screenwidth() or 1024)
+            screen_h = int(self.winfo_screenheight() or 768)
+            max_w = max(1, screen_w - _POPUP_SCREEN_MARGIN_X)
+            if getattr(self, "_footnote_label", None) is not None:
+                self._footnote_label.configure(
+                    wraplength=max(200, min(_POPUP_FOOTNOTE_WRAP_MAX, max_w - 32)),
+                )
+            self.update_idletasks()
+            req_w = int(self.winfo_reqwidth() or 780)
+            req_h = int(self.winfo_reqheight() or 320)
+            width, height = _popup_size_for_content(
+                req_width=req_w,
+                req_height=req_h,
+                screen_width=screen_w,
+                screen_height=screen_h,
+            )
+            self.minsize(min(_POPUP_MINSIZE[0], width), min(_POPUP_MINSIZE[1], height))
+            self.geometry(f"{width}x{height}")
+            self.update_idletasks()
+            self._do_resize_reflow_rows()
+            if getattr(self, "_footnote_label", None) is not None:
+                self._footnote_label.configure(wraplength=max(200, width - 32))
+            self.update_idletasks()
+            req_h = int(self.winfo_reqheight() or height)
+            _width, height = _popup_size_for_content(
+                req_width=width,
+                req_height=req_h,
+                screen_width=screen_w,
+                screen_height=screen_h,
+            )
+            self.geometry(f"{width}x{height}")
+            self.update_idletasks()
+            self._do_resize_reflow_rows()
         except tk.TclError:
             pass
 

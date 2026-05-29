@@ -1,0 +1,41 @@
+{
+  "created_at": "2026-05-29T21:56:00Z",
+  "created_with": {
+    "app": "tradinglab",
+    "template": true,
+    "version": "1.0.0"
+  },
+  "eod_kill_switch": false,
+  "eod_offset_min": 5,
+  "extra": {
+    "functional_series": "ramp_then_pullback",
+    "template_pack": "expanded-2026-05"
+  },
+  "id": "tmpl-exit-activated-trailing-1pct-after-2pct",
+  "legs": [
+    {
+      "enabled": true,
+      "id": "trail",
+      "label": "activate then trail",
+      "triggers": [
+        {
+          "activation_unit": "percent",
+          "activation_value": 2.0,
+          "enabled": true,
+          "id": "acttrail-t",
+          "kind": "trailing_stop",
+          "label": "1% trail after +2%",
+          "qty_pct": 100.0,
+          "time_in_force": "day",
+          "trail_basis": "intrabar",
+          "trail_unit": "percent",
+          "trail_value": 1.0
+        }
+      ]
+    }
+  ],
+  "name": "Activated 1% trail after +2%",
+  "oco_groups": [],
+  "schema_version": 2,
+  "updated_at": "2026-05-29T21:56:00Z"
+}

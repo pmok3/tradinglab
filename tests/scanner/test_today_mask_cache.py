@@ -12,15 +12,23 @@ from datetime import datetime, timedelta, timezone
 import numpy as np
 
 from tradinglab.models import Candle
-from tradinglab.scanner.fields import BarsNp, _days_cache, _days_for, _today_mask
+from tradinglab.scanner.fields import (
+    BarsNp,
+    _days_cache,
+    _days_for,
+    _session_day_arrays_for,
+    _session_day_cache,
+    _today_mask,
+    builtin_compute,
+)
 
 
 def _make_candles(n: int, *, start: datetime, interval_min: int = 5,
-                  session: str = "regular") -> list[Candle]:
+                  session: str = "regular", base: float = 100.0) -> list[Candle]:
     out: list[Candle] = []
     for i in range(n):
         ts = start + timedelta(minutes=i * interval_min)
-        c = 100.0 + i
+        c = base + i
         out.append(Candle(date=ts, open=c - 0.5, high=c + 1.0,
                           low=c - 1.0, close=c, volume=1000 + i,
                           session=session))
@@ -117,3 +125,75 @@ def test_days_for_content_correct():
     b = BarsNp.from_candles(candles)
     expected = b.timestamps.astype("datetime64[D]")
     np.testing.assert_array_equal(_days_for(b), expected)
+
+
+# ---------------------------------------------------------------------------
+# Session-day derived arrays
+# ---------------------------------------------------------------------------
+
+
+def test_session_day_arrays_cache_hit_returns_same_object():
+    _session_day_cache.clear()
+    b = BarsNp.from_candles(_make_candles(
+        10, start=datetime(2026, 5, 4, 9, 30, tzinfo=timezone.utc),
+    ))
+
+    a1 = _session_day_arrays_for(b)
+    a2 = _session_day_arrays_for(b)
+
+    assert a1 is a2
+
+
+def test_session_day_arrays_match_builtin_fields_across_days():
+    _session_day_cache.clear()
+    day1 = _make_candles(
+        6, start=datetime(2026, 5, 4, 9, 30, tzinfo=timezone.utc),
+    )
+    day2 = _make_candles(
+        6, start=datetime(2026, 5, 5, 9, 30, tzinfo=timezone.utc), base=200.0,
+    )
+    b = BarsNp.from_candles(day1 + day2)
+    arrays = _session_day_arrays_for(b)
+
+    for i in range(len(b)):
+        assert arrays.hod[i] == builtin_compute("hod")(b, i, {})
+        assert arrays.lod[i] == builtin_compute("lod")(b, i, {})
+        assert arrays.minutes_since_midnight[i] == builtin_compute("time_of_day")(b, i, {})
+        assert arrays.bars_since_open[i] == builtin_compute("bars_since_open")(b, i, {})
+    assert arrays.hod[6] == 201.0
+    assert arrays.lod[6] == 199.0
+
+
+def test_session_day_arrays_skip_non_finite_high_low_values():
+    candles = _make_candles(
+        3, start=datetime(2026, 5, 4, 9, 30, tzinfo=timezone.utc),
+    )
+    candles[0].high = float("nan")
+    candles[0].low = float("nan")
+    b = BarsNp.from_candles(candles)
+    arrays = _session_day_arrays_for(b)
+
+    assert np.isnan(arrays.hod[0])
+    assert np.isnan(arrays.lod[0])
+    assert builtin_compute("hod")(b, 0, {}) is None
+    assert builtin_compute("lod")(b, 0, {}) is None
+    assert arrays.hod[1] == builtin_compute("hod")(b, 1, {})
+    assert arrays.lod[1] == builtin_compute("lod")(b, 1, {})
+
+
+def test_session_day_arrays_bars_since_open_handles_premarket_prefix():
+    pre = _make_candles(
+        2,
+        start=datetime(2026, 5, 4, 8, 0, tzinfo=timezone.utc),
+        session="pre",
+    )
+    reg = _make_candles(
+        3,
+        start=datetime(2026, 5, 4, 9, 30, tzinfo=timezone.utc),
+        base=110.0,
+        session="regular",
+    )
+    b = BarsNp.from_candles(pre + reg)
+    arrays = _session_day_arrays_for(b)
+
+    np.testing.assert_array_equal(arrays.bars_since_open, [0.0, 0.0, 0.0, 1.0, 2.0])

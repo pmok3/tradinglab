@@ -1,0 +1,31 @@
+{
+  "description": "RVOL, RRVOL, and VWAP to rank unusual volume.",
+  "indicators": [
+    {
+      "id": "rvol-20",
+      "kind": "rvol",
+      "panel": "rvol",
+      "params": {
+        "length": 20,
+        "mode": "simple"
+      }
+    },
+    {
+      "id": "rrvol-spy",
+      "kind": "rrvol",
+      "panel": "rvol",
+      "params": {
+        "compare_symbol": "SPY",
+        "length": 20,
+        "mode": "simple"
+      }
+    },
+    {
+      "id": "vwap",
+      "kind": "vwap",
+      "panel": "overlay",
+      "params": {}
+    }
+  ],
+  "name": "Volume Leaders"
+}

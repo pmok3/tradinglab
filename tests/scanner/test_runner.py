@@ -9,6 +9,7 @@ import pytest
 
 import tradinglab.indicators  # noqa: F401  -- registers indicators
 from tradinglab.models import Candle
+from tradinglab.scanner import runner as runner_module
 from tradinglab.scanner.model import (
     OP_GT,
     Condition,
@@ -181,6 +182,32 @@ def test_run_scan_sync_timestamp_recorded():
 # ---------------------------------------------------------------------------
 # ScanRunner (threaded)
 # ---------------------------------------------------------------------------
+
+
+def test_default_workers_honours_persisted_worker_count(monkeypatch):
+    from tradinglab import defaults
+
+    monkeypatch.setattr(defaults, "get", lambda key: 12 if key == "worker_count" else 0)
+
+    assert runner_module._default_workers() == 12
+    assert ScanRunner().max_workers == 12
+
+
+def test_default_workers_auto_uses_extra_cores(monkeypatch):
+    from tradinglab import defaults
+
+    monkeypatch.setattr(defaults, "get", lambda _key: 0)
+    monkeypatch.setattr(runner_module.os, "cpu_count", lambda: 16)
+
+    assert runner_module._default_workers() == 15
+
+
+def test_default_workers_clamps_persisted_worker_count(monkeypatch):
+    from tradinglab import defaults
+
+    monkeypatch.setattr(defaults, "get", lambda key: 999 if key == "worker_count" else 0)
+
+    assert runner_module._default_workers() == 64
 
 
 def test_scan_runner_basic_threaded():
@@ -379,4 +406,3 @@ def test_run_scan_sync_evidence_reset_between_scans():
     res_b = run_scan_sync(scan_b, candles, interval="5m", tick_id=1, memos=memos)
     assert len(res_a.rows[0].evidence) == 1
     assert res_b.rows[0].evidence == []
-

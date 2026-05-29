@@ -13,9 +13,9 @@ Responsibilities (per the v1 plan, Layer 5)
    :class:`ExitStrategy` to a position, allocates a per-trigger
    :class:`_TriggerSlot` (armed flag, trail state, last-fire dedup
    key), audits ``strategy_attach``.
-2. **Per-bar evaluation.** :meth:`on_bar` walks every leg / trigger
-   for the bound strategy and evaluates each via the appropriate
-   :mod:`exits.spec` pure function. Returns the list of fired
+   2. **Per-bar evaluation.** :meth:`on_bar` walks every leg / trigger
+   for the bound strategy and evaluates each via the shared
+   :mod:`exits.dispatch` registry. Returns the list of fired
    :class:`ExitSignal` instances after they have been submitted to
    the sink (so callers can drive UI overlays / logs).
 3. **Indicator triggers.** Cross-interval condition trees are
@@ -59,8 +59,10 @@ from typing import Any
 from ..core.thread_guard import require_tk_thread
 from ..positions.model import Position, PositionEvent, PositionEventKind
 from ..positions.tracker import PositionTracker
-from ..scanner.engine import evaluate_group, make_context
+from ..scanner.engine import EvaluationContext as _ScannerEvaluationContext
+from ..scanner.engine import make_context
 from .audit import AuditLog
+from .dispatch import ExitTriggerContext, check_trigger_decision
 from .model import (
     ExitLeg,
     ExitStrategy,
@@ -75,15 +77,6 @@ from .spec import (
     Decision,
     TriggerState,
     compute_qty_at_fire,
-    evaluate_chandelier_stop,
-    evaluate_limit,
-    evaluate_market,
-    evaluate_stop,
-    evaluate_stop_limit,
-    evaluate_time_of_day,
-    evaluate_trailing_stop,
-    update_chandelier_state,
-    update_trail_state,
 )
 
 LOG = logging.getLogger(__name__)
@@ -465,40 +458,20 @@ class ExitEvaluator:
         kind = trigger.kind
 
         try:
-            if kind == TriggerKind.MARKET:
-                decision = evaluate_market(trigger, pos, bar)
-            elif kind == TriggerKind.LIMIT:
-                decision = evaluate_limit(trigger, pos, bar)
-            elif kind == TriggerKind.STOP:
-                decision = evaluate_stop(trigger, pos, bar)
-            elif kind == TriggerKind.STOP_LIMIT:
-                decision = evaluate_stop_limit(trigger, pos, bar)
-            elif kind == TriggerKind.TRAILING_STOP:
-                update_trail_state(tslot.state, trigger, pos, bar, is_close=is_close)
-                decision = evaluate_trailing_stop(tslot.state, trigger, pos, bar)
-            elif kind == TriggerKind.TIME_OF_DAY:
-                decision = evaluate_time_of_day(trigger, pos, bar)
-            elif kind == TriggerKind.CHANDELIER:
-                # Activation bar = the first bar this trigger sees after
-                # ``attach_strategy`` for an open position. The slot's
-                # state starts with ``chandelier_frozen_params is None``,
-                # which is our activation sentinel — once it has been
-                # populated by :func:`update_chandelier_state`, every
-                # subsequent bar is a regular update bar.
-                is_activation = tslot.state.chandelier_frozen_params is None
-                update_chandelier_state(
-                    tslot.state, trigger, pos, bar,
-                    is_activation=is_activation,
+            scanner_eval_ctx = None
+            if kind == TriggerKind.INDICATOR and (is_close or trigger.evaluate_intrabar):
+                scanner_eval_ctx = self._build_indicator_context(trigger, pos)
+            decision = check_trigger_decision(
+                trigger,
+                ExitTriggerContext(
+                    position=pos,
+                    bar=bar,
+                    is_close=is_close,
+                    trigger_state=tslot.state,
+                    now=bar.date or self._clock(),
+                    scanner_eval_ctx=scanner_eval_ctx,
                 )
-                decision = evaluate_chandelier_stop(
-                    tslot.state, trigger, pos, bar,
-                )
-            elif kind == TriggerKind.INDICATOR:
-                decision = self._evaluate_indicator_trigger(
-                    trigger, pos, bar, is_close=is_close
-                )
-            else:  # pragma: no cover - exhaustive enum check
-                return None
+            )
         except Exception as exc:
             tslot.broken = True
             tslot.error_count += 1
@@ -633,35 +606,25 @@ class ExitEvaluator:
             )
         return signal
 
-    def _evaluate_indicator_trigger(
+    def _build_indicator_context(
         self,
         trigger: ExitTrigger,
         pos: Position,
-        bar: Bar,
-        *,
-        is_close: bool,
-    ) -> Decision:
-        """Evaluate an indicator-based trigger via :mod:`scanner.engine`.
-
-        Only fires on bar close unless ``trigger.evaluate_intrabar``;
-        requires a configured :class:`BarsRegistry` and a non-None
-        ``trigger.condition``.
-        """
-        if not is_close and not trigger.evaluate_intrabar:
-            return _no_fire("indicator: intrabar disabled")
+    ) -> _ScannerEvaluationContext | None:
+        """Build the scanner context consumed by the dispatch INDICATOR handler."""
         if self._bars_registry is None:
-            return _no_fire("indicator: no bars_registry configured")
+            return None
         if trigger.condition is None:
-            return _no_fire("indicator: no condition")
+            return None
 
         interval = trigger.interval or self._default_interval
         view = self._bars_registry.get_view(pos.symbol, interval)
         if view is None:
-            return _no_fire("indicator: bars view unavailable (lazy load?)")
+            return None
 
         candles = view.memo.candles
         if not candles:
-            return _no_fire("indicator: empty candle history")
+            return None
 
         try:
             ctx = make_context(
@@ -673,22 +636,13 @@ class ExitEvaluator:
                 bars_registry=self._bars_registry,
             )
             self._stats.indicator_evaluations += 1
-            result = evaluate_group(trigger.condition, ctx)
-            evidence = list(ctx.evidence)
-        except NotImplementedError:
-            # Cross-interval ref without a registry hookup; treat as
-            # no-fire rather than crashing the evaluator.
-            return _no_fire("indicator: cross-interval not supported")
-
-        if result is True:
-            return Decision(
-                fire=True,
-                fire_price=bar.close,
-                qty=0.0,  # qty_resolved is computed in the outer call
-                reason="indicator_true",
-                evidence=evidence,
+            return ctx
+        except Exception:  # noqa: BLE001
+            LOG.exception(
+                "ExitEvaluator: failed to build indicator context for trigger %s",
+                trigger.id,
             )
-        return _no_fire(f"indicator: result={result}")
+            return None
 
     # ------------------------------------------------------------------
     # OCO machinery

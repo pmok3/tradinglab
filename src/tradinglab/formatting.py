@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .core.timezones import get_zoneinfo
+
 
 def fmt_volume(v: float) -> str:
     """Format a share/contract volume as a short human-readable string.
@@ -40,9 +42,9 @@ def format_dt(dt, fmt: str, tz_name: str = "") -> str:
     """
     if tz_name and getattr(dt, "tzinfo", None) is not None:
         try:
-            from zoneinfo import ZoneInfo
-            dt = dt.astimezone(ZoneInfo(tz_name))
+            zone = get_zoneinfo(tz_name)
+            if zone is not None:
+                dt = dt.astimezone(zone)
         except Exception:  # noqa: BLE001
             pass
     return dt.strftime(fmt)
-

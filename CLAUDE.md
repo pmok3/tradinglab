@@ -450,9 +450,8 @@ compat, TIME_OF_DAY trigger isolation).
 of RTH membership. Don't accidentally extend the RTH gate to that
 handler.
 
-See also §7.20 (entry-trigger dispatch is now shared between live and
-mechanical evaluators — exit dispatch is NOT yet unified and stays
-mechanical-only here).
+See also §7.20 (entry + exit trigger dispatch are shared between live
+and mechanical evaluators).
 
 ### 7.13 Strategy tester defaults to RTH-only filtering
 `TestConfig.include_extended_hours` defaults to `False` — meaning the
@@ -703,10 +702,13 @@ How it works:
    hardcoded if/elif table silently fell back to 100 for every plugin
    (and was brittle to indicator-name aliasing).
 4. **Fetch range extension** — `runner.run` calls
-   `bars_to_calendar_days(bars, interval)` (intraday: trading days ×
-   1.5 for weekend/holiday slack; 1d: bars × 1.5; 1w: bars × 7) and
-   subtracts that from `start_date` to compute `fetch_start_date`.
-   The fetcher gets the extended range; the disk_cache merges happily.
+   `required_warmup_bars_by_symbol(entry, exit)` and converts each
+   bucket with `bars_to_calendar_days(bars, interval)` (intraday:
+   trading days × 1.5 for weekend/holiday slack; 1d: bars × 1.5;
+   1w: bars × 7). The active-symbol bucket (`""`) computes the
+   active `fetch_start_date` and warmup gate; each cross-symbol
+   dependency gets its own companion-fetch start date. The fetcher
+   gets the extended range; the disk_cache merges happily.
 5. **Active-period gate in evaluator** — `evaluate_symbol` gained a
    `warmup_until_ts: int | None` kwarg. Bars with `ts < warmup_until_ts`
    still tick the engine (so indicators hydrate, scanner eval_ctx state
@@ -735,9 +737,10 @@ the resolution-order table.
 
 **Config knob:** `TestConfig.warmup_override_days: int | None = None`
 (default `None` = auto-compute from indicators). Positive int = explicit
-calendar-day count, overrides the auto-compute. Round-trips through
-`to_dict` / `from_dict`; missing key in old manifests deserialises to
-`None` (back-compat).
+calendar-day count, overrides the auto-compute for both the active
+symbol and every dependency symbol. Round-trips through `to_dict` /
+`from_dict`; missing key in old manifests deserialises to `None`
+(back-compat).
 
 **Smoke-stub safety:** if a test fetcher returns no extra warmup bars
 (its data starts at-or-after `start_date`), the worker degrades to
@@ -751,7 +754,10 @@ tree walker, calendar-days conversion),
 `tests/unit/strategy_tester/test_warmup_plugin_compat.py` (user
 plugins get empirical detection without registry edits),
 `tests/unit/strategy_tester/test_warmup_integration.py` (8 cases:
-evaluator gate, runner extended-fetch, back-compat, override).
+evaluator gate, runner extended-fetch, back-compat, override),
+`tests/unit/strategy_tester/test_runner.py::
+test_run_uses_per_symbol_warmup_windows_for_dependencies`
+(per-dependency fetch windows).
 
 ### 7.17 Custom Indicator Builder dialog + expression DSL
 Indicators → **Custom Indicator Builder…** (menu entry sits directly
@@ -875,13 +881,15 @@ conditions of the AAPL-context entry trigger.
 
 **Registry requirement.** Cross-symbol resolution depends on the
 caller wiring a `BarsRegistry` onto the `EvaluationContext`. Live
-entries/exits already do this. The strategy_tester runner does NOT
-yet (Phase 3 work — runner companion-fetcher needs to populate the
-registry with dependency-symbol bars BEFORE the worker submits the
-context to the evaluator). Until Phase 3 lands, cross-symbol refs in
-a strategy_tester Run will resolve to `None` and the user will see
-"never fires" symptoms for those conditions — that's the expected
-failure mode while the runner-side work is in flight.
+entries/exits already do this. The strategy_tester runner now calls
+`evaluator.collect_dependency_symbols(entry, exit)` before fan-out,
+companion-fetches each pinned dependency symbol at the run interval,
+and passes `{dep_symbol: candles}` into `evaluate_symbol(...,
+dependency_candles=...)`. The evaluator builds a same-interval
+`BarsRegistry` containing active + dependency symbols before creating
+the scanner context, so cross-symbol refs work in Runs. True
+cross-interval strategy-tester evaluation is still normalized to the
+run interval by `_build_normalized_conditions`.
 
 **GUI surface.** `gui/scanner_block_editor.py:_FieldRefPicker` shows
 an `@ [ticker]` Entry at the end of the Indicator / Builtin branches
@@ -902,11 +910,12 @@ carries `prev_symbol` forward).
 **Warmup walker.** `strategy_tester/warmup.py:_walk_field_kinds`
 emits `(symbol, kind_id, params)` triples (symbol-first). The new
 `required_warmup_bars_by_symbol(entry, exit) -> dict[str, int]`
-groups warmup bars by symbol so Phase 3 can pre-fetch the right
-history window per dependency. Back-compat: legacy
-`required_warmup_bars(entry, exit) -> int` still returns the
-aggregate active-symbol-equivalent count so the runner doesn't have
-to change yet.
+groups warmup bars by symbol. The runner consumes it directly:
+`""` controls the active symbol's warmup gate/fetch start, and each
+non-empty key controls that dependency's companion-fetch window.
+Back-compat: legacy `required_warmup_bars(entry, exit) -> int` still
+returns the aggregate active-symbol-equivalent count for callers that
+only need a scalar.
 
 **HA-builtin sanity check.** `_b_ha_streak` (and every other
 BarsNp-based builtin) "just works" with `ref.symbol` because the
@@ -1077,17 +1086,17 @@ a sibling), stacked pickers use `max(180, (toplevel_width - 280))`
   — end-to-end via EntriesDialog at native window size,
   skipped on macOS per §7.1 (`transient()` deadlock).
 
-### 7.20 Shared entry-dispatch eliminates live-vs-mechanical drift
+### 7.20 Shared trigger-dispatch eliminates live-vs-mechanical drift
 Audit item #4. Before this landmine was retired, the live
 `EntryEvaluator` (`src/tradinglab/entries/evaluator.py`) and the
 mechanical strategy_tester evaluator
 (`src/tradinglab/strategy_tester/evaluator.py`) each shipped their
-own per-`TriggerKind` handler functions. Adding a new kind required
-two edits in lockstep and drift between them was a recurring source
-of "the live app says yes, the tester says no" bugs (or worse, vice
-versa — silent backtest miss).
+own per-`TriggerKind` handler functions. The exit side had the same
+drift trap. Adding a new kind required two edits in lockstep and drift
+between them was a recurring source of "the live app says yes, the
+tester says no" bugs (or worse, vice versa — silent backtest miss).
 
-**Now:** both evaluators delegate to
+**Entry side:** both evaluators delegate to
 `src/tradinglab/entries/dispatch.py` (`_ENTRY_DISPATCH` dict).
 `strategy_tester/evaluator.py` literally does
 `_ENTRY_HANDLERS = _ENTRY_DISPATCH` — same dict object, so anything
@@ -1097,6 +1106,15 @@ evaluator keeps its own context-building logic (live = `Candle` +
 per-symbol `_ScannerEvalContext` + `normalized_conditions` cache +
 `scanner_alert_prev_match` state) but the actual fire decision is
 centralized in `dispatch.check_trigger_fires`.
+
+**Exit side:** live `ExitEvaluator` and the mechanical evaluator also
+delegate to `src/tradinglab/exits/dispatch.py` (`_EXIT_DISPATCH`
+dict). `strategy_tester/evaluator.py` exposes `_EXIT_HANDLERS =
+_EXIT_DISPATCH` — the same dict object — and `_check_exits` builds an
+`ExitTriggerContext` before calling `check_trigger_decision`.
+Mechanical Runs pass `legacy_signed_offsets=True` so old manifests
+where positive STOP offsets mean "adverse direction" keep working;
+the live evaluator uses the canonical `exits.spec` raw-offset policy.
 
 **SCANNER_ALERT is one handler, two paths.** `_h_scanner_alert`
 short-circuits to "fired" when `ctx.scanner_row` is non-None (live
@@ -1113,13 +1131,13 @@ synthesize one from a `BarsRegistry`. The live evaluator's new
 `indicator_evaluations` stat as a side effect); the mechanical
 evaluator builds one per-symbol outside the bar loop.
 
-**`UnsupportedTriggerKind` contract preserved.** Shared dispatch
-silently returns `(False, [])` for unknown kinds. The mechanical
-`_check_entry` explicitly checks `trigger.kind not in _ENTRY_DISPATCH`
-and raises the typed exception BEFORE calling dispatch. The existing
-test `test_unsupported_entry_kind_raises` (pops MARKET from
-`_ENTRY_HANDLERS`, asserts the raise, restores in `finally`) still
-works because the alias points at the same dict.
+**`UnsupportedTriggerKind` contract preserved.** Shared entry dispatch
+silently returns `(False, [])` for unknown kinds; shared exit dispatch
+returns a no-fire `Decision`. The mechanical `_check_entry` and
+`_check_exits` explicitly check membership in the shared registries and
+raise the typed exception BEFORE calling dispatch. Tests that pop from
+`_ENTRY_HANDLERS` / `_EXIT_HANDLERS` keep working because each alias
+points at the same dict as its canonical registry.
 
 **If you add a new entry `TriggerKind`:** register a handler in
 `_ENTRY_DISPATCH` in `entries/dispatch.py`. That's it. Both
@@ -1127,14 +1145,18 @@ evaluators will pick it up. Add a test in
 `tests/entries/test_dispatch.py::TestRegistryContract` to pin the
 new kind into the registry-completeness invariant.
 
-**Specs:** `src/tradinglab/entries/dispatch.spec.md` is the source of
-truth. `entries/evaluator.spec.md` (Trigger dispatch / INDICATOR /
-SCANNER_ALERT sections) and `strategy_tester/evaluator.spec.md`
-(Trigger scope section) both point back to it.
+**If you add a new exit `TriggerKind`:** register a handler in
+`_EXIT_DISPATCH` in `exits/dispatch.py`. Both live and mechanical
+evaluators will pick it up. Add/update
+`tests/exits/test_dispatch.py::TestRegistryContract`.
+
+**Specs:** `src/tradinglab/entries/dispatch.spec.md` and
+`src/tradinglab/exits/dispatch.spec.md` are the sources of truth.
+Evaluator specs point back to them.
 
 See also §7.8 / §7.9 (mechanical-evaluator outputs) and §7.12 (EOD
-kill RTH-only walk — orthogonal to entry dispatch but lives in the
-same mechanical evaluator and is the other big "don't let it drift"
+kill RTH-only walk — orthogonal to dispatch but lives in the same
+mechanical evaluator and is the other big "don't let it drift"
 landmine).
 
 ### 7.21 Bounded LRU caches via `core.lru_dict.LRUDict`
@@ -1646,9 +1668,9 @@ guessing — recent checkpoints include:
 - LRUDict + JsonObjectStore + JsonListStore primitives (§7.21, §7.22) +
   migrations (entries, exits, scanner, positions); deferred:
   watchlists (consolidated envelope), strategy_tester (dir-per-Run)
-- Shared entry-dispatch (§7.20) — live + mechanical evaluators now
-  share `_ENTRY_DISPATCH` registry; adding a new TriggerKind = single
-  registry insert
+- Shared trigger-dispatch (§7.20) — live + mechanical evaluators now
+  share `_ENTRY_DISPATCH` and `_EXIT_DISPATCH`; adding a new
+  TriggerKind = single registry insert
 - Auto-stack ConditionFrame (§7.19) + scrollable-form helper + global
   BaseModalDialog migration (19 dialogs) closing the §7.11 wheel-guard
   landmine codebase-wide

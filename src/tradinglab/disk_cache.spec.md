@@ -41,7 +41,8 @@ Durable cache of fetched candle data, keyed by `(source, ticker, interval)`. Act
   available for export. Files that don't match the canonical filename
   pattern are silently ignored.
 - `merge_candles(old, new) -> List[Candle]` — merges by `date`,
-  newer wins on overlap.
+  newer wins on overlap. Sorted inputs use a linear two-pointer merge;
+  unsorted inputs fall back to the dict+sort path.
 - `mark_no_persist(source) / unmark_no_persist(source) /
   is_no_persist(source) / clear_no_persist()` — opt-source-out-of-
   persistence registry. When a source name is in the no-persist set,
@@ -75,11 +76,18 @@ Durable cache of fetched candle data, keyed by `(source, ticker, interval)`. Act
   the caller re-fetches.
 - **Per-source persistence opt-out** unchanged from the pickle era;
   BYOD sources stay opted out.
+- **Linear merge fast path.** Provider and cache outputs are expected to
+  be sorted ascending by `date`. `merge_candles` detects sorted inputs
+  and performs an O(N+M) two-pointer merge that collapses duplicate
+  date runs with "last within side wins, then new side wins". If either
+  input is unsorted, it preserves the older dict+sort behavior.
 
 ## Invariants
 - After `merge_candles(old, new)` on the happy path, the result is
   sorted by `date` ascending.
 - On overlap by `date`, the entry from `new` wins.
+- Duplicate dates within one side collapse to that side's last candle
+  for the duplicate date.
 - `load()` never raises — corrupt → `None`.
 - `save()` either replaces the destination atomically or leaves the
   prior file intact.

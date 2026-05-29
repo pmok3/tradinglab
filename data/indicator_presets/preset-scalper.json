@@ -1,0 +1,37 @@
+{
+  "description": "EMA 3/8, VWAP, and RVOL for fast intraday momentum.",
+  "indicators": [
+    {
+      "id": "ema-3",
+      "kind": "ema",
+      "panel": "overlay",
+      "params": {
+        "length": 3
+      }
+    },
+    {
+      "id": "ema-8",
+      "kind": "ema",
+      "panel": "overlay",
+      "params": {
+        "length": 8
+      }
+    },
+    {
+      "id": "vwap",
+      "kind": "vwap",
+      "panel": "overlay",
+      "params": {}
+    },
+    {
+      "id": "rvol-20",
+      "kind": "rvol",
+      "panel": "rvol",
+      "params": {
+        "length": 20,
+        "mode": "simple"
+      }
+    }
+  ],
+  "name": "Scalper"
+}

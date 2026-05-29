@@ -1,4 +1,4 @@
-"""Single source of truth for the US-Eastern :class:`zoneinfo.ZoneInfo`.
+"""Single source of truth for :class:`zoneinfo.ZoneInfo` resolution.
 
 The repository historically constructed ``ZoneInfo("America/New_York")`` at
 11+ sites — some at module scope, some inside helpers, some wrapped in
@@ -10,9 +10,9 @@ the various tzdata-missing fallback policies disagreed (some returned
 
 This module gives every caller one helper to import. The ``ET`` constant
 is lazy-cached so we pay the ``ZoneInfo`` construction cost exactly once
-per process. ``get_et()`` returns ``None`` when ``tzdata`` is missing;
-callers that need to fall back gracefully should branch on the ``None``,
-while callers that *must* have ET should use ``ET_OR_RAISE``.
+per process. ``get_et()`` and ``get_zoneinfo()`` return ``None`` when
+``tzdata`` is missing or a requested IANA name is invalid; callers that
+need to fall back gracefully should branch on the ``None``.
 
 Concrete adoption sites:
 
@@ -35,6 +35,8 @@ from __future__ import annotations
 
 from datetime import datetime, tzinfo
 
+from .lru_dict import LRUDict
+
 try:
     from zoneinfo import ZoneInfo
 except ImportError:  # pragma: no cover — Python <3.9
@@ -43,6 +45,8 @@ except ImportError:  # pragma: no cover — Python <3.9
 
 _ET_CACHE: tzinfo | None = None
 _ET_RESOLVED = False
+_ZONE_CACHE_MAX_SIZE = 64
+_ZONE_CACHE: LRUDict[str, tzinfo | None] = LRUDict(maxsize=_ZONE_CACHE_MAX_SIZE)
 
 
 def get_et() -> tzinfo | None:
@@ -66,6 +70,30 @@ def get_et() -> tzinfo | None:
             _ET_CACHE = None
     _ET_RESOLVED = True
     return _ET_CACHE
+
+
+def get_zoneinfo(name: str | None) -> tzinfo | None:
+    """Return a cached ``ZoneInfo(name)`` or ``None`` when unavailable.
+
+    ``America/New_York`` routes through :func:`get_et` so every ET caller
+    shares the same cached object and missing-tzdata fallback policy.
+    """
+    key = str(name or "").strip()
+    if not key:
+        return None
+    if key == "America/New_York":
+        return get_et()
+    if key in _ZONE_CACHE:
+        return _ZONE_CACHE[key]
+    if ZoneInfo is None:
+        zone = None
+    else:
+        try:
+            zone = ZoneInfo(key)
+        except Exception:  # noqa: BLE001 — bad IANA name, missing tzdata, etc.
+            zone = None
+    _ZONE_CACHE[key] = zone
+    return zone
 
 
 #: Eagerly-resolved alias for ``get_et()``. Most callers should import

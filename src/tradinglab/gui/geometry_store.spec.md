@@ -24,6 +24,17 @@ Exposes `GeometryStore` class + process-wide `store()` singleton.
   string actually applied. `min_size` rejects stale too-small windows.
 - `bind_window(toplevel, key)` — wire `<Configure>` with 500 ms
   debounce; persists trailing event only.
+- `set_window_size(key, width, height)` /
+  `get_window_size(key)` / `clear_window_size(key)` — size-only dialog
+  preference helpers backed by `kv["window_size.<key>"]`. `set_window_size`
+  clamps width/height to positive integers and writes through
+  immediately; `clear_window_size` also writes through so reset actions
+  persist without waiting for a later geometry save.
+- `restore_window_size(toplevel, key, default, *, min_size=None) -> str`
+  — apply saved width/height while preserving the default position.
+  This is for dialogs where the UX wants per-dialog sizing without
+  persisting potentially-stale monitor coordinates; callers can expose
+  `clear_window_size` as a reset path.
 - `restore_sash(paned, key, default_positions, *, min_pane_widths=None)`
   — apply positions via `after_idle` (paned needs a real size first).
   When `min_pane_widths` is supplied (one per pane, L→R), a saved
@@ -33,7 +44,9 @@ Exposes `GeometryStore` class + process-wide `store()` singleton.
 - `bind_sash(paned, key)` — snapshot on `<ButtonRelease-1>`,
   persist immediately.
 - `get(key, default=None)` / `set(key, value)` — free-form K/V on
-  the same backing file (write-through; no debounce).
+  the same backing file (write-through; no debounce). Size-only helpers
+  follow the same write-through policy because they do not have a Tk
+  widget context for debounce scheduling.
 - `store() -> GeometryStore` — process-wide singleton.
 - `_clamp_to_screen(geometry, screen_w, screen_h, *, default, min_size=None)` —
   reject any geometry whose top-left is < -100 px, bottom-right is

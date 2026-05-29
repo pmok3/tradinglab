@@ -8,11 +8,13 @@
       "params": {}
     },
     {
-      "id": "avwap-session-open",
+      "id": "avwap-manual-anchor",
       "kind": "avwap",
       "panel": "overlay",
       "params": {
-        "anchor": "session_open"
+        "anchor_ts": "",
+        "bands": "off",
+        "price_source": "typical"
       }
     }
   ],

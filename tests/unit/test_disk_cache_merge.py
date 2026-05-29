@@ -69,6 +69,33 @@ def test_merge_candles_newer_wins_on_overlap():
     assert merged[0] is new_c
 
 
+def test_merge_candles_sorted_union_with_overlap():
+    t1 = datetime(2024, 1, 1, 9, 30)
+    t2 = datetime(2024, 1, 1, 9, 35)
+    t3 = datetime(2024, 1, 1, 9, 40)
+    t4 = datetime(2024, 1, 1, 9, 45)
+    old = [_candle(t1, 1.0), _candle(t2, 2.0), _candle(t4, 4.0)]
+    new = [_candle(t2, 20.0), _candle(t3, 3.0)]
+
+    merged = merge_candles(old, new)
+
+    assert [c.date for c in merged] == [t1, t2, t3, t4]
+    assert [c.close for c in merged] == [1.0, 20.0, 3.0, 4.0]
+    assert merged[1] is new[0]
+
+
+def test_merge_candles_last_duplicate_in_new_wins():
+    t1 = datetime(2024, 1, 1, 9, 30)
+    old = [_candle(t1, 1.0)]
+    new = [_candle(t1, 2.0), _candle(t1, 3.0)]
+
+    merged = merge_candles(old, new)
+
+    assert len(merged) == 1
+    assert merged[0].close == 3.0
+    assert merged[0] is new[-1]
+
+
 def test_merge_candles_tz_aware_fallback():
     # old is tz-naive, new is tz-aware UTC → comparison during sort
     # would raise TypeError. Production code documents a fallback that

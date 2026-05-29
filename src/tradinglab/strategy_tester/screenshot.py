@@ -42,9 +42,11 @@ for downstream tooling consistency).
 from __future__ import annotations
 
 import math
+from bisect import bisect_left
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
@@ -68,7 +70,11 @@ from ..scanner.model import FieldRef as _FieldRef
 from ..scanner.model import Group as _ScannerGroup
 
 __all__ = [
+    "CandleTimestampIndex",
+    "IndicatorOverlayCache",
     "ScreenshotSpec",
+    "build_candle_timestamp_index",
+    "build_indicator_overlay_cache",
     "render_trade_screenshot",
     "select_window",
     "trade_filename",
@@ -171,6 +177,59 @@ class ScreenshotSpec:
     draw_volume_pane: bool = True
 
 
+@dataclass(frozen=True)
+class _IndicatorOverlayLine:
+    label: str
+    values: Any
+
+
+@dataclass(frozen=True)
+class IndicatorOverlayCache:
+    """Precomputed price-overlay indicator series for one candle set."""
+
+    lines: tuple[_IndicatorOverlayLine, ...] = ()
+
+
+@dataclass(frozen=True)
+class CandleTimestampIndex:
+    """Sorted candle timestamp lookup for one candle series."""
+
+    seconds: tuple[float, ...] = ()
+    indices: tuple[int, ...] = ()
+
+    def index_of(self, ts: int | float) -> int:
+        if not self.seconds:
+            return -1
+        target = _normalize_ts_to_seconds(ts)
+        pos = bisect_left(self.seconds, target)
+        candidates: list[tuple[float, int]] = []
+        if pos < len(self.seconds):
+            candidates.append((abs(self.seconds[pos] - target), self.indices[pos]))
+        if pos > 0:
+            candidates.append((abs(self.seconds[pos - 1] - target), self.indices[pos - 1]))
+        if not candidates:
+            return -1
+        best_delta, best_i = min(candidates, key=lambda item: item[0])
+        if best_delta < 0.5:
+            return best_i
+        if best_delta > 86_400.0:
+            return -1
+        return best_i
+
+
+def build_candle_timestamp_index(candles: list[Candle]) -> CandleTimestampIndex:
+    """Build a reusable timestamp lookup for repeated screenshot renders."""
+    pairs = sorted(
+        (c.date.timestamp(), i)
+        for i, c in enumerate(candles)
+        if not c.is_gap
+    )
+    if not pairs:
+        return CandleTimestampIndex()
+    seconds, indices = zip(*pairs, strict=True)
+    return CandleTimestampIndex(seconds=tuple(seconds), indices=tuple(indices))
+
+
 def trade_filename(symbol: str, order_id: str) -> str:
     """Return the canonical screenshot filename for a trade.
 
@@ -226,6 +285,8 @@ def render_trade_screenshot(
     spec: ScreenshotSpec | None = None,
     entry_strategy: EntryStrategy | None = None,
     exit_strategy: ExitStrategy | None = None,
+    indicator_overlay_cache: IndicatorOverlayCache | None = None,
+    timestamp_index: CandleTimestampIndex | None = None,
 ) -> Path:
     """Render one trade's screenshot to ``output_path`` and return the path.
 
@@ -257,8 +318,9 @@ def render_trade_screenshot(
     out.parent.mkdir(parents=True, exist_ok=True)
 
     post = trade_row.post
-    entry_index = _index_of_ts(candles, post.entry_ts)
-    exit_index = _index_of_ts(candles, post.exit_ts)
+    index = timestamp_index or build_candle_timestamp_index(candles)
+    entry_index = index.index_of(post.entry_ts)
+    exit_index = index.index_of(post.exit_ts)
     if entry_index < 0 or exit_index < 0:
         raise ValueError(
             f"trade entry/exit timestamps not found in candle window: "
@@ -333,6 +395,7 @@ def render_trade_screenshot(
         ax_price, candles, start, end,
         entry_strategy=entry_strategy,
         exit_strategy=exit_strategy,
+        indicator_overlay_cache=indicator_overlay_cache,
     )
 
     _annotate_trade(
@@ -409,30 +472,7 @@ def _index_of_ts(candles: list[Candle], ts: int) -> int:
     """
     if not candles:
         return -1
-    target = _normalize_ts_to_seconds(ts)
-    # Exact (½-second-tolerant) match.
-    for i, c in enumerate(candles):
-        if c.is_gap:
-            continue
-        c_sec = c.date.timestamp()
-        if abs(c_sec - target) < 0.5:
-            return i
-    # Nearest fallback (only useful for tz / epoch-precision drift).
-    best_i = -1
-    best_delta: float | None = None
-    for i, c in enumerate(candles):
-        if c.is_gap:
-            continue
-        delta = abs(c.date.timestamp() - target)
-        if best_delta is None or delta < best_delta:
-            best_delta = delta
-            best_i = i
-    if best_delta is not None and best_delta > 86_400.0:
-        # No bar within 24 h of the target — almost certainly a unit
-        # mismatch we didn't anticipate. Bail out rather than render
-        # the wrong window.
-        return -1
-    return best_i
+    return build_candle_timestamp_index(candles).index_of(ts)
 
 
 def _apply_volume_ylim(
@@ -569,32 +609,21 @@ def _collect_overlay_indicators(
     return out
 
 
-def _draw_indicator_overlays(
-    ax,
+def build_indicator_overlay_cache(
     candles: list[Candle],
-    start: int,
-    end: int,
-    *,
     entry_strategy: EntryStrategy | None,
     exit_strategy: ExitStrategy | None,
-) -> None:
-    """Compute and plot the price-overlay indicators on ``ax``.
-
-    Lines are drawn at the bar X-coordinates used by the candlestick
-    layer (global bar index). A small legend in the upper-left names
-    each line so a viewer can read off ``"EMA(8)"`` vs ``"EMA(3)"``
-    without checking the strategy definition.
-    """
+) -> IndicatorOverlayCache:
+    """Compute price-overlay indicator series once for a screenshot batch."""
     if entry_strategy is None and exit_strategy is None:
-        return
+        return IndicatorOverlayCache()
     overlays = _collect_overlay_indicators(entry_strategy, exit_strategy)
     if not overlays:
-        return
+        return IndicatorOverlayCache()
     import numpy as np
 
-    legend_handles: list = []
-    color_idx = 0
-    for _kind_id, _params, instance in overlays:
+    lines: list[_IndicatorOverlayLine] = []
+    for kind_id, _params, instance in overlays:
         try:
             series = instance.compute(candles)
         except Exception:  # noqa: BLE001
@@ -607,24 +636,60 @@ def _draw_indicator_overlays(
             arr_np = np.asarray(arr, dtype=float)
             if arr_np.size == 0:
                 continue
-            sl = arr_np[start:end]
-            if sl.size == 0:
-                continue
-            x = np.arange(start, start + sl.size)
-            color = _INDICATOR_COLORS[color_idx % len(_INDICATOR_COLORS)]
-            color_idx += 1
-            label = getattr(instance, "name", _kind_id.upper())
+            label = getattr(instance, "name", kind_id.upper())
             if len(series) > 1:
                 label = f"{label} [{out_key}]"
-            line, = ax.plot(
-                x, sl,
-                color=color,
-                linewidth=1.5,
-                alpha=0.85,
-                zorder=5,
-                label=label,
-            )
-            legend_handles.append(line)
+            lines.append(_IndicatorOverlayLine(label=label, values=arr_np))
+    return IndicatorOverlayCache(lines=tuple(lines))
+
+
+def _draw_indicator_overlays(
+    ax,
+    candles: list[Candle],
+    start: int,
+    end: int,
+    *,
+    entry_strategy: EntryStrategy | None,
+    exit_strategy: ExitStrategy | None,
+    indicator_overlay_cache: IndicatorOverlayCache | None = None,
+) -> None:
+    """Compute and plot the price-overlay indicators on ``ax``.
+
+    Lines are drawn at the bar X-coordinates used by the candlestick
+    layer (global bar index). A small legend in the upper-left names
+    each line so a viewer can read off ``"EMA(8)"`` vs ``"EMA(3)"``
+    without checking the strategy definition.
+    """
+    if indicator_overlay_cache is None and entry_strategy is None and exit_strategy is None:
+        return
+    cache = indicator_overlay_cache
+    if cache is None:
+        cache = build_indicator_overlay_cache(candles, entry_strategy, exit_strategy)
+    if not cache.lines:
+        return
+    import numpy as np
+
+    legend_handles: list = []
+    color_idx = 0
+    for overlay_line in cache.lines:
+        arr_np = np.asarray(overlay_line.values, dtype=float)
+        if arr_np.size == 0:
+            continue
+        sl = arr_np[start:end]
+        if sl.size == 0:
+            continue
+        x = np.arange(start, start + sl.size)
+        color = _INDICATOR_COLORS[color_idx % len(_INDICATOR_COLORS)]
+        color_idx += 1
+        line, = ax.plot(
+            x, sl,
+            color=color,
+            linewidth=1.5,
+            alpha=0.85,
+            zorder=5,
+            label=overlay_line.label,
+        )
+        legend_handles.append(line)
     if legend_handles:
         legend = ax.legend(
             handles=legend_handles,
