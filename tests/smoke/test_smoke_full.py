@@ -19139,36 +19139,50 @@ def check_d81_rvol_rhs_reachable(app) -> None:
             dlg.update_idletasks()
             dlg.update()
 
-        # The dialog's reported ``winfo_width`` is sometimes still
-        # stale (1px) on headless runners — fall back to the
-        # geometry we explicitly set so the assertion is meaningful.
-        dialog_width = max(dlg.winfo_width(), target_width_px)
-        dlg_right = dlg.winfo_rootx() + dialog_width
-        # The original bug pushed RHS controls 150–300+ px past the
-        # dialog edge, so a generous 32-pixel slop for window-manager
-        # decorations + sub-pixel rounding still catches it while
-        # tolerating Tk's own padding artefacts on headless runners.
-        slop_px = 32
-        # Every shared chrome widget must have its right edge within
-        # the dialog. The delete button is the rightmost widget in
-        # both layouts; the interval combo is just left of it.
-        for label, widget in (
-            ("delete_btn", cf._delete_btn),
-            ("interval_combo", cf._interval_combo),
-            ("left_picker", cf._left_picker),
-            ("op_combo", cf._op_combo),
-        ):
-            try:
-                right = widget.winfo_rootx() + widget.winfo_reqwidth()
-            except tk.TclError:
-                continue
-            assert right <= dlg_right + slop_px, (
-                f"d81: {label} right edge {right} exceeds dialog right "
-                f"edge {dlg_right} (dialog_width={dialog_width}, "
-                f"slop={slop_px}) — stacked layout did not contain it")
-        print("  [OK] d81: RVOL LEFT renders compact (params behind "
-              "Edit…); fits inline; all shared chrome stays within "
-              "dialog width")
+        # The pixel-geometry reachability assertions below are only
+        # meaningful when the WM actually realised the dialog at (close
+        # to) the requested 1200px width. On headless xvfb the geometry
+        # frequently never realises — ``winfo_width`` stays small — so
+        # the widgets lay out at their natural positions and comparing
+        # them against an *imagined* 1200px dialog is a false failure.
+        # The real contract (compact RVOL classifies inline) was already
+        # asserted above via the stubbed-width path; skip only the
+        # geometry probe when the window isn't realised (§7.26 pattern).
+        realized_width = dlg.winfo_width()
+        if realized_width < target_width_px - 40:
+            print("  [SKIP] d81 geometry probe: dialog not realised at "
+                  f"{target_width_px}px (winfo_width={realized_width}) on "
+                  "headless runner — classification contract still verified")
+            print("  [OK] d81: RVOL LEFT renders compact (params behind "
+                  "Edit…); fits inline")
+        else:
+            dialog_width = realized_width
+            dlg_right = dlg.winfo_rootx() + dialog_width
+            # The original bug pushed RHS controls 150–300+ px past the
+            # dialog edge, so a generous 32-pixel slop for window-manager
+            # decorations + sub-pixel rounding still catches it while
+            # tolerating Tk's own padding artefacts on headless runners.
+            slop_px = 32
+            # Every shared chrome widget must have its right edge within
+            # the dialog. The delete button is the rightmost widget in
+            # both layouts; the interval combo is just left of it.
+            for label, widget in (
+                ("delete_btn", cf._delete_btn),
+                ("interval_combo", cf._interval_combo),
+                ("left_picker", cf._left_picker),
+                ("op_combo", cf._op_combo),
+            ):
+                try:
+                    right = widget.winfo_rootx() + widget.winfo_reqwidth()
+                except tk.TclError:
+                    continue
+                assert right <= dlg_right + slop_px, (
+                    f"d81: {label} right edge {right} exceeds dialog right "
+                    f"edge {dlg_right} (dialog_width={dialog_width}, "
+                    f"slop={slop_px}) — stacked layout did not contain it")
+            print("  [OK] d81: RVOL LEFT renders compact (params behind "
+                  "Edit…); fits inline; all shared chrome stays within "
+                  "dialog width")
     finally:
         if dlg is not None:
             try:
