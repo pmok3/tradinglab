@@ -33,7 +33,7 @@ def resume_metadata_path() -> Path
 def write_resume_metadata(meta) -> None
 def read_resume_metadata() -> Optional[SandboxResumeMetadata]
 def clear_resume_metadata() -> None
-def build_metadata_from_session(*, ...) -> SandboxResumeMetadata
+def build_metadata_from_session(*, session_id, ticker, interval, bars_processed, spec_dict, engine_version=None, saved_at=None) -> SandboxResumeMetadata
 def now_iso() -> str
 ```
 

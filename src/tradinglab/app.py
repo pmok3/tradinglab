@@ -101,7 +101,7 @@ from .gui.drawings_app import DrawingsAppMixin
 from .gui.drilldown import DrilldownMixin, _DrilldownRequest
 from .gui.entries_app import EntriesAppMixin
 from .gui.exits_app import ExitsAppMixin
-from .gui.geometry_store import compute_screen_percent_geometry
+from .gui.geometry_store import _parse_geometry, compute_screen_percent_geometry
 from .gui.help_menu import HelpMenuMixin
 from .gui.indicator_menu import IndicatorMenuMixin
 from .gui.interaction import InteractionMixin
@@ -530,9 +530,19 @@ class ChartApp(
             min_height=startup_min_h,
         )
         self.minsize(startup_min_w, startup_min_h)
+        # First-run detection: a genuine "unboxing" launch has no stored
+        # geometry yet. We only auto-fit the window to the toolbar's
+        # required width on first run so we never override a window size
+        # the user has deliberately saved from a prior session.
+        self._has_stored_main_geometry: bool = False
+        self._startup_screen_wh: tuple[int, int] = (int(sw), int(sh))
         try:
             from .gui.geometry_store import store as _geom_store
             self._geometry_store = _geom_store()
+            self._geometry_store.load()
+            self._has_stored_main_geometry = (
+                self._geometry_store.get_window("main") is not None
+            )
             applied_geom = self._geometry_store.restore_window(
                 self,
                 "main",
@@ -890,6 +900,13 @@ class ChartApp(
         except Exception:  # noqa: BLE001
             pass
         self._build_ui()
+        # First-run "unboxing": widen the window so every toolbar control
+        # is visible out of the box. No-op when the user has a saved window
+        # geometry (we respect their chosen size). See _ensure_startup_window_fits.
+        try:
+            self._ensure_startup_window_fits()
+        except Exception:  # noqa: BLE001 - cosmetic startup sizing is best-effort
+            pass
         self._theme_ctrl.bind_plot(figure=self._figure, canvas=self._canvas)
         self._apply_theme()
         self._sync_compare_tab_visibility()
@@ -982,6 +999,54 @@ class ChartApp(
     # ------------------------------------------------------------------
     # UI construction
     # ------------------------------------------------------------------
+    def _ensure_startup_window_fits(self) -> None:
+        """Widen the main window on first launch so every toolbar control
+        is visible — the "unboxing" experience.
+
+        Only runs when there is no saved window geometry from a prior
+        session (``_has_stored_main_geometry`` is False), so a user's
+        deliberately-resized window is never overridden. The toolbar is a
+        single non-wrapping horizontal row of controls; if the window is
+        narrower than the toolbar's requested width, the rightmost controls
+        clip off-screen. We grow the window width (clamped to the screen)
+        to at least the toolbar's required width and re-center horizontally,
+        preserving the height and vertical position.
+        """
+        if getattr(self, "_has_stored_main_geometry", True):
+            return
+        toolbar = getattr(self, "_toolbar", None)
+        frame = getattr(toolbar, "frame", None)
+        if frame is None:
+            return
+        try:
+            self.update_idletasks()
+            needed_w = int(frame.winfo_reqwidth())
+        except tk.TclError:
+            return
+        if needed_w <= 1:
+            return
+        # Window border / internal padding margin so nothing sits flush
+        # against the right edge.
+        needed_w += 24
+        screen_w, screen_h = getattr(self, "_startup_screen_wh", (0, 0))
+        if screen_w <= 1:
+            try:
+                screen_w = int(self.winfo_screenwidth())
+            except tk.TclError:
+                return
+        target_w = min(needed_w, max(1, int(screen_w)))
+        parsed = _parse_geometry(self.geometry())
+        if parsed is None:
+            return
+        cur_w, cur_h, cur_x, cur_y = parsed
+        if cur_w >= target_w:
+            return
+        new_x = max(0, (int(screen_w) - target_w) // 2)
+        new_geom = f"{target_w}x{cur_h}+{new_x}+{cur_y}"
+        self.geometry(new_geom)
+        # Keep the post-build sash restore consistent with the new width.
+        self._initial_geometry = new_geom
+
     def _build_ui(self) -> None:
         """Wire up the toolbar, chart canvas, notebook tabs, and status bar."""
         self._toolbar = ToolbarController(
@@ -1109,30 +1174,15 @@ class ChartApp(
         # Color / Duplicate / Hide / Remove menu — see
         # ``_show_legend_context_menu``.
         self._per_indicator_dialogs: dict[int, Any] = {}
+        # The per-overlay legend is now rendered as transparent
+        # matplotlib ``TextArea`` rows INSIDE the top-left readout
+        # (see ``InteractionMixin._build_readout_indicator_rows``), so
+        # the old opaque Tk pill strip (gui.overlay_legend.OverlayLegend)
+        # is no longer instantiated. These handles stay as empty dicts so
+        # ``_refresh_overlay_legend`` / ``_reposition_overlay_legends``
+        # short-circuit to no-ops and ``_apply_theme`` keeps working.
         self._overlay_legends: dict[str, Any] = {}
-        try:
-            from .gui.overlay_legend import OverlayLegend as _OverlayLegend
-            for slot_key in ("primary", "compare"):
-                self._overlay_legends[slot_key] = _OverlayLegend(
-                    self._chart_frame,
-                    manager=self._indicator_manager,
-                    theme=self._theme,
-                    on_row_dblclick=(
-                        lambda cid, sk=slot_key:
-                            self._open_per_indicator_dialog(cid, sk)
-                    ),
-                    on_row_context_menu=(
-                        lambda cid, x, y, sk=slot_key:
-                            self._show_legend_context_menu(cid, sk, x, y)
-                    ),
-                )
-        except Exception:  # noqa: BLE001 - decorative; never blocks launch
-            self._overlay_legends = {}
-        # Back-compat handle for code that referenced the single legend
-        # (e.g. ``_apply_theme``). Points at the primary slot's legend
-        # so theme propagation continues to work; the new dispatch in
-        # ``_apply_theme`` cascades to every slot.
-        self._overlay_legend = self._overlay_legends.get("primary")
+        self._overlay_legend = None
         # ChartStack panel — opt-in mini-chart strip. Insert as the
         # leftmost pane (index 0) BEFORE the chart pane so the layout
         # reads `[ChartStack | Chart | Notebook]`. Disabled by default

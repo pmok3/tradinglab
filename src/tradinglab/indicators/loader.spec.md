@@ -25,6 +25,21 @@ shim become available in the Add menu.
   filters results to the matching file only.
 - `unregister_indicator(name) -> bool` — best-effort removal from
   both `INDICATORS` and `_BY_KIND_ID`. Used by the dialog on Delete.
+- `is_builder_file(source: str) -> bool` — public alias of
+  `_is_builder_file`; True when the source's leading lines contain
+  `BUILDER_HEADER_MARKER`.
+- `export_indicator_file(source, dest) -> Path` — copy an existing
+  indicator `.py` to `dest` (atomic same-dir tempfile + `os.replace`).
+  Normalizes a missing `.py` suffix on `dest`, creates parent dirs,
+  raises `FileNotFoundError` if `source` is missing. Pure (Tk-free).
+- `import_indicator_file(source, directory=None, *, overwrite=False,
+  target_name=None) -> Path` — copy an external `.py` into the
+  user-indicators `directory` (defaults to `default_user_dir()`).
+  Validates the `.py` suffix and a `_MAX_FILE_SIZE` (256 KB) cap,
+  rejects an empty target name, and raises `FileExistsError` on a
+  name collision unless `overwrite=True`. Does **not** register —
+  the caller must call `register_user_indicator_file` so exec-time
+  errors surface separately. Pure (Tk-free).
 - `BUILDER_HEADER_MARKER = "# tradinglab-custom-indicator"` +
   `_is_builder_file(source) -> bool` — detect Builder-managed files.
   Builder files are exec'd with **full `builtins.__dict__`** (not

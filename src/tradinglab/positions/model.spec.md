@@ -24,7 +24,7 @@ Pure-data dataclasses for one open / closed equity exposure (`Position`) and an 
 - **`Position` is mutable, `PositionEvent` is frozen**: tracker applies fills / marks in place on the position; events are append-only history records. Mirrors the `Portfolio` (mutable) vs `Fill` (frozen) split in `backtest/`.
 - **Watermarks track raw price, not signed-by-side**: `high_watermark` is the max `last_price` observed since open regardless of side. Consumers that care about R-multiples or trail anchors compute their own signed deltas. Avoids surprising "watermark went down" semantics for shorts.
 - **`unrealized_pnl()` is signed by side**: longs profit when `last > entry`, shorts when `entry > last`. Returns `0.0` on missing data rather than raising — the price feed can be silent for a tick without crashing the panel render path.
-- **ISO 8601 with explicit UTC offset for `entry_time` / `ts`**: naive datetimes are stamped UTC on serialise; the round-trip via `_parse_iso` accepts both naive (assumed UTC) and tz-aware ISO strings. Matches the "engine ts is UTC seconds, display tz applied at render" convention.
+- **ISO 8601 for `entry_time` / `ts`**: naive datetimes are stamped UTC on serialise. `_parse_iso` accepts both naive and tz-aware ISO strings; datetime objects passed directly are stamped UTC when naive, while naive strings round-trip as parsed by `datetime.fromisoformat`.
 - **`extra: Dict[str, Any]` is the forward-compat slot**: future fields (R-multiple anchor, broker-side order id, strategy notes) land here without bumping the schema version.
 - **`_validate_side` / `_validate_source` raise on bad input**: hard error at deserialise time so a corrupted JSON file fails loudly rather than silently coercing.
 

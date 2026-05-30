@@ -2,7 +2,7 @@
 
 ## Purpose
 
-A modal Toplevel reachable from **Indicators → Custom Indicator
+A modeless Toplevel reachable from **Indicators → Custom Indicator
 Builder…** (sits directly under *Manage Indicators…*). Lets the user
 author, preview, save, edit, and delete custom indicators backed by
 `.py` files in `%LOCALAPPDATA%\TradingLab\indicators\` (the same
@@ -18,6 +18,19 @@ Three authoring modes (default: **Conditions**):
    on the chart (overlay or sub-pane). The same indicator is reusable
    as an entry/exit trigger via the INDICATOR trigger kind, keeping
    semantics consistent with the rest of the codebase.
+
+   **Scrollable body.** The embedded `BlockEditor` is hosted inside a
+   vertical scroll viewport built by `_modal_base.make_scrollable_form`
+   (Canvas + Scrollbar + inner Frame), stored as
+   `self._conditions_canvas`. This keeps a long condition list (8+ rows)
+   fully reachable instead of being clipped by the dialog's fixed
+   height. The fixed description labels + "Condition tree:" label stay
+   pinned above the scroll holder; only the tree scrolls. The canvas is
+   themed to follow `win_bg` in `_apply_native_theme` (no bright-white
+   gap behind the rows in dark mode), and is reset to `None` whenever
+   the dialog leaves Conditions mode (`_render_compose_for_mode`). The
+   per-mode scroll guard `_tl_v_can_scroll` refuses to scroll when the
+   content already fits.
 2. **Expression** *(formerly "Building blocks")* — the whitelisted
    mini-expression language (`tradinglab.indicators.expression`) like
    `ema(close, 9) - sma(close, 20)`. Safe by construction. The on-disk
@@ -82,7 +95,7 @@ block.
 │  • test_1         │ Description [                          ] │
 │  • momo_score     │ ┌─ Composition ─────────────────────────┐│
 │  [New] [Delete]   │ │ cheatsheet (series/funcs/ops)         ││
-│                   │ │ Expression:                           ││
+│  [Import…][Export…]│ │ Expression:                           ││
 │                   │ │ [        text widget        ]         ││
 │                   │ └───────────────────────────────────────┘│
 │                   │ [Validate] [Preview]   [Save] [Close]    │
@@ -99,13 +112,21 @@ template that already defines a class and calls `register_indicator`.
 
 ## Behaviour Contracts
 
-- **Mode-change resets composition.** Switching modes destroys the
-  composition widget; the user is warned via the status bar. Name +
-  description survive (they're held in `StringVar`s outside the
-  swapped frame).
-- **`protect_combobox_wheel(self, scroll_target=None)` is reapplied
-  after every `_render_compose_for_mode()` rebuild** (HARD project
-  rule — CLAUDE.md §7.11). Bound widgets: the Mode combobox.
+- **Mode-change preserves per-mode composition state.** Switching modes
+  first snapshots the currently-mounted body (`_capture_body_state()`),
+  destroys/rebuilds the composition widget, restores that mode's cached
+  body (`Group` / expression text / Python source), and sets the status
+  to `Mode switched`. Name + description survive because they are held
+  in `StringVar`s outside the swapped frame.
+- **`protect_combobox_wheel(self, scroll_target=...)` is reapplied
+  after every `_render_compose_for_mode()` rebuild AND every
+  `_on_block_editor_changed()` edit** (HARD project rule —
+  CLAUDE.md §7.11), via the `_reprotect_comboboxes()` helper. The
+  `scroll_target` is forwarded to `self._conditions_canvas` when in
+  Conditions mode so wheeling over a combobox scrolls the condition
+  tree instead of being swallowed; it is `None` in Expression/Python
+  modes. Bound widgets: the Mode combobox plus every combobox/spinbox
+  inside the embedded BlockEditor.
 - **Validate** is non-destructive — parses the expression OR
   compiles the Python source. Surface result in the status bar.
 - **Preview** validates → builds a `Bars` view from the active
@@ -137,11 +158,42 @@ template that already defines a class and calls `register_indicator`.
 - **Delete** prompts for confirmation, `unlink`s the file, drops the
   in-process registration via `indicators.loader.unregister_indicator`,
   and resets the editor to "new" if the deleted file was loaded.
+- **Export** writes the selected (or currently-loaded) indicator file
+  to a user-chosen destination via `filedialog.asksaveasfilename`
+  (defaulting the filename to the source name, `.py` extension) and
+  delegates to `indicators.loader.export_indicator_file`. No selection
+  → status-bar error, no dialog. A cancelled save dialog is a no-op.
+- **Import** reads a user-chosen `.py` via `filedialog.askopenfilename`.
+  Files that execute arbitrary Python — a Python-mode builder file
+  (`mode: python`) OR any file lacking the builder marker — are gated
+  behind an `askokcancel` trust confirmation (mirrors the Python-mode
+  save gate). A name collision with an existing indicators-dir file
+  triggers an `askyesno` overwrite prompt. On confirm it delegates to
+  `indicators.loader.import_indicator_file`, then
+  `unregister_indicator` + `register_user_indicator_file` to hot-load.
+  Registration errors surface in the status bar. Builder-managed
+  imports are loaded into the editor and selected in the saved list;
+  marker-less plugins register but are not shown in the list.
 - **List refresh** filters the indicators directory to files whose
   first ≤10 lines contain the `# tradinglab-custom-indicator` marker
   — hand-authored plugin files coexist in the same directory and are
   intentionally NOT exposed in this dialog (they're managed
   externally).
+- **Native-widget theming (dark mode).** The saved-indicators
+  `tk.Listbox` and the Expression/Python `tk.Text` bodies are native
+  (non-ttk) widgets the global `ThemeController` Style sweep does not
+  reach, so they are themed explicitly via `_apply_native_theme(theme)`
+  using the live palette from `_current_theme()` (reads
+  `app._theme_ctrl.theme`; falls back to `resolve_theme`/`LIGHT_THEME`).
+  Listbox uses `tree_bg`/`tree_fg`/`spine`; Text bodies use
+  `ax_bg`/`text`/`spine`; the Toplevel background uses `win_bg`; the
+  status + cheatsheet labels use the muted `text_disabled` colour; the
+  preview matplotlib figure facecolor follows `ax_bg`. Re-applied at
+  the end of `_build_layout` and after every `_render_compose_for_mode`
+  (the Text widgets are recreated on mode switch). Because the dialog is
+  non-modal, `_subscribe_theme_changes` registers a `winfo_exists`-guarded
+  `ThemeController.on_change` callback so a live dark/light toggle
+  re-themes the open dialog.
 
 ## Limitations
 
@@ -150,11 +202,10 @@ template that already defines a class and calls `register_indicator`.
   lower, MACD signal+hist) requires Python mode.
 - Preview canvas uses `Bars.from_candles(candles[-200:])` so very
   short charts (< 200 bars) preview against whatever's available.
-- Scanner field dropdown (`scanner.fields.all_fields`) is gated by
-  the hand-curated `SCANNABLE_INDICATORS` allowlist; custom
-  indicators show up in the chart Add menu + entry/exit trigger
-  dropdowns immediately, but the scanner page does not enumerate
-  them without an allowlist edit.
+- Custom indicators are chart-only by default. They appear in scanner /
+  entries / exits field dropdowns only when the saved/generated class
+  exposes `scannable_outputs` (the dialog's **Expose to scanner**
+  checkbox emits `(("value", "numeric"),)` for generated modes).
 
 ## Tests
 
@@ -162,4 +213,6 @@ template that already defines a class and calls `register_indicator`.
   default state, name validation, save → file written + registered,
   delete → unregistered + file removed, mode-switch preserves
   metadata vars, list refreshes after save, `protect_combobox_wheel`
-  guards the Mode combobox.
+  guards the Mode combobox, and dark-mode native-widget theming
+  (Listbox/Text colours via `_apply_native_theme`, auto-applied from
+  `app._theme_ctrl.theme`, re-applied after mode switch).

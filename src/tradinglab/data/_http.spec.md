@@ -28,25 +28,25 @@ contributing to fixes for **H2**, **M5**).
 
 ## Internal helpers
 - `_StripCredentialsOnRedirect(HTTPRedirectHandler)` — overrides
-  `redirect_request`. When the new URL points to a different
-  hostname (case-insensitive compare) than the original request,
-  strips every credential-shaped header from both `headers` and
-  `unredirected_hdrs` before delegating to the stdlib redirect
-  builder. Same-host redirects (e.g. path-only changes on a vendor
-  load balancer) leave headers intact so auth doesn't break on
-  benign 30x.
+  `redirect_request`. Delegates to the stdlib redirect builder first,
+  then, when the new URL points to a different hostname
+  (case-insensitive compare) than the original request, strips every
+  credential-shaped header from both `headers` and `unredirected_hdrs`
+  on the returned request. Same-host redirects (e.g. path-only changes
+  on a vendor load balancer) leave headers intact so auth doesn't break
+  on benign 30x.
 - `_is_credential_header(name: str) -> bool` — case-insensitive
   substring test. Returns `True` if the header name contains any
   of `"authorization"`, `"apca"`, `"key"`, `"secret"`, `"token"`.
   Conservative on purpose: false positives strip a harmless header,
   false negatives leak a credential. The header-name set covers
-  every credential header used by the four currently-integrated
-  vendors (Schwab, Alpaca, Polygon, yfinance).
+  every credential header used by the current urllib vendor/auth
+  call sites (Schwab, Alpaca, Polygon).
 
 ## Callers
 - `data/polygon_source.py::_http_get_aggs` — Bearer Authorization
   header.
-- `data/alpaca_source.py::fetch_alpaca_data` — `APCA-API-KEY-ID` +
+- `data/alpaca_source.py::_http_get_bars` — `APCA-API-KEY-ID` +
   `APCA-API-SECRET-KEY` headers.
 - `data/schwab_auth.py::_post_token` — `Authorization: Basic …`
   for OAuth token refresh.
@@ -58,9 +58,7 @@ contributing to fixes for **H2**, **M5**).
   Building the opener at import would lock in test-time monkey
   patches of `urllib.request`. The lazy global is initialised on
   first `credentialed_opener()` call and reused thereafter; tests
-  reset it via `credentialed_opener.cache_clear()` (the same
-  `functools.lru_cache`-style attribute the implementation
-  exposes) or by mutating `_OPENER` directly.
+  reset it by mutating the module-level `_OPENER` directly.
 - **Case-insensitive hostname compare.** `urllib` normalises
   hostnames to lowercase in most code paths but not all; an
   explicit `.lower()` on both sides removes any ambiguity around

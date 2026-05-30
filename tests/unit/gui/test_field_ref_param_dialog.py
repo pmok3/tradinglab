@@ -101,3 +101,123 @@ def test_param_vars_seeded_from_ref(root):
     ref = FieldRef.indicator("rvol", params={"length": 14})
     dlg = _mk(root, ref)
     assert dlg._param_vars["length"].get() in ("14", 14)
+
+
+def _all_label_texts(widget):
+    texts = []
+    for child in widget.winfo_children():
+        try:
+            if isinstance(child, tk.ttk.Label):  # type: ignore[attr-defined]
+                texts.append(str(child.cget("text")))
+        except Exception:  # noqa: BLE001
+            pass
+        texts.extend(_all_label_texts(child))
+    return texts
+
+
+def test_general_description_not_rendered(root):
+    """The indicator's general description must NOT appear in the Edit popup —
+    params sit at the top for a cleaner, more user-friendly layout."""
+    from tradinglab.scanner.fields import get_field
+
+    spec = get_field("rrvol", kind="indicator")
+    assert spec is not None and spec.description  # precondition: rrvol has one
+    dlg = _mk(root, FieldRef.indicator("rrvol", params={"length": 20}))
+    labels = _all_label_texts(dlg)
+    assert spec.description not in labels
+
+
+def _find_info_icons(widget):
+    """Collect every info-icon Label (text == the circled-i glyph)."""
+    icons = []
+    for child in widget.winfo_children():
+        try:
+            if isinstance(child, tk.ttk.Label) and str(child.cget("text")) == sbe._INFO_ICON_GLYPH:  # type: ignore[attr-defined]
+                icons.append(child)
+        except Exception:  # noqa: BLE001
+            pass
+        icons.extend(_find_info_icons(child))
+    return icons
+
+
+def test_each_param_has_info_icon_with_description(root):
+    """Every parameter row exposes an (i) info icon whose hover tooltip
+    carries that parameter's description."""
+    from tradinglab.scanner.fields import get_field
+
+    spec = get_field("rrvol", kind="indicator")
+    assert spec is not None
+    dlg = _mk(root, FieldRef.indicator("rrvol", params={"length": 20}))
+
+    # One info tooltip per param that has descriptive text.
+    for pdef in spec.params_schema:
+        tip = sbe.tooltip_text_for(pdef)
+        if tip:
+            assert pdef.name in dlg._info_tooltips
+            assert dlg._info_tooltips[pdef.name]._text == tip
+
+    # And visible (i) icon widgets are actually present in the form.
+    icons = _find_info_icons(dlg)
+    assert len(icons) >= 1
+
+
+def test_info_icon_tooltip_glyph_is_circled_i(root):
+    dlg = _mk(root, FieldRef.indicator("rrvol", params={"length": 20}))
+    icons = _find_info_icons(dlg)
+    assert icons, "expected at least one (i) info icon"
+    assert all(str(ic.cget("text")) == sbe._INFO_ICON_GLYPH for ic in icons)
+
+
+def _force_fit(dlg, root):
+    """Realize geometry so the canvas viewport is taller than its content."""
+    try:
+        root.deiconify()
+        dlg.deiconify()
+        dlg.geometry("380x460")
+        dlg.update()
+        dlg.update_idletasks()
+    except tk.TclError:
+        pass
+
+
+def test_single_param_form_does_not_scroll(root):
+    """LRSI has a single parameter that fully fits the popup — the wheel
+    must NOT drag the lone widget around (the reported bug)."""
+    dlg = _mk(root, FieldRef.indicator("lrsi"))
+    _force_fit(dlg, root)
+    canvas = dlg._form_canvas
+    # When content fits, the view fraction spans the whole region.
+    first, last = canvas.yview()
+    assert float(first) <= 0.0 and float(last) >= 1.0
+    # The wheel-scroll guard refuses to scroll a fitting form.
+    assert canvas._tl_v_can_scroll() is False
+    before = canvas.yview()
+    handler = canvas._tl_wheel_handler
+
+    class _Evt:
+        delta = -120
+
+    handler(_Evt())
+    handler(_Evt())
+    assert canvas.yview() == before
+
+
+def test_scrollable_form_guard_blocks_when_fitting(root):
+    """Unit-level: make_scrollable_form refuses wheel scroll when content
+    fits the viewport, generalizing the fix to every dialog that uses it."""
+    from tradinglab.gui._modal_base import make_scrollable_form
+
+    host = tk.ttk.Frame(root)  # type: ignore[attr-defined]
+    host.pack(fill="both", expand=True)
+    inner, canvas = make_scrollable_form(host)
+    tk.ttk.Label(inner, text="only one row").pack()  # type: ignore[attr-defined]
+    try:
+        root.geometry("400x500")
+        root.deiconify()
+        root.update()
+        root.update_idletasks()
+    except tk.TclError:
+        pass
+    assert canvas._tl_v_can_scroll() is False
+
+

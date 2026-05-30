@@ -5,9 +5,14 @@ Declares the `Indicator` Protocol, the `INDICATORS` display registry, and the ty
 
 ## Public API
 - `class Indicator(Protocol)` — class-level: `kind_id: str` (stable persistence id, e.g. `"sma"`), `kind_version: int`, `params_schema: Tuple[ParamDef, ...]`, `default_style: Dict[str, LineStyle]`. Optional class-level (ClassVar) scanner opt-in: `scannable_outputs: Tuple[Tuple[str, str], ...] = ()` — list of `(output_key, dtype)` pairs the scanner / entries / exits / ranking UI should surface. Empty tuple (the default) means "chart-only — invisible to the scanner". `dtype` is `"numeric"` or `"bool"`. `resets_daily: bool = False` — set True for session-anchored indicators (VWAP, RVOL, RRVOL) so condition validators can warn cross-interval mismatches. Instance: `name: str`, `overlay: bool`. Method: `compute(candles) -> Dict[str, np.ndarray]`.
+- `class BaseIndicator` — concrete mixin that owns the canonical `compute(candles)` shim. Subclasses implement `compute_arr(bars: Bars)`; the shim builds `Bars.from_candles(candles)` and forwards.
 - `ParamDef(name, kind, default, min=None, max=None, step=None, choices=(), description="")` — `kind ∈ {"int","float","bool","str","choice"}`. Drives the dialog widget by kind.
 - `LineStyle(color="#888888", width=1.2, visible=True)` — per-output-key visual default. Per-instance overrides live on `IndicatorConfig`.
 - `IndicatorFactory = Callable[..., Indicator]`.
+- `Availability(ok, reason="")` — interval-availability result for factories that gate themselves by interval or params.
+- `intraday_only(interval) -> Availability` — shared helper for indicators that only render on intraday intervals.
+- `factory_is_available_for(factory, interval, params=None) -> Availability` — resolves two-arg `is_available_for(interval, params)`, legacy one-arg `is_available_for(interval)`, legacy `available_intervals`, or defaults to available.
+- `compute_via_bars(indicator, bars) -> Dict[str, np.ndarray]` — render hot-path dispatcher; prefers `indicator.compute_arr(bars)`, falls back to `indicator.compute(bars.candles)` when needed.
 - `INDICATORS: Dict[str, IndicatorFactory]` — display registry, insertion-ordered.
 - `register_indicator(name, factory)` — idempotent; adds to both `INDICATORS` (visible display registry → menu) and `_BY_KIND_ID` (persistence-side lookup) when the factory exposes a `kind_id`.
 - `register_legacy_indicator(name, factory)` — idempotent; adds to `_BY_KIND_ID` ONLY. Used for indicator families that consolidated into a single replacement (e.g. SMA + EMA → MovingAverage): the legacy class stays discoverable for in-memory configs and tests, but is excluded from the Add Indicator menu.
@@ -39,8 +44,9 @@ Declares the `Indicator` Protocol, the `INDICATORS` display registry, and the ty
 - `_LEGACY_MA_OUTPUT_KEYS: dict[str, str]` — maps a legacy MA `kind_id` (`"sma"` / `"ema"`) to the output-key name the legacy class persisted (`"sma"` / `"ema"`). `IndicatorConfig.from_dict` reads this BEFORE migration so it can remap the user's customised `style[legacy_key]` → `style["ma"]` after the kind_id rewrite — mirrors the `_LEGACY_Z_OUTPUT_KIND_IDS` pattern used by the RVOL family.
 
 ## Dependencies
-- Internal: `..models.Candle`.
-- External: `numpy`, `typing`.
+- Internal: `..constants.INTRADAY_INTERVALS`, `..core.bars.Bars`,
+  `..models.Candle`.
+- External: `inspect`, `numpy`, `typing`.
 
 ## Design Decisions
 - **`Dict[str, np.ndarray]` return shape** — Bollinger Bands, MACD, Ichimoku all produce multiple synchronous lines. A dict keyed by output name lets the render layer pick which to draw and what color to use.
@@ -49,6 +55,7 @@ Declares the `Indicator` Protocol, the `INDICATORS` display registry, and the ty
 - **`kind_id` is stable, display name is not** — `INDICATORS["SMA"]` may rename, but `"sma"` round-trips through saved configs forever. `_BY_KIND_ID` index is the persistence-side lookup.
 - **`params_schema` is a Tuple[ParamDef]**, classvar — narrow `kind` whitelist keeps the auto-generated dialog simple. Custom indicators that need exotic types expose a `str` field with a documented format and parse internally.
 - **`default_style` per output key** (not per indicator) — Bollinger's middle/upper/lower want different defaults; a single per-class color would be wrong.
+- **Canonical compute shim.** `BaseIndicator` centralises the `compute(candles)` → `compute_arr(Bars.from_candles(candles))` bridge so built-ins do not hand-roll identical shims.
 - **No Tk / matplotlib imports** — fully headless so backtesters can use the layer directly.
 
 ## Invariants
@@ -56,6 +63,7 @@ Declares the `Indicator` Protocol, the `INDICATORS` display registry, and the ty
 - Undefined positions are `np.nan`.
 - `INDICATORS` and `_BY_KIND_ID` persist registrations across repeat package imports.
 - `register_indicator(name, factory)` is idempotent and keeps both indexes consistent.
+- `BaseIndicator.compute(candles)` is pure boilerplate; indicator-specific math lives in `compute_arr(bars)`.
 
 ## Testing
 - `tests/smoke/test_smoke_full.py:check_d39_indicators_phase1` — registry wiring, kind_id round-trip, schema declarations, NaN-padding, value spot-checks for SMA/EMA/RSI/BB.

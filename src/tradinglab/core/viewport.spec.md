@@ -6,10 +6,11 @@ Pure math for y-axis autoscale and the virtualized render-range calculation. Cal
 ## Public API
 - `RENDER_BUFFER_MULTIPLIER = 3` — render window is 3× visible.
 - `y_limits_for_slice(series, kind, start, end, *, log=False) -> Optional[(ymin, ymax)]` — nan-aware y-range. For `kind="price"`, **asymmetric** padding: bottom and top pads resolved at call time from `defaults.get("price_bot_pad_frac")` (default 0.05) / `defaults.get("price_top_pad_frac")` (default 0.12) — user-overridable via `settings.json`. Extra top headroom reserves space for the always-on top-left OHLCV / %change readout strip (`gui/interaction.spec.md` §11.6). For `kind="volume"` returns `(0, 1.1 * max)` (no readout on volume axes). On `log=True` (price only), asymmetry applied multiplicatively in log space. Returns `None` when the slice has no finite values.
+- `remap_window_by_time(prev_dates, prev_xlim, new_dates) -> Optional[(lo, hi)]` — remap an index-space xlim from a previous series onto a new series by timestamp coverage. Returns a half-open slice or `None` for invalid / degenerate remaps.
 - `compute_render_range(visible_lo, visible_hi, n, min_size, max_size) -> (start, end)` — `[start, end)` centered on visible, width = `max(min_size, min(max_size, visible_count * RENDER_BUFFER_MULTIPLIER))`, clipped to `[0, n]`.
 
 ## Dependencies
-Internal: `.series.SeriesArrays`. External: `numpy`.
+Internal: `.series.SeriesArrays`, `..defaults`. External: `numpy`.
 
 ## Design Decisions
 - **NaN-aware reductions** (`np.nanmin`/`np.nanmax`) so gap candles are transparently skipped. Returns `None` on all-NaN/empty (matplotlib refuses NaN/Inf ylims).

@@ -17,7 +17,7 @@ Prior Day High / Low / Close (PDH / PDL / PDC) reference lines for intraday char
 ## Design Decisions
 - **Regular session only.** PDH/PDL/PDC are computed from 9:30–16:00 ET bars only (`regular_only=True`). Extended hours are excluded — low-liquidity pre/post noise doesn't define the institutional-accepted prior day range.
 - **Derive from intraday bars, not daily bars.** Uses `session_groups_np` to group loaded intraday bars by calendar day and compute H/L/C from the prior day's group. No coupling to the data fetching layer — the indicator stays pure. Trade-off: if only today's bars are loaded (no prior day in the data), all outputs are NaN and no lines appear.
-- **Constant per session.** All bars in a given intraday session carry the same PDH/PDL/PDC values (horizontal lines). The renderer draws these as flat horizontal lines spanning the visible range for that day.
+- **Constant per session with seam breaks.** Bars in a given intraday session carry the same PDH/PDL/PDC values, except the last regular bar of each already-referenced session is reset to NaN before the next session starts. That NaN break prevents matplotlib from drawing a vertical connector when the level changes day-to-day.
 - **Rolling per day.** When multiple days are loaded, each day's bars use the immediately preceding day's H/L/C. Day 3's bars show day 2's levels, not day 1's.
 - **PDC = last regular bar's close.** Not the session VWAP or a weighted close — the literal closing price of the last regular-session bar.
 - **Boolean toggles for each level.** Three `bool` params (`show_high`, `show_low`, `show_close`, all default ON) let users enable/disable each line independently via checkboxes in the Manage Indicators dialog. When a toggle is OFF, the corresponding output array stays all-NaN (no line drawn).
@@ -26,10 +26,10 @@ Prior Day High / Low / Close (PDH / PDL / PDC) reference lines for intraday char
 ## Invariants
 1. Output arrays are always the same length as input bars.
 2. First session's bars are always NaN (no prior day to reference).
-3. All bars within a session carry identical PDH/PDL/PDC values.
+3. All bars within a session carry identical PDH/PDL/PDC values, except deliberate NaN seam breaks at prior-session tails once a later session exists.
 4. Only regular-session bars contribute to the prior day's H/L/C.
 5. Auto-hidden on non-intraday intervals via `is_available_for`.
 
 ## Testing
-- `tests/unit/test_prior_day_hlc.py` — 12 tests: basic two-day computation, three-day rolling, single-day all-NaN, empty input, daily bars all-NaN, constant within session, extended hours excluded, candle API, availability gating, kind_id, overlay flag, output key consistency.
+- `tests/unit/test_prior_day_hlc.py` — covers basic two-day computation, three-day rolling, single-day all-NaN, empty input, daily bars all-NaN, constant-within-session/seam-break behaviour, extended hours excluded, availability gating, kind_id, overlay flag, and output key consistency.
 

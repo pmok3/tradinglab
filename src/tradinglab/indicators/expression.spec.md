@@ -1,4 +1,4 @@
-# indicators/expression
+# indicators/expression.py — Spec
 
 ## Purpose
 
@@ -12,7 +12,7 @@ builder dialog writes to `%LOCALAPPDATA%\TradingLab\indicators\<name>.py`
 so the next app start (or in-process `discover_user_indicators()` call)
 auto-registers the indicator via the existing loader.
 
-## Public Surface
+## Public API
 
 - `ALLOWED_SERIES: frozenset[str]` — `close`, `open`, `high`, `low`,
   `volume`, `hl2`, `hlc3`, `ohlc4`.
@@ -30,9 +30,9 @@ auto-registers the indicator via the existing loader.
 - `estimate_warmup(expr) -> int` — walks AST for max length-bearing
   argument across all indicator calls; adds the signal length for
   `macd*` so the EMA-of-EMA chain converges.
-- `expression_to_python(*, name, expression, description="", overlay=False, created="", updated="", scannable=False) -> str` — round-trip code generator. Emits
+- `expression_to_python(*, name, expression, description="", overlay=True, created="", updated="", scannable=False) -> str` — round-trip code generator. Emits
   a file with a `# tradinglab-custom-indicator` comment header (mode +
-  expression + description + created / updated + scannable timestamps) plus a
+  expression + description + created / updated + scannable flag) plus a
   `class _Indicator` definition and `register_indicator(name, _Indicator)`
   call. When `scannable=True` the class declares
   `scannable_outputs = (("value", "numeric"),)` so the scanner registry
@@ -75,7 +75,9 @@ auto-registers the indicator via the existing loader.
 ## Whitelist
 
 Allowed AST node types: `BinOp`, `UnaryOp`, `BoolOp`, `Compare`,
-`Call`, `Name`, `Constant` (numeric only), `Load`. Every other node
+`Call`, `Name`, `Constant` (numeric / bool only), `Load`, plus the
+whitelisted operator nodes for `+ - * / // ** %`, unary `+ - not`,
+`and` / `or`, and single comparisons. Every other node
 type — `Attribute`, `Subscript`, `Lambda`, `Import`, `Assign`,
 comprehensions, `Starred`, `IfExp` — raises `ExpressionError`. Calls
 must be direct named functions with positional args only (no
@@ -96,10 +98,10 @@ guarded by a per-save confirmation prompt instead.
 # description: 9 EMA - 20 SMA momentum gauge
 # created: 2026-05-26T17:38:00Z
 # updated: 2026-05-26T17:38:00Z
+# scannable: False
 
-from tradinglab.indicators.base import register_indicator
+from tradinglab.indicators.base import BaseIndicator, register_indicator
 from tradinglab.indicators.expression import evaluate, parse_expression
-from tradinglab.core.bars import Bars
 
 
 _EXPRESSION = 'ema(close, 9) - sma(close, 20)'
@@ -107,7 +109,7 @@ _PARSED = parse_expression(_EXPRESSION)
 _WARMUP = 20
 
 
-class _Indicator:
+class _Indicator(BaseIndicator):
     name = 'test_1'
     kind_id = 'test_1'
     kind_version = 1
@@ -120,15 +122,12 @@ class _Indicator:
     def compute_arr(self, bars):
         return evaluate(_PARSED, bars)
 
-    def compute(self, candles):
-        return self.compute_arr(Bars.from_candles(candles))
-
     @property
     def warmup_bars(self):
         return _WARMUP
 
 
-register_indicator('test_1', lambda: _Indicator())
+register_indicator('test_1', _Indicator)
 ```
 
 The class implements the full `Indicator` protocol so it works in the
@@ -146,10 +145,10 @@ walks `INDICATORS`.
   bar — no `previous(close)` or `change(close)` helpers yet. Workaround:
   `close - sma(close, 1)` is constant zero so push the comparison into
   `crosses_above` exits instead.
-- **Scanner integration is allowlist-gated.** The scanner's
-  `SCANNABLE_INDICATORS` allowlist is hand-curated; custom indicators
-  appear in the chart Add menu and the entry/exit trigger dropdowns
-  but NOT in the scanner fields dropdown until manually added there.
+- **Scanner integration is explicit opt-in.** Expression and Conditions
+  mode generators emit `scannable_outputs` only when `scannable=True`.
+  Chart-only custom indicators omit it and remain invisible to scanner /
+  entries / exits field dropdowns.
 
 ## Tests
 
@@ -158,6 +157,7 @@ walks `INDICATORS`.
   `__import__`, `open`, `eval`, attribute access, subscripts,
   comprehensions, keyword args.
 - `tests/unit/indicators/test_expression_codegen.py` — generated
-  source compiles, exec'ing registers in `INDICATORS`, `compute_arr`
-  on synthetic bars returns a finite `value` array, `warmup_bars`
+  source compiles, exec'ing registers in `INDICATORS`, generated
+  classes inherit the `BaseIndicator` compute shim, `compute_arr` on
+  synthetic bars returns a finite `value` array, and `warmup_bars`
   reports the expected max.

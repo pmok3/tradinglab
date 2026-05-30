@@ -4,7 +4,8 @@
 
 Owns the single shared `Figure` + `FigureCanvasTkAgg` and partitions N
 stacked `Axes` across N `CardWidget` slots. `ChartApp` constructs one of
-these via composition (`owner=self`); no mixin — `app.py` already has 11.
+these via composition (`owner=self`); no mixin — `app.py` already has a large
+mixin stack.
 
 ## Public API
 
@@ -24,9 +25,11 @@ these via composition (`owner=self`); no mixin — `app.py` already has 11.
   `"card:N"`-slot branch. Token-gated. `kind == "tick"` →
   `series_cache.upsert_tick`; `kind == "rollover"` →
   `series_cache.append_rollover` (capped at
-  `chartstack.sparkline_bar_count`). Schedules a coalesced flush via
-  `_schedule_idle_flush()` so many ticks within one Tk idle slice collapse
-  to one flush.
+  `chartstack.sparkline_bar_count`). Evaluates alerts for the slot and
+  schedules a coalesced flush via `_schedule_idle_flush()` so many ticks
+  within one Tk idle slice collapse to one flush.
+- `set_card_tint(slot_index, color)` — set or clear the per-card spine tint;
+  marks the slot dirty and invalidates its blit background.
 - `subscription_registry` (read-only) — one `SubscriptionRegistry` per panel.
 - `apply_theme(theme)` — recolor. Accepts a palette **dict** (the primary
   path — `ChartApp._apply_theme` cascades the already-resolved palette so
@@ -83,8 +86,9 @@ these via composition (`owner=self`); no mixin — `app.py` already has 11.
 - `owner._chartstack` — `_drain_worker_inbox` reads this to dispatch stash
   payloads back to `apply_card_stash` (panel does not self-register;
   `app.py` sets the attribute).
-- `owner.source_var` / `owner.interval_var` — read on Tk thread inside
-  `CardController.start`.
+- `owner.source_var` — read on Tk thread inside `CardController.start`.
+- `owner.interval_var` — read by the panel's alert threshold helper; cards
+  still fetch fixed daily (`"1d"`) mini-charts.
 - `owner._stream_queue` — sink for `(token, "card:N", src, ticker,
   interval, kind, bar)` events. `_drain_stream_queue` dispatches
   `"card:"`-prefixed slot strings to `apply_stream_event`.
@@ -117,11 +121,8 @@ never mutates owner state.
   invalidated on binding change, theme change, card stash, demote, destroy.
 - `_resolve()` threads `tuple(self._manual_pins)` into `resolve_bindings`
   so HYBRID mode gives pins priority slot allocation.
-- `_render_card_sparkline` threads M4 toggles
-  (`chartstack.show_vwap`/`show_pmh_pml`/`show_last_candles`/
-  `volume_stroke_encoding`) into `draw_card_sparkline` and applies per-card
-  border tints via `set_card_tint`. Bars carry `session` info from
-  `_bar_from_event_bar` / `_bars_from_candles` so the render layer can
-  wash pre/post-market runs and anchor VWAP at the RTH boundary. Passes
-  `halted_at=card.controller.halt_index` so halted symbols get the grey +
-  vertical-bar treatment (see `render.spec.md`).
+- `_render_card_sparkline` now wraps the candles-only renderer. It forwards
+  per-card border tints, the resolved theme palette, and legacy `halted_at`
+  plumbing; the renderer accepts old overlay kwargs but ignores VWAP,
+  PMH/PML, last-candles, volume-stroke, and halt-grey treatments (see
+  `render.spec.md`).

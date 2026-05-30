@@ -21,7 +21,7 @@ Schwab WebSocket streaming source. Implements the `streaming.base.StreamSource` 
 - External: `websocket-client` (optional — late-imported inside `subscribe`; missing install degrades to a no-op subscriber with a warning).
 
 ## Design Decisions
-- **Singleton connection** lifecycle: dormant until first `subscribe`; teardown on last `unsubscribe`. The `_Connection` owns two threads — a recv loop and a 1-second clock thread that forces minute rollovers for quiet symbols.
+- **Singleton connection** lifecycle: dormant until first `subscribe`; immediate shutdown on last `unsubscribe`. The `_Connection` owns two threads — a recv loop and a 1-second clock thread that forces minute rollovers for quiet symbols.
 - **LEVELONE drives in-progress bars, CHART_EQUITY corrects sealed bars**: the aggregator builds 1-min bars from sub-minute LEVELONE ticks. Schwab's authoritative CHART_EQUITY arrives 5–30s after the minute closes; we re-emit it as a `("tick", Candle)` so the BarsBuffer's match-by-timestamp overwrites the prior synthesized bar. **No separate "correction" event kind.**
 - **Per-subscriber `_Subscription` instances** — multiple subscribers for the same symbol get their own `MinuteBarBuilder` so late subscribers see a fresh in-progress bar seeded with their own most-recent close.
 - **Reconnect with exponential backoff** (`1,2,4,8,16,30` seconds, capped). Resubscribes all symbols on reconnect; `_request_id` resets to send `SUBS` (not `ADD`) on the fresh socket.

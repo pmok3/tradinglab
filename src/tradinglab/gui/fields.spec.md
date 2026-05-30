@@ -74,7 +74,7 @@ Trailing `:` is auto-added (de-duped if caller already added).
 
 ## Invariants
 
-- `row.error_var.get() == ""` means error slot hidden.
+- `row.error_var.get() == ""` means the error slot renders empty.
 - 3-column grid; col 1 (content) is the only expandable one.
 - `LabeledCombobox` defaults `state="readonly"`; editable opts in
   with `state="normal"`.

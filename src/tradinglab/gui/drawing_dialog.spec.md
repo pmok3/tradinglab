@@ -9,7 +9,7 @@ label — plus a destructive "Delete this line" button.
 ## Public API
 
 ```python
-class DrawingDialog(tk.Toplevel):
+class DrawingDialog(BaseModalDialog):
     def __init__(self, parent, *, store: DrawingStore,
                  drawing: Drawing,
                  on_close: Optional[Callable[[], None]] = None): ...
@@ -76,15 +76,17 @@ Subscriber on the store closes the dialog when:
 
 ## ESC binding
 
-ESC fires `_close()`. WM close button does the same. Dialog is
-`transient(parent)`.
+ESC fires `_close()`. WM close button does the same. Dialog inherits
+`BaseModalDialog`, calls `protect_combobox_wheel(self)`, and finalizes
+with `grab=False` so it stays modeless.
 
 ## Width slider
 
 `ttk.Scale` 1.0–5.0 with 0.5-pt quantization on display + commit.
 Floor 1.0pt (sub-1pt dashed/dotted look the same). Quantization
-via static `_quantize_width` (`round(v*2)/2`); `<ButtonRelease-1>`
-snaps the slider's `DoubleVar` so thumb position matches display.
+via static `_quantize_width` (`floor(v*2 + 0.5)/2`, conventional
+round-half-up); `<ButtonRelease-1>` snaps the slider's `DoubleVar`
+so thumb position matches display.
 `drawings.model._coerce_width` clamps weird values on commit; load
 path still tolerates sub-1pt widths from older JSON (snapped up
 on next mutation).

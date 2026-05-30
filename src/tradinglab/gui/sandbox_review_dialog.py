@@ -17,6 +17,7 @@ from typing import Any
 
 from ._modal_base import BaseModalDialog, protect_combobox_wheel
 from .colors import DOWN_RED, UP_GREEN
+from .native_theme import apply_listbox_theme, apply_text_theme, current_theme
 
 
 class PostTradeReviewDialog(BaseModalDialog):
@@ -92,6 +93,7 @@ class PostTradeReviewDialog(BaseModalDialog):
         ttk.Label(frame, text="Review (mandatory) — what did you learn?") \
             .grid(row=6, column=0, columnspan=2, sticky="w", **pad)
         self._review_text = tk.Text(frame, width=44, height=5)
+        apply_text_theme(self._review_text, current_theme(self.app))
         self._review_text.grid(row=7, column=0, columnspan=2, sticky="ew", **pad)
 
         self._error_var = tk.StringVar(value="")
@@ -151,6 +153,7 @@ class TagsEditorDialog(BaseModalDialog):
             .grid(row=0, column=0, columnspan=2, sticky="w", **pad)
 
         self._listbox = tk.Listbox(frame, height=8, exportselection=False)
+        apply_listbox_theme(self._listbox, current_theme(self.app))
         self._listbox.grid(row=1, column=0, sticky="ew", **pad)
         ttk.Button(frame, text="Remove", command=self._on_remove) \
             .grid(row=1, column=1, sticky="ne", **pad)

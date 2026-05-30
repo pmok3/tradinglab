@@ -1,4 +1,4 @@
-# `indicators/rrvol.py` — Relative-Relative Volume vs configurable benchmark
+# indicators/rrvol.py — Spec
 
 Single `RRVOL` factory (replacing three legacy classes) with z-score
 support, mirroring unified `RVOL`. RRVOL = stock's RVOL ÷ comparison
@@ -54,7 +54,7 @@ Single output key `"rvol"` (matches RVOL). Raw ratio when
 
 | Scenario | Output |
 |---|---|
-| Primary == compare_symbol | flat 1.0 wherever primary RVOL is finite |
+| Primary == compare_symbol | flat 1.0 wherever primary RVOL is finite when `z_score=False`; all-NaN under `z_score=True` because the constant ratio has zero stddev |
 | Comparison not yet cached | all-NaN; provider scheduled; rerender on arrival |
 | Primary timestamp without comparison match | NaN |
 | IPO / insufficient lookback on either leg | NaN |

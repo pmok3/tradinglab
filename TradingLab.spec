@@ -80,9 +80,24 @@ if _sp500_csv.exists():
 # entry resolves docs/chartstack.md inside the frozen build. The same
 # path resolution works in the source tree because resource_root()
 # returns the repo root in non-frozen contexts.
+#
+# Developer-only docs (the PyInstaller release guide) are excluded from
+# the redistributable — they live on GitHub for contributors, not in the
+# shipped .exe. Keep this denylist in sync with
+# ``tradinglab.gui.doc_viewer._HIDDEN_DOCS``.
 _docs_dir = _REPO_ROOT / "docs"
+_docs_exclude = {
+    "BUILDING_EXE.md",
+    "PAINT_PIPELINE_REFACTOR.md",
+    "SPEC_INDEX.md",
+    "SPEC_STYLE.md",
+}
 if _docs_dir.exists():
-    datas.append((str(_docs_dir), "docs"))
+    for _doc in _docs_dir.rglob("*"):
+        if not _doc.is_file() or _doc.name in _docs_exclude:
+            continue
+        _rel_parent = _doc.parent.relative_to(_REPO_ROOT)
+        datas.append((str(_doc), str(_rel_parent)))
 
 # Matplotlib + pandas have data dirs (font caches, locale tables, etc.)
 # that the standard hooks normally pick up — but we collect them

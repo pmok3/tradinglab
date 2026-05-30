@@ -26,6 +26,9 @@ across the last N regular sessions). Output is in price units
 - `default_style.atr`: light orange `#ffbb78`, width 1.4.
 - `scannable_outputs = (("atr","numeric"),)` — opts the indicator into the scanner registry.
 - `compute(candles) -> {"atr": ndarray}`.
+- `warmup_bars` property returns `4 * length` for `ma_type="RMA"`,
+  otherwise `length`, so the strategy tester hydrates Wilder IIR output
+  beyond first finite emit.
 - `name`: `ATR(N)` (default `RMA` rolling), `ATR-{KIND}(N)` (other
   rolling kernel), `ATR ToD(N)` (tod regardless of kernel).
 
@@ -53,9 +56,9 @@ collapses to a plain 20-bar rolling mean of TR
 (`_TOD_DAILY_FALLBACK_LENGTH = 20`, independent of `length`).
 
 ## Dependencies
-- Internal: `..models.Candle`, `.base.LineStyle`, `.base.ParamDef`,
-  `.ma_kernels.{MA_TYPES,apply_ma}`, `.wilder.true_range`,
-  `.sessions.{is_intraday,session_filter_predicate,session_groups,tod_key}`.
+- Internal: `..core.bars.Bars`, `.base.BaseIndicator`,
+  `.base.LineStyle`, `.base.ParamDef`, `.ma_kernels.{MA_TYPES,apply_ma}`,
+  `.wilder.true_range`, `.sessions.{is_intraday_np,session_filter_mask_np,session_groups_np,tod_key_np}`.
 - External: `numpy`.
 
 ## Design Decisions
@@ -66,7 +69,9 @@ collapses to a plain 20-bar rolling mean of TR
 - **`kind_version` not bumped (still 2).** Param keys are part of the
   cache hash; old configs rehydrate cleanly through ParamDef defaults.
 - **No reference level** — ATR is unit-bearing.
-- **TR delegated to `wilder.true_range`** — shared with ADX.
+- **TR delegated to `wilder.true_range`** — shared with ADX. Rolling
+  `ma_type="RMA"` delegates through `apply_ma` to the vectorized Wilder
+  kernel rather than an indicator-local loop.
 
 ## Invariants
 - All defined ATR values are `>= 0`.

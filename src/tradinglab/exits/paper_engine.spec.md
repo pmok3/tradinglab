@@ -17,10 +17,20 @@ reports synthetic `Fill` records.
 
 Handles only the four kinds with deterministic OHLC-based fill
 prices: `MARKET`, `LIMIT`, `STOP`, `STOP_LIMIT`. `TRAILING_STOP`,
-`TIME_OF_DAY`, `INDICATOR` triggers are evaluated *upstream* by
-`ExitEvaluator`; on fire the evaluator submits a plain `MARKET`
-`PaperOrder`. Engine stores **no** trail/HWM/indicator state — pure
-order-fill machine.
+`TIME_OF_DAY`, `INDICATOR`, and `CHANDELIER` triggers are evaluated
+*upstream* by `ExitEvaluator`; on fire the evaluator submits a plain
+`MARKET` `PaperOrder`. Engine stores **no** trail/HWM/indicator state
+— pure order-fill machine.
+
+## Target kinds
+
+`PaperOrder.target_kind` distinguishes existing-position exit orders
+from pending-entry orders. `EXISTING_POSITION` is the default and
+requires an already-open `position_id`; fills call
+`PositionTracker.apply_fill`. `PENDING_ENTRY` requires `symbol`,
+`pending_position_id`, and `position_side`; fills are processed via
+`on_bar_for_pending` and call `PositionTracker.open_from_fill` to mint
+the new position.
 
 ## Fill priority — FIFO
 
@@ -64,10 +74,12 @@ on non-zero qty. **Cancelling siblings on full close is the
 ## Threading invariant
 
 Every public mutator (`submit`, `cancel`, `cancel_all_for_position`,
-`on_bar`) is `@require_tk_thread`. Tests bypass via
-`tk_thread_check_disabled()`.
+`cancel_all_pending_for_symbol`, `on_bar`, `on_bar_for_pending`) is
+`@require_tk_thread`. Tests bypass via `tk_thread_check_disabled()`.
 
 ## Stats
 
-`stats()` returns `working` (current in-flight), `submitted`,
-`filled`, `cancelled`, `rejected` (lifetime counters).
+`working_orders_for_position` returns only `EXISTING_POSITION`
+orders. `pending_orders_for_symbol` returns pending-entry orders keyed
+by uppercased symbol. `stats()` returns `working` (current in-flight),
+`submitted`, `filled`, `cancelled`, `rejected` (lifetime counters).

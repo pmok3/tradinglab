@@ -507,6 +507,13 @@ INTERVAL_PERIODS: dict = {
 
 # --- main-window pane layout -----------------------------------------------
 #
+# The golden ratio φ ≈ 1.618 and its inverse 1/φ ≈ 0.618. The defining
+# identity is 1/φ == φ - 1, so the major (0.618) and minor (0.382)
+# sections partition any length into the canonical golden split.
+GOLDEN_RATIO: float = 1.6180339887498949
+GOLDEN_RATIO_INVERSE: float = 0.6180339887498949
+
+#
 # Fraction of the main window the *chart* pane should occupy at every
 # launch. The remainder ``(1 - CHART_PANE_STARTUP_RATIO)`` goes to the
 # right-side notebook (Primary OHLC / Compare / Watchlist / Sandbox /
@@ -515,19 +522,22 @@ INTERVAL_PERIODS: dict = {
 # is carved off the left of the window first, and the remaining width
 # is split between chart and notebook in the same chart:notebook ratio.
 #
-# Why a hardcoded constant rather than a saved-sash restore: the
-# default 70% from earlier sprints left the watchlist eating ~30% on
-# wide monitors which is visually unbalanced — the user's primary
-# focus is the chart. 80% gives the chart the lion's share while
-# still leaving ~384 px (on a 1920-wide monitor) for the watchlist —
-# enough for the 6-column OHLC tree without horizontal scrolling.
+# Why the golden ratio: the chart is the user's primary focus, so it
+# claims the golden *major* section (~61.8 %) and the notebook the
+# golden *minor* (~38.2 %) — a deliberately balanced, aesthetically
+# pleasing "unboxing" split. Earlier sprints used a flat 0.80 which
+# gave the chart the lion's share but left the layout visually
+# lopsided; the golden proportion reads as more harmonious while still
+# keeping the chart dominant. On a 1920-wide monitor the notebook gets
+# ~734 px — comfortably more than the 6-column OHLC tree needs, with no
+# horizontal scrolling.
 #
 # This constant is applied at every startup (see ``app.py``
-# ``_restore_main_paned_sashes``), so the chart always opens wide
-# even if a prior session's drag left the sash in an awkward
-# position. Users who want a different split can drag the sash
+# ``_restore_main_paned_sashes``), so the chart always opens with the
+# golden split even if a prior session's drag left the sash in an
+# awkward position. Users who want a different split can drag the sash
 # during a session — it just won't persist across launches.
-CHART_PANE_STARTUP_RATIO: float = 0.80
+CHART_PANE_STARTUP_RATIO: float = GOLDEN_RATIO_INVERSE
 
 #: Width in pixels reserved for the ChartStack card column when the
 #: 3-pane layout is active. Matches ``chartstack.card_width_px`` so

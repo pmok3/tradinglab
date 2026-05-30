@@ -16,11 +16,14 @@ in its own pane; a horizontal guide at 25 marks the canonical
 - `scannable_outputs = (("adx","numeric"),("+di","numeric"),("-di","numeric"))` — exposes ADX line and DI lines to the scanner. **Pre-existing key inconsistency:** the keys `+di`/`-di` declared here do NOT match `compute()`'s output keys (`plus_di`/`minus_di`); queries for `+di`/`-di` resolve to `None` through `out.get(key)`. Preserved verbatim for back-compat with existing scanner / entries / exits FieldRef persistence; `tests/unit/gui/test_scanner_tab_rank_presets.py` pins the names. Use `plus_di`/`minus_di` if you need numeric values — those are unrouted but available on the indicator's compute output dict.
 - `compute(candles) -> {"plus_di": ndarray, "minus_di": ndarray,
   "adx": ndarray}`. Raises `ValueError` on `length < 2`.
+- `warmup_bars` property returns `4 * length` for strategy-tester
+  hydration; first finite ADX is earlier, but the chained Wilder IIR
+  continues converging after first emit.
 
 ## Dependencies
-- Internal: `..models.Candle`, `.base.LineStyle`, `.base.ParamDef`,
-  `.wilder.true_range` / `.wilder_smooth_avg` /
-  `.wilder_smooth_sum`.
+- Internal: `..core.bars.Bars`, `.base.BaseIndicator`,
+  `.base.LineStyle`, `.base.ParamDef`, `.wilder.true_range`,
+  `.wilder.wilder_smooth_avg`, `.wilder.wilder_smooth_sum`.
 - External: `numpy`.
 
 ## Design Decisions
@@ -30,7 +33,8 @@ in its own pane; a horizontal guide at 25 marks the canonical
   legs — matches Wilder 1978.
 - **Sum-form Wilder smoothing for DM and TR, average form for ADX.**
   `+DI` / `-DI` are ratios of smoothed sums, so seed-by-sum cancels
-  cleanly. ADX itself is averaged so it stays in `[0, 100]`.
+  cleanly. ADX itself is averaged so it stays in `[0, 100]`. Both
+  forms delegate to `wilder.py`'s vectorized Wilder kernels.
 - **Flat-TR continuity** — when smoothed TR collapses to 0,
   `+DI` / `-DI` emit 0 (not NaN). DX → 0 when both DI legs are 0.
 - **Reference level at 25** drawn via the class-level

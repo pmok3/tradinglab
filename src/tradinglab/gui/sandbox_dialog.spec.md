@@ -1,7 +1,7 @@
 # gui/sandbox_dialog.py — Spec
 
 ## Purpose
-Two modal `tk.Toplevel` dialogs for the sandbox subsystem: `SandboxStartDialog` (open-universe Phase 1c-redux start dialog) and `PreTradeFormDialog` (mandatory pre-trade journal form).
+Two modal `BaseModalDialog` dialogs for the sandbox subsystem: `SandboxStartDialog` (open-universe Phase 1c-redux start dialog) and `PreTradeFormDialog` (mandatory pre-trade journal form, re-exported from `gui/pre_trade_dialog.py`).
 
 ## File structure
 - `gui/sandbox_dialog.py` — owns `SandboxStartDialog` and re-exports `PreTradeFormDialog` so legacy callers (`from .sandbox_dialog import PreTradeFormDialog`, used by `gui/sandbox_panel.py`) keep working unchanged.
@@ -15,7 +15,7 @@ Two modal `tk.Toplevel` dialogs for the sandbox subsystem: `SandboxStartDialog` 
    blind, auto_cycle, eligible_dates,
    universe_id, universe_symbols, strict_offline}
   ```
-  `auto_cycle == blind` (Phase 1d UX coupling — blind random implies auto-cycle). `interval` is the *primary* tick interval (= smallest checked entry in `display_intervals`); `display_intervals` is the sorted-ascending tuple of all checked intraday timeframes (e.g. `("5m","15m","1h")`).
+  `auto_cycle == blind` (Phase 1d UX coupling — blind random implies auto-cycle). `interval` is the *primary* tick interval (= smallest checked entry in `display_intervals`); `display_intervals` is the sorted-ascending list of all checked intraday timeframes (e.g. `["5m", "15m", "1h"]`).
 
   `universe_id` is the manifest id (e.g. `"sp500"`, `"qqq"`, `"watchlist:Mega Caps"`) when the user picked a prepared universe, else `""`. `universe_symbols` is a sorted tuple of upper-case tickers (the strict-offline allow-list); empty tuple when no universe is chosen. `strict_offline` is `True` only when both a universe is chosen *and* the locked-checked checkbox is set (i.e. always `True` with a universe, always `False` without one).
 - `class PreTradeFormDialog(...)` — modal pre-trade journal form. `self.result`:
@@ -26,7 +26,7 @@ Two modal `tk.Toplevel` dialogs for the sandbox subsystem: `SandboxStartDialog` 
   Refuses Submit if `thesis` is empty or `size` non-positive.
 
 ## Dependencies
-- Internal: `..backtest.deck.draw_one_date` (for the "Random eligible date" button + blind-mode self-draw).
+- Internal: `..backtest.deck.draw_one_date` (for the "Random eligible date" button + blind-mode self-draw), `._modal_base.BaseModalDialog`, `._modal_base.protect_combobox_wheel`, `.pre_trade_dialog.PreTradeFormDialog`.
 - External: `tkinter`, `tkinter.ttk`.
 
 ## Design Decisions
@@ -43,11 +43,15 @@ Two modal `tk.Toplevel` dialogs for the sandbox subsystem: `SandboxStartDialog` 
 
 ## Invariants
 - `self.result is None` on cancel / Esc / window-close.
-- Both dialogs `grab_set` on construction and `grab_release` on close — no other window receives input while open.
+- Both dialogs finalize with the base modal grab enabled and release it on close — no other window receives input while open.
 - Start dialog payload `auto_cycle == blind` (Phase 1d coupling).
 
 ## Testing
 - Exercised through `check_g0_sandbox_replay_integration` and `check_g2_sandbox_open_universe` indirectly (controllers driven with synthetic payloads); dialog instantiation itself is not unit-tested headlessly because Tk modals can't be event-driven offscreen.
 
-## Modal keys
-`SandboxStartDialog.__init__` calls `bind_modal_keys(self, cancel=self._on_cancel, primary=self._on_start)`. ESC cancels, Return starts the sandbox session.
+## Modal keys and wheel guard
+`SandboxStartDialog.__init__` calls `protect_combobox_wheel(self)` and
+then `BaseModalDialog._finalize_modal(primary=self._on_start,
+cancel=self._on_cancel)`. ESC cancels, Return starts the sandbox
+session, and interval / universe comboboxes are guarded against
+wheel-driven value changes.

@@ -49,6 +49,7 @@ from ..scanner.model import (
 )
 from ..scanner.runner import MatchRow, ScanResult
 from ._modal_base import BaseModalDialog, protect_combobox_wheel
+from .native_theme import apply_listbox_theme, current_theme
 from .scanner_block_editor import BlockEditor
 
 LOG = logging.getLogger(__name__)
@@ -1176,6 +1177,7 @@ class _LoadScanDialog(BaseModalDialog):
             yscrollcommand=scrollbar.set, exportselection=False,
             activestyle="dotbox",
         )
+        apply_listbox_theme(self._listbox, current_theme(parent))
         scrollbar.config(command=self._listbox.yview)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self._listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)

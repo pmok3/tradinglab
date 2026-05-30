@@ -3,13 +3,35 @@
 ## Purpose
 
 In-window scrollable viewer for bundled guides (`docs/ONBOARDING.md`,
-`docs/chartstack.md`, `docs/BUILDING_EXE.md`). Replaces delegating
+`docs/chartstack.md`, the indicator info guides under
+`docs/indicators/`). Replaces delegating
 to the OS-default `.md` handler (which spawned a browser tab beside
 the chart).
 
 `DocViewerDialog` is non-modal so users can keep interacting with the
 chart while reading. Two-pane layout: doc sidebar (left), rendered
-Markdown (right).
+Markdown (right). The body is a plain `tk.Frame` (exposed as
+`self._body`) packed with the sidebar `side="left", fill="y"` and the
+text pane `side="left", fill="both", expand=True`. A `ttk.Panedwindow`
+is deliberately **not** used: it always draws a sash grip in the
+divider that (mis)suggests the panes can be dragged. With a packed
+Frame there is no sash at all, so the description (right text) pane
+width is **hard-locked by construction** and not user-resizable.
+
+The sidebar takes a fixed, content-fit width: `_sidebar_width_px()`
+measures every discovered document's display title (plus the
+`Documents` header) in the sidebar font, adds padding, and clamps the
+result to `[160, 360]` px so every headline is fully visible without
+being clipped. The width is applied via `pack_propagate(False)` on
+`self._side_frame` and re-fit in `_populate_sidebar` once the full doc
+list (including a one-shot `initial_path` doc) is known.
+
+The sidebar listbox binds `<Button-1>` to `_on_sidebar_click`, which
+returns `"break"` (suppressing the default select + navigation) when
+the click lands in the empty space below the last item. `_click_on_item(y)`
+is the testable predicate: it returns `True` only when the click `y`
+falls within a real row's `bbox`, and `False` for an empty listbox or
+below-the-last-row clicks.
 
 ## Public API
 
@@ -31,7 +53,8 @@ Markdown (right).
 - `TAG_NAMES: Tuple[str, ...]` — stable tag-name contract:
   `h1`, `h2`, `h3`, `h4`, `para`, `bullet`, `numbered`,
   `blockquote`, `code_block`, `inline_code`, `bold`, `italic`,
-  `bold_italic`, `link`, `hr`, `table_row`.
+  `bold_italic`, `link`, `hr`, `table_row`, `table_header`,
+  `table_rule`.
 
 ## Markdown subset supported
 
@@ -50,8 +73,20 @@ Hand-rolled scanner — no third-party Markdown dep:
 - **Links**: `[text](url)` → label gets `link` (themed blue +
   underline); URL gets muted-parens `link_url`.
 - **Blockquotes**: `> text` → italic, indented, muted.
-- **Tables**: lines starting with `|` → `table_row` (mono, fixed
-  width grid, no column balancing).
+- **Tables**: consecutive `|`-rows are buffered and rendered as one
+  real, width-aligned table — NOT ASCII art. The GFM `|---|`
+  separator row is consumed (never rendered). Header cells →
+  `table_header` (mono bold); body cells → `table_row` (mono); a
+  box-drawing rule (`─`/`┼`) plus `│` column dividers → `table_rule`
+  (muted). Column widths derive from the visible (inline-markup
+  stripped) cell length via `_visible_inline_len` so columns align
+  even when cells contain bold/code/links. A pipe block with no
+  separator row renders all rows as body with no header rule. The
+  `table_row` / `table_header` / `table_rule` tags set `wrap="none"`
+  so a too-narrow window clips wide tables at the right edge instead
+  of word-wrapping rows (which would spill cell text under prior
+  columns and destroy the monospace column alignment). Body prose
+  still word-wraps (per-tag `wrap` overrides the widget default).
 - **Horizontal rules**: `---` / `___` / `***` → `─` × 60 with `hr`.
 
 ## Theme integration
@@ -59,8 +94,21 @@ Hand-rolled scanner — no third-party Markdown dep:
 Theme picked at construction via `_is_parent_dark(parent)` (checks
 `parent.dark_var.get()`, then `parent._dark_mode`). `_theme_palette(dark)`
 returns bg / fg / muted / code-bg / code-fg / link / hr / sidebar
-colours. **No live repaint** on theme toggle (would lose scroll
-position); close + reopen is the path.
+(`sidebar_bg` / `sidebar_fg` / `sidebar_sel_bg` / `sidebar_sel_fg`) /
+button (`btn_bg` / `btn_fg`) colours. `btn_bg` is deliberately distinct
+from `bg` in **both** themes (light `#e1e4e8` vs white `#ffffff`; dark
+`#3a3a3a` vs `#1e1e1e`) so the action buttons never blend into the
+background. `_apply_theme()` re-detects the parent theme and repaints the
+tracked Tk chrome, sidebar, action buttons, text widget, and renderer
+tags while the viewer remains open.
+
+The two action buttons (**View on GitHub…**, **Close**) are classic
+`tk.Button`s (not `ttk.Button`) painted with explicit `btn_bg` / `btn_fg`
+and `relief="solid", borderwidth=1`, because the Windows vista `ttk`
+theme ignores `background` on `TButton` and the buttons would otherwise
+blend into the light-mode white background. They are tracked in
+`self._theme_tk_buttons` (tagged `_dv_bg_key="btn_bg"` /
+`_dv_fg_key="btn_fg"`) and repainted by `_apply_theme()`.
 
 ## Design decisions
 
@@ -74,8 +122,17 @@ position); close + reopen is the path.
   for mutating keys; preserves Ctrl+C / Ctrl+A / arrows /
   Page Up/Down / Home / End / modifier keys). Not
   `state="disabled"` (would block selection + copy).
-- **External-viewer fallback** — `Open Externally…` button uses
-  `help_menu._open_in_default_app`.
+- **View on GitHub** — the `View on GitHub…` button
+  (`_on_open_externally`) maps the locally-bundled `.md` path to its
+  canonical repo blob URL via `_github_url_for(path)` and opens it with
+  `webbrowser.open`. `_github_url_for` finds the **last** `docs` path
+  segment (robust to a source-checkout vs frozen `_MEIPASS` prefix, and
+  to an ancestor dir coincidentally named `docs`) and joins the tail
+  under `_GITHUB_DOCS_BASE = "https://github.com/pmok3/tradinglab/blob/main"`;
+  returns `None` when no `docs` segment exists. On a `None` URL or a
+  browser-launch failure it shows an info dialog with the best-known
+  target. This replaces the prior local `help_menu._open_in_default_app`
+  behavior so users always land on the up-to-date source.
 - **Geometry persistence** via `BaseModalDialog`'s
   `geometry_key="dlg.doc_viewer"` (default `900x680`).
 - **`apply_dark_theme=False`** to the base (no parent module
@@ -99,11 +156,30 @@ position); close + reopen is the path.
 `_discover_doc_files()` walks
 `tradinglab._resources.resource_path("docs")` (`<repo>/docs/` in
 dev, `<bundle>/_internal/docs/` frozen). Ordered by `_DOC_ORDER`
-(`ONBOARDING.md`, `chartstack.md`, `BUILDING_EXE.md`) then unknown
-files alphabetically (new bundled `.md` appears without a code change).
+(`ONBOARDING.md`, `WATCHLISTS.md`, `CUSTOM_INDICATORS.md`,
+`ENTRIES_EXITS.md`, `STRATEGY_TESTER.md`, `chartstack.md`) then
+unknown files alphabetically (new bundled `.md` appears without a
+code change).
 
-`_display_title_for(path)` resolves via `_DOC_TITLES` when known,
-else `path.stem.replace("_", " ").title()`.
+Files in `_HIDDEN_DOCS` are skipped during discovery so they never
+appear in the in-app viewer even when present on disk in a source-tree
+run. Currently this is `{"BUILDING_EXE.md",
+"PAINT_PIPELINE_REFACTOR.md", "SPEC_INDEX.md", "SPEC_STYLE.md"}` — the
+PyInstaller release guide, the multi-week paint-pipeline scope doc, and
+the spec-authoring references are all developer-only and live on GitHub,
+not in the shipped `.exe`. `TradingLab.spec` mirrors this denylist
+(`_docs_exclude`) so the files are also physically excluded from the
+frozen redistributable; keep the two in sync.
+
+`_display_title_for(path)` resolves the label in three steps: an
+explicit `_DOC_TITLES` override, else the document's first `# ` (H1)
+heading via `_first_h1_title(path)` (so acronym-named indicator guides
+like `ma.md`/`adx.md`/`rrvol.md` show their authored title — "Moving
+Average (MA)", "Average Directional Index", "RRVOL" — not a titleized
+filename like "Ma"), else `path.stem.replace("_", " ").title()` as a
+last resort. `_first_h1_title` scans only the leading ~50 lines, returns
+`None` on unreadable files or when a deeper heading (`## …`) precedes any
+H1.
 
 ## Wiring
 

@@ -9,7 +9,7 @@ chosen basket / watchlist and writing the resulting
 
 ## Shape
 
-- `class UniversePrepareDialog(tk.Toplevel)`.
+- `class UniversePrepareDialog(BaseModalDialog)`.
 - Constructor:
   - `app` — parent ChartApp. Toplevel parent; read-only access to
     `_full_cache` (mirrored on Tk thread) and `_watchlists`.
@@ -106,6 +106,8 @@ chosen basket / watchlist and writing the resulting
   `PreloadResult`.
 - `..preload.manifest` — `UniverseManifest`, `load`,
   `build_from_loaded`, `save`.
+- `._modal_base` — `BaseModalDialog`, `protect_combobox_wheel`.
+- `.colors.MUTED_GREY`.
 - App attrs touched: `_full_cache` (write),
   `_trim_full_cache` (call if present), `_watchlists` (read).
 
@@ -126,6 +128,8 @@ shared `_event_queue`; `_drain_events` routes to
 iterates only the matched subset; manifest carries the filter
 spec in its sidecar.
 
-`__init__` calls `bind_modal_keys(self,
-cancel=self._on_close_request, primary=self._on_start)` (ESC
-closes or cancels in-flight; Return starts).
+`__init__` calls `protect_combobox_wheel(self)` and then
+`BaseModalDialog._finalize_modal(cancel=self._on_close_request,
+primary=self._on_start)`. ESC closes or cancels in-flight, Return
+starts, and the watchlist / interval / filter spinbox widgets are
+guarded against wheel-driven value changes.

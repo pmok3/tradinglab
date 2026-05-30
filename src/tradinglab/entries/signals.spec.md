@@ -49,6 +49,7 @@ class EntrySignalSink(Protocol):
     def cancel(self, order_id) -> bool
     def cancel_all_pending_for_symbol(self, symbol) -> int
     def working_order_ids_for_pending_position(self, pending_position_id) -> List[str]
+    # concrete sinks also expose working_order_ids_for_symbol(symbol) -> List[str]
 
 class EntryPaperSink:
     """Translates EntrySignal → PaperOrder(target_kind=PENDING_ENTRY)."""
@@ -77,7 +78,7 @@ class EntryManualSink:
 - **No `position_id` on `EntrySignal`** — position doesn't exist yet. `pending_position_id` is the *future* id minted by the evaluator before submission; `open_from_fill` uses it on fill so the audit chain (signal → order → fill → position) correlates deterministically.
 - **`symbol` is required** — no position_id to infer from.
 - **`position_side` disambiguates** `OrderSide` — `BUY` means *open long*, not *cover short*.
-- **`on_fill_exit_ids` propagates to the `PaperOrder`** so the engine knows which exit strategies to attach on fill.
+- **`on_fill_exit_ids` propagates to the `PaperOrder`** so the pending fill metadata carries which exit strategies the upstream evaluator should attach on fill.
 - **`EntryManualSink` is Tk-free** — subscribers marshal onto Tk before drawing.
 - **`EntryPaperSink.on_fill(order_id)`** drops the id from local indexes so `cancel_all_pending_for_symbol` doesn't hit a filled order. Idempotent.
 

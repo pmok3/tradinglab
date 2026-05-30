@@ -5,10 +5,10 @@ Render-side bridge between the pure-compute indicator stack ([`base`](base.spec.
 
 ## Public API
 - `factory_by_kind_id(kind_id)` — convenience wrapper around `base.factory_by_kind_id` returning just the factory class (or `None`).
-- `compute_layout(...)` — figure out which configs produce overlays vs non-overlay lower panes for a given slot.
+- `compute_layout(num_lower_panes, fig_height_in, dpi=100.0) -> (height_ratios, can_add_more)` — size the price / volume / indicator pane stack.
 - `class PanelIndicatorState` — dataclass: per-slot artist registry the app walks during blit / theme swap.
-- `applicable_overlay_configs(manager, scope) -> list[IndicatorConfig]` and `applicable_non_overlay_configs(...)` — filter the manager's configs for a slot's scope.
-- `render_for_slot(...)` — top-level call from `_render`: runs compute → builds artists on price + lower axes → returns a `PanelIndicatorState`.
+- `applicable_overlay_configs(manager, scope, interval) -> list[IndicatorConfig]`, `applicable_non_overlay_configs(manager, scope, interval) -> list[IndicatorConfig]`, and `applicable_pane_groups(manager, scope, interval) -> list[list[IndicatorConfig]]` — filter and group the manager's configs for a slot.
+- `render_for_slot(...) -> None` — top-level call from `_render`: runs compute and mutates the supplied `PanelIndicatorState` with artists on price + lower axes.
 - `autoscale_pane_y(ax_lower, lines, lo, hi)` — Y-autoscale a non-overlay pane to its visible window. Reads `_sc_y_data` off non-Line2D artists (e.g. histogram `LineCollection`) so they participate in autoscale the same way `Line2D.get_ydata()` does for line outputs.
 - `_draw_histogram(...)` — private helper that materialises a 4-color histogram `LineCollection` for an indicator output declared with `output_kinds[key] == "histogram"`. Diff path supports `set_segments` + `set_colors` for in-place updates so streaming ticks don't reallocate the collection.
 
@@ -18,8 +18,8 @@ Render-side bridge between the pure-compute indicator stack ([`base`](base.spec.
 
 ## Design Decisions
 - **Tk-thread / matplotlib-coupled by design**. Pure compute (NaN-correct, no Tk imports) lives in the `base` / kind-specific modules. Render is the only place where artists are created.
-- **Gap-aware via `gap_mask`**: when a slot's candles list has been gap-padded for compare-mode alignment, the helper computes on the **non-gap subset** and NaN-pads the result back to the full length so x positions line up with the rendered candles. Without this, indicators would visibly drift across compare gaps.
-- **Style resolution**: `_resolve_style(cfg, output_key)` reads a config's per-output style (e.g. RSI's `rsi`/`upper`/`lower` lines, Bollinger's `mid`/`upper`/`lower`). Falls back to factory defaults when the config doesn't override.
+- **Gap-aware via `gap_mask`**: when a slot's candles list has been gap-padded for compare-mode alignment, the helper computes on the **non-gap subset** and NaN-pads the result back to the full length so x positions line up with the rendered candles. Without this, indicators would visibly drift across compare gaps. The non-gap path uses `compute_via_bars` so `BaseIndicator` / `compute_arr` indicators share the same fast-path contract.
+- **Style resolution**: `_resolve_style(cfg, output_key)` reads a config's per-output style (e.g. RSI's `rsi` line, Bollinger's `middle`/`upper`/`lower`). Falls back to factory defaults when the config doesn't override.
 - **Wraps `base.factory_by_kind_id`'s `(display_name, factory)` tuple shape**: the `(name, factory)` tuple is right for menu/dialog code; render only needs the class. `_safe_remove_line` swallows `ValueError` because matplotlib raises when an artist has already been detached (theme swap + clear race).
 - **`PanelIndicatorState` is the contract surface for fast paths**: blit code walks the state's `Line2D` lists with `set_animated(True)` so pan / zoom / streaming-tick redraws don't trigger a full figure rebuild.
 - **Overlay zorder follows manager-list position (b43)**: each overlay's `Line2D` is created (or restamped via `set_zorder`) with `zorder = 4 + 0.01 * i`, where `i` is the config's index in `applicable_overlay_configs(...)`. This makes `IndicatorManager.reorder` actually reflow the visual stacking of overlapping overlay lines on the price axis. A pure constant `zorder=4` left late-added lines stranded on top because matplotlib's `axes.lines` insertion order — not the config order — was deciding the draw order, and we deliberately reuse `Line2D` artists across renders (keyed by `cfg.id`) to keep blit fast. Lower-pane order naturally tracks manager order via the figure-level gridspec rebuild on `_render`, so no equivalent zorder trick is needed for panes.
@@ -34,4 +34,4 @@ Render-side bridge between the pure-compute indicator stack ([`base`](base.spec.
 ## Invariants
 - Compute output is the same length as the input candles list (NaN-padded across gaps).
 - `render_for_slot` never raises on an unknown `kind_id` — unknown configs are skipped silently (the indicator dialog already presents them as "Unknown indicator (…)" read-only rows).
-- Artists created here are owned by the returned `PanelIndicatorState`; the caller is responsible for `set_animated` and removal on full rebuild.
+- Artists created here are owned by the supplied `PanelIndicatorState`; the caller is responsible for `set_animated` and removal on full rebuild.

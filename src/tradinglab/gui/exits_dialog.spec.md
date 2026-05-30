@@ -51,6 +51,10 @@ written to disk until Save, so cancel needs no explicit revert.
 button is wired to `_on_cancel` so ESC, the X, and the button
 all share one path.
 
+## Native-widget theming
+
+The Library pane uses a classic `tk.Listbox`, so construction explicitly applies the active theme via `gui.native_theme`: `tree_bg` / `tree_fg` for rows, `spine` for selection and focus ring, and no native border. `tests/unit/gui/test_native_widget_dark_theme.py` pins the dark-mode colors.
+
 ## Combobox-wheel guard (CLAUDE.md §7.11)
 
 ``protect_combobox_wheel(self, scroll_target=self._legs_canvas)``

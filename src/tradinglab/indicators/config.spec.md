@@ -19,7 +19,8 @@ observer callbacks on every mutation.
     persisted; legacy configs default to "" and the factory-level
     value applies.
   - `applies_to(scope, interval) -> bool` — visibility + scope +
-    interval filter (empty `intervals` = all).
+    interval filter (empty `intervals` = all) + params-aware factory
+    availability via `factory_is_available_for`.
   - `make_indicator()` — instantiate from `kind_id` + `params`.
     Returns `None` for unknown placeholders. Raises `KeyError` if the
     kind disappears between hydrate and call.
@@ -30,7 +31,7 @@ observer callbacks on every mutation.
   2. `cfg.pane_group` — the persisted value.
   3. `factory.pane_group` class attribute (legacy fallback).
 - `SCOPES = ("main", "compare", "drilldown")`,
-  `DEFAULT_SCOPES = frozenset({"main"})`.
+  `DEFAULT_SCOPES = frozenset({"main", "drilldown"})`.
 - `IndicatorManager(scheduler=None)` — `add / remove / update / list /
   get / clear / reorder(config_id, new_index) / applicable(scope,
   interval) / save_preset / set_preset / delete_preset / list_presets
@@ -46,8 +47,9 @@ observer callbacks on every mutation.
     (typically `Tk.after_idle`) used to coalesce redraws.
 
 ## Dependencies
-- Internal: `.base` (registry + `LineStyle`, `factory_by_kind_id`),
-  `..core.thread_guard` (`require_tk_thread`).
+- Internal: `.base` (registry + `LineStyle`, `factory_by_kind_id`,
+  `factory_is_available_for`), `..core.thread_guard`
+  (`require_tk_thread`).
 - External: `dataclasses`, `copy`, `itertools`, `threading`.
 
 ## Design Decisions
@@ -85,7 +87,7 @@ observer callbacks on every mutation.
   `reorder` / `preset_saved` / `preset_deleted` / `preset_loaded` /
   `loaded` / `redraw`.
 - `applies_to(scope, interval)` is False for unknown / invisible /
-  out-of-scope / out-of-interval configs.
+  out-of-scope / out-of-interval / factory-unavailable configs.
 - `to_dict() → from_dict()` round-trips all persisted fields.
 - After `load_dict(d)` returns, state is fully replaced atomically;
   on parser error the prior state is preserved and a warning is
@@ -93,8 +95,5 @@ observer callbacks on every mutation.
 - Subscriber removal during notify never raises.
 
 ## Known limitations
-- The `"drilldown"` scope is registered but never rendered by the
-  app today — configs scoped only to `drilldown` silently never
-  appear.
 - No per-indicator `migrate(params, from_version)` hook — will be
   added when `kind_version` first changes for a built-in.

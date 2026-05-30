@@ -76,6 +76,7 @@ from .exits_dialog_widgets import (  # noqa: E402
     _LegFrame,
     _OCOGroupRow,
 )
+from .native_theme import apply_listbox_theme, current_theme  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Singleton entry point
@@ -303,6 +304,7 @@ class ExitsDialog(BaseModalDialog):
 
         ttk.Label(lib, text="Strategies", font=("", 10, "bold")).pack(anchor="w")
         self._library_lb = tk.Listbox(lib, exportselection=False, height=20, width=28)
+        apply_listbox_theme(self._library_lb, current_theme(self.master))
         self._library_lb.pack(fill="both", expand=True, padx=2, pady=(4, 4))
         self._library_lb.bind("<<ListboxSelect>>", self._on_library_select)
 

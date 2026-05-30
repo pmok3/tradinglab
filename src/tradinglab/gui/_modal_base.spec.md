@@ -4,7 +4,8 @@
 
 Collapses repeating modal-Toplevel boilerplate (transient + grab_set
 + geometry restore + ESC/Return bindings + footer pack order) into
-two opt-in base classes.
+two opt-in base classes, plus shared combobox-wheel and scrollable-form
+helpers.
 
 ## Public API
 
@@ -52,13 +53,36 @@ two opt-in base classes.
   persisted on Save. Regression test:
   `tests/unit/gui/test_combobox_wheel_guard.py`.
 
+- `make_scrollable_form(parent, *, horizontal=False,
+  bind_mousewheel=True) -> tuple[ttk.Frame, tk.Canvas]` — builds a
+  `Canvas` + scrollbar(s) + inner `ttk.Frame` form skeleton. The
+  returned canvas is the intended `scroll_target` for
+  `protect_combobox_wheel`. When `bind_mousewheel=True`, canvas
+  enter/leave installs and removes global wheel bindings, with an
+  inner-frame destroy backstop so the binding does not leak after
+  dialog close.
+  - **No-scroll-when-fitting guard.** The wheel handlers consult an
+    internal `_v_can_scroll()` predicate that returns `True` only when
+    the form content overflows the viewport (`canvas.yview()` is not
+    `(0.0, 1.0)`). When the content fully fits — e.g. a single-parameter
+    indicator form like LRSI's lone `gamma` — wheel / `<Button-4>` /
+    `<Button-5>` events become no-ops (still returning `"break"`). This
+    suppresses Tk's canvas quirk where `yview_scroll` shifts the view
+    even when the scrollregion is smaller than the canvas, which
+    previously let users drag a lone widget around. Because every
+    indicator param popup and the four other dialog callers share this
+    helper, the fix is the single templated contract for all of them.
+    The handler and predicate are exposed as `canvas._tl_wheel_handler`
+    and `canvas._tl_v_can_scroll` for headless tests
+    (`tests/unit/gui/test_field_ref_param_dialog.py`).
+
 ## Dependencies
 
 - Internal: `._modal_keys.bind_modal_keys`,
   `.geometry_store.store`, `.colors.ERROR_RED` /
   `.colors.MUTED_GREY` / `.colors.SUCCESS_GREEN` (last with
   `ImportError` fallback).
-- External: `tkinter`, `tkinter.ttk`.
+- External: `tkinter`, `tkinter.ttk`, `typing.Any`.
 
 ## Design Decisions
 
@@ -69,8 +93,8 @@ two opt-in base classes.
   (`grab_set` must follow `transient`).
 - **Geometry key opt-in (`None` = no persistence)**: trivial
   confirm dialogs skip; complex editors pass `"dlg.entries"` etc.
-- **`grab=True` default**; non-modal editors (Indicator,
-  Theme Editor) override to `grab=False`.
+- **`grab=True` default**; non-modal viewers / editors (Doc Viewer,
+  Drawing, Indicator) override to `grab=False`.
 - **Dark-theme propagation opt-in via parent hook**: silently
   no-ops if `parent.apply_dark_theme_to(top)` is absent.
 - **Footer pack-from-right**: `side="right"` reverses visual

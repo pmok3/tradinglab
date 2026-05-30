@@ -568,8 +568,25 @@ def make_scrollable_form(
     canvas.bind("<Configure>", _on_canvas_configure)
 
     if bind_mousewheel:
+        def _v_can_scroll() -> bool:
+            """True only when the form content overflows the viewport.
+
+            Guards against Tk's canvas quirk where ``yview_scroll`` still
+            shifts the view when the scrollregion is *smaller* than the
+            canvas (e.g. a single-parameter indicator form). When the
+            content fully fits, ``yview`` reports ``(0.0, 1.0)`` and we
+            refuse to scroll so the lone widget can't be dragged around.
+            """
+            try:
+                first, last = canvas.yview()
+            except (tk.TclError, ValueError):
+                return False
+            return not (float(first) <= 0.0 and float(last) >= 1.0)
+
         def _on_wheel(e: tk.Event) -> str:
             try:
+                if not _v_can_scroll():
+                    return "break"
                 delta = int(getattr(e, "delta", 0))
                 if delta:
                     canvas.yview_scroll(int(-1 * (delta / 120)), "units")
@@ -579,17 +596,24 @@ def make_scrollable_form(
 
         def _on_button4(_e: tk.Event) -> str:
             try:
-                canvas.yview_scroll(-1, "units")
+                if _v_can_scroll():
+                    canvas.yview_scroll(-1, "units")
             except tk.TclError:
                 pass
             return "break"
 
         def _on_button5(_e: tk.Event) -> str:
             try:
-                canvas.yview_scroll(1, "units")
+                if _v_can_scroll():
+                    canvas.yview_scroll(1, "units")
             except tk.TclError:
                 pass
             return "break"
+
+        # Exposed for headless tests to assert the no-scroll-when-fitting
+        # contract without synthesizing real wheel events.
+        canvas._tl_wheel_handler = _on_wheel  # type: ignore[attr-defined]
+        canvas._tl_v_can_scroll = _v_can_scroll  # type: ignore[attr-defined]
 
         def _install_wheel(_e: Any = None) -> None:
             try:

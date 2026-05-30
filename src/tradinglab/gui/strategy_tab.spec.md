@@ -122,7 +122,10 @@ root in smoke tests). The popup wrapper + menubar wiring live in
   (``_on_export_progress``) stores the latest tick into
   ``self._export_latest_progress`` and the Tk-main-thread poller
   (``_on_export_poll``, 100 ms cadence) paints the progress bar +
-  status label. The status label reads
+  status label. The shared ``ttk.Progressbar`` starts in
+  ``mode="indeterminate"`` while the export is in flight, flips to
+  determinate on the first progress tick, and returns to determinate
+  on completion. The status label reads
   ``"Exporting <kind>… (current/total: label)"``.
 - **No cross-thread ``self.after``.** We deliberately don't call
   ``self.after(0, ...)`` from the export thread. ``tkinter.Misc.after``
@@ -167,8 +170,8 @@ root in smoke tests). The popup wrapper + menubar wiring live in
   and, on completion, loads the aggregate via
   ``report.load_aggregate(run_dir)`` and re-renders the Report pane.
 - Status transitions: ``Ready`` → ``Run starting…`` → ``Running… N/M
-  symbols`` → ``Done. N symbols, K trades.`` (or ``Stopped.
-  Partial: …`` on cancel).
+  symbols`` → ``Done. N symbols, K trades.`` (or ``Stopped. Partial
+  results: N/M symbols.`` on cancel).
 - **Stop** → ``self._token.cancel()``; the worker finishes the
   in-flight symbol and writes a CANCELLED manifest. The aggregate /
   CSV are still generated (PR 3 integration), so the partial Report

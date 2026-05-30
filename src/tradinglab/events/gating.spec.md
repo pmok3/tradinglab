@@ -9,7 +9,7 @@ Pure (no Tk/mpl) sandbox gating layer for events. Mirrors `SandboxController.dai
 - `events_visible_for(bundle, clock_ts, *, blind, forward_window_days=30) -> EventsView`.
 
 ## Dependencies
-Internal: `.base`. External: `math`, `bisect`, `dataclasses`, `typing`.
+Internal: `.base`. External: `math`, `bisect`, `dataclasses`.
 
 ## Design Decisions
 - **`clock_ts` is in milliseconds**, matching `EarningsRecord.ts` / `DividendRecord.ex_ts`. Engine clock is seconds — caller converts at boundary.

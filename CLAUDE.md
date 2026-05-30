@@ -1517,6 +1517,157 @@ accumulated state. The per-feature smoke gate (140 tests across
 `test_smoke_<feature>.py` files) is the canonical pre-push gate;
 the mega-test is best-effort coverage.
 
+### 7.27 Indicator IIR hot-paths are vectorized — keep the kernels canonical
+
+Several recurrence-based indicators historically computed their core
+series in a per-bar Python `for` loop. Those hot paths are now
+**pure-numpy vectorized kernels** living in
+`src/tradinglab/indicators/_iir.py` (commit `2b41c5a`). The migrated
+indicators delegate to these shared kernels:
+
+- **`smi.py`** (Stochastic Momentum Index) — double-EMA smoothing of
+  the raw SMI numerator/denominator.
+- **`macd.py`** — EMA(fast) − EMA(slow), then EMA(signal) of the macd
+  line (signal-of-macd chaining).
+- **`lrsi.py`** (Laguerre RSI) — the 4-stage Laguerre filter cascade
+  (`L0..L3` gamma recurrence).
+- **`chandelier.py`** / `core/chandelier_math.py` — Wilder-ATR via the
+  shared kernel (the rolling HH/LL ratchets stay separate; see §7.28).
+- **`keltner.py`** — EMA basis + ATR band offset.
+
+**The kernels in `_iir.py` are the single source of truth.** When you
+touch any of these indicators, do NOT re-introduce a Python bar loop —
+extend or call the kernel. Wilder-family EMA (`alpha = 1/n`) lives in
+`wilder.py` / `_iir.py`; standard EMA (`alpha = 2/(n+1)`) and the SMA/WMA/
+RMA family in `ma_kernels.py`.
+
+**Equivalence is pinned bit-for-bit.** 184 equivalence tests assert the
+vectorized output matches the prior scalar reference across edge cases
+(warmup NaNs, single-bar input, all-equal bars, gaps). If you modify a
+kernel, those tests MUST stay green — they are the regression wall that
+lets us trust the numpy rewrite produces identical journal/screenshot
+values to the old loops. Tests live alongside each indicator's existing
+test file plus `tests/unit/indicators/test_iir_*` equivalence suites.
+
+**`BaseIndicator.compute()` shim:** the canonical `compute()` method is
+owned by the `BaseIndicator` mixin (commit `e4cdf05`) — individual
+indicators implement `compute_arr` (numpy in → numpy out) and inherit
+the `compute()` Candle-list adapter. Don't re-implement `compute()`
+per-indicator. Palette/color constants are centralized in the `_palette`
+module (commit `104aa63`, tab10 hex codes deduped) — don't hardcode
+chart colors in an indicator.
+
+### 7.28 Monotonic queue/stack does NOT help these indicators
+
+A natural "make it faster" instinct is to reach for a monotonic deque
+for the rolling-extrema work (chandelier `rolling_highest_high_since` /
+`rolling_lowest_low_since` in `core/chandelier_math.py`, and the DSL
+`highest` / `lowest` in `indicators/expression.py`). **Don't — it's a
+net loss at this app's scale.** Analysis (no code change shipped):
+
+- Monotonic deque only applies to **sliding-window extrema**, NOT to the
+  recurrence-based hot indicators (EMA/RSI/ATR/MACD/SMI/Laguerre). Those
+  have a true data dependency `y[i] = f(y[i-1], x[i])` — no monotonic
+  structure exists to exploit.
+- For the extrema windows that *could* use it, the existing vectorized
+  numpy `O(n·L)` beats a pure-Python deque `O(n)` because window sizes
+  are tiny (~20 bars). Python interpreter per-element overhead dominates;
+  the deque only wins when `L ≳ 100–200`, which these indicators never hit.
+- **If extrema ever DO become a hot path** (e.g. multi-year 1m with very
+  long lookbacks), reach for `scipy.ndimage.maximum_filter1d` /
+  `minimum_filter1d` — C-level `O(n)` sliding-window extrema — NOT a
+  hand-rolled Python deque. scipy is already a transitive dependency.
+
+### 7.29 Time-of-day RRVOL = RRVOL(mode="time_of_day")
+
+Reference for the relative-relative-volume "time of day" mode (it comes
+up in user questions):
+
+- `indicators/rrvol.py:_compute_rrvol_arr` divides the **primary**
+  symbol's RVOL by the **compare** symbol's RVOL (compare defaults to
+  `SPY`), elementwise per bar.
+- Both legs are computed by `indicators/rvol.py:_dispatch_compute`
+  with the SAME `mode`. For `mode="time_of_day"`,
+  `rvol.py:_compute_time_of_day` keys each bar's volume by its
+  **HH:MM wall-clock slot** (ET) and averages that slot across the prior
+  `length` sessions — so 09:35 today is compared to the average of prior
+  sessions' 09:35 bars, not a trailing N-bar window.
+- The OTHER rvol mode is `"cumulative"` (session-cumulative volume vs the
+  prior-sessions average cumulative-at-this-point). `mode` round-trips in
+  the indicator params.
+- Warmup: RRVOL needs `length` full prior sessions hydrated on BOTH the
+  primary and the compare symbol before it is finite — the strategy-tester
+  warmup walker (§7.16) sizes this via `warmup_bars_for_kind`, and the
+  compare-symbol leg pulls from the cross-symbol `BarsRegistry` (§7.18).
+
+### 7.30 Spec-drift audit methodology (when asked to "update the specs")
+
+The HARD RULE (§2) is one `.spec.md` per `.py`, updated in the same change
+as behavior. To audit the whole tree for accumulated drift:
+
+1. **Structural completeness** — every non-`__init__` `.py` under
+   `src/tradinglab/` must have a sibling `.spec.md`; no orphan specs.
+   Walk the tree and diff the two file sets.
+2. **Content drift heuristic** — compare git last-commit timestamps:
+   any module whose `.py` was committed AFTER its `.spec.md` is a
+   *candidate* for drift. This is **noisy** — it flags pure-formatting /
+   ruff-autofix / import-sort commits too. Treat the count as an upper
+   bound, not a worklist.
+3. **Root-cause to refactor commits** — genuine drift concentrates in
+   cross-cutting refactors that touched many files without spec updates.
+   In this codebase the usual suspects are the consolidation commits:
+   `_palette` centralization (`104aa63`), `BaseIndicator.compute()` shim
+   (`e4cdf05`), `BaseModalDialog` migration (`2e0eace`),
+   `read_json`/`read_jsonl` + `JsonObjectStore` migrations (`df61a26`).
+4. **Fan out, surgically** — dispatch parallel `general-purpose` audit
+   agents grouped by subsystem (gui / indicators / backtest+data /
+   core+events+streaming / exits+entries+scanner+misc). Each agent reads
+   `.py` + `.spec.md`, fixes ONLY factual inaccuracies / removed behavior /
+   undocumented shipped features, and reports a per-file `UPDATED:`/`OK`
+   verdict. Forbid stylistic rewrites — most flagged files come back `OK`.
+
+Specs are markdown — there is no lint/build/test gate for them; quality
+comes from the surgical-edit discipline above, not from CI.
+
+### 7.31 Classic Tk widgets need explicit dark theming — use `gui/native_theme.py`
+
+The global `ThemeController` only sweeps **ttk** widgets via `ttk.Style`.
+Classic Tk widgets — `tk.Listbox`, `tk.Text`, `tk.Canvas` — are NOT
+reached by that sweep and stay **bright white in dark mode**. This was
+the "Saved indicators panel is blinding in dark mode" bug. Every dialog
+that embeds a classic Tk widget must theme it explicitly.
+
+**The single source of truth is `src/tradinglab/gui/native_theme.py`:**
+
+- `current_theme(owner)` — resolves the active theme dict. Reads
+  `owner._theme_ctrl.theme` (real app); falls back to
+  `resolve_theme("dark"|"light", None)` from `..constants` based on
+  `owner.dark_var` / `owner._dark_mode`; final fallback `LIGHT_THEME`.
+- `apply_listbox_theme(widget, theme)` — `tk.Listbox` (bg/fg/select
+  colors/highlight/flat border).
+- `apply_text_theme(widget, theme)` — `tk.Text` (adds `insertbackground`
+  for the caret).
+- `apply_canvas_theme(widget, theme)` — `tk.Canvas` (window background).
+
+**Convention for a new/edited dialog with a classic Tk widget:** at the
+end of `__init__`/layout, resolve `theme = current_theme(self)` and call
+the matching `apply_*_theme(widget, theme)`. If the dialog is non-modal
+(live theme toggling possible), also register a `winfo_exists`-guarded
+`ThemeController.on_change` callback to re-apply. Pin it with a case in
+`tests/unit/gui/test_native_widget_dark_theme.py`.
+
+**Migrated dialogs (commit set this sprint):** `dialogs.py`,
+`exits_dialog.py`, `sandbox_panel.py`, `sandbox_review_dialog.py`,
+`scanner_tab.py`, `pre_trade_dialog.py`, `color_palette.py`.
+
+**Exception — `custom_indicator_dialog.py` keeps its OWN inline
+`_apply_native_theme` / `_current_theme`** (it does extra work the shared
+helper doesn't: status/cheatsheet labels + preview matplotlib figure
+facecolor). Both coexist; that's intentional and tested
+(`tests/unit/gui/test_custom_indicator_dialog.py`). Don't "DRY it up" by
+force-fitting it onto the shared helper — you'd drop the figure-facecolor
+re-theme.
+
 ---
 
 ## 8. Build & release flow
@@ -1623,8 +1774,10 @@ These files are **never** committed to git. Use them for working memory.
 | Data source registry + `internal` flag | `src/tradinglab/data/base.py` (see §7.25 — `register_source(..., internal=True)`, `user_visible_sources()`) |
 | Polling / next-bar tick | `src/tradinglab/gui/polling.py` |
 | Dialogs (Settings, Watchlist, Credentials) | `src/tradinglab/gui/dialogs.py`, `gui/credentials_dialog.py`, `gui/watchlist_dialog.py` |
+| Classic Tk dark-theme helpers | `src/tradinglab/gui/native_theme.py` (`current_theme`, `apply_listbox_theme`, `apply_text_theme`, `apply_canvas_theme`); see §7.31 |
 | Menus | `src/tradinglab/gui/help_menu.py`, `gui/file_menu.py`, etc. |
 | Indicators | `src/tradinglab/indicators/` (one file per indicator + tests) |
+| Vectorized IIR kernels | `src/tradinglab/indicators/_iir.py` (+ `ma_kernels.py`, `wilder.py`); see §7.27 |
 | Sandbox bar-replay | `src/tradinglab/simulation/` |
 | Scanner | `src/tradinglab/scanner/` (`fields.py`, `tab.py`) |
 | Synthetic test events | `src/tradinglab/events/synthetic_events.py` |
@@ -1685,12 +1838,29 @@ guessing — recent checkpoints include:
 - Internal data sources hidden from UI: synthetic / synthetic-stream
   filtered from toolbar + Settings dropdown via
   `register_source(internal=True)` (commit `9fb2c96`, see §7.25)
+- Indicator IIR hot-path vectorization (commit `2b41c5a`, see §7.27):
+  smi / macd / lrsi / chandelier / keltner per-bar loops replaced by
+  pure-numpy kernels in `indicators/_iir.py`; 184 equivalence tests
+  pin bit-for-bit parity with the prior scalar reference. Monotonic
+  queue/stack was evaluated and rejected for this stack (§7.28).
+- Codebase-wide `.spec.md` drift audit: structural completeness +
+  git-timestamp drift heuristic + parallel per-subsystem audit agents
+  (methodology in §7.30). Most files came back accurate; surgical fixes
+  applied where refactors (`_palette`, `BaseIndicator.compute()`,
+  `BaseModalDialog`, `read_json`/`JsonObjectStore`) had outrun their specs.
+- Dark-mode native-widget theming: classic `tk.Listbox`/`tk.Text`/
+  `tk.Canvas` widgets (not reached by the ttk `ThemeController` sweep)
+  now themed via shared `gui/native_theme.py` helpers across 7 dialogs +
+  the Custom Indicator Builder (own inline themer); pinned by
+  `tests/unit/gui/test_native_widget_dark_theme.py` (see §7.31).
 
 ---
 
-*Last updated: 2026-05-28. If you change the build/test/release flow,
+*Last updated: 2026-05-29. If you change the build/test/release flow,
 update §3 / §4 / §8 in the same PR. Strategy Tester landmines are in
-§7.7–§7.10 — read those before touching `strategy_tester/`. App.py
+§7.7–§7.10 — read those before touching `strategy_tester/`. Indicator
+hot-path / kernel conventions are in §7.27–§7.28. Dark-mode native-widget
+theming convention is in §7.31. App.py
 mixin extraction conventions are in §7.24; if you extract a new mixin,
 also update the §2 layout tree, the §11 cheatsheet, the §12 prior
 context, and add a colocated `.spec.md`.*

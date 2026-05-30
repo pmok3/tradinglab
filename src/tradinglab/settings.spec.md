@@ -23,7 +23,8 @@ ever auto-created in `%LOCALAPPDATA%`).
 
 ## Dependencies
 
-- External: `json`, `pathlib`. **No** dependency on `disk_cache` anymore.
+- Internal: `core.io_helpers.atomic_write_json`, `core.io_helpers.read_json`.
+- External: `pathlib`, `logging`. **No** dependency on `disk_cache` anymore.
 
 ## Design notes
 

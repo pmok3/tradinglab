@@ -60,11 +60,13 @@ pre-sandbox app-state snapshot restored on `end_session`.
 - **Full-session xlim pre-allocation**: mechanics live in `app.spec.md`; `replay.py` computes `full_display_length_for(symbol)` and passes it to `app._install_sandbox_primary_series(..., full_session_length=...)`.
 - **Compare slot refreshed every tick**: when `compare_var` on, `next_bar` notifies the focused-symbol cache AND the compare-symbol cache (via `_notify_focused_panels_appended(compare_visible)`, falling back to `_invalidate_focused_panels` for older apps) and calls `_refresh_view_after_append("compare")` after primary. Append-aware notification preserves the indicator cache so `IndicatorCache.get_or_compute_incremental` can extend cached arrays in O(k).
 - **App boundary is narrow**: controller never reads / writes `app._series_cache` or `app._indicator_manager.cache` directly — uses `_install_sandbox_primary_series`, `_notify_focused_panels_appended` (pure-append) / `_invalidate_focused_panels` (forming-bar / fallback), `_draw_slice`, `_render`, `_capture_chart_png`.
-- **Per-tick app callbacks** (`next_bar`): after `panel.refresh()`, invokes two optional Tk hooks via `getattr(self.app, name, None)`:
+- **Per-tick app callbacks** (`next_bar`): after `panel.refresh()`, invokes optional Tk hooks via `getattr(self.app, name, None)`:
   - `_refresh_watchlist_for_sandbox()`
   - `_refresh_scanner_for_sandbox()` — runs every saved scan against `visible_candles_by_symbol`; see [`app.spec.md`](../app.spec.md) §"Scanner tab integration".
+  - `_refresh_entries_for_sandbox()`
+  - `_refresh_exits_for_sandbox()`
 
-  Both no-op in headless tests. Ordering: watchlist before scanner (scanner's `"watchlist"` row-action assumes watchlist sub-tab is up-to-date). Either raising **must not** block the tick — wrapped in narrow try/except.
+  All no-op in headless tests. Ordering: watchlist before scanner, then entries before exits. Scanner's `"watchlist"` row-action assumes the watchlist sub-tab is up-to-date; exits may rely on entry-side fills from the same tick. Any callback raising **must not** block the tick — wrapped in narrow try/except.
 - **M5 ChartStack lockstep fan-out**: `_card_subscribers` is a flat `List[Callable[[], None]]`. `register_card_subscriber` appends + returns an idempotent removal closure. `_fire_card_subscribers` runs at the *end* of `next_bar` (after `_refresh_*_for_sandbox`, after all engine + visible-list mutation) and one final time at the start of `end_session` (before `memento.restore`, with `self.active = False` so subscribers can detach cleanly). Iterates a `list(...)` snapshot. Each call wrapped in swallowing try/except. Subscribers receive no arguments — they read `visible_candles_by_symbol` directly. List fully cleared after the `end_session` final fire.
 
 ### display_intervals contract

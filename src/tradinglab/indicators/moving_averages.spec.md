@@ -8,11 +8,14 @@ dispatcher:
    (`"Moving Average"`). Dropdown picks SMA / EMA / WMA / RMA and the
    source field (Close / Open / High / Low / HL2 / HLC3 / OHLC4).
 2. `SMA` — legacy single-type class kept for direct imports
-   (`kind_id="sma"`). No longer registered; `factory_by_kind_id("sma")`
-   returns `None`. Persisted configs with `kind_id="sma"` migrate to
+   (`kind_id="sma"`). Hidden from the Add menu but registered via
+   `register_legacy_indicator`, so `factory_by_kind_id("sma")` still
+   returns the legacy factory for scanner FieldRefs and direct in-memory
+   configs. Persisted chart configs with `kind_id="sma"` migrate to
    `kind_id="ma"` with `ma_type="SMA"` via
    `indicators.base.migrate_kind_id`.
-3. `EMA` — same story (`kind_id="ema"` → `ma` + `ma_type="EMA"`).
+3. `EMA` — same story (`kind_id="ema"` → `ma` + `ma_type="EMA"` for
+   chart configs; legacy factory remains discoverable by kind id).
 
 ## Public API
 

@@ -35,6 +35,8 @@ from __future__ import annotations
 
 import builtins as _builtins
 import hashlib
+import os
+import tempfile
 import traceback
 from pathlib import Path
 from typing import NamedTuple
@@ -75,6 +77,117 @@ BUILDER_HEADER_MARKER = "# tradinglab-custom-indicator"
 def _is_builder_file(source: str) -> bool:
     """True if ``source`` carries the builder header marker."""
     return BUILDER_HEADER_MARKER in source[:512]
+
+
+def is_builder_file(source: str) -> bool:
+    """Public predicate: does ``source`` carry the builder header marker?
+
+    Thin public alias of :func:`_is_builder_file` for callers outside the
+    loader (e.g. the Custom Indicator Builder dialog's Import flow, which
+    uses it to decide whether an external file is a trusted builder file
+    or arbitrary hand-authored Python requiring a confirmation prompt).
+    """
+    return _is_builder_file(source)
+
+
+def _atomic_write_text(target: Path, text: str) -> None:
+    """Write ``text`` to ``target`` via a same-dir tempfile + ``os.replace``.
+
+    ``os.replace`` is atomic on both Windows and POSIX, so a concurrent
+    reader sees either the old file or the fully-written new one, never a
+    torn write. The parent directory is created if missing.
+    """
+    target = Path(target)
+    directory = target.parent
+    directory.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{target.stem}-", suffix=".tmp", dir=str(directory),
+    )
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp_path, target)
+    except Exception:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+        raise
+
+
+def export_indicator_file(source: Path, dest: Path) -> Path:
+    """Copy a custom-indicator ``.py`` file to ``dest``.
+
+    Normalizes ``dest`` to carry a ``.py`` suffix (so the user can type
+    a bare name in a Save dialog) and writes atomically. Returns the
+    resolved destination path actually written.
+
+    Raises :class:`FileNotFoundError` if ``source`` does not exist.
+    """
+    source = Path(source)
+    if not source.is_file():
+        raise FileNotFoundError(f"no such indicator file: {source}")
+    dest = Path(dest)
+    if dest.suffix.lower() != ".py":
+        dest = dest.with_suffix(".py")
+    text = source.read_text(encoding="utf-8")
+    _atomic_write_text(dest, text)
+    return dest
+
+
+def import_indicator_file(
+    source: Path,
+    directory: Path | None = None,
+    *,
+    overwrite: bool = False,
+    target_name: str | None = None,
+) -> Path:
+    """Copy an external ``.py`` indicator into the custom-indicators dir.
+
+    Parameters
+    ----------
+    source
+        The external ``.py`` file to import.
+    directory
+        Destination custom-indicators directory. ``None`` uses
+        :func:`default_user_dir`.
+    overwrite
+        When ``False`` (default), a name collision raises
+        :class:`FileExistsError` so the caller can prompt the user.
+        ``True`` replaces the existing file.
+    target_name
+        Override the destination file stem. ``None`` uses
+        ``source.stem``.
+
+    Validation mirrors :func:`discover_user_indicators`: the file must
+    have a ``.py`` suffix and stay within :data:`_MAX_FILE_SIZE`. The
+    copy is NOT executed/registered here — the caller is expected to
+    call :func:`register_user_indicator_file` on the returned path so
+    the import surfaces any exec-time errors separately.
+
+    Returns the destination path written.
+    """
+    directory = Path(directory) if directory is not None else default_user_dir()
+    source = Path(source)
+    if not source.is_file():
+        raise FileNotFoundError(f"no such file: {source}")
+    if source.suffix.lower() != ".py":
+        raise ValueError(f"not a Python (.py) indicator file: {source.name}")
+    size = source.stat().st_size
+    if size > _MAX_FILE_SIZE:
+        raise ValueError(
+            f"file too large: {size} bytes exceeds {_MAX_FILE_SIZE}-byte limit",
+        )
+    text = source.read_text(encoding="utf-8")
+    stem = (target_name if target_name is not None else source.stem).strip()
+    if not stem:
+        raise ValueError("target indicator name is empty")
+    target = directory / f"{stem}.py"
+    if target.exists() and not overwrite:
+        raise FileExistsError(str(target))
+    _atomic_write_text(target, text)
+    return target
 
 
 def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):

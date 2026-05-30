@@ -9,51 +9,69 @@ all interaction goes through the Entries tab.
 
 ## What renders
 
-| Source                                | Style                              |
-| ------------------------------------- | ---------------------------------- |
-| Armed LIMIT / STOP / STOP_LIMIT       | dashed line, color by direction    |
-| Pending entry orders (working at broker) | solid line, color by direction  |
-| Fired strategy (terminal, not yet GC'd) | dim dashed line, gray            |
+| Source                                   | Style                              |
+| ---------------------------------------- | ---------------------------------- |
+| Armed LIMIT                              | dashed line, color by direction    |
+| Armed STOP / STOP_LIMIT                  | dotted line, color by direction    |
+| Pending LIMIT / STOP entry orders        | solid line, color by direction     |
+| Pending STOP_LIMIT entry orders          | stop line solid + limit line dashed |
 
 INDICATOR / SCANNER_ALERT / MARKET triggers have no price coordinate
-and render nothing (visible in the Entries tab Treeview).
+and render nothing (visible in the Entries tab Treeview). Fired
+strategies are terminal and are not rendered.
 
 ## Public API
 
 ```python
 @dataclass(frozen=True)
 class OverlayLine:
+    kind: str
+    strategy_id: str | None
+    pending_order_id: str | None
+    symbol: str
+    direction: Direction
     price: float
+    color: str
+    linestyle: str
     label: str
-    color: str             # "#RRGGBB"
-    dash: Optional[Tuple[int,int]]
-    z: int                 # ordering: armed=0, pending=1, fired=-1
+    pending: bool
 
 def compute_overlay_lines(
-    armed_strategies: Iterable[EntryStrategy],
-    working_orders: Iterable[Tuple[str, EntryStrategy, str]],
-    *,
-    symbol: str,
-) -> List[OverlayLine]
+    *, evaluator: EntryEvaluator,
+    paper_engine: PaperBrokerEngine | None,
+    primary_symbol: str | None,
+) -> list[OverlayLine]
 
 class EntriesOverlay:
-    def __init__(self, *, app, canvas) -> None
-    def refresh(self) -> None
+    def __init__(self, *, evaluator: EntryEvaluator,
+                 paper_engine: PaperBrokerEngine | None = None,
+                 request_redraw: Callable[[], None] | None = None,
+                 enabled: bool = True) -> None
+    def set_enabled(self, enabled: bool) -> None
+    @property
+    def enabled(self) -> bool
+    @property
+    def line_count(self) -> int
     def clear(self) -> None
+    def close(self) -> None
+    def redraw(primary_ax: Axes | None,
+               primary_symbol: str | None) -> list[OverlayLine]
 ```
 
 ## Color scheme
 
-- LONG entries: green (`#2daa4f`).
-- SHORT entries: red (`#d9534f`).
-- Armed: dashed (4,2). Pending: solid. Disarmed: not rendered.
-- Fired (terminal, before GC): gray (`#888888`) dashed (1,2).
+- LONG entries: green (`#28a745`).
+- SHORT entries: red (`#d73a49`).
+- Armed LIMIT: dashed. Armed STOP / STOP_LIMIT: dotted.
+- Pending orders: solid, except STOP_LIMIT's limit-price line is dashed.
+- Disarmed / fired strategies are not rendered.
 
 ## Dependencies
 
-- `..entries.{model, evaluator, signals}`.
-- Canvas primitives from the parent `ChartApp` (treats the entries
-  overlay as another `register_overlay` consumer).
+- `..entries.{model, evaluator}`.
+- `..exits.paper_engine` for pending-entry working orders.
+- External: `matplotlib.axes.Axes`, `matplotlib.lines.Line2D`,
+  `matplotlib.text.Text`.
 
 ## Design Decisions
 
@@ -63,21 +81,23 @@ class EntriesOverlay:
 - **No price → no line.** INDICATOR / SCANNER_ALERT / MARKET have
   no trigger price; the overlay simply skips them rather than
   inventing a coordinate.
-- **`compute_overlay_lines` is pure** — takes the input lists and
-  returns a list of frozen lines. Unit-testable without Tk.
-- **Refresh on chart pan/zoom** is the canvas's responsibility; the
-  overlay only redraws on `refresh()` (called by the entries-tab
-  per-tick driver and on arm/disarm events).
-- **Z-ordering**: armed dashed lines first, then pending solid lines
-  on top (so a filled-but-still-pending leg's solid line wins over
-  the armed sibling). Fired terminal lines go below (z=-1).
+- **`compute_overlay_lines` is pure** — reads evaluator and paper-engine
+  snapshots and returns frozen descriptors. Unit-testable without Tk.
+- **Redraw on render**: `EntriesAppMixin` calls `redraw(...)` after the
+  figure is rebuilt. `set_enabled` only requests a host repaint.
+- **Pending order source**: working orders are pulled from
+  `PaperBrokerEngine.pending_orders_for_symbol` and filtered to
+  `OrderTargetKind.PENDING_ENTRY`.
 
 ## Invariants
 
 - `OverlayLine` is hashable + frozen — safe to dedupe via `set()`.
-- `clear()` is idempotent.
-- `compute_overlay_lines(symbol=X)` returns lines whose origin
-  strategies have `X` in their resolved universe.
+- `clear()` and `close()` are idempotent reference drops.
+- `redraw` returns `[]` when disabled, `primary_ax is None`, or no
+  primary symbol is supplied.
+- `compute_overlay_lines(primary_symbol=X)` returns armed lines only
+  for enabled strategies whose universe targets `X`, plus pending
+  entry orders explicitly keyed to `X`.
 
 ## See also
 

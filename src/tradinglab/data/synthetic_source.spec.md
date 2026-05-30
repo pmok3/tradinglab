@@ -1,10 +1,10 @@
 # data/synthetic_source.py — Spec
 
 ## Purpose
-Deterministic offline data source. Used for development, smoke tests, and as the history bootstrap for the synthetic streaming source (which needs seed bars that don't collide with its own in-progress rollover bar).
+Offline random-walk data source. Used for development, smoke tests, and as the history bootstrap for the synthetic streaming source (which needs seed bars that don't collide with its own in-progress rollover bar).
 
 ## Public API
-- `fetch_synthetic_data(ticker="AMD", interval="1d") -> Optional[List[Candle]]` — generates a random-walk OHLCV series. Intraday: bars across full 04:00–20:00 ET window per weekday, session-tagged, ~60 days (7 for 1m). Daily+: ~500 bars. Seed is `hash((ticker, interval)) & 0xFFFFFFFF` so a given symbol is reproducible across runs.
+- `fetch_synthetic_data(ticker="AMD", interval="1d") -> Optional[List[Candle]]` — generates a random-walk OHLCV series. Intraday: bars across full 04:00–20:00 ET window per weekday, session-tagged, ~60 days (7 for 1m). Daily+: ~500 bars. Seed is `hash((ticker, interval)) & 0xFFFFFFFF`, so a given symbol is reproducible within one Python hash-seed/process, but not guaranteed across separate interpreter launches.
 - `fetch_synthetic_stream_bootstrap(ticker, interval) -> Optional[List[Candle]]` — same as `fetch_synthetic_data`, but for intraday intervals truncates any bars whose start timestamp is ≥ the current interval boundary. The streaming source opens a fresh in-progress bar at the current boundary; truncation here prevents a rollover collision at that timestamp.
 
 ## Dependencies
@@ -12,8 +12,8 @@ Deterministic offline data source. Used for development, smoke tests, and as the
 - External: `math`, `random`, `datetime`.
 
 ## Design Decisions
-- **Tests / demos only — not a strategy backtest substrate** — Deterministic seeded log-normal walk. Intended for smoke tests, screenshot reproducibility, and UI development. The price process has no fundamentals, no microstructure, no overnight gaps, no volatility regimes, and no realistic volume. Do NOT use synthetic candles to validate real strategies.
-- **Hash-seeded RNG**:`random.Random(hash((ticker, interval)) & 0xFFFFFFFF)`. Different tickers get different series; same ticker+interval is reproducible. Handy when eyeballing compare mode.
+- **Tests / demos only — not a strategy backtest substrate** — Seeded log-normal walk, deterministic only within one Python hash seed. Intended for smoke tests, screenshot reproducibility within a run, and UI development. The price process has no fundamentals, no microstructure, no overnight gaps, no volatility regimes, and no realistic volume. Do NOT use synthetic candles to validate real strategies.
+- **Hash-seeded RNG**:`random.Random(hash((ticker, interval)) & 0xFFFFFFFF)`. Different tickers get different series; same ticker+interval is reproducible only for a fixed Python hash seed. Handy when eyeballing compare mode within one app run.
 - **Log-normal step**: `close = open * exp(gauss(0, sigma * vol_scale))`. Matches real-stock behavior where prices multiply rather than add (can't go negative, percentage moves are symmetric).
 - **Daily vol ~1.5%** (`sigma = 0.015 * vol_scale`); intraday vol scales as `(step_min / 390) ** 0.5` (so a 5m bar is `√(5/390) ≈ 11%` of daily vol — matches the Brownian-walk scaling rule).
 - **Extended-hours volume is 15% of RTH**: `int(rth_vol * 0.15)` for pre/post. Captures the "thinner liquidity" visual without being so small it rounds to zero.
@@ -23,7 +23,7 @@ Deterministic offline data source. Used for development, smoke tests, and as the
 - **Stream bootstrap truncates at the live boundary**: `fetch_synthetic_data(...)` plus `[c for c in candles if c.date < boundary]` where `boundary = floor_to_interval(now, step_min)`. This gives the stream a clean handoff — it opens a fresh in-progress bar at `boundary`, and the seeded history ends at `boundary - step_min`.
 
 ## Invariants
-- Same `(ticker, interval)` → identical output across runs (deterministic seed).
+- Same `(ticker, interval)` → identical output within one interpreter process / hash seed. Separate launches may differ because Python randomizes `hash()`.
 - All intraday bars fall within `[04:00, 20:00)` ET on a weekday, with correct `session` tags.
 - `fetch_synthetic_stream_bootstrap` on intraday interval returns `max(date) < floor_to_interval(now, step_min)`.
 - Non-intraday intervals fall through to `fetch_synthetic_data` unchanged (streaming is a no-op for daily+).

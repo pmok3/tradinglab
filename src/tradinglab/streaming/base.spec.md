@@ -17,7 +17,7 @@ Declares the `StreamSource` protocol and the `STREAM_SOURCES` registry. A stream
 ## Design Decisions
 - **Subscription returns an unsubscribe callable**, not a subscription object. Minimal API surface, easy to stash in a list and clean up.
 - **Real vs simulated must be self-documented** — Implementations MUST document in their own spec whether they emit real market ticks or simulated ones. The UI surfaces stream source by name; check the source's `__doc__` and spec before relying on the data.
-- **`STREAM_SOURCES` registration is import-time only** — The registry is populated when the streaming package is imported. Runtime registration of new sources is not supported.
+- **`STREAM_SOURCES` registration is idempotent** — The registry is normally populated when the streaming package is imported, and tests may replace entries by re-registering a name.
 - **Contract: at most one trailing event may still complete after unsubscribe** (a caller-visible race with the source's own thread). Consumers must be idempotent to a single trailing callback. The app's token-gating path (`_stream_token` stamped into every event) makes this explicit.
 - **Callbacks may fire from any thread** — the consumer is responsible for marshalling. Callback implementations MUST be thread-safe or post to a thread-safe queue. `ChartApp._start_stream_if_applicable` installs a closure callback that enqueues events into `self._stream_queue` (a thread-safe `queue.Queue`); `ChartApp._drain_stream_queue` pulls them on the Tk main thread via `after()`.
 - **Two event kinds, not more**: anything else (open/close/seal) can be derived from the tick/rollover pair without growing the protocol.

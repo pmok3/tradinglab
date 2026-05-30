@@ -274,15 +274,34 @@ def test_chart_pane_startup_ratio_is_a_finite_fraction_under_one() -> None:
 
 
 def test_chart_pane_startup_ratio_default_value() -> None:
-    """The default ratio should be 0.80.
+    """The default ratio should be the golden-ratio inverse (~0.618).
+
+    The chart pane occupies the golden *major* section of the window
+    and the notebook the golden *minor* — an intentionally balanced,
+    aesthetically pleasing 'unboxing' split (was a flat 0.80).
 
     Pinned so a future `CHART_PANE_STARTUP_RATIO = 0.50` tweak that
     silently shrinks the chart trips a CI failure rather than only
     surfacing on launch. Change the constant *and* this assertion in
     the same commit when retuning.
     """
-    from tradinglab.constants import CHART_PANE_STARTUP_RATIO
-    assert CHART_PANE_STARTUP_RATIO == 0.80
+    from tradinglab.constants import (
+        CHART_PANE_STARTUP_RATIO,
+        GOLDEN_RATIO_INVERSE,
+    )
+    assert CHART_PANE_STARTUP_RATIO == GOLDEN_RATIO_INVERSE
+
+
+def test_golden_ratio_constants() -> None:
+    """``GOLDEN_RATIO`` / ``GOLDEN_RATIO_INVERSE`` define the canonical
+    φ ≈ 1.618 and 1/φ ≈ 0.618 used for the startup pane split."""
+    from tradinglab.constants import GOLDEN_RATIO, GOLDEN_RATIO_INVERSE
+    assert GOLDEN_RATIO == pytest.approx(1.6180339887, abs=1e-9)
+    assert GOLDEN_RATIO_INVERSE == pytest.approx(0.6180339887, abs=1e-9)
+    # 1/φ == φ - 1 is the defining identity of the golden ratio.
+    assert GOLDEN_RATIO_INVERSE == pytest.approx(GOLDEN_RATIO - 1.0, abs=1e-9)
+    # The major + minor sections partition the whole.
+    assert GOLDEN_RATIO_INVERSE + (1.0 - GOLDEN_RATIO_INVERSE) == pytest.approx(1.0)
 
 
 def test_chartstack_pane_startup_width_is_positive_int() -> None:

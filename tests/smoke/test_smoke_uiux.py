@@ -160,7 +160,8 @@ def test_uiux_field_ref_picker_rrvol_deep(app):
         assert picker._symbol_badge is not None
         assert picker._symbol_badge.cget("text") == "@SPY"
         assert "Requires SPY data" in picker._applicability_var.get()
-        assert "Warmup" in picker._applicability_var.get()
+        # Warmup bar counts are intentionally NOT surfaced to the user.
+        assert "Warmup" not in picker._applicability_var.get()
     finally:
         try:
             top.destroy()

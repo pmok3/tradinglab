@@ -8,7 +8,7 @@ review (`SandboxReviewDialog`) anchors to a stated plan.
 
 ## Public API
 
-- `class PreTradeFormDialog(tk.Toplevel)`:
+- `class PreTradeFormDialog(BaseModalDialog)`:
   - `__init__(app, symbol, default_side="buy", default_size=1.0,
     setup_tags=None, *, notice="", suggested_tags=None)` — builds
     form, grabs focus. After dismissal, `self.result` is either a
@@ -38,18 +38,19 @@ review (`SandboxReviewDialog`) anchors to a stated plan.
 4. **Size (units)** — `ttk.Entry`.
 5. **Setup tag** — editable `ttk.Combobox`. Values =
    `suggested_tags` prepended to `setup_tags`, deduped.
-6. **Thesis (mandatory)** — `tk.Text` (w=32, h=4). Empty → error.
+6. **Thesis (mandatory)** — `tk.Text` (w=32, h=4), explicitly themed with `ax_bg`, `text`, and `spine` because ttk.Style does not reach classic Tk Text widgets. Empty → error.
 7. **Conviction (1-5)** — `tk.Spinbox(IntVar, from_=1, to=5)`.
 8. **Target price (optional)** — `ttk.Entry`. Empty → `None`;
    numeric → `float`; non-numeric → error.
-9. **Notes** — `tk.Text` (w=32, h=3).
+9. **Notes** — `tk.Text` (w=32, h=3), using the same native dark/light palette as Thesis.
 10. Inline red error label (`_error_var`).
 11. Footer: `[Cancel] [Submit]` (right-aligned).
 
 ## Geometry
 
-`attach_persistent_geometry(self, "dlg.pre_trade", "380x420")`.
-`resizable(False, False)` — position-only restore.
+`BaseModalDialog` uses `geometry_key="dlg.pre_trade"` with default
+geometry `"380x420"`. `resizable(False, False)` — position-only
+restore.
 
 ## Validation
 
@@ -64,8 +65,8 @@ First failure short-circuits with `_error_var.set(msg)`.
 
 ## Dependencies
 
-- Internal: `._modal_keys.bind_modal_keys`, `.colors.WARN_AMBER`,
-  `.geometry_store.attach_persistent_geometry`.
+- Internal: `._modal_base.BaseModalDialog`,
+  `._modal_base.protect_combobox_wheel`, `.colors.WARN_AMBER`.
 - External: `tkinter`, `tkinter.ttk`.
 - Caller invokes from `SandboxController` / `SandboxPanel` on
   **Place order**; blocks via `wait_window`, reads `dlg.result`.
@@ -77,8 +78,11 @@ First failure short-circuits with `_error_var.set(msg)`.
 - **Mandatory thesis**: empty blocks submit; post-trade review
   compares outcome against thesis.
 - **Editable setup_tag combobox**: traders refine taxonomy over time.
-- **`bind_modal_keys`**: ESC cancels, Enter submits — Enter inside
-  multi-line Text widgets passes through to insert newlines.
+- **Native Text theming**: `tests/unit/gui/test_native_widget_dark_theme.py` asserts both text areas use `DARK_THEME` colors and never the OS-default `SystemWindow` background.
+- **Base modal finalization**: `protect_combobox_wheel(self)` guards
+  side/setup/conviction widgets, then `_finalize_modal` makes ESC
+  cancel and Enter submit. Enter inside multi-line Text widgets passes
+  through to insert newlines.
 
 ## Invariants
 

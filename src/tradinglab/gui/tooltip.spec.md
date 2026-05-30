@@ -10,8 +10,8 @@ that any caller can attach in one line.
 ## Public API
 - `class ToolTip(widget, text, *, delay_ms=450, wraplength=320)` —
   attach a tooltip to `widget`. The constructor wires `<Enter>`,
-  `<Leave>`, and `<ButtonPress>` bindings; callers should hold a
-  reference (e.g. on `self._tooltips`) so the instance survives GC.
+  `<Leave>`, and `<ButtonPress>` bindings; Tk's registered callbacks
+  keep the instance reachable until `detach()` or widget teardown.
 - `ToolTip.set_text(text: str)` — update the hint after
   construction (e.g. a button whose meaning changes with state).
 - `ToolTip.detach()` — unbind handlers + destroy any visible

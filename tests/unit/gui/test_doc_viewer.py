@@ -23,10 +23,12 @@ import pytest
 from tradinglab.gui.doc_viewer import (
     _DOC_ORDER,
     _DOC_TITLES,
+    _GITHUB_DOCS_BASE,
     TAG_NAMES,
     _apply_inline_markup,
     _discover_doc_files,
     _display_title_for,
+    _github_url_for,
     _is_parent_dark,
     _theme_palette,
     render_markdown_into_text,
@@ -159,14 +161,70 @@ def test_blockquote_uses_italic_tag():
     assert "blockquote" in bq[0]
 
 
-def test_table_row_uses_monospace_tag():
+def test_table_renders_header_rule_and_body_tags():
+    """A GFM table becomes a real aligned table, not ASCII art.
+
+    The header row carries ``table_header``, body cells carry
+    ``table_row``, and a box-drawing rule separates them with
+    ``table_rule``. The ``|---|`` separator line is consumed (never
+    rendered as literal dashes).
+    """
     fake = _FakeTextWidget()
-    md = "| Col1 | Col2 |\n|------|------|\n| a    | b    |\n"
+    md = "| Col1 | Col2 |\n|------|------|\n| a | b |\n"
     render_markdown_into_text(fake, md)
-    rows = [s for s, t in fake.segments if "table_row" in t]
-    assert len(rows) == 3
-    assert "Col1" in rows[0]
-    assert "a" in rows[2] and "b" in rows[2]
+
+    header = "".join(s for s, t in fake.segments if "table_header" in t)
+    body = "".join(s for s, t in fake.segments if "table_row" in t)
+    rule = "".join(s for s, t in fake.segments if "table_rule" in t)
+
+    assert "Col1" in header and "Col2" in header
+    assert "a" in body and "b" in body
+    # The GFM separator row is consumed: no literal dash-pipe art anywhere.
+    assert "|------|" not in fake.joined()
+    assert "---" not in fake.joined()
+    # The rule uses box-drawing glyphs, not hyphens.
+    assert "\u2500" in rule  # ─
+    assert "\u253c" in rule  # ┼
+
+
+def test_table_uses_vertical_bar_separator_between_columns():
+    fake = _FakeTextWidget()
+    md = "| A | B |\n|---|---|\n| x | y |\n"
+    render_markdown_into_text(fake, md)
+    sep = "".join(s for s, t in fake.segments if "table_rule" in t)
+    assert "\u2502" in sep  # │ column separator
+
+
+def test_table_columns_are_width_aligned():
+    """Cells are padded so columns line up regardless of content length."""
+    fake = _FakeTextWidget()
+    md = (
+        "| Name | Value |\n"
+        "|------|-------|\n"
+        "| a | 1 |\n"
+        "| longname | 2 |\n"
+    )
+    render_markdown_into_text(fake, md)
+    # Reconstruct each body row's text up to the first column divider and
+    # assert the first-column block is the same width for every row.
+    text = fake.joined()
+    body_lines = [ln for ln in text.splitlines() if "\u2502" in ln
+                  and ("a" in ln or "longname" in ln)]
+    first_cols = [ln.split("\u2502", 1)[0] for ln in body_lines]
+    assert len(first_cols) >= 2
+    assert len(set(len(fc) for fc in first_cols)) == 1
+    assert len(first_cols[0]) >= len(" longname ")
+
+
+def test_table_without_separator_renders_all_rows_as_body():
+    """A pipe block with no ``|---|`` separator has no header rule."""
+    fake = _FakeTextWidget()
+    md = "| a | b |\n| c | d |\n"
+    render_markdown_into_text(fake, md)
+    rule = [s for s, t in fake.segments if "table_rule" in t and "\u2500" in s]
+    assert not rule
+    body = "".join(s for s, t in fake.segments if "table_row" in t)
+    assert "a" in body and "d" in body
 
 
 def test_empty_lines_become_blank_lines():
@@ -244,6 +302,45 @@ def test_inline_markup_attaches_base_tag():
 
 
 # ---------------------------------------------------------------------------
+# GitHub "Open externally" URL mapping
+# ---------------------------------------------------------------------------
+
+
+def test_github_url_for_top_level_doc():
+    url = _github_url_for(Path("C:/app/docs/WATCHLISTS.md"))
+    assert url == f"{_GITHUB_DOCS_BASE}/docs/WATCHLISTS.md"
+
+
+def test_github_url_for_indicator_subdir_doc():
+    url = _github_url_for(Path("/repo/docs/indicators/rsi.md"))
+    assert url == f"{_GITHUB_DOCS_BASE}/docs/indicators/rsi.md"
+
+
+def test_github_url_for_frozen_meipass_path():
+    """A PyInstaller temp path still maps from its ``docs`` segment."""
+    url = _github_url_for(Path("C:/Temp/_MEI12345/docs/STRATEGY_TESTER.md"))
+    assert url == f"{_GITHUB_DOCS_BASE}/docs/STRATEGY_TESTER.md"
+
+
+def test_github_url_for_uses_last_docs_segment():
+    """A stray ``docs`` ancestor dir doesn't derail the mapping.
+
+    The real bundled docs root is the deepest ``docs`` segment, so an
+    ancestor folder that happens to be named ``docs`` is ignored.
+    """
+    url = _github_url_for(Path("/home/docs/checkout/docs/ONBOARDING.md"))
+    assert url == f"{_GITHUB_DOCS_BASE}/docs/ONBOARDING.md"
+
+
+def test_github_url_for_path_without_docs_segment_returns_none():
+    assert _github_url_for(Path("/tmp/random/file.md")) is None
+
+
+def test_github_docs_base_points_at_repo_blob():
+    assert _GITHUB_DOCS_BASE == "https://github.com/pmok3/tradinglab/blob/main"
+
+
+# ---------------------------------------------------------------------------
 # Tag-name contract
 # ---------------------------------------------------------------------------
 
@@ -252,7 +349,8 @@ def test_tag_names_includes_every_block_kind():
     """Stability contract for tests that filter by tag set."""
     expected = {"h1", "h2", "h3", "h4", "para", "bullet", "numbered",
                 "blockquote", "code_block", "inline_code", "bold",
-                "italic", "bold_italic", "link", "hr", "table_row"}
+                "italic", "bold_italic", "link", "hr", "table_row",
+                "table_header", "table_rule"}
     assert set(TAG_NAMES) == expected
 
 
@@ -267,11 +365,16 @@ def test_theme_palette_has_all_keys_in_both_modes():
     expected_keys = {
         "bg", "fg", "muted", "code_bg", "code_fg", "link", "hr",
         "sidebar_bg", "sidebar_fg", "sidebar_sel_bg", "sidebar_sel_fg",
+        "btn_bg", "btn_fg",
     }
     assert set(light) == expected_keys
     assert set(dark) == expected_keys
     # Light bg must be lighter than dark bg (sanity check).
     assert light["bg"].lower() != dark["bg"].lower()
+    # Buttons must be visually distinct from the pane background in
+    # both themes so they don't blend in (light-mode regression).
+    assert light["btn_bg"].lower() != light["bg"].lower()
+    assert dark["btn_bg"].lower() != dark["bg"].lower()
 
 
 def test_is_parent_dark_reads_dark_var():
@@ -305,6 +408,9 @@ def test_discover_doc_files_returns_known_docs(monkeypatch, tmp_path):
     (docs / "ONBOARDING.md").write_text("# Onboarding\n")
     (docs / "chartstack.md").write_text("# ChartStack\n")
     (docs / "BUILDING_EXE.md").write_text("# Build\n")
+    (docs / "PAINT_PIPELINE_REFACTOR.md").write_text("# Paint\n")
+    (docs / "SPEC_INDEX.md").write_text("# Spec Index\n")
+    (docs / "SPEC_STYLE.md").write_text("# Spec Style\n")
     (docs / "extra.md").write_text("# Extra\n")
     (docs / "ignore.txt").write_text("not markdown")
 
@@ -319,9 +425,13 @@ def test_discover_doc_files_returns_known_docs(monkeypatch, tmp_path):
     found = _discover_doc_files()
     names = [p.name for p in found]
     # Known order first, then unknowns alphabetically.
-    assert names[:3] == ["ONBOARDING.md", "chartstack.md", "BUILDING_EXE.md"]
+    assert names[:2] == ["ONBOARDING.md", "chartstack.md"]
     assert "extra.md" in names
     assert "ignore.txt" not in names
+    # Developer-only docs are filtered even when present on disk.
+    for hidden in ("BUILDING_EXE.md", "PAINT_PIPELINE_REFACTOR.md",
+                   "SPEC_INDEX.md", "SPEC_STYLE.md"):
+        assert hidden not in names
 
 
 def test_discover_doc_files_returns_empty_when_docs_missing(monkeypatch, tmp_path):
@@ -345,6 +455,42 @@ def test_display_title_for_known_doc():
 
 def test_display_title_for_unknown_doc_titleizes_filename():
     assert _display_title_for(Path("custom_guide.md")) == "Custom Guide"
+
+
+def test_display_title_for_derives_from_first_h1(tmp_path):
+    """Unmapped docs use their authored ``# `` heading, not the filename."""
+    guide = tmp_path / "ma.md"
+    guide.write_text("# Moving Average (MA)\n\nBody text.\n", encoding="utf-8")
+    assert _display_title_for(guide) == "Moving Average (MA)"
+
+
+def test_display_title_for_real_indicator_guides_use_h1():
+    """Acronym-named indicator guides must not render as 'Ma'/'Adx'/'Rrvol'."""
+    repo_root = Path(__file__).resolve().parents[3]
+    indicators = repo_root / "docs" / "indicators"
+    if not indicators.is_dir():
+        pytest.skip("bundled indicator guides not present")
+    expected = {
+        "ma.md": "Moving Average (MA)",
+        "adx.md": "Average Directional Index",
+        "rrvol.md": "RRVOL",
+        "bbands.md": "Bollinger Bands",
+        "macd.md": "Moving Average Convergence Divergence (MACD)",
+    }
+    for name, title in expected.items():
+        path = indicators / name
+        if not path.is_file():
+            continue
+        got = _display_title_for(path)
+        assert got == title, f"{name}: expected {title!r}, got {got!r}"
+        assert got != name[:-3].title(), f"{name} rendered as titleized filename"
+
+
+def test_display_title_for_stops_at_deeper_heading(tmp_path):
+    """A leading ``## `` before any ``# `` falls back to the filename."""
+    guide = tmp_path / "weird_guide.md"
+    guide.write_text("## Subsection first\n\n# Late Title\n", encoding="utf-8")
+    assert _display_title_for(guide) == "Weird Guide"
 
 
 def test_doc_order_constants_consistent():
@@ -393,8 +539,8 @@ def doc_paths(tmp_path, monkeypatch):
     onb.write_text("# Onboarding\n\nLearn the basics.\n", encoding="utf-8")
     cs = docs / "chartstack.md"
     cs.write_text("# ChartStack\n\nMini-charts on the left.\n", encoding="utf-8")
-    bx = docs / "BUILDING_EXE.md"
-    bx.write_text("# Building\n\nPyInstaller pipeline.\n", encoding="utf-8")
+    wl = docs / "WATCHLISTS.md"
+    wl.write_text("# Watchlists\n\nGroup your tickers.\n", encoding="utf-8")
 
     class _FakeResources:
         @staticmethod
@@ -404,7 +550,7 @@ def doc_paths(tmp_path, monkeypatch):
     import tradinglab
     monkeypatch.setattr(tradinglab, "_resources", _FakeResources,
                         raising=False)
-    return {"onboarding": onb, "chartstack": cs, "building": bx}
+    return {"onboarding": onb, "chartstack": cs, "watchlists": wl}
 
 
 def test_dialog_opens_with_initial_path(stub_root, doc_paths):
@@ -436,7 +582,9 @@ def test_sidebar_populates_with_discovered_docs(stub_root, doc_paths):
         items = [dlg._sidebar.get(i) for i in range(dlg._sidebar.size())]
         assert "Getting Started" in items
         assert "ChartStack Guide" in items
-        assert "Building the .exe" in items
+        assert "Watchlists Guide" in items
+        # The developer-only build guide must never appear in-app.
+        assert "Building the .exe" not in items
     finally:
         dlg.destroy()
 
@@ -490,6 +638,119 @@ def test_dialog_handles_missing_file_gracefully(stub_root, doc_paths, tmp_path):
         assert dlg._current_path is not None
         # Should NOT have crashed; should be on ONBOARDING.md.
         assert dlg._current_path.name == "ONBOARDING.md"
+    finally:
+        dlg.destroy()
+
+
+def test_description_pane_width_is_hardlocked(stub_root, doc_paths):
+    """The description box has no draggable sash.
+
+    The body is a plain ``tk.Frame`` (not a ``ttk.Panedwindow``), so
+    there is no sash grip in the middle of the divider and the
+    description (right text) pane width is hard-locked by construction.
+    The sidebar takes a fixed, content-fit width via ``pack_propagate``.
+    """
+    import tkinter.ttk as ttk
+
+    from tradinglab.gui.doc_viewer import DocViewerDialog
+    dlg = DocViewerDialog(stub_root, initial_path=doc_paths["onboarding"])
+    try:
+        body = dlg._body
+        # No Panedwindow → no sash.
+        assert not isinstance(body, ttk.Panedwindow)
+        assert isinstance(body, tk.Frame)
+        # Sidebar has a fixed width and does not propagate child sizing.
+        side = dlg._side_frame
+        assert int(side.cget("width")) > 0
+        assert bool(side.pack_propagate()) is False
+        # The old draggable-sash blocker is gone.
+        assert not hasattr(dlg, "_block_sash")
+    finally:
+        dlg.destroy()
+
+
+def test_sidebar_width_fits_longest_title(stub_root, doc_paths):
+    """Sidebar auto-sizes to fit the longest document headline."""
+    import tkinter.font as tkfont
+
+    from tradinglab.gui.doc_viewer import DocViewerDialog, _display_title_for
+    dlg = DocViewerDialog(stub_root, initial_path=doc_paths["onboarding"])
+    try:
+        f = tkfont.Font(family="Segoe UI", size=10)
+        longest = max(
+            f.measure(_display_title_for(p)) for p in dlg._docs
+        )
+        width = dlg._sidebar_width_px()
+        # The computed width covers the longest title (plus padding) and
+        # is clamped to the documented [160, 360] range.
+        assert width >= longest
+        assert 160 <= width <= 360
+    finally:
+        dlg.destroy()
+
+
+def test_sidebar_click_below_items_does_not_navigate(stub_root, doc_paths):
+    """Clicking the empty space below the last item must not navigate."""
+    from tradinglab.gui.doc_viewer import DocViewerDialog
+    dlg = DocViewerDialog(stub_root, initial_path=doc_paths["onboarding"])
+    try:
+        # Stub the listbox geometry: a single 18px-tall row at the top.
+        dlg._sidebar.size = lambda: 3  # type: ignore[assignment]
+        dlg._sidebar.nearest = lambda y: 2  # type: ignore[assignment]
+        dlg._sidebar.bbox = lambda idx: (2, 40, 100, 18)  # type: ignore[assignment]
+        # Click well below the last row (y=400) → blocked.
+        class _Evt:
+            y = 400
+        assert dlg._on_sidebar_click(_Evt()) == "break"
+        assert dlg._click_on_item(400) is False
+        # Click on the real row (y between 40 and 58) → allowed.
+        assert dlg._click_on_item(50) is True
+
+        class _Evt2:
+            y = 50
+        assert dlg._on_sidebar_click(_Evt2()) is None
+    finally:
+        dlg.destroy()
+
+
+def test_sidebar_click_empty_listbox_is_blocked(stub_root, doc_paths):
+    """With no items, any click is a no-op (no navigation)."""
+    from tradinglab.gui.doc_viewer import DocViewerDialog
+    dlg = DocViewerDialog(stub_root, initial_path=doc_paths["onboarding"])
+    try:
+        dlg._sidebar.size = lambda: 0  # type: ignore[assignment]
+        assert dlg._click_on_item(10) is False
+
+        class _Evt:
+            y = 10
+        assert dlg._on_sidebar_click(_Evt()) == "break"
+    finally:
+        dlg.destroy()
+
+
+def test_table_tags_disable_wrapping(stub_root, doc_paths):
+    """Table rows must not word-wrap (prevents column spillover)."""
+    from tradinglab.gui.doc_viewer import DocViewerDialog
+    dlg = DocViewerDialog(stub_root, initial_path=doc_paths["onboarding"])
+    try:
+        for tag in ("table_row", "table_header", "table_rule"):
+            assert str(dlg._text.tag_cget(tag, "wrap")) == "none"
+    finally:
+        dlg.destroy()
+
+
+def test_action_buttons_use_distinct_background(stub_root, doc_paths):
+    """View-on-GitHub / Close buttons use the distinct btn_bg colour."""
+    from tradinglab.gui.doc_viewer import DocViewerDialog, _theme_palette
+    dlg = DocViewerDialog(stub_root, initial_path=doc_paths["onboarding"])
+    try:
+        pal = _theme_palette(dlg._dark)
+        assert dlg._theme_tk_buttons, "expected tracked tk.Button widgets"
+        for btn in dlg._theme_tk_buttons:
+            assert isinstance(btn, tk.Button)
+            assert str(btn.cget("bg")).lower() == pal["btn_bg"].lower()
+            # Distinct from the pane background.
+            assert str(btn.cget("bg")).lower() != pal["bg"].lower()
     finally:
         dlg.destroy()
 

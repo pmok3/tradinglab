@@ -19,7 +19,7 @@ Internal: `..constants.classify_session`, `..constants.is_intraday`, `..models.C
 - **Format-specific helpers**: a single generic transformer loses pandas' C-level columnar access and is measurably slower than per-row loops.
 - **Columnar `.to_numpy()`** per OHLCV column is ~10× cheaper than `df.iterrows()` (each iterrows iteration constructs a fresh `Series`). On a ~5k-bar intraday fetch, vectorized extraction is 5–20× faster.
 - **`df.index.to_pydatetime()` once, not per row** (per-row `.to_pydatetime()` is quadratic).
-- **Volume as int64 with NaN→0 coercion** (`np.nan_to_num(volumes, nan=0.0).astype(np.int64, copy=False)`): Yahoo emits NaN/0 for extended-hours bars (volume aggregation excludes TRF tape). Raw `int()` on NaN raises `ValueError` on modern numpy.
+- **Candle volume as int with NaN→0 coercion** (`np.nan_to_num(volumes, nan=0.0).astype(np.int64, copy=False)` in the DataFrame path): Yahoo emits NaN/0 for extended-hours bars (volume aggregation excludes TRF tape). Raw `int()` on NaN raises `ValueError` on modern numpy. The stashed `CandleArrays.volumes` side channel remains `float64`.
 - **Prebuilt-arrays side channel**: first consumer (`build_series_safe` → `SeriesArrays.from_arrays`) pops and uses arrays directly, skipping five `np.fromiter` passes. Stash lifetime is milliseconds.
 - **`(candles_ref, arrays)` tuple in the stash, not just `arrays`**: Python reuses `id()` after GC. A naive `{id → arrays}` map would hand stale arrays to a different list. `pop_prebuilt_arrays` verifies `stashed_candles is candles` and returns `None` on mismatch. **Concrete bug this fixed**: AMD's pair-aligned daily candles received SPY's arrays after compare-mode interval switches, producing SPY's y-axis range on AMD's price panel.
 - **Bounded stash (32, FIFO)**: defense in depth if pop-and-consume ever breaks. Dict preserves insertion order; `next(iter(d))` gives oldest. 32 >> `_fetch_executor.max_workers=8`, so legitimate flows never evict.
@@ -31,7 +31,7 @@ Internal: `..constants.classify_session`, `..constants.is_intraday`, `..models.C
 - **`_PREBUILT_ARRAYS` thread contract** — single-writer / single-reader-per-key: each entry built once by the producer thread, then read-only for consumers. Lifetime bounded by the candle list's GC.
 - For every `i`, `candles[i].open == opens[i]` (same for H/L/C/V) — arrays and candles agree cell-by-cell.
 - Non-intraday candles all have `session="regular"`; intraday have `session = classify_session(date.hour, date.minute)`.
-- Normalised candles carry US/Eastern timestamps for US equities. Session classification against ET market hours.
+- Normalised candles preserve the provider/index timezone in the DataFrame path; JSON epoch / ISO inputs are normalised to aware UTC. Session classification uses the timestamp's own hour/minute, so vendor adapters must request bars in the intended market timezone when ET session labels matter.
 - `volumes` in `stash_arrays` is float64; `Candle.volume` is plain `int` — dual representation.
 
 ## Algorithm

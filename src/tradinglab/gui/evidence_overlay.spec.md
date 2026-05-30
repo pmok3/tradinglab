@@ -45,8 +45,8 @@ Pure-logic helpers are Tk-free and matplotlib-free; the
 - Exit evidence → `#a02434` (red).
 - Dashed vertical at resolved bar index, alpha 0.55, zorder 3.
 - Right-stacked label at top of price axes: `E:{node_id_short}` /
-  `X:{node_id_short}` + `"NN bars ago"`. fontsize 7, rotation 90,
-  zorder 4.
+  `X:{node_id_short}` + `"now"`, `"1 bar"`, or `"N bars"`.
+  fontsize 7, rotation 90, zorder 4.
 
 ## Dependencies
 

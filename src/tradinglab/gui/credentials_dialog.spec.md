@@ -35,8 +35,9 @@ in the current `os.environ`.
   Never raises. The sentinel is captured by `app.py::main()` which
   surfaces `decrypt_error` and `io_error` to the user via
   `status_log.warn(...)` after the chart app constructs.
-- `CredentialsDialog(parent)` — Tk modal with seven entry fields
-  (3 Schwab, 3 Alpaca, 1 Polygon) and per-secret "show" toggles.
+- `CredentialsDialog(parent)` — `BaseModalDialog` modal with seven
+  entry fields (3 Schwab, 3 Alpaca, 1 Polygon) and per-secret
+  "show" toggles.
 - `open_credentials_dialog(parent)` — convenience wrapper:
   construct + `wait_window`. Returns the dialog instance (or
   `None` on TclError).
@@ -89,6 +90,9 @@ machine or by a different user. The plaintext exists in
 the environment can leak the secret, but that's a property of
 every Python program that holds secrets in env vars.
 
-## Modal keys
-`__init__` calls `bind_modal_keys(self, cancel=self._on_cancel,
-primary=self._on_save)` (ESC dismisses, Return commits).
+## Modal keys and wheel guard
+`__init__` calls `protect_combobox_wheel(self)` and then
+`BaseModalDialog._finalize_modal(primary=self._on_save,
+cancel=self._on_cancel)`. ESC dismisses, Return commits, and any
+future combobox / spinbox descendants are guarded against wheel-driven
+value changes.

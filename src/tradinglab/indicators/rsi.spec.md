@@ -12,17 +12,20 @@ Wilder's Relative Strength Index over close prices. Values in `[0, 100]`. Non-ov
     max=2000),)` — schema enforces `length >= 2` at dialog level.
   - `default_style = {"rsi": LineStyle(color="#d62728", width=1.4)}`.
   - `scannable_outputs = (("rsi", "numeric"),)` — opts the indicator into the scanner / entries / exits dropdowns via the registry-driven projection in `scanner.fields`.
+  - `warmup_bars` property returns `4 * length` for strategy-tester
+    hydration beyond the first finite RSI point.
 
 ## Dependencies
-- Internal: `..models.Candle`.
+- Internal: `..core.bars.Bars`, `.base.BaseIndicator`,
+  `.base.LineStyle`, `.base.ParamDef`, `.wilder.wilder_smooth_avg`.
 - External: `numpy`.
 
 ## Design Decisions
 - **Wilder's smoothing** (not Cutler's): seed with a simple arithmetic mean of the first `length` deltas, then recursive `avg = (avg*(n-1) + new) / n`. This is the canonical RSI definition; matches TradingView defaults.
 - **First RSI point lands at index `length`** (not `length-1`): the first `length` deltas seed the averages; the resulting RS is posted at index `length`.
 - **`al == 0` → RSI = 100** (not NaN): matches the standard convention for "no losses in the window".
-- **Loop instead of vectorized recursion**: the recursive smoothing (`avg_gain`/`avg_loss` each depend on the previous) can't be trivially vectorized. A numpy `lfilter` would work but adds complexity for modest speedup.
-- **`np.diff` + `np.where` to split gains/losses** vectorized up front — cheap, and avoids branching in the hot loop.
+- **Shared Wilder kernel.** RSI delegates average gain/loss smoothing to `wilder_smooth_avg`, the same vectorized RMA primitive used by ADX / ATR-family consumers.
+- **`np.diff` + `np.where` to split gains/losses** vectorized up front — cheap, and keeps the hot path branch-free before smoothing.
 - **Not session-aware** — RSI runs over whatever bars it is fed, including pre/post-market bars when extended-hours rendering is on. To get a regular-hours-only RSI, drive it from a regular-only candle stream.
 
 ## Invariants
@@ -40,13 +43,11 @@ RSI ∈ [0, 100] inclusive at every defined index.
 deltas = diff(closes)
 gains = where(deltas > 0, deltas, 0)
 losses = where(deltas < 0, -deltas, 0)
-avg_gain = gains[:n].mean()
-avg_loss = losses[:n].mean()
-out[n] = 100 - 100/(1 + avg_gain/avg_loss)   # or 100 if avg_loss == 0
-for i in n+1 .. len(closes)-1:
-    g = gains[i-1]; l = losses[i-1]
-    avg_gain = (avg_gain*(n-1) + g) / n
-    avg_loss = (avg_loss*(n-1) + l) / n
-    out[i] = 100 - 100/(1 + avg_gain/avg_loss)   # or 100 if avg_loss == 0
+avg_gain = wilder_smooth_avg(gains, n)
+avg_loss = wilder_smooth_avg(losses, n)
+ag = avg_gain[n-1:]
+al = avg_loss[n-1:]
+rs = where(al > 0, ag / al, inf)
+out[n:] = 100 - 100/(1 + rs)
 ```
 

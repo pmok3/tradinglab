@@ -16,7 +16,7 @@ Canonical record types + fetcher protocol + registry for the earnings/dividends 
 - `register_event_source(name, fetcher)`.
 
 ## Dependencies
-Stdlib only: `math`, `dataclasses`, `typing`.
+Stdlib only: `math`, `dataclasses`, `collections.abc`.
 
 ## Design Decisions
 - **`ts` is UTC ms-since-epoch.** Matches tradinglab convention. Engine clock uses seconds — consumers convert at boundary (`* 1000`).

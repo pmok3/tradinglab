@@ -63,9 +63,11 @@ class QueuedTickSource:
   `maxsize > 0` drops oldest on overflow (logged). `drain*` is
   non-blocking by default; typical Tk pattern is a 50 ms `after()`.
 - **`candles_by_symbol` is NOT defensively copied** inside `Tick`.
-  In-place-mutating sources must serialize or wrap with
-  `QueuedTickSource` (which snapshots).
+  In-place-mutating sources must serialize or emit snapshots before
+  constructing a tick.
 - **`PollingTickSource` snapshots upstream data** before dispatching.
+  `QueuedTickSource` buffers `Tick` objects from its upstream; it does
+  not deep-copy their candle lists.
 
 ## Invariants
 

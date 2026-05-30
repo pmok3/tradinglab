@@ -30,7 +30,7 @@ Mixed into `SandboxController` (which lives in `replay.py`). Relies on attribute
 - **Skip out-of-timeline ex-dates**: events whose `ex_ts` falls outside `[timeline[0], timeline[-1]]` are dropped. They'd accumulate as inert queue entries that never fire and complicate the engine's idempotency check.
 - **`_compute_event_proximity` reads `earnings_window_days` from `TUNABLES`** with a default of 10. Soft import on `defaults` so a bare-events smoke test that bypasses the defaults loader still works.
 - **Engine-kind map collapses the events taxonomy** (`cash` / `special` / `spinoff` / `stock_split`) onto the four engine kinds (`cash_dividend` / `special_dividend` / `spinoff_cash` / `stock_split`). Unknown kinds default to `cash_dividend` — safest fallback (credit cash, don't rescale shares).
-- **`searchsorted` aligns `ex_ts` onto the timeline**: the engine's corporate-action phase only fires when the timeline cursor lands exactly on a registered `ts`. Floor-to-next-bar via `searchsorted(side="left")` ensures the action triggers on the ex-date's bar (or the next available one if the ex-date isn't a trading day).
+- **`searchsorted` aligns `ex_ts` onto the timeline**: the engine's corporate-action phase only fires when the timeline cursor lands exactly on a registered `ts`. First-bar-at-or-after alignment via `searchsorted(side="left")` ensures the action triggers on the ex-date's bar (or the next available one if the ex-date isn't a trading day).
 
 ## Invariants
 - The kernel headless contract (`import tradinglab.backtest` works without a display / Tk runtime) is preserved — every `events` import is lazy and inside a function body.

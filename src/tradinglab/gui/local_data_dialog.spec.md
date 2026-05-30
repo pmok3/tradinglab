@@ -7,7 +7,7 @@ archives** whose subfolders (or top-level zip directories) become
 entries in the source-selector combobox.
 
 ## Public API
-- `LocalDataDialog(parent, *, on_changed=None)` — Toplevel dialog
+- `LocalDataDialog(parent, *, on_changed=None)` — `BaseModalDialog`
   modal to `parent`. The optional `on_changed` callback is invoked
   after a successful Save and Close so the caller can refresh the
   source combobox.
@@ -32,14 +32,18 @@ entries in the source-selector combobox.
 ## Dependencies
 - Internal: `tradinglab.settings`, `tradinglab.defaults`,
   `tradinglab.data.DATA_SOURCES`, `tradinglab.data.register_local_sources`,
-  `._modal_keys.bind_modal_keys`, `.colors.MUTED_GREY`.
+  `._modal_base.BaseModalDialog`,
+  `._modal_base.protect_combobox_wheel`, `._modal_keys.bind_modal_keys`,
+  `.colors.MUTED_GREY`.
 - External: `tkinter`, `tkinter.ttk`, `tkinter.filedialog`,
   `tkinter.messagebox`.
 
 ## Design Decisions
 - **Save and Close / Cancel paradigm**. Composing a definition (root
   list) — not adjusting a live setting — so the user expects a deliberate
-  commit. Matches the `dialog-button-paradigms` audit ID.
+  commit. Matches the `dialog-button-paradigms` audit ID. The parent
+  dialog inherits `BaseModalDialog` and applies the combobox wheel guard
+  after building widgets.
 - **Enabled checkbox separate from row list**. So a user can keep a
   configured root list around but temporarily disable BYOD without
   losing the configuration.

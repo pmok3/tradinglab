@@ -450,3 +450,307 @@ def test_new_indicator_recollapses_preview(root, tmp_dir) -> None:
     info = dlg._preview_frame.pack_info()
     assert str(info.get("expand")) in ("0", "false", "False")
     dlg.destroy()
+
+
+# ===========================================================================
+# Import / Export
+# ===========================================================================
+
+
+def _write_builder_file(tmp_dir: Path, name: str) -> Path:
+    from tradinglab.indicators.expression import expression_to_python
+    src = expression_to_python(name=name, expression="ema(close, 5)")
+    p = tmp_dir / f"{name}.py"
+    p.write_text(src, encoding="utf-8")
+    return p
+
+
+def _ext_dir(tmp_path: Path) -> Path:
+    """An external directory distinct from the indicators dir (== tmp_path)."""
+    d = tmp_path / "_external"
+    d.mkdir(exist_ok=True)
+    return d
+
+
+def test_export_writes_selected_file(root, tmp_dir, tmp_path, monkeypatch) -> None:
+    _write_builder_file(tmp_dir, "exp_me")
+    dlg = _mk(root, tmp_dir)
+    dlg._refresh_saved_list()
+    # Select the one builder file.
+    dlg._listbox.selection_clear(0, "end")
+    dlg._listbox.selection_set(0)
+    dest = _ext_dir(tmp_path) / "exported.py"
+    monkeypatch.setattr(
+        mod.filedialog, "asksaveasfilename", lambda *a, **k: str(dest),
+    )
+    dlg._on_export()
+    assert dest.is_file()
+    assert dest.read_text(encoding="utf-8") == (tmp_dir / "exp_me.py").read_text(
+        encoding="utf-8"
+    )
+    dlg.destroy()
+
+
+def test_export_no_selection_sets_error(root, tmp_dir, monkeypatch) -> None:
+    dlg = _mk(root, tmp_dir)
+    called = {"dialog": False}
+    def _fail(*a, **k):
+        called["dialog"] = True
+        return ""
+    monkeypatch.setattr(mod.filedialog, "asksaveasfilename", _fail)
+    dlg._on_export()
+    assert called["dialog"] is False
+    assert "Select" in dlg._status_var.get()
+    dlg.destroy()
+
+
+def test_export_cancelled_is_noop(root, tmp_dir, monkeypatch) -> None:
+    _write_builder_file(tmp_dir, "cancel_exp")
+    dlg = _mk(root, tmp_dir)
+    dlg._refresh_saved_list()
+    dlg._listbox.selection_set(0)
+    monkeypatch.setattr(mod.filedialog, "asksaveasfilename", lambda *a, **k: "")
+    dlg._on_export()  # should not raise
+    dlg.destroy()
+
+
+def test_import_builder_file_registers_and_lists(
+    root, tmp_dir, tmp_path, monkeypatch
+) -> None:
+    external = _write_builder_file(_ext_dir(tmp_path), "imported_ind")
+    dlg = _mk(root, tmp_dir)
+    monkeypatch.setattr(
+        mod.filedialog, "askopenfilename", lambda *a, **k: str(external),
+    )
+    dlg._on_import()
+    try:
+        # Copied into the indicators dir.
+        assert (tmp_dir / "imported_ind.py").is_file()
+        # Registered globally.
+        assert "imported_ind" in ind_base.INDICATORS
+        # Appears in the saved list.
+        assert "imported_ind" in dlg._listbox.get(0, "end")
+    finally:
+        ind_loader.unregister_indicator("imported_ind")
+    dlg.destroy()
+
+
+def test_import_cancelled_is_noop(root, tmp_dir, monkeypatch) -> None:
+    dlg = _mk(root, tmp_dir)
+    monkeypatch.setattr(mod.filedialog, "askopenfilename", lambda *a, **k: "")
+    dlg._on_import()
+    assert dlg._listbox.size() == 0
+    dlg.destroy()
+
+
+def test_import_python_file_prompts_trust(root, tmp_dir, tmp_path, monkeypatch) -> None:
+    # A non-builder plugin (no marker) triggers the trust confirmation.
+    plugin = _ext_dir(tmp_path) / "trust_plugin.py"
+    plugin.write_text(
+        "from tradinglab.indicators.base import register_indicator\n"
+        "import numpy as np\n"
+        "class _F:\n"
+        "    kind_id = 'trust_plugin'\n"
+        "    name = 'trust_plugin'\n"
+        "    overlay = True\n"
+        "    def compute_arr(self, bars):\n"
+        "        return np.zeros(len(bars.close))\n"
+        "register_indicator('trust_plugin', lambda **k: _F())\n",
+        encoding="utf-8",
+    )
+    dlg = _mk(root, tmp_dir)
+    monkeypatch.setattr(
+        mod.filedialog, "askopenfilename", lambda *a, **k: str(plugin),
+    )
+    seen = {"asked": False}
+    def _ask(*a, **k):
+        seen["asked"] = True
+        return False  # decline
+    monkeypatch.setattr(mod.messagebox, "askokcancel", _ask)
+    dlg._on_import()
+    assert seen["asked"] is True
+    # Declined → not copied.
+    assert not (tmp_dir / "trust_plugin.py").exists()
+    dlg.destroy()
+
+
+def test_import_collision_prompts_overwrite(
+    root, tmp_dir, tmp_path, monkeypatch
+) -> None:
+    # Pre-existing file in the indicators dir.
+    _write_builder_file(tmp_dir, "dup_ind")
+    external = _write_builder_file(_ext_dir(tmp_path), "dup_ind")
+    dlg = _mk(root, tmp_dir)
+    monkeypatch.setattr(
+        mod.filedialog, "askopenfilename", lambda *a, **k: str(external),
+    )
+    seen = {"asked": False}
+    def _ask(*a, **k):
+        seen["asked"] = True
+        return False  # decline overwrite
+    monkeypatch.setattr(mod.messagebox, "askyesno", _ask)
+    dlg._on_import()
+    assert seen["asked"] is True
+    dlg.destroy()
+
+
+
+# ===========================================================================
+# Dark-mode theming of native (non-ttk) widgets
+# ===========================================================================
+from types import SimpleNamespace  # noqa: E402
+
+from tradinglab.constants import DARK_THEME  # noqa: E402
+
+
+def test_saved_listbox_dark_theme(root, tmp_dir) -> None:
+    """The saved-indicators Listbox must follow the dark palette, not stay white."""
+    dlg = _mk(root, tmp_dir)
+    dlg._apply_native_theme(DARK_THEME)
+    lb = dlg._listbox
+    assert str(lb.cget("background")) == DARK_THEME["tree_bg"]
+    assert str(lb.cget("foreground")) == DARK_THEME["tree_fg"]
+    assert str(lb.cget("selectbackground")) == DARK_THEME["spine"]
+    assert str(lb.cget("selectforeground")) == DARK_THEME["tree_fg"]
+    assert str(lb.cget("highlightbackground")) == DARK_THEME["spine"]
+    assert str(lb.cget("highlightcolor")) == DARK_THEME["spine"]
+    assert str(lb.cget("highlightthickness")) == "1"
+    assert str(lb.cget("borderwidth")) == "0"
+    assert str(lb.cget("relief")) == "flat"
+    dlg.destroy()
+
+
+def test_expression_text_dark_theme(root, tmp_dir) -> None:
+    dlg = _mk(root, tmp_dir)
+    dlg._mode_var.set(mod._EXPRESSION_MODE)
+    dlg._on_mode_changed()
+    dlg._apply_native_theme(DARK_THEME)
+    txt = dlg._expr_text
+    assert str(txt.cget("background")) == DARK_THEME["ax_bg"]
+    assert str(txt.cget("foreground")) == DARK_THEME["text"]
+    assert str(txt.cget("insertbackground")) == DARK_THEME["text"]
+    assert str(txt.cget("highlightbackground")) == DARK_THEME["spine"]
+    assert str(txt.cget("highlightcolor")) == DARK_THEME["spine"]
+    assert str(txt.cget("highlightthickness")) == "1"
+    assert str(txt.cget("borderwidth")) == "0"
+    assert str(txt.cget("relief")) == "flat"
+    dlg.destroy()
+
+
+def test_python_text_dark_theme(root, tmp_dir) -> None:
+    dlg = _mk(root, tmp_dir)
+    dlg._mode_var.set(mod._PYTHON_MODE)
+    dlg._on_mode_changed()
+    dlg._apply_native_theme(DARK_THEME)
+    txt = dlg._python_text
+    assert str(txt.cget("background")) == DARK_THEME["ax_bg"]
+    assert str(txt.cget("foreground")) == DARK_THEME["text"]
+    assert str(txt.cget("insertbackground")) == DARK_THEME["text"]
+    assert str(txt.cget("highlightthickness")) == "1"
+    dlg.destroy()
+
+
+def test_native_theme_auto_applied_from_app_theme_ctrl(root, tmp_dir) -> None:
+    """Constructing the dialog under a dark app theme controller paints the
+    Listbox dark without a manual ``_apply_native_theme`` call."""
+    root._theme_ctrl = SimpleNamespace(theme=DARK_THEME)  # type: ignore[attr-defined]
+    try:
+        dlg = mod.CustomIndicatorDialog(root, directory=tmp_dir)
+        lb = dlg._listbox
+        assert str(lb.cget("background")) == DARK_THEME["tree_bg"]
+        assert str(lb.cget("foreground")) == DARK_THEME["tree_fg"]
+        # The dialog Toplevel background also follows the window color.
+        assert str(dlg.cget("background")) == DARK_THEME["win_bg"]
+        dlg.destroy()
+    finally:
+        delattr(root, "_theme_ctrl")
+
+
+def test_native_theme_reapplied_after_mode_switch(root, tmp_dir) -> None:
+    """Switching modes builds a fresh Text widget; it must inherit the theme."""
+    root._theme_ctrl = SimpleNamespace(theme=DARK_THEME)  # type: ignore[attr-defined]
+    try:
+        dlg = mod.CustomIndicatorDialog(root, directory=tmp_dir)
+        dlg._mode_var.set(mod._EXPRESSION_MODE)
+        dlg._on_mode_changed()
+        # No explicit _apply_native_theme — the mode-render path must do it.
+        assert str(dlg._expr_text.cget("background")) == DARK_THEME["ax_bg"]
+        assert str(dlg._expr_text.cget("foreground")) == DARK_THEME["text"]
+        dlg.destroy()
+    finally:
+        delattr(root, "_theme_ctrl")
+
+
+# ===========================================================================
+# Scrollable Conditions body (many-condition reachability)
+# ===========================================================================
+from tradinglab.scanner import model as _scan_model  # noqa: E402
+
+
+def _simple_condition(threshold: float) -> _scan_model.Condition:
+    """A valid ``close > <literal>`` condition usable in a Group tree."""
+    return _scan_model.Condition(
+        left=_scan_model.FieldRef(kind="builtin", id="close"),
+        op=_scan_model.OP_GT,
+        params={"right": _scan_model.FieldRef(kind="literal", value=float(threshold))},
+        interval="1d",
+    )
+
+
+def test_conditions_body_hosts_block_editor_in_scrollable_canvas(root, tmp_dir) -> None:
+    """The Conditions BlockEditor must live inside a scrollable Canvas so a
+    long condition list stays reachable instead of being clipped."""
+    dlg = _mk(root, tmp_dir)
+    canvas = dlg._conditions_canvas
+    assert isinstance(canvas, tk.Canvas)
+    assert hasattr(canvas, "_tl_v_can_scroll")
+    be = dlg._block_editor
+    assert be is not None
+    inner = be.nametowidget(be.winfo_parent())
+    assert inner.nametowidget(inner.winfo_parent()) is canvas
+    dlg.destroy()
+
+
+def test_conditions_canvas_cleared_when_leaving_conditions_mode(root, tmp_dir) -> None:
+    dlg = _mk(root, tmp_dir)
+    assert isinstance(dlg._conditions_canvas, tk.Canvas)
+    dlg._mode_var.set(mod._EXPRESSION_MODE)
+    dlg._on_mode_changed()
+    assert dlg._conditions_canvas is None
+    dlg._mode_var.set(mod._CONDITIONS_MODE)
+    dlg._on_mode_changed()
+    assert isinstance(dlg._conditions_canvas, tk.Canvas)
+    dlg.destroy()
+
+
+def test_many_conditions_overflow_is_scrollable(root, tmp_dir) -> None:
+    """With many conditions the inner content has positive requested height,
+    hosted by the scroll viewport that makes the rows reachable."""
+    dlg = _mk(root, tmp_dir)
+    group = _scan_model.Group(
+        combinator="and",
+        children=[_simple_condition(i) for i in range(8)],
+    )
+    dlg._block_editor.set_root(group)
+    dlg._group_root = group
+    try:
+        dlg.geometry("700x300")
+    except tk.TclError:
+        pass
+    dlg.update_idletasks()
+    canvas = dlg._conditions_canvas
+    inner = dlg._block_editor.nametowidget(dlg._block_editor.winfo_parent())
+    assert inner.winfo_reqheight() > 0
+    assert canvas.winfo_reqheight() >= 0
+    dlg.destroy()
+
+
+def test_conditions_canvas_dark_themed(root, tmp_dir) -> None:
+    """The scroll canvas must follow the window background in dark mode,
+    not stay bright white behind the condition rows."""
+    dlg = _mk(root, tmp_dir)
+    dlg._apply_native_theme(DARK_THEME)
+    canvas = dlg._conditions_canvas
+    assert isinstance(canvas, tk.Canvas)
+    assert str(canvas.cget("background")) == DARK_THEME["win_bg"]
+    dlg.destroy()

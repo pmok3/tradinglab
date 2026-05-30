@@ -8,7 +8,7 @@ Provider-agnostic, column-tolerant translation between pandas-DataFrame-shaped p
 - `normalize_actions_df(df, *, symbol, source) -> List[DividendRecord]`
 - `coerce_float(v)` — None/NaN/inf-tolerant float coercion.
 - `date_to_midnight_ms(d)` — date → UTC midnight ms.
-- `slot_from_hour(hour_et)` — `BMO/AMC/DMH` classifier.
+- `slot_from_hour(hour_et)` — hour-only slot classifier: `<9` → `BMO`, `>=16` → `AMC`, otherwise `DMH`.
 - `EARNINGS_EST_VARIANTS`, `EARNINGS_ACT_VARIANTS`, `REVENUE_EST_VARIANTS`, `REVENUE_ACT_VARIANTS` — column-name fallback tables, exposed so smoke checks lock in the matrix.
 
 ## Dependencies
@@ -19,8 +19,8 @@ Internal: `.base`. External: none at import. Pandas-shape duck-typed at call tim
 - **Case-insensitive column lookup** preserving original names for `row[col]` indexing (pandas is case-sensitive at the row level).
 - **First-match wins** in `_resolve_column`; variant tables ordered most-recent-first.
 - **Missing columns are not errors.** Missing earnings columns → NaN fields; missing dividend columns → empty output.
-- **`9:00–9:29 ET` BMO quirk** preserved: `_extract_index_hour_et` encodes a +1 nudge when `hour==9 and minute>=30` (mirrors legacy behavior).
-- **Single-row both-cols.** `normalize_actions_df` emits a cash record AND a split record from one row when both columns are populated, in that order (stable by emission, not just `ex_ts`).
+- **9am rows classify DMH.** `slot_from_hour` is hour-only, so `09:00–09:59 ET` maps to DMH. `_extract_index_hour_et` still encodes the legacy +1 nudge for `09:30–09:59` rows before calling it.
+- **Single-row both-cols.** `normalize_actions_df` emits a split record AND a cash record from one row when both columns are populated, in that order (stable by emission, not just `ex_ts`).
 - **Output sorted ascending** by `ts` / `ex_ts` for binary-search-friendly order.
 
 ## Invariants

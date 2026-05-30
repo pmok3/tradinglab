@@ -107,7 +107,7 @@ The engine never imports ChartApp. `evaluate` takes snapshot inputs
 tests can hand deterministic inputs.
 
 ### Audio fallback
-`winsound` is imported lazily inside `_play_chime` with a top-level `try`.
+`winsound` is imported lazily inside `_play_chime` under a guarded `try`.
 Non-Windows runners get a silent no-op. On Windows we use `SND_NODEFAULT`
 so a missing system sound alias falls back to silence (not the jarring
 default `MessageBeep`).

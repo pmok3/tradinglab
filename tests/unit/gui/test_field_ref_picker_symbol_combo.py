@@ -330,20 +330,20 @@ def test_indicator_param_validation_shows_inline_error_and_blocks_commit(root):
         picker.destroy()
 
 
-def test_indicator_applicability_mentions_dependency_and_warmup(root):
+def test_indicator_applicability_mentions_dependency_not_warmup(root):
     picker = _FieldRefPicker(
         root, ref=FieldRef.indicator("ema", params={"length": 20}, symbol="SPY")
     )
     try:
         text = picker._applicability_var.get()
         assert "Requires SPY data" in text
-        assert "Warmup" in text
-        assert "bars" in text
+        # Warmup bar counts are intentionally NOT surfaced to the user.
+        assert "Warmup" not in text
     finally:
         picker.destroy()
 
 
-def test_indicator_shows_interval_warmup_dependency_and_missing_data_badges(root):
+def test_indicator_shows_interval_dependency_and_missing_data_badges_not_warmup(root):
     def status_provider(ref: FieldRef) -> tuple[bool, str]:
         return False, f"Missing data for {ref.symbol or 'active'}"
 
@@ -357,7 +357,8 @@ def test_indicator_shows_interval_warmup_dependency_and_missing_data_badges(root
         assert "@SPY" in texts
         assert "Dep" in texts
         assert "1h" in texts
-        assert any(t.startswith("Warmup ") for t in texts)
+        # Warmup bar counts are intentionally NOT surfaced to the user.
+        assert not any(t.startswith("Warmup") for t in texts)
         assert "Missing data" in texts
         assert "Can run now: no" in picker._applicability_var.get()
     finally:

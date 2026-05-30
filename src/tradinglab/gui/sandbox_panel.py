@@ -22,6 +22,7 @@ from tkinter import ttk
 from typing import Any
 
 from ..core.timezones import get_et, get_zoneinfo
+from .native_theme import apply_listbox_theme, current_theme
 
 _MS_PER_DAY = 86_400_000
 
@@ -107,6 +108,7 @@ class SandboxPanel(ttk.Frame):
         # Focus list — pick which ticker is on the primary chart.
         ttk.Label(self, text="Focus ticker:").grid(row=4, column=0, sticky="w", **pad)
         self._focus_lb = tk.Listbox(self, height=4, exportselection=False)
+        apply_listbox_theme(self._focus_lb, current_theme(self.app))
         self._focus_lb.grid(row=5, column=0, sticky="ew", **pad)
         self._focus_lb.bind("<<ListboxSelect>>", self._on_focus_select)
 

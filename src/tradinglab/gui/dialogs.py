@@ -29,6 +29,7 @@ from ..watchlists import (
 )
 from ._modal_base import BaseModalDialog, make_scrollable_form, protect_combobox_wheel
 from .colors import MUTED_GREY
+from .native_theme import apply_listbox_theme, current_theme
 
 if TYPE_CHECKING:
     from ..app import ChartApp
@@ -1019,6 +1020,7 @@ class _WatchlistDialog(BaseModalDialog):
         right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         ttk.Label(right, text="Tickers").pack(anchor="w")
         self._tickers = tk.Listbox(right, height=12, exportselection=False)
+        apply_listbox_theme(self._tickers, current_theme(parent))
         self._tickers.pack(fill=tk.BOTH, expand=True)
 
         t_btns = ttk.Frame(right)

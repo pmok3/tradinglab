@@ -2,15 +2,15 @@
 
 ## Purpose
 
-Dedicated **Theme Editor** Toplevel (big-bet item #7 of Phase E).
-Replaces the in-Settings 6-slot color-picker grid with a focused
-modeless dialog opened from **View → Theme…** (with a fallback
+Dedicated **Theme Editor** `BaseModalDialog` (big-bet item #7 of
+Phase E). Replaces the in-Settings 6-slot color-picker grid with a
+focused modal dialog opened from **View → Theme…** (with a fallback
 "Open Theme Editor…" button still in Settings for users who go
 there out of habit).
 
 ## Public API
 
-- `class ThemeEditorDialog(tk.Toplevel)` — not normally constructed
+- `class ThemeEditorDialog(BaseModalDialog)` — not normally constructed
   directly.
 - `open_theme_editor(parent: ChartApp) -> ThemeEditorDialog` —
   singleton-ish factory. Stashes at `parent._theme_editor_dialog`;
@@ -52,14 +52,14 @@ calling `_apply_theme()`. **Save and Close** is a no-op besides
 
 ## Geometry
 
-`attach_persistent_geometry(self, "dlg.theme_editor", "560x320")`.
-Minsize `(440, 260)`.
+`BaseModalDialog` uses `geometry_key="dlg.theme_editor"` with default
+geometry `"560x320"`. Minsize `(440, 260)`.
 
 ## Dependencies
 
 - Internal: `..constants.CUSTOMIZABLE_THEME_KEYS`,
-  `..constants.DEFAULT_THEMES`, `._modal_keys.bind_modal_keys`,
-  `.geometry_store.attach_persistent_geometry`.
+  `..constants.DEFAULT_THEMES`, `._modal_base.BaseModalDialog`,
+  `._modal_base.protect_combobox_wheel`.
 - External: `tkinter`, `tkinter.ttk`, `tkinter.colorchooser`.
 - Parent contract: `_theme_overrides`, `set_theme_override`,
   `clear_theme_overrides`, `replace_theme_overrides`,
@@ -67,8 +67,9 @@ Minsize `(440, 260)`.
 
 ## Design Decisions
 
-- **Modeless** (`transient(parent)` without `grab_set`): live
-  preview demands the user can still drag the chart.
+- **Base modal lifecycle**: the dialog inherits `BaseModalDialog`,
+  uses the default modal grab, and applies `protect_combobox_wheel`
+  before finalization.
 - **Snapshot + revert on Cancel** — `__init__` captures a
   `copy.deepcopy` of `_theme_overrides` plus the current
   `dark_var.get()`; `_on_cancel` replays both via
@@ -89,4 +90,6 @@ Minsize `(440, 260)`.
 - At most one `ThemeEditorDialog` per `ChartApp` instance.
 - Swatch button background always matches resolved color for its
   slot — `_refresh_swatches` invoked after every pick/preset/reset.
+- `BaseModalDialog._finalize_modal` binds ESC / WM close to Cancel
+  and Return to Save and Close.
 - **Tk-main-thread only**.

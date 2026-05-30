@@ -102,6 +102,10 @@ from .tooltip import ToolTip
 
 LOG = logging.getLogger(__name__)
 
+#: Circled-i glyph used as the hover-for-description info icon next to each
+#: editable parameter in :class:`_FieldRefParamDialog`.
+_INFO_ICON_GLYPH = "\u24d8"  # ⓘ
+
 
 # Interval picker values — kept in sync with the rest of the toolbar.
 _INTERVALS: tuple[str, ...] = ("1m", "2m", "5m", "15m", "30m", "1h", "1d", "1wk", "1mo")
@@ -1738,6 +1742,7 @@ class _FieldRefParamDialog(BaseModalDialog):
         self.result: FieldRef | None = None
         self._param_vars: dict[str, tk.Variable] = {}
         self._pdefs: dict[str, ParamDef] = {}
+        self._info_tooltips: dict[str, ToolTip] = {}
         self._output_var: tk.StringVar | None = None
         self._error_var = tk.StringVar(value="")
         self._build_layout()
@@ -1750,15 +1755,12 @@ class _FieldRefParamDialog(BaseModalDialog):
         title = spec.label if spec is not None else self._ref.id
 
         header = ttk.Label(self, text=title, font=("TkDefaultFont", 10, "bold"))
-        header.pack(side="top", anchor="w", padx=10, pady=(10, 2))
-        if spec is not None and spec.description:
-            ttk.Label(
-                self, text=spec.description, foreground="#888", wraplength=340
-            ).pack(side="top", anchor="w", padx=10, pady=(0, 6))
+        header.pack(side="top", anchor="w", padx=10, pady=(10, 4))
 
         body = ttk.Frame(self)
         body.pack(side="top", fill="both", expand=True, padx=4, pady=2)
         inner, canvas = make_scrollable_form(body)
+        self._form_canvas = canvas
 
         if spec is not None:
             for pdef in spec.params_schema:
@@ -1780,6 +1782,19 @@ class _FieldRefParamDialog(BaseModalDialog):
 
         protect_combobox_wheel(self, scroll_target=canvas)
 
+    def _add_info_icon(self, row: tk.Misc, key: str, tip: str) -> None:
+        """Render a hover-for-description (i) icon next to a param label."""
+        if not tip:
+            return
+        icon = ttk.Label(
+            row,
+            text=_INFO_ICON_GLYPH,
+            foreground="#1f4ea1",
+            cursor="question_arrow",
+        )
+        icon.pack(side="left", anchor="w", padx=(3, 0))
+        self._info_tooltips[key] = ToolTip(icon, tip)
+
     def _build_param_row(self, parent: tk.Misc, pdef: ParamDef) -> None:
         row = ttk.Frame(parent)
         row.pack(side="top", fill="x", padx=6, pady=3)
@@ -1788,6 +1803,7 @@ class _FieldRefParamDialog(BaseModalDialog):
         tip = tooltip_text_for(pdef)
         if tip:
             ToolTip(label, tip)
+        self._add_info_icon(row, pdef.name, tip)
         seed = self._ref.params.get(pdef.name, getattr(pdef, "default", None))
         var, widget = build_param_widget(parent, pdef, seed, commit_policy="manual")
         widget.pack(in_=row, side="right", anchor="e")
@@ -1798,6 +1814,11 @@ class _FieldRefParamDialog(BaseModalDialog):
         row = ttk.Frame(parent)
         row.pack(side="top", fill="x", padx=6, pady=3)
         ttk.Label(row, text="Output:").pack(side="left", anchor="w")
+        self._add_info_icon(
+            row,
+            "__output__",
+            "Which output series of this indicator to compare against.",
+        )
         current = self._ref.output_key or spec.default_output_key
         self._output_var = tk.StringVar(value=current)
         ttk.Combobox(
@@ -2962,10 +2983,6 @@ def _applicability_text_for_ref(
     symbol_part = f"Requires {symbol} data" if symbol else "Uses active symbol"
     interval_part = f"at {interval} interval" if interval else "at default interval"
     parts = [f"{symbol_part} {interval_part}."]
-    if ref.kind == FIELD_KIND_INDICATOR:
-        warmup = _warmup_bars_for_field_ref(ref)
-        if warmup is not None and warmup > 0:
-            parts.append(f"Warmup: about {warmup} bars.")
     if data_status_provider is not None:
         ok, message = _data_status_for_ref(ref, data_status_provider)
         state = "yes" if ok else "no"
@@ -2984,10 +3001,6 @@ def _badges_for_ref(
         badges.append(("Dep", f"Requires companion symbol data for {ref.symbol}."))
     if ref.interval:
         badges.append((str(ref.interval), "Uses a non-default interval."))
-    if ref.kind == FIELD_KIND_INDICATOR:
-        warmup = _warmup_bars_for_field_ref(ref)
-        if warmup is not None and warmup > 0:
-            badges.append((f"Warmup {warmup}", f"Needs about {warmup} bars before reliable."))
     if data_status_provider is not None:
         ok, message = _data_status_for_ref(ref, data_status_provider)
         badges.append(("Data OK" if ok else "Missing data", message))
@@ -3005,14 +3018,6 @@ def _data_status_for_ref(
         return bool(ok), str(message or ("Latest data available." if ok else "Missing required data."))
     except Exception:  # noqa: BLE001
         return False, "Data status check failed."
-
-
-def _warmup_bars_for_field_ref(ref: FieldRef) -> int | None:
-    try:
-        from ..strategy_tester.warmup import warmup_bars_for_kind
-        return int(warmup_bars_for_kind(ref.id, dict(ref.params or {})))
-    except Exception:  # noqa: BLE001
-        return None
 
 
 def _condition_summary_text(cond: Condition) -> str:

@@ -33,13 +33,14 @@ class TestTwoPaneLayout:
         assert len(sashes) == 1
 
     def test_chart_claims_startup_ratio_on_wide_window(self) -> None:
-        """On a 2000-px window, chart gets ~80 % and notebook ~20 %.
+        """On a 2000-px window, chart gets the golden-major (~61.8 %)
+        and notebook the golden-minor (~38.2 %).
 
         We pick a wide window so the ``notebook_min_px`` clamp doesn't
         kick in — the math is the pure ratio. Notebook width is
         computed as ``main_w - int(main_w * CHART_PANE_STARTUP_RATIO)``
         rather than ``int(main_w * (1 - ratio))`` to dodge float
-        precision artefacts (e.g. ``1920 * 0.20 == 383.999...``).
+        precision artefacts.
         """
         main_w = 2000
         sashes = compute_main_paned_sashes(main_w, chartstack_visible=False)
@@ -51,11 +52,12 @@ class TestTwoPaneLayout:
         assert notebook_w == expected_notebook
 
     def test_notebook_min_clamp_on_narrow_window(self) -> None:
-        """At 1200 px, 20 % = 240 px — below ``notebook_min_px``
-        default of 280. The clamp pins notebook at 280."""
-        sashes = compute_main_paned_sashes(1200, chartstack_visible=False)
+        """At 700 px, the golden-minor (~38.2 %) = ~268 px — below
+        ``notebook_min_px`` default of 280. The clamp pins notebook at
+        280."""
+        sashes = compute_main_paned_sashes(700, chartstack_visible=False)
         chart_w = sashes[0]
-        assert 1200 - chart_w == 280
+        assert 700 - chart_w == 280
 
 
 # ---------------------------------------------------------------------------
@@ -152,12 +154,12 @@ class TestConcreteExamples:
     @pytest.mark.parametrize(
         "main_w,expected_2pane,expected_3pane",
         [
-            # 1080p typical: 1920 wide.
-            (1920, [1536], [220, 1536]),  # nb=384 in both cases.
-            # 1440p wide: 2560.
-            (2560, [2048], [220, 2048]),  # nb=512 in both cases.
-            # 4K: 3840.
-            (3840, [3072], [220, 3072]),  # nb=768 in both cases.
+            # 1080p typical: 1920 wide. chart=int(1920*0.618034)=1186.
+            (1920, [1186], [220, 1186]),  # nb=734 in both cases.
+            # 1440p wide: 2560. chart=int(2560*0.618034)=1582.
+            (2560, [1582], [220, 1582]),  # nb=978 in both cases.
+            # 4K: 3840. chart=int(3840*0.618034)=2373.
+            (3840, [2373], [220, 2373]),  # nb=1467 in both cases.
         ],
     )
     def test_pinned_sash_positions(self, main_w, expected_2pane, expected_3pane):

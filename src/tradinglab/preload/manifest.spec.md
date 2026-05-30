@@ -23,8 +23,8 @@ Durable JSON sidecar describing a prepared sandbox universe (which symbols, whic
 ## Filesystem layout
 - Manifests live at `<_cache_dir()>/universes/<safe_filename(id)>.json`.
 - Co-located with `disk_cache` pickles so a single `TRADINGLAB_CACHE_DIR` redirect captures both (smoke-test isolation).
-- IDs are stable strings: built-in baskets use the basket key (`sp500`, `qqq`); custom watchlists use `watchlist:<name>`; path-unsafe chars in the filename stem are replaced with `__`.
-- **`_safe_filename` is non-injective**: every reserved char (`<>:"/\|?*` plus whitespace) maps to the same `"__"` replacement. Two universe IDs that differ only in reserved chars (e.g. `a:b` and `a/b`) collide to the same sidecar filename. In practice this is fine — built-in IDs are tightly controlled and watchlist names go through a sanitizer at creation time — but downstream code must not assume the manifest filename is a reversible encoding of the ID.
+- IDs are stable strings: built-in baskets use the basket key (`sp500`, `qqq`); custom watchlists use `watchlist:<name>`; path-unsafe chars in the filename stem (`<>:"/\|?*`) are replaced with `__`. Whitespace is preserved.
+- **`_safe_filename` is non-injective**: every reserved char maps to the same `"__"` replacement. Two universe IDs that differ only in reserved chars (e.g. `a:b` and `a/b`) collide to the same sidecar filename. In practice this is fine — built-in IDs are tightly controlled and watchlist names go through a sanitizer at creation time — but downstream code must not assume the manifest filename is a reversible encoding of the ID.
 
 ## Design Decisions
 - **JSON, not pickle**, because manifests are tiny structured records that humans may want to inspect or hand-edit; the binary blob trade-off that disk_cache makes (preserve datetime tz precision) doesn't apply here.

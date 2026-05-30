@@ -14,6 +14,7 @@ Modal Tk dialogs owned by `ChartApp`: the Settings dialog (worker count, dark mo
   - Helpers: `_on_open_theme_editor` (lazily imports `gui.theme_editor.open_theme_editor` and routes to the dedicated dialog), `_build_startup_defaults_section(parent)`, `_on_capture_current_as_default()`, `_on_reset_startup_defaults()`, `_commit_startup_defaults()`. The legacy in-dialog theme grid helpers (`_build_theme_editor_section`, `_current_color`, `_refresh_swatches`, `_on_pick_color`, `_on_reset_themes`) were removed when the grid moved to `theme_editor.py`.
 - `class _WatchlistDialog(BaseModalDialog)`:
   - **Two-pane layout**: names Treeview on the left (`[Pin][Name]` columns; a ✓ in the Pin column marks pinned lists), tickers Listbox on the right.
+  - The native Tk tickers `Listbox` is explicitly painted from the active theme (`tree_bg`, `tree_fg`, `spine`) because ttk.Style does not reach classic Tk widgets.
   - Buttons: `New`, `Rename`, `Delete` (for names); `Pin`, `Unpin` (toggle pin state of the selected list); `Add`, `Remove` (for tickers); `Import…`, `Export…` (JSON round-trip via `watchlists/storage.export_to_file` / `import_from_file`, mode `"merge"` on import).
   - Bottom row exposes two dismissal actions: **`Save and Close`** (primary — persists watchlists via `ChartApp._on_menu_save_watchlists` then closes) and **`Close`** (discard-on-exit). `Save and Close` falls through to a save-as file picker when the manager has no `loaded_path()`; if the user cancels that picker the dialog stays open so in-flight changes aren't dropped.
   - `Pin` button is disabled when (a) no name is selected, (b) the selected name is already pinned, or (c) the manager is at `MAX_PINNED` capacity. `Unpin` is disabled when the selected name is not pinned.
@@ -71,6 +72,8 @@ Modal Tk dialogs owned by `ChartApp`: the Settings dialog (worker count, dark mo
   call after the last widget is created is sufficient.
 - `_WatchlistDialog` errors surface as modals and abort the specific action
   (never leaves the manager in a broken state).
+- `tests/unit/gui/test_native_widget_dark_theme.py` asserts the Watchlists tickers
+  `Listbox` uses the dark palette instead of OS `SystemWindow` colors.
 - `_WatchlistDialog._on_close` calls `parent._rebuild_watchlist_subtabs()`
   exactly once iff `_pin_dirty`, wired to both the Close button and
   `WM_DELETE_WINDOW`.

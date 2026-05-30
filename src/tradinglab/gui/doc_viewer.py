@@ -69,6 +69,7 @@ from __future__ import annotations
 import os
 import re
 import tkinter as tk
+import webbrowser
 from pathlib import Path
 from tkinter import font as tkfont
 from tkinter import messagebox, ttk
@@ -76,6 +77,13 @@ from typing import Any
 
 from ._modal_base import BaseModalDialog
 from .colors import INFO_BLUE, MUTED_GREY
+
+#: Base URL for the canonical copy of the bundled docs on GitHub. The
+#: "Open externally" button maps the locally-bundled ``.md`` path back
+#: to its repo path under here so users land on the up-to-date source
+#: (and can read it without a Markdown viewer installed). Points at the
+#: ``main`` branch blob view.
+_GITHUB_DOCS_BASE: str = "https://github.com/pmok3/tradinglab/blob/main"
 
 #: Stable preferred order for the sidebar list. Docs not in this list
 #: are appended in alphabetical order so newly-added bundled .md files
@@ -87,8 +95,22 @@ _DOC_ORDER: tuple[str, ...] = (
     "ENTRIES_EXITS.md",
     "STRATEGY_TESTER.md",
     "chartstack.md",
-    "BUILDING_EXE.md",
 )
+
+#: Developer-only docs that must never surface in the bundled in-app
+#: viewer — they live on GitHub for contributors, not in the shipped
+#: ``.exe``. ``BUILDING_EXE.md`` is the PyInstaller release guide;
+#: ``PAINT_PIPELINE_REFACTOR.md`` is a multi-week refactor scope doc;
+#: ``SPEC_INDEX.md`` / ``SPEC_STYLE.md`` are the spec-authoring
+#: references. Filtered in :func:`_discover_doc_files` so they stay
+#: hidden even in a source-tree run where ``docs/`` is present. Keep
+#: this in sync with ``TradingLab.spec``'s ``_docs_exclude``.
+_HIDDEN_DOCS: frozenset[str] = frozenset({
+    "BUILDING_EXE.md",
+    "PAINT_PIPELINE_REFACTOR.md",
+    "SPEC_INDEX.md",
+    "SPEC_STYLE.md",
+})
 
 #: Human-readable display titles for known docs. Anything not in this
 #: map falls back to the filename (stripped of ``.md``).
@@ -99,10 +121,7 @@ _DOC_TITLES: dict[str, str] = {
     "ENTRIES_EXITS.md": "Entries and Exits Guide",
     "STRATEGY_TESTER.md": "Strategy Tester Guide",
     "chartstack.md": "ChartStack Guide",
-    "BUILDING_EXE.md": "Building the .exe",
     "spec.md": "Application Spec",
-    "SPEC_INDEX.md": "Spec Index (developer)",
-    "SPEC_STYLE.md": "Spec Style (developer)",
 }
 
 #: Tag base names emitted into the ``tk.Text`` widget. Tests assert
@@ -113,6 +132,7 @@ TAG_NAMES: tuple[str, ...] = (
     "code_block", "inline_code",
     "bold", "italic", "bold_italic",
     "link", "hr", "table_row",
+    "table_header", "table_rule",
 )
 
 
@@ -126,7 +146,7 @@ def _theme_palette(dark: bool) -> dict[str, str]:
 
     Returned keys: ``bg``, ``fg``, ``muted``, ``code_bg``, ``code_fg``,
     ``link``, ``hr``, ``sidebar_bg``, ``sidebar_fg``, ``sidebar_sel_bg``,
-    ``sidebar_sel_fg``.
+    ``sidebar_sel_fg``, ``btn_bg``, ``btn_fg``.
     """
     if dark:
         return {
@@ -141,6 +161,8 @@ def _theme_palette(dark: bool) -> dict[str, str]:
             "sidebar_fg": "#cfcfcf",
             "sidebar_sel_bg": "#3a5a8a",
             "sidebar_sel_fg": "#ffffff",
+            "btn_bg": "#3a3a3a",
+            "btn_fg": "#e8e8e8",
         }
     return {
         "bg": "#ffffff",
@@ -154,6 +176,8 @@ def _theme_palette(dark: bool) -> dict[str, str]:
         "sidebar_fg": "#1f1f1f",
         "sidebar_sel_bg": "#cfe2ff",
         "sidebar_sel_fg": "#0b3a82",
+        "btn_bg": "#e1e4e8",
+        "btn_fg": "#1f1f1f",
     }
 
 
@@ -227,6 +251,109 @@ def _apply_inline_markup(text_widget, line: str, base_tag: str) -> None:
         text_widget.insert("end", line[pos:], (base_tag,))
 
 
+#: Matches a GFM table separator cell, e.g. ``---``, ``:--``, ``:-:``.
+_TABLE_SEP_CELL_RE = re.compile(r"^:?-{1,}:?$")
+
+
+def _visible_inline_len(text: str) -> int:
+    """Return the rendered width of ``text`` after inline-markup removal.
+
+    Mirrors what :func:`_apply_inline_markup` actually inserts so table
+    columns align even when cells contain ``**bold**`` / ``` `code` ``` /
+    ``[label](url)`` markup. Links expand to ``label (url)`` to match the
+    renderer's two-segment emission.
+    """
+    out: list[str] = []
+    pos = 0
+    for m in _INLINE_RE.finditer(text):
+        out.append(text[pos:m.start()])
+        if m.group(1) is not None:        # inline code
+            out.append(m.group(1))
+        elif m.group(2) is not None:      # link [label](url)
+            out.append(f"{m.group(2)} ({m.group(3)})")
+        elif m.group(4) is not None:      # bold-italic
+            out.append(m.group(4))
+        elif m.group(5) is not None:      # bold
+            out.append(m.group(5))
+        elif m.group(6) is not None:      # italic *x*
+            out.append(m.group(6))
+        elif m.group(7) is not None:      # italic _x_
+            out.append(m.group(7))
+        pos = m.end()
+    out.append(text[pos:])
+    return len("".join(out))
+
+
+def _split_table_row(line: str) -> list[str]:
+    """Split a ``| a | b |`` row into trimmed cell strings."""
+    s = line.strip()
+    if s.startswith("|"):
+        s = s[1:]
+    if s.endswith("|"):
+        s = s[:-1]
+    return [c.strip() for c in s.split("|")]
+
+
+def _emit_table(text_widget, block: list[str], emitted: list[str]) -> None:
+    """Render a buffered run of pipe-rows as an aligned, ruled table.
+
+    The GFM separator row (``|---|---|``) is consumed — it never renders
+    as literal dashes. Cells are width-padded with a monospace font so
+    columns line up; a box-drawing rule (``─┼─``) divides header from
+    body and ``│`` separates columns.
+    """
+    rows = [_split_table_row(ln) for ln in block]
+    if not rows:
+        return
+
+    def _is_sep(cells: list[str]) -> bool:
+        return bool(cells) and all(
+            c and _TABLE_SEP_CELL_RE.match(c) for c in cells
+        )
+
+    sep_idx = next((i for i, r in enumerate(rows) if _is_sep(r)), None)
+    if sep_idx is None:
+        header_rows: list[list[str]] = []
+        body_rows = rows
+    else:
+        header_rows = rows[:sep_idx]
+        body_rows = [r for r in rows[sep_idx + 1:] if not _is_sep(r)]
+
+    ncols = max(len(r) for r in rows)
+    widths = [1] * ncols
+    for r in header_rows + body_rows:
+        for c in range(ncols):
+            cell = r[c] if c < len(r) else ""
+            widths[c] = max(widths[c], _visible_inline_len(cell))
+
+    def _emit_row(cells: list[str], base_tag: str) -> None:
+        for c in range(ncols):
+            cell = cells[c] if c < len(cells) else ""
+            text_widget.insert("end", " ", (base_tag,))
+            _apply_inline_markup(text_widget, cell, base_tag)
+            pad = widths[c] - _visible_inline_len(cell) + 1
+            text_widget.insert("end", " " * pad, (base_tag,))
+            if c < ncols - 1:
+                text_widget.insert("end", "\u2502", ("table_rule",))
+        text_widget.insert("end", "\n", (base_tag,))
+        emitted.append(base_tag)
+
+    def _emit_rule() -> None:
+        for c in range(ncols):
+            text_widget.insert("end", "\u2500" * (widths[c] + 2), ("table_rule",))
+            if c < ncols - 1:
+                text_widget.insert("end", "\u253c", ("table_rule",))
+        text_widget.insert("end", "\n", ("table_rule",))
+        emitted.append("table_rule")
+
+    for r in header_rows:
+        _emit_row(r, "table_header")
+    if header_rows:
+        _emit_rule()
+    for r in body_rows:
+        _emit_row(r, "table_row")
+
+
 def render_markdown_into_text(text_widget, md_text: str) -> list[str]:
     """Render ``md_text`` into a ``tk.Text`` widget using semantic tags.
 
@@ -238,21 +365,38 @@ def render_markdown_into_text(text_widget, md_text: str) -> list[str]:
     Stateful scanner:
     * Lines inside a ```` ``` ```` fenced block are emitted with the
       ``code_block`` tag verbatim (no inline-markup dispatch).
-    * Tables (lines starting with ``|``) are emitted as ``table_row``
-      so the caller can apply a monospace font and avoid expensive
-      column-balancing logic.
+    * Consecutive table rows (lines starting with ``|``) are buffered
+      and rendered as one width-aligned table: the ``|---|`` separator
+      row is consumed, header cells get ``table_header``, body cells
+      ``table_row``, and a box-drawing rule + ``\u2502`` column dividers
+      get ``table_rule``. Monospace fonts keep columns aligned.
     * Each non-code line is dispatched to the most-specific block
       tag (h1..h4, bullet, numbered, blockquote, hr, para) and then
       run through :func:`_apply_inline_markup`.
     """
     emitted: list[str] = []
     in_code = False
+    table_block: list[str] = []
     lines = md_text.splitlines()
 
     def _emit_blank() -> None:
         text_widget.insert("end", "\n")
 
+    def _flush_table() -> None:
+        if table_block:
+            _emit_table(text_widget, table_block, emitted)
+            table_block.clear()
+
     for raw in lines:
+        # Buffer consecutive pipe-rows into a single table block so the
+        # whole table can be width-balanced and ruled at once.
+        is_table_line = (not in_code) and raw.strip().startswith("|")
+        if table_block and not is_table_line:
+            _flush_table()
+        if is_table_line:
+            table_block.append(raw.strip())
+            continue
+
         if raw.strip().startswith("```"):
             in_code = not in_code
             # Don't render the fence row itself; just toggle state.
@@ -292,12 +436,6 @@ def render_markdown_into_text(text_widget, md_text: str) -> list[str]:
             emitted.append("blockquote")
             continue
 
-        # Tables (rough heuristic — line starts with |)
-        if stripped.startswith("|"):
-            text_widget.insert("end", line + "\n", ("table_row",))
-            emitted.append("table_row")
-            continue
-
         # Bullets: detect indent depth in pairs/quads of spaces.
         indent = len(line) - len(line.lstrip(" "))
         # Pre-strip leading tabs (treat as 4 spaces).
@@ -329,6 +467,7 @@ def render_markdown_into_text(text_widget, md_text: str) -> list[str]:
         _apply_inline_markup(text_widget, line + "\n", "para")
         emitted.append("para")
 
+    _flush_table()
     return emitted
 
 
@@ -356,6 +495,8 @@ def _discover_doc_files() -> list[Path]:
     found: dict[str, Path] = {}
     for entry in docs_root.iterdir():
         if entry.is_file() and entry.suffix.lower() == ".md":
+            if entry.name in _HIDDEN_DOCS:
+                continue
             found[entry.name] = entry
     ordered: list[Path] = []
     for name in _DOC_ORDER:
@@ -366,9 +507,69 @@ def _discover_doc_files() -> list[Path]:
     return ordered
 
 
+def _first_h1_title(path: Path) -> str | None:
+    """Return the text of the document's first level-1 heading, if any.
+
+    Scans only the leading lines of the file so acronym-named guides
+    (``ma.md``, ``adx.md``, ``rrvol.md``) surface their authored title
+    (e.g. "Moving Average (MA)") rather than a titleized filename
+    ("Ma"). Returns ``None`` when the file is unreadable or has no
+    ``# `` heading near the top.
+    """
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            for _ in range(50):
+                line = fh.readline()
+                if line == "":
+                    break
+                stripped = line.strip()
+                if stripped.startswith("# "):
+                    return stripped[2:].strip().rstrip("#").strip() or None
+                if stripped.startswith("#"):
+                    # A deeper heading (## …) before any H1 — stop looking.
+                    return None
+    except OSError:
+        return None
+    return None
+
+
 def _display_title_for(path: Path) -> str:
-    """Return the human-readable sidebar / title-bar label for ``path``."""
-    return _DOC_TITLES.get(path.name, path.stem.replace("_", " ").title())
+    """Return the human-readable sidebar / title-bar label for ``path``.
+
+    Resolution order: an explicit :data:`_DOC_TITLES` override, then the
+    document's own first ``# `` heading, then a titleized filename as a
+    last resort.
+    """
+    mapped = _DOC_TITLES.get(path.name)
+    if mapped is not None:
+        return mapped
+    h1 = _first_h1_title(path)
+    if h1:
+        return h1
+    return path.stem.replace("_", " ").title()
+
+
+def _github_url_for(path: os.PathLike | str) -> str | None:
+    """Map a bundled doc ``path`` to its canonical GitHub blob URL.
+
+    The doc is resolved at runtime via ``resource_path("docs", …)``, so
+    the absolute location differs between a source checkout
+    (``<repo>/docs/…``) and a frozen build (``<_MEIPASS>/docs/…``). Both
+    share the same tail starting at the ``docs`` directory, so we locate
+    the last ``docs`` segment and rebuild the repo-relative path under
+    :data:`_GITHUB_DOCS_BASE`. Returns ``None`` when the path has no
+    ``docs`` segment (defensive — every bundled doc lives under
+    ``docs/``).
+    """
+    parts = Path(path).parts
+    docs_idx = next(
+        (i for i in range(len(parts) - 1, -1, -1) if parts[i] == "docs"),
+        None,
+    )
+    if docs_idx is None:
+        return None
+    rel = "/".join(parts[docs_idx:])
+    return f"{_GITHUB_DOCS_BASE}/{rel}"
 
 
 # ---------------------------------------------------------------------------
@@ -420,6 +621,7 @@ class DocViewerDialog(BaseModalDialog):
         # after the toggle) showed stale light-mode chrome.
         self._theme_tk_frames: list[tk.Widget] = []
         self._theme_tk_labels: list[tk.Widget] = []
+        self._theme_tk_buttons: list[tk.Widget] = []
 
         self.configure(bg=self._palette["bg"])
         self._build_layout()
@@ -493,22 +695,50 @@ class DocViewerDialog(BaseModalDialog):
         title_label._dv_bg_key = "bg"  # type: ignore[attr-defined]
         title_label._dv_fg_key = "fg"  # type: ignore[attr-defined]
 
-        external_btn = ttk.Button(
-            top, text="Open Externally…",
+        external_btn = tk.Button(
+            top, text="View on GitHub…",
             command=self._on_open_externally,
+            bg=pal["btn_bg"], fg=pal["btn_fg"],
+            activebackground=pal["btn_bg"], activeforeground=pal["btn_fg"],
+            relief="solid", borderwidth=1, padx=10, pady=2,
+            highlightthickness=0, cursor="hand2",
         )
         external_btn.pack(side="right", padx=(4, 0))
+        external_btn._dv_bg_key = "btn_bg"  # type: ignore[attr-defined]
+        external_btn._dv_fg_key = "btn_fg"  # type: ignore[attr-defined]
+        self._theme_tk_buttons.append(external_btn)
 
-        close_btn = ttk.Button(top, text="Close", command=self._on_cancel)
+        close_btn = tk.Button(
+            top, text="Close", command=self._on_cancel,
+            bg=pal["btn_bg"], fg=pal["btn_fg"],
+            activebackground=pal["btn_bg"], activeforeground=pal["btn_fg"],
+            relief="solid", borderwidth=1, padx=10, pady=2,
+            highlightthickness=0, cursor="hand2",
+        )
         close_btn.pack(side="right", padx=(4, 0))
+        close_btn._dv_bg_key = "btn_bg"  # type: ignore[attr-defined]
+        close_btn._dv_fg_key = "btn_fg"  # type: ignore[attr-defined]
+        self._theme_tk_buttons.append(close_btn)
 
-        # Body: PanedWindow with sidebar + text area.
-        body = ttk.Panedwindow(outer, orient="horizontal")
+        # Body: a plain two-pane frame (sidebar + text area). We
+        # deliberately do NOT use a ``ttk.Panedwindow`` here: the panes
+        # are not user-resizable, and a Panedwindow always draws a sash
+        # grip in the middle of the divider which (mis)suggests the
+        # divider can be dragged. A packed Frame layout has no sash at
+        # all, so the description box width is hard-locked by
+        # construction and the sidebar takes a fixed, content-fit width.
+        body = tk.Frame(outer, bg=pal["bg"])
         body.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        self._theme_tk_frames.append(body)
+        body._dv_bg_key = "bg"  # type: ignore[attr-defined]
+        self._body = body
 
-        # Sidebar (left).
-        side = tk.Frame(body, bg=pal["sidebar_bg"], width=200)
+        # Sidebar (left). Width is computed to fit the longest document
+        # title so headlines are never clipped (see _sidebar_width_px).
+        side = tk.Frame(body, bg=pal["sidebar_bg"], width=self._sidebar_width_px())
         side.pack_propagate(False)
+        side.pack(side="left", fill="y")
+        self._side_frame = side
         self._theme_tk_frames.append(side)
         side._dv_bg_key = "sidebar_bg"  # type: ignore[attr-defined]
         side_lbl = tk.Label(
@@ -535,7 +765,9 @@ class DocViewerDialog(BaseModalDialog):
         )
         self._sidebar.pack(fill="both", expand=True, padx=4, pady=(0, 8))
         self._sidebar.bind("<<ListboxSelect>>", self._on_sidebar_select)
-        body.add(side, weight=0)
+        # Swallow clicks that land in the empty space below the last
+        # item so they don't select (and navigate to) the final doc.
+        self._sidebar.bind("<Button-1>", self._on_sidebar_click)
 
         # Text pane (right) with scrollbar.
         right = tk.Frame(body, bg=pal["bg"])
@@ -568,7 +800,54 @@ class DocViewerDialog(BaseModalDialog):
         # when the cursor is over the text widget regardless of
         # focus (matches the chart widget's behaviour).
         self._text.bind("<MouseWheel>", self._on_mousewheel)
-        body.add(right, weight=1)
+        right.pack(side="left", fill="both", expand=True)
+
+    def _sidebar_width_px(self) -> int:
+        """Width (px) for the sidebar that fits the longest doc title.
+
+        Measures every discovered document's display title (plus the
+        ``Documents`` header) in the sidebar font and adds room for the
+        listbox padding so no headline is clipped. Clamped to a sane
+        ``[160, 360]`` range so a pathologically long title can't eat
+        the whole window.
+        """
+        try:
+            f = tkfont.Font(family="Segoe UI", size=10)
+            labels = [_display_title_for(p) for p in self._docs]
+            labels.append("Documents")
+            longest = max((f.measure(s) for s in labels), default=140)
+        except tk.TclError:
+            longest = 160
+        # listbox padx (4*2) + frame breathing room + dotbox/active marker.
+        width = int(longest) + 40
+        return max(160, min(360, width))
+
+    def _on_sidebar_click(self, event) -> str | None:
+        """Block clicks that fall below the last list item.
+
+        A ``tk.Listbox`` selects (and thus, via ``<<ListboxSelect>>``,
+        navigates to) the nearest item even when the user clicks in the
+        empty space beneath the final row. Returning ``"break"`` for
+        those clicks stops the default select behaviour so the viewer
+        only navigates on a genuine item click.
+        """
+        if not self._click_on_item(getattr(event, "y", 0)):
+            return "break"
+        return None
+
+    def _click_on_item(self, y: int) -> bool:
+        """True iff vertical position ``y`` lands on a real list row."""
+        try:
+            if self._sidebar.size() == 0:
+                return False
+            idx = self._sidebar.nearest(y)
+            bbox = self._sidebar.bbox(idx)
+        except tk.TclError:
+            return False
+        if not bbox:
+            return False
+        _bx, by, _bw, bh = bbox
+        return by <= y <= by + bh
 
     def _configure_tags(self) -> None:
         """Wire fonts + colours for every renderer-emitted tag."""
@@ -639,7 +918,17 @@ class DocViewerDialog(BaseModalDialog):
         self._text.tag_configure(
             "table_row",
             font=tkfont.Font(family=mono_family, size=9),
-            foreground=pal["fg"], spacing3=0,
+            foreground=pal["fg"], spacing3=0, wrap="none",
+        )
+        self._text.tag_configure(
+            "table_header",
+            font=tkfont.Font(family=mono_family, size=9, weight="bold"),
+            foreground=pal["fg"], spacing3=0, wrap="none",
+        )
+        self._text.tag_configure(
+            "table_rule",
+            font=tkfont.Font(family=mono_family, size=9),
+            foreground=pal["hr"], spacing3=0, wrap="none",
         )
 
     # ------------------------------------------------------------------
@@ -694,7 +983,7 @@ class DocViewerDialog(BaseModalDialog):
             except tk.TclError:
                 pass
 
-        # Sidebar listbox.
+        # Sidebar listbox + container width (re-fit in case docs changed).
         try:
             if self._sidebar.winfo_exists():
                 self._sidebar.configure(
@@ -704,6 +993,22 @@ class DocViewerDialog(BaseModalDialog):
                 )
         except (tk.TclError, AttributeError):
             pass
+
+        # Action buttons (View on GitHub / Close).
+        for btn in list(self._theme_tk_buttons):
+            try:
+                if not btn.winfo_exists():
+                    continue
+                bg_key = getattr(btn, "_dv_bg_key", "btn_bg")
+                fg_key = getattr(btn, "_dv_fg_key", "btn_fg")
+                btn.configure(
+                    bg=pal.get(bg_key, pal["bg"]),
+                    fg=pal.get(fg_key, pal["fg"]),
+                    activebackground=pal.get(bg_key, pal["bg"]),
+                    activeforeground=pal.get(fg_key, pal["fg"]),
+                )
+            except tk.TclError:
+                pass
 
         # Text widget + every renderer tag — _configure_tags is
         # idempotent and reads the (now-updated) self._palette.
@@ -724,6 +1029,15 @@ class DocViewerDialog(BaseModalDialog):
         self._sidebar.delete(0, "end")
         for p in self._docs:
             self._sidebar.insert("end", _display_title_for(p))
+        # Re-fit the sidebar width now that the full doc list (including
+        # any one-shot initial_path doc) is known, so every headline is
+        # fully visible.
+        try:
+            if getattr(self, "_side_frame", None) is not None and \
+                    self._side_frame.winfo_exists():
+                self._side_frame.configure(width=self._sidebar_width_px())
+        except tk.TclError:
+            pass
 
     def _on_sidebar_select(self, _event=None) -> None:
         sel = self._sidebar.curselection()
@@ -813,24 +1127,27 @@ class DocViewerDialog(BaseModalDialog):
     # Toolbar + event handlers
     # ------------------------------------------------------------------
     def _on_open_externally(self) -> None:
-        """Hand off to the OS-default app for users who prefer it.
+        """Open the current doc's canonical copy on GitHub in a browser.
 
-        Mirrors the legacy ``Help \u2192 Getting Started`` behaviour
-        so users who do want their browser / Markdown editor can still
-        get there in one click.
+        Maps the locally-bundled ``.md`` path to its repo path under
+        :data:`_GITHUB_DOCS_BASE` so users land on the up-to-date source
+        (no Markdown viewer required). Falls back to an info dialog if
+        the URL can't be derived or the browser won't launch.
         """
         if self._current_path is None:
             return
-        try:
-            from .help_menu import _open_in_default_app  # type: ignore
-            ok = _open_in_default_app(self._current_path)
-        except Exception:  # noqa: BLE001
-            ok = False
+        url = _github_url_for(self._current_path)
+        ok = False
+        if url is not None:
+            try:
+                ok = bool(webbrowser.open(url))
+            except Exception:  # noqa: BLE001
+                ok = False
         if not ok:
+            target = url or str(self._current_path)
             messagebox.showinfo(
                 "Open Externally",
-                f"Could not launch an external viewer.\n\n"
-                f"File path:\n{self._current_path}",
+                f"Could not open the document in your browser.\n\n{target}",
                 parent=self,
             )
 

@@ -10,12 +10,12 @@ Pure renderer-helper that projects an `EventsView` onto a visible-candle window,
 - `build_event_glyphs(view, candles, *, blind=False) -> List[EventGlyph]`.
 
 ## Dependencies
-Internal: `.base` (record types — duck-typed `getattr` lookups for shape tolerance). External: `math`, `dataclasses`, `typing`.
+Internal: none (record/view inputs are duck-typed with `getattr` lookups for shape tolerance). External: `math`, `dataclasses`, `typing`, `collections.abc`.
 
 ## Design Decisions
 - **Descriptor list, not artists.** Matplotlib artists built by `gui/sandbox_*` overlay modules; this stays headless.
 - **Bar-index, not x-coord.** Visible-candle lists are append-only with stable identity; integer index more robust than `transData` x (zoom/pan warps data coords).
-- **`bar_index = -1` means right-edge badge.** Forward events outside the visible window become a single right-edge "next earnings in T-N days" descriptor. In-pane forwards take precedence: any forward inside the window suppresses the right-edge badge (in-pane glyph carries strictly more info).
+- **`bar_index = -1` means right-edge badge.** In blind mode, forward badges become a single right-edge "next earnings in T-N days" descriptor. Non-blind forward records suppress the right-edge badge even if their date is outside the visible window.
 - **Tooltip pre-built here.** Blind-mode redaction stays inside the events module — GUI never sees an absolute forward date when blind.
 - **Marker letters are centralized.** `EVENT_MARKER_GLYPH` maps AMC earnings to `A`, BMO earnings to `B`, and dividend ex-dates to `D`; unsupported earnings slots fall back to `E` while splits remain `S`.
 
@@ -28,8 +28,8 @@ Internal: `.base` (record types — duck-typed `getattr` lookups for shape toler
 ## Algorithm
 1. For each past event, compute matching `bar_index` via linear scan over candle dates (visible windows are O(100s); bisect setup not worth it).
 2. Build tooltip and marker letter per record (`_earnings_tooltip` / `_dividend_tooltip`, `EVENT_MARKER_GLYPH`).
-3. Forward earnings: emit in-pane glyph if date inside window; else nothing (right-edge badge handles).
-4. If forward badges and no in-pane forward glyph, emit one right-edge badge using the nearest badge.
+3. Forward earnings: emit in-pane glyph if date inside window; outside-window records emit nothing.
+4. If forward badges exist and `forward_earnings` is empty, emit one right-edge badge using the nearest badge.
 
 ## Known limitations
 - One glyph per bar maximum per kind. Stacked glyphs (earnings AND ex-div same day) would overlap; future: y-stagger via a per-bar slot counter.

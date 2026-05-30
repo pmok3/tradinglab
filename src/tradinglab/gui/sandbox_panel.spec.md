@@ -18,6 +18,7 @@ Sidebar widget shown only while a sandbox session is active. Mounts to the right
 - **Buy / Sell open `PreTradeFormDialog`** for the currently focused ticker. Cancelling the modal silently no-ops; submitting routes through `controller.submit_order`.
 - **Post-trade modal driven via callback**: the controller invokes `_open_post_trade_modal(post_trade)` synchronously inside its `next_bar` loop. The callback opens [`PostTradeReviewDialog`](sandbox_review_dialog.spec.md), waits, and returns the user's text. The controller `dataclasses.replace`s the engine's record in place.
 - **All widget access wrapped in `tk.TclError` guards**: app-close races during `refresh()` have torn down the underlying Tk widgets; we want a silent no-op, not a stack trace.
+- **Native Listbox theming**: the Focus ticker `tk.Listbox` is painted from the active theme (`tree_bg`, `tree_fg`, `spine`) at construction so dark-mode sessions do not show the OS-default white listbox.
 
 ## Invariants
 - The panel is created and `pack`'d only while `controller.is_active()`. `end_session` triggers `app._hide_sandbox_panel()`.
@@ -25,4 +26,5 @@ Sidebar widget shown only while a sandbox session is active. Mounts to the right
 
 ## Testing
 - `check_g0_sandbox_replay_integration` and `check_g1_sandbox_phase1c` drive the controller's post-trade callback path end-to-end (smoke-mode panel-less; the dialog is short-circuited).
+- `tests/unit/gui/test_native_widget_dark_theme.py` asserts the Focus ticker `Listbox` uses dark palette colors under `DARK_THEME`.
 

@@ -17897,35 +17897,40 @@ def check_d61_time_label_on_crosshair(app) -> None:
 
 
 def check_d62_overlay_legend_eye_toggles(app) -> None:
-    """Per-overlay legend with eye-toggles (big-bet item #9).
+    """TradingView-style in-readout overlay legend (big-bet item #9).
 
-    A floating ``OverlayLegend`` Tk frame in the top-right of the
-    chart frame lists every overlay-class indicator (visible +
-    hidden). Clicking an eye-button flips the cfg's ``visible`` flag
-    via the IndicatorManager, which fires the redraw subscriber and
-    causes the next render to show or hide the lines. Hidden configs
-    keep their legend row so the user can re-enable them.
+    The floating Tk ``OverlayLegend`` pill has been RETIRED. The
+    overlay-class indicator legend is now rendered as transparent
+    matplotlib ``TextArea`` rows stacked under the OHLCV strip inside
+    the top-left readout offsetbox, so it never overlaps the OHLCV
+    readout and carries no opaque background. Each visible row shows
+    ``NAME value`` with the live indicator value at the hovered bar;
+    hidden overlays appear greyed (name only) so they can be
+    re-enabled via right-click.
 
-    The test exercises the legend in isolation via constructed
-    configs + a tiny stub manager; it deliberately does NOT mutate
-    the real ``app._indicator_manager`` so subsequent smoke checks
-    see an unperturbed indicator state.
+    Two layers are exercised:
+      1. The pure enumeration helper ``build_overlay_legend_rows``
+         (Tk-free, via a stub manager) — includes hidden configs and
+         resolves per-output colours.
+      2. End-to-end on the real app: add an SMA overlay, render, and
+         assert the price readout box gains a legend row whose live
+         value updates on hover. The real ``_indicator_manager`` is
+         restored in ``finally``.
     """
-    from tradinglab.gui.overlay_legend import (
-        OverlayLegend,
-        collect_overlay_configs,
-    )
+    from tradinglab.gui.overlay_legend import collect_overlay_configs
+    from tradinglab.gui.readout_legend import build_overlay_legend_rows
     from tradinglab.indicators.base import LineStyle
     from tradinglab.indicators.config import IndicatorConfig
 
-    legend = getattr(app, "_overlay_legend", None)
-    assert isinstance(legend, OverlayLegend), (
-        f"app._overlay_legend must be an OverlayLegend instance, "
-        f"got {type(legend)!r}")
+    # The Tk pill legend is retired — handles must be inert.
+    assert getattr(app, "_overlay_legend", "missing") is None, (
+        "the floating Tk OverlayLegend is retired; app._overlay_legend "
+        f"must be None, got {getattr(app, '_overlay_legend', 'missing')!r}")
+    assert getattr(app, "_overlay_legends", None) == {}, (
+        "app._overlay_legends must be an empty dict after Tk-legend "
+        "retirement")
 
-    # Stub manager: just enough surface for the legend to call
-    # ``update(cfg_id, visible=...)`` and ``list()`` without touching
-    # the real indicator manager's subscriber chain.
+    # ---- Layer 1: pure enumeration helper -----------------------------
     class _StubManager:
         def __init__(self):
             self._cfgs = {}
@@ -17948,84 +17953,114 @@ def check_d62_overlay_legend_eye_toggles(app) -> None:
             return list(self._cfgs.values())
 
     stub_mgr = _StubManager()
-    # Re-target the legend to the stub for the duration of the test.
-    real_mgr = legend._manager
-    legend._manager = stub_mgr
+    # No overlays -> no rows.
+    assert build_overlay_legend_rows(stub_mgr, "main", "1d") == []
+
+    sma_cfg = IndicatorConfig(
+        kind_id="sma", display_name="SMA(20)",
+        params={"length": 20},
+        style={"sma": LineStyle(color="#ff8800", width=1.2, visible=True)},
+        scopes=frozenset({"main"}),
+        visible=True,
+    )
+    stub_mgr.add(sma_cfg)
+    rows = build_overlay_legend_rows(stub_mgr, "main", "1d")
+    assert any(r.config_id == sma_cfg.id and r.visible for r in rows), (
+        f"visible SMA overlay must produce a legend row; got {rows!r}")
+    sma_row = next(r for r in rows if r.config_id == sma_cfg.id)
+    assert sma_row.color == "#ff8800", (
+        f"legend row colour must come from the cfg style; got {sma_row.color!r}")
+    assert "SMA" in sma_row.label
+
+    # Hidden overlay still enumerated (so it can be re-enabled), but
+    # flagged not-visible.
+    stub_mgr.update(sma_cfg.id, visible=False)
+    rows_hidden = build_overlay_legend_rows(stub_mgr, "main", "1d")
+    hidden_row = next(
+        (r for r in rows_hidden if r.config_id == sma_cfg.id), None)
+    assert hidden_row is not None and not hidden_row.visible, (
+        "hidden overlays must remain enumerated with visible=False")
+
+    # RSI (non-overlay pane indicator) must NOT appear in the overlay
+    # legend (collect_overlay_configs filters by overlay factories).
+    rsi_cfg = IndicatorConfig(
+        kind_id="rsi", display_name="RSI(14)",
+        params={"length": 14},
+        scopes=frozenset({"main"}),
+        visible=True,
+    )
+    stub_mgr.add(rsi_cfg)
+    overlay_ids = {c.id for c in collect_overlay_configs(stub_mgr, "main", "1d")}
+    assert rsi_cfg.id not in overlay_ids, (
+        "RSI is a non-overlay pane indicator and MUST NOT show up in the "
+        "overlay legend")
+
+    # ---- Layer 2: end-to-end in the real readout box ------------------
+    mgr = app._indicator_manager
+    pre_cfg_ids = [c.id for c in mgr.list()]
+    added_id = None
     try:
-        # No overlays -> legend stays hidden.
-        legend.refresh([])
-        assert not legend._placed, (
-            "legend must be hidden when no overlay configs are present")
-
-        # Add an SMA(20) overlay.
-        sma = IndicatorConfig(
-            kind_id="sma", display_name="SMA(20)",
-            params={"length": 20},
-            style={"sma": LineStyle(color="#ff8800", width=1.2,
-                                     visible=True)},
-            scopes=frozenset({"main"}),
-            visible=True,
+        cfg = IndicatorConfig(
+            kind_id="sma", scopes=("main",), params={"length": 3},
         )
-        stub_mgr.add(sma)
-        legend.refresh([sma])
+        mgr.add(cfg)
+        added_id = cfg.id
+        app._render()
 
-        btns = legend._buttons_by_id
-        assert sma.id in btns, (
-            f"newly-added SMA must appear in the legend; "
-            f"got buttons for ids={list(btns)}")
-        assert len(legend._rows) >= 1, "expected at least one legend row"
+        ax_p = app._ax_price
+        box = app._readout_artists.get(ax_p)
+        assert box is not None, "price axes must have a readout offsetbox"
+        ind_rows = getattr(box, "_ind_rows", None)
+        assert ind_rows, "readout box must carry per-overlay legend rows"
+        row_meta = next(
+            (m for m in ind_rows if m.get("config_id") == cfg.id), None)
+        assert row_meta is not None, (
+            "newly-added SMA overlay must appear as a readout legend row")
+        assert row_meta.get("visible") is True
+        assert row_meta.get("line") is not None, (
+            "visible overlay row must reference its live Line2D for hover values")
 
-        # Toggle hidden via the legend -> cfg.visible flips False.
-        legend._toggle(sma.id)
-        assert stub_mgr.get(sma.id).visible is False, (
-            "legend toggle must flip cfg.visible via manager.update")
+        # Hover the latest bar — the row text must gain a numeric value.
+        candles = app._panel_state["primary"]["candles"]
+        n = len(candles)
+        assert n > 5
+        app._update_readout(float(n - 1))
+        ta = row_meta["textarea"]
+        text = ta.get_text()
+        label = row_meta["label"]
+        assert text.startswith(label), (
+            f"legend row text must start with the indicator name: {text!r}")
+        assert any(ch.isdigit() for ch in text[len(label):]), (
+            f"hovered overlay legend row must display a live value: {text!r}")
 
-        # collect_overlay_configs must still list the hidden cfg
-        # (so the user can re-enable it from the legend).
-        visible_after = collect_overlay_configs(
-            stub_mgr, "main", "1d")
-        assert sma.id in {c.id for c in visible_after}, (
-            "hidden overlays must remain in the legend for re-enabling")
-
-        # Refresh and verify the eye glyph reflects the hidden state.
-        legend.refresh([sma])
-        glyph_hidden = legend._buttons_by_id[sma.id].cget("text")
-
-        # Toggle back to visible.
-        legend._toggle(sma.id)
-        assert stub_mgr.get(sma.id).visible is True
-        legend.refresh([sma])
-        glyph_visible = legend._buttons_by_id[sma.id].cget("text")
-        assert glyph_hidden != glyph_visible, (
-            f"hidden vs visible glyph must differ: "
-            f"hidden={glyph_hidden!r} visible={glyph_visible!r}")
-
-        # RSI (non-overlay pane indicator) must NOT appear when
-        # ``collect_overlay_configs`` filters by overlay factories.
-        rsi = IndicatorConfig(
-            kind_id="rsi", display_name="RSI(14)",
-            params={"length": 14},
-            scopes=frozenset({"main"}),
-            visible=True,
-        )
-        stub_mgr.add(rsi)
-        filtered = collect_overlay_configs(stub_mgr, "main", "1d")
-        assert sma.id in {c.id for c in filtered}
-        assert rsi.id not in {c.id for c in filtered}, (
-            "RSI is a non-overlay pane indicator and MUST NOT show up "
-            "in the overlay legend")
-
-        # Final cleanup: hide legend so post-test render doesn't
-        # leave a stray frame floating over the canvas.
-        legend.refresh([])
-        assert not legend._placed
+        # Hide the overlay -> next render greys the row (no live value).
+        mgr.update(cfg.id, visible=False)
+        app._render()
+        box2 = app._readout_artists.get(app._ax_price)
+        ind_rows2 = getattr(box2, "_ind_rows", None) or []
+        hidden_meta = next(
+            (m for m in ind_rows2 if m.get("config_id") == cfg.id), None)
+        assert hidden_meta is not None, (
+            "hidden overlay must remain in the readout legend for re-enabling")
+        assert hidden_meta.get("visible") is False
+        assert hidden_meta.get("line") is None, (
+            "hidden overlay row must not reference a live line (no value shown)")
     finally:
-        # Restore the real indicator manager binding.
-        legend._manager = real_mgr
+        if added_id is not None:
+            try:
+                mgr.remove(added_id)
+            except Exception:  # noqa: BLE001
+                pass
+        for c in list(mgr.list()):
+            if c.id not in pre_cfg_ids:
+                try: mgr.remove(c.id)  # noqa: E701
+                except Exception: pass  # noqa: BLE001, E701
+        try:
+            app._render()
+        except Exception:  # noqa: BLE001
+            pass
 
-    print("  [OK] overlay legend lists overlays + toggles visibility")
-
-    print("  [OK] overlay legend lists overlays + toggles visibility")
+    print("  [OK] in-readout overlay legend lists overlays + live values")
 
 
 def check_d28_data_readout_strip(app) -> None:

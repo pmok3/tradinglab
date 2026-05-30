@@ -31,9 +31,8 @@ yesterday" mid-day. Audit tag `daily-today-upsample`.
 
 ## Dependencies
 
-- Internal: `..models.Candle`.
-- External: `zoneinfo` (optional — lazy import, hard fallback to
-  fixed -5h UTC offset when tzdata missing).
+- Internal: `..models.Candle`, `..core.timezones.get_et`.
+- External: stdlib `datetime`; `zoneinfo` is reached only through the shared timezone helper, with a fixed -5h UTC fallback when tzdata is missing.
 
 ## Design decisions
 
@@ -45,12 +44,7 @@ coarser interval is acceptable when the finer one isn't warm.
 
 ### ET date assignment
 
-Tz-aware intraday timestamps convert to `America/New_York` via
-`zoneinfo` (codebase convention — see `app.spec.md` §"Cache staleness"
-for the same pattern). Tz-naive timestamps are treated as already-in-ET
-(matches `models.spec.md`). The fallback path on missing tzdata is a
-fixed `-5h` UTC offset; off-by-one for ~10% of the year (EDT vs EST)
-but only matters across midnight ET which RTH never straddles.
+Tz-aware intraday timestamps convert to `America/New_York` via the shared `core.timezones.get_et()` helper. Tz-naive timestamps are treated as already-in-ET (matches `models.spec.md`). The fallback path on missing tzdata is a fixed `-5h` UTC offset; off-by-one for ~10% of the year (EDT vs EST) but only matters across midnight ET which RTH never straddles.
 
 ### Regular session by default
 

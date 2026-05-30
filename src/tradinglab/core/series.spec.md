@@ -5,9 +5,9 @@ Vectorized numpy view of a `List[Candle]` plus a lazy per-candle tooltip-text ca
 
 ## Public API
 - `class SeriesArrays(__slots__=...)` — holds `opens`, `highs`, `lows`, `closes`, `volumes` (all `np.ndarray`, same length), plus `_candles` (the list it was built from), `_format_date` (callable), `_tooltip_cache: Dict[int, str]`, and `n: int`.
-  - `__init__(candles, format_date)` — legacy path: five `np.fromiter` passes (one per OHLCV column).
+  - `__init__(candles, format_date)` — legacy path: one Python pass filling five preallocated OHLCV arrays.
   - `@classmethod from_arrays(candles, format_date, arrays)` — fast path when the fetcher already extracted arrays during `candles_from_dataframe`.
-  - `@classmethod from_bars(bars, format_date) -> SeriesArrays` — alternate fast path for the scanner / indicator-cache layer when a NumPy-shaped `BarsNp` is already in hand. Reuses the existing OHLCV arrays in-place (no re-extraction), reconstructs a synthetic `List[Candle]` view from `bars` for the tooltip-text path, and stashes it under `_candles` so consumers that read `SeriesArrays._candles` (e.g. cache identity checks) keep working.
+  - `@classmethod from_bars(bars, format_date) -> SeriesArrays` — alternate fast path for the scanner / indicator-cache layer when a `Bars` view is already in hand. Requires `bars.candles` for tooltip text, reuses the existing OHLCV arrays in-place (no re-extraction), and stashes the `Bars` under `_bars`.
   - `tooltip_text(idx) -> str` — formats `"[PRE]/[POST] <date>\nO: ...\nH: ...\nL: ...\nC: ...\nVol: ..."` on first call; caches the result so repeated hovers are free.
 - `build_series_safe(candles, format_date) -> Optional[SeriesArrays]` — thread-safe builder used by worker threads. Pops any prebuilt arrays (via `data.pop_prebuilt_arrays`) and takes the fast path; falls back to the legacy path; swallows exceptions.
 
@@ -17,8 +17,8 @@ Vectorized numpy view of a `List[Candle]` plus a lazy per-candle tooltip-text ca
 
 ## Design Decisions
 - **`__slots__`** on `SeriesArrays`: instances are created per-candle-list (cached by `id()` in `ChartApp._series_cache`); slots cut memory ~30% vs. a `__dict__`-backed class and make attribute access a shade faster. Also documents the full attribute surface — unexpected attrs would `AttributeError`.
-- **`np.fromiter` with explicit `dtype=float, count=n`** rather than `np.array([c.low for c in candles])`. The generator path avoids building an intermediate Python list (material speedup on ~5k-bar intraday series).
-- **Fast-path construction via `from_arrays`**: when the fetcher (e.g. `candles_from_dataframe`) already extracted numpy arrays, it stashes them keyed by `id(candles)`. `build_series_safe` pops the stash and hands the arrays directly to `from_arrays`, skipping 5 extraction passes. See `data/normalize.py` for the side-channel.
+- **Single-pass array extraction** rather than five `np.fromiter` passes. One Python loop fills preallocated arrays, avoiding repeated candle-list walks and generator overhead.
+- **Fast-path construction via `from_arrays`**: when the fetcher (e.g. `candles_from_dataframe`) already extracted numpy arrays, it stashes them keyed by `id(candles)`. `build_series_safe` pops the stash and hands the arrays directly to `from_arrays`, skipping candle-list extraction. See `data/normalize.py` for the side-channel.
 - **Lazy tooltip cache** (dict keyed by int idx): pre-formatting every candle's tooltip at startup would burn 5–50ms on large histories. Hover latency is dominated by blit overhead anyway, so lazy-and-cache is the right tradeoff.
 - **Session tag in tooltip** (`[PRE] ` / `[POST] `) so users can tell at a glance why a bar is visually dimmer.
 - **`build_series_safe` is thread-safe**: `SeriesArrays.__init__` only populates numpy arrays and stashes the `format_date` callable (the callable is invoked later on the main thread from `tooltip_text`, where Tk access is safe). The builder itself reads nothing from Tk.
@@ -37,7 +37,7 @@ try:
     prebuilt = pop_prebuilt_arrays(candles)     # side-channel from normalizer
     if prebuilt is not None:
         return SeriesArrays.from_arrays(candles, format_date, prebuilt)
-    return SeriesArrays(candles, format_date)
+    return SeriesArrays(candles, format_date)  # single-pass extraction
 except Exception:
     return None                                 # main thread will rebuild lazily
 ```

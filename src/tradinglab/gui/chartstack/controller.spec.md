@@ -22,23 +22,23 @@ explosion" guarantee).
     stream is held.
   - `bind(binding)` — replace held binding; resets to `IDLE`, bumps `token`,
     releases any held stream subscription, clears any held halt.
-  - `start()` — resolves source/interval on the Tk thread, bumps `token`,
-    transitions to `FETCHING`, submits a worker on
-    `owner_app._fetch_executor`. The worker calls
-    `DATA_SOURCES[src](symbol, interval)` and pushes
-    `("card_stash", (slot_index, token, symbol, bars))` onto
-    `owner_app._worker_inbox`. When called on the Tk main thread (test-shim
-    path), result is dispatched synchronously to
+  - `start()` — resolves source on the Tk thread, pins the card interval to
+    `"1d"`, bumps `token`, transitions to `FETCHING`, and submits a worker on
+    `owner_app._fetch_executor`. The worker calls `DATA_SOURCES[src](symbol,
+    "1d")` and pushes `("card_stash", (slot_index, token, symbol, bars))`
+    onto `owner_app._worker_inbox`. When called on the Tk main thread
+    (test-shim path), result is dispatched synchronously to
     `owner_app._chartstack.apply_card_stash`. No-op when binding is `None`,
     when `owner_app` lacks `_fetch_executor` / `_worker_inbox`, or when
-    source/interval Tk vars are unreadable.
-  - `start_stream(registry, *, is_intraday=None)` — resolves source/interval
-    on the Tk thread, subscribes via the `SubscriptionRegistry`, transitions
-    to `LIVE`. Subscribe is refcount-deduped (two cards on same
-    `(src, ticker, interval)` share one upstream stream). Upstream callback
-    enqueues `(token, "card:N", src, ticker, interval, kind, bar)` onto
-    `owner_app._stream_queue`. No-op when binding is `None`, owner lacks
-    `_stream_queue`, `is_intraday(interval)` is `False`, or
+    `source_var` is unreadable.
+  - `start_stream(registry, *, is_intraday=None)` — resolves source on the Tk
+    thread, pins the card interval to `"1d"`, then applies the intraday-only
+    stream gate. In normal app use `is_intraday("1d")` is `False`, so daily
+    ChartStack cards do not subscribe to live streams. If a test override
+    allows the daily key through, subscribing is refcount-deduped and the
+    upstream callback enqueues `(token, "card:N", src, ticker, "1d", kind,
+    bar)` onto `owner_app._stream_queue`. No-op when binding is `None`, owner
+    lacks `_stream_queue`, `is_intraday("1d")` is `False`, or
     `STREAM_SOURCES[src]` is missing. Idempotent on the same `stream_key`.
   - `stop_stream()` — release held subscription (decrement registry refcount;
     auto-unsubscribe upstream at zero). Idempotent. Does NOT change FSM
@@ -79,10 +79,10 @@ explosion" guarantee).
 - **Token gating** lives on the controller (payloads carry the token they
   were submitted under) — slow fetches landing after a re-bind are silently
   discarded with no need to cancel the worker.
-- **Workers must not touch Tcl/Tk vars.** Source/interval resolved on the
-  calling (Tk) thread and embedded in the worker closure; touching
-  `owner_app.source_var.get()` from the worker thread blocks
-  `tk.createcommand` (same contract as
+- **Workers must not touch Tcl/Tk vars.** Source is resolved on the
+  calling (Tk) thread and embedded in the worker closure; cards use a fixed
+  `"1d"` interval. Touching `owner_app.source_var.get()` from the worker
+  thread blocks `tk.createcommand` (same contract as
   `gui/watchlist_tab.py:_preload_one_last`).
 - **Synchronous dispatch on Tk thread**: when `start()` is invoked from the
   main thread (e.g. tests with a sync executor), the worker bypasses the

@@ -7,7 +7,7 @@ Pure-Python aggregator that derives higher-timeframe candles from a single prima
 - `INTERVAL_MINUTES: Dict[str, int]` — supported intervals: `1m`, `2m`, `5m`, `15m`, `30m`, `1h`, `60m`.
 - `interval_minutes(itv: str) -> int` — lookup; raises `ValueError` on unknown intervals.
 - `divides_evenly(primary: str, target: str) -> bool` — cheap precondition. `True` iff `target_minutes % primary_minutes == 0`. Used by the dialog and the controller to validate selectable timeframe combos before calling `aggregate`. Returns `False` when either string is unknown or when `target < primary`.
-- `aggregate(primary_candles, primary_interval, target_interval) -> List[Candle]` — main entry point. Returns a fresh `List[Candle]`. Identity-aggregation (same interval) returns a shallow copy. Raises `ValueError` if `target_interval` does not divide `primary_interval` evenly or either string is unsupported.
+- `aggregate(primary_candles, primary_interval, target_interval) -> List[Candle]` — main entry point. Returns a fresh `List[Candle]`. Identity-aggregation (same interval) returns a shallow copy. Raises `ValueError` if `target_interval` is not an integer multiple of `primary_interval` or either string is unsupported.
 
 ## Dependencies
 - Internal: `..models.Candle`.
@@ -22,7 +22,7 @@ Pure-Python aggregator that derives higher-timeframe candles from a single prima
 
 ## Invariants
 - `aggregate(primary, p, t)` for `t == p` returns `list(primary)` (shallow copy; same content, distinct list object). **`Candle` references are shared** — callers that mutate a returned candle will mutate the source list's candle too. In practice `Candle` is a frozen dataclass so this is moot, but if it ever becomes mutable, callers must `dataclasses.replace(...)` instead of in-place mutation.
-- `aggregate(primary, p, t)` for `t % p != 0` raises `ValueError` (never silently returns wrong-cadence bars).
+- `aggregate(primary, p, t)` for `t_minutes % p_minutes != 0` raises `ValueError` (never silently returns wrong-cadence bars).
 - For valid `(p, t)`, `len(out) == ceil(span / t_minutes)` per session, where `span` covers all primary bars in that calendar date. The trailing bar's timestamp is stable across re-aggregation calls until the bucket fills.
 - `volume` is summed as `int(c.volume)` per constituent (avoids float drift on long sessions).
 

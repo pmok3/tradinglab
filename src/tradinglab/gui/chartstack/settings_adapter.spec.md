@@ -23,7 +23,7 @@ clamp / parse rules in exactly one place.
   through the settings dialog, which calls `_settings.set(...)`
   directly.
 - **Clamp at read time.** A user who hand-edits their config to
-  `cards.count=12` should still get a working stack at 5 (the max),
-  not a crash.
-- **Default = `chartstack.enabled=False` for M1.** Flips to `True`
-  at M3 once streams + drain branches land.
+  `cards.count=12` should still get a working stack at the configured max
+  (default 6), not a crash.
+- **Default = `chartstack.enabled=False`.** ChartStack remains opt-in even
+  though later milestone code paths are present.

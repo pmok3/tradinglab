@@ -7,10 +7,12 @@ M1 just nails down the data structure with a tested upsert /
 rollover / eviction contract.
 
 ## Public API
-- `Bar(ts, open, high, low, close, volume)` — dataclass.
+- `Bar(ts, open, high, low, close, volume, session="regular")` — dataclass.
 - `CardSeriesCache(maxlen=60)`:
-  - `upsert_tick(ts, ohlcv)` — mutate the trailing bar in-place when
-    `ts` matches; otherwise append + evict oldest at capacity.
+  - `upsert_tick(ts, ohlcv, *, session="regular")` — mutate the trailing bar
+    in-place when `ts` matches; otherwise append + evict oldest at capacity.
+    The `session` value is used for newly appended bars and preserved on
+    in-place updates.
   - `append_rollover(bar)` — explicit append for finalized bars.
   - `snapshot() -> list[Bar]` — copy of the internal list.
   - `invalidate()` — clear all bars.
@@ -26,4 +28,5 @@ rollover / eviction contract.
 - **Mutable in-place upsert** keeps live-tick redraws allocation-
   free — the M3 blit budget is 2 ms/card.
 - **Decoupled from `models.Candle`** so unit tests don't need to
-  build the bigger model graph.
+  build the bigger model graph. `session` is carried as a plain string for
+  alert/session filters without importing candle/session helpers.

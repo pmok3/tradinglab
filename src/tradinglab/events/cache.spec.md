@@ -28,7 +28,7 @@ Disk-backed cache for fetched `EventBundle`s, mirroring `tradinglab.disk_cache` 
   overlap; sorted ascending. Unchanged from the pickle era.
 
 ## Dependencies
-Internal: `.base`. External: `json`, `math`, `os`, `tempfile`,
+Internal: `.base`, `..core.io_helpers.read_json`, `..paths.events_dir`. External: `json`, `math`, `os`, `tempfile`,
 `time`, `pathlib`.
 
 ## Design Decisions

@@ -30,7 +30,7 @@ Owns the **on-disk Schwab OAuth token cache** and the **POST-to-refresh** flow. 
   header before forwarding. Response read is bounded by
   `data._http.MAX_RESPONSE_BYTES` (8 MB) — the real Schwab token
   reply is ~1 KB.
-- **Never raises on happy paths**: missing creds, missing cache, network error during refresh — all return `None` so the fetcher / streamer fail gracefully.
+- **Public token lookup fails soft**: `get_access_token` returns `None` for missing creds, missing cache, expired refresh token, or network error during refresh so the fetcher / streamer fail gracefully. Lower-level `refresh_access_token` still raises `RuntimeError` when called directly with unconfigured credentials.
 
 ## Invariants
 - Cache file mode is 0600 on POSIX (best-effort on Windows where `os.chmod` is a no-op).

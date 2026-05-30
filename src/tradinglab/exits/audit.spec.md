@@ -66,4 +66,5 @@ opened against `<new-day>.jsonl`. Tests inject a fake `clock`.
 `tail(n)` walks date files newest-first until `n` records gathered,
 reverses for oldest-first output. `list_dates` returns YYYY-MM-DD
 newest-first; `read_date` returns that day's records oldest-first.
-Readers tolerate corrupt / non-object lines silently (logged warning).
+Readers use `core.io_helpers.read_jsonl` and tolerate corrupt /
+non-object lines by skipping them with a logged warning.

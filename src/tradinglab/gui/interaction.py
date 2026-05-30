@@ -66,6 +66,15 @@ class InteractionMixin:
             self._pan_state = None
             self._drag_press = None
             return
+        # In-readout overlay legend rows: B3 (or B1 double-click) on a
+        # row opens the per-indicator edit dialog / context menu, mirroring
+        # the pane-indicator-label affordance. Gated before pan/zoom so a
+        # click on the legend never starts a pan.
+        if (event.button in (1, 3)
+                and self._maybe_handle_readout_legend_click(event)):
+            self._pan_state = None
+            self._drag_press = None
+            return
         # Drawings: B1 double-click on a horizontal line opens the
         # per-line edit dialog. Gated BEFORE the drilldown check so
         # a line drawn over a candle wins (drill-down only takes
@@ -169,6 +178,72 @@ class InteractionMixin:
         except (TypeError, ValueError):
             return None, None
         return label, config_id
+
+    def _maybe_handle_readout_legend_click(self, event) -> bool:
+        """Open per-indicator edit/menu when an in-readout legend row is clicked.
+
+        Mirrors :meth:`_maybe_handle_pane_indicator_label_click` but
+        hit-tests the per-overlay ``TextArea`` rows stacked under the
+        OHLCV strip. B1 → per-indicator edit dialog; B3 → the full
+        legend context menu (Edit / Change Colour / Duplicate /
+        Hide↔Show / Remove). Returns True when a row was hit so the
+        caller can suppress pan/zoom.
+        """
+        config_id = self._readout_legend_row_hit(event)
+        if config_id is None:
+            return False
+        slot_key = self._slot_key_for_axes(getattr(event, "inaxes", None))
+        if event.button == 1:
+            opener = getattr(self, "_open_per_indicator_dialog", None)
+            if callable(opener):
+                try:
+                    opener(int(config_id), slot_key)
+                except Exception:  # noqa: BLE001
+                    pass
+            return True
+        if event.button == 3:
+            show = getattr(self, "_show_legend_context_menu", None)
+            if callable(show):
+                x_root, y_root = self._event_root_xy(event)
+                try:
+                    show(int(config_id), slot_key, x_root, y_root)
+                except Exception:  # noqa: BLE001
+                    pass
+            return True
+        return False
+
+    def _readout_legend_row_hit(self, event):
+        """Return the ``config_id`` of the legend row under ``event``, or None.
+
+        Each readout box stashes ``_ind_rows`` (built in
+        :meth:`_build_readout_indicator_rows`); every row's ``TextArea``
+        exposes ``get_window_extent`` in display coords after a draw, so
+        we can pixel-test the cursor against each row.
+        """
+        ax = getattr(event, "inaxes", None)
+        if ax is None:
+            return None
+        box = getattr(self, "_readout_artists", {}).get(ax)
+        if box is None or not box.get_visible():
+            return None
+        rows = getattr(box, "_ind_rows", None)
+        if not rows:
+            return None
+        try:
+            renderer = self._canvas.get_renderer()
+        except Exception:  # noqa: BLE001
+            return None
+        for meta in rows:
+            ta = meta.get("textarea")
+            if ta is None:
+                continue
+            try:
+                bbox = ta.get_window_extent(renderer)
+                if bbox.contains(float(event.x), float(event.y)):
+                    return int(meta.get("config_id"))
+            except Exception:  # noqa: BLE001
+                continue
+        return None
 
     def _slot_key_for_axes(self, ax) -> str | None:
         if ax is None:
@@ -1118,6 +1193,7 @@ class InteractionMixin:
             AnchoredOffsetbox,
             HPacker,
             TextArea,
+            VPacker,
         )
         self._readout_artists = {}
         for ax, entry in self._ax_candle_map.items():
@@ -1135,8 +1211,19 @@ class InteractionMixin:
                     textprops=dict(color=theme["text"], fontsize=9,
                                    family="monospace"),
                 )
-                packer = HPacker(children=[main_text, pct_text],
-                                 align="center", pad=0, sep=0)
+                ohlcv_row = HPacker(children=[main_text, pct_text],
+                                    align="center", pad=0, sep=0)
+                # TradingView-style indicator legend rows: one transparent
+                # line per visible overlay output (``NAME value``), rendered
+                # INSIDE the readout offsetbox so it never overlaps the
+                # OHLCV strip and has no opaque background. Hidden overlays
+                # appear greyed so they can be re-enabled via right-click.
+                ind_textareas, ind_meta = self._build_readout_indicator_rows(
+                    ax, theme)
+                packer = VPacker(
+                    children=[ohlcv_row, *ind_textareas],
+                    align="left", pad=0, sep=2,
+                )
                 box = AnchoredOffsetbox(
                     loc="upper left", child=packer,
                     pad=0.3, borderpad=0.5, frameon=False,
@@ -1150,6 +1237,7 @@ class InteractionMixin:
                 # back through the offsetbox tree on every hover dispatch.
                 box._main_text = main_text
                 box._pct_text = pct_text
+                box._ind_rows = ind_meta
                 self._readout_artists[ax] = box
             except Exception:  # noqa: BLE001
                 pass
@@ -1175,6 +1263,77 @@ class InteractionMixin:
             self._hover_ann = None
         self._hover_visible = False
         self._crosshair_current_ax = None
+
+    # ---- in-readout overlay indicator legend (TradingView-style) ------
+
+    _READOUT_SCOPE_FOR_SLOT = {"primary": "main", "compare": "compare"}
+
+    def _build_readout_indicator_rows(self, ax, theme):
+        """Build the per-overlay legend ``TextArea`` rows for ``ax``.
+
+        Returns ``(textareas, meta)`` where ``textareas`` is the list of
+        matplotlib ``TextArea`` artists to stack under the OHLCV strip,
+        and ``meta`` is a parallel list of dicts used by
+        :meth:`_update_readout` (live value) and the click hit-test::
+
+            {"config_id", "output_key", "label", "color", "visible",
+             "line", "textarea"}
+
+        Rows are enumerated via the pure
+        :func:`gui.readout_legend.build_overlay_legend_rows` (which
+        includes hidden configs); the live ``Line2D`` for each visible
+        row is looked up from the panel's ``overlay_lines`` so hover can
+        read its value. Hidden rows render greyed with no value and no
+        line reference.
+        """
+        from matplotlib.offsetbox import TextArea
+
+        from .readout_legend import build_overlay_legend_rows
+
+        textareas: list = []
+        meta: list = []
+        slot_key = self._slot_key_for_axes(ax)
+        scope = self._READOUT_SCOPE_FOR_SLOT.get(str(slot_key), "main")
+        mgr = getattr(self, "_indicator_manager", None)
+        if mgr is None:
+            return textareas, meta
+        try:
+            interval = self.interval_var.get()
+        except Exception:  # noqa: BLE001
+            interval = ""
+        try:
+            rows = build_overlay_legend_rows(
+                mgr, scope, interval, theme_text=theme["text"])
+        except Exception:  # noqa: BLE001
+            return textareas, meta
+        if not rows:
+            return textareas, meta
+        ps_match, _kind = self._find_indicator_panel_for_axes(ax)
+        overlay_lines = {}
+        if ps_match is not None:
+            state = ps_match.get("ind_state")
+            overlay_lines = getattr(state, "overlay_lines", {}) or {}
+        muted = theme.get("muted") or theme.get("axis") or "#888888"
+        for row in rows:
+            line = None
+            if row.visible:
+                line = overlay_lines.get(row.config_id, {}).get(row.output_key)
+            color = row.color if row.visible else muted
+            ta = TextArea(
+                row.label,
+                textprops=dict(color=color, fontsize=9, family="monospace"),
+            )
+            textareas.append(ta)
+            meta.append({
+                "config_id": row.config_id,
+                "output_key": row.output_key,
+                "label": row.label,
+                "color": color,
+                "visible": row.visible,
+                "line": line,
+                "textarea": ta,
+            })
+        return textareas, meta
 
     def _dispatch_hover(self, event) -> None:
         """Hit-test candles + volume bars, update the tooltip/crosshair."""
@@ -1783,6 +1942,23 @@ class InteractionMixin:
                     box._pct_text._text.set_color(pct_color)
                 except Exception:  # noqa: BLE001
                     pass
+                # Live per-indicator legend values (TradingView-style):
+                # ``NAME value`` for each visible overlay output at the
+                # resolved bar; hidden rows keep just their greyed name.
+                for meta in getattr(box, "_ind_rows", None) or ():
+                    try:
+                        ta = meta.get("textarea")
+                        if ta is None:
+                            continue
+                        line = meta.get("line")
+                        val = (self._line_value_at(line, idx)
+                               if line is not None else None)
+                        label = meta.get("label", "")
+                        text = (f"{label} {val:,.2f}" if val is not None
+                                else label)
+                        ta.set_text(text)
+                    except Exception:  # noqa: BLE001
+                        pass
                 box.set_visible(True)
             except Exception:  # noqa: BLE001
                 try:

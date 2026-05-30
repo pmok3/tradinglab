@@ -18,6 +18,8 @@ pointing at it.
   produce no crash file.
 - `MAX_CRASH_FILES_KEPT` (default `30`) — older crash files are
   pruned on each new write.
+- `reset_for_tests()` — restore `sys.excepthook` to the prior hook.
+  Test-only public seam.
 
 ## File format
 `logs/crash-YYYY-MM-DDTHH-MM-SS.txt` (timestamp is local). Plain
@@ -35,9 +37,9 @@ Frozen: <bool>
 ```
 
 ## Dialog content
-Single-line summary `Type: message[:200]`, then path to the crash
-file, then "Please include this file when reporting the bug." The
-messagebox is `showerror` so on Windows it gets the red-X icon.
+Single-line summary `Error: Type: message[:200]`, then path to the
+crash file, then "Please include this file when reporting the bug."
+The messagebox is `showerror` so on Windows it gets the red-X icon.
 
 ## Skipped exception types
 `KeyboardInterrupt` and `SystemExit` are propagated unchanged —

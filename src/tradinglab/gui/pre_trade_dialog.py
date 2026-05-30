@@ -20,6 +20,7 @@ from typing import Any
 
 from ._modal_base import BaseModalDialog, protect_combobox_wheel
 from .colors import WARN_AMBER
+from .native_theme import apply_text_theme, current_theme
 
 
 class PreTradeFormDialog(BaseModalDialog):
@@ -102,7 +103,9 @@ class PreTradeFormDialog(BaseModalDialog):
         row += 1
 
         ttk.Label(frame, text="Thesis (mandatory):").grid(row=row, column=0, sticky="ne", **pad)
+        theme = current_theme(app)
         self._thesis_text = tk.Text(frame, width=32, height=4)
+        apply_text_theme(self._thesis_text, theme)
         self._thesis_text.grid(row=row, column=1, sticky="w", **pad)
         row += 1
 
@@ -120,6 +123,7 @@ class PreTradeFormDialog(BaseModalDialog):
 
         ttk.Label(frame, text="Notes:").grid(row=row, column=0, sticky="ne", **pad)
         self._notes_text = tk.Text(frame, width=32, height=3)
+        apply_text_theme(self._notes_text, theme)
         self._notes_text.grid(row=row, column=1, sticky="w", **pad)
         row += 1
 

@@ -6,7 +6,7 @@ Owns the Tk variable registry for `ChartApp`. This extracts `StringVar` / `Boole
 ## Public API
 - `class AppState`
   - `AppState(master, startup_defaults)` — creates every Tk variable used by `ChartApp` state wiring and parents each one to the live Tk root passed as `master`.
-  - `_sync_compare_label(*_args)` — trace callback that mirrors `compare_ticker` into `compare_label` only while compare mode is enabled.
+  - `_sync_compare_label(*_args)` — trace callback that mirrors the stripped, upper-cased `compare_ticker` into `compare_label` only while compare mode is enabled.
 
 ## State
 Constructs and owns these Tk variables:
@@ -17,7 +17,7 @@ Constructs and owns these Tk variables:
 - `ha_display`, `highlight_key_bars`, `highlight_ha_flat`, `volume_tod`, `chartstack_visible`
 
 ## Dependencies
-- Internal: `tradinglab.defaults`, `tradinglab.settings`, `tradinglab.data.DATA_SOURCES`, `tradinglab.watchlists.DEFAULT_WATCHLIST_NAME`, `tradinglab.gui.chartstack.settings_adapter` (late import for initial ChartStack visibility).
+- Internal: `tradinglab.defaults`, `tradinglab.settings`, `tradinglab.data.DATA_SOURCES`, `tradinglab.data.is_internal_source`, `tradinglab.data.user_visible_sources`, `tradinglab.watchlists.DEFAULT_WATCHLIST_NAME`, `tradinglab.gui.chartstack.settings_adapter` (late import for initial ChartStack visibility).
 - External: `tkinter`.
 
 ## Design Decisions
@@ -29,7 +29,7 @@ Constructs and owns these Tk variables:
 ## Invariants
 - `compare_enabled` is an alias of `compare`.
 - `compare_label` is blank when compare mode is off.
-- Invalid startup `source` values fall back to the first registered data source, then to `synthetic`.
+- Invalid, empty, unregistered, or internal startup `source` values fall back to the first user-visible data source, then to literal `"yfinance"`.
 
 ## Testing
 - Covered indirectly by the `ChartApp` initialization and smoke tests that read/write the aliased vars.

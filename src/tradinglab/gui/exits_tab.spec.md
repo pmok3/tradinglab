@@ -3,8 +3,8 @@
 ## Purpose
 
 Right-side notebook tab for exits operations: per-position attach
-panel, status Treeview of armed legs / pending orders, audit-tail
-footer, and the PANIC two-phase confirm button.
+panel, trigger-status Treeview, audit-tail footer, and the PANIC
+two-phase confirm button.
 
 ## Layout
 
@@ -13,8 +13,8 @@ footer, and the PANIC two-phase confirm button.
 │  Per-open-position row: [Symbol qty entry_px] [Attach …] [Detach]   │
 │    (one _AttachRow widget per position)                              │
 ├─────────────────────────────────────────────────────────────────────┤
-│  Status Treeview: position | leg | trigger-kind | armed-at | state  │
-│                   ──────────────────────────────────────────         │
+│  Status Treeview: symbol | side | qty | strategy | leg | trigger    │
+│                   state | current | trigger px | distance            │
 ├─────────────────────────────────────────────────────────────────────┤
 │  [PANIC]   ← red, two-phase: first click arms, second flattens      │
 ├─────────────────────────────────────────────────────────────────────┤
@@ -26,57 +26,75 @@ footer, and the PANIC two-phase confirm button.
 
 ```python
 class ExitsTab(ttk.Frame):
-    def __init__(self, master, *, app: "ChartApp") -> None
+    def __init__(self, master, *, tracker: PositionTracker,
+                 evaluator: ExitEvaluator,
+                 audit: AuditLog | None = None,
+                 on_open_dialog: Callable[[], None] | None = None) -> None
+    @property
+    def library(self) -> tuple[ExitStrategy, ...]
+    @property
+    def broken_count(self) -> int
     def refresh(self) -> None
-    def _refresh_attach_rows(self) -> None
+    def attach_for_position(position_id: str, strategy_id: str) -> None
+    def _build_layout(self) -> None
+    def _apply_theme(theme: dict[str, str]) -> None
+    def _refresh_badge(self) -> None
+    def _refresh_attach_panel(self) -> None
     def _refresh_status_tree(self) -> None
+    def _format_state(position_id: str, leg_id: str, trigger_id: str) -> str
+    def _format_trigger_price(pos: Position, leg: Any, trig: Any) -> str
+    def _format_distance(current: float | None, trig_px: str) -> str
     def _refresh_audit_tail(self) -> None
-    def _on_panic_click(self) -> None  # two-phase
-    def _on_panic_timeout(self) -> None
-    def _on_position_event(self, event: PositionEvent) -> None
+    def _on_open_dialog_clicked(self) -> None
+    def _on_panic_clicked(self) -> None
+    def _disarm_panic(self) -> None
+    def _do_panic_flatten(self) -> None
+    def attach_strategy_for(position_id: str, strategy_id: str) -> None
+    def detach_strategy_for(position_id: str) -> None
 
 class _AttachRow(ttk.Frame):
-    """One row per open position; holds Attach/Detach buttons + a
-    summary label."""
+    """One row per open position; holds summary, strategy combobox,
+    Attach/Detach buttons, and warning label."""
 ```
 
 ## Two-phase PANIC
 
-1. First click: button text → "Confirm PANIC", red background, 5-second
-   timer starts.
-2. Second click within the timer: invokes
-   `app._on_panic_flatten()` — cancels all working orders, then
-   market-flattens every open position. Audited via
-   `panic_flatten_request` and `panic_flatten_complete`.
-3. Timer expires without confirm: button reverts to "PANIC", no action.
+1. First click: opens `messagebox.askyesno`. If cancelled, no state
+   changes. If confirmed, button text → "PANIC: Confirm" and a
+   5-second auto-disarm timer starts.
+2. Second click within the timer: calls `_do_panic_flatten()`, which
+   loops over open positions and invokes `evaluator.panic_flatten_position`
+   followed by `evaluator.submit_market_flatten` for each position.
+3. Timer expires without the second click: button reverts to
+   "PANIC: Flatten All", no action.
 
 ## Dependencies
 
-- `..exits.{audit, evaluator}` via `self._app`.
-- `..core.positions.PositionTracker`.
-- `.exits_dialog.open_exits_dialog` for Attach.
+- `..exits.{audit, evaluator, model, storage}`.
+- `..positions.tracker.PositionTracker`, `..positions.model.Position`.
+- `.exits_dialog.open_exits_dialog` for Edit Strategies fallback.
+- `.colors` for muted and warning colours.
 
 ## Design Decisions
 
-- **1-second `after()` refresh** for attach panel + status tree; the
-  audit tail piggy-backs on the same tick. Cheap reads.
-- **Status Treeview is leg-keyed**, not strategy-keyed. A single
-  bracket strategy can show as 2 rows (target / stop).
-- **`_AttachRow` is a small widget class** — one per open position.
-  Rebuilt on every `_refresh_attach_rows` (cheap; O(open-positions)).
-- **Detach** disarms every leg attached to the position and cancels
-  the position's pending exit orders. It does NOT flatten the
-  position itself — that's the PANIC button's job.
-- **Audit-tail footer** uses `audit_log.tail(20)`; one line per record,
-  truncated.
+- **Refresh is host-driven**: the tab does not schedule its own tick;
+  `ChartApp` calls `refresh` after sandbox ticks or library changes.
+- **Status Treeview is trigger-keyed**, not strategy-keyed. Rows use
+  `(position, leg, trigger)` ids and preserve selection across refresh.
+- **`_AttachRow` is diff-updated** — one widget per open position;
+  `_refresh_attach_panel` adds/removes rows and calls `update` in place.
+- **Detach** disarms the strategy attached to the position. It does NOT
+  flatten the position itself — that's the PANIC button's job.
+- **Audit-tail footer** uses `audit.tail(100)` and expands evidence
+  entries into indented child lines.
 
 ## Invariants
 
 - All callbacks run on the Tk thread.
 - Two-phase PANIC timer is single-flighted (clicking twice in the
   same frame doesn't double-fire).
-- Status Treeview rows correspond 1:1 with armed legs known to
-  `_exit_evaluator.attached_legs()`.
+- Status Treeview rows correspond 1:1 with triggers in strategies
+  currently attached to open positions.
 
 ## See also
 

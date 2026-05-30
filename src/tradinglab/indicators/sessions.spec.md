@@ -1,4 +1,4 @@
-# `indicators/sessions.py`
+# indicators/sessions.py — Spec
 
 Shared helpers for session-aware indicators (VWAP, Anchored VWAP,
 Relative Volume). One place for DST / half-days / missing-bars / gap
@@ -11,21 +11,20 @@ from tradinglab.indicators.sessions import (
     # Candle-list API (list-of-Candle inputs)
     session_groups, tod_key, is_intraday,
     session_filter_predicate, TodKey,
-    # NumPy / BarsNp API (scanner + vectorized indicators)
+    # NumPy / Bars API (scanner + vectorized indicators)
     session_groups_np, tod_key_np, is_intraday_np,
     session_filter_mask_np,
 )
 ```
 
-### NumPy / `BarsNp` API
+### NumPy / `Bars` API
 
-`*_np` variants take a `BarsNp` snapshot (scanner-native columnar
-form) and return NumPy arrays. Semantics match the list-based helpers
-so the two surfaces never disagree.
+`*_np` variants take a `Bars` snapshot (columnar NumPy arrays) and
+return NumPy arrays. Semantics match the list-based helpers so the two
+surfaces never disagree.
 
 - `tod_key_np(bars) -> np.ndarray[int32]` — per-bar `hour*60 + minute`
-  in exchange-local wall clock. NaN-safe; out-of-range timestamps
-  fall back to `-1`.
+  in exchange-local wall clock.
 - `session_groups_np(bars, *, regular_only=True) -> List[np.ndarray]`
   — per-day index groupings of `bars`. Each entry is an `int64`
   index array.
@@ -62,7 +61,7 @@ Predicate that admits:
 
 * `"regular_only"` — only `session == "regular"`
 * `"regular_plus_premarket"` — regular OR `"pre"`
-* `"extended"` — regular OR pre OR post
+* `"extended"` — regular OR pre OR post OR `"extended"`
 
 Gap fillers (`is_gap=True`) always rejected. Unknown filter values
 fall back to `"regular_only"`.

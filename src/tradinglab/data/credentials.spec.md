@@ -17,7 +17,7 @@ Stdlib-only loader for broker / data-vendor credentials from environment + `.env
 
 ## Design Decisions
 - **No `python-dotenv` dependency**: minimal in-house parser covers `KEY=VALUE`, `#` comments, blank lines, optional quoted values. No interpolation, no multi-line, no escape sequences. Malformed lines log WARNING and are skipped — never raise.
-- **Lookup precedence: `os.environ` > `<repo_root>/.env` > `<repo_root>/.env.local`**. Shell-exported vars always win.
+- **Lookup precedence: `os.environ` > `<repo_root>/.env.local` > `<repo_root>/.env`**. Shell-exported vars always win; `.env.local` overrides the base project `.env` for developer-local tweaks.
 - **Frozen-build skip**: when `sys.frozen` is truthy (PyInstaller/redistributable) dotenv discovery is **disabled entirely** — a packaged exe must never silently load a `.env` from cwd. Packaged users configure via DPAPI blob or real env vars.
 - **Per-vendor dataclasses, not a flat dict**: each vendor has a different "configured?" predicate (Schwab key+secret; Polygon key only; Alpaca key+secret+feed). Keeping that typed is the documentation.
 - **Empty strings → None** at the resolver boundary so `is_configured()` doesn't get fooled by `SCHWAB_APP_KEY=`.

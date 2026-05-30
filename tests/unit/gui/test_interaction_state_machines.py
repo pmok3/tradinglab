@@ -366,6 +366,8 @@ for _name in (
     "_maybe_handle_drawing_dblclick",
     "_maybe_handle_pane_indicator_label_click",
     "_pane_indicator_label_hit",
+    "_maybe_handle_readout_legend_click",
+    "_readout_legend_row_hit",
     "_update_drawing_hover_cursor",
     "_reset_drawing_hover_cursor",
     "_begin_click_to_type",

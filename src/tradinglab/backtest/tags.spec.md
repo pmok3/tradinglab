@@ -14,7 +14,7 @@ Tiny in-memory store for the setup-tag taxonomy (`"breakout"`, `"pullback"`, `"r
 None beyond stdlib.
 
 ## Design Decisions
-- **Case-folded uniqueness**: tags are normalised to lowercase before storage. `BreakOut` and `breakout` are the same tag; aggregates merge them. Display is whatever case the user typed first; subsequent re-typings map silently to the existing entry. Prevents silent duplicates from typos — discretionary aggregates over `setup_tag` rely on a single canonical spelling per concept.
+- **Case-folded uniqueness**: tags are normalised to lowercase before storage. `BreakOut` and `breakout` are the same tag; aggregates merge them. Display is the normalized lowercase spelling; subsequent re-typings map silently to the existing entry. Prevents silent duplicates from typos — discretionary aggregates over `setup_tag` rely on a single canonical spelling per concept.
 - **Insertion order preserved** (not alphabetical) — the user's curated order is what the Combobox surfaces.
 - **Default seed of 9 tags** (5 trade-pattern + 4 event-proximity) so a brand-new install isn't an empty Combobox. The event-proximity tags are auto-suggested by `SandboxController.submit_order` when a trade falls within `earnings_window_days` of an earnings print, on an ex-dividend day, or just after a special dividend — same trader-facing labels the journal's `earnings_proximity_tag` / `dividend_proximity_tag` fields carry, so aggregates merge automatically.
 - **In-memory only**: persisted neither across app launches nor in the saved session JSON. The pre-trade record carries the resolved string, which is the one durable artefact.

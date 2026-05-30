@@ -148,15 +148,16 @@ Produces a `FieldRef`. Layout:
   explaining that the value evaluates on that dependency symbol.
   Additional status badges render in the shared badge row: `Dep` for
   companion-symbol dependency, the interval text for non-default
-  interval overrides, `Warmup N` for indicator warmup estimates, and
+  interval overrides, and
   `Data OK` / `Missing data` / `Data ?` depending on the optional data
   status hook. The symbol badge is removed when the symbol field
   returns to active/blank. Literal refs do not render data-status badges
   even when a provider is present because they have no data dependency.
+  Indicator warmup bar counts are intentionally NOT surfaced in any
+  badge or applicability text.
 - **Applicability line.** Every picker branch shows a text-only status
-  line. Literal refs say they have no data dependency; builtins show
-  active vs dependency symbol and interval; indicators also include an
-  approximate warmup bar count via `strategy_tester.warmup`. Callers
+  line. Literal refs say they have no data dependency; builtins and
+  indicators show active vs dependency symbol and interval. Callers
   may pass `data_status_provider(ref) -> (ok, message)` to
   `_FieldRefPicker` / `BlockEditor`; when present the line appends
   `Can run now: yes/no` plus the provider message using active
@@ -210,9 +211,21 @@ Produces a `FieldRef`. Layout:
 
 `BaseModalDialog` Apply/Cancel popup used by compact-mode pickers to
 edit an indicator's full ParamDef set without consuming horizontal
-space in the condition row. Renders one labelled, full-width widget
+space in the condition row. The layout leads with a short bold
+indicator-name header followed immediately by the parameter rows —
+the indicator's **general description is intentionally NOT shown** so
+the params sit at the top for a cleaner, more user-friendly layout.
+Renders one labelled, full-width widget
 per ParamDef stacked vertically (reusing
-`gui._param_widgets.build_param_widget`). `_on_primary` validates +
+`gui._param_widgets.build_param_widget`). **Each parameter row carries a
+hover-for-description `ⓘ` info icon** (`_INFO_ICON_GLYPH`, muted-blue
+`ttk.Label` with a `question_arrow` cursor) placed immediately right of
+the param label; hovering it surfaces `tooltip_text_for(pdef)` via a
+`ToolTip`. The multi-output `Output:` selector gets the same icon ("Which
+output series of this indicator to compare against."). Icons are only
+rendered when the tooltip text is non-empty; the `ToolTip` instances are
+held in `self._info_tooltips` (keyed by param name, `"__output__"` for the
+output row). `_on_primary` validates +
 writes the collected params into `self.result` then `destroy()`s;
 `_on_cancel` sets `self.result = None` then `destroy()`s. Caller drives
 it via `wait_window`. Inherits the standard modal chrome (Escape =

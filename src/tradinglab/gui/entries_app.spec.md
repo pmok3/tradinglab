@@ -4,54 +4,56 @@
 
 `EntriesAppMixin` — glue wiring the entries subsystem into
 `ChartApp`. Constructs audit log, paper sink, evaluator, notebook
-tab, and chart overlay; owns lifecycle hooks (sandbox tick, panic
-disarm, app close). Mirrors `ExitsAppMixin`.
+tab, entries overlay, and evidence overlay; owns lifecycle hooks for
+sandbox ticks, render-time redraws, menu actions, and app close.
+Mirrors `ExitsAppMixin`.
 
 ## MRO + ordering
 
 ```python
-class ChartApp(EntriesAppMixin, ExitsAppMixin, …, tk.Tk):
+class ChartApp(..., EntriesAppMixin, ExitsAppMixin, …, tk.Tk):
     ...
 ```
 
-`EntriesAppMixin` left-most so `_init_entries_subsystem` runs
-**after** `_init_exits_subsystem` — entries depends on the
-`_position_tracker` + `_paper_engine` exits already constructed.
-Per-sandbox-tick: **entries fire first, then exits evaluate** (a
-freshly-filled position is subject to existing exit attachments on
-the *next* tick, not the same one).
+The mixin has no `__init__`; `ChartApp.__init__` explicitly calls
+`_build_exits_stack` before `_build_entries_stack` because entries
+reuse the exits stack's `_position_tracker` and `_paper_engine`.
+Per-sandbox-tick: **entries refresh first, then exits refresh** so a
+pending entry fill can open a tracked position before exit logic runs.
 
 ## Public API
 
 ```python
 class EntriesAppMixin:
-    def _init_entries_subsystem(self) -> None:
-        """Build _entries_audit_log, _entry_paper_sink, _entry_evaluator,
-        _entries_tab, _entries_overlay. Subscribe SCANNER_ALERT adapter."""
-
-    def _build_entries_tab(self) -> None
-    def _attach_entries_overlay(self) -> None
-
-    def _on_sandbox_tick_entries(self) -> None:
-        """Per-tick driver: build candles_by_symbol from BarsRegistry,
-        call _entry_evaluator.on_tick(...) BEFORE exits.on_tick."""
-
-    def _on_panic_flatten_entries(self) -> None:
-        """Hook off exits PANIC — disarms all entries too."""
-
-    def _on_close_entries(self) -> None:
-        """Idempotent teardown: evaluator.close(), audit.close()."""
+    def _build_entries_stack(self) -> None
+    def _lazy_exit_storage(self)
+    def _get_active_symbol_for_entries(self) -> str | None
+    def _refresh_entries_for_sandbox(self) -> None
+    def _redraw_entries_overlay(self) -> None
+    def _redraw_evidence_overlay(self) -> None
+    def _request_entries_overlay_redraw(self) -> None
+    def _safe_full_render_for_entries(self) -> None
+    def _on_open_entries_dialog(self, *_args) -> None
+    def _on_open_entries_new_dialog(self, *_args) -> None
+    def _on_entries_disarm_all(self, *_args) -> None
+    def _on_entries_modal_request(self, pending_position_id: str,
+                                  strategy: Any) -> None
+    def _on_entries_library_changed(self, *_args) -> None
+    def _close_entries_stack(self) -> None
 ```
 
 ## Owned attributes (attached to `self`)
 
-| Attribute            | Type                                 |
-| -------------------- | ------------------------------------ |
-| `_entries_audit_log` | `entries.audit.AuditLog`             |
-| `_entry_paper_sink`  | `entries.signals.EntryPaperSink`     |
-| `_entry_evaluator`   | `entries.evaluator.EntryEvaluator`   |
-| `_entries_tab`       | `gui.entries_tab.EntriesTab`         |
-| `_entries_overlay`   | `gui.entries_overlay.EntriesOverlay` |
+| Attribute                   | Type                                 |
+| --------------------------- | ------------------------------------ |
+| `_entries_audit_log`        | `entries.audit.AuditLog`             |
+| `_entry_paper_sink`         | `entries.signals.EntryPaperSink`     |
+| `_entry_evaluator`          | `entries.evaluator.EntryEvaluator`   |
+| `_entries_tab`              | `gui.entries_tab.EntriesTab`         |
+| `_entries_overlay`          | `gui.entries_overlay.EntriesOverlay` |
+| `_evidence_overlay`         | `gui.evidence_overlay.EvidenceOverlay` |
+| `_entries_dialog`           | modeless dialog placeholder          |
+| `_entries_scan_unsubscribe` | ScanRunner unsubscribe callback      |
 
 Reuses `self._position_tracker` and `self._paper_engine` from
 `ExitsAppMixin` — constructed there, shared by the entire trading
@@ -62,8 +64,8 @@ subsystem.
 - `..entries.audit.AuditLog`,
   `..entries.signals.EntryPaperSink`,
   `..entries.evaluator.EntryEvaluator`.
-- `.entries_tab.EntriesTab`, `.entries_overlay.EntriesOverlay`.
-- `..core.thread_guard` for Tk-thread invariants.
+- `.entries_tab.EntriesTab`, `.entries_overlay.EntriesOverlay`,
+  `.evidence_overlay.EvidenceOverlay`.
 
 ## Design Decisions
 
@@ -71,13 +73,15 @@ subsystem.
   `cb(scan_id, ScanResult)`; evaluator wants
   `Dict[scan_id, ScanResult]`. Mixin owns the adapter lambda so
   cleanup is straightforward (`unsubscribe_fn` stored on the mixin).
-- **Per-tick driver inlines candle-dict construction** — iterates
-  the chart's `_bars_registry` to build symbol→bars dict; keeps
-  `EntryEvaluator` chart-agnostic and testable.
-- **Panic propagation**: exits panic-flatten calls entries'
-  `_on_panic_flatten_entries`, which calls `evaluator.disarm_all()`
-  AND cancels every working `target_kind=PENDING_ENTRY` order via
-  paper sink. Symmetric to exits panic-cancel.
+- **Per-tick driver uses sandbox candles** — builds a symbol→`Bar`
+  dict from `visible_candles_by_symbol`, runs pending-entry fills via
+  the shared paper engine first, then calls `EntryEvaluator.on_tick`.
+- **Evidence overlay shares redraw path**: entry and exit audit evidence
+  markers are created here because this mixin owns the entries audit log
+  and can see the exits audit log + position tracker.
+- **Modal request is logged**: filled entries without configured
+  `on_fill_exit_ids` call `_on_entries_modal_request`; the current GUI
+  logs the request and relies on the evaluator's audit record.
 - **Settings persistence**: library on/off (`enabled` per strategy)
   via `entries.storage`. Arm state is runtime-only.
 
@@ -85,8 +89,9 @@ subsystem.
 
 - All mixin entry-points run on Tk thread; evaluator enforces via
   `@require_tk_thread`.
-- `_on_close_entries` idempotent (`close_event` flag).
-- Entries-tick MUST run before exits-tick for the same sandbox
+- `_close_entries_stack` idempotently drops unsubscribe, overlays,
+  evaluator, tab, paper sink, audit log, and dialog refs.
+- Entries refresh MUST run before exits refresh for the same sandbox
   tick (causality).
 
 ## See also

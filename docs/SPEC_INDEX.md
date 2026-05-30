@@ -4,7 +4,7 @@ A one-spec-per-`.py` documentation set. Each spec follows a fixed 9-section layo
 
 **Style guide:** see [`SPEC_STYLE.md`](SPEC_STYLE.md) for the canonical layout every spec follows.
 
-**Count: 263 specs (one per `.py` module — the count here is the canonical authority; this index table is a curated subset listing the most-accessed specs, not an exhaustive enumeration).**
+**Count: 266 specs (one per `.py` module — the count here is the canonical authority; this index table is a curated subset listing the most-accessed specs, not an exhaustive enumeration).**
 
 ## Top-level (`tradinglab/`)
 | Spec | Covers |

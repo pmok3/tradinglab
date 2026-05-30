@@ -5,55 +5,46 @@
 `ExitsAppMixin` — glue layer that wires the exits subsystem into
 `ChartApp`. Constructs audit log, position tracker, paper broker
 engine, paper sink, exits evaluator, notebook tab, and chart overlay;
-owns lifecycle hooks (sandbox tick, panic flatten, app close).
+owns lifecycle hooks for sandbox ticks, render-time redraws, dialog
+launch, library refresh, and app close.
 Mirrored upstream by `EntriesAppMixin`.
 
 ## MRO + ordering
 
 ```python
-class ChartApp(EntriesAppMixin, ExitsAppMixin, …, tk.Tk): ...
+class ChartApp(..., EntriesAppMixin, ExitsAppMixin, …, tk.Tk): ...
 ```
 
-`ExitsAppMixin` initialises FIRST (right-most before `tk.Tk`) so its
-shared infrastructure — `_position_tracker`, `_paper_engine` — exists
-when `EntriesAppMixin._init_entries_subsystem` runs.
+The mixin has no `__init__`; `ChartApp.__init__` explicitly calls
+`_build_exits_stack` before `_build_entries_stack` so the shared
+`_position_tracker` and `_paper_engine` exist before entries are built.
 
 ## Public API (mixin methods called by ChartApp)
 
 ```python
 class ExitsAppMixin:
-    def _init_exits_subsystem(self) -> None:
-        """Build _exits_audit_log, _position_tracker, _paper_engine,
-        _exit_paper_sink, _exit_evaluator, _exits_tab, _exits_overlay."""
-
-    def _build_exits_tab(self) -> None
-    def _attach_exits_overlay(self) -> None
-
-    def _on_sandbox_tick_exits(self) -> None:
-        """Per-tick driver: build candles_by_position, call
-        _exit_evaluator.on_tick(...) AFTER entries-tick has run."""
-
-    def _on_panic_flatten(self) -> None:
-        """Tab PANIC button hook: cancel all pending exit orders, then
-        market-flatten every open position. Calls EntriesAppMixin
-        panic hook so entries are disarmed atomically."""
-
-    def _on_close_exits(self) -> None  # idempotent
-
-    def _on_position_event(self, event: PositionEvent) -> None
+    def _build_exits_stack(self) -> None
+    def _refresh_exits_for_sandbox(self) -> None
+    def _redraw_exits_overlay(self) -> None
+    def _request_exits_overlay_redraw(self) -> None
+    def _safe_full_render(self) -> None
+    def _on_open_exits_dialog(self) -> None
+    def _on_exits_library_changed(self) -> None
+    def _close_exits_stack(self) -> None
 ```
 
 ## Owned attributes
 
-| Attribute             | Type                                      |
-| --------------------- | ----------------------------------------- |
-| `_exits_audit_log`    | `exits.audit.AuditLog`                    |
-| `_position_tracker`   | `core.positions.PositionTracker`          |
-| `_paper_engine`       | `exits.paper_engine.PaperBrokerEngine`    |
-| `_exit_paper_sink`    | `exits.signals.PaperSink`                 |
-| `_exit_evaluator`     | `exits.evaluator.ExitEvaluator`           |
-| `_exits_tab`          | `gui.exits_tab.ExitsTab`                  |
-| `_exits_overlay`      | `gui.exits_overlay.ExitsOverlay`          |
+| Attribute           | Type                                      |
+| ------------------- | ----------------------------------------- |
+| `_audit_log`        | `exits.audit.AuditLog`                    |
+| `_position_tracker` | `positions.tracker.PositionTracker`       |
+| `_paper_engine`     | `exits.paper_engine.PaperBrokerEngine`    |
+| `_paper_sink`       | `exits.signals.PaperBrokerSink`           |
+| `_exit_evaluator`   | `exits.evaluator.ExitEvaluator`           |
+| `_exits_tab`        | `gui.exits_tab.ExitsTab`                  |
+| `_exits_overlay`    | `gui.exits_overlay.ExitsOverlay`          |
+| `_exits_dialog`     | `gui.exits_dialog.ExitsDialog` (lazy)     |
 
 `_position_tracker` and `_paper_engine` are deliberately exposed via
 the mixin so `EntriesAppMixin` can re-use them rather than spinning up
@@ -62,29 +53,29 @@ parallel infrastructure.
 ## Dependencies
 
 - `..exits.{audit, paper_engine, signals, evaluator}`.
-- `..core.positions.PositionTracker`.
+- `..positions.tracker.PositionTracker`.
 - `.exits_tab.ExitsTab` / `.exits_overlay.ExitsOverlay`.
-- `..core.thread_guard` for Tk-thread invariants.
 
 ## Design Decisions
 
-- **Per-tick driver builds the position→bars dict here**, not in the
-  evaluator — keeps `ExitEvaluator` chart-agnostic and testable.
-- **Panic flatten is two-phase**: cancel pending working orders first
-  (so they don't race the market exits), THEN submit market exits.
-  Audited via `panic_flatten_request` + `panic_flatten_complete`.
-- **Position-event fan-out**: the mixin subscribes to
-  `_position_tracker` and forwards events to (a) the exits tab for
-  status refresh, (b) the entries evaluator for on-fill bracket
-  binding.
-- **Close ordering**: tab close → overlay clear → evaluator close →
-  paper engine close → audit close. Idempotent via `_closed` flag.
+- **Per-tick driver walks open positions** — for each position whose
+  symbol has visible sandbox candles, it calls `ExitEvaluator.on_bar`
+  before `PaperBrokerEngine.on_bar` so newly-fired exits can fill on
+  the same closed replay bar.
+- **Panic lives in `ExitsTab`**: the tab calls
+  `panic_flatten_position` and `submit_market_flatten` on the evaluator;
+  the mixin only builds the evaluator and tab.
+- **Overlay redraw is debounced**: `ExitsOverlay` requests a repaint via
+  `_request_exits_overlay_redraw`, which schedules `_render` through
+  `after(50, ...)`.
+- **Close ordering**: dialog destroy → overlay close → evaluator close →
+  tab/paper/tracker/audit refs cleared. Idempotent via null checks.
 
 ## Invariants
 
 - All mixin entry-points run on the Tk thread; underlying components
   enforce this via `@require_tk_thread`.
-- `_on_close_exits` is idempotent.
+- `_close_exits_stack` is idempotent.
 - The exits-tick driver runs AFTER entries-tick on the same sandbox
   tick (causality).
 

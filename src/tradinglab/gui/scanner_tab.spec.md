@@ -6,9 +6,9 @@
 
 Self-contained right-side **Scanner** notebook tab. Toolbar (+ New /
 Load / Rename / Close / Delete / Import / Export) plus a nested
-`ttk.Notebook` of per-scan sub-tabs sorted by name. Each sub-tab
-combines a `BlockEditor` with a result `Treeview` driven by the
-runner's `ScanResult` stream.
+`ttk.Notebook` of per-scan sub-tabs ordered by the user's open order.
+Each sub-tab combines a `BlockEditor` with a result `Treeview` driven
+by the runner's `ScanResult` stream.
 
 ## Public API
 
@@ -70,6 +70,8 @@ most-recently-updated** scan (sort by `updated_at`, fallback
 Modal `Toplevel` with a sorted `Listbox` of library scans not in
 `_open_ids`. Double-click / Enter loads; Escape cancels. Listbox
 height = `min(15, max(5, n))`. Returns chosen scan id or `None`.
+The classic Tk Listbox is explicitly themed from the active palette
+(`tree_bg`, `tree_fg`, `spine`) because ttk.Style does not reach it.
 
 ### Right-click context menu on sub-tab strip
 
@@ -77,6 +79,7 @@ height = `min(15, max(5, n))`. Returns chosen scan id or `None`.
 `notebook.index(f"@{x},{y}")` guarded by `TclError`. Empty-state
 placeholder no-ops.
 
+`tests/unit/gui/test_native_widget_dark_theme.py` pins `_LoadScanDialog`'s Listbox dark-mode colors.
 ### `set_library` semantics
 
 Replaces `_library`; filters `_open_ids` to surviving ids

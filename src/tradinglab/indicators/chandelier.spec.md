@@ -1,4 +1,4 @@
-# Chandelier Stops Indicator (`indicators/chandelier.py`)
+# indicators/chandelier.py — Spec
 
 ## Purpose
 Always-on chart-study indicator that overlays Chandelier Stops (Chuck LeBeau, 1995) on the price pane. Companion to the in-trade exit rule that lives in `exits/spec.py` and shares the same math via `core/chandelier_math.py`.
@@ -7,13 +7,14 @@ Always-on chart-study indicator that overlays Chandelier Stops (Chuck LeBeau, 19
 - `class ChandelierStops` — Indicator factory, registered in `indicators.__init__` under display name `"Chandelier Stops"`, kind_id `"chandelier"`.
 - Construct as `ChandelierStops(lookback=22, atr_period=22, multiplier=3.0, ma_type="RMA")`.
 - `compute_arr(bars: Bars) → Dict[str, np.ndarray]` — returns `{"long_stop", "short_stop"}`.
-- `compute(candles: List[Candle]) → Dict[str, np.ndarray]` — convenience.
+- `compute(candles: List[Candle]) → Dict[str, np.ndarray]` — inherited from `BaseIndicator` as the candle-list convenience shim.
+- `warmup_bars` property returns `max(lookback, 4×atr_period)` for RMA and `max(lookback, atr_period)` for non-RMA kernels.
 
 ## Formula
 * `long_stop[i]  = highest_high(lookback)  − multiplier × ATR[i]` (ratcheted up only)
 * `short_stop[i] = lowest_low(lookback)    + multiplier × ATR[i]` (ratcheted down only)
 
-ATR uses Wilder's True Range smoothed by the chosen kernel.
+ATR uses `core.chandelier_math.compute_atr`, which shares True Range and kernel semantics with the vectorized indicator stack.
 
 ## Parameters (locked design)
 | Param | Default | Range | Notes |

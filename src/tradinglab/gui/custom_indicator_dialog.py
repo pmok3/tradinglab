@@ -33,9 +33,10 @@ import tempfile
 import tkinter as tk
 from datetime import datetime, timezone
 from pathlib import Path
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 from typing import Any
 
+from ..constants import LIGHT_THEME, resolve_theme
 from ..indicators import loader as ind_loader
 from ..indicators._palette import FALLBACK_GRAY
 from ..indicators.base import INDICATORS
@@ -50,7 +51,7 @@ from ..indicators.expression import (
     warmup_for_conditions,
 )
 from ..scanner.model import Group
-from ._modal_base import BaseModalDialog, protect_combobox_wheel
+from ._modal_base import BaseModalDialog, make_scrollable_form, protect_combobox_wheel
 
 __all__ = [
     "CustomIndicatorDialog",
@@ -225,7 +226,16 @@ class CustomIndicatorDialog(BaseModalDialog):
         # Re-apply wheel guard AFTER finalize so the combobox is
         # discoverable (it lives inside scroll_frame).
         try:
-            protect_combobox_wheel(self, scroll_target=None)
+            protect_combobox_wheel(self, scroll_target=self._conditions_canvas)
+        except tk.TclError:
+            pass
+
+    def _reprotect_comboboxes(self) -> None:
+        """Re-apply the combobox-wheel guard, forwarding wheel events to the
+        Conditions scroll canvas when one is mounted (so wheeling over a
+        combobox scrolls the tree instead of being swallowed)."""
+        try:
+            protect_combobox_wheel(self, scroll_target=self._conditions_canvas)
         except tk.TclError:
             pass
 
@@ -244,10 +254,20 @@ class CustomIndicatorDialog(BaseModalDialog):
         self._listbox.bind("<<ListboxSelect>>", self._on_select_saved)
         btn_row = ttk.Frame(left)
         btn_row.pack(side="bottom", fill="x", pady=(4, 0))
-        ttk.Button(btn_row, text="New", command=self._on_new).pack(side="left", padx=2)
-        ttk.Button(btn_row, text="Delete", command=self._on_delete).pack(
-            side="left", padx=2,
+        ttk.Button(btn_row, text="New", command=self._on_new).grid(
+            row=0, column=0, sticky="ew", padx=2, pady=1,
         )
+        ttk.Button(btn_row, text="Delete", command=self._on_delete).grid(
+            row=0, column=1, sticky="ew", padx=2, pady=1,
+        )
+        ttk.Button(btn_row, text="Import…", command=self._on_import).grid(
+            row=1, column=0, sticky="ew", padx=2, pady=1,
+        )
+        ttk.Button(btn_row, text="Export…", command=self._on_export).grid(
+            row=1, column=1, sticky="ew", padx=2, pady=1,
+        )
+        btn_row.columnconfigure(0, weight=1)
+        btn_row.columnconfigure(1, weight=1)
 
         # Right: editor.
         right = ttk.Frame(body)
@@ -291,6 +311,10 @@ class CustomIndicatorDialog(BaseModalDialog):
         self._expr_text: tk.Text | None = None
         self._python_text: tk.Text | None = None
         self._block_editor: Any = None  # BlockEditor instance, lazy
+        # Scroll canvas hosting the Conditions BlockEditor (None outside
+        # Conditions mode). Combobox-wheel events are forwarded here so a
+        # parameter-heavy / many-condition tree stays fully reachable.
+        self._conditions_canvas: tk.Canvas | None = None
 
         self._render_compose_for_mode()
 
@@ -334,6 +358,161 @@ class CustomIndicatorDialog(BaseModalDialog):
         )
         self._status_lbl.pack(side="left", fill="x", expand=True)
 
+        # Theme the native (non-ttk) widgets — Listbox + Text bodies stay
+        # white in dark mode otherwise (the ttk Style sweep does not reach
+        # them). Re-applied after each mode render because the Text widgets
+        # are recreated on mode switch.
+        self._apply_native_theme(self._current_theme())
+        self._subscribe_theme_changes()
+
+    def _current_theme(self) -> dict:
+        """Resolve the live theme dict.
+
+        Reads ``app._theme_ctrl.theme`` when the parent exposes a theme
+        controller (the real app path). Falls back to resolving a
+        named theme from the parent's dark flag, then to LIGHT_THEME
+        (the bare-Tk-root test path).
+        """
+        ctrl = getattr(self._app, "_theme_ctrl", None)
+        theme = getattr(ctrl, "theme", None)
+        if isinstance(theme, dict) and theme:
+            return theme
+        dark = False
+        dark_var = getattr(self._app, "dark_var", None)
+        if dark_var is not None:
+            try:
+                dark = bool(dark_var.get())
+            except Exception:  # noqa: BLE001
+                dark = False
+        else:
+            dark = bool(getattr(self._app, "_dark_mode", False))
+        if dark:
+            try:
+                return resolve_theme("dark", None)
+            except Exception:  # noqa: BLE001
+                pass
+        return LIGHT_THEME
+
+    def _subscribe_theme_changes(self) -> None:
+        """Live-retheme when the app toggles dark/light while we're open.
+
+        The dialog is non-modal, so the user can flip the theme with it
+        showing. ``ThemeController.on_change`` has no unsubscribe API, so
+        the callback guards on ``winfo_exists`` and silently no-ops once
+        the dialog is gone.
+        """
+        ctrl = getattr(self._app, "_theme_ctrl", None)
+        on_change = getattr(ctrl, "on_change", None)
+        if not callable(on_change):
+            return
+
+        def _cb(theme: dict, *_a: Any) -> None:
+            try:
+                if not self.winfo_exists():
+                    return
+            except tk.TclError:
+                return
+            self._apply_native_theme(theme if isinstance(theme, dict) else self._current_theme())
+
+        try:
+            on_change(_cb)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _apply_native_theme(self, theme: dict) -> None:
+        """Paint every native (non-ttk) widget with the active palette.
+
+        ttk widgets are handled by the global ``ThemeController`` Style
+        sweep; the Listbox, the Expression/Python ``Text`` bodies, the
+        preview matplotlib figure, and the hardcoded muted-grey labels
+        are not — they are themed here.
+        """
+        win_bg = theme.get("win_bg", LIGHT_THEME["win_bg"])
+        ax_bg = theme.get("ax_bg", LIGHT_THEME["ax_bg"])
+        tree_bg = theme.get("tree_bg", LIGHT_THEME["tree_bg"])
+        tree_fg = theme.get("tree_fg", LIGHT_THEME["tree_fg"])
+        text_fg = theme.get("text", LIGHT_THEME["text"])
+        spine = theme.get("spine", LIGHT_THEME["spine"])
+        muted = theme.get("text_disabled", spine)
+
+        try:
+            self.configure(background=win_bg)
+        except tk.TclError:
+            pass
+
+        lb = getattr(self, "_listbox", None)
+        if lb is not None:
+            try:
+                lb.configure(
+                    background=tree_bg,
+                    foreground=tree_fg,
+                    selectbackground=spine,
+                    selectforeground=tree_fg,
+                    highlightbackground=spine,
+                    highlightcolor=spine,
+                    highlightthickness=1,
+                    borderwidth=0,
+                    relief="flat",
+                )
+            except tk.TclError:
+                pass
+
+        cond_canvas = getattr(self, "_conditions_canvas", None)
+        if cond_canvas is not None:
+            try:
+                cond_canvas.configure(
+                    background=win_bg,
+                    highlightthickness=0,
+                    borderwidth=0,
+                )
+            except tk.TclError:
+                pass
+
+        for attr in ("_expr_text", "_python_text"):
+            txt = getattr(self, attr, None)
+            if txt is None:
+                continue
+            try:
+                txt.configure(
+                    background=ax_bg,
+                    foreground=text_fg,
+                    insertbackground=text_fg,
+                    selectbackground=spine,
+                    selectforeground=text_fg,
+                    highlightbackground=spine,
+                    highlightcolor=spine,
+                    highlightthickness=1,
+                    borderwidth=0,
+                    relief="flat",
+                )
+            except tk.TclError:
+                pass
+
+        status_lbl = getattr(self, "_status_lbl", None)
+        if status_lbl is not None:
+            try:
+                status_lbl.configure(foreground=muted)
+            except tk.TclError:
+                pass
+
+        cheatsheet = getattr(self, "_cheatsheet_lbl", None)
+        if cheatsheet is not None:
+            try:
+                cheatsheet.configure(foreground=muted)
+            except tk.TclError:
+                pass
+
+        canvas = getattr(self, "_preview_canvas", None)
+        fig = getattr(canvas, "figure", None) if canvas is not None else None
+        if fig is not None:
+            try:
+                fig.set_facecolor(ax_bg)
+                for ax in fig.get_axes():
+                    ax.set_facecolor(ax_bg)
+                canvas.draw_idle()
+            except Exception:  # noqa: BLE001
+                pass
+
     def _capture_body_state(self) -> None:
         """Snapshot whichever body widget is currently mounted into the cache vars.
 
@@ -365,6 +544,7 @@ class CustomIndicatorDialog(BaseModalDialog):
         self._python_text = None
         self._cheatsheet_lbl = None
         self._block_editor = None
+        self._conditions_canvas = None
 
         mode = self._mode_var.get()
         if mode == _CONDITIONS_MODE:
@@ -377,8 +557,12 @@ class CustomIndicatorDialog(BaseModalDialog):
         # Re-apply combobox wheel guard AFTER widgets are mounted so the
         # Mode combobox itself plus any new comboboxes inside the
         # embedded BlockEditor are protected (CLAUDE.md §7.11).
+        self._reprotect_comboboxes()
+
+        # Freshly-built Text bodies (Expression/Python) start with default
+        # white backgrounds — re-theme so a mode switch keeps dark mode.
         try:
-            protect_combobox_wheel(self, scroll_target=None)
+            self._apply_native_theme(self._current_theme())
         except tk.TclError:
             pass
 
@@ -397,8 +581,16 @@ class CustomIndicatorDialog(BaseModalDialog):
         ttk.Label(self._compose_frame, text="Condition tree:").pack(
             side="top", anchor="w",
         )
+        # Host the BlockEditor inside a scrollable canvas so a long
+        # condition list (8+ rows) stays fully reachable instead of being
+        # clipped by the dialog's fixed height. The fixed labels above stay
+        # pinned; only the tree scrolls.
+        scroll_holder = ttk.Frame(self._compose_frame)
+        scroll_holder.pack(side="top", fill="both", expand=True)
+        inner, canvas = make_scrollable_form(scroll_holder)
+        self._conditions_canvas = canvas
         self._block_editor = BlockEditor(
-            self._compose_frame,
+            inner,
             root=self._group_root,
             on_change=self._on_block_editor_changed,
             default_interval="1d",
@@ -409,10 +601,7 @@ class CustomIndicatorDialog(BaseModalDialog):
         # Re-apply wheel guard after every edit because the BlockEditor
         # tears down + rebuilds child widgets on Add/Delete/combinator
         # changes; freshly-built widgets start with no bindings.
-        try:
-            protect_combobox_wheel(self, scroll_target=None)
-        except tk.TclError:
-            pass
+        self._reprotect_comboboxes()
         if self._block_editor is not None:
             try:
                 self._group_root = self._block_editor.get_root()
@@ -609,6 +798,131 @@ class CustomIndicatorDialog(BaseModalDialog):
         self._set_status(f"Deleted {name}", level="info")
 
     # ------------------------------------------------------------------
+    # Import / Export
+    # ------------------------------------------------------------------
+    def _selected_file(self) -> Path | None:
+        """Resolve the file the user means to act on (export / etc.).
+
+        Prefers the current listbox selection, falling back to the
+        currently-loaded editor file. Returns ``None`` if neither yields
+        an existing file.
+        """
+        try:
+            sel = self._listbox.curselection()
+        except tk.TclError:
+            sel = ()
+        files = self._builder_files()
+        if sel:
+            idx = sel[0]
+            if idx < len(files):
+                return files[idx]
+        if self._current_path is not None and self._current_path.is_file():
+            return self._current_path
+        return None
+
+    def _on_export(self) -> None:
+        path = self._selected_file()
+        if path is None:
+            self._set_status("Select an indicator to export", level="error")
+            return
+        dest_str = filedialog.asksaveasfilename(
+            parent=self,
+            title="Export custom indicator",
+            defaultextension=".py",
+            initialfile=path.name,
+            filetypes=[("Python indicator", "*.py"), ("All files", "*.*")],
+        )
+        if not dest_str:
+            return
+        try:
+            written = ind_loader.export_indicator_file(path, Path(dest_str))
+        except Exception as exc:  # noqa: BLE001
+            self._set_status(f"Export failed: {exc}", level="error")
+            return
+        self._set_status(f"Exported {path.stem!r} to {written}", level="ok")
+
+    def _on_import(self) -> None:
+        src_str = filedialog.askopenfilename(
+            parent=self,
+            title="Import custom indicator",
+            filetypes=[("Python indicator", "*.py"), ("All files", "*.*")],
+        )
+        if not src_str:
+            return
+        src = Path(src_str)
+        try:
+            text = src.read_text(encoding="utf-8")
+        except OSError as exc:
+            self._set_status(f"Cannot read {src.name}: {exc}", level="error")
+            return
+
+        meta = _read_header_metadata(src)
+        mode = (meta.get("mode") or "").strip()
+        is_builder = ind_loader.is_builder_file(text)
+        # Trust gate: any file that runs arbitrary Python (Python-mode
+        # builder file, or a hand-authored plugin with no marker) is
+        # gated behind an explicit confirmation, mirroring the Save-time
+        # Python-mode prompt.
+        if mode == "python" or not is_builder:
+            if not messagebox.askokcancel(
+                "Import custom indicator",
+                "This indicator file contains Python code that will be "
+                "executed when the indicator is computed.\n\n"
+                "Only import indicators you trust. Continue?",
+                parent=self, icon="warning",
+            ):
+                return
+
+        target_name = src.stem
+        target = self._directory / f"{target_name}.py"
+        overwrite = False
+        if target.exists():
+            if not messagebox.askyesno(
+                "Overwrite custom indicator",
+                f"{target.name} already exists in your indicators folder. "
+                "Overwrite?",
+                parent=self,
+            ):
+                return
+            overwrite = True
+
+        try:
+            written = ind_loader.import_indicator_file(
+                src, self._directory, overwrite=overwrite,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._set_status(f"Import failed: {exc}", level="error")
+            return
+
+        ind_loader.unregister_indicator(target_name)
+        result = ind_loader.register_user_indicator_file(written)
+        if result.errors:
+            err = result.errors[0]
+            self._refresh_saved_list()
+            self._set_status(
+                f"Imported {written.name} but registration failed: {err.error}",
+                level="error",
+            )
+            return
+
+        self._refresh_saved_list()
+        # If the imported file is a builder-managed file it appears in the
+        # saved list; load it into the editor and select it.
+        if _read_header_metadata(written).get("_marker") == "yes":
+            self._load_from_file(written)
+            try:
+                for i, p in enumerate(self._builder_files()):
+                    if p == written:
+                        self._listbox.selection_clear(0, "end")
+                        self._listbox.selection_set(i)
+                        break
+            except tk.TclError:
+                pass
+        self._set_status(
+            f"Imported and registered {target_name!r}.", level="ok",
+        )
+
+    # ------------------------------------------------------------------
     # Mode / validate / preview
     # ------------------------------------------------------------------
     def _on_mode_changed(self, _event: object = None) -> None:
@@ -646,10 +960,10 @@ class CustomIndicatorDialog(BaseModalDialog):
             if not grp.children:
                 return False, "Condition tree is empty — add at least one condition"
             try:
-                warmup = warmup_for_conditions(grp.to_dict())
+                warmup_for_conditions(grp.to_dict())
             except ExpressionError as exc:
                 return False, str(exc)
-            return True, f"Condition tree OK (warmup: {warmup} bars)"
+            return True, "Condition tree OK"
         if mode == _EXPRESSION_MODE:
             try:
                 expr = self._current_expression()

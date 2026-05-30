@@ -55,7 +55,7 @@ KNOWN_KINDS = frozenset({
 - **Single-writer Tk-thread invariant.** `append` raises `TkThreadViolation` off-thread. Record-level atomicity follows: single writer flushes after every line; partial writes only possible on hard crash mid-line — readers skip.
 - **`KNOWN_KINDS` whitelist.** Typo → `ValueError`. New kinds require editing this module.
 - **Day rotation by UTC date.** First `append` of a new day closes the previous handle. Tests inject a fake `clock`.
-- **Reader resilience.** `tail` / `read_date` tolerate corrupt / non-object lines silently.
+- **Reader resilience.** `tail` / `read_date` delegate line parsing to `core.io_helpers.read_jsonl`; corrupt / non-object lines are skipped with a logged warning.
 - **Duplicate, don't share.** Copy of `exits.audit`; promoting to `core/audit_log.py` would touch exits-v1 with too much blast radius.
 
 ## Invariants
