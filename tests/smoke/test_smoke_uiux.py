@@ -31,6 +31,77 @@ def _settle(widget: tk.Misc, rounds: int = 5) -> None:
         widget.update()
 
 
+def test_uiux_compact_indicator_token_and_edit_reachable(app):
+    """Compact-mode FieldRefPicker collapses RRVOL behind a summary
+    token + Edit… button so the row never clips on a narrow dialog
+    (CLAUDE.md §7.19). Reachability only — does NOT open the modal Edit
+    popup (would deadlock on headless macOS, §7.1)."""
+    from tkinter import ttk
+
+    import tradinglab.indicators  # noqa: F401 - ensure indicator registry loaded
+    from tradinglab.gui.scanner_block_editor import (
+        _ConditionFrame,
+        _FieldRefPicker,
+    )
+    from tradinglab.scanner.model import Condition, FieldRef
+
+    top = tk.Toplevel(app)
+    top.geometry("760x520+90+90")
+    picker = _FieldRefPicker(
+        top,
+        ref=FieldRef.indicator("rrvol", params={"length": 20, "compare_symbol": "QQQ"}),
+        display_mode="compact",
+    )
+    picker.pack(fill="x", padx=12, pady=12)
+    cf = None
+    try:
+        _settle(top)
+        # Edit… button is reachable and no inline per-param widgets exist.
+        edit_btns = [
+            w for w in _all_descendants(picker)
+            if isinstance(w, ttk.Button) and str(w.cget("text")).startswith("Edit")
+        ]
+        assert edit_btns, "compact RRVOL picker must expose an Edit… button"
+        assert picker._param_widgets == {}
+        token = picker._compact_summary_var.get()
+        assert "20" in token and "QQQ" in token
+
+        # A ConditionFrame builds compact pickers for indicator operands.
+        cond = Condition(
+            left=FieldRef.indicator("rrvol", params={"length": 20}),
+            op=">",
+            params={"right": FieldRef.literal(2.0)},
+            interval="5m",
+        )
+        cf = _ConditionFrame(top, cond=cond, on_change=lambda: None,
+                             on_delete=lambda _f: None)
+        cf.pack(fill="x", padx=12, pady=12)
+        _settle(top)
+        # The LEFT operand picker is compact regardless of inline/stacked
+        # classification — so RRVOL's params never render as inline
+        # widgets that could clip; they live behind the Edit… button.
+        assert cf._left_picker._display_mode == "compact"
+        assert cf._left_picker._param_widgets == {}
+        left_edit = [
+            w for w in _all_descendants(cf._left_picker)
+            if isinstance(w, ttk.Button) and str(w.cget("text")).startswith("Edit")
+        ]
+        assert left_edit, "compact LEFT picker must expose an Edit… button"
+    finally:
+        try:
+            top.destroy()
+        except tk.TclError:
+            pass
+
+
+def _all_descendants(widget):
+    out = []
+    for child in widget.winfo_children():
+        out.append(child)
+        out.extend(_all_descendants(child))
+    return out
+
+
 def test_uiux_field_ref_picker_rrvol_deep(app):
     """RRVOL in the shared FieldRefPicker exercises the dense path.
 

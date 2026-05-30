@@ -113,6 +113,15 @@ template that already defines a class and calls `register_indicator`.
   embedded matplotlib `FigureCanvasTkAgg`. When `overlay=True` the
   indicator + close price share a single axis; when off, the
   indicator drops to its own pane.
+- **Preview pane is collapsed by default** (`expand=False`,
+  `_preview_expanded = False`) so a parameter-heavy compose form
+  (e.g. an RRVOL-based Conditions tree) is not squeezed off-screen
+  by an empty preview area before the user has rendered anything.
+  `_render_preview` calls `_set_preview_expanded(True)` once a chart
+  is actually drawn; `_on_new` (and any reset) calls `_reset_preview()`
+  which re-collapses it. `_set_preview_expanded(expanded)` re-packs the
+  preview frame with `fill="both", expand=True` when expanded and
+  `fill="x", expand=False` when collapsed, and is idempotent.
 - **Save** validates → runs a **dry compute** against a synthetic
   200-bar Bars view (reuses `strategy_tester.warmup._synthetic_bars`)
   → atomic-writes the generated source via `tempfile` + `os.replace`

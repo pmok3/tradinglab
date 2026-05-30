@@ -51,7 +51,7 @@ from __future__ import annotations
 import logging
 import math
 import tkinter as tk
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from tkinter import ttk
 from typing import Any
 
@@ -75,6 +75,11 @@ from ..scanner.model import (
     Condition,
     FieldRef,
     Group,
+)
+from ._modal_base import (
+    BaseModalDialog,
+    make_scrollable_form,
+    protect_combobox_wheel,
 )
 from ._param_widgets import (
     build_param_widget,
@@ -214,6 +219,13 @@ def _filter_field_specs_for_query(specs: list[Any], query: str) -> tuple[str, ..
 _COMPLEX_INDICATOR_PARAM_THRESHOLD: int = 3
 
 
+#: Assumed character budget for a compact indicator summary token
+#: (e.g. ``(20, vs=QQQ)``). Used by :func:`_estimate_picker_width` in
+#: compact mode. Generous so the fit-based classifier doesn't
+#: under-estimate a long token and over-pack the inline row.
+_SUMMARY_TOKEN_EST_CHARS: int = 18
+
+
 #: Empirically-derived font/widget metrics for the inline-width
 #: estimator live in :mod:`._widget_metrics` so the indicator-dialog
 #: param-wrap classifier can share the same calibration (avoiding the
@@ -244,7 +256,7 @@ def _estimate_pdef_width(pdef: Any) -> int:
     return label_px + 8 * _CHAR_PX + _ENTRY_OVERHEAD
 
 
-def _estimate_picker_width(ref: FieldRef | None) -> int:
+def _estimate_picker_width(ref: FieldRef | None, *, compact: bool = False) -> int:
     """Estimate inline pixel width of a ``_FieldRefPicker`` for ``ref``.
 
     Sum of the type combo + value widgets (combo / spinbox / entry
@@ -254,6 +266,12 @@ def _estimate_picker_width(ref: FieldRef | None) -> int:
     Drives :meth:`_ConditionFrame._classify_layout` for fit-based
     inline-vs-stacked selection. Falls back to a safe value for
     unknown indicator IDs (treats them as "wide enough to stack").
+
+    When ``compact`` is True, indicator refs are estimated for the
+    collapsed compact branch (type combo + indicator combo + a short
+    summary token + an Edit button + symbol cluster) instead of the
+    full per-parameter inline layout — matching the compact-mode
+    pickers the :class:`_ConditionFrame` builds for indicator operands.
     """
     type_combo = 9 * _CHAR_PX + _COMBO_OVERHEAD  # picker type combo width=9
     if ref is None or ref.kind == FIELD_KIND_LITERAL:
@@ -270,6 +288,19 @@ def _estimate_picker_width(ref: FieldRef | None) -> int:
     if spec is None:
         # Unknown indicator — assume wide to be safe (forces stacked).
         return 9999
+    if compact:
+        # type combo + indicator combo + summary token + Edit button
+        # + the always-present indicator symbol cluster + paddings.
+        ind_combo = 14 * _CHAR_PX + _COMBO_OVERHEAD
+        token = _SUMMARY_TOKEN_EST_CHARS * _CHAR_PX + _FRAME_PAD_PX
+        edit_btn = 6 * _CHAR_PX + _ENTRY_OVERHEAD
+        indicator_symbol_cluster = (
+            (1 * _CHAR_PX + 2) + (11 * _CHAR_PX + _COMBO_OVERHEAD)
+        )
+        return (
+            type_combo + ind_combo + token + edit_btn
+            + indicator_symbol_cluster + 4 * _FRAME_PAD_PX
+        )
     ind_combo = 14 * _CHAR_PX + _COMBO_OVERHEAD  # indicator combo width=14
     params_total = sum(_estimate_pdef_width(p) for p in spec.params_schema)
     output_combo = (
@@ -327,7 +358,7 @@ def _estimate_condition_inline_width(cond: Condition) -> int:
     """
     width = _CONDITION_CHROME_PX
     if cond.op not in _NO_LEFT_OPS:
-        width += _estimate_picker_width(cond.left) + _FRAME_PAD_PX
+        width += _estimate_picker_width(cond.left, compact=True) + _FRAME_PAD_PX
     schema = OPERATOR_PARAM_SCHEMA.get(cond.op, ())
     for name, kind in schema:
         if kind == "field":
@@ -336,7 +367,7 @@ def _estimate_condition_inline_width(cond: Condition) -> int:
                 # field-typed op params get a "name:" label prefix in
                 # ``_build_params_row``; account for that label too.
                 label_px = (len(name) + 1) * _CHAR_PX + 4
-                width += label_px + _estimate_picker_width(field_ref) + _FRAME_PAD_PX
+                width += label_px + _estimate_picker_width(field_ref, compact=True) + _FRAME_PAD_PX
         else:
             width += _estimate_scalar_param_width(name, kind) + _FRAME_PAD_PX
     return width
@@ -425,12 +456,23 @@ class _FieldRefPicker(ttk.Frame):
         ref: FieldRef | None = None,
         on_change: Callable[[], None] | None = None,
         layout_hint: str = "inline",
+        display_mode: str = "detailed",
         data_status_provider: Callable[[FieldRef], tuple[bool, str]] | None = None,
     ) -> None:
         super().__init__(master)
         self._on_change = on_change
         self._ref: FieldRef = ref or FieldRef.builtin("close")
         self._data_status_provider = data_status_provider
+        # ``display_mode`` is "detailed" (default — every indicator
+        # param gets its own inline widget, flow-wrapped) or "compact"
+        # (indicator params collapse to a one-line summary token plus
+        # an "Edit…" button opening :class:`_FieldRefParamDialog`).
+        # Compact mode keeps parameter-heavy indicators (RRVOL, BBANDS,
+        # SMI) from clipping off-screen on a narrow dialog. Builtins and
+        # literals render identically in both modes.
+        self._display_mode: str = display_mode if display_mode in (
+            "detailed", "compact") else "detailed"
+        self._compact_summary_var = tk.StringVar(value="")
         # ``layout_hint`` is "inline" (default — picker shares its
         # row with a sibling RHS picker, so the flow budget halves)
         # or "stacked" (parent gave the picker its own row; flow
@@ -699,6 +741,9 @@ class _FieldRefPicker(ttk.Frame):
                 symbol=self._ref.symbol,
                 interval=self._ref.interval,
             )
+        if self._display_mode == "compact":
+            self._build_compact_indicator_branch(ids=ids)
+            return
         # Build the indicator branch into a single row frame initially.
         # ``_reflow_value_pane`` may subsequently tear this down and
         # rebuild with multiple row frames if the dialog is too narrow.
@@ -843,6 +888,85 @@ class _FieldRefPicker(ttk.Frame):
         )
         self._flow_widths_cache = tuple(widths)
         self._flow_widths_cache_ids = self._flow_child_ids()
+
+    # -- compact indicator branch -------------------------------------------
+
+    def _build_compact_indicator_branch(self, *, ids: list[str]) -> None:
+        """Render the indicator branch as a compact one-line token.
+
+        Layout: ``[indicator combo ▾] [(param summary) label] [Edit…]
+        [@ symbol]``. The per-parameter widgets are NOT built inline;
+        instead they are edited in :class:`_FieldRefParamDialog` opened
+        by the Edit button. This keeps parameter-heavy indicators from
+        clipping off-screen on a narrow dialog (see CLAUDE.md §7.19).
+        """
+        spec = get_field(self._ref.id, kind="indicator")
+        if spec is None:
+            return
+        row = ttk.Frame(self._value_pane)
+        row.grid(row=0, column=0, sticky="w")
+
+        self._field_id_var = tk.StringVar(value=self._ref.id)
+        ind_combo = ttk.Combobox(
+            row, textvariable=self._field_id_var,
+            state="normal", values=tuple(ids), width=18,
+        )
+        ind_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_indicator_change())
+        ind_combo.bind("<KeyRelease>", self._on_indicator_combo_keyrelease)
+        ind_combo.bind("<Return>", lambda _e: self._on_indicator_change())
+        ind_combo.bind("<FocusOut>", lambda _e: self._on_indicator_change())
+        ind_combo.pack(side="left", padx=(0, 4))
+        self._indicator_combo = ind_combo
+
+        self._compact_summary_var = tk.StringVar(value=self._compact_summary_text(spec))
+        summary_lbl = ttk.Label(
+            row, textvariable=self._compact_summary_var, foreground="#555555",
+        )
+        summary_lbl.pack(side="left", padx=(0, 4))
+        self._tooltips.append(ToolTip(
+            summary_lbl,
+            "Current parameters. Click Edit… to change them in a "
+            "stacked dialog where every option is visible.",
+        ))
+
+        edit_btn = ttk.Button(
+            row, text="Edit…", width=6, command=self._open_param_dialog,
+        )
+        edit_btn.pack(side="left", padx=(0, 6))
+
+        sym_wrap = self._build_symbol_combo(parent=row)
+        sym_wrap.pack(side="left")
+
+        self._build_validation_label(row_index=1)
+
+    def _compact_summary_text(self, spec: Any) -> str:
+        """Build the compact param-summary token shown next to the combo.
+
+        Appends ``· <output>`` for multi-output indicators so the user
+        can see which output is selected without opening the dialog.
+        """
+        summary = _indicator_param_summary(spec, self._ref.params)
+        if len(spec.output_keys) > 1:
+            out = self._ref.output_key or spec.default_output_key
+            if out:
+                summary = f"{summary} · {out}" if summary else out
+        return summary
+
+    def _open_param_dialog(self) -> None:
+        """Open the stacked Apply/Cancel parameter dialog for the ref."""
+        try:
+            top = self.winfo_toplevel()
+        except tk.TclError:
+            return
+        dlg = _FieldRefParamDialog(top, ref=self._ref)
+        try:
+            self.wait_window(dlg)
+        except tk.TclError:
+            return
+        if dlg.result is not None:
+            self._ref = dlg.result
+            self._rebuild_value_pane()
+            self._fire()
 
     def _build_validation_label(self, *, row_index: int) -> None:
         """Create the inline validation label under indicator params."""
@@ -1089,10 +1213,25 @@ class _FieldRefPicker(ttk.Frame):
         return tuple(str(s.id) for s in cls._indicator_specs())
 
     def _commit_indicator(self) -> None:
-        params: dict[str, Any] = {}
         spec = get_field(self._ref.id, kind="indicator")
         if spec is None:
             return
+        if self._display_mode == "compact":
+            # Compact mode has no inline param widgets — preserve the
+            # ref's existing params/output and only fold in the latest
+            # cross-symbol pin (the one editable control on the row).
+            sym = self._current_symbol_from_combo()
+            self._ref = FieldRef.indicator(
+                self._ref.id,
+                params=dict(self._ref.params),
+                output_key=self._ref.output_key,
+                symbol=sym,
+                interval=self._ref.interval,
+            )
+            self._refresh_applicability()
+            self._fire()
+            return
+        params: dict[str, Any] = {}
         for pdef in spec.params_schema:
             var = self._param_widgets.get(pdef.name)
             if var is None:
@@ -1570,6 +1709,151 @@ _LOOKBACK_MODES_FOR_TRANSITION: tuple[str, ...] = (
 )
 
 
+class _FieldRefParamDialog(BaseModalDialog):
+    """Modal Apply/Cancel popup for editing an indicator ``FieldRef``'s
+    parameters (and output key) stacked vertically.
+
+    Opened by the compact :class:`_FieldRefPicker` "Edit…" button so
+    parameter-heavy indicators (RRVOL, BBANDS, SMI) never clip off-screen
+    on a narrow dialog. Every trigger-relevant param gets its own labeled
+    row in a scrollable, wheel-guarded form.
+
+    The cross-symbol ``FieldRef.symbol`` pin is intentionally NOT edited
+    here — it stays a visible ``@TICKER`` badge on the condition row (see
+    CLAUDE.md §7.18). On Apply, :attr:`result` holds a brand-new
+    ``FieldRef`` carrying the edited params while preserving the original
+    ``id`` / ``symbol`` / ``interval``. On Cancel (or invalid input)
+    :attr:`result` stays ``None``.
+    """
+
+    def __init__(self, parent: tk.Misc, *, ref: FieldRef) -> None:
+        super().__init__(
+            parent,
+            title="Edit indicator parameters",
+            geometry_key="dlg.field_ref_params",
+            default_geometry="380x460",
+            resizable=(True, True),
+        )
+        self._ref = ref
+        self.result: FieldRef | None = None
+        self._param_vars: dict[str, tk.Variable] = {}
+        self._pdefs: dict[str, ParamDef] = {}
+        self._output_var: tk.StringVar | None = None
+        self._error_var = tk.StringVar(value="")
+        self._build_layout()
+        self._finalize_modal(primary=self._on_primary, cancel=self._on_cancel)
+
+    # -- layout --------------------------------------------------------------
+
+    def _build_layout(self) -> None:
+        spec = get_field(self._ref.id, kind="indicator")
+        title = spec.label if spec is not None else self._ref.id
+
+        header = ttk.Label(self, text=title, font=("TkDefaultFont", 10, "bold"))
+        header.pack(side="top", anchor="w", padx=10, pady=(10, 2))
+        if spec is not None and spec.description:
+            ttk.Label(
+                self, text=spec.description, foreground="#888", wraplength=340
+            ).pack(side="top", anchor="w", padx=10, pady=(0, 6))
+
+        body = ttk.Frame(self)
+        body.pack(side="top", fill="both", expand=True, padx=4, pady=2)
+        inner, canvas = make_scrollable_form(body)
+
+        if spec is not None:
+            for pdef in spec.params_schema:
+                self._build_param_row(inner, pdef)
+
+            if len(spec.output_keys) > 1:
+                self._build_output_row(inner, spec)
+
+        # Footer: validation message + Cancel / Apply.
+        footer = ttk.Frame(self)
+        footer.pack(side="bottom", fill="x", padx=10, pady=(4, 10))
+        ttk.Label(footer, textvariable=self._error_var, foreground="#c0392b").pack(
+            side="left", anchor="w"
+        )
+        ttk.Button(footer, text="Apply", command=self._on_primary).pack(
+            side="right", padx=(6, 0)
+        )
+        ttk.Button(footer, text="Cancel", command=self._on_cancel).pack(side="right")
+
+        protect_combobox_wheel(self, scroll_target=canvas)
+
+    def _build_param_row(self, parent: tk.Misc, pdef: ParamDef) -> None:
+        row = ttk.Frame(parent)
+        row.pack(side="top", fill="x", padx=6, pady=3)
+        label = ttk.Label(row, text=label_text_for(pdef))
+        label.pack(side="left", anchor="w")
+        tip = tooltip_text_for(pdef)
+        if tip:
+            ToolTip(label, tip)
+        seed = self._ref.params.get(pdef.name, getattr(pdef, "default", None))
+        var, widget = build_param_widget(parent, pdef, seed, commit_policy="manual")
+        widget.pack(in_=row, side="right", anchor="e")
+        self._param_vars[pdef.name] = var
+        self._pdefs[pdef.name] = pdef
+
+    def _build_output_row(self, parent: tk.Misc, spec: Any) -> None:
+        row = ttk.Frame(parent)
+        row.pack(side="top", fill="x", padx=6, pady=3)
+        ttk.Label(row, text="Output:").pack(side="left", anchor="w")
+        current = self._ref.output_key or spec.default_output_key
+        self._output_var = tk.StringVar(value=current)
+        ttk.Combobox(
+            row,
+            textvariable=self._output_var,
+            state="readonly",
+            values=tuple(spec.output_keys),
+            width=max(combo_width_for_choices(spec.output_keys), 8),
+        ).pack(side="right", anchor="e")
+
+    # -- actions -------------------------------------------------------------
+
+    def _on_primary(self) -> None:
+        spec = get_field(self._ref.id, kind="indicator")
+        params: dict[str, Any] = {}
+        if spec is not None:
+            for pdef in spec.params_schema:
+                var = self._param_vars.get(pdef.name)
+                if var is None:
+                    continue
+                try:
+                    raw = var.get()
+                except tk.TclError:
+                    continue
+                ok, value, message = validate_param_value(pdef, raw)
+                if not ok:
+                    self._error_var.set(message)
+                    return
+                params[pdef.name] = value
+        self._error_var.set("")
+        output_key = self._ref.output_key
+        if self._output_var is not None:
+            try:
+                output_key = self._output_var.get()
+            except tk.TclError:
+                pass
+        self.result = FieldRef.indicator(
+            self._ref.id,
+            params=params,
+            output_key=output_key,
+            symbol=self._ref.symbol,
+            interval=self._ref.interval,
+        )
+        try:
+            self.destroy()
+        except tk.TclError:
+            pass
+
+    def _on_cancel(self) -> None:
+        self.result = None
+        try:
+            self.destroy()
+        except tk.TclError:
+            pass
+
+
 class _LookbackCluster(ttk.Frame):
     """Inline ``[bars: N ▾mode]`` cluster for within-last-N-bars look-back.
 
@@ -1819,7 +2103,7 @@ class _ConditionFrame(ttk.Frame):
 
         self._left_picker = _FieldRefPicker(
             self, ref=self.cond.left, on_change=self._on_left_change,
-            layout_hint="inline",
+            layout_hint="inline", display_mode="compact",
             data_status_provider=self._data_status_provider,
         )
 
@@ -2176,7 +2460,7 @@ class _ConditionFrame(ttk.Frame):
                 picker = _FieldRefPicker(
                     wrap, ref=ref,
                     on_change=self._on_param_field_change,
-                    layout_hint=layout,
+                    layout_hint=layout, display_mode="compact",
                     data_status_provider=self._data_status_provider,
                 )
                 picker.pack(side="left")
@@ -2762,6 +3046,106 @@ def _field_ref_summary(ref: FieldRef | None) -> str:
         if ref.symbol:
             base = f"{ref.symbol}:{base}"
         return base
+
+
+#: Abbreviations applied to *non-numeric* indicator parameter names in
+#: the compact picker token (e.g. ``rrvol(20, vs=QQQ)``). Numeric params
+#: (lengths / periods / std multipliers) are always rendered by value,
+#: so they never appear here. Keeps the token short enough to fit
+#: alongside the operator + RHS on a narrow dialog.
+_PARAM_NAME_ABBREV: dict[str, str] = {
+    "denominator_includes_current": "incl_cur",
+    "z_score": "z",
+    "compare_symbol": "vs",
+    "session_filter": "sess",
+    "aggregator": "agg",
+    "mode": "mode",
+}
+
+#: Abbreviations applied to selected *choice* parameter values.
+_PARAM_VALUE_ABBREV: dict[str, str] = {
+    "time_of_day": "tod",
+    "regular_plus_premarket": "reg+pre",
+    "regular_only": "reg",
+}
+
+
+def _indicator_param_summary(spec: Any, params: Mapping[str, Any] | None) -> str:
+    """Return a compact parenthesized parameter summary for an indicator.
+
+    Policy (pinned by ``tests/unit/gui/test_field_ref_summary.py``):
+
+    * **Numeric params** (``int`` / ``float``) are *always* shown by
+      value — they are the indicator's identity (lengths, periods, std
+      multipliers). Rendered first, in schema order.
+    * **Non-numeric params** (``choice`` / ``str`` / ``bool``) are shown
+      *only when they differ from the schema default*, abbreviated via
+      :data:`_PARAM_NAME_ABBREV` / :data:`_PARAM_VALUE_ABBREV`:
+
+      - ``mode`` renders just the (abbreviated) value, e.g. ``tod``;
+      - ``compare_symbol`` renders ``vs=QQQ``;
+      - booleans render the bare abbreviation when ``True``
+        (``z``, ``incl_cur``) or ``<abbrev>=off`` when toggled off from
+        a ``True`` default;
+      - other choices/strings render ``<abbrev>=<value>``.
+
+    Returns ``""`` when the schema has no parameters at all.
+    """
+    schema = tuple(getattr(spec, "params_schema", ()) or ())
+    if not schema:
+        return ""
+    p = dict(params or {})
+    num_bits: list[str] = []
+    flag_bits: list[str] = []
+    for pdef in schema:
+        name = getattr(pdef, "name", "")
+        kind = getattr(pdef, "kind", "str")
+        default = getattr(pdef, "default", None)
+        value = p.get(name, default)
+        if kind in ("int", "float"):
+            num_bits.append(_format_number(value))
+            continue
+        # Non-numeric: skip when equal to default (default noise).
+        if value == default:
+            continue
+        abbrev = _PARAM_NAME_ABBREV.get(name, name)
+        if kind == "bool":
+            flag_bits.append(abbrev if value else f"{abbrev}=off")
+        elif name == "mode":
+            flag_bits.append(_PARAM_VALUE_ABBREV.get(str(value), str(value)))
+        elif name == "compare_symbol":
+            flag_bits.append(f"vs={value}")
+        else:
+            val_txt = _PARAM_VALUE_ABBREV.get(str(value), str(value))
+            flag_bits.append(f"{abbrev}={val_txt}")
+    bits = num_bits + flag_bits
+    if not bits:
+        return ""
+    return "(" + ", ".join(bits) + ")"
+
+
+def _field_ref_compact_token(ref: FieldRef | None) -> str:
+    """Return the compact one-line token shown in compact picker mode.
+
+    Examples: ``3.5`` (literal), ``close`` (builtin), ``rvol(20)`` /
+    ``rrvol(30, vs=QQQ)`` / ``smi.signal(14, 3, 3, 3)`` (indicators).
+
+    The cross-symbol pin (:attr:`FieldRef.symbol`) is intentionally
+    **excluded** — it is surfaced separately as an ``@SPY`` badge so it
+    is not conflated with RRVOL's ``compare_symbol`` benchmark param.
+    """
+    if ref is None:
+        return "(value)"
+    if ref.kind == FIELD_KIND_LITERAL:
+        return _format_number(ref.value)
+    if ref.kind == FIELD_KIND_BUILTIN:
+        return ref.id
+    base = ref.id
+    if ref.output_key:
+        base = f"{base}.{ref.output_key}"
+    spec = get_field(ref.id, kind="indicator")
+    summary = _indicator_param_summary(spec, ref.params) if spec is not None else ""
+    return f"{base}{summary}"
 
 
 __all__ = ["BlockEditor"]

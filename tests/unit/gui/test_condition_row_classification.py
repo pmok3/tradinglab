@@ -130,11 +130,14 @@ def test_ema_20_gt_100_is_inline(root):
     assert cf._classify_layout() == "inline"
 
 
-def test_rvol_gt_100_is_stacked(root):
+def test_rvol_gt_100_is_inline_with_compact_token(root):
+    # Compact indicator tokens (CLAUDE.md §7.19) collapse RVOL's 6
+    # trigger-relevant params behind an Edit… button, so a single
+    # ``rvol > 100`` operand now fits the default inline row.
     c = Condition(left=FieldRef.indicator("rvol"), op=OP_GT,
                   params={"right": FieldRef.literal(100.0)}, interval="5m")
     cf = _cond_frame_for(c, root)
-    assert cf._classify_layout() == "stacked"
+    assert cf._classify_layout() == "inline"
 
 
 def test_close_gt_rvol_is_stacked_via_complex_rhs(root):
@@ -145,11 +148,13 @@ def test_close_gt_rvol_is_stacked_via_complex_rhs(root):
     assert cf._classify_layout() == "stacked"
 
 
-def test_bbands_gt_100_is_stacked_via_multi_output(root):
+def test_bbands_gt_100_is_inline_with_compact_token(root):
+    # Multi-output indicator (middle/upper/lower) also collapses to a
+    # compact token + Edit… button, so ``bbands > 100`` fits inline.
     c = Condition(left=FieldRef.indicator("bbands"), op=OP_GT,
                   params={"right": FieldRef.literal(100.0)}, interval="5m")
     cf = _cond_frame_for(c, root)
-    assert cf._classify_layout() == "stacked"
+    assert cf._classify_layout() == "inline"
 
 
 def test_between_op_forces_stacked(root):
@@ -216,23 +221,22 @@ def test_op_change_gt_to_between_flips_to_stacked(root):
     assert cf._current_layout == "stacked"
 
 
-def test_left_change_rvol_to_close_collapses_to_inline(root):
-    # Start with rvol → stacked. Switch the LEFT picker to ``close``
-    # (builtin) → should collapse to inline.
+def test_left_change_rvol_to_close_stays_inline_with_compact(root):
+    # With compact indicator tokens (§7.19) both ``rvol`` and ``close``
+    # operands fit the inline row, so switching LEFT between them does
+    # not change the layout — it stays inline throughout.
     c = Condition(left=FieldRef.indicator("rvol"), op=OP_GT,
                   params={"right": FieldRef.literal(100.0)}, interval="5m")
     cf = _cond_frame_for(c, root)
-    assert cf._current_layout == "stacked"
-    # Mutate the LEFT picker's ref to a simple builtin and fire the
-    # change handler the picker would have invoked.
+    assert cf._current_layout == "inline"
     cf._left_picker.set(FieldRef.builtin("close"))
     cf.cond.left = cf._left_picker.get()
     cf._on_left_change()
     assert cf._current_layout == "inline"
 
 
-def test_left_change_close_to_rvol_expands_to_stacked(root):
-    # Reverse direction — start simple, switch LEFT to RVOL.
+def test_left_change_close_to_rvol_stays_inline_with_compact(root):
+    # Reverse direction — compact RVOL token keeps the row inline.
     c = Condition(left=FieldRef.builtin("close"), op=OP_GT,
                   params={"right": FieldRef.literal(100.0)}, interval="5m")
     cf = _cond_frame_for(c, root)
@@ -240,7 +244,7 @@ def test_left_change_close_to_rvol_expands_to_stacked(root):
     cf._left_picker.set(FieldRef.indicator("rvol"))
     cf.cond.left = cf._left_picker.get()
     cf._on_left_change()
-    assert cf._current_layout == "stacked"
+    assert cf._current_layout == "inline"
 
 
 def test_int_scalar_param_rejects_fractional_decimal_without_truncating(root):
@@ -295,13 +299,13 @@ def test_inline_estimate_for_simple_condition(root):
 
 
 def test_inline_estimate_for_rvol_condition(root):
-    """RVOL's 6 trigger-relevant params push the estimate above
-    any realistic dialog width — guarantees stacked layout."""
+    """Compact RVOL token keeps the inline estimate within realistic
+    dialog widths so a single ``rvol > 2`` operand fits inline."""
     from tradinglab.gui.scanner_block_editor import _estimate_condition_inline_width
     c = Condition(left=FieldRef.indicator("rvol"), op=OP_GT,
                   params={"right": FieldRef.literal(2.0)}, interval="5m")
     est = _estimate_condition_inline_width(c)
-    assert est > 1500, f"rvol > 2 estimate {est} px should exceed realistic dialog widths"
+    assert est < 1200, f"compact rvol > 2 estimate {est} px should fit a 1200 px dialog"
 
 
 def test_classify_uses_available_width_when_realized(root):

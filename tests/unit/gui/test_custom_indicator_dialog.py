@@ -415,3 +415,38 @@ def test_conditions_wheel_guard_after_block_editor_mutation(root, tmp_dir) -> No
         combo.update()
     assert combo.get() == initial
     dlg.destroy()
+
+
+# ===========================================================================
+# Builder guardrail: Preview pane must not steal Composition height
+# ===========================================================================
+
+
+def test_preview_pane_starts_collapsed(root, tmp_dir) -> None:
+    """The Preview pane must NOT expand before a chart is rendered so a
+    parameter-heavy Composition body owns the full vertical budget."""
+    dlg = _mk(root, tmp_dir)
+    assert dlg._preview_expanded is False
+    info = dlg._preview_frame.pack_info()
+    assert str(info.get("expand")) in ("0", "false", "False")
+    dlg.destroy()
+
+
+def test_preview_pane_expands_after_render(root, tmp_dir) -> None:
+    dlg = _mk(root, tmp_dir)
+    dlg._set_preview_expanded(True)
+    assert dlg._preview_expanded is True
+    info = dlg._preview_frame.pack_info()
+    assert str(info.get("expand")) in ("1", "true", "True")
+    dlg.destroy()
+
+
+def test_new_indicator_recollapses_preview(root, tmp_dir) -> None:
+    dlg = _mk(root, tmp_dir)
+    dlg._set_preview_expanded(True)
+    assert dlg._preview_expanded is True
+    dlg._on_new()
+    assert dlg._preview_expanded is False
+    info = dlg._preview_frame.pack_info()
+    assert str(info.get("expand")) in ("0", "false", "False")
+    dlg.destroy()

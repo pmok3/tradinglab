@@ -18937,7 +18937,12 @@ def check_d81_rvol_rhs_reachable(app) -> None:
     via the INDICATOR trigger kind, adding a Condition with
     LEFT=rvol, and asserting:
 
-    1. The row's ``_current_layout`` is ``"stacked"``.
+    1. The row's LEFT picker is in ``compact`` display mode, so RVOL's
+       parameters are collapsed behind the summary token + ``Edit…``
+       popup instead of rendering inline (CLAUDE.md §7.19). With the
+       compact token a single RVOL operand fits the inline row at
+       1200px, so ``_current_layout`` is now ``"inline"`` — the
+       params can no longer clip because they aren't inline widgets.
     2. The dialog's BlockEditor scroll canvas does not need to grow
        wider than the dialog frame to make every shared widget
        reachable.
@@ -18993,8 +18998,9 @@ def check_d81_rvol_rhs_reachable(app) -> None:
 
         # Flip trigger kind to INDICATOR so BlockEditor is mounted.
         dlg._draft.trigger.kind = TriggerKind.INDICATOR
-        # Seed condition with a complex LEFT (rvol) so the very first
-        # ConditionFrame already classifies as stacked.
+        # Seed condition with an RVOL LEFT operand. In compact mode the
+        # params collapse behind the Edit… popup, so this no longer
+        # forces a stacked layout — it fits inline at 1200px.
         dlg._draft.trigger.condition = Group(
             combinator="and",
             children=[
@@ -19023,10 +19029,17 @@ def check_d81_rvol_rhs_reachable(app) -> None:
             f"first child must be a _ConditionFrame, got "
             f"{cf.__class__.__name__}")
 
-        # --- Stacked layout assertion ----------------------------------
-        assert cf._current_layout == "stacked", (
-            f"RVOL LEFT must trigger stacked layout per CLAUDE.md "
-            f"§7.19; got {cf._current_layout!r}")
+        # --- Compact-mode layout assertion -----------------------------
+        # The LEFT picker must be compact (params behind Edit…), which is
+        # what guarantees reachability now — not the stacked layout.
+        assert cf._left_picker._display_mode == "compact", (
+            "RVOL LEFT picker must render in compact mode so params "
+            "collapse behind the Edit… popup (CLAUDE.md §7.19)")
+        assert cf._left_picker._param_widgets == {}, (
+            "compact LEFT picker must build no inline param widgets")
+        assert cf._current_layout == "inline", (
+            f"compact RVOL LEFT fits the inline row at 1200px per "
+            f"CLAUDE.md §7.19; got {cf._current_layout!r}")
 
         # --- Geometric reachability -----------------------------------
         # Force one more pump so all the picker's internal reflow
@@ -19062,8 +19075,9 @@ def check_d81_rvol_rhs_reachable(app) -> None:
                 f"d81: {label} right edge {right} exceeds dialog right "
                 f"edge {dlg_right} (dialog_width={dialog_width}, "
                 f"slop={slop_px}) — stacked layout did not contain it")
-        print("  [OK] d81: RVOL LEFT triggers stacked layout; all "
-              "shared chrome stays within dialog width")
+        print("  [OK] d81: RVOL LEFT renders compact (params behind "
+              "Edit…); fits inline; all shared chrome stays within "
+              "dialog width")
     finally:
         if dlg is not None:
             try:

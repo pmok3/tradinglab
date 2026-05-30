@@ -310,9 +310,15 @@ class CustomIndicatorDialog(BaseModalDialog):
             side="right", padx=2,
         )
 
-        # Preview canvas.
+        # Preview canvas. Starts collapsed (non-expanding) so the
+        # Composition area owns the full vertical budget — a
+        # parameter-heavy Conditions/BlockEditor body must never be
+        # squeezed by an empty preview pane. Expanded on first render
+        # (see :meth:`_render_preview`) and re-collapsed when the body
+        # is reset for a new indicator.
         self._preview_frame = ttk.LabelFrame(right, text="Preview", padding=4)
-        self._preview_frame.pack(side="top", fill="both", expand=True, pady=(4, 2))
+        self._preview_frame.pack(side="top", fill="x", expand=False, pady=(4, 2))
+        self._preview_expanded = False
         self._preview_canvas: Any = None  # FigureCanvasTkAgg, lazy
         ttk.Label(
             self._preview_frame,
@@ -569,6 +575,7 @@ class CustomIndicatorDialog(BaseModalDialog):
         self._expression_text_cached = ""
         self._python_text_cached = ""
         self._render_compose_for_mode()
+        self._reset_preview()
         self._listbox.selection_clear(0, "end")
         self._set_status("Editing new indicator", level="info")
 
@@ -793,6 +800,35 @@ class CustomIndicatorDialog(BaseModalDialog):
         canvas.draw()
         canvas.get_tk_widget().pack(side="top", fill="both", expand=True)
         self._preview_canvas = canvas
+        self._set_preview_expanded(True)
+
+    def _reset_preview(self) -> None:
+        """Tear down any rendered preview and re-collapse the pane."""
+        for child in self._preview_frame.winfo_children():
+            child.destroy()
+        self._preview_canvas = None
+        ttk.Label(
+            self._preview_frame,
+            text="(Click Preview to render the indicator on the current chart's candles.)",
+            foreground=FALLBACK_GRAY,
+        ).pack(side="top", anchor="w")
+        self._set_preview_expanded(False)
+
+    def _set_preview_expanded(self, expanded: bool) -> None:
+        """Toggle whether the Preview pane claims vertical space.
+
+        Collapsed (default) keeps the Composition body — including a
+        parameter-heavy Conditions/BlockEditor — at full height. The
+        pane expands only once a chart has actually been rendered so an
+        empty placeholder never steals room from the editor.
+        """
+        if expanded == self._preview_expanded:
+            return
+        self._preview_expanded = expanded
+        if expanded:
+            self._preview_frame.pack_configure(fill="both", expand=True)
+        else:
+            self._preview_frame.pack_configure(fill="x", expand=False)
 
     # ------------------------------------------------------------------
     # Save

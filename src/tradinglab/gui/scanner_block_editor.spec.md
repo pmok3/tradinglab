@@ -174,6 +174,49 @@ Produces a `FieldRef`. Layout:
   flow-layout budget divisor — it does NOT change widget
   structure. Idempotent setter: re-applying the same hint is a
   no-op.
+- **`display_mode: Literal["detailed", "compact"]`** (default
+  `"detailed"`): controls whether indicator params render inline
+  or are collapsed behind a summary token + `Edit…` button.
+  - **detailed**: the full inline/wrapping ParamDef widget grid
+    described above.
+  - **compact**: the indicator branch renders only the indicator
+    combo, a read-only **summary token** (`_compact_summary_var`,
+    e.g. `(20, vs=QQQ)` built by `_compact_summary_text()` from the
+    current params), an **`Edit…`** button, and the cross-symbol
+    `@ Symbol` cluster. **No** inline per-param widgets are built
+    (`_param_widgets` stays empty). This keeps a parameter-heavy
+    indicator like RRVOL from clipping the row on narrow dialogs —
+    the params live behind the popup instead of wrapping across
+    rows. Builtin and Number branches render identically to
+    detailed mode (they have no params to collapse), so neither
+    grows a token or Edit button.
+  - **`Edit…` → `_open_param_dialog()`** opens `_FieldRefParamDialog`
+    (a `BaseModalDialog` Apply/Cancel popup) listing every ParamDef
+    stacked vertically with full-width widgets. On Apply the dialog
+    sets `self.result` to the new params dict; the caller folds it
+    back into the ref via `_apply_param_dialog_result(...)`, then
+    refreshes the summary token and fires `on_change`. Cancel is a
+    no-op. The popup is the only place the full param grid lives in
+    compact mode, so it never competes for horizontal space with the
+    operator / RHS / interval / delete chrome of the condition row.
+  - **Compact commit guard.** Because compact mode builds no inline
+    param widgets, `_commit_indicator` takes an early-return branch
+    that **preserves** the existing `self._ref.params` / `output_key`
+    and only folds in the cross-symbol `symbol` from the `@` entry.
+    Rebuilding params from the (empty) `_param_widgets` would
+    otherwise wipe them.
+
+### `_FieldRefParamDialog`
+
+`BaseModalDialog` Apply/Cancel popup used by compact-mode pickers to
+edit an indicator's full ParamDef set without consuming horizontal
+space in the condition row. Renders one labelled, full-width widget
+per ParamDef stacked vertically (reusing
+`gui._param_widgets.build_param_widget`). `_on_primary` validates +
+writes the collected params into `self.result` then `destroy()`s;
+`_on_cancel` sets `self.result = None` then `destroy()`s. Caller drives
+it via `wait_window`. Inherits the standard modal chrome (Escape =
+Cancel, `transient` parent — hence the macOS smoke-skip per §7.1).
 
 ### `_ConditionFrame`
 
@@ -241,11 +284,27 @@ reclassification against the actual width.
 
 - chrome (enabled + op combo + lookback + interval + delete +
   paddings) ≈ 420 px,
-- `_estimate_picker_width(cond.left)` (when not in `_NO_LEFT_OPS`),
+- `_estimate_picker_width(cond.left, compact=True)` (when not in
+  `_NO_LEFT_OPS`),
 - for each per-op param: scalar width OR `"name:"` label +
-  `_estimate_picker_width(field_ref)`.
+  `_estimate_picker_width(field_ref, compact=True)`.
 
-`_estimate_picker_width(ref)` uses calibrated font/widget metrics
+The `_ConditionFrame` builds its LEFT picker and per-op RHS field
+pickers with `display_mode="compact"` (indicator params collapse
+behind the summary token + `Edit…` popup). The estimate therefore
+passes `compact=True` so the width calculation matches what the
+compact picker actually renders: an indicator collapses to
+`type combo + indicator combo + summary token
+(_SUMMARY_TOKEN_EST_CHARS = 18 chars) + Edit button + symbol
+cluster`, instead of summing every inline ParamDef widget. This is
+why a single RRVOL operand now fits inline on a normal-width dialog
+where it previously forced a stacked layout (and clipped on narrow
+dialogs). On a genuinely narrow dialog the compact estimate may
+still exceed the available width and stack — but the params remain
+behind the `Edit…` button, so nothing clips either way.
+
+`_estimate_picker_width(ref, *, compact=False)` uses calibrated
+font/widget metrics
 (`_CHAR_PX = 7`, `_COMBO_OVERHEAD = 25`, `_SPINBOX_OVERHEAD = 20`,
 `_CHECKBOX_PX = 22`, `_FRAME_PAD_PX = 6`) imported from
 `gui/_widget_metrics.py` and shared with
