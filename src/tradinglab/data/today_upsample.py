@@ -28,6 +28,7 @@ import logging
 from collections.abc import Mapping, Sequence
 from datetime import date, datetime, timedelta, timezone
 
+from ..core.timezones import get_et
 from ..models import Candle
 
 logger = logging.getLogger(__name__)
@@ -45,16 +46,6 @@ _INTRADAY_RESOLUTION_ORDER: tuple[str, ...] = (
 SUPPORTED_INTERVALS: frozenset[str] = frozenset({"1d"})
 
 
-def _et_zoneinfo():
-    """Return ``ZoneInfo('America/New_York')`` or None on missing tzdata.
-
-    Thin back-compat wrapper around :func:`tradinglab.core.timezones.get_et`.
-    New call sites should import ``get_et`` directly.
-    """
-    from ..core.timezones import get_et
-    return get_et()
-
-
 def _et_date_of(dt: datetime) -> date:
     """Return the US-Eastern calendar date for an OHLCV timestamp.
 
@@ -66,7 +57,7 @@ def _et_date_of(dt: datetime) -> date:
     """
     if dt.tzinfo is None:
         return dt.date()
-    et = _et_zoneinfo()
+    et = get_et()
     if et is not None:
         return dt.astimezone(et).date()
     # tzdata-less fallback: assume UTC and shift -5h. Off by one for
@@ -79,7 +70,7 @@ def _today_et(now: datetime | None = None) -> date:
     """Return today's US-Eastern calendar date."""
     if now is not None:
         return _et_date_of(now if now.tzinfo else now.replace(tzinfo=timezone.utc))
-    et = _et_zoneinfo()
+    et = get_et()
     if et is not None:
         return datetime.now(et).date()
     return (datetime.now(timezone.utc) - timedelta(hours=5)).date()

@@ -20,13 +20,14 @@ import argparse
 import json
 import statistics
 import time
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 
 import tradinglab.indicators  # noqa: F401 - populate the registry
 from tradinglab.core.bars import Bars
-from tradinglab.indicators.base import INDICATORS, factory_by_kind_id
+from tradinglab.indicators.base import INDICATORS
 
 _DEFAULT_SIZES = (1_000, 5_000, 25_000, 100_000)
 _DEFAULT_RUNS = 7
@@ -73,20 +74,29 @@ def _time_call(fn: Callable[[], Any], runs: int) -> tuple[float, float]:
 
 
 def _registered_factories() -> list[tuple[str, Any]]:
-    """(kind_id, factory) for every distinct registered indicator."""
+    """(kind_id, factory) for every distinct registered indicator.
+
+    ``INDICATORS`` is keyed by display name; we re-key by ``kind_id``
+    so the harness output is stable across UI label tweaks. The legacy
+    ``sma`` / ``ema`` kind_ids are intentionally NOT injected — the
+    canonical ``MovingAverage`` (kind_id ``ma``) factory already
+    exercises the same per-bar SMA/EMA loop with the ``mode`` param,
+    and ``indicators.base.factory_by_kind_id`` returns a
+    ``(label, class)`` tuple (NOT a callable) so any attempt to
+    instantiate it raises ``TypeError: 'tuple' object is not callable``.
+    Audit ``bench-harness-no-tuples``.
+    """
     seen: dict[str, Any] = {}
     for factory in INDICATORS.values():
         kind_id = getattr(factory, "kind_id", None) or factory.__name__
         seen.setdefault(kind_id, factory)
-    # Include legacy SMA/EMA via kind-id lookup so the raw MA loops show up.
-    for kid in ("sma", "ema"):
-        fac = factory_by_kind_id(kid)
-        if fac is not None:
-            seen.setdefault(kid, fac)
     return sorted(seen.items())
 
 
-def run(sizes: tuple[int, ...], runs: int) -> dict[str, Any]:
+def run(sizes: tuple[int, ...] | list[int] | None = None, runs: int = _DEFAULT_RUNS) -> dict[str, Any]:
+    if sizes is None:
+        sizes = _DEFAULT_SIZES
+    sizes = tuple(sizes)
     factories = _registered_factories()
     bars_by_size = {n: _make_bars(n) for n in sizes}
     results: dict[str, Any] = {"sizes": list(sizes), "runs": runs, "rows": []}

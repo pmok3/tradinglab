@@ -785,8 +785,21 @@ class DocViewerDialog(BaseModalDialog):
             spacing1=2, spacing3=2,
             font=tkfont.Font(family="Segoe UI", size=10),
         )
-        scroll = ttk.Scrollbar(right, orient="vertical",
-                               command=self._text.yview)
+        # Per-dialog ttk style for the scrollbar so dark mode can repaint
+        # the trough + arrows without yanking the global ``TScrollbar``
+        # style (which would dark-mode every other ttk Scrollbar across
+        # the app). Style name is captured so ``_apply_theme`` can
+        # reconfigure it on theme flip without re-creating the widget.
+        # Audit ``doc-viewer-scrollbar-theme``.
+        self._scrollbar_style_name: str = f"DocViewer{id(self):x}.Vertical.TScrollbar"
+        self._configure_scrollbar_style()
+        scroll = ttk.Scrollbar(
+            right,
+            orient="vertical",
+            command=self._text.yview,
+            style=self._scrollbar_style_name,
+        )
+        self._scrollbar = scroll
         self._text.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
         self._text.pack(side="left", fill="both", expand=True)
@@ -801,6 +814,48 @@ class DocViewerDialog(BaseModalDialog):
         # focus (matches the chart widget's behaviour).
         self._text.bind("<MouseWheel>", self._on_mousewheel)
         right.pack(side="left", fill="both", expand=True)
+
+    def _configure_scrollbar_style(self) -> None:
+        """Configure the per-dialog scrollbar ttk Style for the active palette.
+
+        Sets ``troughcolor`` (gutter) + ``background`` (thumb) +
+        ``arrowcolor`` from the active palette. Idempotent — repeated
+        calls during ``_apply_theme`` reconfigure in place. On
+        platforms whose ttk theme ignores these options (notably the
+        Aqua theme on macOS, where the scrollbar is fully native) the
+        configure call is a harmless no-op.
+        """
+        pal = self._palette
+        try:
+            style = ttk.Style(self)
+        except tk.TclError:
+            return
+        # ``code_bg`` is the gutter colour reused throughout the dialog
+        # (it's the inline-code / code-block tint) so the scrollbar
+        # gutter visually matches a code-block scroll region. ``btn_bg``
+        # is the slightly-raised thumb colour (matches the action
+        # buttons). ``fg`` for the arrow strokes so they read against
+        # the dark thumb.
+        try:
+            style.configure(
+                self._scrollbar_style_name,
+                troughcolor=pal["code_bg"],
+                background=pal["btn_bg"],
+                arrowcolor=pal["fg"],
+                bordercolor=pal["hr"],
+                lightcolor=pal["btn_bg"],
+                darkcolor=pal["btn_bg"],
+            )
+            # Active / pressed states use a slightly contrasting thumb
+            # so user feedback is visible in both themes.
+            style.map(
+                self._scrollbar_style_name,
+                background=[("active", pal["sidebar_sel_bg"]),
+                            ("pressed", pal["sidebar_sel_bg"])],
+                arrowcolor=[("disabled", pal["muted"])],
+            )
+        except tk.TclError:
+            pass
 
     def _sidebar_width_px(self) -> int:
         """Width (px) for the sidebar that fits the longest doc title.
@@ -1019,6 +1074,13 @@ class DocViewerDialog(BaseModalDialog):
                     insertbackground=pal["fg"],
                 )
                 self._configure_tags()
+        except (tk.TclError, AttributeError):
+            pass
+
+        # Scrollbar ttk style — re-configure in place so the trough +
+        # thumb + arrows flip with the rest of the chrome.
+        try:
+            self._configure_scrollbar_style()
         except (tk.TclError, AttributeError):
             pass
 

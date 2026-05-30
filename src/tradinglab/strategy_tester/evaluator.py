@@ -73,6 +73,7 @@ from ..backtest.session import ENGINE_VERSION, SessionResult, SessionSpec
 from ..core.bars_registry import BarsRegistry
 from ..core.params_key import freeze_params
 from ..core.side import Side
+from ..core.timezones import ET
 from ..data.multi_interval_cache import MultiIntervalCache
 from ..entries.dispatch import (
     _ENTRY_DISPATCH,
@@ -153,22 +154,13 @@ __all__ = [
 # (ET), the same convention used by the live evaluator's templates and by
 # every "trading day" reference in the codebase. Bar timestamps in
 # :class:`BarSeries.ts` are int64 epoch SECONDS in UTC; the conversion
-# happens here.
+# happens here. ``_ET`` is a module-local alias for
+# :data:`tradinglab.core.timezones.ET` — kept so the dozen internal call
+# sites read naturally without rippling the rename through every line.
 # ---------------------------------------------------------------------------
 
 
-def _et_zoneinfo():
-    """Return ``ZoneInfo('America/New_York')`` or ``None`` on missing tzdata.
-
-    Thin back-compat wrapper around :func:`tradinglab.core.timezones.get_et`.
-    New call sites should import ``get_et`` (or the eager ``ET`` constant)
-    directly.
-    """
-    from ..core.timezones import get_et
-    return get_et()
-
-
-_ET = _et_zoneinfo()
+_ET = ET
 
 
 def _bar_ts_to_et(ts: int) -> datetime:

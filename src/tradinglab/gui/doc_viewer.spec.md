@@ -150,6 +150,18 @@ blend into the light-mode white background. They are tracked in
   `app.ChartApp._on_theme_changed` (live toggle while open) and
   from `open_doc_viewer` (singleton re-show after a hidden
   toggle).
+- **Per-dialog scrollbar ttk style** (audit
+  `doc-viewer-scrollbar-theme`) — the `ttk.Scrollbar` is wired to a
+  per-instance style name (`DocViewer{id}.Vertical.TScrollbar`) so
+  dark mode can repaint the trough / thumb / arrows without touching
+  the global `TScrollbar` style (which would dark-mode every other
+  ttk Scrollbar across the app). `_configure_scrollbar_style()`
+  sets `troughcolor=pal["code_bg"]`, `background=pal["btn_bg"]`,
+  `arrowcolor=pal["fg"]`, and a `style.map` for active/pressed
+  thumb feedback. Idempotent; re-called by `_apply_theme()` on
+  every theme flip. On platforms whose ttk theme ignores these
+  options (notably macOS Aqua, where the scrollbar is native) the
+  configure call is a harmless no-op.
 
 ## Discovery
 

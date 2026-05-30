@@ -142,6 +142,33 @@ class TestAdoptionInvariant:
 
         assert offenders == []
 
+    def test_no_back_compat_et_zoneinfo_wrappers_remain(self):
+        """No production module may define a thin ``_et_zoneinfo`` shim.
+
+        These shims existed during the migration to centralise the
+        ET resolution; once every caller switched to importing ``ET``
+        or ``get_et`` from :mod:`tradinglab.core.timezones`, the shims
+        became pure dead-code drift surface (a future agent could
+        edit the shim, missing the central helper).
+
+        Regression for CLAUDE.md §7.23 — the cleanup sprint that
+        retired the wrappers in ``data/today_upsample.py``,
+        ``strategy_tester/evaluator.py``, ``strategy_tester/screenshot.py``,
+        and ``gui/volume_tod_overlay.py``.
+        """
+        src_root = Path(__file__).resolve().parents[2] / "src" / "tradinglab"
+        offenders: list[str] = []
+        for path in sorted(src_root.rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            rel = path.relative_to(src_root)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.FunctionDef) and node.name == "_et_zoneinfo":
+                    offenders.append(str(rel))
+        assert offenders == [], (
+            f"_et_zoneinfo shims must be retired in favour of "
+            f"core.timezones.ET / get_et; still defined in: {offenders}"
+        )
+
 
 @pytest.fixture(autouse=True)
 def reset_timezone_cache():

@@ -86,6 +86,7 @@ from matplotlib.collections import LineCollection, PolyCollection
 from matplotlib.colors import to_rgba
 
 from ..constants import BEAR_COLOR, BULL_COLOR
+from ..core.timezones import get_et
 from ..models import Candle
 from ..rendering import _BODY_HALF, darker_shade
 
@@ -112,15 +113,6 @@ _MEDIAN_TICK_HALF_WIDTH = _BODY_HALF  # matches the bar's x-extent
 _RTH_OPEN_MIN = 9 * 60 + 30   # 570
 _RTH_CLOSE_MIN = 16 * 60      # 960
 _RTH_SPAN_MIN = _RTH_CLOSE_MIN - _RTH_OPEN_MIN  # 390
-
-
-def _et_zoneinfo():
-    """Return ``ZoneInfo("America/New_York")`` or ``None`` on missing tzdata.
-
-    Thin back-compat wrapper around :func:`tradinglab.core.timezones.get_et`.
-    """
-    from ..core.timezones import get_et
-    return get_et()
 
 
 def _candle_date_key(c: Candle) -> date | None:
@@ -160,7 +152,7 @@ def _candle_et_minute_of_day(c: Candle) -> int | None:
     d = c.date
     tz = getattr(d, "tzinfo", None)
     if tz is not None:
-        et = _et_zoneinfo()
+        et = get_et()
         if et is not None:
             try:
                 d = d.astimezone(et)
@@ -178,7 +170,7 @@ def _epoch_ms_to_et_minute(epoch_ms: int) -> int | None:
     caller treats this as a "can't compute time-of-day reference"
     signal and the overlay degrades to feature-off.
     """
-    et = _et_zoneinfo()
+    et = get_et()
     if et is None:
         return None
     try:
