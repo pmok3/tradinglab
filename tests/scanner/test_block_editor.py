@@ -486,6 +486,13 @@ def test_field_ref_picker_reflow_wraps_when_narrow(root):
         # by stubbing it we make the test exercise the layout logic
         # rather than the windowing system.
         picker._toplevel_for_reflow = root
+        # Stub per-child widths to a fixed value so the wrap decision
+        # is pure budget arithmetic, independent of the platform's font
+        # metrics (the same widgets render wider on Linux/macOS than on
+        # Windows, which would otherwise make this assertion flaky).
+        picker._flow_widths_for_children = (  # type: ignore[method-assign]
+            lambda: [100] * len(picker._flow_children)
+        )
         original_winfo_width = root.winfo_width
         root.winfo_width = lambda: 400  # type: ignore[method-assign]
         try:
@@ -496,7 +503,7 @@ def test_field_ref_picker_reflow_wraps_when_narrow(root):
         # ``side="left"`` inside its row Frame). Verify wrapping by
         # asserting >1 row frames exist.
         # At 400px toplevel, budget = max(180, (400-280)//2) = 180.
-        # 9 widgets averaging ~80-120px each can't all fit on row 0.
+        # With 100px-wide children (+6 pad) only one fits per 180px row.
         assert len(picker._flow_row_frames) > 1, (
             f"Expected wrapping at 400px toplevel, got "
             f"{len(picker._flow_row_frames)} row frame(s)")
@@ -511,6 +518,11 @@ def test_field_ref_picker_reflow_single_row_when_wide(root):
     picker = _make_indicator_picker(root, "rvol")
     try:
         picker._toplevel_for_reflow = root
+        # Deterministic per-child widths (see the narrow-wrap test) so
+        # the single-row outcome is platform-font-independent.
+        picker._flow_widths_for_children = (  # type: ignore[method-assign]
+            lambda: [100] * len(picker._flow_children)
+        )
         original_winfo_width = root.winfo_width
         root.winfo_width = lambda: 3000  # type: ignore[method-assign]
         try:
@@ -518,7 +530,7 @@ def test_field_ref_picker_reflow_single_row_when_wide(root):
         finally:
             root.winfo_width = original_winfo_width  # type: ignore[method-assign]
         # At 3000px toplevel: budget = max(180, (3000-280)//2) = 1360.
-        # 9 widgets at ~80-120px (≈800 total + padding) all fit on row 0.
+        # 10 children at 100px (+6 pad ≈ 1060 total) all fit on row 0.
         assert len(picker._flow_row_frames) == 1, (
             f"Expected single-row layout at 3000px toplevel, got "
             f"{len(picker._flow_row_frames)} row frame(s)")
