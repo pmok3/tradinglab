@@ -29,3 +29,14 @@ NaN until both the rolling window AND the ATR kernel are warm. No SMA-of-TR prox
 
 ## Determinism
 Pure function on `np.ndarray`; no state, no IO, no locks. Identical inputs → identical outputs (window ops are sums-of-max, no reorder).
+
+## Performance
+The ratchet helpers (`_ratchet_long` / `_ratchet_short`) are loop-free:
+the NaN-aware running max/min is a cumulative `np.maximum.accumulate` /
+`np.minimum.accumulate` over the finite-compressed series, with
+`ratchet_prev` applied as a constant floor/ceiling. Output is
+bit-equivalent to the former per-bar loop (NaN entries pass through
+untouched; the input array is never mutated). Pinned by
+`tests/unit/indicators/test_chandelier_ratchet_vectorized.py`. This is
+the dominant cost in `ChandelierStops.compute_arr` for the indicator
+(`anchor_idx is None`) path.

@@ -41,7 +41,10 @@ bounded oscillators.
 - `classify_histogram(hist) -> np.ndarray[int8]` — pure helper
   returning `0..3` per the palette order above, `-1` for NaN. The
   first defined bar has no predecessor; it is classified as "rising"
-  by convention.
+  by convention. Fully vectorised (no per-bar loop): a NaN gap resets
+  the "rising" comparison to True for the next finite bar, matching the
+  former scalar loop. Pinned by
+  `tests/unit/indicators/test_iir_vectorization.py`.
 - `name`: compact label; tags appear only when a parameter differs
   from its default (e.g. `MACD(12,26,9)`, `MACD(12,26,9,SMA,hl2)`,
   `MACD(8,21,5)`).

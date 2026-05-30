@@ -29,7 +29,8 @@ flat-market regimes. Drawn in its own pane.
   (Ehlers' published `[0, 1]` form × 100).
 
 ## Dependencies
-- Internal: `..models.Candle`, `.base.LineStyle`, `.base.ParamDef`.
+- Internal: `..models.Candle`, `.base.LineStyle`, `.base.ParamDef`,
+  `._iir.iir_tail` (vectorised linear-recurrence kernel).
 - External: `numpy`.
 
 ## Design Decisions
@@ -37,6 +38,14 @@ flat-market regimes. Drawn in its own pane.
   Defaults 15 / 85 correspond to Ehlers' 0.15 / 0.85.
 - **`gamma` trades lag for smoothness** — `γ ≈ 0.2–0.4` ⇒ fast/whippy;
   `γ ≈ 0.7–0.8` ⇒ smooth/lagging. Default 0.5 is Ehlers' classic.
+- **Loop-free 4-stage cascade.** Each Laguerre stage is a first-order
+  linear recurrence (`q = gamma`) evaluated by `_iir.iir_tail` over the
+  finite-compressed price series, run sequentially (each stage consumes
+  the previous stage's full output and its shift). Non-finite prices are
+  skipped (recurrence continues at the next finite sample); a non-finite
+  `closes[0]` poisons the seed and yields all-NaN — both behaviours are
+  bit-equivalent to the former scalar loop, pinned by
+  `tests/unit/indicators/test_iir_vectorization.py`.
 - **Per-instance reference levels.** Unlike SMI / ADX (class-level
   levels), LRSI's OB/OS are user-tunable.
   `render._resolve_reference_levels` reads the instance first so each

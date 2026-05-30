@@ -36,6 +36,7 @@ import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
 
 from ..core.bars import Bars
+from ._iir import ema_first_seeded_nan as _ema_first_seeded_nan
 from ._palette import SECONDARY_LINE, TAB10_CYAN
 from .base import BaseIndicator, LineStyle, ParamDef
 
@@ -171,22 +172,8 @@ def _ema_with_nan(arr: np.ndarray, length: int) -> np.ndarray:
     Output mirrors input length. Indices before the first finite
     input remain NaN; the EMA seeds at the first finite sample with
     that sample's value, then applies ``alpha = 2/(length+1)``.
+
+    Evaluated by the vectorised closed-form kernel in
+    :mod:`indicators._iir` (no per-bar Python loop).
     """
-    out = np.full_like(arr, np.nan)
-    if arr.size == 0:
-        return out
-    alpha = 2.0 / (length + 1.0)
-    seeded = False
-    prev = 0.0
-    for i in range(arr.size):
-        v = arr[i]
-        if not np.isfinite(v):
-            continue
-        if not seeded:
-            prev = float(v)
-            seeded = True
-            out[i] = prev
-            continue
-        prev = alpha * float(v) + (1.0 - alpha) * prev
-        out[i] = prev
-    return out
+    return _ema_first_seeded_nan(arr, length)

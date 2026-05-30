@@ -48,6 +48,7 @@ from typing import ClassVar
 import numpy as np
 
 from ..core.bars import Bars
+from ._iir import iir_tail
 from ._palette import TAB10_OLIVE
 from .base import BaseIndicator, LineStyle, ParamDef
 
@@ -129,59 +130,55 @@ class LRSI(BaseIndicator):
             return {"lrsi": out}
 
         prices = bars.close
-        gamma = self.gamma
+        gamma = float(self.gamma)
 
-        # Laguerre filter state. Seed all four stages with the first
-        # price so the recurrence is well-defined from index 0; the
-        # first three outputs are masked to NaN below because they
-        # are dominated by the seed.
-        L0 = float(prices[0])
-        L1 = L0
-        L2 = L0
-        L3 = L0
+        # The scalar reference seeds all four Laguerre stages with the raw
+        # first price (prices[0]) and advances state only on finite bars
+        # (non-finite bars are skipped, preserving prior state). A non-finite
+        # prices[0] therefore poisons the cascade with NaN for the whole
+        # series; replicate that exactly.
+        seed = float(prices[0])
+        if not np.isfinite(seed):
+            return {"lrsi": out}
 
-        for i in range(n):
-            p = float(prices[i])
-            if not np.isfinite(p):
-                # Skip non-finite price; preserve previous state.
-                continue
-            L0_new = (1.0 - gamma) * p   + gamma * L0
-            L1_new =        -gamma * L0_new + L0 + gamma * L1
-            L2_new =        -gamma * L1_new + L1 + gamma * L2
-            L3_new =        -gamma * L2_new + L2 + gamma * L3
-            L0, L1, L2, L3 = L0_new, L1_new, L2_new, L3_new
+        idx = np.flatnonzero(np.isfinite(prices))
+        if idx.size == 0:
+            return {"lrsi": out}
 
-            cu = 0.0
-            cd = 0.0
-            # Pair 0-1
-            if L0 >= L1:
-                cu += L0 - L1
-            else:
-                cd += L1 - L0
-            # Pair 1-2
-            if L1 >= L2:
-                cu += L1 - L2
-            else:
-                cd += L2 - L1
-            # Pair 2-3
-            if L2 >= L3:
-                cu += L2 - L3
-            else:
-                cd += L3 - L2
+        pf = prices[idx].astype(np.float64, copy=False)
 
-            denom = cu + cd
-            # Mask the first 3 bars (filter not yet warmed up — output
-            # is dominated by seed bias).
-            if i < 3:
-                continue
-            if denom <= 0.0:
-                # Perfectly flat input across the window: no
-                # directional pressure either way; emit a neutral
-                # 50 (midpoint) rather than NaN to keep the line
-                # continuous through flat patches. This matches
-                # Ehlers' published reference behavior.
-                out[i] = 50.0
-            else:
-                out[i] = 100.0 * (cu / denom)
+        # Stage 0: L0[k] = (1-g)*p[k] + g*L0[k-1], with L0[-1] = seed.
+        # Because pf[0] == seed, L0[0] == seed.
+        L0 = np.empty(pf.size, dtype=np.float64)
+        L0[0] = seed
+        if pf.size > 1:
+            L0[1:] = iir_tail((1.0 - gamma) * pf[1:], gamma, seed)
+
+        def _next_stage(prev: np.ndarray) -> np.ndarray:
+            # Lk[m] = g*Lk[m-1] + (-g*prev[m] + prev[m-1]); seeds at `seed`.
+            st = np.empty(prev.size, dtype=np.float64)
+            st[0] = seed
+            if prev.size > 1:
+                u = -gamma * prev[1:] + prev[:-1]
+                st[1:] = iir_tail(u, gamma, seed)
+            return st
+
+        L1 = _next_stage(L0)
+        L2 = _next_stage(L1)
+        L3 = _next_stage(L2)
+
+        d01 = L0 - L1
+        d12 = L1 - L2
+        d23 = L2 - L3
+        cu = np.maximum(d01, 0.0) + np.maximum(d12, 0.0) + np.maximum(d23, 0.0)
+        cd = np.maximum(-d01, 0.0) + np.maximum(-d12, 0.0) + np.maximum(-d23, 0.0)
+        denom = cu + cd
+        with np.errstate(divide="ignore", invalid="ignore"):
+            vals = np.where(denom <= 0.0, 50.0, 100.0 * cu / denom)
+
+        out[idx] = vals
+        # Mask the first 3 bars (filter not yet warmed up — output is
+        # dominated by seed bias). The scalar loop masks original index < 3.
+        out[:3] = np.nan
         return {"lrsi": out}
 

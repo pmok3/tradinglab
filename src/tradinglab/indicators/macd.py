@@ -99,23 +99,18 @@ def classify_histogram(hist: np.ndarray) -> np.ndarray:
     finite = np.isfinite(hist)
     if not finite.any():
         return out
-    first = int(np.argmax(finite))
-    prev = hist[first]
-    out[first] = 0 if prev > 0 else 2  # first bar: treat as "rising"
-    for i in range(first + 1, n):
-        v = hist[i]
-        if not np.isfinite(v):
-            prev = v
-            continue
-        if np.isfinite(prev):
-            rising = v >= prev
-        else:
-            rising = True
-        if v > 0:
-            out[i] = 0 if rising else 1
-        else:
-            out[i] = 2 if rising else 3
-        prev = v
+    # Vectorised: "rising" iff this bar >= the immediately-preceding bar,
+    # but only when that predecessor is itself finite (a NaN gap resets to
+    # "rising", matching the per-bar loop which set prev = NaN on a gap).
+    prev = np.empty(n, dtype=np.float64)
+    prev[0] = np.nan
+    prev[1:] = hist[:-1]
+    prev_finite = np.isfinite(prev)
+    with np.errstate(invalid="ignore"):
+        rising = np.where(prev_finite, hist >= prev, True)
+        above = hist > 0.0
+    out = np.where(above, np.where(rising, 0, 1), np.where(rising, 2, 3)).astype(np.int8)
+    out[~finite] = -1
     return out
 
 

@@ -26,10 +26,15 @@ Keltner, ATR, MACD, Chandelier Stops).
   dispatch. Raises `ValueError` for unknown `kind`.
 
 ## Dependencies
-- Internal: `.wilder.wilder_smooth_avg` (re-exported as `rma`).
+- Internal: `.wilder.wilder_smooth_avg` (re-exported as `rma`);
+  `._iir.ema_sma_seeded` (vectorised EMA recurrence kernel).
 - External: `numpy`.
 
 ## Design Decisions
+- **`ema` is loop-free.** The EMA recurrence is evaluated by the
+  shared closed-form kernel `_iir.ema_sma_seeded` (chunked-cumsum), not
+  a per-bar Python loop. Output is bit-equivalent to the former loop
+  (pinned by `tests/unit/indicators/test_iir_vectorization.py`).
 - **Common contract across all four kernels.** Input is a 1-D
   `np.ndarray` of finite floats with optional leading NaNs. Mid-stream
   NaNs are treated as 0 in the recurrence so the line stays

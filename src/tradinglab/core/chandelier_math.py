@@ -153,34 +153,38 @@ def rolling_lowest_low_since(
 
 
 def _ratchet_long(arr: np.ndarray, prev: float | None) -> np.ndarray:
-    """In-place ratchet (max-of-running) of a long chandelier series.
+    """Ratchet (max-of-running) of a long chandelier series.
 
     NaN entries pass through untouched. ``prev`` seeds the running max
-    so the function can be called incrementally on chunks.
+    so the function can be called incrementally on chunks. Vectorised:
+    the running max over finite samples is a cumulative max, which
+    ``np.maximum.accumulate`` computes in one pass over the compressed
+    finite values; ``prev`` is a constant floor applied to every output.
     """
     out = arr.copy()
-    running: float | None = prev
-    for i in range(out.size):
-        v = out[i]
-        if not np.isfinite(v):
-            continue
-        if running is None or v > running:
-            running = float(v)
-        out[i] = running
+    fin = np.isfinite(out)
+    if not fin.any():
+        return out
+    cm = np.maximum.accumulate(out[fin])
+    if prev is not None and np.isfinite(prev):
+        cm = np.maximum(cm, float(prev))
+    out[fin] = cm
     return out
 
 
 def _ratchet_short(arr: np.ndarray, prev: float | None) -> np.ndarray:
-    """In-place ratchet (min-of-running) of a short chandelier series."""
+    """Ratchet (min-of-running) of a short chandelier series.
+
+    Mirror of :func:`_ratchet_long` using ``np.minimum.accumulate``.
+    """
     out = arr.copy()
-    running: float | None = prev
-    for i in range(out.size):
-        v = out[i]
-        if not np.isfinite(v):
-            continue
-        if running is None or v < running:
-            running = float(v)
-        out[i] = running
+    fin = np.isfinite(out)
+    if not fin.any():
+        return out
+    cm = np.minimum.accumulate(out[fin])
+    if prev is not None and np.isfinite(prev):
+        cm = np.minimum(cm, float(prev))
+    out[fin] = cm
     return out
 
 

@@ -24,7 +24,8 @@ the result. Output bounded in roughly `[-100, +100]`; signal line
 - `compute(candles) -> {"smi": ndarray, "signal": ndarray}`.
 
 ## Dependencies
-- Internal: `..models.Candle`, `.base.LineStyle`, `.base.ParamDef`.
+- Internal: `..models.Candle`, `.base.LineStyle`, `.base.ParamDef`,
+  `._iir.ema_first_seeded_nan` (vectorised NaN-skipping EMA recurrence).
 - External: `numpy`.
 
 ## Design Decisions
@@ -33,7 +34,9 @@ the result. Output bounded in roughly `[-100, +100]`; signal line
   range spikes into the SMI.
 - **Recursive EMA seeded at first finite sample with that sample's
   value** (same convention as the `EMA` indicator). Preserves the
-  `length-1` HH/LL warmup as NaN.
+  `length-1` HH/LL warmup as NaN. `_ema_with_nan` delegates to the
+  shared closed-form kernel `_iir.ema_first_seeded_nan` (no per-bar
+  Python loop); output is bit-equivalent to the former loop.
 - **Reference levels at −40, 0, +40** drawn by default. Blau's
   convention: > +40 ≈ overbought, < −40 ≈ oversold; SMI/signal
   crossovers are the primary entry trigger.

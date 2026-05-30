@@ -24,6 +24,7 @@ from __future__ import annotations
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
 
+from ._iir import ema_sma_seeded as _ema_sma_seeded
 from .wilder import wilder_smooth_avg as _wilder_smooth_avg
 
 MA_TYPES: tuple[str, ...] = ("SMA", "EMA", "WMA", "RMA")
@@ -61,28 +62,11 @@ def ema(arr: np.ndarray, length: int) -> np.ndarray:
     from that seed onward. This matches TradingView and TA-Lib's
     EMA (and the standalone :class:`EMA` indicator). It differs from
     ``pandas.ewm(adjust=False)``, which seeds at the first sample.
+
+    The recurrence is evaluated by the vectorised closed-form kernel in
+    :mod:`indicators._iir` (no per-bar Python loop).
     """
-    out = np.full_like(arr, np.nan, dtype=np.float64)
-    n = arr.size
-    if n == 0 or length < 1:
-        return out
-    first = _first_valid(arr)
-    if first < 0 or first + length > n:
-        return out
-    alpha = 2.0 / (length + 1.0)
-    seed_end = first + length  # exclusive of the last seed input
-    window = arr[first:seed_end]
-    cleaned_seed = np.where(np.isfinite(window), window, 0.0)
-    seed = float(cleaned_seed.mean())
-    out[seed_end - 1] = seed
-    prev = seed
-    for i in range(seed_end, n):
-        v = arr[i]
-        if not np.isfinite(v):
-            v = 0.0
-        prev = alpha * float(v) + (1.0 - alpha) * prev
-        out[i] = prev
-    return out
+    return _ema_sma_seeded(arr, length)
 
 
 def wma(arr: np.ndarray, length: int) -> np.ndarray:
