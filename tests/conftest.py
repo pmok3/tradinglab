@@ -22,6 +22,34 @@ import tkinter as tk
 
 import pytest
 
+# ---------------------------------------------------------------------
+# Tk-finalizer landmine fix (CLAUDE.md §7.5 + cousin)
+# ---------------------------------------------------------------------
+# Mirror of the proactive neuter that ``tests/smoke/conftest.py``
+# applies for the smoke suite. Lifted to the top-level conftest so
+# the SAME protection applies to ``pytest tests/unit tests/scanner -q``
+# (the unit gate the release workflow runs BEFORE the smoke step) —
+# matplotlib's Tk backend gets imported transitively by enough unit
+# tests that leftover ``tk.Variable`` / ``tk.PhotoImage`` instances
+# can GC on the wrong thread → ``Tcl_AsyncDelete: async handler
+# deleted by the wrong thread`` → SIGABRT.
+#
+# Symptom in CI: the unit step fails with "Windows fatal exception:
+# code 0x80000003" and a ``Tcl_AsyncDelete`` line in the log; the
+# 4500+ test pass count locally never reproduces because dev pytest
+# sessions terminate before GC reaches the dead objects.
+#
+# Skipping the Tcl ``unset`` / ``image delete`` call is harmless in
+# a test process — the small per-test leak is reclaimed at process
+# exit, and the only thing the original finalizer did was issue a
+# command against a Tcl interp that's about to be torn down anyway.
+try:
+    import tkinter as _tk_neuter
+    _tk_neuter.Variable.__del__ = lambda self: None  # type: ignore[assignment]
+    _tk_neuter.Image.__del__ = lambda self: None  # type: ignore[assignment]
+except Exception:  # noqa: BLE001
+    pass
+
 
 @pytest.fixture(scope="session")
 def _tk_root():
