@@ -20,8 +20,11 @@ the ``light`` and ``dark`` palettes (defined by
 ``tkinter.colorchooser.askcolor`` and applies live via
 ``ChartApp.set_theme_override``.
 
-Below the swatch grids, a **Presets** strip exposes three one-click
-schemes:
+Built-in presets
+----------------
+
+The **Built-in presets** strip exposes every entry from
+:data:`tradinglab.constants.PRESET_THEMES`. The default ship list is:
 
 * **Default Light** — clears all light-mode overrides + switches the
   active mode to ``light``.
@@ -30,6 +33,34 @@ schemes:
 * **Bloomberg** — pre-baked black/amber palette (deep black background,
   amber text + grid, classic terminal aesthetic). Applied to the
   ``dark`` palette + activates dark mode.
+* **Solarized Light** / **Solarized Dark** — Ethan Schoonover's classic
+  16-colour palette, both modes.
+* **Nord** — Arctic Ice Studio's frost+aurora calm bluish dark palette.
+* **Dracula** — Zeno Rocha's iconic deep purple+cyan dark palette.
+* **Gruvbox Dark** — morhetz's retro warm-brown dark palette.
+* **Monokai** — Wimer Hazenberg's TextMate classic dark palette.
+* **Material Ocean** — Material Theme team's deep-blue saturated dark.
+
+Custom themes
+-------------
+
+The **My themes** row lets users save / re-apply / delete their own
+theme snapshots. Storage lives at
+``<app_data_dir>/themes/<slug>.json`` via
+:mod:`tradinglab.gui.theme_store` — one JSON file per theme so they
+survive uninstall/reinstall and are trivial to share.
+
+* ``Combobox`` — populated from :func:`theme_store.load_all` (sorted
+  alphabetically). Empty when no saved themes exist; placeholder text
+  ``"No saved themes yet"``.
+* **Apply** — replaces the active mode's overrides with the selected
+  saved theme's overrides + flips ``dark_var`` to that theme's mode.
+  Same atomic-replace pattern as the built-in presets.
+* **Save current…** — opens a small entry dialog asking for a name;
+  if a saved theme with that name already exists, prompts with
+  overwrite confirm. Persists via :func:`theme_store.save_theme`.
+* **Delete** — confirm + :func:`theme_store.delete_theme`; only
+  enabled when a real saved theme is selected.
 
 Buttons (right-aligned footer): **Reset all** (wipes both modes),
 **Save and Close** (commits the live overrides + closes), **Cancel**
@@ -58,44 +89,26 @@ from __future__ import annotations
 
 import copy
 import tkinter as tk
-from tkinter import colorchooser, ttk
+from tkinter import colorchooser, messagebox, simpledialog, ttk
 from typing import TYPE_CHECKING
 
-from ..constants import CUSTOMIZABLE_THEME_KEYS, DEFAULT_THEMES
+from ..constants import (
+    CUSTOMIZABLE_THEME_KEYS,
+    DEFAULT_THEMES,
+    PRESET_THEMES,
+)
+from . import theme_store
 from ._modal_base import BaseModalDialog, protect_combobox_wheel
+from .theme_store import UserTheme
 
 if TYPE_CHECKING:
     from ..app import ChartApp
 
 
-# ---------------------------------------------------------------------------
-# Presets — name + override dict per mode. Each preset is applied via
-# ``ChartApp.replace_theme_overrides`` so all overrides flip atomically.
-# ---------------------------------------------------------------------------
-
-#: Classic "Bloomberg terminal" black + amber palette. Mapped onto the
-#: ``dark`` slot of the override dict. The base ``DARK_THEME`` colors
-#: that are NOT customizable (spine, watermark, tooltip_*, etc.) keep
-#: their defaults — that's by design: only the 6 keys in
-#: ``CUSTOMIZABLE_THEME_KEYS`` get the Bloomberg treatment.
-_BLOOMBERG_DARK: dict[str, str] = {
-    "win_bg": "#000000",
-    "ax_bg": "#0a0a0a",
-    "text": "#ffb000",
-    "grid": "#3a2a00",
-    "bull_row_bg": "#1f3a1a",
-    "bear_row_bg": "#3a1a1a",
-}
-
-#: Canonical preset registry. Each entry is
-#: ``(label, target_mode, overrides_for_that_mode, clear_other_mode)``.
-#: ``clear_other_mode=True`` wipes the *other* mode's overrides so the
-#: preset is fully isolated; ``False`` leaves the other mode alone.
-_PRESETS = (
-    ("Default Light", "light", {}, False),
-    ("Default Dark",  "dark",  {}, False),
-    ("Bloomberg",     "dark",  _BLOOMBERG_DARK, False),
-)
+# Placeholder text shown in the user-themes combobox when no saved
+# themes exist. Distinct from a real theme label so the Apply button
+# can grey out cleanly on this sentinel value.
+_NO_SAVED_THEMES_SENTINEL = "(no saved themes yet)"
 
 
 # ---------------------------------------------------------------------------
@@ -120,10 +133,10 @@ class ThemeEditorDialog(BaseModalDialog):
             parent,
             title="Theme Editor",
             geometry_key="dlg.theme_editor",
-            default_geometry="560x320",
+            default_geometry="640x420",
         )
         self._parent_app = parent
-        self.minsize(440, 260)
+        self.minsize(520, 360)
 
         self._swatch_buttons: dict[str, dict[str, tk.Button]] = {
             "light": {},
@@ -158,9 +171,10 @@ class ThemeEditorDialog(BaseModalDialog):
             outer,
             text=(
                 "Pick a color for any slot — changes apply live. "
-                "Use the presets to load a starting palette."
+                "Use the presets to load a starting palette, or save "
+                "your own under \u201cMy themes\u201d."
             ),
-            wraplength=520, justify="left",
+            wraplength=600, justify="left",
         )
         intro.pack(fill="x", pady=(0, 8))
 
@@ -169,15 +183,54 @@ class ThemeEditorDialog(BaseModalDialog):
         self._build_mode_section(grid_wrap, "light", col=0)
         self._build_mode_section(grid_wrap, "dark", col=1)
 
-        # Presets strip.
-        preset_frame = ttk.LabelFrame(outer, text="Presets", padding=6)
+        # Built-in presets strip. Wraps if needed so the dialog stays
+        # compact on smaller screens.
+        preset_frame = ttk.LabelFrame(outer, text="Built-in presets", padding=6)
         preset_frame.pack(fill="x", pady=(10, 0))
-        for idx, (label, _mode, _ovr, _) in enumerate(_PRESETS):
+        ncols = 4  # fits all 10 presets in 3 rows nicely
+        for idx, preset in enumerate(PRESET_THEMES):
+            r, c = divmod(idx, ncols)
             ttk.Button(
-                preset_frame, text=label,
-                command=lambda i=idx: self._on_apply_preset(i),
-            ).grid(row=0, column=idx, padx=(0 if idx == 0 else 4, 0),
-                   sticky="w")
+                preset_frame, text=preset.label,
+                command=lambda p=preset: self._on_apply_preset(p),
+            ).grid(row=r, column=c, padx=(0 if c == 0 else 4, 0),
+                   pady=(0 if r == 0 else 4, 0), sticky="w")
+
+        # User themes row: combobox + Apply / Save current / Delete.
+        # Audit: ``theme-editor-custom-themes`` (sprint adding
+        # user-saved themes to the picker).
+        my_frame = ttk.LabelFrame(outer, text="My themes", padding=6)
+        my_frame.pack(fill="x", pady=(10, 0))
+
+        self._user_themes: list[UserTheme] = []
+        self._user_theme_var = tk.StringVar(value=_NO_SAVED_THEMES_SENTINEL)
+        self._user_theme_combo = ttk.Combobox(
+            my_frame,
+            textvariable=self._user_theme_var,
+            state="readonly",
+            width=28,
+        )
+        self._user_theme_combo.grid(row=0, column=0, sticky="w")
+        self._user_theme_combo.bind(
+            "<<ComboboxSelected>>",
+            lambda _e: self._refresh_user_themes_buttons(),
+        )
+
+        self._apply_btn = ttk.Button(
+            my_frame, text="Apply", command=self._on_apply_user_theme,
+        )
+        self._apply_btn.grid(row=0, column=1, padx=(6, 0), sticky="w")
+
+        ttk.Button(
+            my_frame, text="Save current…", command=self._on_save_current,
+        ).grid(row=0, column=2, padx=(6, 0), sticky="w")
+
+        self._delete_btn = ttk.Button(
+            my_frame, text="Delete", command=self._on_delete_user_theme,
+        )
+        self._delete_btn.grid(row=0, column=3, padx=(6, 0), sticky="w")
+
+        self._refresh_user_themes()
 
         # Footer. Cancel is packed first so it lands rightmost (Windows
         # convention — matches every other dialog in the app).
@@ -226,6 +279,55 @@ class ThemeEditorDialog(BaseModalDialog):
                 except tk.TclError:
                     pass
 
+    def _refresh_user_themes(self) -> None:
+        """Re-read every saved theme and repaint the combobox + buttons.
+
+        Called on dialog construction and after every save / delete so
+        the dropdown stays in sync with disk state.
+        """
+        try:
+            self._user_themes = theme_store.load_all()
+        except Exception:  # noqa: BLE001
+            self._user_themes = []
+
+        if self._user_themes:
+            labels = [t.label for t in self._user_themes]
+            try:
+                self._user_theme_combo.configure(values=labels)
+            except tk.TclError:
+                return
+            # Preserve the prior selection if it still exists; otherwise
+            # default to the first entry so Apply / Delete are usable.
+            prior = self._user_theme_var.get()
+            if prior not in labels:
+                self._user_theme_var.set(labels[0])
+        else:
+            try:
+                self._user_theme_combo.configure(values=[_NO_SAVED_THEMES_SENTINEL])
+            except tk.TclError:
+                return
+            self._user_theme_var.set(_NO_SAVED_THEMES_SENTINEL)
+        self._refresh_user_themes_buttons()
+
+    def _refresh_user_themes_buttons(self) -> None:
+        """Grey out Apply / Delete when no real theme is selected."""
+        has_real = bool(self._user_themes) and self._user_theme_var.get() != _NO_SAVED_THEMES_SENTINEL
+        state = ("!disabled",) if has_real else ("disabled",)
+        try:
+            self._apply_btn.state(state)
+            self._delete_btn.state(state)
+        except tk.TclError:
+            pass
+
+    def _selected_user_theme(self) -> UserTheme | None:
+        label = self._user_theme_var.get()
+        if label == _NO_SAVED_THEMES_SENTINEL:
+            return None
+        for t in self._user_themes:
+            if t.label == label:
+                return t
+        return None
+
     # ------------------------------------------------------------------
     # Event handlers
     # ------------------------------------------------------------------
@@ -247,18 +349,16 @@ class ThemeEditorDialog(BaseModalDialog):
             pass
         self._refresh_swatches()
 
-    def _on_apply_preset(self, idx: int) -> None:
-        """Apply preset ``idx`` from :data:`_PRESETS`.
+    def _apply_overrides_for_mode(
+        self, mode: str, overrides: dict[str, str],
+    ) -> None:
+        """Atomically replace the target mode's overrides + flip dark_var.
 
-        Switches the active mode + replaces that mode's overrides.
-        The other mode's overrides are left intact.
+        Shared body for both built-in preset apply and user-theme
+        apply. Preserves the OTHER mode's overrides so the user
+        doesn't lose their light-mode tweaks when they pick a dark
+        preset (or vice versa).
         """
-        try:
-            _label, mode, overrides, _clear_other = _PRESETS[idx]
-        except IndexError:
-            return
-        # Build a full overrides dict that replaces only the target
-        # mode while preserving the other mode's existing overrides.
         try:
             existing = dict(self._parent_app._theme_overrides)
         except Exception:  # noqa: BLE001
@@ -272,7 +372,6 @@ class ThemeEditorDialog(BaseModalDialog):
             self._parent_app.replace_theme_overrides(new_overrides)
         except Exception:  # noqa: BLE001
             pass
-        # Switch to the preset's target mode so the user sees it.
         try:
             target_dark = (mode == "dark")
             if hasattr(self._parent_app, "dark_var"):
@@ -281,6 +380,102 @@ class ThemeEditorDialog(BaseModalDialog):
         except Exception:  # noqa: BLE001
             pass
         self._refresh_swatches()
+
+    def _on_apply_preset(self, preset) -> None:
+        """Apply a built-in :class:`tradinglab.constants.ThemePreset`."""
+        self._apply_overrides_for_mode(preset.mode, dict(preset.overrides))
+
+    def _on_apply_user_theme(self) -> None:
+        """Apply the currently-selected saved user theme."""
+        t = self._selected_user_theme()
+        if t is None:
+            return
+        self._apply_overrides_for_mode(t.mode, dict(t.overrides))
+
+    def _on_save_current(self) -> None:
+        """Capture the current overrides + active mode under a user-supplied name.
+
+        Opens an ``askstring`` for the name; if a saved theme with
+        that name exists, prompts to overwrite. Saves the override
+        dict for the *currently-active* mode (the chart you're
+        looking at) — the other mode's overrides are NOT saved
+        because the user can capture them separately by flipping
+        dark_var.
+        """
+        try:
+            current_dark = bool(self._parent_app.dark_var.get())
+        except Exception:  # noqa: BLE001
+            current_dark = False
+        mode = "dark" if current_dark else "light"
+        try:
+            current_overrides = dict(
+                self._parent_app._theme_overrides.get(mode, {}),
+            )
+        except Exception:  # noqa: BLE001
+            current_overrides = {}
+
+        name = simpledialog.askstring(
+            "Save theme",
+            "Name this theme:",
+            parent=self,
+        )
+        if not name:
+            return
+        name = name.strip()
+        if not name:
+            return
+
+        if theme_store.theme_exists(name):
+            ok = messagebox.askyesno(
+                "Overwrite theme?",
+                f"A saved theme called \u201c{name}\u201d already exists. "
+                "Overwrite it?",
+                parent=self,
+            )
+            if not ok:
+                return
+
+        try:
+            theme_store.save_theme(
+                UserTheme(label=name, mode=mode, overrides=current_overrides),
+            )
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror(
+                "Save failed",
+                f"Could not save theme: {exc}",
+                parent=self,
+            )
+            return
+
+        # After save, select the newly-saved name in the dropdown.
+        self._refresh_user_themes()
+        try:
+            self._user_theme_var.set(name)
+            self._refresh_user_themes_buttons()
+        except tk.TclError:
+            pass
+
+    def _on_delete_user_theme(self) -> None:
+        t = self._selected_user_theme()
+        if t is None:
+            return
+        ok = messagebox.askyesno(
+            "Delete theme?",
+            f"Delete saved theme \u201c{t.label}\u201d?",
+            parent=self,
+        )
+        if not ok:
+            return
+        try:
+            theme_store.delete_theme(t.label)
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror(
+                "Delete failed",
+                f"Could not delete theme: {exc}",
+                parent=self,
+            )
+            return
+        self._refresh_user_themes()
 
     def _on_reset(self) -> None:
         try:

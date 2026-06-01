@@ -20,13 +20,28 @@ import pytest
 tk = pytest.importorskip("tkinter")
 ttk = pytest.importorskip("tkinter.ttk")
 
-from tradinglab.constants import CUSTOMIZABLE_THEME_KEYS, DEFAULT_THEMES
+from tradinglab.constants import (
+    CUSTOMIZABLE_THEME_KEYS,
+    DEFAULT_THEMES,
+    PRESET_THEMES,
+)
 from tradinglab.gui.theme_editor import (
-    _BLOOMBERG_DARK,
-    _PRESETS,
     ThemeEditorDialog,
     open_theme_editor,
 )
+
+
+def _preset_by_label(label: str):
+    for p in PRESET_THEMES:
+        if p.label == label:
+            return p
+    raise AssertionError(
+        f"preset {label!r} missing from constants.PRESET_THEMES; got "
+        f"{[p.label for p in PRESET_THEMES]}",
+    )
+
+
+_BLOOMBERG_DARK = _preset_by_label("Bloomberg").overrides
 
 
 def _attach_stub_app_surface(root: tk.Tk) -> tk.Tk:
@@ -137,7 +152,7 @@ def test_preset_default_light_clears_light_overrides(stub_app):
     stub_app.dark_var.set(True)
     dlg = ThemeEditorDialog(stub_app)
     try:
-        dlg._on_apply_preset(0)
+        dlg._on_apply_preset(_preset_by_label("Default Light"))
         assert stub_app._theme_overrides["light"] == {}
         assert stub_app._theme_overrides["dark"] == {"ax_bg": "#222222"}
         assert stub_app.dark_var.get() is False
@@ -150,7 +165,7 @@ def test_preset_default_dark_switches_mode(stub_app):
     stub_app.dark_var.set(False)
     dlg = ThemeEditorDialog(stub_app)
     try:
-        dlg._on_apply_preset(1)
+        dlg._on_apply_preset(_preset_by_label("Default Dark"))
         assert stub_app._theme_overrides["dark"] == {}
         assert stub_app.dark_var.get() is True
     finally:
@@ -160,9 +175,7 @@ def test_preset_default_dark_switches_mode(stub_app):
 def test_bloomberg_preset_loads_amber_palette(stub_app):
     dlg = ThemeEditorDialog(stub_app)
     try:
-        bloomberg_idx = next(
-            i for i, p in enumerate(_PRESETS) if p[0] == "Bloomberg")
-        dlg._on_apply_preset(bloomberg_idx)
+        dlg._on_apply_preset(_preset_by_label("Bloomberg"))
         assert stub_app._theme_overrides["dark"] == _BLOOMBERG_DARK
         assert stub_app.dark_var.get() is True
         allowed = {k for k, _ in CUSTOMIZABLE_THEME_KEYS}
@@ -211,7 +224,7 @@ def test_preset_apply_calls_apply_theme(stub_app):
     dlg = ThemeEditorDialog(stub_app)
     try:
         before = stub_app.apply_count
-        dlg._on_apply_preset(0)
+        dlg._on_apply_preset(_preset_by_label("Default Light"))
         assert stub_app.apply_count > before, (
             "preset apply must trigger _apply_theme for live preview")
     finally:

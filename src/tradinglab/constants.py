@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import datetime
 
 # Candlestick body / wick colors.
@@ -384,6 +385,143 @@ CUSTOMIZABLE_THEME_KEYS: list = [
     ("bull_row_bg", "Bull row tint"),
     ("bear_row_bg", "Bear row tint"),
 ]
+
+
+# ---------------------------------------------------------------------------
+# Built-in palette presets (light + dark + 6 popular community palettes)
+# ---------------------------------------------------------------------------
+# These are exposed to the user via the Theme Editor's Presets strip.
+# Each entry covers all six CUSTOMIZABLE_THEME_KEYS so a switch is a
+# complete repaint (no leftover slot from the previous preset). When
+# the user clicks a preset, the Theme Editor swaps the active mode +
+# replaces that mode's override dict atomically.
+#
+# Palette sources (community standards): Solarized — Ethan Schoonover;
+# Nord — Arctic Ice Studio; Dracula — Zeno Rocha; Gruvbox — morhetz;
+# Monokai — Wimer Hazenberg; Material Ocean — Material Theme team.
+# Bull/bear-tint slots stay native-feeling within each palette family
+# rather than literal "green/red" because some palettes (Solarized,
+# Bloomberg) deliberately avoid the saturated chart-pattern combo.
+
+
+@dataclass(frozen=True)
+class ThemePreset:
+    """One named built-in theme.
+
+    ``label`` is the UI text (e.g. ``"Dracula"``); ``mode`` is
+    ``"light"`` or ``"dark"`` and controls whether ``dark_var``
+    flips when the preset is applied; ``overrides`` is the dict
+    of ``CUSTOMIZABLE_THEME_KEYS`` colour values.
+    """
+
+    label: str
+    mode: str
+    overrides: dict = field(default_factory=dict)
+
+
+# Bloomberg-terminal black + amber. The classic.
+_BLOOMBERG_DARK: dict = {
+    "win_bg": "#000000",
+    "ax_bg": "#0a0a0a",
+    "text": "#ffb000",
+    "grid": "#3a2a00",
+    "bull_row_bg": "#1f3a1a",
+    "bear_row_bg": "#3a1a1a",
+}
+
+# Solarized Light — warm parchment background + dark teal text.
+# Same colour theory as the dark variant; light backplate.
+_SOLARIZED_LIGHT: dict = {
+    "win_bg": "#fdf6e3",
+    "ax_bg": "#eee8d5",
+    "text": "#073642",
+    "grid": "#93a1a1",
+    "bull_row_bg": "#d5e8c4",
+    "bear_row_bg": "#f0c7c7",
+}
+
+# Solarized Dark — Ethan Schoonover's 16-colour palette, dark variant.
+_SOLARIZED_DARK: dict = {
+    "win_bg": "#002b36",
+    "ax_bg": "#073642",
+    "text": "#93a1a1",
+    "grid": "#586e75",
+    "bull_row_bg": "#1f4d3a",
+    "bear_row_bg": "#4d1f1f",
+}
+
+# Nord — Arctic Ice Studio's frost+aurora palette. Calm bluish dark.
+_NORD_DARK: dict = {
+    "win_bg": "#2e3440",
+    "ax_bg": "#3b4252",
+    "text": "#eceff4",
+    "grid": "#4c566a",
+    "bull_row_bg": "#3b5a4b",
+    "bear_row_bg": "#5a3b3b",
+}
+
+# Dracula — Zeno Rocha's iconic dark palette. Deep purple+cyan.
+_DRACULA_DARK: dict = {
+    "win_bg": "#282a36",
+    "ax_bg": "#1e1f29",
+    "text": "#f8f8f2",
+    "grid": "#44475a",
+    "bull_row_bg": "#3a5a40",
+    "bear_row_bg": "#5a3a40",
+}
+
+# Gruvbox Dark — morhetz's retro warm-brown palette.
+_GRUVBOX_DARK: dict = {
+    "win_bg": "#282828",
+    "ax_bg": "#1d2021",
+    "text": "#ebdbb2",
+    "grid": "#504945",
+    "bull_row_bg": "#3a4a2a",
+    "bear_row_bg": "#5a2a2a",
+}
+
+# Monokai — Wimer Hazenberg's TextMate classic. Dark warm grey + green/pink.
+_MONOKAI_DARK: dict = {
+    "win_bg": "#272822",
+    "ax_bg": "#1e1f1c",
+    "text": "#f8f8f2",
+    "grid": "#49483e",
+    "bull_row_bg": "#3a5a2a",
+    "bear_row_bg": "#5a2a3a",
+}
+
+# Material Ocean — Material Theme team's deep-blue palette. Like Nord but
+# bluer and more saturated; popular VS Code / Atom theme.
+_MATERIAL_OCEAN_DARK: dict = {
+    "win_bg": "#0f111a",
+    "ax_bg": "#1b1e2b",
+    "text": "#a6accd",
+    "grid": "#3b3f51",
+    "bull_row_bg": "#1c3a3a",
+    "bear_row_bg": "#3a1c2a",
+}
+
+
+#: Canonical preset registry. The Theme Editor reads this directly
+#: and turns each entry into a button on the Presets strip. Order is
+#: preserved in the UI so put new entries somewhere intentional.
+#:
+#: "Default Light" / "Default Dark" are sentinel presets — they don't
+#: override anything; applying one just clears the target mode's
+#: overrides + flips dark_var. The remaining entries replace the
+#: target mode's overrides atomically.
+PRESET_THEMES: tuple = (
+    ThemePreset(label="Default Light",   mode="light", overrides={}),
+    ThemePreset(label="Default Dark",    mode="dark",  overrides={}),
+    ThemePreset(label="Bloomberg",       mode="dark",  overrides=_BLOOMBERG_DARK),
+    ThemePreset(label="Solarized Light", mode="light", overrides=_SOLARIZED_LIGHT),
+    ThemePreset(label="Solarized Dark",  mode="dark",  overrides=_SOLARIZED_DARK),
+    ThemePreset(label="Nord",            mode="dark",  overrides=_NORD_DARK),
+    ThemePreset(label="Dracula",         mode="dark",  overrides=_DRACULA_DARK),
+    ThemePreset(label="Gruvbox Dark",    mode="dark",  overrides=_GRUVBOX_DARK),
+    ThemePreset(label="Monokai",         mode="dark",  overrides=_MONOKAI_DARK),
+    ThemePreset(label="Material Ocean",  mode="dark",  overrides=_MATERIAL_OCEAN_DARK),
+)
 
 
 def resolve_theme(mode: str, overrides: dict | None) -> dict:
