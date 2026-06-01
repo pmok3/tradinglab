@@ -41,6 +41,7 @@ from . import disk_cache
 from . import settings as _settings
 from .backtest.sandbox_app import SandboxAppController
 from .backtest.sandbox_app_aliases import SandboxAliasMixin
+from .backtest.sandbox_app_methods import SandboxAppMixin
 from .constants import (
     BUILTIN_STARTUP_DEFAULTS,
     LIGHT_THEME,
@@ -122,6 +123,7 @@ from .gui.named_fonts import (
 from .gui.polling import PollingMixin
 from .gui.recent_menus import RecentMenusMixin
 from .gui.sandbox_menu import SandboxMenuMixin
+from .gui.scanner_app import ScannerAppMixin
 from .gui.snapshot import SnapshotMixin
 from .gui.splash import (
     STAGE_BUILDING_UI,
@@ -245,6 +247,8 @@ class ChartApp(
     LivePriceOverlayAppMixin,
     RecentMenusMixin,
     SandboxAliasMixin,
+    SandboxAppMixin,
+    ScannerAppMixin,
     SnapshotMixin,
     UpdateCheckMixin,
     tk.Tk,
@@ -6004,43 +6008,11 @@ class ChartApp(
     # ------------------------------------------------------------------
     # Scanner integration (sandbox-driven block-tree screener)
     # ------------------------------------------------------------------
-
-    def _build_scanner_tab(self) -> None:
-        """Construct the right-side Scanner notebook tab.
-
-        Auto-loads any saved scans from ``<cache>/scans/`` and wires
-        the per-row action callback to the existing primary/compare
-        register-and-focus paths. Failures during autoload degrade
-        gracefully to an empty library — the user can re-import.
-        """
-        from .gui.scanner_tab import ScannerTab
-        from .scanner import storage as _scan_storage
-        from .scanner.runner import ScanRunner
-
-        library: dict[str, Any] = {}
-        try:
-            library = {s.id: s for s in _scan_storage.load_all()}
-        except Exception:  # noqa: BLE001
-            try:
-                self._status.warn(
-                    "Scanner: failed to load saved scans; starting empty")
-            except Exception:  # noqa: BLE001
-                pass
-            library = {}
-
-        self._scanner_storage = _scan_storage
-        self._scan_runner = ScanRunner()
-        self._scan_tick_id: int = 0
-        self._scan_last_results: dict[str, Any] = {}
-
-        self._scanner_tab = ScannerTab(
-            self._notebook,
-            library=library,
-            on_scan_saved=self._on_scanner_scan_saved,
-            on_scan_deleted=self._on_scanner_scan_deleted,
-            on_row_action=self._on_scanner_row_action,
-        )
-        self._notebook.add(self._scanner_tab, text="Scanner")
+    # ``_build_scanner_tab`` / ``_on_scanner_scan_saved`` /
+    # ``_on_scanner_scan_deleted`` / ``_on_scanner_row_action`` /
+    # ``_refresh_scanner_for_sandbox`` / ``_reset_scanner_state``
+    # extracted into ``gui/scanner_app.py:ScannerAppMixin`` in
+    # wave-3 of the app.py shrink (CLAUDE §7.24).
 
     def _on_open_strategy_dialog(self) -> None:
         """**Strategy** menu entry — open or re-focus the Strategy Tester popup.
@@ -6128,173 +6100,20 @@ class ChartApp(
         except tk.TclError:
             pass
 
-    def _on_scanner_scan_saved(self, scan: Any) -> None:
-        try:
-            self._scanner_storage.save(scan)
-        except Exception:  # noqa: BLE001
-            try:
-                self._status.error(
-                    f"Scanner: failed to save scan {scan.name!r}")
-            except Exception:  # noqa: BLE001
-                pass
-
-    def _on_scanner_scan_deleted(self, scan_id: str) -> None:
-        try:
-            self._scanner_storage.delete(scan_id)
-        except Exception:  # noqa: BLE001
-            try:
-                self._status.error(
-                    f"Scanner: failed to delete scan {scan_id!r}")
-            except Exception:  # noqa: BLE001
-                pass
-        # Drop any stale history so a re-created scan starts fresh.
-        runner = getattr(self, "_scan_runner", None)
-        if runner is not None:
-            try:
-                runner.reset_history(scan_id)
-            except Exception:  # noqa: BLE001
-                pass
-
-    def _on_scanner_row_action(self, symbol: str, kind: str) -> None:
-        """User picked a row + an action from the Scanner result table.
-
-        ``kind`` is ``"primary"``, ``"compare"`` or ``"watchlist"``.
-        Routes through the existing sandbox register-and-focus paths
-        when a session is active; otherwise falls back to the regular
-        ``ticker_var.set`` / ``compare_ticker_var.set`` plumbing.
-        """
-        sym = (symbol or "").strip().upper()
-        if not sym:
-            return
-        sandbox_on = self._is_sandbox_active()
-        try:
-            if kind == "primary":
-                if sandbox_on:
-                    self._sandbox_register_and_focus(sym)
-                else:
-                    self.ticker_var.set(sym)
-                    if hasattr(self, "_load_data"):
-                        try:
-                            self._load_data()
-                        except Exception:  # noqa: BLE001
-                            pass
-            elif kind == "compare":
-                if sandbox_on:
-                    try:
-                        self.compare_var.set(True)
-                    except Exception:  # noqa: BLE001
-                        pass
-                    self._sandbox_register_compare(sym)
-                else:
-                    try:
-                        self.compare_var.set(True)
-                        self.compare_ticker_var.set(sym)
-                    except Exception:  # noqa: BLE001
-                        pass
-            elif kind == "watchlist":
-                # Best-effort: append to the active pinned watchlist if
-                # the watchlist manager is available. Tolerate missing
-                # APIs (smoke tests run without one configured).
-                wl_mgr = getattr(self, "_watchlist_manager", None)
-                if wl_mgr is None:
-                    return
-                try:
-                    name = self.watchlist_var.get()
-                except Exception:  # noqa: BLE001
-                    name = ""
-                if not name:
-                    return
-                try:
-                    wl_mgr.add_ticker(name, sym)
-                except Exception:  # noqa: BLE001
-                    pass
-                try:
-                    self._populate_watchlist_tab(name)
-                except Exception:  # noqa: BLE001
-                    pass
-        except Exception:  # noqa: BLE001
-            try:
-                self._status.error(
-                    f"Scanner: action {kind!r} on {sym} failed")
-            except Exception:  # noqa: BLE001
-                pass
-
-    def _refresh_scanner_for_sandbox(self) -> None:
-        self._sandbox_ctrl.refresh_scanner_for_sandbox(app=self, silent_tcl=_silent_tcl)
-
-    def _reset_scanner_state(self) -> None:
-        self._sandbox_ctrl.reset_scanner_state(app=self, silent_tcl=_silent_tcl)
-
-    def _sandbox_register_compare(self, symbol: str) -> bool:
-        return self._sandbox_ctrl.register_compare(
-            app=self,
-            symbol=symbol,
-            silent_tcl=_silent_tcl,
-        )
-
-    def _sandbox_sync_compare_to_var(self) -> None:
-        self._sandbox_ctrl.sync_compare_to_var(app=self, silent_tcl=_silent_tcl)
-
-    def _sandbox_can_register(self, sym: str) -> bool:
-        return self._sandbox_ctrl.can_register(app=self, sym=sym)
-
-    def _sandbox_register_and_focus(self, symbol: str) -> bool:
-        return self._sandbox_ctrl.register_and_focus(app=self, symbol=symbol)
-
-    def _install_sandbox_compare_series(
-        self,
-        *,
-        symbol: str,
-        candles: list[Candle],
-        interval: str,
-    ) -> None:
-        self._sandbox_ctrl.install_compare_series(
-            app=self,
-            symbol=symbol,
-            candles=candles,
-            interval=interval,
-            silent_tcl=_silent_tcl,
-        )
-
-    def _restrict_toolbar_intervals_for_sandbox(
-        self,
-        *,
-        display_intervals: list[str],
-        daily_available: bool,
-    ) -> None:
-        self._sandbox_ctrl.restrict_toolbar_intervals(
-            app=self,
-            display_intervals=list(display_intervals),
-            daily_available=daily_available,
-            silent_tcl=_silent_tcl,
-        )
-
-    def _restore_toolbar_intervals_from_sandbox(self) -> None:
-        self._sandbox_ctrl.restore_toolbar_intervals(app=self, silent_tcl=_silent_tcl)
-
-    def _sandbox_reset_compare_for_session_start(self) -> None:
-        self._sandbox_ctrl.reset_compare_for_session_start(
-            app=self,
-            silent_tcl=_silent_tcl,
-            compare_default=_DEFAULT_COMPARE,
-        )
-
-    def _install_sandbox_primary_series(
-        self,
-        *,
-        symbol: str,
-        candles: list[Candle],
-        interval: str,
-        full_session_length: int | None = None,
-    ) -> None:
-        self._sandbox_ctrl.install_primary_series(
-            app=self,
-            symbol=symbol,
-            candles=candles,
-            interval=interval,
-            full_session_length=full_session_length,
-            silent_tcl=_silent_tcl,
-        )
+    # ``_on_scanner_scan_saved`` / ``_on_scanner_scan_deleted`` /
+    # ``_on_scanner_row_action`` / ``_refresh_scanner_for_sandbox`` /
+    # ``_reset_scanner_state`` extracted into
+    # ``gui/scanner_app.py:ScannerAppMixin`` (wave-3; CLAUDE §7.24).
+    #
+    # ``_sandbox_register_compare`` / ``_sandbox_sync_compare_to_var`` /
+    # ``_sandbox_can_register`` / ``_sandbox_register_and_focus`` /
+    # ``_install_sandbox_compare_series`` /
+    # ``_restrict_toolbar_intervals_for_sandbox`` /
+    # ``_restore_toolbar_intervals_from_sandbox`` /
+    # ``_sandbox_reset_compare_for_session_start`` /
+    # ``_install_sandbox_primary_series`` extracted into
+    # ``backtest/sandbox_app_methods.py:SandboxAppMixin``
+    # (wave-3; CLAUDE §7.24).
 
     def _on_open_status_history(self, _event=None) -> None:
         """Open (or focus) the verbose status-history window.

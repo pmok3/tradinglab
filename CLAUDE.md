@@ -41,7 +41,7 @@ tradinglab/
 ├── src/tradinglab/           # the package (src layout)
 │   ├── __main__.py            # `python -m tradinglab` entry; also exposed as `tradinglab` console script
 │   ├── _version.py            # SINGLE SOURCE OF TRUTH for __version__ (read by pyproject + build_exe.ps1)
-│   ├── app.py                 # ChartApp god-object (6147 LOC after waves 1+2 mixin extraction; was 7790)
+│   ├── app.py                 # ChartApp god-object (6036 LOC after waves 1+2+3 mixin extraction; was 7790)
 │   ├── backtest/ core/ data/ drawings/ entries/ events/ exits/
 │   ├── gui/                   # dialogs, menus, widgets (e.g. dialogs.py, help_menu.py, watchlist_dialog.py)
 │   │   ├── drawings_app.py        # DrawingsAppMixin (wave 1)
@@ -1335,12 +1335,13 @@ Tests: `tests/core/test_timezones.py` (8 tests covering cached
 identity, summer/winter DST offsets, all 3 missing-tzdata fallback
 paths).
 
-### 7.24 ChartApp MRO — 18 mixins, alphabetical insertion, no `__init__`
+### 7.24 ChartApp MRO — 20 mixins, alphabetical insertion, no `__init__`
 
-`ChartApp` (in `src/tradinglab/app.py`) inherits from **18 mixins +
-`tk.Tk`** after waves 1+2 of the god-file extraction (commits
+`ChartApp` (in `src/tradinglab/app.py`) inherits from **20 mixins +
+`tk.Tk`** after waves 1+2+3 of the god-file extraction (commits
 `358ad16`, `d0cdadc`, `73a4adb`, `bfe80fc`, `e9fa1b2`, `a1f11ba`,
-`9393301`). The MRO declaration lives at L229-250:
+`9393301`, plus the wave-3 sprint adding `ScannerAppMixin` and
+`SandboxAppMixin`). The MRO declaration lives at L233-255:
 
 ```python
 class ChartApp(
@@ -1348,7 +1349,8 @@ class ChartApp(
     IndicatorMenuMixin, SandboxMenuMixin, ConfigMenuMixin, DrilldownMixin,
     EntriesAppMixin, ExitsAppMixin, HelpMenuMixin, FirstRunBannerMixin,
     DrawingsAppMixin, LivePriceOverlayAppMixin, RecentMenusMixin,
-    SandboxAliasMixin, SnapshotMixin, UpdateCheckMixin,
+    SandboxAliasMixin, SandboxAppMixin, ScannerAppMixin, SnapshotMixin,
+    UpdateCheckMixin,
     tk.Tk,
 ):
 ```
@@ -1379,14 +1381,14 @@ class ChartApp(
    filedialog` line in `app.py` MUST stay (with `# noqa: F401` if
    needed) even when no in-file code references it.
 
-**Pending extractions** (LOW-MED risk, ~1100 LOC removable, see
-checkpoint 006 for backlog): WatchlistsAppMixin (section L5841-6092),
-ScannerAppMixin (section L6939-7390), SandboxAppMixin (the big one
-at L7390-7791 + scattered methods). Multi-week scope items
-(DataLoadController, RenderController, topology-preserving paint
-pipeline) are documented in `docs/PAINT_PIPELINE_REFACTOR.md` —
-read that before attempting any cut into `_load_data_async`,
-`_panel_state`, or `_render`.
+**Pending extractions** (LOW-MED risk, ~700 LOC removable, see
+checkpoint 006 for backlog): WatchlistsAppMixin (section L5841-6092
+— the bulk of watchlists already lives in `WatchlistTabMixin`,
+wave-1). Multi-week scope items (DataLoadController,
+RenderController, topology-preserving paint pipeline) are
+documented in `docs/PAINT_PIPELINE_REFACTOR.md` — read that before
+attempting any cut into `_load_data_async`, `_panel_state`, or
+`_render`.
 
 ### 7.25 Internal data sources: `register_source(..., internal=True)`
 
