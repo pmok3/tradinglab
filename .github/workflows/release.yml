@@ -1,13 +1,14 @@
 name: Release
 
 # Triggered by pushing a tag of the form ``vX.Y.Z`` (matching the
-# version bump produced by ``tools/bump_version.py``). Builds a
-# Windows redistributable via ``tools/build_exe.ps1``, uploads the
-# zip as both a workflow artifact and a GitHub Release asset.
+# version bump produced by ``tools/bump_version.py``). Builds Windows
+# redistributables IN PARALLEL on x64 (windows-latest) and ARM64
+# (windows-11-arm — public-repo GA since 2025-08), then a single
+# publish job collects both zips and uploads them to a GitHub Release.
 #
 # Manual ``workflow_dispatch`` runs are also supported so a
-# maintainer can produce a one-off build from the current main
-# branch without cutting a tag.
+# maintainer can produce one-off cross-arch builds from the current
+# main branch without cutting a tag.
 
 on:
   push:
@@ -25,9 +26,20 @@ permissions:
 
 jobs:
   build-windows:
-    name: Build Windows redistributable
-    runs-on: windows-latest
+    name: Build Windows ${{ matrix.arch }} redistributable
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
+    strategy:
+      # One arch failing must NOT cancel the other — a transient
+      # ARM64 runner blip shouldn't cost us the x64 zip and force a
+      # full re-run.
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            arch: x64
+          - runner: windows-11-arm
+            arch: arm64
     steps:
       - name: Checkout source
         uses: actions/checkout@v6
@@ -38,14 +50,21 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+          # The runner image's preinstalled Python is x64 on
+          # windows-latest and ARM64 on windows-11-arm; setup-python
+          # follows the same convention so both matrix legs run
+          # against their native arch. PyInstaller embeds the
+          # interpreter's architecture into the produced .exe.
 
       - name: Cache pip
         uses: actions/cache@v5
         with:
+          # Arch-distinct cache key so x64 and ARM64 don't fight
+          # over the same key (different wheel archs cached).
           path: ~/AppData/Local/pip/Cache
-          key: pip-${{ runner.os }}-py312-${{ hashFiles('pyproject.toml') }}
+          key: pip-${{ runner.os }}-${{ matrix.arch }}-py312-${{ hashFiles('pyproject.toml') }}
           restore-keys: |
-            pip-${{ runner.os }}-py312-
+            pip-${{ runner.os }}-${{ matrix.arch }}-py312-
 
       # Smoke gate runs BEFORE PyInstaller. PyInstaller takes ~8 minutes
       # on the windows-latest runner; failing fast here saves the time
@@ -94,7 +113,10 @@ jobs:
         shell: pwsh
         # ``-NoSmoke`` because the next step runs the richer probe
         # (GUI window + WM_CLOSE) that build_exe.ps1's bundled
-        # ``--version`` check can't cover.
+        # ``--version`` check can't cover. ``build_exe.ps1`` auto-
+        # detects the produced exe's arch via the PE machine code and
+        # tags the zip filename ``TradingLab-<ver>-{win64|winarm64}.zip``
+        # — no per-matrix-leg flag needed.
         run: ./tools/build_exe.ps1 -NoSmoke
 
       - name: Verify frozen build (--version only)
@@ -119,13 +141,40 @@ jobs:
       - name: Upload as workflow artifact
         uses: actions/upload-artifact@v7
         with:
-          name: TradingLab-windows
+          # Matrix-arch-distinct name so x64 + ARM64 uploads don't
+          # collide — the publish job downloads both via a glob.
+          name: TradingLab-windows-${{ matrix.arch }}
           path: dist/TradingLab-*.zip
           if-no-files-found: error
           retention-days: 30
 
+  publish:
+    name: Publish to GitHub Releases
+    needs: build-windows
+    # Only publish when a tag is pushed or the user explicitly
+    # opts in via workflow_dispatch. Manual dispatch defaults to
+    # build-only so a maintainer can sanity-check a candidate
+    # cross-arch build without creating a Release.
+    if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.publish_release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Download all arch artifacts
+        uses: actions/download-artifact@v8
+        with:
+          # Pattern matches BOTH ``TradingLab-windows-x64`` AND
+          # ``TradingLab-windows-arm64`` (one per matrix leg).
+          # ``merge-multiple: true`` flattens all matching artifacts
+          # into the single ``dist/`` directory so the action below
+          # can pick up both zips with a single glob.
+          pattern: TradingLab-windows-*
+          merge-multiple: true
+          path: dist/
+
+      - name: List collected artifacts
+        run: ls -lh dist/
+
       - name: Publish to GitHub Releases
-        if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.publish_release == 'true'
         uses: softprops/action-gh-release@v3
         with:
           files: dist/TradingLab-*.zip
