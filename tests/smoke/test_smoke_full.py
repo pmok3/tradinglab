@@ -19414,6 +19414,7 @@ def _run_all_checks(app) -> None:
     check_d3_adaptive_x_formatter(app)
     check_d4_compare_toggle_uses_prefetch(app)
     check_d5_x_axis_pan_stability(app)
+    check_d6_intraday_uniform_gaps(app)
     check_d7_poll_tick_slides_view_forward(app)
     check_d8_scheduler_aligns_to_bar_close(app)
     check_d9_poll_retry_when_bar_not_ready(app)
@@ -19635,11 +19636,289 @@ if __name__ == "__main__":
 # ---------------------------------------------------------------------------
 # Mega-test wall-clock: ~86 s on Windows ARM64, ~120+ s on macOS-latest
 # (macOS Tk + ``app.update()`` is significantly slower per pump round-
-# trip). Bumped past the default 120 s pytest-timeout so the macOS CI
-# matrix isn't gated on per-pump latency; if the test actually hangs
-# (vs runs slow), the explicit 300 s here still surfaces it as a
-# failure with the stack dump instead of stalling for 6 hours.
-@pytest.mark.timeout(300)
-def test_smoke_full(app) -> None:
-    check_00_import()
-    _run_all_checks(app)
+# trip). Each parametrised check has its own default 120 s pytest-
+# timeout so a single hanging check fails fast without taking down the
+# rest of the sequence.
+#
+# As of the smoke-modularisation sprint each check_* function lands as
+# its own pytest test case via ``@pytest.mark.parametrize``. Order is
+# preserved (pytest honours parametrize declaration order, and the
+# session-scoped ``app`` fixture means every case shares the same Tk
+# root). Win: a single flaky check fails ONE test instead of the
+# whole 154-step sequence. The legacy ``_run_all_checks(app)`` helper
+# stays for ``main()`` (standalone non-pytest entry point) — the
+# parametrised entry below shares the same canonical ordered sequence.
+
+
+def _build_check_sequence():
+    """Return ``[(name, callable_taking_app), ...]`` in canonical order.
+
+    Walks the ``_run_all_checks`` source order so the parametrised
+    mega test and ``main()`` stay bit-identical in what they run.
+    ``check_00_import`` is wrapped as a zero-arg call that discards
+    the ``app`` argument (it's the import-sanity preflight, no Tk
+    state needed).
+
+    Order matters: many checks depend on prior-check state through
+    the session-scoped ``app`` fixture. A parametrised test sees them
+    in this order; pytest preserves parametrize declaration order so
+    a single flake on, say, ``check_d50`` fails only that one test
+    and the next 100+ proceed.
+    """
+    seq: list[tuple[str, object]] = [
+        ("check_00_import", lambda _app: check_00_import()),
+        ("check_10_state_vars", check_10_state_vars),
+        ("check_20_themes", check_20_themes),
+        ("check_30_render_topology", check_30_render_topology),
+        ("check_40_virtualized_render", check_40_virtualized_render),
+        ("check_50_compare_mode", check_50_compare_mode),
+        ("check_60_pair_filter_align", check_60_pair_filter_align),
+        ("check_70_fetch_executor", check_70_fetch_executor),
+        ("check_80_next_bar_scheduler", check_80_next_bar_scheduler),
+        ("check_90_streaming_dispatch", check_90_streaming_dispatch),
+        ("check_90b_stream_refresh", check_90b_stream_refresh),
+        ("check_95_stream_queue_coalescing", check_95_stream_queue_coalescing),
+        ("check_a0_hover_and_crosshair", check_a0_hover_and_crosshair),
+        ("check_b0_click_to_type", check_b0_click_to_type),
+        ("check_c0_watchlist_tab", check_c0_watchlist_tab),
+        ("check_c5_notebook", check_c5_notebook),
+        ("check_c6_bad_ticker", check_c6_bad_ticker),
+        ("check_d0_dialogs", check_d0_dialogs),
+        ("check_d1_log_price_scale", check_d1_log_price_scale),
+        ("check_d2_preserve_xlim_across_compare_toggle",
+         check_d2_preserve_xlim_across_compare_toggle),
+        ("check_d3_adaptive_x_formatter", check_d3_adaptive_x_formatter),
+        ("check_d4_compare_toggle_uses_prefetch",
+         check_d4_compare_toggle_uses_prefetch),
+        ("check_d5_x_axis_pan_stability", check_d5_x_axis_pan_stability),
+        ("check_d6_intraday_uniform_gaps", check_d6_intraday_uniform_gaps),
+        ("check_d7_poll_tick_slides_view_forward",
+         check_d7_poll_tick_slides_view_forward),
+        ("check_d8_scheduler_aligns_to_bar_close",
+         check_d8_scheduler_aligns_to_bar_close),
+        ("check_d9_poll_retry_when_bar_not_ready",
+         check_d9_poll_retry_when_bar_not_ready),
+        ("check_d10_poll_tick_offloads_fetch_to_executor",
+         check_d10_poll_tick_offloads_fetch_to_executor),
+        ("check_d11_tab_labels_show_tickers", check_d11_tab_labels_show_tickers),
+        ("check_d12_companion_prefetch_warms_cache",
+         check_d12_companion_prefetch_warms_cache),
+        ("check_d13_watchlist_pinned_subtabs", check_d13_watchlist_pinned_subtabs),
+        ("check_d14_theme_overrides", check_d14_theme_overrides),
+        ("check_d15_pin_kicks_preload", check_d15_pin_kicks_preload),
+        ("check_d16_startup_defaults", check_d16_startup_defaults),
+        ("check_d17_double_click_drilldown_to_5m",
+         check_d17_double_click_drilldown_to_5m),
+        ("check_d60_drilldown_works_in_heikin_ashi_mode",
+         check_d60_drilldown_works_in_heikin_ashi_mode),
+        ("check_d18_display_timezone", check_d18_display_timezone),
+        ("check_d19_reset_view_snaps_to_1d", check_d19_reset_view_snaps_to_1d),
+        ("check_d20_drilldown_persists_across_ticker_change",
+         check_d20_drilldown_persists_across_ticker_change),
+        ("check_d72_chartstack_promote_preserves_view",
+         check_d72_chartstack_promote_preserves_view),
+        ("check_d21_space_cycles_watchlist", check_d21_space_cycles_watchlist),
+        ("check_d22_plus_button_adds_watchlist",
+         check_d22_plus_button_adds_watchlist),
+        ("check_d23_perf_h3_h6_m2_m4", check_d23_perf_h3_h6_m2_m4),
+        ("check_d24_n7_async_load_offloads_to_executor",
+         check_d24_n7_async_load_offloads_to_executor),
+        ("check_d25_scroll_wheel_zoom_anchored_on_cursor",
+         check_d25_scroll_wheel_zoom_anchored_on_cursor),
+        ("check_d26_scroll_zoom_invert_setting",
+         check_d26_scroll_zoom_invert_setting),
+        ("check_d27_floating_price_label_on_crosshair",
+         check_d27_floating_price_label_on_crosshair),
+        ("check_d61_time_label_on_crosshair", check_d61_time_label_on_crosshair),
+        ("check_d62_overlay_legend_eye_toggles",
+         check_d62_overlay_legend_eye_toggles),
+        ("check_b73_per_indicator_popup", check_b73_per_indicator_popup),
+        ("check_b74_pane_indicator_label_popup",
+         check_b74_pane_indicator_label_popup),
+        ("check_bxx_splash_and_bundles", check_bxx_splash_and_bundles),
+        ("check_d28_data_readout_strip", check_d28_data_readout_strip),
+        ("check_d29_price_axes_top_headroom", check_d29_price_axes_top_headroom),
+        ("check_d30_drilldown_ylim_no_deferred_render_race",
+         check_d30_drilldown_ylim_no_deferred_render_race),
+        ("check_d31_pan_end_invalidates_blit_bg",
+         check_d31_pan_end_invalidates_blit_bg),
+        ("check_d32_interaction_sequence_matrix",
+         check_d32_interaction_sequence_matrix),
+        ("check_d33_blit_overlays_invariant", check_d33_blit_overlays_invariant),
+        ("check_d34_compare_toggle_after_drilldown_ylim",
+         check_d34_compare_toggle_after_drilldown_ylim),
+        ("check_d53_compare_off_during_drilldown_ylim",
+         check_d53_compare_off_during_drilldown_ylim),
+        ("check_d35_config_import_export_round_trip",
+         check_d35_config_import_export_round_trip),
+        ("check_d36_watchlist_explicit_save", check_d36_watchlist_explicit_save),
+        ("check_d37_status_bar", check_d37_status_bar),
+        ("check_d38_drilldown_race_and_coverage",
+         check_d38_drilldown_race_and_coverage),
+        ("check_d39_indicators_phase1", check_d39_indicators_phase1),
+        ("check_d40_smoke_cache_isolation", check_d40_smoke_cache_isolation),
+        ("check_d41_indicator_menu_add_routes",
+         check_d41_indicator_menu_add_routes),
+        ("check_d42_indicator_scope_picker", check_d42_indicator_scope_picker),
+        ("check_d43_compute_layout_preserves_3to1_ratio",
+         check_d43_compute_layout_preserves_3to1_ratio),
+        ("check_d44_locator_handles_tz_mixed_candles",
+         check_d44_locator_handles_tz_mixed_candles),
+        ("check_d45_prepost_toggle_rescales_drilldown",
+         check_d45_prepost_toggle_rescales_drilldown),
+        ("check_d46_pan_slice_change_no_draw_flash",
+         check_d46_pan_slice_change_no_draw_flash),
+        ("check_d47_cache_stale_session_aware",
+         check_d47_cache_stale_session_aware),
+        ("check_d48_indicator_dialog", check_d48_indicator_dialog),
+        ("check_d49_indicator_render_integration",
+         check_d49_indicator_render_integration),
+        ("check_d54_indicator_reorder", check_d54_indicator_reorder),
+        ("check_d50_indicators_menu_wiring", check_d50_indicators_menu_wiring),
+        ("check_d55_indicator_preset_menu", check_d55_indicator_preset_menu),
+        ("check_d56_ema_seeding_alignment", check_d56_ema_seeding_alignment),
+        ("check_d57_performance_view_equity_csv_export",
+         check_d57_performance_view_equity_csv_export),
+        ("check_d58_anchored_vwap", check_d58_anchored_vwap),
+        ("check_d59_relative_volume", check_d59_relative_volume),
+        ("check_d51_hover_indicator_readout", check_d51_hover_indicator_readout),
+        ("check_d52_manual_zoom_pan_arms_preserve_xlim",
+         check_d52_manual_zoom_pan_arms_preserve_xlim),
+        ("check_f0_backtest_kernel", check_f0_backtest_kernel),
+        ("check_f1_session_reproducibility", check_f1_session_reproducibility),
+        ("check_g0_sandbox_replay_integration",
+         check_g0_sandbox_replay_integration),
+        ("check_g1_sandbox_phase1c", check_g1_sandbox_phase1c),
+        ("check_g2_sandbox_open_universe", check_g2_sandbox_open_universe),
+        ("check_b5_sandbox_save_load", check_b5_sandbox_save_load),
+        ("check_b6_sandbox_auto_cycle", check_b6_sandbox_auto_cycle),
+        ("check_b7_sandbox_multitf_context", check_b7_sandbox_multitf_context),
+        ("check_b8_sandbox_dialog_lazy_fetch", check_b8_sandbox_dialog_lazy_fetch),
+        ("check_b9_toolbar_ticker_labels", check_b9_toolbar_ticker_labels),
+        ("check_b10_sandbox_multi_interval", check_b10_sandbox_multi_interval),
+        ("check_b11_sandbox_full_session_xlim", check_b11_sandbox_full_session_xlim),
+        ("check_b12_sandbox_compare_per_tick_refresh",
+         check_b12_sandbox_compare_per_tick_refresh),
+        ("check_b13_sandbox_clock_tz_alignment",
+         check_b13_sandbox_clock_tz_alignment),
+        ("check_b14_sandbox_visible_list_identity_stable",
+         check_b14_sandbox_visible_list_identity_stable),
+        ("check_b15_sandbox_master_clock_frozen",
+         check_b15_sandbox_master_clock_frozen),
+        ("check_b16_sandbox_lookback_boundary_exact",
+         check_b16_sandbox_lookback_boundary_exact),
+        ("check_b17_sandbox_memento_full_restore",
+         check_b17_sandbox_memento_full_restore),
+        ("check_b18_sandbox_reentrancy_guards",
+         check_b18_sandbox_reentrancy_guards),
+        ("check_b19_sandbox_end_of_session_boundary",
+         check_b19_sandbox_end_of_session_boundary),
+        ("check_b20_sandbox_session_restart_state_cleanup",
+         check_b20_sandbox_session_restart_state_cleanup),
+        ("check_b21_sandbox_right_arrow_entry_suppression",
+         check_b21_sandbox_right_arrow_entry_suppression),
+        ("check_b22_sandbox_compare_mid_session_toggle_and_swap",
+         check_b22_sandbox_compare_mid_session_toggle_and_swap),
+        ("check_b23_sandbox_invalidate_focused_panels_contract",
+         check_b23_sandbox_invalidate_focused_panels_contract),
+        ("check_b24_sandbox_watermark_tracks_focus",
+         check_b24_sandbox_watermark_tracks_focus),
+        ("check_b25_sandbox_blind_random_seed",
+         check_b25_sandbox_blind_random_seed),
+        ("check_b26_sandbox_compare_does_not_pan_primary",
+         check_b26_sandbox_compare_does_not_pan_primary),
+        ("check_b27_indicator_dialog_dark_mode",
+         check_b27_indicator_dialog_dark_mode),
+        ("check_b28_sandbox_indicator_survives_tick",
+         check_b28_sandbox_indicator_survives_tick),
+        ("check_b29_aggregation_matches_recompute",
+         check_b29_aggregation_matches_recompute),
+        ("check_b30_ticker_switching_mid_session",
+         check_b30_ticker_switching_mid_session),
+        ("check_b31_register_ticker_idempotency_and_rejection",
+         check_b31_register_ticker_idempotency_and_rejection),
+        ("check_b32_save_load_mid_session_roundtrip",
+         check_b32_save_load_mid_session_roundtrip),
+        ("check_b33_engine_determinism", check_b33_engine_determinism),
+        ("check_b34_set_display_interval_state_machine",
+         check_b34_set_display_interval_state_machine),
+        ("check_b35_dark_theme_menubar_painting",
+         check_b35_dark_theme_menubar_painting),
+        ("check_b35a_dark_theme_cascade_tabs_and_check_indicator",
+         check_b35a_dark_theme_cascade_tabs_and_check_indicator),
+        ("check_b35b_highlight_ha_flat_overlay_toggle",
+         check_b35b_highlight_ha_flat_overlay_toggle),
+        ("check_b36_lookback_trading_days_not_calendar",
+         check_b36_lookback_trading_days_not_calendar),
+        ("check_b37_sandbox_compare_survives_focus_swap",
+         check_b37_sandbox_compare_survives_focus_swap),
+        ("check_b38_sandbox_compare_change_routing",
+         check_b38_sandbox_compare_change_routing),
+        ("check_b40_sandbox_watchlist_uses_replay_clock",
+         check_b40_sandbox_watchlist_uses_replay_clock),
+        ("check_b41_indicator_intervals_per_instance",
+         check_b41_indicator_intervals_per_instance),
+        ("check_b42_indicator_color_palette", check_b42_indicator_color_palette),
+        ("check_b43_bollinger_bands_ema", check_b43_bollinger_bands_ema),
+        ("check_b44_bollinger_separate_std_window",
+         check_b44_bollinger_separate_std_window),
+        ("check_b45_vwap_session_anchored", check_b45_vwap_session_anchored),
+        ("check_b46_smi_stochastic_momentum_index",
+         check_b46_smi_stochastic_momentum_index),
+        ("check_b47_indicator_pane_yfit_after_click",
+         check_b47_indicator_pane_yfit_after_click),
+        ("check_b48_adx_average_directional_index",
+         check_b48_adx_average_directional_index),
+        ("check_b49_atr_average_true_range", check_b49_atr_average_true_range),
+        ("check_b50_lrsi_laguerre_rsi", check_b50_lrsi_laguerre_rsi),
+        ("check_b60_events_protocol_registry",
+         check_b60_events_protocol_registry),
+        ("check_b61_engine_corporate_action_phase",
+         check_b61_engine_corporate_action_phase),
+        ("check_b62_events_blind_redaction", check_b62_events_blind_redaction),
+        ("check_b63_events_master_timeline_frozen",
+         check_b63_events_master_timeline_frozen),
+        ("check_b64_save_load_proximity_and_adjustments",
+         check_b64_save_load_proximity_and_adjustments),
+        ("check_b65_events_cache_disk_roundtrip",
+         check_b65_events_cache_disk_roundtrip),
+        ("check_b66_events_cycle_clears", check_b66_events_cycle_clears),
+        ("check_b67_events_provider_drift_determinism",
+         check_b67_events_provider_drift_determinism),
+        ("check_b68_volume_tod_shading", check_b68_volume_tod_shading),
+        ("check_b69_color_only_toggles_use_glyph_repaint",
+         check_b69_color_only_toggles_use_glyph_repaint),
+        ("check_b70_keltner_channels", check_b70_keltner_channels),
+        ("check_b71_macd", check_b71_macd),
+        ("check_b72_chandelier_stops", check_b72_chandelier_stops),
+        ("check_d80_horizontal_lines", check_d80_horizontal_lines),
+        ("check_d81_rvol_rhs_reachable", check_d81_rvol_rhs_reachable),
+        ("check_d82_modeless_dialogs_preserve_grab",
+         check_d82_modeless_dialogs_preserve_grab),
+        ("check_d83_entries_scanner_alert_renders_scanner_id_entry",
+         check_d83_entries_scanner_alert_renders_scanner_id_entry),
+        ("check_e0_disk_cache_persist", check_e0_disk_cache_persist),
+    ]
+    return seq
+
+
+_CHECK_SEQUENCE = _build_check_sequence()
+
+
+@pytest.mark.parametrize(
+    "check",
+    [c for _, c in _CHECK_SEQUENCE],
+    ids=[name for name, _ in _CHECK_SEQUENCE],
+)
+def test_smoke_full(app, check) -> None:
+    """Per-check parametrised entry — each ``check_*`` is its own test.
+
+    Order is preserved (pytest honours parametrize declaration order),
+    so checks that depend on prior-check state see the same accumulated
+    app state they did when this was a single sequential function.
+
+    A single flake now fails ONE test instead of all 154. Use
+    ``pytest tests/smoke/test_smoke_full.py -k check_d38`` to re-run
+    just one parametrised case.
+    """
+    check(app)

@@ -1512,12 +1512,23 @@ BUDGET` with a larger sample count (11+) — the min represents
 See `check_d59` sub-test M for the canonical example (min-of-11 <
 500ms catches any ~14× regression over the 35ms baseline).
 
-**Out of scope:** the mega-test
-(`tests/smoke/test_smoke_full.py::test_smoke_full`) has additional
-intermittent flakes from 60+ checks sharing a single ChartApp's
-accumulated state. The per-feature smoke gate (140 tests across
-`test_smoke_<feature>.py` files) is the canonical pre-push gate;
-the mega-test is best-effort coverage.
+**Mega-test is now parametrised:**
+`tests/smoke/test_smoke_full.py::test_smoke_full` was historically a
+single 154-step function — one flake fails the whole test. The
+smoke-modularisation sprint replaced it with `@pytest.mark.parametrize`
+over the canonical sequence (`_build_check_sequence()` builds the
+ordered list; `_run_all_checks()` retained for the standalone
+`main()` entry). Each check now lands as its own pytest test case
+(`test_smoke_full[check_d38_drilldown_race_and_coverage]` etc.); a
+flake on one check fails ONE test, not all 154. Order is preserved
+(pytest honours parametrize declaration order, session-scoped `app`
+fixture shares state). Per-feature subset files
+(`test_smoke_<feature>.py`) remain the iteration-speed tool for
+single-feature dev work — they're no longer the "canonical gate"
+because per-check granularity now exists in the mega-test itself.
+The structural contract (every defined `check_*` is wired into the
+sequence; head is `check_00_import`; the entry is parametrised) is
+pinned by `tests/unit/test_smoke_mega_parametrisation.py`.
 
 ### 7.27 Indicator IIR hot-paths are vectorized — keep the kernels canonical
 
