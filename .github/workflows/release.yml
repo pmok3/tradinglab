@@ -84,10 +84,24 @@ jobs:
       # ``TRADINGLAB_DATA_DIR`` would silently shadow the monkeypatch
       # and cause tests to see leftover state from other tests.
       # See ``tests/unit/conftest.py`` for the defense-in-depth.
-      - name: Run unit + scanner tests (clean env)
+      #
+      # Unit + scanner run as SEPARATE pytest invocations on purpose.
+      # Mixing them in one invocation hit a transient Tcl_AsyncDelete
+      # crash on CI runners (Windows fatal exception 0x80000003)
+      # during the cross-test-transition GC of leftover tkinter
+      # objects from matplotlib's backend. Each invocation gets its
+      # own fresh interpreter; the ``tests/conftest.py`` neuter for
+      # ``tkinter.Variable.__del__`` / ``tkinter.Image.__del__``
+      # (CLAUDE §7.5) cleans up at process exit. Local runs (which
+      # use one invocation) pass; only CI is sensitive to this race.
+      - name: Run unit tests (clean env)
         shell: pwsh
         run: |
-          python -m pytest tests/unit tests/scanner -q
+          python -m pytest tests/unit -q
+      - name: Run scanner tests (clean env)
+        shell: pwsh
+        run: |
+          python -m pytest tests/scanner -q
 
       # Smoke tests are allowed to use ``TRADINGLAB_CACHE_DIR``
       # (already set by ``tests/smoke/conftest.py`` to a fresh tempdir
