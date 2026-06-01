@@ -46,3 +46,22 @@ jobs:
       - name: Run smoke + scanner tests (Linux, under xvfb)
         if: runner.os == 'Linux'
         run: xvfb-run -a pytest tests/smoke tests/scanner -v --tb=short
+
+  perf-gate:
+    # Indicator perf-budget regression gate (see docs/PERFORMANCE.md +
+    # CLAUDE.md §7.27). Opt-in marker so the default smoke matrix
+    # stays fast; runs unconditionally on push to main so any
+    # accidentally-merged regression surfaces immediately, and on
+    # every PR — the suite is <1 second so the cost is negligible.
+    # Budgets are sized at 4× the v0.3.0 ARM64 baseline so the gate
+    # tolerates the Linux x86 runner's different micro-architecture.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install -e .[dev]
+      - name: Run indicator perf-budget gates
+        run: pytest tests/perf -m perf -v --tb=short

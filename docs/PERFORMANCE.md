@@ -87,6 +87,42 @@ candidate change; diff the speedup column. A regression below ~0.85×
 on any indicator should block the change unless explicitly justified
 (e.g. a correctness fix that requires more work per bar).
 
+## CI perf-gate
+
+The most expensive vectorised indicators (MACD, Chandelier, Keltner,
+SMI, LRSI) are pinned by a regression-gate test suite at
+``tests/perf/test_indicator_perf_gate.py``. It uses the same
+``min-of-N`` methodology as the harness (CLAUDE.md §7.26) and sizes
+each budget at **~4× the v0.3.0 ARM64 baseline** so it absorbs CI
+runner contention while still catching any 2× regression on the
+fastest hardware. Specifically (25k-bar synthetic regular-session
+input, 11 timed samples):
+
+| kind_id      | v0.3.0 baseline (ms) | budget (ms) |
+|--------------|---------------------:|------------:|
+| `smi`        |                16.34 |          64 |
+| `lrsi`       |                10.90 |          46 |
+| `macd`       |                 3.30 |          14 |
+| `chandelier` |                 1.88 |           8 |
+| `keltner`    |                 1.76 |           8 |
+
+The ``perf`` marker is **opt-in** — the default ``pytest`` session
+filters it out via ``-m 'not perf'`` in ``pyproject.toml`` so the
+millisecond timings don't bloat the smoke matrix. Run the gate
+explicitly:
+
+```powershell
+pytest tests/perf -m perf -v        # all gates, <1 second
+pytest tests/perf -m perf -k macd   # single gate
+```
+
+When a regression trips the gate, the assertion message points back
+to ``CLAUDE.md §7.27`` and this document. To accept a regression
+deliberately (e.g. a correctness fix requires more work per bar),
+update ``_BUDGETS_MS_25K`` and document the reason in the commit
+body — the gate's whole purpose is to make accepting regressions a
+deliberate choice rather than silent drift.
+
 ## Future work
 
 - Numba / Cython feasibility (open todo: ``numba-feasibility``). The
@@ -95,3 +131,7 @@ on any indicator should block the change unless explicitly justified
   another 5–10× on them.
 - A perf-gate test in CI: track each indicator's min_ms at a fixed
   size and fail the build if a regression > 1.5× lands.
+  **DONE** (tests/perf/test_indicator_perf_gate.py, 4× headroom).
+  Future: integrate as a dedicated CI lane that runs on PRs touching
+  ``src/tradinglab/indicators/`` so regressions are caught at PR
+  review time rather than on a manual re-run.
