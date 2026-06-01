@@ -67,3 +67,7 @@ src/tradinglab/_build_info.py
 # guard the in-repo path in case anyone configures TOKEN_DIR=.
 .tokens/
 *.tokens.json
+
+# Local commit-message scratch files (used by the CLI agent because
+# multi-line `git commit -m` strings are PowerShell-hostile).
+.commit-msg-*.txt
