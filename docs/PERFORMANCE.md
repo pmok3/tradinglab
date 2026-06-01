@@ -125,10 +125,15 @@ deliberate choice rather than silent drift.
 
 ## Future work
 
-- Numba / Cython feasibility (open todo: ``numba-feasibility``). The
-  remaining 50ms-class indicators (LRSI, SMI) still have IIR
-  recurrences that are hard to fully vectorise; a JIT could close
-  another 5–10× on them.
+- Numba / Cython feasibility — **REJECTED** after empirical study
+  (no win-arm64 wheel for numba; +39 MB bundle; vectorised
+  baseline already neutralises numba's per-bar-loop win). See
+  ``docs/JIT_FEASIBILITY.md`` for full numbers and the
+  scipy.signal.lfilter alternative (DEFERRED — 12× kernel
+  speedup but +23 MB bundle not justified at current scale).
+  Zero-dep pure-numpy paths (allocation reduction in
+  ``iir_tail``, LRSI 4-stage fusion) remain tracked under
+  ``vectorize-ema`` / ``vectorize-other``.
 - A perf-gate test in CI: track each indicator's min_ms at a fixed
   size and fail the build if a regression > 1.5× lands.
   **DONE** (tests/perf/test_indicator_perf_gate.py, 4× headroom).
