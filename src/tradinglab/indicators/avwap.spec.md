@@ -9,6 +9,41 @@ variance. Overlay on price axis. Anchor is picked via the dialog's
 "Pick Anchor…" button (see `gui/indicator_dialog.py`,
 `gui/interaction.py`).
 
+## Pick Anchor UX
+
+When the user clicks the "Pick Anchor…" button (either in the
+Manage Indicators dialog or in a per-indicator popup):
+
+1. `IndicatorDialog._on_pick_anchor(row)` calls
+   `ChartApp._begin_anchor_pick(config_id)`.
+2. `_begin_anchor_pick` iconifies **every visible indicator dialog**
+   so the chart underneath is unobstructed and the user can click
+   any candle without first moving the popup. This covers BOTH:
+   - the Manage Indicators dialog (`self._indicator_dialog`), AND
+   - every per-indicator dialog in `self._per_indicator_dialogs`
+     (any one may overlap the chart; the user typically clicks Pick
+     Anchor from one of these).
+   Each dialog's prior state (`"normal"` / `"zoomed"` / `"iconic"` /
+   `"withdrawn"`) is captured before iconifying — already-iconic
+   dialogs are left alone. Audit
+   `avwap-anchor-pick-iconifies-per-indicator-dialog`.
+3. Cursor flips to `crosshair`; status hint reads
+   "Click a bar to anchor VWAP — Esc to cancel".
+4. `InteractionMixin._on_button_press` short-circuits the next
+   left-click to `_handle_anchor_pick_click`, which snaps to the
+   nearest non-gap regular-session bar at or after the click and
+   updates `cfg.params["anchor_ts"]` via
+   `IndicatorManager.update(config_id, params=...)`. `price_source`
+   and `bands` are preserved (merge).
+5. On success / Esc / cancel, `_cancel_anchor_pick` restores every
+   previously-iconified dialog to its captured prior state and lifts
+   it back over the chart so the user can keep editing.
+
+Pinned by `tests/unit/gui/test_avwap_anchor_pick_iconify.py`
+(per-indicator + Manage Indicators + multiple per-indicator + dead
+dialog + no-dialog edge cases) and the `check_d42_avwap_*` sub-test
+in `tests/smoke/test_smoke_full.py`.
+
 ## Public API
 - `class AnchoredVWAP(anchor_ts="", price_source="typical", bands="off")`
   — `kind_id="avwap"`, `kind_version=1`, `overlay=True`. Display

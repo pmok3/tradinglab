@@ -264,6 +264,15 @@ Opt-in `_volume_tod_enabled` (default `False`, settings top-level). Settings and
 ### Mouse-wheel zoom (TradingView-style)
 `InteractionMixin._on_scroll_zoom` wired in `_build_ui` via `mpl_connect("scroll_event", …)`. DOWN zooms IN, UP zooms OUT; cursor anchor stays fixed in screen space. Sets `_preserve_xlim_on_render = True`, clears `_slide_xlim_to_right_edge`. Gated off during pan/zoom gestures. `|step|` clamped to ≤2. 3-bar minimum width. `scroll_zoom_invert` setting flips the convention.
 
+### Anchored-VWAP "Pick Anchor" mode
+`_begin_anchor_pick(config_id)` arms one-shot capture of the next chart click into the named AVWAP config's `anchor_ts`. The companion `_cancel_anchor_pick(*, status_msg=None)` clears the mode (on success, Esc, or programmatic abort). State lives in `self._anchor_pick_state: dict | None` with shape `{"config_id": int, "iconified_dialogs": list[(Toplevel, prior_state_str | None)], "dialog_prior_state": str | None}` (the last is a back-compat alias for the first iconified dialog's prior state).
+
+While the mode is armed, **every visible indicator dialog is iconified** (`tk.Toplevel.iconify()`) so the chart underneath is unobstructed and the user can reach any candle without first moving a popup out of the way. Both the Manage Indicators dialog (`self._indicator_dialog`) and every per-indicator dialog (`self._per_indicator_dialogs[cfg_id]`) are minimised — any of them could overlap the chart geometry. Each dialog's prior state (`"normal"` / `"zoomed"` / `"iconic"` / `"withdrawn"`) is captured before the iconify; already-iconic dialogs are left alone on both iconify AND deiconify; withdrawn dialogs stay withdrawn on restore. Cursor flips to `crosshair`, status bar shows "Click a bar to anchor VWAP — Esc to cancel", `<Escape>` is bound to `_on_anchor_pick_escape` (which calls `_cancel_anchor_pick` with a cancel message).
+
+`InteractionMixin._on_button_press` checks `self._anchor_pick_state` BEFORE pan / zoom dispatch so an armed pick mode swallows the left click via `_handle_anchor_pick_click` regardless of which axis the user lands on. Hits snap forward to the nearest non-gap regular-session bar; the resolved timestamp goes into `cfg.params["anchor_ts"]` via `IndicatorManager.update(config_id, params=merged)` (preserving `price_source` / `bands`). On hit, `_cancel_anchor_pick(status_msg=f"Anchor set: ...")` deiconifies every captured dialog back to its prior state and lifts it over the chart so the user can keep editing params right where they left off. Audit `avwap-anchor-pick-iconifies-per-indicator-dialog`.
+
+Pinned by `tests/unit/gui/test_avwap_anchor_pick_iconify.py` (6 tests covering per-indicator-only, Manage-Indicators-only, both-open, multiple-per-indicator, destroyed-dialog-graceful, no-dialogs-open) and the `check_d42_avwap_*` mega-test sub-test in `tests/smoke/test_smoke_full.py` (F-sub-test).
+
 ## Invariants
 1. `_fetch_token` monotonically increases; fetch callbacks check against it.
 2. `_stream_token` monotonically increases; stream drain checks against it.

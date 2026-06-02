@@ -4212,35 +4212,61 @@ class ChartApp(
         :class:`InteractionMixin`'s ``_on_button_press``); a miss
         keeps the mode active so the user can retry.
 
-        While pick mode is active the Manage Indicators dialog is
+        While pick mode is active EVERY visible indicator dialog is
         iconified (minimised to the taskbar) so the chart underneath
-        is unobstructed and the user can reach any candle. The
-        original window state is captured and restored when pick mode
-        ends (success, cancel, or Esc).
+        is unobstructed and the user can reach any candle. This
+        covers BOTH the Manage Indicators dialog (``self.
+        _indicator_dialog``) AND every per-indicator dialog
+        (``self._per_indicator_dialogs`` — any of which may overlap
+        the chart geometry). Each iconified dialog's original window
+        state is captured and restored when pick mode ends (success,
+        cancel, or Esc) via :meth:`_cancel_anchor_pick`.
+
+        Audit ``avwap-anchor-pick-iconifies-per-indicator-dialog``.
         """
         cfg = self._indicator_manager.get(config_id)
         if cfg is None or getattr(cfg, "kind_id", "") != "avwap":
             return
-        # Capture the indicator dialog's current state so we can
-        # restore on cancel / completion. ``state()`` returns
-        # "normal" / "iconic" / "withdrawn" / "zoomed". If there's
-        # no dialog open (e.g. the user invoked the pick from a
-        # future menu shortcut), ``prior_state`` stays None and we
-        # don't touch any window.
-        prior_state: str | None = None
-        dlg = getattr(self, "_indicator_dialog", None)
-        if dlg is not None:
+        # Collect EVERY visible indicator dialog so we can iconify all
+        # of them and restore later. Capture each dialog's current
+        # state (`state()` returns "normal" / "iconic" / "withdrawn"
+        # / "zoomed") so a withdrawn/iconic dialog stays in its
+        # original state on restore.
+        candidates: list[tk.Toplevel] = []
+        mgr_dlg = getattr(self, "_indicator_dialog", None)
+        if mgr_dlg is not None:
+            candidates.append(mgr_dlg)
+        per_dlgs = getattr(self, "_per_indicator_dialogs", None) or {}
+        for d in per_dlgs.values():
+            if d is not None and d is not mgr_dlg:
+                candidates.append(d)
+        iconified: list[tuple[Any, str | None]] = []
+        for dlg in candidates:
+            try:
+                if not dlg.winfo_exists():
+                    continue
+            except Exception:  # noqa: BLE001
+                continue
             try:
                 prior_state = dlg.state()
             except Exception:  # noqa: BLE001
                 prior_state = None
+            # Don't re-iconify an already-iconified dialog; leave it
+            # alone on restore too.
+            if prior_state == "iconic":
+                continue
             try:
                 dlg.iconify()
             except Exception:  # noqa: BLE001
-                pass
+                continue
+            iconified.append((dlg, prior_state))
         self._anchor_pick_state = {
             "config_id": config_id,
-            "dialog_prior_state": prior_state,
+            "iconified_dialogs": iconified,
+            # Back-compat alias for callers / tests that read
+            # ``dialog_prior_state`` directly — refers to the
+            # first-iconified dialog (typically Manage Indicators).
+            "dialog_prior_state": iconified[0][1] if iconified else None,
         }
         self._pan_state = None
         self._zoom_state = None
@@ -4262,14 +4288,19 @@ class ChartApp(
     def _cancel_anchor_pick(self, *, status_msg: str | None = None) -> None:
         """Clear anchor-pick mode and restore the cursor / status.
 
-        If the Manage Indicators dialog was iconified by
-        :meth:`_begin_anchor_pick`, restore it to its prior state and
-        lift it back over the chart so the user can keep editing
-        params right where they left off.
+        Every indicator dialog iconified by :meth:`_begin_anchor_pick`
+        is deiconified back to its prior state (typically "normal"
+        but preserving "zoomed" if that's what it was) and lifted
+        over the chart so the user can keep editing params right
+        where they left off.
+
+        Audit ``avwap-anchor-pick-iconifies-per-indicator-dialog``.
         """
-        prior_state: str | None = None
+        iconified: list[tuple[Any, str | None]] = []
         if self._anchor_pick_state is not None:
-            prior_state = self._anchor_pick_state.get("dialog_prior_state")
+            iconified = list(
+                self._anchor_pick_state.get("iconified_dialogs", []) or []
+            )
         self._anchor_pick_state = None
         try:
             tk_widget = self._canvas.get_tk_widget()
@@ -4277,12 +4308,16 @@ class ChartApp(
             tk_widget.unbind("<Escape>")
         except Exception:  # noqa: BLE001
             pass
-        dlg = getattr(self, "_indicator_dialog", None)
-        if dlg is not None:
+        for dlg, prior_state in iconified:
+            try:
+                if not dlg.winfo_exists():
+                    continue
+            except Exception:  # noqa: BLE001
+                continue
             try:
                 # Only deiconify if it WAS visible before we minimised
-                # it. If the user had it withdrawn / zoomed for some
-                # reason, preserve that state.
+                # it. If the user had it withdrawn for some reason,
+                # preserve that state.
                 if prior_state in ("normal", "zoomed", None):
                     dlg.deiconify()
                     if prior_state == "zoomed":
