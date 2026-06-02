@@ -2,6 +2,81 @@
 
 All notable changes to this project will be documented here. Format roughly follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.3.1] - 2026-06-02
+
+### Fixed
+
+- **Color picker no longer stuck in light mode in dark themes** when
+  opened from a child dialog (e.g. IndicatorDialog). Root cause:
+  `gui/native_theme.current_theme(owner)` only inspected
+  `owner._theme_ctrl` directly; only `ChartApp` installs a
+  `_theme_ctrl`, so intermediate dialogs caused the lookup to fall
+  through to `LIGHT_THEME`. Fixed by walking the Tk `master` chain
+  (with a `winfo_toplevel()` fallback) until an ancestor with
+  `_theme_ctrl` is found. Every dialog using `current_theme(self)`
+  benefits transparently. (audit `color-picker-theme-walks-master-chain`)
+- **Strategy Tester: 1d / 1wk / 1mo strategies no longer emit zero
+  trades.** Root cause: `runner._filter_rth_only` was dropping 100%
+  of daily candles (timestamped 00:00 ET = outside the 09:30-16:00
+  RTH window) AND `arm_window` + `require_market_open` evaluator
+  gates were blocking every daily bar. Now bypassed when
+  `is_intraday(interval) is False`. After fix: 5y MSFT 3/8 EMA
+  cross produces 70 closed trades / 141 fills (was 0).
+  (audit `daily-rth-bypass`)
+
+### Changed
+
+- **AVWAP legend prefix shows only the anchor point** — the one
+  "important detail" for an anchored indicator. Format:
+  - blank anchor → bare `Anchored VWAP` (no parens)
+  - date-only anchor → `Anchored VWAP(2025-09-15)`
+  - intraday anchor → `Anchored VWAP(2025-09-15 09:30)`
+    (`T` → space, zero seconds dropped; non-zero seconds preserved)
+
+  `price_source` and `bands` rendering knobs no longer appear in the
+  label. New `BaseIndicator.legend_label(display_name, params)`
+  classmethod hook lets future indicators suppress similarly noisy
+  schema-walker output. (audit `avwap-anchor-only-label`)
+- **Indicator legend rows consolidated** — multi-output indicators
+  (Bollinger Bands, AVWAP-with-bands, Keltner, Donchian) now render
+  as a single row of the form
+  `BB(20) upper 421.50 middle 418.20 lower 414.90` with each band's
+  value in its own color. Per-output `style.visible=False` now also
+  hides bands from the legend. AVWAP with bands disabled went from
+  5 noisy rows to 1 clean row. New
+  `BaseIndicator.effective_output_keys(params)` classmethod lets
+  indicators declare which outputs are visible per-params + their
+  canonical top-down chart order. (audit `legend-condensation`)
+- **Color picker shows Advanced HSV + Swatches side-by-side** —
+  the historical view-toggle radio is gone; both panes are
+  permanently visible. Hex entry + preview swatch moved under the
+  swatches column ("final pick" affordances grouped together).
+  Dialog widened 440×420 → 760×420. (audit `color-picker-side-by-side`)
+
+### Tests
+
+- **+62 invariant meta-tests across 7 files** that catch entire
+  classes of future regressions at PR time. Covers: dark-theme
+  coverage for every Toplevel subclass; no hardcoded color
+  literals in classic Tk widget constructors; spec-md coverage
+  (every `.py` has a colocated `.spec.md`); ChartApp MRO
+  invariants (mixins have no `__init__`, `tk.Tk` is last);
+  TriggerKind dispatch completeness (entries + exits); ZoneInfo
+  consolidation; protect_combobox_wheel on every BaseModalDialog;
+  indicator schema (`scannable_outputs` ⊆ `default_style`,
+  `effective_output_keys` ⊆ `default_style`, `kind_id` unique, no
+  required ctor args); no debug-statement leaks; no hardcoded
+  user paths; no raw `open(w/a)`; JsonObjectStore adoption; no
+  mixin → mixin imports. Each contract has an allowlist with
+  documented grandfathered cases and a self-test that detects
+  stale entries.
+
+### Internal
+
+- **4 spec.md sync passes** keeping AGENTS.md / CLAUDE.md and
+  per-module `*.spec.md` in step with the legend-condensation +
+  AVWAP-label + color-picker + theme-walk-up sprints.
+
 ## [0.1.2] - 2026-05-23
 
 ### Added
