@@ -52,6 +52,7 @@ import numpy as np
 
 from ..backtest.performance import build_trade_rows
 from ..backtest.session import ENGINE_VERSION
+from ..constants import is_intraday
 from ..core.lru_dict import LRUDict
 from ..core.params_key import freeze_params
 from ..entries.model import EntryStrategy
@@ -385,9 +386,22 @@ def _prepare_fetched_candles(
     fetch_start_date: _dt.date,
     end_date: _dt.date,
     include_extended_hours: bool,
+    interval: str = "",
 ) -> list[Candle]:
+    """Slice + optionally RTH-filter a fetched candle sequence.
+
+    The RTH filter is **intraday-only** (audit ``daily-rth-bypass``):
+    yfinance daily bars are timestamped at ``00:00 ET`` which sits
+    outside the 09:30-16:00 ET RTH window, so applying the filter to
+    a 1d / 1wk / 1mo series would drop 100 % of the bars and silently
+    produce zero trades for every daily-timeframe strategy tester
+    run. The concept of "regular trading hours" is meaningless for a
+    bar that summarises an entire session anyway — non-intraday bars
+    bypass the gate. ``interval=""`` is treated as intraday-style
+    behaviour (legacy callers; the runner always supplies it).
+    """
     candles = _slice_to_date_range(raw, fetch_start_date, end_date)
-    if not include_extended_hours:
+    if not include_extended_hours and is_intraday(interval):
         candles = _filter_rth_only(candles)
     return candles
 
@@ -436,6 +450,7 @@ def _submit_shared_dependency_candle_futures(
                 fetch_start_date=dependency_fetch_start_dates.get(dep, start_date),
                 end_date=end_date,
                 include_extended_hours=cfg.include_extended_hours,
+                interval=cfg.interval,
             )
             return dep, candles, ""
         except Exception as exc:  # noqa: BLE001 - surfaced per active worker
@@ -586,6 +601,7 @@ def _worker(
             fetch_start_date=fetch_start_date,
             end_date=end_date,
             include_extended_hours=cfg.include_extended_hours,
+            interval=cfg.interval,
         )
         deps: dict[str, list[Candle]] = {}
         active_symbol = symbol.strip().upper()

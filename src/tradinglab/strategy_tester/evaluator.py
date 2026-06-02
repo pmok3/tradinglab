@@ -70,6 +70,7 @@ from ..backtest.engine import SandboxEngine
 from ..backtest.orders import Order
 from ..backtest.orders import Side as OrderSide
 from ..backtest.session import ENGINE_VERSION, SessionResult, SessionSpec
+from ..constants import is_intraday
 from ..core.bars_registry import BarsRegistry
 from ..core.params_key import freeze_params
 from ..core.side import Side
@@ -1082,6 +1083,7 @@ def _check_entry(
     bar_ts: int = 0,
     et_now: datetime | None = None,
     is_rth: bool | None = None,
+    interval: str = "",
 ) -> tuple[bool, Side, float]:
     """Decide whether the entry trigger fires against ``bar``.
 
@@ -1101,6 +1103,12 @@ def _check_entry(
     ``is_rth`` is the precomputed RTH-membership of this bar (from
     :func:`_compute_et_arrays`) used by ``require_market_open``; falls
     back to ``_is_regular_session(et_now)`` when not supplied.
+    ``interval`` is the run interval (``"1d"``/``"5m"``/etc); the
+    ``arm_window`` and ``require_market_open`` gates are
+    **auto-skipped on non-intraday intervals** because daily / weekly /
+    monthly bars are timestamped at 00:00 ET (outside RTH) and the
+    concept of "regular trading hours" is meaningless for a bar that
+    summarises a whole session. Audit ``daily-rth-bypass``.
     """
     if not ctx.entry_strategy.enabled:
         return False, OrderSide.BUY, 0.0
@@ -1119,20 +1127,25 @@ def _check_entry(
         >= ctx.entry_strategy.max_fires_per_session_per_symbol
     ):
         return False, OrderSide.BUY, 0.0
-    # Arm-window gate (ET HH:MM). Blank → no gate. The default template
-    # cooks 09:35–15:30 ET, so without this gate a 24/7 fictional bar
-    # series would fire pre-market.
-    if et_now is not None and not _within_arm_window(ctx.entry_strategy, et_now):
-        return False, OrderSide.BUY, 0.0
-    # Require-market-open gate (Mon–Fri AND 09:30 ≤ ET time ≤ 16:00).
-    # Holidays are not enforced — synthetic data with a Christmas-day
-    # bar will fire, matching the strategy's "any RTH-shaped bar is
-    # eligible" interpretation.
-    if ctx.entry_strategy.require_market_open:
-        if is_rth is None and et_now is not None:
-            is_rth = _is_regular_session(et_now)
-        if is_rth is False:
+    # Intraday-only gates: arm_window + require_market_open. Both
+    # auto-skip on 1d / 1wk / 1mo (a daily bar's wall-clock is 00:00 ET
+    # which would silently block every fire). Audit ``daily-rth-bypass``.
+    intraday = is_intraday(interval) if interval else True
+    if intraday:
+        # Arm-window gate (ET HH:MM). Blank → no gate. The default template
+        # cooks 09:35–15:30 ET, so without this gate a 24/7 fictional bar
+        # series would fire pre-market.
+        if et_now is not None and not _within_arm_window(ctx.entry_strategy, et_now):
             return False, OrderSide.BUY, 0.0
+        # Require-market-open gate (Mon–Fri AND 09:30 ≤ ET time ≤ 16:00).
+        # Holidays are not enforced — synthetic data with a Christmas-day
+        # bar will fire, matching the strategy's "any RTH-shaped bar is
+        # eligible" interpretation.
+        if ctx.entry_strategy.require_market_open:
+            if is_rth is None and et_now is not None:
+                is_rth = _is_regular_session(et_now)
+            if is_rth is False:
+                return False, OrderSide.BUY, 0.0
     # Cooldown-since-last-fire gate. ``cooldown_secs == 0`` is the
     # "no cooldown" default. ``last_fire_ts is None`` means "no prior
     # fire" — always passes.
@@ -1577,6 +1590,7 @@ def evaluate_symbol(
             bar_ts=ts,
             et_now=et_now,
             is_rth=is_rth,
+            interval=interval,
         )
         if fired:
             entry_order = Order(

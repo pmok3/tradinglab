@@ -22,7 +22,7 @@ For each bar `i`:
 
 ## Time-of-day gates (`_check_entry`)
 - **`arm_window_start/end`** — `"HH:MM"` strings; default `"09:35"/"15:30"` ET. Blank string disables the gate (mirrors live `_parse_hhmm("")` → None). Supports midnight wrap (start > end → "fire if t >= start OR t <= end").
-- **`require_market_open`** — `True` by default. Blocks Saturday/Sunday and any time outside 09:30-16:00 ET. Does NOT enforce holidays (would require a calendar dep); acceptable for user-supplied backtest data.
+- **`require_market_open`** — `True` by default. Blocks Saturday/Sunday and any time outside 09:30-16:00 ET. Does NOT enforce holidays (would require a calendar dep); acceptable for user-supplied backtest data. **Auto-skipped on non-intraday intervals** (1d / 1wk / 1mo) — same `is_intraday(interval)` gate the runner's `_filter_rth_only` uses (audit `daily-rth-bypass`). Daily bars are timestamped 00:00 ET (outside RTH) and the "regular trading hours" concept is meaningless for a bar summarising an entire session; without this skip, every daily-timeframe strategy that left the flag at the default produced zero trades.
 - **`cooldown_secs`** — `0` by default. Blocks fires when `(bar_ts - ctx.last_fire_ts) < cooldown_secs`.
 
 ## TIME_OF_DAY exit ET fix
