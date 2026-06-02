@@ -32,6 +32,13 @@ variance. Overlay on price axis. Anchor is picked via the dialog's
   - `bands="2σ"` → `("upper2", "avwap", "lower2")`
   - `bands="both"` → `("upper2", "upper1", "avwap", "lower1", "lower2")`
   This is what fixes the "AVWAP shows 5 legend rows when bands are disabled" bug — the `compute(...)` output schema still always returns all 5 keys (invariant 2 below), but the legend only renders the visible subset.
+- `legend_label(cls, display_name, params) -> str | None` — classmethod overriding `BaseIndicator.legend_label` so the consolidated readout-legend row shows only the **anchor point** (the only "important detail" for an anchored indicator) instead of rendering every schema param. Returns:
+  - bare ``Anchored VWAP`` (or whatever `display_name` is set to) when `anchor_ts` is blank — i.e. the user hasn't picked an anchor yet and the compute layer is falling back to the first eligible bar;
+  - ``Anchored VWAP(2025-09-15)`` for date-only anchors (daily / weekly / monthly intervals);
+  - ``Anchored VWAP(2025-09-15 09:30)`` for intraday anchors — the ISO ``T`` separator becomes a space and a trailing zero-seconds suffix is dropped for readability;
+  - ``Anchored VWAP(2025-09-15 09:31:45)`` when the anchor's seconds are non-zero (precise anchor — preserved verbatim).
+  ``price_source`` and ``bands`` never appear in the label (rendering knobs, not "important details"). Audit ``avwap-anchor-only-label``.
+- `_format_anchor_for_label(anchor_ts: str) -> str` — module-level helper backing the `legend_label` override. Pure: date-only strings pass through; datetime strings parsed via `datetime.fromisoformat` then formatted with the rules above; unparseable strings fall back to a `T → space` substitution so the legend never raises.
 - `compute(candles) -> {"avwap", "upper1", "lower1", "upper2", "lower2"}`.
   Always returns all five keys; unrequested band keys are NaN-filled.
 - `first_eligible_anchor_ts(candles) -> str` — ISO date of the first

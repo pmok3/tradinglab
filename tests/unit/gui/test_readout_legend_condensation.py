@@ -125,9 +125,72 @@ class TestFormatIndicatorLabel:
             params={"anchor_ts": "", "price_source": "typical", "bands": "off"},
             style={},
         )
-        # First param positional (price_source); remainder name=value.
-        # Empty anchor_ts is skipped.
-        assert format_indicator_label(cfg) == "AVWAP(typical, bands=off)"
+        # Audit ``avwap-anchor-only-label``: the only "important" param
+        # for AVWAP is its anchor; price_source / bands are noise. Blank
+        # anchor (uninitialised) → bare ``AVWAP`` with no parens.
+        assert format_indicator_label(cfg) == "AVWAP"
+
+    def test_avwap_with_intraday_anchor(self):
+        from tradinglab.gui.readout_legend import format_indicator_label
+        from tradinglab.indicators.config import IndicatorConfig
+
+        cfg = IndicatorConfig(
+            id=1,
+            kind_id="avwap",
+            kind_version=1,
+            display_name="AVWAP",
+            params={
+                "anchor_ts": "2025-09-15T09:30:00",
+                "price_source": "typical",
+                "bands": "off",
+            },
+            style={},
+        )
+        # ISO-8601 anchor formatted human-readably: ``T`` → space and
+        # the trailing ``:00`` seconds dropped. Audit
+        # ``avwap-anchor-only-label``.
+        assert format_indicator_label(cfg) == "AVWAP(2025-09-15 09:30)"
+
+    def test_avwap_anchor_drops_seconds_only_when_zero(self):
+        from tradinglab.gui.readout_legend import format_indicator_label
+        from tradinglab.indicators.config import IndicatorConfig
+
+        cfg = IndicatorConfig(
+            id=1, kind_id="avwap", kind_version=1, display_name="AVWAP",
+            params={"anchor_ts": "2025-09-15T09:31:45", "price_source": "typical",
+                    "bands": "off"},
+            style={},
+        )
+        # Non-zero seconds should be preserved (it's a precise anchor).
+        assert format_indicator_label(cfg) == "AVWAP(2025-09-15 09:31:45)"
+
+    def test_avwap_with_date_only_anchor(self):
+        from tradinglab.gui.readout_legend import format_indicator_label
+        from tradinglab.indicators.config import IndicatorConfig
+
+        cfg = IndicatorConfig(
+            id=1, kind_id="avwap", kind_version=1, display_name="AVWAP",
+            params={"anchor_ts": "2025-09-15", "price_source": "typical",
+                    "bands": "off"},
+            style={},
+        )
+        # Daily/weekly/monthly anchors are date-only strings; pass through.
+        assert format_indicator_label(cfg) == "AVWAP(2025-09-15)"
+
+    def test_avwap_bands_param_never_appears_in_label(self):
+        from tradinglab.gui.readout_legend import format_indicator_label
+        from tradinglab.indicators.config import IndicatorConfig
+
+        for bands in ("off", "1σ", "2σ", "both"):
+            cfg = IndicatorConfig(
+                id=1, kind_id="avwap", kind_version=1, display_name="AVWAP",
+                params={"anchor_ts": "2025-09-15T09:30:00",
+                        "price_source": "typical", "bands": bands},
+                style={},
+            )
+            label = format_indicator_label(cfg)
+            assert "bands" not in label, f"bands leaked into AVWAP label for {bands!r}"
+            assert "typical" not in label, "price_source leaked into AVWAP label"
 
     def test_bollinger_with_length_and_stddev(self):
         from tradinglab.gui.readout_legend import format_indicator_label

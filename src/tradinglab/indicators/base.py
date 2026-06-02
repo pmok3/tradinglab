@@ -237,6 +237,26 @@ class BaseIndicator:
         kind_id = getattr(cls, "kind_id", "") or ""
         return (str(kind_id) or "value",)
 
+    @classmethod
+    def legend_label(cls, display_name: str, params: dict) -> str | None:
+        """Return a custom legend prefix for this indicator, or ``None``.
+
+        Most indicators are happy with the generic
+        ``format_indicator_label`` walker in ``gui/readout_legend.py``
+        which renders every non-empty schema param as
+        ``"Name(first, key2=val2, ...)"``. Indicators where the generic
+        walker produces a noisy / unhelpful label (e.g. AVWAP, where
+        only the anchor matters; ``price_source`` + ``bands`` are
+        rendering knobs, not "important details") override this to
+        return the custom prefix.
+
+        Returning ``None`` (the default) means "use the generic
+        walker". Returning a string means "use exactly this string as
+        the row prefix" — the renderer skips the schema walk entirely.
+        Audit ``avwap-anchor-only-label``.
+        """
+        return None
+
 
 # ---------------------------------------------------------------------------
 # compute_arr dispatch

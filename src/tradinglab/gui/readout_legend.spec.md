@@ -62,6 +62,13 @@ theme — no Tk, no matplotlib — so it is unit-testable headless.
   - If `display_name` already contains a parenthesised suffix (the
     factory convention `self.name = "SMA(20)"`), returns it as-is so
     we don't double up.
+  - **Indicator-class override hook (audit `avwap-anchor-only-label`).**
+    Before the generic walker, calls `factory.legend_label(display,
+    cfg.params)` on the factory class. If that returns a non-empty
+    string, it is used verbatim as the row prefix. Lets indicators
+    (currently only AVWAP) suppress noisy rendering-knob params
+    (`price_source`, `bands`) and surface only what actually matters
+    for the reader — for AVWAP, the anchor point.
   - Otherwise walks the indicator factory's `params_schema` in
     declaration order: first non-empty param positional
     (`typical`), remaining params `name=value` (`bands=off`).

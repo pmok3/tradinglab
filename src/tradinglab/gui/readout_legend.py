@@ -207,6 +207,21 @@ def format_indicator_label(cfg: IndicatorConfig) -> str:
     factory = _factory_for_kind_id(cfg.kind_id)
     if factory is None:
         return display
+
+    # Indicator-class override hook — if the factory defines a
+    # ``legend_label(display_name, params)`` returning a non-None
+    # string, use it verbatim. Lets indicators (e.g. AVWAP) hide
+    # rendering knobs that aren't "important details" for the
+    # legend reader. Audit ``avwap-anchor-only-label``.
+    try:
+        hook = getattr(factory, "legend_label", None)
+        if callable(hook):
+            custom = hook(display, dict(cfg.params or {}))
+            if isinstance(custom, str) and custom.strip():
+                return custom
+    except Exception:  # noqa: BLE001
+        pass
+
     schema = getattr(factory, "params_schema", None) or ()
 
     params = dict(cfg.params or {})

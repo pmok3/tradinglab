@@ -48,6 +48,32 @@ _BANDS_CHOICES: tuple[str, ...] = ("off", "1σ", "2σ", "both")
 _OUTPUT_KEYS: tuple[str, ...] = ("avwap", "upper1", "lower1", "upper2", "lower2")
 
 
+def _format_anchor_for_label(anchor_ts: str) -> str:
+    """Render an ISO-8601 anchor timestamp readably for the legend.
+
+    - Date-only anchor (``"2025-09-15"``) → pass through unchanged.
+    - Datetime anchor (``"2025-09-15T09:30:00"``) → ``T`` becomes a
+      space; trailing zero-seconds (``:00``) are dropped.
+    - Unparseable / weird inputs → return as-is (legend never raises).
+
+    Audit ``avwap-anchor-only-label``.
+    """
+    s = (anchor_ts or "").strip()
+    if not s:
+        return s
+    # Date-only (no time component) — fast path.
+    if "T" not in s and " " not in s:
+        return s
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        # Unknown shape; substitute ``T`` with space at minimum.
+        return s.replace("T", " ", 1)
+    if dt.second == 0 and dt.microsecond == 0:
+        return dt.strftime("%Y-%m-%d %H:%M")
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
 class AnchoredVWAP(BaseIndicator):
     """Anchored Volume-Weighted Average Price with optional ±σ bands."""
 
@@ -125,6 +151,37 @@ class AnchoredVWAP(BaseIndicator):
             return ("upper2", "upper1", "avwap", "lower1", "lower2")
         # "off" or unknown — just the centerline.
         return ("avwap",)
+
+    @classmethod
+    def legend_label(cls, display_name: str, params: dict) -> str | None:
+        """Render the legend prefix as ``AVWAP`` or ``AVWAP(anchor)``.
+
+        The only "important detail" for AVWAP is its anchor point —
+        ``price_source`` and ``bands`` are rendering knobs that don't
+        change what the indicator means at a given anchor. Override
+        the generic ``params_schema`` walker so the readout legend
+        shows just:
+
+        - ``AVWAP`` when ``anchor_ts`` is blank (uninitialised → the
+          compute layer falls back to the first eligible bar);
+        - ``AVWAP(2025-09-15)`` for daily/weekly/monthly anchors
+          (date-only ISO strings pass through unchanged);
+        - ``AVWAP(2025-09-15 09:30)`` for intraday anchors — the
+          ``T`` separator is replaced with a space, and a trailing
+          zero-seconds (``:00``) is dropped for readability;
+        - ``AVWAP(2025-09-15 09:31:45)`` when the seconds are
+          non-zero (precise anchor — preserved).
+
+        Audit ``avwap-anchor-only-label``.
+        """
+        name = (display_name or "Anchored VWAP").strip() or "Anchored VWAP"
+        # If display_name already has a parenthesised suffix, trust it.
+        if "(" in name and name.endswith(")"):
+            return name
+        anchor = ((params or {}).get("anchor_ts") or "").strip()
+        if not anchor:
+            return name
+        return f"{name}({_format_anchor_for_label(anchor)})"
 
     # --- public --------------------------------------------------------
 
