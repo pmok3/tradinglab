@@ -194,10 +194,17 @@ def _put_data(r: np.ndarray, g: np.ndarray, b: np.ndarray) -> str:
 
 
 class HexColorPalette(BaseModalDialog):
-    """Modal color picker — advanced HSV view by default, honeycomb swatches secondary.
+    """Modal color picker — Advanced HSV + Swatches honeycomb side-by-side.
 
     Use :func:`pick_color` instead of constructing this class directly —
     it blocks via ``wait_window`` and returns the result.
+
+    Layout (audit ``color-picker-side-by-side``): the historical
+    Advanced-or-Swatches radio toggle is gone. Both panes are
+    permanently visible: Advanced HSV picker on the left,
+    Swatches honeycomb on the right, hex entry + preview swatch
+    under the swatches column (the user's "more final pick" affordance).
+    Dialog is wider (760×420) to accommodate both columns.
     """
 
     def __init__(self, parent: tk.Misc, initial: str = "#888888",
@@ -206,11 +213,11 @@ class HexColorPalette(BaseModalDialog):
             parent,
             title=title,
             geometry_key="dlg.color_palette",
-            default_geometry="440x420",
+            default_geometry="760x420",
             resizable=(True, True),
         )
         try:
-            self.minsize(400, 380)
+            self.minsize(720, 400)
         except tk.TclError:
             pass
         self.result: str | None = None
@@ -222,9 +229,7 @@ class HexColorPalette(BaseModalDialog):
         self._cell_items: list[tuple[int, str]] = []
         self._sv_image: tk.PhotoImage | None = None
         self._hue_image: tk.PhotoImage | None = None
-        self._view_var = tk.StringVar(self, value="advanced")
         self._build_ui()
-        self._show_view("advanced")
         protect_combobox_wheel(self)
         self._finalize_modal(primary=self._on_ok, cancel=self._on_cancel)
 
@@ -238,27 +243,17 @@ class HexColorPalette(BaseModalDialog):
         outer = tk.Frame(self, padx=10, pady=10, bg=bg)
         outer.pack(fill="both", expand=True)
 
-        # View toggle.
-        toggle = tk.Frame(outer, bg=bg)
-        toggle.pack(side="top", fill="x")
-        self._adv_btn = ttk.Radiobutton(
-            toggle, text="Advanced", value="advanced",
-            variable=self._view_var, style="Toolbutton",
-            command=lambda: self._show_view("advanced"),
-        )
-        self._sw_btn = ttk.Radiobutton(
-            toggle, text="Swatches", value="swatches",
-            variable=self._view_var, style="Toolbutton",
-            command=lambda: self._show_view("swatches"),
-        )
-        self._adv_btn.pack(side="left")
-        self._sw_btn.pack(side="left", padx=(6, 0))
-
-        # Body holds the two mutually-exclusive views.
+        # Side-by-side body: Advanced HSV on left, Swatches on right.
+        # Audit ``color-picker-side-by-side``.
         body = tk.Frame(outer, bg=bg)
-        body.pack(side="top", fill="both", expand=True, pady=(8, 0))
+        body.pack(side="top", fill="both", expand=True)
         self._advanced_frame = tk.Frame(body, bg=bg)
         self._swatches_frame = tk.Frame(body, bg=bg)
+        # Pack the swatches column first so it lands on the right
+        # (Tk's side="right" semantics); advanced fills the rest of
+        # the row on the left.
+        self._swatches_frame.pack(side="right", anchor="n", padx=(10, 0))
+        self._advanced_frame.pack(side="left", fill="both", expand=True)
         self._build_advanced(self._advanced_frame, bg, fg)
         self._build_swatches(self._swatches_frame, bg, fg)
 
@@ -289,20 +284,6 @@ class HexColorPalette(BaseModalDialog):
         self._hue_canvas = hue
         hue.bind("<Button-1>", self._on_hue_drag)
         hue.bind("<B1-Motion>", self._on_hue_drag)
-
-        # Preview + hex entry row.
-        row = tk.Frame(parent, bg=bg)
-        row.pack(side="top", anchor="w", fill="x", pady=(8, 0))
-        self._preview = tk.Frame(row, width=40, height=24, bg=self._current,
-                                 bd=1, relief="solid")
-        self._preview.pack_propagate(False)
-        self._preview.pack(side="left")
-        tk.Label(row, text="Hex:", bg=bg, fg=fg).pack(side="left", padx=(10, 4))
-        self._hex_var = tk.StringVar(self, value=self._current)
-        self._hex_entry = ttk.Entry(row, textvariable=self._hex_var, width=10)
-        self._hex_entry.pack(side="left")
-        self._hex_entry.bind("<Return>", lambda _e: self._on_hex_entry())
-        self._hex_entry.bind("<FocusOut>", lambda _e: self._on_hex_entry())
 
         self._render_hue()
         self._render_sv()
@@ -362,18 +343,22 @@ class HexColorPalette(BaseModalDialog):
             btn.pack(side="left", padx=1)
             btn.bind("<Button-1>", lambda _e, c=color: self._on_pick(c))
 
-    # ------------------------------------------------------------------
-    # View switching
-    # ------------------------------------------------------------------
-
-    def _show_view(self, name: str) -> None:
-        self._view_var.set(name)
-        if name == "swatches":
-            self._advanced_frame.pack_forget()
-            self._swatches_frame.pack(side="top", fill="both", expand=True)
-        else:
-            self._swatches_frame.pack_forget()
-            self._advanced_frame.pack(side="top", fill="both", expand=True)
+        # Preview + hex entry row — mounted UNDER the swatches column
+        # so the "final pick" affordances (the touch-friendly swatch
+        # grid + the precise hex entry) sit together on the right of
+        # the dialog. Audit ``color-picker-side-by-side``.
+        row = tk.Frame(parent, bg=bg)
+        row.pack(side="top", anchor="w", fill="x", pady=(8, 0))
+        self._preview = tk.Frame(row, width=40, height=24, bg=self._current,
+                                 bd=1, relief="solid")
+        self._preview.pack_propagate(False)
+        self._preview.pack(side="left")
+        tk.Label(row, text="Hex:", bg=bg, fg=fg).pack(side="left", padx=(10, 4))
+        self._hex_var = tk.StringVar(self, value=self._current)
+        self._hex_entry = ttk.Entry(row, textvariable=self._hex_var, width=10)
+        self._hex_entry.pack(side="left")
+        self._hex_entry.bind("<Return>", lambda _e: self._on_hex_entry())
+        self._hex_entry.bind("<FocusOut>", lambda _e: self._on_hex_entry())
 
     # ------------------------------------------------------------------
     # Advanced-view rendering

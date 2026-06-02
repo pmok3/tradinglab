@@ -74,14 +74,23 @@ def _make_dialog(root):
         pytest.skip(f"Tk dialog could not be constructed: {e}")
 
 
-def test_default_view_is_advanced(root) -> None:
+def test_default_view_shows_both_panes_side_by_side(root) -> None:
+    """Both Advanced HSV + Swatches honeycomb are visible at once.
+
+    Per the ``color-picker-side-by-side`` sprint: the radio toggle
+    is gone; both panes mount permanently inside a horizontal
+    container. The dialog's ``_view_var`` is retired.
+    """
     dlg = _make_dialog(root)
     try:
         dlg.update_idletasks()
-        assert dlg._view_var.get() == "advanced"
-        # Advanced frame is packed; swatches frame is hidden.
+        # Both frames are packed simultaneously.
         assert dlg._advanced_frame.winfo_manager() == "pack"
-        assert dlg._swatches_frame.winfo_manager() == ""
+        assert dlg._swatches_frame.winfo_manager() == "pack"
+        # No view-toggle radios anymore.
+        assert not hasattr(dlg, "_adv_btn")
+        assert not hasattr(dlg, "_sw_btn")
+        assert not hasattr(dlg, "_view_var")
     finally:
         dlg.destroy()
 
@@ -89,8 +98,11 @@ def test_default_view_is_advanced(root) -> None:
 def test_window_is_larger_and_resizable(root) -> None:
     dlg = _make_dialog(root)
     try:
+        # Side-by-side layout needs more horizontal room than the
+        # 440px toggled variant. Default geometry must be at least
+        # 720px wide so both panes fit without truncation.
         w, h = dlg._default_geometry.split("+")[0].split("x")
-        assert int(w) >= 420
+        assert int(w) >= 720
         assert int(h) >= 380
         rs = dlg.resizable()
         assert all(int(x) for x in rs)
@@ -129,14 +141,13 @@ def test_ok_commits_current_advanced_selection(root) -> None:
         raise
 
 
-def test_switch_to_swatches_shows_honeycomb_canvas(root) -> None:
+def test_honeycomb_canvas_is_always_present(root) -> None:
+    """Swatches pane is permanently visible; ``_canvas`` attribute
+    stays for the dark-theme contract."""
     dlg = _make_dialog(root)
     try:
-        dlg._show_view("swatches")
         dlg.update_idletasks()
-        assert dlg._view_var.get() == "swatches"
         assert dlg._swatches_frame.winfo_manager() == "pack"
-        assert dlg._advanced_frame.winfo_manager() == ""
         # Honeycomb canvas attribute preserved (dark-theme contract).
         assert dlg._canvas is not None
     finally:
@@ -151,6 +162,46 @@ def test_hex_entry_commit_updates_current(root) -> None:
         assert dlg._current == "#abcdef"
     finally:
         dlg.destroy()
+
+
+def test_hex_entry_lives_under_swatches_column(root) -> None:
+    """Hex entry + preview swatch sit on the right (swatches column).
+
+    Per the user's choice in the sprint: "Move under the Swatches
+    column on the right — the swatch grid feels like the more
+    'final pick' affordance."
+    """
+    dlg = _make_dialog(root)
+    try:
+        dlg.update_idletasks()
+        # Walk up the hex entry's parent chain; one of the ancestors
+        # must be (or be inside) the swatches frame.
+        parent = dlg._hex_entry.master
+        ancestors = []
+        for _ in range(6):
+            if parent is None:
+                break
+            ancestors.append(parent)
+            parent = parent.master if hasattr(parent, "master") else None
+        assert dlg._swatches_frame in ancestors, (
+            "hex entry must mount under the swatches column, not the "
+            "advanced column"
+        )
+    finally:
+        dlg.destroy()
+
+
+def test_swatch_click_still_commits_selection_immediately(root) -> None:
+    """Sanity: per-cell swatch click still calls ``_on_pick`` → commits."""
+    dlg = _make_dialog(root)
+    try:
+        # Pick a known honeycomb colour directly via the API the
+        # swatch <Button-1> binding uses.
+        dlg._on_pick("#1f77b4")
+        assert dlg.result == "#1f77b4"
+    except Exception:
+        dlg.destroy()
+        raise
 
 
 def test_canvas_attr_is_honeycomb_for_dark_theme(root) -> None:
