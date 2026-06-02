@@ -26,6 +26,7 @@ population-σ window regardless of kernel.
   (`SMA→#2ca02c`, `EMA→#d62728`, `WMA→#9467bd`, `RMA→#1f77b4`)
   defined for future per-instance default swapping.
 - `scannable_outputs = (("middle","numeric"),("upper","numeric"),("lower","numeric"))` — exposes the three lines to the scanner registry.
+- `effective_output_keys(cls, params) -> ("upper", "middle", "lower")` — classmethod overriding `BaseIndicator.effective_output_keys` (`default_style` insertion order is `middle, upper, lower`) so the in-readout overlay legend (`gui/readout_legend.py`) renders the bands in canonical **top-down visual order on the chart** (`upper` above `middle` above `lower`). Without this override the row would read `BB(20) middle <v> upper <v> lower <v>`, which contradicts the chart geometry. Audit `legend-condensation`.
 - `compute(candles) -> {"middle", "upper", "lower"}`. First
   `max(length, std_length) - 1` entries of the bands are NaN; the
   centerline alone is defined from `length-1` onward (so for

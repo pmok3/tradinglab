@@ -22,7 +22,7 @@ by `ChartApp._build_ui`.
     `ChartApp._open_drawing_dialog(drawing.id)` BEFORE the
     1d-drilldown check (line over candle wins).
   - B1 on a lower-pane indicator label → `_open_per_indicator_dialog(config_id, slot)`; B3 on the same label → `_show_legend_context_menu(...)`.
-  - B1 / B3 on an in-readout overlay legend row (`_maybe_handle_readout_legend_click`) → B1 `_open_per_indicator_dialog(config_id, slot)`; B3 `_show_legend_context_menu(...)`. Gated before pan/zoom so a legend click never starts a pan. Hit-test via `_readout_legend_row_hit` (per-row `TextArea.get_window_extent` pixel test).
+  - B1 / B3 on an in-readout overlay legend row (`_maybe_handle_readout_legend_click`) → B1 `_open_per_indicator_dialog(config_id, slot)`; B3 `_show_legend_context_menu(...)`. Gated before pan/zoom so a legend click never starts a pan. Hit-test via `_readout_legend_row_hit` (per-row `HPacker.get_window_extent` pixel test — the whole condensed row maps to one indicator config_id).
   - Double-click on a 1d candle (primary OR compare) →
     `_maybe_handle_dblclick_drilldown` → `_zoom_5m_for_date(day)`.
 - `_on_button_release(event)` — terminate pan / zoom; detect click
@@ -228,13 +228,22 @@ during drag.
   - **Overlay legend rows** (TradingView-style; replaces the retired Tk
     `OverlayLegend` pill). Built by `_build_readout_indicator_rows(ax,
     theme)` which enumerates via the pure
-    `gui.readout_legend.build_overlay_legend_rows` and looks up each
-    visible row's live `Line2D` from the panel's `overlay_lines`. The
-    row meta (`config_id`/`output_key`/`label`/`color`/`visible`/`line`/
-    `textarea`) is stashed on `box._ind_rows`. `_update_readout` sets
-    each row's text to `"NAME value"` (`_line_value_at(line, idx)`) for
-    visible rows, just the greyed `NAME` for hidden rows (line=None).
-    Slot→scope via `_READOUT_SCOPE_FOR_SLOT` (`primary`→`main`,
+    `gui.readout_legend.build_overlay_legend_rows`. As of the
+    `legend-condensation` sprint each row is an **`HPacker` of
+    `TextArea`s** representing ONE indicator config — multi-output
+    indicators (Bollinger / AVWAP-with-bands / Keltner / Donchian)
+    render as `LABEL upper <v1> middle <v2> lower <v3>` on a single
+    visual row with each band's value in its own colour. Row meta on
+    `box._ind_rows` is now
+    `{"config_id", "label", "visible", "container": HPacker,
+    "outputs": [{"output_key", "color", "line", "value_textarea",
+    "key_label"}, ...]}` where `outputs` enumerates the visible bands
+    in indicator-declared top-down order (via
+    `Indicator.effective_output_keys(params)`). `_update_readout`
+    walks `outputs` per row and writes `_line_value_at(line, idx)` into
+    each segment's `value_textarea` (visible rows) or leaves the
+    placeholder + greyed label (hidden rows / hidden bands). Slot→scope
+    via `_READOUT_SCOPE_FOR_SLOT` (`primary`→`main`,
     `compare`→`compare`). Transparent background (no overlap with the
     OHLCV strip). Click routing: see `_maybe_handle_readout_legend_click`
     / `_readout_legend_row_hit` above.

@@ -26,6 +26,12 @@ variance. Overlay on price axis. Anchor is picked via the dialog's
   1.0. The mid-blue clears WCAG-AA non-text contrast in both themes
   (~3.39:1 on white, ~4.92:1 on dark `#1e1e1e`).
 - `scannable_outputs = (("avwap","numeric"),)` — only the AVWAP line is exposed to the scanner; bands are visual-only.
+- `effective_output_keys(cls, params) -> tuple[str, ...]` — classmethod overriding `BaseIndicator.effective_output_keys` for the in-readout overlay legend (`gui/readout_legend.py`). Returns ONLY the bands that the current `bands` param actually renders, in canonical top-down visual order on the chart:
+  - `bands="off"` → `("avwap",)`
+  - `bands="1σ"` → `("upper1", "avwap", "lower1")`
+  - `bands="2σ"` → `("upper2", "avwap", "lower2")`
+  - `bands="both"` → `("upper2", "upper1", "avwap", "lower1", "lower2")`
+  This is what fixes the "AVWAP shows 5 legend rows when bands are disabled" bug — the `compute(...)` output schema still always returns all 5 keys (invariant 2 below), but the legend only renders the visible subset.
 - `compute(candles) -> {"avwap", "upper1", "lower1", "upper2", "lower2"}`.
   Always returns all five keys; unrequested band keys are NaN-filled.
 - `first_eligible_anchor_ts(candles) -> str` — ISO date of the first
