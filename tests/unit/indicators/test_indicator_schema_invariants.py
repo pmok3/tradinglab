@@ -16,6 +16,16 @@ Pins contracts about every indicator registered in
    rows to render. Drift between this method and the static style
    table produces phantom legend rows or missing ones.
 
+3. **``kind_id`` is unique across the registry** — duplicate kind_ids
+   would silently overwrite each other via ``register_indicator`` /
+   ``_BY_KIND_ID``, persisting one config and resolving to the other.
+
+4. **Every indicator factory is callable with NO arguments** —
+   ``factory_by_kind_id(kind_id)()`` is how persisted configs
+   rehydrate. If a factory requires a positional arg without a
+   default, the rehydrate path raises ``TypeError`` and the
+   indicator becomes silently invisible.
+
 Each contract has a small grandfathered allowlist for pre-existing
 documented drift (e.g. ADX intentionally uses ``+di``/``-di`` keys
 in ``scannable_outputs`` for back-compat with persisted FieldRefs).
@@ -23,6 +33,9 @@ in ``scannable_outputs`` for back-compat with persisted FieldRefs).
 Audit ``indicator-schema-invariants``.
 """
 from __future__ import annotations
+
+import inspect
+from collections import Counter
 
 import pytest
 
@@ -168,3 +181,81 @@ def test_scannable_key_exemptions_correspond_to_real_drift():
     assert not stale, "Stale _SCANNABLE_KEY_EXEMPTIONS entries:\n" + "\n".join(
         stale
     )
+
+
+# ---------------------------------------------------------------------------
+# 3. kind_id is unique across the registry
+# ---------------------------------------------------------------------------
+
+
+def test_every_indicator_kind_id_is_unique():
+    """Duplicate kind_ids would silently overwrite each other in
+    ``_BY_KIND_ID`` via ``register_indicator``. A persisted config
+    pointing at the duplicated id would deterministically rehydrate
+    as whichever indicator registered LAST — silently switching the
+    user's chart behind their back.
+    """
+    from tradinglab.indicators.base import iter_indicator_factories
+
+    counts: Counter[str] = Counter()
+    name_by_kind_id: dict[str, list[str]] = {}
+    for kind_id, name, _factory in iter_indicator_factories():
+        counts[kind_id] += 1
+        name_by_kind_id.setdefault(kind_id, []).append(name)
+    dups = [k for k, n in counts.items() if n > 1]
+    if dups:
+        msg = "\n".join(
+            f"  - {k!r}: registered as {name_by_kind_id[k]}" for k in dups
+        )
+        pytest.fail(
+            f"Duplicate indicator kind_ids in the registry:\n{msg}\n\n"
+            "Each kind_id must be unique — a config persisted with a "
+            "duplicated id silently rehydrates as whichever indicator "
+            "registered LAST. Rename one or the other."
+        )
+
+
+# ---------------------------------------------------------------------------
+# 4. Every indicator factory is callable with no arguments
+# ---------------------------------------------------------------------------
+
+
+def test_every_indicator_factory_callable_with_no_args():
+    """``factory_by_kind_id(kind_id)()`` is how persisted configs are
+    rehydrated when no per-instance params are stored. If a factory
+    requires a positional arg without a default, the rehydrate path
+    raises ``TypeError`` and the indicator becomes silently invisible
+    on chart load — the user's saved config is "broken" with no
+    explanation.
+
+    Every indicator must therefore be constructable as ``Factory()``
+    (all params have schema defaults).
+    """
+    from tradinglab.indicators.base import iter_indicator_factories
+
+    bad: list[str] = []
+    for kind_id, name, factory in iter_indicator_factories():
+        try:
+            sig = inspect.signature(factory)
+        except (TypeError, ValueError):
+            continue
+        required = [
+            p.name
+            for p in sig.parameters.values()
+            if p.default is inspect.Parameter.empty
+            and p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)
+        ]
+        if required:
+            bad.append(
+                f"  - {name} (kind_id={kind_id!r}): required param(s) "
+                f"{required} — rehydrate from persisted config raises "
+                f"TypeError."
+            )
+    if bad:
+        pytest.fail(
+            "Indicator factories with required ctor args (breaks "
+            "silent-rehydrate on config load):\n\n" + "\n".join(bad)
+            + "\n\nEvery __init__ param must have a default that "
+            "matches the params_schema declaration."
+        )
+
