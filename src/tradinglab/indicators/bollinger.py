@@ -78,6 +78,17 @@ class BollingerBands(BaseIndicator):
 
     overlay = True
 
+    @classmethod
+    def effective_output_keys(cls, params: dict) -> tuple[str, ...]:
+        """Return outputs in top-down visual order (upper → middle → lower).
+
+        ``default_style.keys()`` declares middle first (the canonical
+        "centerline" anchor for code) but on the chart the bands are
+        upper / middle / lower stacked top-down — that's the order the
+        user reads them in the legend. Audit ``legend-condensation``.
+        """
+        return ("upper", "middle", "lower")
+
     def __init__(self, length: int = 20, num_std: float = 2.0,
                  std_length: int | None = None,
                  ma_type: str = "SMA") -> None:

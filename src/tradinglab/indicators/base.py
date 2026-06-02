@@ -209,6 +209,34 @@ class BaseIndicator:
             f"{type(self).__name__} must implement compute_arr(bars)"
         )
 
+    @classmethod
+    def effective_output_keys(cls, params: dict) -> tuple[str, ...]:
+        """Return the output keys actually visible for these ``params``.
+
+        Drives the in-chart legend (`gui/readout_legend.py`) and any
+        future "skip computing an output that's not shown" path.
+        Default: every key in ``default_style`` (or a single synthetic
+        key for indicators with no declared style). Multi-output
+        indicators that emit all-NaN for some outputs depending on
+        params (e.g. AVWAP with ``bands="off"`` emits NaN for every
+        band but still returns the keys in its dict) MUST override
+        this to declare which keys are genuinely visible — otherwise
+        the legend shows a row per all-NaN output. Also: indicators
+        with a non-default visual top-down order (Bollinger upper →
+        middle → lower) may override here to put them in chart-order.
+
+        Audit ``legend-condensation`` — added for the sprint that
+        collapsed multi-output rows into a single consolidated legend
+        row per indicator config.
+        """
+        default_style = getattr(cls, "default_style", None)
+        if default_style and hasattr(default_style, "keys"):
+            keys = tuple(str(k) for k in default_style.keys())
+            if keys:
+                return keys
+        kind_id = getattr(cls, "kind_id", "") or ""
+        return (str(kind_id) or "value",)
+
 
 # ---------------------------------------------------------------------------
 # compute_arr dispatch

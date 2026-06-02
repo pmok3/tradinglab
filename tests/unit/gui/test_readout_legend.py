@@ -64,8 +64,17 @@ def test_single_output_row_uses_display_name_and_color():
     row = rows[0]
     assert isinstance(row, ReadoutLegendRow)
     assert row.config_id == cfg.id
+    # Single-output indicators now show "DisplayName" as the row label;
+    # if the factory's params_schema has a length param, the formatter
+    # parenthesises it. ``SMA`` ships with kind_id="sma" + a length
+    # param, so the label is "SMA(20)" — matching the display_name set
+    # by the indicator class.
     assert row.label == "SMA(20)"
-    assert row.color == "#ff8800"
+    # As of the ``legend-condensation`` sprint, single-output rows
+    # carry one OverlaySegment. The colour lives on the segment.
+    assert len(row.outputs) == 1
+    assert row.outputs[0].output_key == "sma"
+    assert row.outputs[0].color == "#ff8800"
     assert row.visible is True
 
 
@@ -78,17 +87,27 @@ def test_two_overlays_in_insertion_order():
     assert [r.label for r in rows] == ["SMA(20)", "EMA(50)"]
 
 
-def test_multi_output_expands_one_row_per_key_with_qualifier():
+def test_multi_output_collapses_to_one_row_with_per_output_segments():
+    """Multi-output indicators now collapse to ONE row with per-band segments.
+
+    Pre-condensation, this test asserted ``len(rows) > 1`` (one row
+    per band) with each row's label prefixed with the display name.
+    The new shape is ``one row + len(row.outputs) == n_bands`` so the
+    legend renders ``BB(20,2) upper <v1> middle <v2> lower <v3>`` on
+    a single line.
+    """
     m = IndicatorManager()
     cfg = m.add(_bbands())
     rows = build_overlay_legend_rows(m, "main", "1d")
-    # Bollinger Bands has >1 default_style output → one row per key,
-    # each label prefixed with the display name.
-    assert len(rows) > 1
-    assert all(r.config_id == cfg.id for r in rows)
-    assert all(r.label.startswith("BB(20,2) ") for r in rows)
-    keys = {r.output_key for r in rows}
-    assert len(keys) == len(rows)  # distinct output keys
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.config_id == cfg.id
+    # Bollinger declares the top-down order via effective_output_keys.
+    keys = [seg.output_key for seg in row.outputs]
+    assert keys == ["upper", "middle", "lower"]
+    # Per-band labels carry the band name for the legend renderer.
+    labels = [seg.key_label for seg in row.outputs]
+    assert labels == ["upper", "middle", "lower"]
 
 
 def test_hidden_config_is_included_but_marked_not_visible():
@@ -110,8 +129,10 @@ def test_color_falls_back_to_theme_text_when_unstyled():
     m = IndicatorManager()
     # bbands cfg has empty style override; if the factory exposes a
     # default colour we use it, otherwise the theme text colour. Either
-    # way the colour must be a non-empty string.
+    # way every output segment's colour must be a non-empty string.
     m.add(_bbands())
     rows = build_overlay_legend_rows(m, "main", "1d", theme_text="#abcabc")
     assert rows
-    assert all(isinstance(r.color, str) and r.color for r in rows)
+    for row in rows:
+        for seg in row.outputs:
+            assert isinstance(seg.color, str) and seg.color

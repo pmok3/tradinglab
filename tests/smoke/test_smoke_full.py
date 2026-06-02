@@ -17971,8 +17971,11 @@ def check_d62_overlay_legend_eye_toggles(app) -> None:
     assert any(r.config_id == sma_cfg.id and r.visible for r in rows), (
         f"visible SMA overlay must produce a legend row; got {rows!r}")
     sma_row = next(r for r in rows if r.config_id == sma_cfg.id)
-    assert sma_row.color == "#ff8800", (
-        f"legend row colour must come from the cfg style; got {sma_row.color!r}")
+    # As of the ``legend-condensation`` sprint, row colour lives on the
+    # OverlaySegment, not the row.
+    assert sma_row.outputs and sma_row.outputs[0].color == "#ff8800", (
+        f"legend row segment colour must come from the cfg style; "
+        f"got {[s.color for s in sma_row.outputs]!r}")
     assert "SMA" in sma_row.label
 
     # Hidden overlay still enumerated (so it can be re-enabled), but
@@ -18020,21 +18023,26 @@ def check_d62_overlay_legend_eye_toggles(app) -> None:
         assert row_meta is not None, (
             "newly-added SMA overlay must appear as a readout legend row")
         assert row_meta.get("visible") is True
-        assert row_meta.get("line") is not None, (
-            "visible overlay row must reference its live Line2D for hover values")
+        # As of ``legend-condensation``, each row carries per-output
+        # segments; the live Line2D + value TextArea live on the
+        # segment, not the row.
+        outputs = row_meta.get("outputs") or []
+        assert outputs, "row meta must carry at least one output segment"
+        seg = outputs[0]
+        assert seg.get("line") is not None, (
+            "visible overlay segment must reference its live Line2D for hover values")
 
-        # Hover the latest bar — the row text must gain a numeric value.
+        # Hover the latest bar — the segment's value TextArea must gain a numeric value.
         candles = app._panel_state["primary"]["candles"]
         n = len(candles)
         assert n > 5
         app._update_readout(float(n - 1))
-        ta = row_meta["textarea"]
-        text = ta.get_text()
-        label = row_meta["label"]
-        assert text.startswith(label), (
-            f"legend row text must start with the indicator name: {text!r}")
-        assert any(ch.isdigit() for ch in text[len(label):]), (
-            f"hovered overlay legend row must display a live value: {text!r}")
+        value_ta = seg["value_textarea"]
+        value_text = value_ta.get_text()
+        assert any(ch.isdigit() for ch in value_text), (
+            f"hovered overlay legend segment must display a live value: {value_text!r}")
+        # The row's prefix label still reads the indicator name.
+        assert "SMA" in row_meta.get("label", "")
 
         # Hide the overlay -> next render greys the row (no live value).
         mgr.update(cfg.id, visible=False)
@@ -18046,8 +18054,10 @@ def check_d62_overlay_legend_eye_toggles(app) -> None:
         assert hidden_meta is not None, (
             "hidden overlay must remain in the readout legend for re-enabling")
         assert hidden_meta.get("visible") is False
-        assert hidden_meta.get("line") is None, (
-            "hidden overlay row must not reference a live line (no value shown)")
+        # Hidden row's segments must not reference live lines (no value shown).
+        for seg2 in (hidden_meta.get("outputs") or []):
+            assert seg2.get("line") is None, (
+                "hidden overlay segment must not reference a live line")
     finally:
         if added_id is not None:
             try:

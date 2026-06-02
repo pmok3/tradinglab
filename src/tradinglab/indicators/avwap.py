@@ -104,6 +104,28 @@ class AnchoredVWAP(BaseIndicator):
         self.bands = bands
         self.name = "Anchored VWAP"
 
+    @classmethod
+    def effective_output_keys(cls, params: dict) -> tuple[str, ...]:
+        """Return only the bands actually visible for these ``params``.
+
+        ``compute_arr`` always emits all 5 keys (NaN for unrequested
+        bands) so the render layer's stale-key-removal limitation
+        doesn't bite — but for the legend we want to show only what's
+        actually drawn. Order is top-down on the chart so the user
+        reads bands the way they appear.
+
+        Audit ``legend-condensation``.
+        """
+        bands = (params or {}).get("bands", "off")
+        if bands == "1σ":
+            return ("upper1", "avwap", "lower1")
+        if bands == "2σ":
+            return ("upper2", "avwap", "lower2")
+        if bands == "both":
+            return ("upper2", "upper1", "avwap", "lower1", "lower2")
+        # "off" or unknown — just the centerline.
+        return ("avwap",)
+
     # --- public --------------------------------------------------------
 
     def compute_arr(self, bars: Bars) -> dict[str, np.ndarray]:
