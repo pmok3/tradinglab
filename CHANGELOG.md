@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.3.2] - 2026-06-03
+
+### Added
+
+- **Themed Win-ChooseColor look-alike replaces the OS chooser for
+  indicator color selection.** New `ThemedColorChooser` (in
+  `gui.color_palette`) mirrors the Win32 ChooseColor layout
+  (8×6 Basic colors grid + 8×2 Custom colors grid + H×S pad +
+  L slider + H/S/L + R/G/B spinboxes + hex entry + Color|Solid
+  preview + Add to Custom Colors / OK / Cancel) but its chrome
+  follows the app's light/dark theme. Closes the gap left by the
+  legacy `tkinter.colorchooser.askcolor` (a Win32 `COMMDLG` that
+  never adopted Windows dark mode). Custom colors persist as
+  `%LOCALAPPDATA%\TradingLab\custom_colors.json` (16-slot list,
+  atomic JSON writes, corrupt-file safe). Same `pick_color`
+  public signature — every caller (`ChartApp._legend_pick_color`,
+  `IndicatorDialog._on_pick_color_for_output`) picks up the new
+  behavior transparently. (audit `themed-color-chooser`)
+
+### Fixed
+
+- **Entries tab: "Load template…" button aligned with the rest of
+  the toolbar.** Was offset 8 px to the right because its `padx`
+  was `(12, 0)` instead of `(4, 0)` like every other button on
+  bars 1 and 2. Pure visual fix — no behavior change. (audit
+  `entries-tab-load-template-alignment`)
+
 All notable changes to this project will be documented here. Format roughly follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [0.3.1] - 2026-06-02
