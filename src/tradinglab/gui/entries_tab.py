@@ -251,7 +251,7 @@ class EntriesTab(ttk.Frame):
             side="left", padx=(4, 0))
         ttk.Button(bar2, text="Load template…",
                    command=self._on_load_template).pack(
-            side="left", padx=(12, 0))
+            side="left", padx=(4, 0))
         ttk.Button(bar2, text="Refresh", command=self.refresh).pack(
             side="right")
 
