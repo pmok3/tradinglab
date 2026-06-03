@@ -33,7 +33,6 @@ from tradinglab.gui._param_widgets import (
 )
 from tradinglab.indicators.base import ParamDef
 
-
 # ---------------------------------------------------------------------------
 # Per-kind widget + variable type
 # ---------------------------------------------------------------------------
