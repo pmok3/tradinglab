@@ -458,7 +458,7 @@ def _draw_histogram(
     palette = tuple(getattr(cls, "histogram_palette", ()) or ())
     if len(palette) < 4:
         palette = ("#26a69a", "#b2dfdb", "#ffcdd2", "#ef5350")
-    # Optional per-output user color override (b42 honeycomb picker).
+    # Optional per-output user color override (b42 native color chooser).
     # We only honor it as the "rising-above-zero" anchor; the other
     # three classes derive from the default palette to keep the
     # 4-class TradingView contrast intact.

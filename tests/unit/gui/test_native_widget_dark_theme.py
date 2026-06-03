@@ -10,7 +10,6 @@ import tkinter as tk  # noqa: E402
 
 from tradinglab.constants import DARK_THEME
 from tradinglab.gui import (
-    color_palette,
     dialogs,
     exits_dialog,
     pre_trade_dialog,
@@ -175,88 +174,23 @@ def test_pre_trade_dialog_text_widgets_use_dark_theme(dark_root: tk.Toplevel) ->
         dlg.destroy()
 
 
-def test_color_palette_canvas_uses_dark_theme(dark_root: tk.Toplevel) -> None:
-    dlg = color_palette.HexColorPalette(dark_root)
-    try:
-        assert str(dlg._canvas.cget("background")) == DARK_THEME["win_bg"]
-        assert str(dlg._canvas.cget("highlightthickness")) == "0"
-        assert str(dlg._canvas.cget("borderwidth")) == "0"
-        assert str(dlg.cget("background")) == DARK_THEME["win_bg"]
-    finally:
-        dlg.destroy()
+def test_color_palette_uses_native_chooser_not_themed_dialog(dark_root: tk.Toplevel) -> None:
+    """The color picker is now a thin wrapper around the native OS
+    chooser (audit ``color-picker-native-only``); the previous
+    custom ``HexColorPalette`` Toplevel was deleted.
 
-
-def test_color_palette_inherits_theme_through_intermediate_toplevel(
-    dark_root: tk.Toplevel,
-) -> None:
-    """The picker is usually opened from a *child* dialog (e.g.
-    IndicatorDialog) whose own widget hierarchy does NOT carry
-    ``_theme_ctrl``. The picker must still find the dark theme by
-    walking up the ``master`` chain to the root ChartApp.
-
-    Audit ``color-picker-theme-walks-master-chain``.
+    There is therefore nothing to dark-theme on the picker side —
+    the native chooser follows the OS theme. This sentinel test
+    pins that contract: importing the module must not re-introduce
+    a `HexColorPalette` class, and `pick_color` must be the only
+    public entry point.
     """
-    intermediate = tk.Toplevel(dark_root)
-    try:
-        # The intermediate Toplevel (mimicking IndicatorDialog) has
-        # NO _theme_ctrl of its own.
-        assert not hasattr(intermediate, "_theme_ctrl")
-        dlg = color_palette.HexColorPalette(intermediate)
-        try:
-            assert str(dlg.cget("background")) == DARK_THEME["win_bg"]
-            assert str(dlg._canvas.cget("background")) == DARK_THEME["win_bg"]
-            assert str(dlg._sv_canvas.cget("background")) == DARK_THEME["win_bg"]
-            assert str(dlg._hue_canvas.cget("background")) == DARK_THEME["win_bg"]
-        finally:
-            dlg.destroy()
-    finally:
-        intermediate.destroy()
-
-
-def test_color_palette_classic_label_chrome_uses_dark_theme(
-    dark_root: tk.Toplevel,
-) -> None:
-    """The "Hex:" and "Gray:" labels are classic ``tk.Label`` widgets
-    (not ttk) — they must use the dark-theme background AND
-    foreground or they stay bright white in dark mode.
-
-    Audit ``color-picker-theme-walks-master-chain``.
-    """
-    dlg = color_palette.HexColorPalette(dark_root)
-    try:
-        # Walk the dialog's widget tree and collect every classic
-        # tk.Label / tk.Frame. Each must use the dark palette
-        # (bg = win_bg; Label fg = text).
-        def walk(w):
-            yield w
-            for child in w.winfo_children():
-                yield from walk(child)
-        labels = [w for w in walk(dlg) if isinstance(w, tk.Label)]
-        frames = [w for w in walk(dlg) if isinstance(w, tk.Frame)]
-        assert labels, "expected at least the Hex/Gray labels"
-        for lbl in labels:
-            assert str(lbl.cget("background")) == DARK_THEME["win_bg"], (
-                f"label {lbl.cget('text')!r} bg is "
-                f"{lbl.cget('background')!r}, want {DARK_THEME['win_bg']!r}"
-            )
-            assert str(lbl.cget("foreground")) == DARK_THEME["text"], (
-                f"label {lbl.cget('text')!r} fg is "
-                f"{lbl.cget('foreground')!r}, want {DARK_THEME['text']!r}"
-            )
-        # Frames showing a SOLID hardcoded swatch colour (the preview
-        # square and the 6 grayscale swatch frames) are intentional —
-        # they ARE the colours being displayed. Everything else
-        # should match win_bg.
-        intentional_swatch_colors = (
-            set(color_palette._GRAYSCALE_COLORS)
-            | {color_palette.HexColorPalette._normalise("#888888")}
-        )
-        for fr in frames:
-            bg = str(fr.cget("background")).lower()
-            if bg in {c.lower() for c in intentional_swatch_colors}:
-                continue  # intentional swatch-display frame
-            assert bg == DARK_THEME["win_bg"].lower(), (
-                f"frame bg is {bg!r}, want {DARK_THEME['win_bg']!r}"
-            )
-    finally:
-        dlg.destroy()
+    from tradinglab.gui import color_palette as _cp
+    assert not hasattr(_cp, "HexColorPalette"), (
+        "color_palette.HexColorPalette was deleted (audit "
+        "color-picker-native-only) — do not re-introduce a "
+        "themed custom palette; route through the native chooser."
+    )
+    assert callable(getattr(_cp, "pick_color", None)), (
+        "color_palette.pick_color must remain the public entry point"
+    )

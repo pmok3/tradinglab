@@ -153,7 +153,7 @@ src/tradinglab/
         manager.py                 # WatchlistManager CRUD + pin APIs
     gui/                           # Tk-coupled mixins + dialogs (no main loop)
         __init__.py
-        color_palette.py           # per-scope indicator colour assignment
+        color_palette.py           # thin wrapper around native OS color chooser
         dialogs.py                 # _SettingsDialog + _WatchlistDialog
         interaction.py             # InteractionMixin (pan/zoom/hover/crosshair)
         watchlist_tab.py           # WatchlistTabMixin (pinned sub-tabs)
@@ -1691,7 +1691,7 @@ locked in Phase 1 specifically so Phase 2 wouldn't need a re-port.
   managed by `IndicatorManager`. Render pipeline (`render_for_slot` +
   dynamic `compute_layout`), Manage Indicators dialog, preset
   Save/Load/Delete cascades in the Indicators menu, drag-to-reorder
-  with `Alt+↑/↓` keyboard fallback, per-scope colour palette, and the
+  with `Alt+↑/↓` keyboard fallback, native OS colour chooser, and the
   `BollingerBandsEMA` / `ATRSMA` fold into a `ma_type` ParamDef are
   all in. See §18.3 / §18.3.1.
 

@@ -14254,17 +14254,20 @@ def check_b41_indicator_intervals_per_instance(app) -> None:
 
 
 def check_b42_indicator_color_palette(app) -> None:
-    """Per-output color picker via the hexagonal honeycomb palette (b42).
+    """Per-output color picker — native OS chooser + per-output overrides.
 
-    User asked for a popup hex-graphical palette so each indicator
-    instance can have its own color. Implementation lives in
-    :mod:`gui.color_palette` (honeycomb canvas + Custom… fallback)
-    and is wired into :class:`gui.indicator_dialog.IndicatorDialog`
-    as a per-output swatch button row beneath the interval row.
+    Audit ``color-picker-native-only``: the previous custom
+    `HexColorPalette` (HSV gradient + 19-cell honeycomb swatches) was
+    retired at the user's request — `pick_color` is now a thin
+    wrapper around `tkinter.colorchooser.askcolor`. The b42 contract
+    is the per-output `style_overrides` flow inside
+    :class:`gui.indicator_dialog.IndicatorDialog`; nothing in this
+    check opens the native chooser (that would block CI on a real
+    OS dialog).
 
     Validates:
-      A. ``HexColorPalette._normalise`` canonicalises hex strings
-         (#abc → #aabbcc; #1F77B4 → #1f77b4).
+      A. ``color_palette._normalise`` canonicalises hex strings
+         (#abc → #aabbcc; #1F77B4 → #1f77b4; "" → #888888).
       B. ``_default_style_for_kind`` reads the factory's
          ``default_style`` dict for SMA / Bollinger.
       C. ``_resolved_color_for`` prefers the row's
@@ -14280,10 +14283,7 @@ def check_b42_indicator_color_palette(app) -> None:
       G. Bollinger Bands (3 outputs: middle/upper/lower) gets three
          distinct color buttons, each independently overridable.
     """
-    from tradinglab.gui.color_palette import (
-        _HONEYCOMB_COLORS,
-        HexColorPalette,
-    )
+    from tradinglab.gui.color_palette import _normalise
     from tradinglab.gui.indicator_dialog import open_indicator_dialog
     from tradinglab.indicators.base import LineStyle
     from tradinglab.indicators.config import IndicatorConfig
@@ -14292,18 +14292,14 @@ def check_b42_indicator_color_palette(app) -> None:
     mgr.clear()
 
     # --- A: hex normalisation ------------------------------------------
-    assert HexColorPalette._normalise("#abc") == "#aabbcc", (
+    assert _normalise("#abc") == "#aabbcc", (
         "short-form #RGB should expand to #RRGGBB lower-case"
     )
-    assert HexColorPalette._normalise("#1F77B4") == "#1f77b4", (
+    assert _normalise("#1F77B4") == "#1f77b4", (
         "long-form should be lower-cased"
     )
-    assert HexColorPalette._normalise("") == "#888888", (
+    assert _normalise("") == "#888888", (
         "empty string should fall back to default gray"
-    )
-    # Honeycomb table is 19 cells (1 + 6 + 12).
-    assert len(_HONEYCOMB_COLORS) == 19, (
-        f"honeycomb must have 19 swatches; got {len(_HONEYCOMB_COLORS)}"
     )
 
     dlg = open_indicator_dialog(app)
@@ -14449,7 +14445,7 @@ def check_b42_indicator_color_palette(app) -> None:
         except Exception:  # noqa: BLE001
             pass
 
-    print("  [OK] b42 indicator color palette (honeycomb picker; per-output overrides; "
+    print("  [OK] b42 indicator color palette (native chooser; per-output overrides; "
           "default-equals-override skipped; persistence round-trip)")
 
 

@@ -286,10 +286,10 @@ class _IndicatorRow:
         # per indicator output key (e.g. "sma" / "upper" / "middle"
         # / "lower" for Bollinger). ``style_overrides`` maps the
         # output key to a hex color the user has chosen via the
-        # honeycomb palette; a key absent from the dict means "use
-        # the factory's default_style color". Rebuilt whenever the
-        # row's kind changes, so a SMA→EMA switch correctly resets
-        # to the new factory's output keys.
+        # native OS color chooser; a key absent from the dict means
+        # "use the factory's default_style color". Rebuilt whenever
+        # the row's kind changes, so a SMA→EMA switch correctly
+        # resets to the new factory's output keys.
         self.color_subframe: tk.Frame | None = None
         self.color_buttons: dict[str, tk.Frame] = {}
         self.style_overrides: dict[str, str] = {}
@@ -1034,7 +1034,7 @@ class IndicatorDialog(BaseModalDialog):
         row.interval_subframe = tk.Frame(container)
         row.interval_subframe.pack(fill="x", pady=(2, 0))
         # Per-output color picker row (b42). One small swatch button
-        # per output key — clicking opens the honeycomb palette.
+        # per output key — clicking opens the native OS color chooser.
         row.color_subframe = tk.Frame(container)
         row.color_subframe.pack(fill="x", pady=(2, 0))
         # Param area: a sub-frame we destroy + rebuild whenever the
@@ -2276,7 +2276,7 @@ class IndicatorDialog(BaseModalDialog):
             pass
 
     # ------------------------------------------------------------------
-    # b42 — per-output color picker (honeycomb palette)
+    # b42 — per-output color picker (native OS chooser)
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -2311,8 +2311,8 @@ class IndicatorDialog(BaseModalDialog):
 
         One button per output key declared in the factory's
         ``default_style``. Each button shows the resolved color as
-        its background; clicking it opens the honeycomb palette and
-        commits the chosen color via ``_commit_now``.
+        its background; clicking it opens the native OS color
+        chooser and commits the chosen color via ``_commit_now``.
         """
         sf = row.color_subframe
         if sf is None:
@@ -2360,10 +2360,12 @@ class IndicatorDialog(BaseModalDialog):
 
     def _on_pick_color_for_output(self, row: _IndicatorRow,
                                   key: str) -> None:
-        """Open the honeycomb palette for output ``key`` and commit.
+        """Open the native color picker for output ``key`` and commit.
 
         Called from the swatch button's ``<Button-1>`` binding. The
-        picker is modal — we read its result, store it on the row's
+        picker (`gui.color_palette.pick_color`) delegates to the
+        native OS chooser (audit ``color-picker-native-only``). The
+        chooser is modal — we read its result, store it on the row's
         ``style_overrides``, restyle the swatch widget, and commit
         through the manager so the chart redraws."""
         if row.is_unknown:

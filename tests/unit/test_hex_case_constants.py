@@ -2,18 +2,22 @@
 
 Audit ID: ``hex-case-constants``. The codebase mostly uses lowercase
 hex literals for theme colors (e.g. ``"#26a69a"`` in ``constants.py``)
-and indicator defaults (``"#888888"`` in ``LineStyle``). Two places
-drifted to uppercase: ``drawings/model.DEFAULT_COLOR`` (``"#2962FF"``)
-and the honeycomb palette in ``gui/color_palette.py`` (``"#FFFFFF"``,
-``"#A41DE5"`` etc.). On top of that, ``HexColorPalette._normalise``
-and ``drawing_dialog._choose_color`` explicitly uppercased every
-result string, so user color picks ended up as uppercase no matter
-what they started as.
+and indicator defaults (``"#888888"`` in ``LineStyle``). One place
+drifted to uppercase: ``drawings/model.DEFAULT_COLOR`` (``"#2962FF"``).
+On top of that, the old ``color_palette._normalise`` and
+``drawing_dialog._choose_color`` explicitly uppercased every result
+string, so user color picks ended up as uppercase no matter what
+they started as.
 
 This is now normalised: every hex literal in ``src/tradinglab`` is
 lowercase, and both ``_normalise`` / ``_choose_color`` return
 lowercase. This test pins the convention so future drift is caught
 on the spot.
+
+Audit ``color-picker-native-only`` (subsequent sprint) deleted the
+honeycomb `HexColorPalette` class and made `_normalise` a
+module-level function in `gui.color_palette`. The contract test
+below imports it accordingly.
 """
 from __future__ import annotations
 
@@ -67,13 +71,13 @@ class TestHexCaseConstants:
         )
 
     def test_palette_normalise_returns_lowercase(self):
-        from tradinglab.gui.color_palette import HexColorPalette
-        assert HexColorPalette._normalise("#ABC") == "#aabbcc"
-        assert HexColorPalette._normalise("#1F77B4") == "#1f77b4"
+        from tradinglab.gui.color_palette import _normalise
+        assert _normalise("#ABC") == "#aabbcc"
+        assert _normalise("#1F77B4") == "#1f77b4"
         # Lowercase input passes through unchanged.
-        assert HexColorPalette._normalise("#1f77b4") == "#1f77b4"
+        assert _normalise("#1f77b4") == "#1f77b4"
         # Empty -> default gray (still lowercase).
-        assert HexColorPalette._normalise("") == "#888888"
+        assert _normalise("") == "#888888"
 
     def test_drawing_dialog_choose_color_uses_lower_not_upper(self):
         """Source-level check: _choose_color must call ``.lower()``,

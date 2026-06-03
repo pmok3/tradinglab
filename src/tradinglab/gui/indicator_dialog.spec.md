@@ -25,7 +25,7 @@ settings popup via `restricted_to_config_id`.
 ## Dependencies
 
 - Internal: `indicators` registry + `IndicatorConfig` / `IndicatorManager`;
-  `app._indicator_manager`; `gui.color_palette.HexColorPalette`;
+  `app._indicator_manager`; `gui.color_palette.pick_color`;
   `gui.indicator_acronyms.explain_kind_id`; `gui.tooltip.ToolTip`;
   `_modal_base.BaseModalDialog` (modal boilerplate: title / transient /
   geometry persistence / ESC + WM_DELETE wiring via `_finalize_modal`,
@@ -37,8 +37,9 @@ settings popup via `restricted_to_config_id`.
 ### Per-output color overrides (b42)
 Each row has a Colors row with one swatch button per output key (e.g. `sma`;
 `middle`/`upper`/`lower` for Bollinger; `macd`/`signal`/`hist` for MACD).
-Swatch opens `HexColorPalette` (19-cell flat-top honeycomb + 6-cell grayscale
-+ `Custom…` fallback). Chosen hex lands on row's `style_overrides`, committed
+Swatch opens the native OS color chooser via `pick_color` (audit
+`color-picker-native-only`; the previous custom `HexColorPalette` was
+retired). Chosen hex lands on row's `style_overrides`, committed
 via `manager.update(style=...)` as `LineStyle(color=..., width=default,
 visible=default)`. Switching kind purges `style_overrides`. Default-equals-
 override is skipped — `_build_style` drops entries matching factory

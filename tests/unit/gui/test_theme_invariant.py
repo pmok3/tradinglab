@@ -101,8 +101,9 @@ _DIALOG_COVERAGE_EXEMPTIONS: dict[str, str] = {
         "scanner-block-editor's own theme path."
     ),
     "IndicatorDialog": (
-        "Pure ttk; calls pick_color which IS themed via the master-"
-        "chain walk-up (audit color-picker-theme-walks-master-chain)."
+        "Pure ttk; calls pick_color which delegates to the native OS "
+        "colour chooser (audit color-picker-native-only) — the chooser "
+        "follows the OS theme, not the app theme."
     ),
     "_BracketDialog": "Pure ttk form (single Spinbox + Buttons).",
     "ExportCacheDialog": "Pure ttk read-only summary.",

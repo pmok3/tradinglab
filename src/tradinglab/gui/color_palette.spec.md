@@ -1,56 +1,77 @@
 # gui/color_palette.py — Spec
 
 ## Purpose
-Modal color picker with the Advanced HSV picker and Swatches honeycomb laid
-out **side-by-side**. The advanced HSV picker (a saturation/value gradient
-square + hue strip) sits on the left for precise color selection; the
-Swatches honeycomb (1 center + 6 ring-1 hues + 12 ring-2 tint/shade pairs)
-plus a 6-cell grayscale strip sits on the right. The live hex entry +
-preview swatch row lives **under the swatches column**, grouping the "final
-pick" affordances together. A `System…` button still falls back to
-`tkinter.colorchooser.askcolor` for the OS chooser.
+Thin wrapper around the native OS color chooser. Exposes a single
+synchronous entry point :func:`pick_color` for selecting indicator
+colors — the legend right-click "Change Color…" flow and the
+per-output color swatches inside `IndicatorDialog` both route through
+here.
+
+Audit tag: ``color-picker-native-only``.
+
+Previous revisions shipped a custom `HexColorPalette` modal (HSV
+gradient + honeycomb swatches + a "System…" escape hatch). The user
+reported the custom palette was too sparse and asked that the System
+(native OS) chooser become the canonical *and only* color UI for
+indicator color selection. The custom dialog, HSV helpers, honeycomb
+tables, and the dedicated geometry-store key (`dlg.color_palette`)
+were deleted in the same commit. There is no `HexColorPalette` class
+anymore.
 
 ## Public API
-- `pick_color(parent, initial="#888888", title="Pick a color") -> Optional[str]` — open the picker modally, block via `wait_window`, return the chosen `"#rrggbb"` (lower-case) or `None` on cancel / WM-close.
-- `class HexColorPalette(BaseModalDialog)` — the popup itself; not normally constructed directly. Exposes `result: Optional[str]` after dismissal, and `_normalise(color)` (static) for hex canonicalisation.
-- `hsv_to_hex(h, s, v) -> str` — module-level pure helper; HSV components in `[0, 1]` (clamped) → lower-case `#rrggbb`.
-- `hex_to_hsv(hexstr) -> tuple[float, float, float]` — module-level pure helper; parses `#rgb` / `#rrggbb`, falls back to mid-gray on bad input.
+- `pick_color(parent, initial="#888888", title="Pick a color") -> Optional[str]`
+  — blocks on `tkinter.colorchooser.askcolor`, returns the normalised
+  lower-case `"#rrggbb"` on OK, or `None` if the user cancels / closes
+  the dialog / the underlying Tk call fails.
+- `_normalise(color: str) -> str` — module-level hex canonicaliser.
+  `#RRGGBB` lower-cased; `#RGB` expanded; empty input → `DEFAULT_COLOR`;
+  X11 color names returned unchanged so Tk can still resolve them.
+- `DEFAULT_COLOR = "#888888"` — mid-gray fallback, matches
+  `tradinglab.indicators.base.LineStyle` default.
 
 ## Dependencies
-- External: `tkinter`, `tkinter.ttk`, `tkinter.colorchooser`, `colorsys`, `math`, `numpy`.
-- Internal: `._modal_base.BaseModalDialog`, `._modal_base.protect_combobox_wheel`, `.native_theme`.
+- External: `tkinter`, `tkinter.colorchooser`.
 
 ## Design Decisions
-- **Side-by-side layout — no view toggle.** Both panes are permanently
-  visible (audit `color-picker-side-by-side`): `_advanced_frame` is packed
-  `side="left", fill="both", expand=True`, and `_swatches_frame` is packed
-  `side="right", anchor="n", padx=(10, 0)`. There is no `_view_var`
-  radiobutton, no `_show_view()` method, and no `_adv_btn`/`_sw_btn`
-  toolbuttons — they were retired so the user never has to flip back and
-  forth between "precise" and "graphical" pickers. The hex entry + preview
-  swatch row is mounted inside `_build_swatches` under the honeycomb +
-  grayscale strip so the touch-friendly swatch grid and the precise hex
-  entry sit together on the right.
-- **No PIL.** The SV gradient image is built with `tk.PhotoImage.put(...)` fed by a numpy-vectorised HSV→RGB conversion (`_sv_rgb_arrays`, `_put_data`). numpy is a core dependency; PIL is intentionally not bundled in the frozen `.exe`. The SV image is recomputed only when hue changes (not on every SV drag) to keep dragging responsive.
-- **Wider, resizable window.** Geometry is `760x420`, `resizable=(True, True)`, with `minsize(720, 400)`. The wider default + minsize floor guarantees both panes plus the footer are visible side-by-side without horizontal clipping on the advanced HSV canvas.
-- **Flat-top hexagonal grid via axial coordinates.** Swatch cells are positioned by the standard hex-grid formula `x = 1.5*size*q`, `y = √3*size*(r + q/2)` and drawn with `Canvas.create_polygon`. Ring-N coordinates come from a single CW walk in the six axial directions, `n` cells per direction.
-- **Two visual layers, one click handler.** Honeycomb canvas + grayscale row are wired to the same `_on_pick(color)` callback (immediate commit). The advanced view commits via the footer OK button / Return; the hex entry commits on `<Return>` / `<FocusOut>` through `_on_hex_entry`.
-- **System… as escape hatch.** Opens `tkinter.colorchooser.askcolor` for users who prefer the OS chooser.
-- **Modal via `wait_window` + `grab_set`.** Picker callers (e.g. `IndicatorDialog`) get a synchronous return value, matching the ergonomics of `colorchooser.askcolor`.
-- **Native Canvas theming**: the popup background, outer `tk.Frame`, the HSV `tk.Canvas` (`self._sv_canvas`), the hue strip (`self._hue_canvas`), and the swatch `tk.Canvas` (`self._canvas`) use the active theme's `win_bg` so dark mode does not show the OS-default light canvas behind any pane.
-- **Hex normalisation.** All returned colors go through `_normalise`: `#RRGGBB` lower-cased; short-form `#RGB` expanded; empty input → `#888888`. Comparison sites (e.g. `_resolved_color_for`) use `.upper()` so case differences from external sources never produce false-positive overrides.
+
+### Native chooser is the only UI
+The custom HSV/honeycomb palette was retired (user request:
+"the System… popup is the only thing I want the user to see when
+they select a colour for an indicator"). `pick_color` is now a
+direct passthrough to `colorchooser.askcolor` plus hex normalisation
+on input and output.
+
+### OS theme, not app theme
+The native chooser follows the OS theme — on Windows it uses the
+system color picker, which does not honour the app's dark / light
+mode. This is the explicit trade-off the user accepted by requesting
+the System popup as the only surface. As a result there is no
+`apply_*_theme` plumbing here and no entry in
+`tests/unit/gui/test_native_widget_dark_theme.py`.
+
+### Hex normalisation on both directions
+`_normalise` runs on `initial` *before* the chooser opens (so a
+caller passing a malformed / empty value still gets the chooser
+opened with a sensible default rather than tripping Tk's input
+validator and falling through to `None`) and again on the returned
+`hex_color` so call sites consuming the result can always rely on
+lower-case `#rrggbb`.
 
 ## Invariants
-- Returns `None` iff the user cancelled (Esc / Cancel / WM close); never returns an empty string.
-- The 19-color honeycomb table (`_HONEYCOMB_COLORS`) and the 6-color grayscale row (`_GRAYSCALE_COLORS`) are immutable module-level tuples; their lengths are part of the public contract (the smoke test asserts `len(_HONEYCOMB_COLORS) == 19`).
-- `self._canvas` (the honeycomb canvas), `self._sv_canvas` (the HSV gradient), and `self._hue_canvas` (the hue strip) all exist after construction and are simultaneously visible (no view toggle).
-- The picker grabs focus exclusively while open and releases the grab on dismissal.
-- **Tk-main-thread-only** — all Tk widget construction and mutation occurs on the Tk thread.
+- Returns `None` iff the user cancelled / dismissed the chooser;
+  never returns an empty string.
+- **Tk-main-thread-only** — `askcolor` itself does this; documented
+  here for symmetry with sibling dialogs.
 
 ## Testing
-- `check_b42_indicator_color_palette` — covers hex normalisation, honeycomb table size, and the dialog integration round-trip.
-- `tests/unit/gui/test_native_widget_dark_theme.py` asserts the swatch Canvas and popup background use `DARK_THEME["win_bg"]`.
-- `tests/unit/gui/test_color_palette_advanced.py` — pins the HSV helper round-trips, the side-by-side layout (both panes simultaneously visible, no `_view_var`/`_adv_btn`/`_sw_btn` attrs), the wider resizable window (≥720 wide), OK/Cancel reachability, swatch immediate-commit, hex-entry commit, and the hex-entry-lives-under-swatches placement.
+- `tests/unit/test_hex_case_constants.py::test_palette_normalise_returns_lowercase`
+  — pins `_normalise` for `#RGB`, `#RRGGBB`, empty input.
+- `tests/smoke/test_smoke_full.py::check_b42_indicator_color_palette`
+  — covers `_normalise` plus the per-output `style_overrides` flow
+  through `IndicatorDialog` (the dialog round-trip works because
+  `pick_color` is monkey-patched / driven via the dialog's commit
+  hooks, never opening the real native chooser inside the test).
 
-## Modal keys
-`HexColorPalette.__init__` calls `BaseModalDialog._finalize_modal(primary=self._on_ok, cancel=self._on_cancel)`. Return/OK commits the current advanced selection (`self._current`); ESC cancels. Swatch clicks commit immediately via `_on_pick`.
+## See also
+- `gui.indicator_dialog` — primary caller via per-output color swatches.
+- `app.ChartApp._legend_pick_color` — legend right-click "Change Color…" flow.
