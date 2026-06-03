@@ -20,6 +20,16 @@ The tests pin the public surface, not the pixel-perfect layout:
   landmine).
 - The ``_normalise`` non-hex contract is preserved: X11 colour
   names are accepted as ``initial``.
+
+Test fixture note
+-----------------
+Uses the conftest's session-scoped ``root`` fixture (a
+``tk.Toplevel`` under the shared session ``_tk_root``). Do NOT
+define a local ``root`` fixture that constructs ``tk.Tk()``
+directly — on Windows-ARM64 CI runners that creates a second Tk
+interpreter that conflicts with the shared session root and
+manifests as ``image "pyimageN" doesn't exist`` errors during
+``tk.PhotoImage`` construction in the dialog.
 """
 
 from __future__ import annotations
@@ -37,24 +47,8 @@ from tradinglab.constants import DARK_THEME  # noqa: E402
 
 
 @pytest.fixture
-def root():
-    try:
-        r = tk.Tk()
-    except tk.TclError as exc:
-        pytest.skip(f"Tk unavailable: {exc}")
-    try:
-        r.geometry("1x1-3000-3000")
-    except tk.TclError:
-        pass
-    yield r
-    try:
-        r.destroy()
-    except tk.TclError:
-        pass
-
-
-@pytest.fixture
-def dark_root(root: tk.Tk):
+def dark_root(root):
+    """Mark the conftest ``root`` Toplevel as dark-themed for this test."""
     root._theme_ctrl = SimpleNamespace(theme=DARK_THEME)  # type: ignore[attr-defined]
     yield root
 

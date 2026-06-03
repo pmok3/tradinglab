@@ -5,6 +5,17 @@ The shared helper underpins three dialog sites
 was the audit-3 motivation. These tests pin the per-kind dispatcher,
 the four CommitPolicy values, the choices_override + anchor_ts
 specials, and the §7.19 ``pdef.description`` label contract.
+
+Note: the ``root`` fixture comes from ``tests/conftest.py`` (a
+``tk.Toplevel`` under the shared session ``_tk_root``). Earlier
+revisions of this file defined a LOCAL ``root`` fixture that called
+``tk.Tk()`` per test — that created a second Tcl interpreter and
+broke the anchor_ts label-trace test on CI runners, because
+``tk.StringVar(value=...)`` (no explicit master) registers itself
+with ``tkinter._default_root.tk`` (the SESSION root), but the local
+fixture's ``root.tk`` was a different interpreter. ``root.getvar()``
+then raised ``can't read "PY_VARn": no such variable`` because the
+two interpreters didn't share the variable namespace.
 """
 
 from __future__ import annotations
@@ -21,20 +32,6 @@ from tradinglab.gui._param_widgets import (
     validate_param_value,
 )
 from tradinglab.indicators.base import ParamDef
-
-
-@pytest.fixture()
-def root():
-    try:
-        r = tk.Tk()
-        r.withdraw()
-    except tk.TclError:
-        pytest.skip("No display available")
-    yield r
-    try:
-        r.destroy()
-    except tk.TclError:
-        pass
 
 
 # ---------------------------------------------------------------------------
@@ -283,12 +280,17 @@ def test_anchor_ts_returns_frame_with_label_and_button(root):
 def test_anchor_ts_var_trace_updates_label(root):
     pdef = ParamDef(name="anchor_ts", kind="str", default="")
     var, widget = build_param_widget(root, pdef, "")
-    # Find the display StringVar via the Label widget.
+    # Find the display Label.
     lbl = next(w for w in widget.winfo_children() if isinstance(w, ttk.Label))
-    assert lbl.cget("text") == _format_anchor_label("")  # "(first bar)"
+    # The label is bound via ``textvariable``, not ``text``. On many
+    # Tk builds ``cget("text")`` returns "" until a ``text=`` is
+    # explicitly set; read the live value through the textvariable
+    # name instead (this matches what the widget actually displays).
+    tv_name = str(lbl.cget("textvariable"))
+    assert root.getvar(tv_name) == _format_anchor_label("")  # "(first bar)"
     var.set("2024-01-15T09:30:00")
     root.update()
-    assert "2024-01-15" in lbl.cget("text")
+    assert "2024-01-15" in root.getvar(tv_name)
 
 
 # ---------------------------------------------------------------------------
