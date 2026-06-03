@@ -14254,16 +14254,14 @@ def check_b41_indicator_intervals_per_instance(app) -> None:
 
 
 def check_b42_indicator_color_palette(app) -> None:
-    """Per-output color picker — native OS chooser + per-output overrides.
+    """Per-output color picker — themed chooser + per-output overrides.
 
-    Audit ``color-picker-native-only``: the previous custom
-    `HexColorPalette` (HSV gradient + 19-cell honeycomb swatches) was
-    retired at the user's request — `pick_color` is now a thin
-    wrapper around `tkinter.colorchooser.askcolor`. The b42 contract
-    is the per-output `style_overrides` flow inside
+    Audit ``themed-color-chooser``: `pick_color` opens
+    :class:`gui.color_palette.ThemedColorChooser`, a Win-ChooseColor
+    look-alike whose chrome follows the app's light/dark theme. The
+    b42 contract is the per-output `style_overrides` flow inside
     :class:`gui.indicator_dialog.IndicatorDialog`; nothing in this
-    check opens the native chooser (that would block CI on a real
-    OS dialog).
+    check opens the chooser (that would block CI on a modal dialog).
 
     Validates:
       A. ``color_palette._normalise`` canonicalises hex strings
@@ -14445,7 +14443,7 @@ def check_b42_indicator_color_palette(app) -> None:
         except Exception:  # noqa: BLE001
             pass
 
-    print("  [OK] b42 indicator color palette (native chooser; per-output overrides; "
+    print("  [OK] b42 indicator color palette (themed ChooseColor clone; per-output overrides; "
           "default-equals-override skipped; persistence round-trip)")
 
 

@@ -174,23 +174,25 @@ def test_pre_trade_dialog_text_widgets_use_dark_theme(dark_root: tk.Toplevel) ->
         dlg.destroy()
 
 
-def test_color_palette_uses_native_chooser_not_themed_dialog(dark_root: tk.Toplevel) -> None:
-    """The color picker is now a thin wrapper around the native OS
-    chooser (audit ``color-picker-native-only``); the previous
-    custom ``HexColorPalette`` Toplevel was deleted.
+def test_color_palette_canvas_uses_dark_theme(dark_root: tk.Toplevel) -> None:
+    """The themed ``ThemedColorChooser`` (audit
+    ``themed-color-chooser``) must paint its four ``tk.Canvas``
+    chrome backgrounds with the active dark theme — the rendered
+    swatch + gradient pixels stay as the colours being displayed.
 
-    There is therefore nothing to dark-theme on the picker side —
-    the native chooser follows the OS theme. This sentinel test
-    pins that contract: importing the module must not re-introduce
-    a `HexColorPalette` class, and `pick_color` must be the only
-    public entry point.
+    Detailed per-canvas + per-label dark-theme assertions live in
+    `tests/unit/gui/test_themed_color_chooser.py`; this test pins
+    that the dialog appears on the dark-themed-dialog audit roster.
     """
-    from tradinglab.gui import color_palette as _cp
-    assert not hasattr(_cp, "HexColorPalette"), (
-        "color_palette.HexColorPalette was deleted (audit "
-        "color-picker-native-only) — do not re-introduce a "
-        "themed custom palette; route through the native chooser."
-    )
-    assert callable(getattr(_cp, "pick_color", None)), (
-        "color_palette.pick_color must remain the public entry point"
-    )
+    from tradinglab.gui.color_palette import ThemedColorChooser
+    dlg = ThemedColorChooser(dark_root, initial="#1f77b4")
+    try:
+        win_bg = DARK_THEME["win_bg"]
+        assert str(dlg.cget("background")) == win_bg
+        for canvas in (dlg._basic_canvas, dlg._custom_canvas,
+                       dlg._pad_canvas, dlg._slider_canvas):
+            assert str(canvas.cget("background")) == win_bg, (
+                f"canvas {canvas} bg is not dark"
+            )
+    finally:
+        dlg.destroy()

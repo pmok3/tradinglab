@@ -2360,14 +2360,15 @@ class IndicatorDialog(BaseModalDialog):
 
     def _on_pick_color_for_output(self, row: _IndicatorRow,
                                   key: str) -> None:
-        """Open the native color picker for output ``key`` and commit.
+        """Open the themed colour chooser for output ``key`` and commit.
 
         Called from the swatch button's ``<Button-1>`` binding. The
-        picker (`gui.color_palette.pick_color`) delegates to the
-        native OS chooser (audit ``color-picker-native-only``). The
-        chooser is modal — we read its result, store it on the row's
-        ``style_overrides``, restyle the swatch widget, and commit
-        through the manager so the chart redraws."""
+        picker (`gui.color_palette.pick_color`) opens the themed
+        `ThemedColorChooser` (audit ``themed-color-chooser`` — a
+        Win32-ChooseColor look-alike that follows the app theme).
+        The chooser is modal — we read its result, store it on the
+        row's ``style_overrides``, restyle the swatch widget, and
+        commit through the manager so the chart redraws."""
         if row.is_unknown:
             return
         kind_display = (row.kind_var.get() or "").strip()

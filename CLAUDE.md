@@ -1671,10 +1671,10 @@ the matching `apply_*_theme(widget, theme)`. If the dialog is non-modal
 
 **Migrated dialogs (commit set this sprint):** `dialogs.py`,
 `exits_dialog.py`, `sandbox_panel.py`, `sandbox_review_dialog.py`,
-`scanner_tab.py`, `pre_trade_dialog.py`. (The former
-`color_palette.py` entry was retired alongside the custom
-`HexColorPalette` itself — audit `color-picker-native-only` —
-the native OS chooser follows the OS theme rather than the app's.)
+`scanner_tab.py`, `pre_trade_dialog.py`, `color_palette.py`
+(the latter being a themed Win-ChooseColor look-alike —
+audit `themed-color-chooser` — built specifically because
+the native OS chooser does not follow Windows dark mode).
 
 **Exception — `custom_indicator_dialog.py` keeps its OWN inline
 `_apply_native_theme` / `_current_theme`** (it does extra work the shared

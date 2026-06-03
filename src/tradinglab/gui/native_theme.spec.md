@@ -18,5 +18,5 @@ Centralizes dark/light theming for classic Tk widgets that are not reached by th
 
 ## Tests
 
-Pinned by `tests/unit/gui/test_native_widget_dark_theme.py`, which builds every audited native-widget dialog under `DARK_THEME` and asserts the classic Tk widget options are dark palette values rather than OS defaults. The color picker is no longer one of those dialogs — audit `color-picker-native-only` retired the custom `HexColorPalette` Toplevel and routes `pick_color` through `tkinter.colorchooser.askcolor`, which follows the OS theme rather than the app theme. The picker is instead pinned by `test_color_palette_uses_native_chooser_not_themed_dialog`.
+Pinned by `tests/unit/gui/test_native_widget_dark_theme.py`, which builds every audited native-widget dialog under `DARK_THEME` and asserts the classic Tk widget options are dark palette values rather than OS defaults. The themed `ThemedColorChooser` (audit `themed-color-chooser`) is covered separately by `tests/unit/gui/test_themed_color_chooser.py::test_dark_theme_chrome_uses_dark_bg` and `::test_dark_theme_labels_use_dark_palette` — those pin that the chooser's `tk.Canvas` chrome + classic `tk.Label`s adopt `DARK_THEME` palette values while leaving the rendered swatch / gradient pixels intact.
 

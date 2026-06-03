@@ -5946,15 +5946,14 @@ class ChartApp(
             return []
 
     def _legend_pick_color(self, config_id: int, output_key: str) -> None:
-        """Open the native color picker for ``output_key`` and commit.
+        """Open the themed colour chooser for ``output_key`` and commit.
 
         Reads the current color from ``cfg.style[output_key]`` (or
         falls back to the factory's ``default_style``), opens
-        :func:`gui.color_palette.pick_color` (which delegates to the
-        native OS color chooser — audit ``color-picker-native-only``),
-        and on success writes a new ``style`` dict through
-        ``manager.update``. The chart repaints via the standard
-        manager-event coalesced redraw.
+        :func:`gui.color_palette.pick_color` (the themed Win-ChooseColor
+        look-alike — audit ``themed-color-chooser``), and on success
+        writes a new ``style`` dict through ``manager.update``. The
+        chart repaints via the standard manager-event coalesced redraw.
         """
         try:
             manager = getattr(self, "_indicator_manager", None)
