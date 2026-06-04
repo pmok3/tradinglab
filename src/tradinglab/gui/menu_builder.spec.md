@@ -8,7 +8,7 @@
   4. **Sandbox** — Start / End Session, Performance, Save / Load Session, Tags.
   5. **Entries** — sits left of **Exits** (entries logically precede exits in the trade lifecycle).
   6. **Exits** — Edit Strategies.
-  7. **View** — Heikin-Ashi (cascade: Show Heikin-Ashi Candles + Highlight Flat Bars), Highlight Key Bars, Volume time-of-day shading, ChartStack.
+  7. **View** — Heikin-Ashi (cascade: Show Heikin-Ashi Candles + Highlight Flat Bars), Highlight Key Bars, Volume time-of-day shading, ChartStack, Heatmap.
   8. **Tools** — Credentials, Local Data, Download Replay Data, Export CSV, Status History, Reveal Data Folder, Restore Templates.
   9. **Help** — built by `HelpMenuMixin._build_help_menu`.
 - Keep menu commands routed back into `ChartApp` through a narrow callback protocol so the builder owns widget construction, not app business logic.
@@ -41,6 +41,7 @@
 - **Theme lives under File, not View.** Theme selection is a one-time/per-session preference (similar to "Load Configuration") rather than a transient view toggle like Heikin-Ashi or ChartStack — the placement matches that mental model. The accelerator on the View menu is removed; users open the theme editor via File → Theme… or via Settings → Open Theme Editor….
 - **Heikin-Ashi is a cascade, not three top-level entries.** Audit `ha-menu-cascade` (2026) grouped the "Show Heikin-Ashi Candles" toggle and the "Highlight Flat Bars" overlay into a single `Heikin-Ashi` cascade inside View. The flat-bar entry is always enabled/clickable even while HA is off; its BooleanVar persists independently, and rendering is gated downstream by HA mode AND the flat-highlight toggle. Top-level "Highlight Key Bars" stays a sibling because it's not HA-specific. The cascade submenu is registered in `submenus` so `ThemeController._apply_menubar_theme` repaints it on theme toggle.
 - **Volume TOD shading is in View and Settings.** The overlay remains default-off and still appears in Settings, but the View menu also exposes a checkbutton so chart-only users can discover and flip the visual layer without opening the full settings dialog. Both surfaces drive `ChartApp.set_volume_tod_enabled`, keeping persistence, prefetch warmup, and redraw behavior identical.
+- **Heatmap is a direct browser launch, not a dialog.** Audit `view-heatmap-launcher` (2026). The `View → Heatmap` entry hands off to `webbrowser.open("https://finviz.com/map.ashx?t=sec", new=2, autoraise=True)` — the Finviz S&P 500 sector treemap (1D performance). No intermediate popup; per `tests/unit/gui/test_ellipsis_semantics.py` the label has no ellipsis since it doesn't open a dialog. Fallback when the OS browser hand-off fails is a `messagebox.showinfo` containing the URL so the user can copy-paste it manually. Callback lives on `ChartApp._on_view_heatmap` and is declared on the `MenuBuilderCallbacks` protocol next to `_on_view_toggle_chartstack`.
 
 ## Notes
 - `MenuBuilder` intentionally preserves the existing submenu list shape used by `ThemeController._apply_menubar_theme`.

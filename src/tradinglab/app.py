@@ -24,6 +24,7 @@ import math
 import queue
 import time
 import tkinter as tk
+import webbrowser
 from collections import OrderedDict
 from collections.abc import Callable, Iterable
 from datetime import datetime
@@ -5457,6 +5458,38 @@ class ChartApp(
         except Exception:  # noqa: BLE001
             target = False
         self._toggle_chartstack(target=target)
+
+    def _on_view_heatmap(self) -> None:
+        """View menu callback: open the Finviz S&P 500 sector heatmap.
+
+        Direct browser launch (no intermediate popup) per the
+        ``view-heatmap-launcher`` audit. Mirrors the
+        :meth:`gui.help_menu.HelpMenuMixin._on_help_view_online_docs`
+        pattern: ``webbrowser.open(url, new=2, autoraise=True)`` with
+        a ``messagebox.showinfo`` fallback that surfaces the URL so
+        the user can copy-paste it manually when the OS browser
+        hand-off fails (locked-down profile / no default browser
+        configured / headless run).
+
+        URL: ``https://finviz.com/map.ashx?t=sec`` — the S&P 500
+        sector performance treemap (1D). The per-stock 500-square
+        view (``t=sec_all``) is one query-string flip away; the
+        sector view is the more useful glance during a trading
+        session per the trader consult that informed this feature.
+        """
+        url = "https://finviz.com/map.ashx?t=sec"
+        try:
+            opened = webbrowser.open(url, new=2, autoraise=True)
+        except Exception:  # noqa: BLE001
+            opened = False
+        if opened:
+            return
+        messagebox.showinfo(
+            "Heatmap",
+            f"Could not launch a web browser automatically.\n\n"
+            f"Open this URL manually:\n{url}",
+            parent=self,
+        )
 
     def _toggle_chartstack(self, *, target: bool | None = None) -> None:
         """Show or hide the ChartStack panel.

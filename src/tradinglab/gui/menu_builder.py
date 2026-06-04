@@ -54,6 +54,7 @@ class MenuBuilderCallbacks(Protocol):
     def _on_menu_toggle_volume_tod(self) -> None: ...
     def _on_view_toggle_chartstack(self) -> None: ...
     def _on_view_open_theme_editor(self) -> None: ...
+    def _on_view_heatmap(self) -> None: ...
     def _on_help_configure_credentials(self) -> None: ...
     def _on_help_configure_local_data(self) -> None: ...
     def _on_tools_export_bars_to_csv(self) -> None: ...
@@ -300,6 +301,15 @@ class MenuBuilder:
             offvalue=False,
             variable=self._cb._chartstack_visible_var,
             command=self._cb._on_view_toggle_chartstack,
+        )
+        view_menu.add_separator()
+        # Finviz S&P 500 sector heatmap — direct browser launch
+        # (no intermediate popup). Convention: no ellipsis since
+        # this hands off to ``webbrowser.open`` rather than opening
+        # a dialog (see ``tests/unit/gui/test_ellipsis_semantics.py``).
+        view_menu.add_command(
+            label="Heatmap",
+            command=self._cb._on_view_heatmap,
         )
         menubar.add_cascade(label="View", menu=view_menu)
 
