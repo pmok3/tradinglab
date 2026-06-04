@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.3.3] - 2026-06-04
+
+### Added
+
+- **View → Heatmap menu entry — one-click hand-off to the Finviz
+  S&P 500 sector heatmap.** Adds a new `Heatmap` item to the View
+  menu (positioned just below the existing `ChartStack` toggle).
+  Clicking it opens the Finviz sector performance treemap
+  (https://finviz.com/map.ashx?t=sec) in your default web browser
+  — TradingLab itself doesn't pop a new window, and there's no
+  intermediate variant-selection dialog to click through. The
+  sector view (~11 squares, one per S&P sector with intraday
+  performance shading) was chosen over the per-stock view (~500
+  tiny squares) because it's more useful as a "where is the money
+  rotating right now" glance during an active trading session;
+  the per-stock view is a single URL flip away
+  (`t=sec_all`) if a future iteration wants to expose both. No new
+  bundled dependencies — the implementation is a thin wrapper
+  around stdlib `webbrowser.open` (~45 LOC of code + ~200 LOC of
+  tests). If your machine has no default browser configured
+  (locked-down Windows profile, headless session, or an
+  `Exception` raised inside `webbrowser`), the feature degrades to
+  a `messagebox` dialog containing the URL so you can copy-paste
+  it manually rather than silently doing nothing. Mirrors the
+  existing `Help → View Online Docs` pattern.
+
 ## [0.3.2] - 2026-06-03
 
 ### Added
