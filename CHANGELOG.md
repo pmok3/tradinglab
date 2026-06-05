@@ -1,5 +1,54 @@
 # Changelog
 
+## [0.3.4] - 2026-06-05
+
+### Added
+
+- **ChartStack now defaults to a fixed SPY / QQQ / VXX preset, editable
+  via a dedicated settings popup.** The mini-chart sidebar (ChartStack)
+  previously filled its cards from a "hybrid" mix of your open
+  positions, watchlist, and scanner results. It now ships with a
+  fixed, predictable layout out of the box — **SPY on top, QQQ in the
+  middle, VXX on the bottom** — the broad-market reference trio most
+  useful as an at-a-glance market read. To change which symbols appear
+  (or how many, if you've increased the card count), open
+  **View → ChartStack → Settings…**: a small popup with one text box
+  per slot. Type a ticker into each, click **Save**, and the cards
+  re-bind immediately; **Reset to Defaults** restores SPY/QQQ/VXX;
+  **Cancel** discards your edits. Your picks persist across restarts
+  (stored in `settings.json` under `chartstack.fixed_preset_symbols`).
+  A new `FIXED_PRESET` binding mode backs this — it binds each slot to
+  your chosen symbol verbatim and, unlike the old hybrid mode, never
+  silently substitutes your open positions or watchlist. Existing users
+  who had explicitly set a different ChartStack binding mode keep their
+  choice; open the Settings popup and Save to switch to the preset.
+
+### Changed
+
+- **View menu: ChartStack is now a sub-menu (cascade), matching
+  Heikin-Ashi.** Instead of two separate top-level View entries
+  (`ChartStack` toggle + `ChartStack Settings…`), there is a single
+  **ChartStack** sub-menu containing **Show ChartStack** (the
+  show/hide toggle, still bound to `Ctrl+``) and **Settings…** (the
+  preset editor). This keeps related controls grouped together and
+  tidies the View menu.
+
+### Fixed
+
+- **Toggling ChartStack no longer resizes the watchlist.** Previously,
+  showing or hiding the ChartStack sidebar would snap the right-hand
+  watchlist / OHLC / scanner column to roughly half the screen,
+  especially if you had resized or maximised the window since launch.
+  Root cause: the toggle computed the new pane layout from the
+  *startup* window width rather than the *current* width, so on a
+  wider-than-startup window the watchlist boundary landed in the wrong
+  place. The toggle now measures the watchlist's actual current edge
+  and holds it fixed — only the main chart resizes (by exactly the
+  220-pixel ChartStack column width) to make room for, or reclaim space
+  from, the three mini-charts. The watchlist stays exactly where you
+  left it. Verified pixel-for-pixel: the watchlist column does not move
+  by a single pixel across a toggle.
+
 ## [0.3.3] - 2026-06-04
 
 ### Added
