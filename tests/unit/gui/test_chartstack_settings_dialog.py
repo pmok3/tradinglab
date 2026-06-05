@@ -192,40 +192,33 @@ def test_save_switches_binding_mode_to_fixed_preset(root: tk.Tk) -> None:
     assert _settings.get("chartstack.binding.mode") == "FIXED_PRESET"
 
 
-def test_save_refreshes_owner_chartstack_panel_when_present() -> None:
+def test_save_refreshes_owner_chartstack_panel_when_present(root: tk.Tk) -> None:
     """If the parent has a ``_chartstack`` attribute (the live
     ChartStackPanel), saving must call ``refresh()`` on it so the
-    cards re-bind without waiting for the next event-loop tick."""
-    import tkinter as _tk
-    from types import SimpleNamespace
+    cards re-bind without waiting for the next event-loop tick.
+
+    Uses the conftest session ``root`` Toplevel (NOT a fresh
+    ``tk.Tk()``) as the owner — a second Tcl interpreter risks the
+    §7.5 ``Tcl_AsyncDelete`` crash on Windows CI when its leftover
+    objects GC on a background thread mid-run.
+    """
     from unittest.mock import MagicMock
 
     from tradinglab.gui.chartstack_settings_dialog import (
         ChartStackSettingsDialog,
     )
-    try:
-        owner = _tk.Tk()
-    except _tk.TclError as exc:
-        pytest.skip(f"Tk unavailable: {exc}")
-    owner.withdraw()
     panel_mock = MagicMock(spec=["refresh"])
-    owner._chartstack = panel_mock  # type: ignore[attr-defined]
+    root._chartstack = panel_mock  # type: ignore[attr-defined]
+    _settings.clear()
+    dlg = ChartStackSettingsDialog(root)
     try:
-        _settings.clear()
-        dlg = ChartStackSettingsDialog(owner)
-        try:
-            dlg._on_save()
-        finally:
-            try:
-                dlg.destroy()
-            except _tk.TclError:
-                pass
-        panel_mock.refresh.assert_called_once()
+        dlg._on_save()
     finally:
         try:
-            owner.destroy()
-        except _tk.TclError:
+            dlg.destroy()
+        except tk.TclError:
             pass
+    panel_mock.refresh.assert_called_once()
 
 
 def test_save_no_owner_panel_does_not_crash(root: tk.Tk) -> None:
