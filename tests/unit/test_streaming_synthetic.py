@@ -17,10 +17,40 @@ tests.
 
 from __future__ import annotations
 
+import gc
 import threading
 import time
 
+import pytest
+
 from tradinglab.streaming.synthetic import SyntheticStreamSource
+
+
+@pytest.fixture(autouse=True)
+def _no_cyclic_gc_on_daemon_threads():
+    """Disable the cyclic garbage collector for each streaming test.
+
+    These tests spawn daemon tick threads (``SyntheticStreamSource``)
+    that allocate in their ``on_event`` callbacks. If Python's cyclic
+    collector fires *on one of those daemon threads* it can reclaim a
+    leftover Tk object from an earlier GUI test and run its Tcl
+    finalizer (``Variable`` / ``Image`` / ``font.Font``) off the main
+    thread → ``Tcl_AsyncDelete`` → ``Windows fatal exception: code
+    0x80000003`` (SIGABRT) on the Windows CI runners (see CLAUDE.md
+    §7.5). The top-level ``conftest`` neuters those finalizers; this
+    fixture is belt-and-suspenders — with the cyclic collector off,
+    the daemon threads never run it at all, so leftover Tk objects
+    stay alive until the main thread (or interpreter teardown)
+    reclaims them safely. Reference-counted deallocation is
+    unaffected (the daemon threads hold no Tk references).
+    """
+    was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        yield
+    finally:
+        if was_enabled:
+            gc.enable()
 
 
 def test_non_intraday_returns_noop_unsubscribe() -> None:

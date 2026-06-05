@@ -313,7 +313,7 @@ class MenuBuilder:
         # ``chartstack-fixed-preset``). Ellipsis since this opens a
         # dialog (per ``ellipsis-semantics``).
         cs_menu.add_command(
-            label="Settings\u2026",
+            label="Settings…",
             command=self._cb._on_view_chartstack_settings,
         )
         view_menu.add_cascade(label="ChartStack", menu=cs_menu)

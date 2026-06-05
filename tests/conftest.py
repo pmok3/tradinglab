@@ -43,10 +43,21 @@ import pytest
 # a test process — the small per-test leak is reclaimed at process
 # exit, and the only thing the original finalizer did was issue a
 # command against a Tcl interp that's about to be torn down anyway.
+#
+# ``tkinter.font.Font.__del__`` is neutered for the SAME reason: it
+# calls ``self._tk.call("font", "delete", ...)``. ``test_named_fonts``
+# (and any themed dialog) leaves ``Font`` objects alive; if the cyclic
+# collector reclaims one on a *daemon* thread (e.g. the synthetic-stream
+# tick thread allocating in ``test_streaming_synthetic``), the Tcl call
+# crosses threads → ``Tcl_AsyncDelete`` → ``Windows fatal exception:
+# code 0x80000003`` (SIGABRT). The synthetic-stream test additionally
+# disables the cyclic GC for its own duration as belt-and-suspenders.
 try:
     import tkinter as _tk_neuter
     _tk_neuter.Variable.__del__ = lambda self: None  # type: ignore[assignment]
     _tk_neuter.Image.__del__ = lambda self: None  # type: ignore[assignment]
+    import tkinter.font as _tk_font_neuter
+    _tk_font_neuter.Font.__del__ = lambda self: None  # type: ignore[assignment]
 except Exception:  # noqa: BLE001
     pass
 
