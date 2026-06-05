@@ -29,7 +29,18 @@ DEFAULTS: dict[str, Any] = {
     "chartstack.cards.count": 3,
     "chartstack.cards.max": 6,
     "chartstack.cards.min": 3,
-    "chartstack.binding.mode": "HYBRID",
+    # Default mode changed to FIXED_PRESET in audit
+    # ``chartstack-fixed-preset``: out of the box the cards show
+    # SPY / QQQ / VXX (the broad-market reference trio) rather
+    # than whatever HYBRID picks off the user's watchlist +
+    # positions. Users can re-enable HYBRID via the
+    # ChartStack Settings popup or by editing settings.json.
+    "chartstack.binding.mode": "FIXED_PRESET",
+    #: Per-slot fixed-preset symbols. Index 0 = top of the stack.
+    #: Slots beyond ``chartstack.cards.count`` are ignored; missing
+    #: trailing slots render as empty cards. Edited via
+    #: :class:`gui.chartstack_settings_dialog.ChartStackSettingsDialog`.
+    "chartstack.fixed_preset_symbols": ["SPY", "QQQ", "VXX"],
     "chartstack.status_preset": "auto-by-phase",
     "chartstack.alerts.audio_muted": False,
     "chartstack.alerts.rvol_1m": 2.5,
@@ -80,7 +91,8 @@ def card_count() -> int:
 
 
 def binding_mode() -> BindingMode:
-    """Return the configured :class:`BindingMode`, defaulting to ``HYBRID``."""
+    """Return the configured :class:`BindingMode`, defaulting to
+    :attr:`BindingMode.FIXED_PRESET` (audit ``chartstack-fixed-preset``)."""
     from .binding import BindingMode
     raw = get("chartstack.binding.mode")
     if isinstance(raw, BindingMode):
@@ -90,7 +102,43 @@ def binding_mode() -> BindingMode:
             return BindingMode[raw.upper()]
         except KeyError:
             pass
-    return BindingMode.HYBRID
+    return BindingMode.FIXED_PRESET
 
 
-__all__ = ["DEFAULTS", "get", "is_enabled", "card_count", "binding_mode"]
+def fixed_preset_symbols() -> list[str]:
+    """Return the per-slot fixed-preset symbols, length-aligned to
+    :func:`card_count`.
+
+    Reads :data:`chartstack.fixed_preset_symbols` (defaults to
+    ``["SPY", "QQQ", "VXX"]``), normalises each entry (upper-cased,
+    stripped — blank/non-string entries become ``""``), and
+    pads / truncates so the returned list is exactly ``card_count``
+    long. Garbage values (non-list, ``None``, etc.) degrade to the
+    default list rather than crashing the panel.
+
+    The empty-string slots are deliberate: the binding resolver
+    turns them into ``None`` card bindings (empty card slots).
+    """
+    raw = get("chartstack.fixed_preset_symbols")
+    if not isinstance(raw, list):
+        raw = list(DEFAULTS["chartstack.fixed_preset_symbols"])
+    cleaned: list[str] = []
+    for value in raw:
+        if isinstance(value, str):
+            cleaned.append(value.strip().upper())
+        else:
+            cleaned.append("")
+    n = card_count()
+    if len(cleaned) >= n:
+        return cleaned[:n]
+    return cleaned + [""] * (n - len(cleaned))
+
+
+__all__ = [
+    "DEFAULTS",
+    "binding_mode",
+    "card_count",
+    "fixed_preset_symbols",
+    "get",
+    "is_enabled",
+]

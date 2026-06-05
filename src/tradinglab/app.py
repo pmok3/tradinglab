@@ -5491,6 +5491,29 @@ class ChartApp(
             parent=self,
         )
 
+    def _on_view_chartstack_settings(self) -> None:
+        """View menu callback: open the ChartStack Settings popup.
+
+        Per-slot fixed-preset symbol editor — audit
+        ``chartstack-fixed-preset``. Delegates to
+        :func:`gui.chartstack_settings_dialog.open_chartstack_settings`
+        so the heavy Tk widget construction lives in its own
+        importable module + can be unit-tested without spinning up
+        a full ChartApp.
+
+        Swallow construction exceptions defensively (e.g. a Tk
+        init failure on a headless run) so a broken popup doesn't
+        propagate into the Tk event loop and bring down the chart.
+        """
+        try:
+            from .gui.chartstack_settings_dialog import open_chartstack_settings
+            open_chartstack_settings(self)
+        except Exception:  # noqa: BLE001
+            try:
+                self._status.warn("ChartStack Settings failed to open")
+            except Exception:  # noqa: BLE001
+                pass
+
     def _toggle_chartstack(self, *, target: bool | None = None) -> None:
         """Show or hide the ChartStack panel.
 

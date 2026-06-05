@@ -9,10 +9,10 @@ matrix cover the four modes exhaustively.
 
 ## Public API
 - `BindingMode` enum: `PINNED_WATCHLIST`, `SCANNER_TOP_N`,
-  `OPEN_POSITIONS`, `HYBRID`.
+  `OPEN_POSITIONS`, `HYBRID`, `FIXED_PRESET`.
 - `CardBinding` frozen dataclass: `(symbol: str, source_label: str)`.
 - `resolve_bindings(mode, *, watchlist, scanner_results,
-  open_positions, manual_pins, card_count) -> list[CardBinding | None]`.
+  open_positions, manual_pins, fixed_preset, card_count) -> list[CardBinding | None]`.
 
 ## Input tolerance
 Each sequence may contain strings, dicts with `symbol`/`ticker`
@@ -28,6 +28,25 @@ filtered.
 
 Deduplicated first-seen across all sources, capped at `card_count`.
 The result is **always** length `card_count`, padded with `None`.
+
+## FIXED_PRESET ordering (audit `chartstack-fixed-preset`)
+Per-slot positional binding — slot `i` shows `fixed_preset[i]`
+verbatim. No first-seen dedup, no source fall-through: this mode
+deliberately does NOT consult `watchlist` / `open_positions` /
+`scanner_results` / `manual_pins`, since the user picked these
+symbols explicitly via the ChartStack Settings popup.
+
+Slot rules:
+- Out-of-range slots (`i >= len(fixed_preset)`) → `None` binding
+  (empty card).
+- Blank / whitespace entries (`""` / `"   "`) → `None` binding,
+  so the user can intentionally hold a slot empty.
+- Symbols are upper-cased on the way in via `_normalise_symbol`.
+- Source label is `"preset"`.
+
+Default `fixed_preset` (when no override): `["SPY", "QQQ", "VXX"]`
+— sourced from `chartstack.settings_adapter.DEFAULTS` and surfaced
+by the `fixed_preset_symbols()` helper.
 
 ## Design decisions
 - **First-seen dedup** keeps the slot order stable across refreshes.

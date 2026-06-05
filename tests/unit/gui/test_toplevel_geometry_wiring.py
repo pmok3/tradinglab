@@ -37,6 +37,7 @@ EXPECTED = [
     ("src/tradinglab/gui/sandbox_dialog.py",          "dlg.sandbox_start"),
     ("src/tradinglab/gui/universe_prepare_dialog.py", "dlg.universe_prepare_v2"),
     ("src/tradinglab/gui/color_palette.py",           "dlg.color_palette"),
+    ("src/tradinglab/gui/chartstack_settings_dialog.py", "dlg.chartstack_settings"),
     ("src/tradinglab/gui/scanner_tab.py",             "dlg.scanner_conditions"),
     ("src/tradinglab/gui/scanner_tab.py",             "dlg.load_scan"),
     ("src/tradinglab/gui/watchlist_tab.py",           "dlg.load_watchlist"),

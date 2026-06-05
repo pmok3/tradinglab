@@ -120,7 +120,12 @@ never mutates owner state.
   if no bg is cached, e.g. right after a binding swap). The bbox cache is
   invalidated on binding change, theme change, card stash, demote, destroy.
 - `_resolve()` threads `tuple(self._manual_pins)` into `resolve_bindings`
-  so HYBRID mode gives pins priority slot allocation.
+  so HYBRID mode gives pins priority slot allocation. It also threads
+  `tuple(_adapter.fixed_preset_symbols())` so the new `FIXED_PRESET`
+  binding mode (audit `chartstack-fixed-preset`) can read its per-slot
+  symbols. FIXED_PRESET is the **default** binding mode and seeds the
+  cards with SPY (top) / QQQ (middle) / VXX (bottom) until the user
+  overrides via `View → ChartStack Settings…`.
 - `_render_card_sparkline` now wraps the candles-only renderer. It forwards
   per-card border tints, the resolved theme palette, and legacy `halted_at`
   plumbing; the renderer accepts old overlay kwargs but ignores VWAP,

@@ -42,7 +42,13 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 # Placeholder symbols used when `owner._watchlist_snapshot` is empty
 # (or when the panel is constructed with `owner=None` in unit tests).
-_PLACEHOLDER_SYMBOLS = ("AAPL", "MSFT", "NVDA", "GOOGL", "AMZN")
+# Updated to the broad-market reference trio per audit
+# ``chartstack-fixed-preset``; with the FIXED_PRESET binding mode now
+# the default, these placeholders are mostly irrelevant in production
+# (the FIXED_PRESET path bypasses them entirely) but the order is
+# kept aligned with the persisted default so a test or developer
+# inspecting the placeholder list sees the same trio as the popup.
+_PLACEHOLDER_SYMBOLS = ("SPY", "QQQ", "VXX")
 
 
 def _bars_from_candles(candles: object, maxlen: int) -> list[Bar]:
@@ -992,12 +998,18 @@ class ChartStackPanel(ttk.Frame):
         # the watchlist branch, matching the M2/M5 behavior.
         scanner = tuple(_owner_state.scanner_symbols(self.owner))
         positions = tuple(_owner_state.open_position_symbols(self.owner))
+        # Audit ``chartstack-fixed-preset``: per-slot user-defined
+        # symbols (default SPY/QQQ/VXX). Only consulted when
+        # ``mode is BindingMode.FIXED_PRESET``; passed unconditionally
+        # because ``resolve_bindings`` discards it for other modes.
+        preset = tuple(_adapter.fixed_preset_symbols())
         return resolve_bindings(
             mode,
             watchlist=watchlist,
             scanner_results=scanner,
             open_positions=positions,
             manual_pins=tuple(self._manual_pins),
+            fixed_preset=preset,
             card_count=n,
         )
 

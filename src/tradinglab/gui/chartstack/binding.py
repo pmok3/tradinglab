@@ -28,6 +28,12 @@ class BindingMode(Enum):
     SCANNER_TOP_N = "SCANNER_TOP_N"
     OPEN_POSITIONS = "OPEN_POSITIONS"
     HYBRID = "HYBRID"
+    #: Fixed per-slot bindings; slot ``i`` shows ``fixed_preset[i]``
+    #: verbatim. Blank / out-of-range entries become empty cards
+    #: (``None`` bindings) rather than falling through to other
+    #: sources — the user explicitly chose these symbols via the
+    #: ``ChartStack Settings…`` popup. Audit ``chartstack-fixed-preset``.
+    FIXED_PRESET = "FIXED_PRESET"
 
 
 @dataclass(frozen=True)
@@ -93,6 +99,7 @@ def resolve_bindings(
     scanner_results: Sequence[object] = (),
     open_positions: Sequence[object] = (),
     manual_pins: Sequence[object] = (),
+    fixed_preset: Sequence[object] = (),
     card_count: int = 3,
 ) -> list[CardBinding | None]:
     """Compute the binding list for ``card_count`` slots.
@@ -109,6 +116,10 @@ def resolve_bindings(
     * ``OPEN_POSITIONS`` — every open-position symbol.
     * ``HYBRID`` — open positions → manual pins → watchlist →
       scanner edges, deduped, capped at ``card_count``.
+    * ``FIXED_PRESET`` — slot ``i`` shows ``fixed_preset[i]`` (or
+      ``None`` for blank entries / out-of-range slots). Does NOT
+      fall through to other sources — the user picked these
+      symbols explicitly via the ChartStack Settings popup.
     """
     if card_count <= 0:
         return []
@@ -127,6 +138,17 @@ def resolve_bindings(
         symbols = _dedup_in_order(_normalise_symbol(s) for s in open_positions)
         bindings = [CardBinding(s, "position") for s in symbols]
         return _pad_to_count(bindings, card_count)
+
+    if mode is BindingMode.FIXED_PRESET:
+        # Per-slot positional binding — no dedup, no fall-through.
+        # Blank slots (``None`` from _normalise_symbol of ``""`` /
+        # whitespace) stay as ``None`` cards.
+        out: list[CardBinding | None] = []
+        for i in range(card_count):
+            raw = fixed_preset[i] if i < len(fixed_preset) else None
+            sym = _normalise_symbol(raw)
+            out.append(CardBinding(sym, "preset") if sym is not None else None)
+        return out
 
     # HYBRID — composite ordering with first-seen dedup across sources.
     sources: list[tuple[Sequence[object], str]] = [

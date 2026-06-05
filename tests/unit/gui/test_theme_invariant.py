@@ -106,6 +106,11 @@ _DIALOG_COVERAGE_EXEMPTIONS: dict[str, str] = {
         "follows the app theme via native_theme master-chain walk-up."
     ),
     "_BracketDialog": "Pure ttk form (single Spinbox + Buttons).",
+    "ChartStackSettingsDialog": (
+        "Pure ttk form — Frame/Label/Entry/Button only. Chrome "
+        "themed by the global ttk.Style sweep; no classic Tk "
+        "widgets requiring native_theme helpers."
+    ),
     "ExportCacheDialog": "Pure ttk read-only summary.",
     "LocalDataDialog": (
         "Pure ttk Treeview + Buttons — Treeview themed via ttk.Style."
