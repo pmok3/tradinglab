@@ -5514,6 +5514,76 @@ class ChartApp(
             except Exception:  # noqa: BLE001
                 pass
 
+    def _capture_notebook_boundary(
+        self, paned: object, currently_visible: bool
+    ) -> int:
+        """Return the absolute x-pixel of the chart|notebook sash.
+
+        The chart|notebook boundary is sash index ``1`` when
+        ChartStack is currently visible (3-pane layout
+        ``[chartstack | chart | notebook]``) and index ``0`` when
+        hidden (2-pane ``[chart | notebook]``). Returns ``0`` if the
+        sash can't be read (widget not laid out yet) so the caller
+        falls back to the ratio-based layout.
+
+        Audit ``chartstack-toggle-preserves-notebook``.
+        """
+        idx = 1 if currently_visible else 0
+        try:
+            return int(paned.sashpos(idx))  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            return 0
+
+    def _apply_chartstack_toggle_sash(
+        self, paned: object, notebook_boundary: int, *,
+        chartstack_visible: bool,
+    ) -> None:
+        """Pin sash positions so the watchlist column stays put across
+        a ChartStack toggle; only the chart pane resizes.
+
+        Uses the **live** paned width (``winfo_width``) — NOT the
+        stale startup ``_initial_geometry`` — so the boundary is
+        correct even after the user has resized / maximised the
+        window. That stale-width read was the root cause of the
+        "watchlist jumps to half the screen" bug
+        (audit ``chartstack-toggle-preserves-notebook``).
+
+        Falls back to the ratio-based
+        :func:`constants.compute_main_paned_sashes` only when the
+        captured boundary is unusable (e.g. the sash wasn't laid out
+        yet, so ``_capture_notebook_boundary`` returned ``0``).
+        """
+        try:
+            live_w = int(paned.winfo_width())  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            live_w = 0
+        if notebook_boundary and int(notebook_boundary) > 0:
+            try:
+                from .constants import compute_toggle_sashes
+            except Exception:  # noqa: BLE001
+                return
+            positions = compute_toggle_sashes(
+                live_w, int(notebook_boundary),
+                chartstack_visible=chartstack_visible)
+        else:
+            try:
+                from .constants import compute_main_paned_sashes
+            except Exception:  # noqa: BLE001
+                return
+            main_w = live_w
+            if main_w <= 0:
+                try:
+                    main_w = int(
+                        self._initial_geometry.split('+')[0].split('x')[0])
+                except (ValueError, IndexError, AttributeError):
+                    main_w = 1280
+            positions = compute_main_paned_sashes(
+                main_w, chartstack_visible=chartstack_visible)
+        try:
+            self._apply_forced_sash(paned, positions)
+        except Exception:  # noqa: BLE001
+            pass
+
     def _toggle_chartstack(self, *, target: bool | None = None) -> None:
         """Show or hide the ChartStack panel.
 
@@ -5553,6 +5623,12 @@ class ChartApp(
         if target is None:
             target = not currently_visible
 
+        # Capture the chart|notebook boundary BEFORE mutating panes so
+        # the watchlist column can be pinned to its current position
+        # across the toggle (audit ``chartstack-toggle-preserves-notebook``).
+        notebook_boundary = self._capture_notebook_boundary(
+            paned, currently_visible)
+
         if target and not currently_visible:
             if cs is None:
                 try:
@@ -5576,29 +5652,16 @@ class ChartApp(
                     paned.insert(0, cs, weight=0)
                 except Exception:  # noqa: BLE001
                     pass
-                # Force the 3-pane layout to the hardcoded ratio
-                # (same one used at startup) so the notebook width
-                # stays put and only the chart gives up pixels to the
-                # ChartStack. We deliberately bypass
-                # ``geometry_store.restore_sash`` here — letting a
-                # prior session's drag persist would re-introduce the
-                # "watchlist eats half the chart" bug the user
-                # reported. ``after_idle`` defers until the inserted
-                # pane has been laid out so ``winfo_width`` is sane.
-                def _force_3pane_layout(_p=paned):
-                    try:
-                        try:
-                            main_w = int(
-                                self._initial_geometry.split('+')[0]
-                                .split('x')[0])
-                        except (ValueError, IndexError, AttributeError):
-                            main_w = 1280
-                        from .constants import compute_main_paned_sashes
-                        positions = compute_main_paned_sashes(
-                            main_w, chartstack_visible=True)
-                        self._apply_forced_sash(_p, positions)
-                    except Exception:  # noqa: BLE001
-                        pass
+                # Pin the watchlist column to its CURRENT position so
+                # toggling ChartStack only steals pixels from the
+                # chart, never moves the notebook. ``after_idle``
+                # defers until the inserted pane has been laid out so
+                # ``winfo_width`` is sane. See
+                # ``_apply_chartstack_toggle_sash`` + audit
+                # ``chartstack-toggle-preserves-notebook``.
+                def _force_3pane_layout(_p=paned, _b=notebook_boundary):
+                    self._apply_chartstack_toggle_sash(
+                        _p, _b, chartstack_visible=True)
                 try:
                     self.after_idle(_force_3pane_layout)
                 except Exception:  # noqa: BLE001
@@ -5608,23 +5671,12 @@ class ChartApp(
                 paned.forget(cs)
             except Exception:  # noqa: BLE001
                 pass
-            # Force the 2-pane layout back to the hardcoded ratio so
-            # the chart reclaims the chartstack's pixels and the
-            # notebook stays at its consistent width.
-            def _force_2pane_layout(_p=paned):
-                try:
-                    try:
-                        main_w = int(
-                            self._initial_geometry.split('+')[0]
-                            .split('x')[0])
-                    except (ValueError, IndexError, AttributeError):
-                        main_w = 1280
-                    from .constants import compute_main_paned_sashes
-                    positions = compute_main_paned_sashes(
-                        main_w, chartstack_visible=False)
-                    self._apply_forced_sash(_p, positions)
-                except Exception:  # noqa: BLE001
-                    pass
+            # Reclaim the ChartStack pixels into the chart while
+            # holding the notebook column fixed at its current
+            # position (audit ``chartstack-toggle-preserves-notebook``).
+            def _force_2pane_layout(_p=paned, _b=notebook_boundary):
+                self._apply_chartstack_toggle_sash(
+                    _p, _b, chartstack_visible=False)
             try:
                 self.after_idle(_force_2pane_layout)
             except Exception:  # noqa: BLE001
@@ -5743,6 +5795,7 @@ class ChartApp(
         self._menubar = self._menu_builder.menubar
         self._view_menu = self._menu_builder.view_menu
         self._ha_menu = self._menu_builder.ha_menu
+        self._chartstack_menu = self._menu_builder.chartstack_menu
         self._menubar_submenus = self._menu_builder.submenus
         self._recent_config_menu = self._menu_builder.recent_config_menu
         self._recent_watchlist_menu = self._menu_builder.recent_watchlist_menu

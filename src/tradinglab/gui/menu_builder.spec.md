@@ -8,7 +8,7 @@
   4. **Sandbox** — Start / End Session, Performance, Save / Load Session, Tags.
   5. **Entries** — sits left of **Exits** (entries logically precede exits in the trade lifecycle).
   6. **Exits** — Edit Strategies.
-  7. **View** — Heikin-Ashi (cascade: Show Heikin-Ashi Candles + Highlight Flat Bars), Highlight Key Bars, Volume time-of-day shading, ChartStack, ChartStack Settings…, Heatmap.
+  7. **View** — Heikin-Ashi (cascade: Show Heikin-Ashi Candles + Highlight Flat Bars), Highlight Key Bars, Volume time-of-day shading, ChartStack (cascade: Show ChartStack + Settings…), Heatmap.
   8. **Tools** — Credentials, Local Data, Download Replay Data, Export CSV, Status History, Reveal Data Folder, Restore Templates.
   9. **Help** — built by `HelpMenuMixin._build_help_menu`.
 - Keep menu commands routed back into `ChartApp` through a narrow callback protocol so the builder owns widget construction, not app business logic.
@@ -23,6 +23,7 @@
   - `menubar`
   - `view_menu`
   - `ha_menu`
+  - `chartstack_menu`
   - `submenus`
   - `recent_config_menu`
   - `recent_watchlist_menu`
@@ -42,7 +43,8 @@
 - **Heikin-Ashi is a cascade, not three top-level entries.** Audit `ha-menu-cascade` (2026) grouped the "Show Heikin-Ashi Candles" toggle and the "Highlight Flat Bars" overlay into a single `Heikin-Ashi` cascade inside View. The flat-bar entry is always enabled/clickable even while HA is off; its BooleanVar persists independently, and rendering is gated downstream by HA mode AND the flat-highlight toggle. Top-level "Highlight Key Bars" stays a sibling because it's not HA-specific. The cascade submenu is registered in `submenus` so `ThemeController._apply_menubar_theme` repaints it on theme toggle.
 - **Volume TOD shading is in View and Settings.** The overlay remains default-off and still appears in Settings, but the View menu also exposes a checkbutton so chart-only users can discover and flip the visual layer without opening the full settings dialog. Both surfaces drive `ChartApp.set_volume_tod_enabled`, keeping persistence, prefetch warmup, and redraw behavior identical.
 - **Heatmap is a direct browser launch, not a dialog.** Audit `view-heatmap-launcher` (2026). The `View → Heatmap` entry hands off to `webbrowser.open("https://finviz.com/map.ashx?t=sec", new=2, autoraise=True)` — the Finviz S&P 500 sector treemap (1D performance). No intermediate popup; per `tests/unit/gui/test_ellipsis_semantics.py` the label has no ellipsis since it doesn't open a dialog. Fallback when the OS browser hand-off fails is a `messagebox.showinfo` containing the URL so the user can copy-paste it manually. Callback lives on `ChartApp._on_view_heatmap` and is declared on the `MenuBuilderCallbacks` protocol next to `_on_view_toggle_chartstack`.
-- **ChartStack Settings popup opens from the View menu.** Audit `chartstack-fixed-preset` (2026). The `View → ChartStack Settings…` entry (with ellipsis since it opens a dialog) opens `gui.chartstack_settings_dialog.ChartStackSettingsDialog`, a small modal with one `ttk.Entry` per ChartStack card slot. Saving writes the entries' upper-cased contents to `chartstack.fixed_preset_symbols`, flips `chartstack.binding.mode` to `"FIXED_PRESET"`, and (if the live `_chartstack` panel is mounted on the parent) calls `panel.refresh()` so the cards re-bind immediately. Callback `ChartApp._on_view_chartstack_settings` is declared on the `MenuBuilderCallbacks` protocol next to `_on_view_heatmap`.
+- **ChartStack Settings popup opens from the View menu.** Audit `chartstack-fixed-preset` (2026). The `View → ChartStack → Settings…` entry (with ellipsis since it opens a dialog) opens `gui.chartstack_settings_dialog.ChartStackSettingsDialog`, a small modal with one `ttk.Entry` per ChartStack card slot. Saving writes the entries' upper-cased contents to `chartstack.fixed_preset_symbols`, flips `chartstack.binding.mode` to `"FIXED_PRESET"`, and (if the live `_chartstack` panel is mounted on the parent) calls `panel.refresh()` so the cards re-bind immediately. Callback `ChartApp._on_view_chartstack_settings` is declared on the `MenuBuilderCallbacks` protocol next to `_on_view_heatmap`.
+- **ChartStack is a cascade, not two flat entries.** Audit `chartstack-menu-cascade` (2026) grouped the show/hide toggle and the per-slot Settings popup into a single `ChartStack` cascade inside View — mirroring the Heikin-Ashi cascade. The cascade child `Show ChartStack` is the checkbutton (keeps the `Ctrl+`` accelerator, binds `_chartstack_visible_var` / `_on_view_toggle_chartstack`); `Settings…` is the command opening the dialog. The submenu is built as `cs_menu`, exposed via the `chartstack_menu` property + mirrored onto `ChartApp._chartstack_menu`, and registered in `submenus` so `ThemeController._apply_menubar_theme` repaints it on theme toggle. The previous flat layout (top-level `ChartStack` checkbutton + top-level `ChartStack Settings…` command) is retired.
 
 ## Notes
 - `MenuBuilder` intentionally preserves the existing submenu list shape used by `ThemeController._apply_menubar_theme`.

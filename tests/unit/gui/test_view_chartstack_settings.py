@@ -1,13 +1,22 @@
-"""Tests for the View → ChartStack Settings… menu entry.
+"""Tests for the View → ChartStack cascade.
 
-Audit ``chartstack-fixed-preset``: View menu wires a
-``ChartStack Settings…`` command (ellipsis since it opens a dialog
-per the ``ellipsis-semantics`` convention) that opens the
-:class:`ChartStackSettingsDialog` via
-``gui.chartstack_settings_dialog.open_chartstack_settings``.
+Audit ``chartstack-fixed-preset`` + ``chartstack-menu-cascade``:
+ChartStack lives as a **cascade** in the View menu (mirroring the
+Heikin-Ashi cascade), containing:
 
-Source-grep style (no full ChartApp fixture) — mirrors the
-``test_view_heatmap.py`` shape.
+- ``Show ChartStack`` — checkbutton bound to
+  ``_chartstack_visible_var`` / ``_on_view_toggle_chartstack``
+  (keeps the ``Ctrl+`` accelerator).
+- ``Settings…`` — command (ellipsis: opens the
+  :class:`ChartStackSettingsDialog` popup) wired to
+  ``_on_view_chartstack_settings``.
+
+The old flat layout — a top-level ``ChartStack`` checkbutton plus a
+top-level ``ChartStack Settings…`` command — is gone; settings is now
+a subset of the ChartStack cascade.
+
+Source-grep style (no full ChartApp fixture), mirroring
+``test_view_heatmap.py``.
 """
 
 from __future__ import annotations
@@ -21,61 +30,84 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 _MENU_BUILDER_PY = _REPO_ROOT / "src" / "tradinglab" / "gui" / "menu_builder.py"
 _APP_PY = _REPO_ROOT / "src" / "tradinglab" / "app.py"
 
+# Accept the ellipsis as either the literal U+2026 char or its
+# ``\u2026`` Python string-escape — both are equivalent at runtime.
+_ELLIPSIS = r"(?:\u2026|\\u2026)"
+
 
 # ---------------------------------------------------------------------------
-# Menu wiring (source-grep)
+# Cascade structure (source-grep)
 # ---------------------------------------------------------------------------
 
 
-def test_view_menu_has_chartstack_settings_entry() -> None:
+def test_view_menu_has_chartstack_cascade() -> None:
     src = _MENU_BUILDER_PY.read_text(encoding="utf-8")
-    # The label in source may be the literal U+2026 char OR the
-    # ``\u2026`` Python string-escape — both are equivalent at
-    # runtime. The regex character-class accepts both spellings.
-    ellipsis_re = r"(?:\u2026|\\u2026)"
     pattern = re.compile(
-        r'view_menu\.add_command\(\s*label\s*=\s*"ChartStack Settings'
-        + ellipsis_re
-        + r'"\s*,\s*command\s*=\s*self\._cb\._on_view_chartstack_settings'
-        r'\s*,?\s*\)',
+        r'view_menu\.add_cascade\(\s*label\s*=\s*"ChartStack"\s*,'
+        r'\s*menu\s*=\s*cs_menu\s*,?\s*\)',
         re.DOTALL,
     )
     assert pattern.search(src), (
-        "chartstack-fixed-preset regression: View menu must add a "
-        '"ChartStack Settings\u2026" command wired to '
+        "chartstack-menu-cascade regression: View menu must add a "
+        '"ChartStack" cascade backed by ``cs_menu``.'
+    )
+
+
+def test_cascade_has_show_chartstack_checkbutton() -> None:
+    src = _MENU_BUILDER_PY.read_text(encoding="utf-8")
+    pattern = re.compile(
+        r'cs_menu\.add_checkbutton\(\s*label\s*=\s*"Show ChartStack"',
+        re.DOTALL,
+    )
+    assert pattern.search(src), (
+        'ChartStack cascade must contain a "Show ChartStack" checkbutton.'
+    )
+    # Must still be wired to the same toggle var + command.
+    assert "self._cb._chartstack_visible_var" in src
+    assert "self._cb._on_view_toggle_chartstack" in src
+
+
+def test_cascade_has_settings_command_with_ellipsis() -> None:
+    src = _MENU_BUILDER_PY.read_text(encoding="utf-8")
+    pattern = re.compile(
+        r'cs_menu\.add_command\(\s*label\s*=\s*"Settings' + _ELLIPSIS + r'"\s*,'
+        r'\s*command\s*=\s*self\._cb\._on_view_chartstack_settings\s*,?\s*\)',
+        re.DOTALL,
+    )
+    assert pattern.search(src), (
+        'ChartStack cascade must contain a "Settings\u2026" command '
+        "(ellipsis since it opens a dialog) wired to "
         "self._cb._on_view_chartstack_settings."
     )
 
 
-def test_chartstack_settings_label_has_ellipsis() -> None:
-    """Opens a dialog → label MUST end in U+2026 per the
-    ``ellipsis-semantics`` audit (Apple HIG / MS UWP)."""
+def test_old_flat_chartstack_entries_are_gone() -> None:
+    """The pre-cascade layout must not linger — no top-level
+    ``ChartStack`` checkbutton, no top-level ``ChartStack Settings…``
+    command."""
     src = _MENU_BUILDER_PY.read_text(encoding="utf-8")
-    has_literal = '"ChartStack Settings\u2026"' in src
-    has_escape = '"ChartStack Settings\\u2026"' in src
-    assert has_literal or has_escape, (
-        'ChartStack Settings\u2026 must end in U+2026 (opens a dialog)'
+    assert 'view_menu.add_checkbutton(\n            label="ChartStack"' not in src, (
+        "old top-level ChartStack checkbutton must be removed (it now "
+        "lives inside the ChartStack cascade as 'Show ChartStack')."
     )
-    assert '"ChartStack Settings"' not in src, (
-        'ellipsis-semantics regression: the bare "ChartStack Settings" '
-        "(no ellipsis) label was reintroduced; it must end in U+2026."
+    assert '"ChartStack Settings\u2026"' not in src and \
+           '"ChartStack Settings\\u2026"' not in src, (
+        "old top-level 'ChartStack Settings…' command must be removed "
+        "(settings is now the cascade child 'Settings…')."
     )
 
 
-def test_menu_builder_protocol_declares_callback() -> None:
+def test_menu_builder_protocol_declares_callbacks() -> None:
     src = _MENU_BUILDER_PY.read_text(encoding="utf-8")
-    assert "def _on_view_chartstack_settings(self)" in src, (
-        "MenuBuilderCallbacks protocol must declare "
-        "_on_view_chartstack_settings."
-    )
+    assert "def _on_view_chartstack_settings(self)" in src
+    assert "def _on_view_toggle_chartstack(self)" in src
 
 
-def test_chart_app_defines_callback() -> None:
+def test_chart_app_defines_settings_callback() -> None:
     src = _APP_PY.read_text(encoding="utf-8")
     assert re.search(r"^\s*def _on_view_chartstack_settings\(self\)",
                      src, re.MULTILINE), (
-        "ChartApp must define _on_view_chartstack_settings; the menu "
-        "entry routes through self._cb._on_view_chartstack_settings."
+        "ChartApp must define _on_view_chartstack_settings."
     )
 
 
@@ -85,43 +117,28 @@ def test_chart_app_defines_callback() -> None:
 
 
 def _bind_callback() -> tuple[SimpleNamespace, callable]:
-    """Bind ``ChartApp._on_view_chartstack_settings`` to a stub
-    ``self`` that only carries the attributes the method touches."""
     import tradinglab.app as app_mod
     stub = SimpleNamespace()
     return stub, app_mod.ChartApp._on_view_chartstack_settings.__get__(stub)
 
 
 def test_callback_invokes_open_helper() -> None:
-    """Callback delegates to
-    ``gui.chartstack_settings_dialog.open_chartstack_settings``
-    with the ChartApp as parent."""
     stub, cb = _bind_callback()
     mock = MagicMock()
     with patch(
-        "tradinglab.gui.chartstack_settings_dialog."
-        "open_chartstack_settings",
+        "tradinglab.gui.chartstack_settings_dialog.open_chartstack_settings",
         mock,
     ):
         cb()
-    assert mock.called, (
-        "_on_view_chartstack_settings must call "
-        "open_chartstack_settings(self)"
-    )
+    assert mock.called
     args, _kwargs = mock.call_args
-    assert args[0] is stub, (
-        "the first positional arg should be the ChartApp (self)"
-    )
+    assert args[0] is stub
 
 
 def test_callback_swallows_open_exception() -> None:
-    """If the popup fails to construct (e.g. Tk init failure on a
-    headless run), the callback must not propagate the exception
-    into the Tk event loop."""
     stub, cb = _bind_callback()
     with patch(
-        "tradinglab.gui.chartstack_settings_dialog."
-        "open_chartstack_settings",
+        "tradinglab.gui.chartstack_settings_dialog.open_chartstack_settings",
         side_effect=RuntimeError("boom"),
     ):
         cb()  # must NOT raise

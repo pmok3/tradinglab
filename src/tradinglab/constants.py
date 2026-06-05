@@ -735,6 +735,73 @@ def compute_main_paned_sashes(
     return [chart_w]
 
 
+def compute_toggle_sashes(
+    main_w: int,
+    notebook_left_x: int,
+    *,
+    chartstack_visible: bool,
+    chartstack_w: int = CHARTSTACK_PANE_STARTUP_WIDTH_PX,
+    chart_min_px: int = 200,
+) -> list[int]:
+    """Sash positions that PRESERVE the watchlist (notebook) column.
+
+    Unlike :func:`compute_main_paned_sashes` (which derives the
+    notebook width from a *ratio* of ``main_w`` and is used at
+    startup, where there is no prior layout to honour), this helper
+    is used by the **ChartStack toggle** path. It takes the
+    chart|notebook boundary captured *before* the toggle and holds it
+    fixed, so the watchlist does not move — only the chart pane
+    resizes to absorb (or release) the ChartStack column on the left.
+
+    Audit ``chartstack-toggle-preserves-notebook``. The previous
+    toggle path recomputed the layout from a *stale*
+    ``_initial_geometry`` width; on a window that had been resized /
+    maximised since launch the resulting sash positions left the
+    notebook filling ~half the screen. The fix is to (a) read the
+    live paned width and (b) preserve the measured boundary verbatim
+    — both of which this helper assumes its caller has done.
+
+    Parameters
+    ----------
+    main_w
+        The **live** paned width in pixels (``paned.winfo_width()``),
+        used only to cap the boundary so the notebook can't be pushed
+        off the right edge. ``0`` (widget not yet realised) disables
+        the cap.
+    notebook_left_x
+        The absolute x-pixel of the chart|notebook sash captured
+        before the toggle (``paned.sashpos(0)`` in 2-pane mode or
+        ``paned.sashpos(1)`` in 3-pane mode).
+    chartstack_visible
+        The target state *after* the toggle. ``True`` → 3-pane
+        (ChartStack shown); ``False`` → 2-pane (ChartStack hidden).
+
+    Returns
+    -------
+    * 3-pane (CS on):  ``[chartstack_w, notebook_left_x]`` — chartstack
+      spans ``[0, chartstack_w]``, chart ``[chartstack_w,
+      notebook_left_x]``, notebook ``[notebook_left_x, main_w]``.
+    * 2-pane (CS off): ``[notebook_left_x]`` — chart spans
+      ``[0, notebook_left_x]``, notebook ``[notebook_left_x, main_w]``.
+
+    Defensive: if holding the boundary would crush the chart below
+    ``chart_min_px``, the boundary is nudged right just enough to keep
+    the chart usable (the only case the watchlist gives up width).
+    """
+    boundary = int(notebook_left_x)
+    if chartstack_visible:
+        # Chart spans [chartstack_w, boundary] — keep it usable.
+        boundary = max(boundary, int(chartstack_w) + int(chart_min_px))
+    else:
+        # Chart spans [0, boundary] — keep it usable.
+        boundary = max(boundary, int(chart_min_px))
+    if main_w and int(main_w) > 0:
+        boundary = min(boundary, int(main_w))
+    if chartstack_visible:
+        return [int(chartstack_w), int(boundary)]
+    return [int(boundary)]
+
+
 # Intervals that represent intraday aggregations. Pre-market / post-market
 # sessions only exist at these granularities; for daily+ bars the concept
 # is meaningless (one bar already spans the whole trading day).

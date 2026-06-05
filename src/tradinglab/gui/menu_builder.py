@@ -75,6 +75,7 @@ class MenuBuilder:
         self._menubar: tk.Menu | None = None
         self._view_menu: tk.Menu | None = None
         self._ha_menu: tk.Menu | None = None
+        self._chartstack_menu: tk.Menu | None = None
         self._submenus: list[tk.Menu] = []
         self._recent_config_menu: tk.Menu | None = None
         self._recent_watchlist_menu: tk.Menu | None = None
@@ -295,21 +296,27 @@ class MenuBuilder:
             command=self._cb._on_menu_toggle_volume_tod,
         )
         view_menu.add_separator()
-        view_menu.add_checkbutton(
-            label="ChartStack",
+        # ChartStack cascade (audit ``chartstack-menu-cascade``) —
+        # groups the show/hide toggle with the per-slot Settings popup,
+        # mirroring the Heikin-Ashi cascade above. Settings is a subset
+        # of ChartStack, not a sibling top-level entry.
+        cs_menu = tk.Menu(view_menu, tearoff=0)
+        cs_menu.add_checkbutton(
+            label="Show ChartStack",
             accelerator="Ctrl+`",
             onvalue=True,
             offvalue=False,
             variable=self._cb._chartstack_visible_var,
             command=self._cb._on_view_toggle_chartstack,
         )
-        # ChartStack Settings popup — per-slot fixed-preset symbols
-        # editor (audit ``chartstack-fixed-preset``). Ellipsis since
-        # this opens a dialog (per ``ellipsis-semantics``).
-        view_menu.add_command(
-            label="ChartStack Settings\u2026",
+        # Per-slot fixed-preset symbols editor (audit
+        # ``chartstack-fixed-preset``). Ellipsis since this opens a
+        # dialog (per ``ellipsis-semantics``).
+        cs_menu.add_command(
+            label="Settings\u2026",
             command=self._cb._on_view_chartstack_settings,
         )
+        view_menu.add_cascade(label="ChartStack", menu=cs_menu)
         view_menu.add_separator()
         # Finviz S&P 500 sector heatmap — direct browser launch
         # (no intermediate popup). Convention: no ellipsis since
@@ -358,6 +365,7 @@ class MenuBuilder:
         self._menubar = menubar
         self._view_menu = view_menu
         self._ha_menu = ha_menu
+        self._chartstack_menu = cs_menu
         self._recent_config_menu = recent_config_menu
         self._recent_watchlist_menu = recent_watchlist_menu
         self._submenus = [
@@ -366,6 +374,7 @@ class MenuBuilder:
             sb_menu,
             view_menu,
             ha_menu,
+            cs_menu,
             tools_menu,
             exits_menu,
             load_preset_menu,
@@ -393,6 +402,13 @@ class MenuBuilder:
         if self._ha_menu is None:
             raise RuntimeError("build() must be called before reading ha_menu")
         return self._ha_menu
+
+    @property
+    def chartstack_menu(self) -> tk.Menu:
+        if self._chartstack_menu is None:
+            raise RuntimeError(
+                "build() must be called before reading chartstack_menu")
+        return self._chartstack_menu
 
     @property
     def submenus(self) -> list[tk.Menu]:

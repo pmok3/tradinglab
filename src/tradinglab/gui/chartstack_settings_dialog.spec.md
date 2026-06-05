@@ -110,5 +110,5 @@ reset rewrites entries in place (no settings write), public
   (slot-aligned resolution).
 - `gui.chartstack.settings_adapter` — defaults table +
   `fixed_preset_symbols()` helper.
-- `gui.menu_builder` — wires the `View → ChartStack Settings…` menu
-  entry to `ChartApp._on_view_chartstack_settings`.
+- `gui.menu_builder` — wires the `View → ChartStack → Settings…`
+  cascade child to `ChartApp._on_view_chartstack_settings`.
