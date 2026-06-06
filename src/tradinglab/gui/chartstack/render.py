@@ -30,6 +30,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
 
+from ... import constants as _constants
+
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from matplotlib.axes import Axes
 
@@ -37,10 +39,10 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from .series_cache import Bar
 
 
-# Bull / bear colors mirror the main chart so positive cards read
-# the same hue as positive candles on the main chart.
-_UP_COLOR = "#26a69a"
-_DOWN_COLOR = "#ef5350"
+# Bull / bear candle colors are read LIVE from constants.BULL_COLOR /
+# BEAR_COLOR (via _direction_color) so the cards mirror the main chart —
+# including the Okabe-Ito color-blind palette toggle. Only the flat
+# (doji) color is a fixed neutral grey. Audit ``color-blind-palette``.
 _FLAT_COLOR = "#6b7280"
 
 
@@ -148,11 +150,17 @@ def apply_card_tint(ax: Axes, color: str | None) -> None:
 # ---------------------------------------------------------------------------
 
 def _direction_color(open_: float, close: float) -> str:
-    """Return bull/bear/flat color for one candle."""
+    """Return bull/bear/flat color for one candle.
+
+    Bull/bear read the **live** ``constants.BULL_COLOR`` /
+    ``BEAR_COLOR`` so the cards track the main chart's palette,
+    including the Okabe-Ito color-blind toggle. Audit
+    ``color-blind-palette``.
+    """
     if close > open_:
-        return _UP_COLOR
+        return _constants.BULL_COLOR
     if close < open_:
-        return _DOWN_COLOR
+        return _constants.BEAR_COLOR
     return _FLAT_COLOR
 
 

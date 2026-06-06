@@ -32,9 +32,14 @@ bounded oscillators.
   (see `render.spec.md`).
 - `histogram_palette: ClassVar[Tuple[str, str, str, str]]` — 4-color
   scheme in classifier index order
-  `(rising_above, falling_above, rising_below, falling_below)`:
-  `#26a69a` (bright teal-green), `#b2dfdb` (pale teal-green),
-  `#ffcdd2` (pale red), `#ef5350` (bright red).
+  `(rising_above, falling_above, rising_below, falling_below)` =
+  `(strong_bull, weak_bull, weak_bear, strong_bear)`. Sourced from
+  `constants.macd_histogram_palette()` (single source of truth, Okabe-Ito
+  aware) — NO hardcoded hex. The histogram **renderer re-resolves this
+  LIVE** on every paint via the same function (see `render.spec.md`), so a
+  runtime color-blind toggle reaches the bars; the ClassVar snapshot drives
+  only the default-style legend swatch + introspection. Audit
+  `color-blind-palette-audit`.
 - `compute(candles) -> {"macd", "signal", "histogram"}`. All three
   outputs are length `len(candles)`; warmup is NaN.
 - `compute_arr(bars)` — `Bars`-native entry point used by the cache.

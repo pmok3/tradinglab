@@ -69,8 +69,14 @@ holds.
   Regression test in `test_screenshot_ux.py::test_screenshot_gridspec_hspace_is_zero`.
 
 ## Annotation contract
-- **Entry**: triangle marker, green up-triangle for long, red
-  down-triangle for short. `s=180` (was 120 — bumped so the entry
+- **Entry**: triangle marker, `ENTRY_LONG_COLOR` up-triangle for long,
+  `ENTRY_SHORT_COLOR` down-triangle for short. These (plus `MAE_COLOR`,
+  `MFE_COLOR`, `ENTRY_GUIDE_COLOR`) route through
+  `constants.sentiment_recolor` so the directional markers follow the
+  Okabe-Ito color-blind palette (orange = long/bull, blue = short/bear)
+  instead of being locked to green/red; the neutral `EXIT_COLOR` /
+  `TARGET_COLOR` / `EXIT_GUIDE_COLOR` stay fixed. Audit
+  `color-blind-palette-audit`. `s=180` (was 120 — bumped so the entry
   remains obvious on dense charts), `edgecolors="black"`,
   `linewidths=0.8`, `zorder=10`. A bold ``"Entry $123.45"`` label is
   placed ~30 pt to the side + ~35 pt vertically from the marker

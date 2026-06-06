@@ -9,7 +9,7 @@ from typing import Any
 import numpy as np
 from matplotlib.colors import to_rgba
 
-from ..constants import BEAR_COLOR, BULL_COLOR
+from .. import constants as _constants
 from ..core.viewport import compute_render_range as _compute_render_range
 from ..core.viewport import y_limits_for_slice as _y_limits_for_slice
 from ..indicators import render as _ind_render
@@ -123,11 +123,11 @@ class ChartRenderer:
             if not (bull_any or bear_any):
                 return None
             if dark_mode:
-                bull_hatch_color = brighter_shade(to_rgba(BULL_COLOR), dark_mode=True)
-                bear_hatch_color = brighter_shade(to_rgba(BEAR_COLOR), dark_mode=True)
+                bull_hatch_color = brighter_shade(to_rgba(_constants.BULL_COLOR), dark_mode=True)
+                bear_hatch_color = brighter_shade(to_rgba(_constants.BEAR_COLOR), dark_mode=True)
             else:
-                bull_hatch_color = darker_shade(to_rgba(BULL_COLOR), dark_mode=False)
-                bear_hatch_color = darker_shade(to_rgba(BEAR_COLOR), dark_mode=False)
+                bull_hatch_color = darker_shade(to_rgba(_constants.BULL_COLOR), dark_mode=False)
+                bear_hatch_color = darker_shade(to_rgba(_constants.BEAR_COLOR), dark_mode=False)
             return {
                 "bull_indices": frozenset(int(i) for i in res.bull_flat_bottom.nonzero()[0]),
                 "bear_indices": frozenset(int(i) for i in res.bear_flat_top.nonzero()[0]),

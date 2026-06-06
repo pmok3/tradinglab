@@ -53,6 +53,7 @@ from matplotlib.figure import Figure
 from matplotlib.ticker import FuncFormatter, MaxNLocator
 
 from ..backtest.performance import TradeRow
+from ..constants import sentiment_recolor as _sentiment_recolor
 from ..core.timezones import ET as _ET
 from ..entries.model import EntryStrategy
 from ..exits.model import ExitStrategy
@@ -109,14 +110,19 @@ WIDTH_IN_DEFAULT = 14.5         # 1600 px @ 110 dpi
 HEIGHT_IN_DEFAULT = 8.2         #  900 px @ 110 dpi
 DPI_DEFAULT = 110
 
-# Annotation colours (theme-independent — readable on either backdrop).
-ENTRY_LONG_COLOR = "#1bb556"    # green
-ENTRY_SHORT_COLOR = "#d8444f"   # red
+# Annotation colours. Directional markers (entry long/short, MAE/MFE,
+# entry guide) route through ``constants.sentiment_recolor`` so they
+# follow the Okabe-Ito color-blind palette (orange = bullish/long,
+# blue = bearish/short) instead of being locked to green/red. The
+# neutral exit / target / exit-guide colours are non-directional and
+# stay fixed. Audit ``color-blind-palette-audit``.
+ENTRY_LONG_COLOR = _sentiment_recolor("#1bb556", bullish=True)    # long entry
+ENTRY_SHORT_COLOR = _sentiment_recolor("#d8444f", bullish=False)  # short entry
 EXIT_COLOR = "#7d7d7d"          # neutral grey
-MAE_COLOR = "#d8444f"           # red dot at low-water mark
-MFE_COLOR = "#1bb556"           # green dot at high-water mark
+MAE_COLOR = _sentiment_recolor("#d8444f", bullish=False)  # adverse (bear)
+MFE_COLOR = _sentiment_recolor("#1bb556", bullish=True)   # favorable (bull)
 TARGET_COLOR = "#1f77b4"        # blue horizontal target line
-ENTRY_GUIDE_COLOR = "#1bb556"   # vertical guide line at entry index
+ENTRY_GUIDE_COLOR = _sentiment_recolor("#1bb556", bullish=True)  # entry guide
 EXIT_GUIDE_COLOR = "#888888"    # vertical guide line at exit index
 
 # Marker sizing — bumped from the previous defaults so the entry / exit

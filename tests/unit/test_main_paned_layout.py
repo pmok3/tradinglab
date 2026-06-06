@@ -167,3 +167,71 @@ class TestConcreteExamples:
             main_w, chartstack_visible=False) == expected_2pane
         assert compute_main_paned_sashes(
             main_w, chartstack_visible=True) == expected_3pane
+
+
+# ---------------------------------------------------------------------------
+# notebook_width_px override (user-configurable saved watchlist width)
+# ---------------------------------------------------------------------------
+
+
+class TestNotebookWidthOverride:
+    """``notebook_width_px`` overrides the golden-ratio notebook width.
+
+    Audit ``watchlist-width-setting``: the user can drag the
+    chart|watchlist divider to a preferred width and persist it via
+    File → Save Configuration. On load / startup the saved absolute
+    pixel width is honoured instead of the ratio default.
+    """
+
+    def test_override_sets_notebook_width_2pane(self) -> None:
+        # 1920 window, request notebook=500px → chart=1420px → [1420].
+        out = compute_main_paned_sashes(
+            1920, chartstack_visible=False, notebook_width_px=500)
+        assert out == [1420]
+        assert 1920 - out[0] == 500  # notebook is exactly the requested width
+
+    def test_override_sets_notebook_width_3pane(self) -> None:
+        # 1920 window, CS on (220px), notebook=500 → chart=1200 → [220, 1420].
+        out = compute_main_paned_sashes(
+            1920, chartstack_visible=True, notebook_width_px=500)
+        assert out == [220, 1420]
+        assert 1920 - out[1] == 500  # notebook width preserved with CS on
+
+    def test_override_none_falls_back_to_ratio(self) -> None:
+        """``notebook_width_px=None`` (absent setting) → golden ratio."""
+        out = compute_main_paned_sashes(
+            1920, chartstack_visible=False, notebook_width_px=None)
+        assert out == compute_main_paned_sashes(1920, chartstack_visible=False)
+
+    def test_override_zero_falls_back_to_ratio(self) -> None:
+        """A zero / non-positive override is ignored (treated as unset)."""
+        out = compute_main_paned_sashes(
+            1920, chartstack_visible=False, notebook_width_px=0)
+        assert out == compute_main_paned_sashes(1920, chartstack_visible=False)
+
+    def test_override_clamped_to_notebook_min(self) -> None:
+        """An override below ``notebook_min_px`` is floored."""
+        out = compute_main_paned_sashes(
+            1920, chartstack_visible=False, notebook_width_px=50,
+            notebook_min_px=280)
+        assert 1920 - out[0] == 280
+
+    def test_override_too_wide_yields_chart_min_floor(self) -> None:
+        """An override wider than the window keeps the chart usable —
+        the chart floors at ``chart_min_px`` and the notebook gives up
+        the excess (mirrors the ratio-path defensive clamp)."""
+        out = compute_main_paned_sashes(
+            1000, chartstack_visible=False, notebook_width_px=5000,
+            chart_min_px=200)
+        chart_w = out[0]
+        assert chart_w == 200
+
+    def test_override_round_trips_across_chartstack_toggle(self) -> None:
+        """The same saved width yields the same notebook column whether
+        ChartStack is on or off — only the chart absorbs the 220px."""
+        off = compute_main_paned_sashes(
+            2560, chartstack_visible=False, notebook_width_px=700)
+        on = compute_main_paned_sashes(
+            2560, chartstack_visible=True, notebook_width_px=700)
+        assert 2560 - off[0] == 700
+        assert 2560 - on[1] == 700

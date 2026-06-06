@@ -8,12 +8,12 @@ Phase 1c sandbox modals for the review flow: `PostTradeReviewDialog` (mandatory 
 - `class TagsEditorDialog(BaseModalDialog)` — small list editor; mutates the controller's [`TagStore`](../backtest/tags.spec.md) incrementally via `add()` / `remove()` as the user clicks Add / Remove. OK is a confirmation-only handler (sets `self.result = True` and destroys); Cancel sets `self.result = False` and destroys, but the store has already been mutated either way.
 
 ## Dependencies
-- Internal: read-only access to a `PostTradeReview` (duck-typed), `TagStore`, `._modal_base.BaseModalDialog`, `._modal_base.protect_combobox_wheel`, `.colors.UP_GREEN`, `.colors.DOWN_RED`.
+- Internal: read-only access to a `PostTradeReview` (duck-typed), `TagStore`, `._modal_base.BaseModalDialog`, `._modal_base.protect_combobox_wheel`, `.colors.up_green`, `.colors.down_red`.
 - External: `tkinter`, `tkinter.ttk`.
 
 ## Design Decisions
 - **Cannot dismiss `PostTradeReviewDialog` without input**: the close (X) button is overridden via `WM_DELETE_WINDOW` to refuse dismissal until at least one character is typed. Implements the locked decision: every closed trade must be journaled.
-- **P/L badge coloured by sign**: `UP_GREEN` for >= 0, `DOWN_RED` for <0 (from `gui/colors.py`, aliased to `constants.BULL_COLOR`/`BEAR_COLOR`) — small visual cue so the user immediately knows whether they're reviewing a winner or a loser. Colors match candle hues for consistency.
+- **P/L badge coloured by sign**: `up_green()` for >= 0, `down_red()` for <0 (live accessors from `gui/colors.py`, returning `constants.BULL_COLOR`/`BEAR_COLOR`) — small visual cue so the user immediately knows whether they're reviewing a winner or a loser. Colors match candle hues for consistency and follow the Okabe-Ito color-blind palette toggle (audit `color-blind-palette-audit`).
 - **Native-widget dark theming**: `PostTradeReviewDialog._review_text` uses the active theme's `ax_bg`, `text`, and `spine`; `TagsEditorDialog._listbox` uses `tree_bg`, `tree_fg`, and `spine`.
 - **`TagsEditorDialog` mutates the `TagStore` incrementally**: each `Add` click calls `TagStore.add(text)`, each `Remove` click calls `TagStore.remove(tag)`. The dialog does NOT diff state on OK — mutations are committed live as the user interacts. OK / Cancel only control whether `self.result` is set to `True` / `False`; neither rolls back the live store mutations. The simpler-than-diff-state rationale still applies; the `TagStore.replace(list)` method exists on the store but is not used by this dialog (kept available for programmatic bulk imports).
 

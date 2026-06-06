@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import colorsys
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -30,6 +31,15 @@ _DEFAULT_BEAR_COLOR = "#ef5350"  # coral-red
 _COLORBLIND_BULL_COLOR = "#e69f00"  # Okabe-Ito orange
 _COLORBLIND_BEAR_COLOR = "#56b4e9"  # Okabe-Ito sky-blue
 
+#: Canonical *pale* bull/bear tints — the desaturated companions of the
+#: bull/bear hue used by the MACD 4-class histogram (falling-above-zero /
+#: rising-below-zero) and the light-theme watchlist row backgrounds. Kept
+#: here so they live in exactly ONE place; every consumer derives its
+#: Okabe-Ito variant from these via :func:`sentiment_recolor`. Audit
+#: ``color-blind-palette-audit``.
+_BULL_TINT_PALE = "#b2dfdb"  # pale teal-green
+_BEAR_TINT_PALE = "#ffcdd2"  # pale coral-red
+
 
 def _resolve_initial_palette() -> tuple[str, str]:
     """Pick the bull/bear palette based on user setting.
@@ -49,6 +59,130 @@ def _resolve_initial_palette() -> tuple[str, str]:
 
 
 BULL_COLOR, BEAR_COLOR = _resolve_initial_palette()
+
+
+# ---------------------------------------------------------------------------
+# Directional-sentiment palette plumbing (audit ``color-blind-palette-audit``)
+# ---------------------------------------------------------------------------
+# Every color that encodes *market direction* (bull/bear, up/down, gain/loss,
+# rising/falling, MFE/MAE) must follow the Okabe-Ito toggle. The toggle
+# mutates ``BULL_COLOR`` / ``BEAR_COLOR`` above at runtime; the helpers here
+# are the single chokepoint every directional color routes through so a
+# green/red literal can be recoloured to the active bull/bear hue without a
+# relaunch. Status colors (error/warn/info/ok) are a DIFFERENT semantic axis
+# and intentionally do NOT route through here.
+
+
+def colorblind_palette_active() -> bool:
+    """True when the Okabe-Ito color-blind palette is the live palette.
+
+    Reads the live ``BULL_COLOR`` (which the setter mutates) rather than
+    the persisted setting, so it reflects the in-session toggle state.
+    """
+    return BULL_COLOR == _COLORBLIND_BULL_COLOR
+
+
+def _hex_to_rgb01(h: str) -> tuple[float, float, float]:
+    h = h.lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    return (int(h[0:2], 16) / 255.0, int(h[2:4], 16) / 255.0,
+            int(h[4:6], 16) / 255.0)
+
+
+def _rgb01_to_hex(r: float, g: float, b: float) -> str:
+    def _clamp(v: float) -> int:
+        return max(0, min(255, round(v * 255)))
+    return f"#{_clamp(r):02x}{_clamp(g):02x}{_clamp(b):02x}"
+
+
+def recolor_to_hue(base_hex: str, hue_source_hex: str) -> str:
+    """Return ``base_hex`` recoloured to ``hue_source_hex``'s hue.
+
+    Preserves ``base_hex``'s lightness AND saturation (HLS space) and
+    borrows only the *hue* from ``hue_source_hex``. This lets a carefully
+    tuned green/red *tint* (a pale row background, a faded histogram
+    class) be swung onto the Okabe-Ito orange/blue hue while keeping its
+    original tone, so the result still reads as a subtle tint rather than
+    a saturated slab. Invalid hex inputs fall through to ``base_hex``.
+    """
+    try:
+        br, bg, bb = _hex_to_rgb01(base_hex)
+        sr, sg, sb = _hex_to_rgb01(hue_source_hex)
+    except (ValueError, IndexError):
+        return base_hex
+    _bh, bl, bs = colorsys.rgb_to_hls(br, bg, bb)
+    sh, _sl, _ss = colorsys.rgb_to_hls(sr, sg, sb)
+    nr, ng, nb = colorsys.hls_to_rgb(sh, bl, bs)
+    return _rgb01_to_hex(nr, ng, nb)
+
+
+def sentiment_recolor(base_hex: str, *, bullish: bool) -> str:
+    """Map a directional green/red color onto the active bull/bear hue.
+
+    When the default palette is active this is a **pass-through** (returns
+    ``base_hex`` unchanged) so the default appearance stays pixel-exact.
+    When the Okabe-Ito palette is active, ``base_hex`` is recoloured to the
+    live ``BULL_COLOR`` (``bullish=True``) or ``BEAR_COLOR`` hue, preserving
+    its lightness/saturation. This is the one function every directional
+    color reference should funnel through.
+    """
+    if not colorblind_palette_active():
+        return base_hex
+    return recolor_to_hue(base_hex, BULL_COLOR if bullish else BEAR_COLOR)
+
+
+def macd_histogram_palette() -> tuple[str, str, str, str]:
+    """Live 4-class MACD histogram palette, Okabe-Ito-aware.
+
+    Order ``(rising_above, falling_above, rising_below, falling_below)``
+    zero — i.e. ``(strong_bull, weak_bull, weak_bear, strong_bear)``.
+    Derived from the live ``BULL_COLOR`` / ``BEAR_COLOR`` plus the pale
+    tints so the whole histogram follows the palette toggle.
+    """
+    return (
+        BULL_COLOR,
+        sentiment_recolor(_BULL_TINT_PALE, bullish=True),
+        sentiment_recolor(_BEAR_TINT_PALE, bullish=False),
+        BEAR_COLOR,
+    )
+
+
+def is_app_macd_palette(palette: tuple[str, ...]) -> bool:
+    """True when ``palette`` is the app's standard MACD histogram palette.
+
+    Recognises BOTH the default green/red 4-tuple and the Okabe-Ito
+    orange/blue variant. The histogram renderer uses this to decide
+    whether to swap a class's ``histogram_palette`` for the live,
+    palette-aware :func:`macd_histogram_palette` (so the app's own MACD
+    follows the color-blind toggle) or to honour a genuinely custom
+    4-tuple a future indicator might pin.
+    """
+    p = tuple(c.lower() for c in palette)
+    default = (
+        _DEFAULT_BULL_COLOR, _BULL_TINT_PALE,
+        _BEAR_TINT_PALE, _DEFAULT_BEAR_COLOR,
+    )
+    okabe = (
+        _COLORBLIND_BULL_COLOR,
+        recolor_to_hue(_BULL_TINT_PALE, _COLORBLIND_BULL_COLOR),
+        recolor_to_hue(_BEAR_TINT_PALE, _COLORBLIND_BEAR_COLOR),
+        _COLORBLIND_BEAR_COLOR,
+    )
+    return p == tuple(c.lower() for c in default) or \
+        p == tuple(c.lower() for c in okabe)
+
+
+def bull_row_bg(theme: dict) -> str:
+    """Watchlist/table bull-row background tint for ``theme``, palette-aware."""
+    return sentiment_recolor(
+        theme.get("bull_row_bg", BULL_COLOR), bullish=True)
+
+
+def bear_row_bg(theme: dict) -> str:
+    """Watchlist/table bear-row background tint for ``theme``, palette-aware."""
+    return sentiment_recolor(
+        theme.get("bear_row_bg", BEAR_COLOR), bullish=False)
 
 
 LIGHT_THEME: dict = {
@@ -689,6 +823,7 @@ def compute_main_paned_sashes(
     chartstack_visible: bool,
     notebook_min_px: int = 280,
     chart_min_px: int = 200,
+    notebook_width_px: int | None = None,
 ) -> list[int]:
     """Compute cumulative sash x-positions for ``app._main_paned``.
 
@@ -719,9 +854,30 @@ def compute_main_paned_sashes(
     ``chart_min_px`` is a defensive floor: on absurdly narrow windows
     the helper sacrifices notebook width before chart width so the
     chart stays usable.
+
+    ``notebook_width_px`` (audit ``watchlist-width-setting``): when a
+    positive int is supplied it OVERRIDES the golden-ratio notebook
+    width with that absolute pixel width — the user's saved watchlist
+    width (the dragged divider position persisted via
+    ``settings["layout.notebook_width_px"]`` on File → Save
+    Configuration). ``None`` / non-positive falls back to the ratio.
+    The override is still subject to the ``notebook_min_px`` floor and
+    the ``chart_min_px`` floor (a saved width wider than the window
+    still yields a usable chart, with the notebook giving up the
+    excess — same defensive behaviour as the ratio path).
     """
-    notebook_w = max(notebook_min_px,
-                     main_w - int(main_w * CHART_PANE_STARTUP_RATIO))
+    if notebook_width_px is not None:
+        try:
+            _nb_override = int(notebook_width_px)
+        except (TypeError, ValueError):
+            _nb_override = 0
+    else:
+        _nb_override = 0
+    if _nb_override > 0:
+        notebook_w = max(notebook_min_px, _nb_override)
+    else:
+        notebook_w = max(notebook_min_px,
+                         main_w - int(main_w * CHART_PANE_STARTUP_RATIO))
     if chartstack_visible:
         cs_w = CHARTSTACK_PANE_STARTUP_WIDTH_PX
         chart_w = main_w - cs_w - notebook_w

@@ -14,7 +14,7 @@ Own TradingLab's panel rendering state and the helper methods that mutate candle
   - `reset_slot_artists(slot)` — tear down cached artists for one slot.
   - `display_candles_for(candles, *, ha_on)` — optional HA projection for glyph drawing.
   - `key_bar_hollow_indices_for(candles, *, highlight_key_bars_on)` — derive hollow-bar indices.
-  - `ha_flat_overlay_for(candles, *, highlight_ha_flat_on, ha_on, dark_mode)` — derive HA-flat hatch metadata only when HA mode and the flat-highlight toggle are both on.
+  - `ha_flat_overlay_for(candles, *, highlight_ha_flat_on, ha_on, dark_mode)` — derive HA-flat hatch metadata only when HA mode and the flat-highlight toggle are both on. Hatch colours derive from the **live** `constants.BULL_COLOR` / `BEAR_COLOR` (module imports `from .. import constants as _constants` and reads `_constants.BULL_COLOR` at call time, NOT a value-binding `from ..constants import BULL_COLOR`) so the Okabe-Ito palette toggle re-colours the hatch without a relaunch. Audit `color-blind-palette`.
   - `repaint_visible_slot_glyphs(...)` — redraw existing slot slices without rebuilding topology.
   - `autoscale_slot_y(...)`, `ensure_rendered_for_view(...)` — viewport maintenance helpers.
   - `apply_tick_to_artists(...)`, `refresh_view_after_tick(...)`, `refresh_view_after_append(...)` — streaming fast paths.

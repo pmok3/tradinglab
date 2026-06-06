@@ -22,6 +22,7 @@ Prior Day High / Low / Close (PDH / PDL / PDC) reference lines for intraday char
 - **PDC = last regular bar's close.** Not the session VWAP or a weighted close — the literal closing price of the last regular-session bar.
 - **Boolean toggles for each level.** Three `bool` params (`show_high`, `show_low`, `show_close`, all default ON) let users enable/disable each line independently via checkboxes in the Manage Indicators dialog. When a toggle is OFF, the corresponding output array stays all-NaN (no line drawn).
 - **Output keys spelled out.** `prior_day_high`, `prior_day_low`, `prior_day_close` — not abbreviated — so the colour swatch labels in the dialog are self-explanatory.
+- **PDH/PDL default colours follow the bull/bear palette.** `default_style` sets `prior_day_high` to `constants.BULL_COLOR` and `prior_day_low` to `constants.BEAR_COLOR` (PDC stays neutral grey `#9e9e9e`) — PDH reads as support-from-above / bullish reclaim, PDL as breakdown / bearish, matching candle hues. Sourced from the constants so they follow the Okabe-Ito color-blind palette (orange/blue) on a fresh launch / indicator-add rather than being hardcoded teal/salmon. Audit `color-blind-palette-audit`.
 
 ## Invariants
 1. Output arrays are always the same length as input bars.

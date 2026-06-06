@@ -16,7 +16,7 @@ from tkinter import ttk
 from typing import Any
 
 from ._modal_base import BaseModalDialog, protect_combobox_wheel
-from .colors import DOWN_RED, UP_GREEN
+from .colors import down_red, up_green
 from .native_theme import apply_listbox_theme, apply_text_theme, current_theme
 
 
@@ -70,7 +70,7 @@ class PostTradeReviewDialog(BaseModalDialog):
             entry_dt = str(p.entry_ts)
             exit_dt = str(p.exit_ts)
 
-        pnl_color = UP_GREEN if p.pnl >= 0 else DOWN_RED
+        pnl_color = up_green() if p.pnl >= 0 else down_red()
         sign = "+" if p.pnl >= 0 else ""
 
         ttk.Label(frame, text=f"{p.symbol}  {p.side.upper()}  ×  {p.quantity:g}",

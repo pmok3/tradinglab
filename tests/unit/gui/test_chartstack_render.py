@@ -22,6 +22,7 @@ from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.patches import Rectangle
 
+from tradinglab import constants as _C
 from tradinglab.gui.chartstack import render as R
 from tradinglab.gui.chartstack.binding import CardBinding
 from tradinglab.gui.chartstack.render import (
@@ -140,9 +141,9 @@ def test_candle_body_color_bull_vs_bear():
     face_colors = body_collection.get_facecolors()
     assert len(face_colors) == 2
     assert tuple(face_colors[0]) == pytest.approx(
-        tuple(to_rgba(R._UP_COLOR)), abs=1e-9)
+        tuple(to_rgba(_C.BULL_COLOR)), abs=1e-9)
     assert tuple(face_colors[1]) == pytest.approx(
-        tuple(to_rgba(R._DOWN_COLOR)), abs=1e-9)
+        tuple(to_rgba(_C.BEAR_COLOR)), abs=1e-9)
 
 
 def test_candle_y_range_pads_above_and_below_extremes():
@@ -254,9 +255,9 @@ def test_candles_header_pct_color_tracks_today_bar_direction():
     # The %chg label is the right-aligned header text.
     pct_text = next(
         t for t in ax.texts if t.get_ha() == "right")
-    assert pct_text.get_color() == R._DOWN_COLOR or \
+    assert pct_text.get_color() == _C.BEAR_COLOR or \
         tuple(pct_text.get_color()) == pytest.approx(
-            tuple(to_rgba(R._DOWN_COLOR)), abs=1e-9)
+            tuple(to_rgba(_C.BEAR_COLOR)), abs=1e-9)
 
 
 # ---------------------------------------------------------------------------

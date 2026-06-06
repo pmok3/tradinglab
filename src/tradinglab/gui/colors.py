@@ -19,6 +19,7 @@ bull candles render the same shade (and vice versa for negative P/L).
 
 from __future__ import annotations
 
+from .. import constants as _constants
 from ..constants import BEAR_COLOR, BULL_COLOR
 
 # ---------------------------------------------------------------------------
@@ -26,13 +27,30 @@ from ..constants import BEAR_COLOR, BULL_COLOR
 # ---------------------------------------------------------------------------
 
 UP_GREEN: str = BULL_COLOR
-"""Positive sentiment (gains, wins, in-the-money). Aliased to
-``constants.BULL_COLOR`` (``#26a69a``) so P/L badges and bull candles
-render the same teal-green."""
+"""Positive sentiment (gains, wins, in-the-money). Import-time snapshot
+aliased to ``constants.BULL_COLOR``. **Prefer :func:`up_green` for any
+color read at paint time** — this constant freezes the palette at import
+and will not follow a runtime Okabe-Ito toggle. Audit
+``color-blind-palette-audit``."""
 
 DOWN_RED: str = BEAR_COLOR
-"""Negative sentiment (losses, errors, out-of-the-money). Aliased to
-``constants.BEAR_COLOR`` (``#ef5350``)."""
+"""Negative sentiment (losses, out-of-the-money). Import-time snapshot
+aliased to ``constants.BEAR_COLOR``. **Prefer :func:`down_red`** for
+live reads (see :data:`UP_GREEN`)."""
+
+
+def up_green() -> str:
+    """Live positive-sentiment color = current ``constants.BULL_COLOR``.
+
+    Follows the Okabe-Ito color-blind palette toggle (orange when active)
+    because it reads the constant at call time rather than import time.
+    """
+    return _constants.BULL_COLOR
+
+
+def down_red() -> str:
+    """Live negative-sentiment color = current ``constants.BEAR_COLOR``."""
+    return _constants.BEAR_COLOR
 
 
 # ---------------------------------------------------------------------------
@@ -68,6 +86,8 @@ on both light and dark backgrounds."""
 __all__ = [
     "UP_GREEN",
     "DOWN_RED",
+    "up_green",
+    "down_red",
     "WARN_AMBER",
     "INFO_BLUE",
     "CAUTION_YELLOW",

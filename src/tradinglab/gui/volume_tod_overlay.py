@@ -85,7 +85,7 @@ from matplotlib.axes import Axes
 from matplotlib.collections import LineCollection, PolyCollection
 from matplotlib.colors import to_rgba
 
-from ..constants import BEAR_COLOR, BULL_COLOR
+from .. import constants as _constants
 from ..core.timezones import get_et
 from ..models import Candle
 from ..rendering import _BODY_HALF, darker_shade
@@ -187,7 +187,7 @@ def _bar_base_color(c: Candle) -> tuple[float, float, float, float]:
     :func:`tradinglab.rendering.vol_geometry` so the overlay's solid
     fill matches the underlying ``draw_volume`` bar exactly.
     """
-    base = BULL_COLOR if c.is_bull else BEAR_COLOR
+    base = _constants.BULL_COLOR if c.is_bull else _constants.BEAR_COLOR
     extended_alpha = 0.45 if c.is_extended else 1.0
     return to_rgba(base, 0.7 * extended_alpha)
 

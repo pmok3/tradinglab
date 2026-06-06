@@ -41,6 +41,7 @@ from typing import ClassVar
 
 import numpy as np
 
+from ..constants import BEAR_COLOR, BULL_COLOR
 from ..core.bars import Bars
 from .base import Availability, BaseIndicator, LineStyle, ParamDef, intraday_only
 from .sessions import is_intraday_np, session_groups_np
@@ -69,8 +70,11 @@ class PriorDayHLC(BaseIndicator):
                  description="Prior Day Close"),
     )
     default_style: ClassVar[dict[str, LineStyle]] = {
-        "prior_day_high":  LineStyle(color="#26a69a", width=1.2),   # teal
-        "prior_day_low":   LineStyle(color="#ef5350", width=1.2),   # salmon
+        # PDH = bull (support-from-above breakout), PDL = bear, sourced from
+        # the live bull/bear palette so they follow the Okabe-Ito toggle.
+        # Audit ``color-blind-palette-audit``.
+        "prior_day_high":  LineStyle(color=BULL_COLOR, width=1.2),
+        "prior_day_low":   LineStyle(color=BEAR_COLOR, width=1.2),
         "prior_day_close": LineStyle(color="#9e9e9e", width=1.0),   # gray
     }
 

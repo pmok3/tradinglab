@@ -1409,9 +1409,12 @@ class ChartApp(
                 main_w = 1280
             try:
                 if compute_main_paned_sashes is not None:
+                    from . import settings as _settings_mod
+                    saved_nb_w = _settings_mod.get("layout.notebook_width_px")
                     forced_sashes = compute_main_paned_sashes(
                         main_w,
                         chartstack_visible=(self._chartstack is not None),
+                        notebook_width_px=saved_nb_w,
                     )
                     self.after_idle(
                         lambda: self._apply_forced_sash(
@@ -1691,21 +1694,22 @@ class ChartApp(
     def set_use_colorblind_palette(self, enabled: bool) -> None:
         """Toggle the color-blind-safe (Okabe-Ito) candle palette.
 
-        Persists to ``settings.json["use_colorblind_palette"]``.
-        Most call sites cache :data:`constants.BULL_COLOR` /
-        :data:`constants.BEAR_COLOR` as module-level locals, so a
-        full re-launch is needed for every chart and watchlist to
-        pick up the new palette. The Settings dialog displays a
-        "Relaunch required to fully apply" hint next to the
-        checkbox so traders aren't surprised when the live chart
-        keeps its previous colors after toggling.
+        Persists to ``settings.json["use_colorblind_palette"]`` and
+        mutates the live module-level :data:`constants.BULL_COLOR` /
+        :data:`constants.BEAR_COLOR`. The candle renderers
+        (``rendering._bar_rgba`` / ``bar_geometry`` / ``vol_geometry``,
+        the HA flat-bar hatch in ``gui.chart_renderer``, and the
+        time-of-day volume overlay) all resolve these constants via a
+        *live* attribute lookup at paint time, so the ``self._render()``
+        below repaints the chart with the new palette immediately — no
+        relaunch needed. We also re-tag the watchlist Treeviews so their
+        bull/bear row colors flip in lockstep.
 
-        We *do* mutate the live module-level constants here so
-        new windows / dialogs opened after the toggle pick up the
-        change immediately, plus we trigger a render so the
-        current chart re-paints any artists that compute colors
-        on-the-fly via ``constants.BULL_COLOR`` lookups. Audit
-        ``color-blind-palette``.
+        (A handful of secondary surfaces — e.g. the cached
+        ``gui.colors.UP_GREEN`` / ``DOWN_RED`` P/L badge aliases — still
+        snapshot the palette at import time and only fully reconcile on
+        the next launch. The chart and watchlist, which is what the
+        toggle is about, update live.) Audit ``color-blind-palette``.
         """
         from . import constants as _constants
         if enabled:
@@ -1718,13 +1722,29 @@ class ChartApp(
             _settings.set("use_colorblind_palette", bool(enabled))
         except Exception:  # noqa: BLE001
             pass
-        # Best-effort re-render so the current chart picks up the
-        # change for artists that read constants.BULL_COLOR /
-        # BEAR_COLOR via attribute lookup. Direct `from ... import`
-        # consumers keep their cached reference and require a
-        # relaunch.
+        # Re-render so the current chart picks up the change: the candle
+        # renderers read constants.BULL_COLOR / BEAR_COLOR via live
+        # attribute lookup (not a cached `from ... import`).
         try:
             self._render()
+        except Exception:  # noqa: BLE001
+            pass
+        # Re-apply the active theme so every Treeview's bull/bear row
+        # BACKGROUND and foreground tags repaint with the new palette
+        # (watchlist + primary/compare OHLC tables). The theme controller
+        # routes row tints through constants.bull_row_bg / bear_row_bg,
+        # which recolour to the Okabe-Ito hue when active. Audit
+        # ``color-blind-palette-audit``.
+        try:
+            self._apply_theme()
+        except Exception:  # noqa: BLE001
+            pass
+        # Repaint the ChartStack cards (SPY/QQQ/VXX etc.) from cache so
+        # their candles track the palette too — they read BULL_COLOR /
+        # BEAR_COLOR live via render._direction_color.
+        try:
+            if getattr(self, "_chartstack", None) is not None:
+                self._chartstack.refresh_palette()
         except Exception:  # noqa: BLE001
             pass
 
@@ -5533,6 +5553,116 @@ class ChartApp(
             return int(paned.sashpos(idx))  # type: ignore[attr-defined]
         except Exception:  # noqa: BLE001
             return 0
+
+    def _chartstack_currently_visible(self, paned: object) -> bool:
+        """Return True if the ChartStack panel is currently a pane of
+        ``paned``. Duck-typed so unit tests can pass a stub paned with
+        a ``panes()`` method."""
+        cs = getattr(self, "_chartstack", None)
+        if cs is None:
+            return False
+        try:
+            return str(cs) in list(paned.panes())  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _current_notebook_width(self) -> int:
+        """Return the live width (px) of the right-side notebook
+        (watchlist / OHLC / scanner / sandbox / entries / exits pane).
+
+        Computed as ``paned.winfo_width() - chart|notebook boundary``.
+        Returns ``0`` when the paned / sash can't be measured (so the
+        caller skips persisting a bogus width).
+
+        Audit ``watchlist-width-setting``.
+        """
+        paned = getattr(self, "_main_paned", None)
+        if paned is None:
+            return 0
+        cs_visible = self._chartstack_currently_visible(paned)
+        boundary = self._capture_notebook_boundary(paned, cs_visible)
+        if boundary <= 0:
+            return 0
+        try:
+            live_w = int(paned.winfo_width())  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            return 0
+        if live_w <= 0:
+            return 0
+        return max(0, live_w - boundary)
+
+    def _capture_notebook_width_setting(self) -> None:
+        """Snapshot the current notebook width into
+        ``settings["layout.notebook_width_px"]``.
+
+        Called by :class:`gui.config_manager.ConfigManager` right
+        before ``File → Save Configuration`` exports the settings
+        store, so the user's dragged divider position is persisted in
+        the saved config file. A width of ``0`` (unmeasurable) is a
+        no-op so we never clobber an existing saved value with junk.
+
+        Audit ``watchlist-width-setting``.
+        """
+        width = self._current_notebook_width()
+        if width <= 0:
+            return
+        try:
+            from . import settings as _settings
+            _settings.set("layout.notebook_width_px", int(width))
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _apply_notebook_width_setting(self) -> None:
+        """Force the live ``_main_paned`` sash to the saved notebook
+        width in ``settings["layout.notebook_width_px"]``.
+
+        Called by :class:`gui.config_manager.ConfigManager` after
+        ``File → Load Configuration`` imports a config file, so a
+        loaded watchlist width takes effect immediately. No-op when the
+        setting is absent / non-positive / unparseable (the layout then
+        keeps whatever it currently has). Honours the current
+        ChartStack visibility so the 220 px column is reserved when the
+        stack is showing.
+
+        Audit ``watchlist-width-setting``.
+        """
+        try:
+            from . import settings as _settings
+            raw = _settings.get("layout.notebook_width_px")
+        except Exception:  # noqa: BLE001
+            return
+        if raw is None:
+            return
+        try:
+            width = int(raw)
+        except (TypeError, ValueError):
+            return
+        if width <= 0:
+            return
+        paned = getattr(self, "_main_paned", None)
+        if paned is None:
+            return
+        cs_visible = self._chartstack_currently_visible(paned)
+        try:
+            live_w = int(paned.winfo_width())  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            live_w = 0
+        if live_w <= 0:
+            try:
+                live_w = int(
+                    self._initial_geometry.split('+')[0].split('x')[0])
+            except (ValueError, IndexError, AttributeError):
+                live_w = 1280
+        try:
+            from .constants import compute_main_paned_sashes
+        except Exception:  # noqa: BLE001
+            return
+        positions = compute_main_paned_sashes(
+            live_w, chartstack_visible=cs_visible, notebook_width_px=width)
+        try:
+            self._apply_forced_sash(paned, positions)
+        except Exception:  # noqa: BLE001
+            pass
 
     def _apply_chartstack_toggle_sash(
         self, paned: object, notebook_boundary: int, *,

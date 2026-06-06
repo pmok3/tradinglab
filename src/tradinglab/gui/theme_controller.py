@@ -7,10 +7,9 @@ import tkinter as tk
 from collections.abc import Callable
 from tkinter import ttk
 
+from .. import constants as _constants
 from .. import settings as _settings
 from ..constants import (
-    BEAR_COLOR,
-    BULL_COLOR,
     CUSTOMIZABLE_THEME_KEYS,
     LIGHT_THEME,
     build_ttk_style_spec,
@@ -175,12 +174,23 @@ class ThemeController:
                 pass
 
     def _apply_treeview_row_tags(self, theme: dict) -> None:
-        """Push bull/bear row tint onto every Treeview we own."""
+        """Push bull/bear row tint onto every Treeview we own.
+
+        Bull/bear backgrounds route through ``constants.bull_row_bg`` /
+        ``bear_row_bg`` so that when the Okabe-Ito color-blind palette is
+        active the green/red row tints are recoloured to the orange/blue
+        hue (preserving each theme's tuned tone). Audit
+        ``color-blind-palette-audit``.
+        """
         root = self._root
-        bull_bg = theme.get("bull_row_bg", BULL_COLOR)
-        bear_bg = theme.get("bear_row_bg", BEAR_COLOR)
-        bull_fg = theme.get("bull_row_fg", theme["text"])
-        bear_fg = theme.get("bear_row_fg", theme["text"])
+        bull_bg = _constants.bull_row_bg(theme)
+        bear_bg = _constants.bear_row_bg(theme)
+        bull_fg = (
+            _constants.sentiment_recolor(theme["bull_row_fg"], bullish=True)
+            if "bull_row_fg" in theme else theme["text"])
+        bear_fg = (
+            _constants.sentiment_recolor(theme["bear_row_fg"], bullish=False)
+            if "bear_row_fg" in theme else theme["text"])
         trees: list = []
         trees.extend(getattr(root, "_watchlist_trees", {}).values())
         trees.append(getattr(root, "_primary_table", None))

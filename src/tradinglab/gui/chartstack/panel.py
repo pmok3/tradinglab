@@ -261,6 +261,20 @@ class ChartStackPanel(ttk.Frame):
         self.refresh()
 
     # --------------------------------------------------------- public API --
+    def refresh_palette(self) -> None:
+        """Repaint every card from its cached bars so candle colors pick
+        up a live palette change (Okabe-Ito color-blind toggle) without
+        re-fetching. Marks all slots dirty and flushes the per-card blit
+        pass. Best-effort — never raises into the caller. Audit
+        ``color-blind-palette``.
+        """
+        try:
+            for card in self._cards:
+                self._dirty_slots.add(card.slot_index)
+            self._flush_dirty_cards()
+        except Exception:  # noqa: BLE001
+            pass
+
     def refresh(self) -> None:
         """Re-resolve bindings and redraw all cards.
 

@@ -10,7 +10,14 @@ Collections without rebuilding formatters/locators.
 
 ## Public API
 
-- `BULL_COLOR`, `BEAR_COLOR` — re-imported from `.constants`.
+- `BULL_COLOR`, `BEAR_COLOR` — resolved **live** at paint time via
+  `constants.BULL_COLOR` / `constants.BEAR_COLOR` attribute lookup (the module
+  imports `from . import constants as _constants`, NOT a value-binding
+  `from .constants import BULL_COLOR` — that froze the colour at import and
+  broke the runtime Okabe-Ito palette toggle). `_bar_rgba` and `vol_geometry`
+  read `_constants.BULL_COLOR` / `_constants.BEAR_COLOR` on every call, so
+  `ChartApp.set_use_colorblind_palette` + `_render()` repaints with the new
+  palette without a relaunch. Audit `color-blind-palette`.
 - `safe_remove(artist)` — `artist.remove()` wrapped in try/except.
 - `draw_candlesticks(ax, candles, x_offset=0, start=0, end=None, hollow_indices=None, flat_overlay=None) -> (wicks, bodies)`
   Builds `LineCollection` (wicks) + `PolyCollection` (bodies) for the slice.
@@ -72,7 +79,8 @@ Collections without rebuilding formatters/locators.
 
 ## Dependencies
 
-- Internal: `constants` (`BULL_COLOR`, `BEAR_COLOR`, `classify_session` for
+- Internal: `constants` (`BULL_COLOR`, `BEAR_COLOR` via live `_constants.*`
+  attribute lookup — see Public API note; `classify_session` for
   gap-shading), `formatting.fmt_volume`, `models.Candle`.
 - External: matplotlib (`LineCollection`, `PolyCollection`, `Rectangle`,
   `blended_transform_factory`, `FuncFormatter`, `MaxNLocator`, `to_rgba`).

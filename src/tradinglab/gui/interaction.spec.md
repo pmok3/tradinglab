@@ -219,6 +219,9 @@ during drag.
   `HPacker` (row 0) over one transparent `TextArea` per overlay legend
   row (rows 1..N). The OHLCV `HPacker` holds two `TextArea` children
   (`_main_text` neutral O/H/L/C/Vol; `_pct_text` bull/bear-coloured pct).
+  The pct color reads `constants.BULL_COLOR`/`BEAR_COLOR` **live** (via
+  `_constants.*` at paint time) so it follows the Okabe-Ito color-blind
+  palette toggle. Audit `color-blind-palette-audit`.
   Anchored axes-fraction `(0, 1)`, `frameon=False`, `animated=True`,
   `zorder=11`. `_update_readout(xdata)` from `_dispatch_hover`,
   `_hide_overlays`, and once at `_ensure_overlay_artists`. Falls back to

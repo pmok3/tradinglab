@@ -14,7 +14,7 @@ from collections.abc import Mapping
 
 from matplotlib.colors import to_rgba
 
-from .constants import BEAR_COLOR, BULL_COLOR
+from . import constants as _constants
 from .formatting import fmt_volume
 from .models import Candle
 
@@ -154,8 +154,13 @@ def _bar_rgba(c: Candle) -> tuple:
 
     Green/red from bull/bear; alpha reduced for extended-hours bars so they
     read as visually quieter than regular trading hours.
+
+    Reads ``constants.BULL_COLOR`` / ``BEAR_COLOR`` via *live* attribute
+    lookup (not a cached ``from ... import``) so the color-blind-palette
+    toggle (Okabe-Ito) repaints candles on the next render without a
+    relaunch. Audit ``color-blind-palette``.
     """
-    base = BULL_COLOR if c.is_bull else BEAR_COLOR
+    base = _constants.BULL_COLOR if c.is_bull else _constants.BEAR_COLOR
     alpha = _EXTENDED_ALPHA if c.is_extended else 1.0
     return to_rgba(base, alpha)
 
@@ -205,7 +210,7 @@ def vol_geometry(
     """
     if body_half is None:
         body_half = _BODY_HALF
-    base = BULL_COLOR if c.is_bull else BEAR_COLOR
+    base = _constants.BULL_COLOR if c.is_bull else _constants.BEAR_COLOR
     alpha = 0.7 * (_EXTENDED_ALPHA if c.is_extended else 1.0)
     color = to_rgba(base, alpha)
     x0 = x - body_half

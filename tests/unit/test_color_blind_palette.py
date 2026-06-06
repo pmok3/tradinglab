@@ -21,6 +21,17 @@ from pathlib import Path
 
 import pytest
 
+# Import the candle renderers at *collection* time so any cached
+# ``from .constants import BULL_COLOR`` binding is locked to the
+# import-time palette BEFORE the sentinel fixtures below mutate
+# ``constants``. Otherwise a fresh first-import inside a test would bind
+# to the sentinel and mask the very bug these tests guard. (Both are
+# already imported transitively via conftest, so this is belt-and-braces.)
+from tradinglab import rendering as _rendering_preimport  # noqa: E402,F401
+from tradinglab.gui import (  # noqa: E402,F401
+    volume_tod_overlay as _vto_preimport,
+)
+
 # ---------------------------------------------------------------------------
 # constants module — palette resolution
 # ---------------------------------------------------------------------------
@@ -143,10 +154,10 @@ def test_chartapp_defines_set_use_colorblind_palette():
 
 
 def test_setter_mutates_live_constants():
-    """Live mutation makes new dialogs / charts pick up the
-    palette swap without a restart. (Cached imports still hold
-    the old reference, hence the dialog's 'relaunch required'
-    hint.)"""
+    """Live mutation makes the chart + watchlist pick up the palette
+    swap without a restart — the candle renderers read
+    ``constants.BULL_COLOR`` / ``BEAR_COLOR`` via live attribute
+    lookup (see the ``*_reads_live_*`` behavioural tests below)."""
     start = APP_SRC.find("def set_use_colorblind_palette")
     end = APP_SRC.find("\n    def ", start + 1)
     body = APP_SRC[start:end] if end != -1 else APP_SRC[start:]
@@ -194,15 +205,34 @@ def test_dialog_has_colorblind_checkbox():
         "(Okabe-Ito) — accessibility-minded users search for it")
 
 
-def test_dialog_warns_about_relaunch():
-    """The hint must tell the user that some references are
-    cached and require a relaunch — otherwise they'll toggle the
-    setting, watch the chart not change instantly, and report a
-    bug."""
-    assert "Relaunch required" in DIALOGS_SRC or "relaunch required" in (
-        DIALOGS_SRC.lower()), (
-            "Settings dialog must warn that a relaunch is needed "
-            "to fully propagate the palette change")
+def test_dialog_describes_immediate_apply():
+    """After the live-repaint fix, toggling the palette repaints the
+    chart and re-tags the watchlist immediately, so the hint must tell
+    the user it applies right away (and must NOT claim a relaunch is
+    required — that was the pre-fix behaviour that prompted the bug
+    report)."""
+    assert "immediately" in DIALOGS_SRC.lower(), (
+        "Settings dialog must tell the user the palette applies "
+        "immediately")
+    # The old, now-incorrect 'relaunch required to fully apply' hint
+    # must be gone so users aren't told to restart needlessly.
+    assert "relaunch required to fully apply" not in DIALOGS_SRC.lower(), (
+        "Stale 'relaunch required to fully apply' hint must be removed "
+        "now that the chart + watchlist update live")
+
+
+def test_setter_retags_watchlist_live():
+    """The setter must re-apply the active theme so every Treeview's
+    bull/bear row BACKGROUND + foreground tags flip in lockstep with the
+    chart (watchlist + OHLC tables). The theme controller routes the row
+    tints through ``constants.bull_row_bg`` / ``bear_row_bg`` which
+    recolour to the Okabe-Ito hue when active."""
+    start = APP_SRC.find("def set_use_colorblind_palette")
+    end = APP_SRC.find("\n    def ", start + 1)
+    body = APP_SRC[start:end] if end != -1 else APP_SRC[start:]
+    assert "self._apply_theme()" in body, (
+        "Setter must re-apply the theme so Treeview row backgrounds + "
+        "foregrounds track the live palette")
 
 
 def test_dialog_persists_via_setter():
@@ -242,3 +272,124 @@ def test_default_and_colorblind_palettes_differ():
     from tradinglab import constants as c
     assert c._DEFAULT_BULL_COLOR != c._COLORBLIND_BULL_COLOR
     assert c._DEFAULT_BEAR_COLOR != c._COLORBLIND_BEAR_COLOR
+
+
+# ---------------------------------------------------------------------------
+# Candle renderers must read the LIVE palette (regression: toggling
+# Okabe-Ito has to repaint candles without a relaunch). The bug was that
+# rendering.py / chart_renderer.py / volume_tod_overlay.py did
+# ``from .constants import BULL_COLOR, BEAR_COLOR`` — binding the *value*
+# at import time — so mutating ``constants.BULL_COLOR`` in the setter
+# never reached the candle artists. Audit ``color-blind-palette``.
+# ---------------------------------------------------------------------------
+
+from datetime import datetime  # noqa: E402
+
+
+def _candle(close: float, open_: float = 100.0, *, session: str = "regular"):
+    from tradinglab.models import Candle
+    return Candle(
+        date=datetime(2024, 1, 2, 10, 0),
+        open=open_,
+        high=max(open_, close) + 1.0,
+        low=min(open_, close) - 1.0,
+        close=close,
+        volume=1000,
+        session=session,
+    )
+
+
+@pytest.fixture
+def _live_sentinel_palette():
+    """Swap the live module constants to *sentinel* colours that are
+    neither the default nor the Okabe-Ito palette, then restore.
+
+    Using sentinels (rather than the real colour-blind palette) is
+    essential: the user who reported the bug runs with
+    ``use_colorblind_palette`` already ON, so the cached import in
+    rendering.py happens to hold the Okabe-Ito value at import time.
+    Asserting against a sentinel guarantees the test only passes if the
+    renderer resolves the colour *live* at paint time."""
+    from tradinglab import constants as c
+    saved = (c.BULL_COLOR, c.BEAR_COLOR)
+    c.BULL_COLOR = "#123456"  # sentinel bull — in neither palette
+    c.BEAR_COLOR = "#abcdef"  # sentinel bear — in neither palette
+    try:
+        yield c
+    finally:
+        c.BULL_COLOR, c.BEAR_COLOR = saved
+
+
+def test_bar_rgba_reads_live_bull_color(_live_sentinel_palette):
+    from matplotlib.colors import to_rgba
+
+    from tradinglab import rendering
+    got = rendering._bar_rgba(_candle(close=105.0))  # bull
+    assert got == to_rgba("#123456", 1.0), (
+        "candle body/wick colour must follow the live BULL_COLOR")
+
+
+def test_bar_rgba_reads_live_bear_color(_live_sentinel_palette):
+    from matplotlib.colors import to_rgba
+
+    from tradinglab import rendering
+    got = rendering._bar_rgba(_candle(close=95.0))  # bear
+    assert got == to_rgba("#abcdef", 1.0), (
+        "candle body/wick colour must follow the live BEAR_COLOR")
+
+
+def test_bar_geometry_colour_follows_live_palette(_live_sentinel_palette):
+    from matplotlib.colors import to_rgba
+
+    from tradinglab import rendering
+    _wick, _body, colour = rendering.bar_geometry(_candle(close=105.0), x=0.0)
+    assert colour == to_rgba("#123456", 1.0)
+
+
+def test_vol_geometry_colour_follows_live_palette(_live_sentinel_palette):
+    from matplotlib.colors import to_rgba
+
+    from tradinglab import rendering
+    _verts, colour = rendering.vol_geometry(_candle(close=95.0), x=0.0)
+    assert colour == to_rgba("#abcdef", 0.7)
+
+
+def test_volume_tod_overlay_colour_follows_live_palette(
+        _live_sentinel_palette):
+    from matplotlib.colors import to_rgba
+
+    from tradinglab.gui import volume_tod_overlay as vto
+    got = vto._bar_base_color(_candle(close=105.0))  # bull
+    assert got == to_rgba("#123456", 0.7)
+
+
+def test_chartstack_direction_colour_follows_live_palette(
+        _live_sentinel_palette):
+    """ChartStack cards (SPY/QQQ/VXX) must mirror the main chart's
+    palette so a color-blind user gets Okabe-Ito candles there too."""
+    from tradinglab.gui.chartstack import render as csr
+    assert csr._direction_color(100.0, 105.0) == "#123456"  # bull → BULL
+    assert csr._direction_color(105.0, 100.0) == "#abcdef"  # bear → BEAR
+
+
+def test_setter_repaints_chartstack_and_watchlist():
+    """The setter must nudge the ChartStack cards (refresh_palette) and
+    the watchlist trees so every candle surface updates in lockstep."""
+    start = APP_SRC.find("def set_use_colorblind_palette")
+    end = APP_SRC.find("\n    def ", start + 1)
+    body = APP_SRC[start:end] if end != -1 else APP_SRC[start:]
+    assert "refresh_palette" in body, (
+        "Setter must repaint the ChartStack cards on palette toggle")
+
+
+def test_rendering_module_does_not_cache_palette_values():
+    """Source-pin: the candle renderer must resolve the palette via a
+    live ``constants`` attribute lookup, never a value-binding
+    ``from .constants import BULL_COLOR`` (which freezes the colour at
+    import time and is exactly what broke the Okabe-Ito toggle)."""
+    src = (Path(__file__).resolve().parents[2]
+           / "src" / "tradinglab" / "rendering.py").read_text(encoding="utf-8")
+    assert "from .constants import BEAR_COLOR, BULL_COLOR" not in src, (
+        "rendering.py must not value-bind BULL_COLOR/BEAR_COLOR at import")
+    assert "_constants.BULL_COLOR" in src and "_constants.BEAR_COLOR" in src, (
+        "rendering.py must read constants.BULL_COLOR/BEAR_COLOR live")

@@ -34,6 +34,7 @@ from typing import ClassVar
 
 import numpy as np
 
+from ..constants import macd_histogram_palette
 from ..core.bars import Bars
 from ._palette import SECONDARY_LINE, TERTIARY_LINE
 from .base import BaseIndicator, LineStyle, ParamDef
@@ -52,13 +53,14 @@ _DEFAULT_SOURCE = "close"
 #: Four-class color palette for the histogram. Order:
 #: ``(up_above, down_above, up_below, down_below)`` — i.e.
 #: (rising-above-zero, falling-above-zero, rising-below-zero,
-#: falling-below-zero). Matches the TradingView default.
-_HISTOGRAM_PALETTE: tuple[str, str, str, str] = (
-    "#26a69a",  # bright teal-green — rising above 0
-    "#b2dfdb",  # pale teal-green   — falling above 0
-    "#ffcdd2",  # pale red          — rising below 0
-    "#ef5350",  # bright red        — falling below 0
-)
+#: falling-below-zero). Sourced from ``constants.macd_histogram_palette``
+#: (a single source of truth that is Okabe-Ito-aware) so the histogram
+#: follows the color-blind palette. The histogram renderer re-resolves
+#: this LIVE on every paint via the same function, so a runtime palette
+#: toggle reaches the bars; this module-level snapshot drives only the
+#: default-style legend swatch + ``histogram_palette`` introspection.
+#: Audit ``color-blind-palette-audit``.
+_HISTOGRAM_PALETTE: tuple[str, str, str, str] = macd_histogram_palette()
 
 
 def _select_source(bars: Bars, source: str) -> np.ndarray:

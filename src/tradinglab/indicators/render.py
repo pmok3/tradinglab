@@ -452,12 +452,21 @@ def _draw_histogram(
     """
     from matplotlib.collections import LineCollection
 
+    # Base 4-class histogram palette. The app's standard MACD palette
+    # (default green/red OR its Okabe-Ito orange/blue variant) is swapped
+    # for the LIVE, palette-aware ``macd_histogram_palette`` so the bars
+    # follow the color-blind toggle without a relaunch; a genuinely custom
+    # 4-tuple pinned on ``cls.histogram_palette`` is still honoured. Audit
+    # ``color-blind-palette-audit``.
+    from ..constants import is_app_macd_palette, macd_histogram_palette
+
     # Local import to avoid a top-level dependency on macd from render.
     from .macd import classify_histogram
-
-    palette = tuple(getattr(cls, "histogram_palette", ()) or ())
-    if len(palette) < 4:
-        palette = ("#26a69a", "#b2dfdb", "#ffcdd2", "#ef5350")
+    cls_palette = tuple(getattr(cls, "histogram_palette", ()) or ())
+    if len(cls_palette) >= 4 and not is_app_macd_palette(cls_palette):
+        palette = cls_palette
+    else:
+        palette = macd_histogram_palette()
     # Optional per-output user color override (b42 native color chooser).
     # We only honor it as the "rising-above-zero" anchor; the other
     # three classes derive from the default palette to keep the

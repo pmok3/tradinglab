@@ -26,6 +26,8 @@ decisions and stay inline as literals.
 
 from __future__ import annotations
 
+from ..constants import sentiment_recolor as _sentiment_recolor
+
 # matplotlib tab10 names (canonical color cycle)
 TAB10_BLUE    = "#1f77b4"
 TAB10_ORANGE  = "#ff7f0e"
@@ -46,9 +48,12 @@ TERTIARY_LINE  = TAB10_GREEN     # MA #3, etc.
 QUATERNARY     = TAB10_RED       # bands upper / lower, hi/lo
 QUINARY        = TAB10_PURPLE    # extras
 
-# Bullish / bearish semantic colors (slightly off-tab10 for visibility).
-BULLISH = "#1bb556"  # green dot at high-water mark, MFE marker
-BEARISH = "#d62728"  # red dot, MAE marker
+# Bullish / bearish semantic marker colors (MFE / MAE dots). Routed
+# through ``constants.sentiment_recolor`` so they follow the Okabe-Ito
+# color-blind palette (the green/red base hues swing to orange/blue when
+# the toggle is on). Audit ``color-blind-palette-audit``.
+BULLISH = _sentiment_recolor("#1bb556", bullish=True)   # MFE marker
+BEARISH = _sentiment_recolor("#d62728", bullish=False)  # MAE marker
 
 # Default fallback gray used when an indicator's style is unset.
 FALLBACK_GRAY = "#888888"

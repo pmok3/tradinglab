@@ -75,6 +75,16 @@ class ConfigManager:
                         pass
         except Exception:  # noqa: BLE001
             pass
+        # Apply the saved watchlist (notebook) width to the live sash
+        # (audit ``watchlist-width-setting``). No-op when the loaded
+        # config doesn't carry ``layout.notebook_width_px``.
+        try:
+            apply_width = getattr(
+                parent_widget, "_apply_notebook_width_setting", None)
+            if callable(apply_width):
+                apply_width()
+        except Exception:  # noqa: BLE001
+            pass
         try:
             parent_widget._render()
             parent_widget._refill_table()
@@ -111,11 +121,28 @@ class ConfigManager:
             parent=parent_widget,
         )
 
+    @staticmethod
+    def _capture_layout_into_settings(parent_widget: Any) -> None:
+        """Snapshot the live watchlist (notebook) width into settings
+        before an export, so File → Save Configuration persists the
+        user's dragged divider position (audit
+        ``watchlist-width-setting``). Duck-typed + guarded — a parent
+        without the hook (or a headless test stub) is a silent no-op.
+        """
+        try:
+            capture = getattr(
+                parent_widget, "_capture_notebook_width_setting", None)
+            if callable(capture):
+                capture()
+        except Exception:  # noqa: BLE001
+            pass
+
     def save_config(self, parent_widget: Any) -> None:
         target = _settings.loaded_path()
         if target is None:
             self.save_config_as(parent_widget)
             return
+        self._capture_layout_into_settings(parent_widget)
         ok = _settings.export_to_file(target)
         if not ok:
             messagebox.showerror(
@@ -141,6 +168,7 @@ class ConfigManager:
         )
         if not path:
             return
+        self._capture_layout_into_settings(parent_widget)
         ok = _settings.export_to_file(path)
         if not ok:
             messagebox.showerror(

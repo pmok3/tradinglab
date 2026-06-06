@@ -224,14 +224,11 @@ class _SettingsDialog(BaseModalDialog):
         ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
 
         # Color-blind-safe candle palette (Okabe-Ito orange/blue).
-        # Most call sites cache the imported BULL_COLOR / BEAR_COLOR
-        # so a full relaunch is needed to propagate the change to
-        # every chart + watchlist. We mutate the module-level
-        # constants live so dialogs opened after the toggle pick up
-        # the new palette, and we tag the checkbox with a "Relaunch
-        # required to fully apply" hint so users aren't surprised
-        # when the live chart keeps the old colors. Audit
-        # ``color-blind-palette``.
+        # The candle renderers resolve constants.BULL_COLOR /
+        # BEAR_COLOR via live attribute lookup, so the toggle handler's
+        # set_use_colorblind_palette() re-renders the chart and re-tags
+        # the watchlist immediately — no relaunch needed for those
+        # surfaces. Audit ``color-blind-palette``.
         try:
             from .. import settings as _settings_mod
             self._colorblind_initial = bool(
@@ -253,8 +250,8 @@ class _SettingsDialog(BaseModalDialog):
             text=("Replaces the default green/red candle colors with "
                   "Okabe-Ito orange/blue so the bull/bear distinction "
                   "reads cleanly for deuteranopia / protanopia / "
-                  "tritanopia. Relaunch required to fully apply across "
-                  "all charts and watchlists."),
+                  "tritanopia. The chart and watchlists update "
+                  "immediately."),
             foreground=MUTED_GREY, wraplength=480, justify="left",
         ).grid(row=1, column=0, sticky="w", pady=(2, 0))
 
@@ -546,22 +543,16 @@ class _SettingsDialog(BaseModalDialog):
 
         # Startup update check. Default-on now that the repo has a
         # public GitHub Releases channel; the networking layer is RTH-
-        # suppressed and cached. The URL entry is a power-user override
-        # for forks/self-hosted manifests; empty means built-in default.
+        # suppressed and cached. The endpoint URL is intentionally NOT
+        # user-facing — it falls back to the env var / built-in GitHub
+        # Releases default (see updates._resolve_url).
         try:
             self._update_check_initial = bool(
                 _defaults_mod.get("update_check_on_startup"))
         except Exception:  # noqa: BLE001
             self._update_check_initial = True
-        try:
-            self._update_url_initial = str(
-                _defaults_mod.get("update_check_url") or "")
-        except Exception:  # noqa: BLE001
-            self._update_url_initial = ""
         self._update_check_var = tk.BooleanVar(
             value=self._update_check_initial)
-        self._update_url_var = tk.StringVar(
-            value=self._update_url_initial)
         ttk.Checkbutton(
             parent,
             text="Check for updates on startup",
@@ -574,19 +565,6 @@ class _SettingsDialog(BaseModalDialog):
                   "hours, and only shows a banner when a newer release exists."),
             foreground=MUTED_GREY, wraplength=480, justify="left",
         ).grid(row=btn_row + 5, column=0, columnspan=2, sticky="w",
-               pady=(2, 0))
-        ttk.Label(parent, text="Update endpoint override:").grid(
-            row=btn_row + 6, column=0, sticky="w", pady=(8, 0))
-        ttk.Entry(
-            parent, textvariable=self._update_url_var, width=52,
-        ).grid(row=btn_row + 6, column=1, sticky="ew", padx=(8, 0),
-               pady=(8, 0))
-        ttk.Label(
-            parent,
-            text=("Empty = built-in GitHub Releases endpoint. Set only "
-                  "if you maintain a fork or self-hosted release manifest."),
-            foreground=MUTED_GREY, wraplength=480, justify="left",
-        ).grid(row=btn_row + 7, column=0, columnspan=2, sticky="w",
                pady=(2, 0))
 
     def _on_capture_current_as_default(self) -> None:
@@ -935,10 +913,6 @@ class _SettingsDialog(BaseModalDialog):
             new_update_check = bool(self._update_check_var.get())
             if new_update_check != self._update_check_initial:
                 _settings_mod.set("update_check_on_startup", new_update_check)
-                _defaults_mod.reload()
-            new_update_url = (self._update_url_var.get() or "").strip()
-            if new_update_url != self._update_url_initial:
-                _settings_mod.set("update_check_url", new_update_url)
                 _defaults_mod.reload()
             # Commit watchlist pin cap. Audit ``pinned-watchlist-cap``.
             try:

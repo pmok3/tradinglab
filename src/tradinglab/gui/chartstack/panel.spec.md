@@ -14,6 +14,11 @@ mixin stack.
   the binding changed, redraw placeholders, and call `card.controller.start()`
   on every non-empty slot for first-paint fetch. Also calls
   `controller.start_stream(self._subscription_registry)` after the fetch kick.
+- `refresh_palette()` — repaint every card from its **cached** bars (marks
+  all slots dirty + `_flush_dirty_cards()`) so candle colors pick up a live
+  palette change (Okabe-Ito color-blind toggle) **without** re-fetching or
+  re-kicking streams. Best-effort (never raises). Called by
+  `ChartApp.set_use_colorblind_palette`. Audit `color-blind-palette`.
 - `apply_card_stash(slot_index, token, symbol, candles)` — receive bars from
   the worker-inbox drain, populate the per-slot `CardSeriesCache`, render
   via `draw_card_sparkline`. **Token-gated**: payloads whose `token` is

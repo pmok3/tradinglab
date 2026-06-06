@@ -41,17 +41,19 @@ A doji bar (open == close) draws a floor-height sliver so it
 remains visible. Body width spans 70 % of the per-bar x-step;
 falls back to a minimum of `0.3` to stay visible on a 2-bar card.
 
-## Color tokens (mirror `gui/colors.py`)
-- `_UP_COLOR = "#26a69a"` — mirrors `BULL_COLOR`.
-- `_DOWN_COLOR = "#ef5350"` — mirrors `BEAR_COLOR`.
-- `_FLAT_COLOR = "#6b7280"` — neutral grey for doji.
-
-Local constants instead of imports so the module stays importable
-on a headless test runner that hasn't loaded `gui/colors.py`
-(which transitively pulls Tk-side `..constants`).
+## Color tokens
+- Bull / bear candle colors are read **live** from
+  `constants.BULL_COLOR` / `BEAR_COLOR` inside `_direction_color`
+  (module imports `from ... import constants as _constants`), so the
+  cards mirror the main chart — including the Okabe-Ito color-blind
+  palette toggle (`ChartApp.set_use_colorblind_palette` →
+  `ChartStackPanel.refresh_palette()`). Audit `color-blind-palette`.
+- `_FLAT_COLOR = "#6b7280"` — neutral grey for doji (no palette
+  variant; bull/bear carry the directional meaning).
 
 ## Drawing helpers
-- `_direction_color(open, close)` — bull / bear / flat hex string.
+- `_direction_color(open, close)` — bull / bear / flat hex string;
+  bull/bear resolve `constants.BULL_COLOR` / `BEAR_COLOR` live.
 - `_draw_candles(ax, bars, xs)` — single `LineCollection` for wicks +
   single `PatchCollection` for bodies (~3 ms / 60-bar card vs ~60 ms for a
   per-bar `ax.plot` + `add_patch` loop). Lazy `matplotlib.collections` /

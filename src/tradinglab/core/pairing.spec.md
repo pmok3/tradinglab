@@ -5,7 +5,7 @@ Compare-mode primitive: given primary + compare raw candle lists, coordinate the
 
 ## Public API
 - `apply_pair_filter(primary_raw, compare_raw, interval, extended_hours) -> (primary, compare)` — drops extended-hours bars unless both sides have them. Identity-preserving on no-op.
-- `align_pair(primary, compare) -> (primary_aligned, compare_aligned)` — equal-length lists with shared `date` keys; missing slots filled with `Candle.gap(date)`. Real bars are the **same objects** as in inputs.
+- `align_pair(primary, compare, interval=None) -> (primary_aligned, compare_aligned)` — equal-length lists with shared slot keys; missing slots filled with `Candle.gap(date)`. Real bars are the **same objects** as in inputs. **Grain depends on `interval`**: intraday (or `interval=None`, the back-compat default) keys on the exact tz-normalized timestamp; daily and coarser (`1d`/`1wk`/`1mo`) key on the **calendar date** so a synthesized today bar (session-open time, e.g. 09:30 ET) aligns with the other side's midnight provider bar for the same day.
 - `apply_pair_filter_and_align(primary_raw, compare_raw, interval, extended_hours)` — composition.
 
 ## Dependencies
@@ -17,11 +17,12 @@ Internal: `..constants.is_intraday`, `..models.Candle`. External: none.
 - **Gap placeholders**, not skipping slots: `align_pair` pads missing slots with `Candle.gap(date)`. Rendering/hover/autoscale short-circuit on `is_gap`, but the slot is preserved so both panels keep matching X indices (essential for `sharex=`).
 - **Intersection by calendar date** (`lo_day = max(p[0].date.date(), c[0].date.date())`): one side may go further back (e.g. new IPO vs. SPY). Restricting to the overlap avoids long stretches of `Candle.gap`.
 - **`align_pair` short-circuits** when either side is empty or date ranges don't overlap — returns shallow `list(...)` copies of inputs (real bars share identity).
-- **Tz-mixed inputs are normalized**, not rejected: disk-cache pickles preserve provider tz (e.g. `America/New_York`) while in-memory fake/streaming/stubbed data is often tz-naive. Mixing inside `set | set` raises `TypeError`. `_normalize_pairing_key` strips tzinfo for use as a dict/sort key (both sides represent the same exchange wall clock). Output candles retain their original `.date`.
+- **Daily+ align by calendar date, intraday by exact timestamp** (`compare-daily-today-align`): `data.today_upsample` synthesizes today's 1d bar with the session-open timestamp (`matches[0].date`, e.g. 09:30 ET) — intentionally, so hover/event joins still resolve a real intraday bar. The other side's today bar may be a provider partial at midnight (when its intraday isn't cached, no synth runs). Under exact-timestamp keying those two same-day bars split into two slots → a spurious gap before today on one panel and a blank "tomorrow" on the other (reported for MU in compare mode). Keying daily+ on `c.date.date()` snaps both today bars into one slot. Intraday keeps exact-timestamp keying (sub-day bars are genuinely distinct). Gated on `interval`; `align_pair(p, c)` with no interval keeps the legacy exact-timestamp path (used by some headless callers/tests).
+- **Tz-mixed inputs are normalized**, not rejected: disk-cache pickles preserve provider tz (e.g. `America/New_York`) while in-memory fake/streaming/stubbed data is often tz-naive. Mixing inside `set | set` raises `TypeError`. `_normalize_pairing_key` strips tzinfo for use as a dict/sort key (both sides represent the same exchange wall clock). Output candles retain their original `.date`. (Daily+ keys on `.date.date()` which is tz-irrelevant by construction.)
 
 ## Invariants
 - After `apply_pair_filter(raw, None, ...)`, primary is filtered correctly regardless of `compare_raw=None` (single-chart mode still honors Pre/Post).
-- After `align_pair(p, c)`: `len(p_out) == len(c_out)`; `p_out[i].date == c_out[i].date` for all i.
+- After `align_pair(p, c, interval)`: `len(p_out) == len(c_out)`. For **intraday**, `p_out[i].date == c_out[i].date` for all i. For **daily+**, `p_out[i].date.date() == c_out[i].date.date()` (same calendar day) — the time-of-day may differ when one side is a synth-today bar (09:30) and the other a midnight provider bar; gap placeholders borrow a real bar's `.date` for the slot.
 - Real (non-gap) output bars share `id()` with input bars.
 - `apply_pair_filter` returns the input list object unchanged when no filtering needed.
 
@@ -36,10 +37,17 @@ apply_pair_filter(p_raw, c_raw, interval, extended_hours):
             want_ext = False          # fall back: RTH on both sides
     return (p_filtered, c_filtered)   # identity-return when no filter
 
-align_pair(p, c):
+align_pair(p, c, interval=None):
     lo_day = max(p[0].date.date(), c[0].date.date())
     hi_day = min(p[-1].date.date(), c[-1].date.date())
     if lo_day > hi_day: return as-is
+    if interval is not None and not is_intraday(interval):   # daily+
+        by_p = {c.date.date(): c for c in p  if lo_day <= c.date.date() <= hi_day}
+        by_c = {c.date.date(): c for c in c_in if lo_day <= c.date.date() <= hi_day}
+        for day in sorted(set(by_p) | set(by_c)):
+            ref = (by_p.get(day) or by_c.get(day)).date   # a real bar's ts
+            emit (by_p.get(day) or Candle.gap(ref), by_c.get(day) or Candle.gap(ref))
+        return
     by_p = {_normalize_pairing_key(c.date): c for c in p if lo_day <= c.date.date() <= hi_day}
     by_c = {_normalize_pairing_key(c.date): c for c in c_in if lo_day <= c.date.date() <= hi_day}
     merged_dates = sorted(set(by_p) | set(by_c))

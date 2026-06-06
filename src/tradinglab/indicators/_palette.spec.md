@@ -30,8 +30,8 @@ import these directly.
 | `TERTIARY_LINE`  | `TAB10_GREEN`    | Third line (ADX `+DI`, WMA-MA, SMA-BB)           |
 | `QUATERNARY`     | `TAB10_RED`      | Bands / hi-lo / "hot" series (ADX `-DI`, RSI, EMA-BB) |
 | `QUINARY`        | `TAB10_PURPLE`   | Extras (VWAP, WMA-BB, WMA-KC)                    |
-| `BULLISH`        | `"#1bb556"`      | Green dot at MFE marker — slightly off-tab10 for visibility |
-| `BEARISH`        | `"#d62728"`      | Red dot at MAE marker                            |
+| `BULLISH`        | `sentiment_recolor("#1bb556")` | MFE marker dot — base green, recoloured to the live bull hue under the Okabe-Ito palette (audit `color-blind-palette-audit`) |
+| `BEARISH`        | `sentiment_recolor("#d62728")` | MAE marker dot — base red, recoloured to the live bear hue under Okabe-Ito |
 | `FALLBACK_GRAY`  | `"#888888"`      | Neutral fallback when no style is set            |
 
 ### Role-vs-name distinction

@@ -79,6 +79,7 @@ def _normalize_pairing_key(d):
 def align_pair(
     primary: list[Candle],
     compare: list[Candle],
+    interval: str | None = None,
 ) -> tuple[list[Candle], list[Candle]]:
     """Timestamp-align two candle series.
 
@@ -91,6 +92,18 @@ def align_pair(
     Tz-mixed inputs (one naive, one aware) are tolerated: keys are
     normalized via :func:`_normalize_pairing_key` so wall-clock
     alignment works regardless of provenance.
+
+    ``interval`` selects the alignment grain. For **intraday** intervals
+    (or when ``None``, the back-compat default) bars are keyed on the
+    exact tz-normalized timestamp. For **daily and coarser** intervals
+    (``1d`` / ``1wk`` / ``1mo``) bars are keyed on the **calendar date**
+    only — daily bars are one-per-day, and today's *synthesized* daily
+    bar carries the session-open time (e.g. ``09:30`` ET, see
+    ``data.today_upsample``) which would otherwise NOT match the other
+    side's midnight provider bar for the same day. Keying on the date
+    snaps both today bars into a single slot, fixing the spurious
+    "gap before today + blank tomorrow" rendering in compare mode.
+    Audit ``compare-daily-today-align``.
     """
     if not primary or not compare:
         return list(primary or []), list(compare or [])
@@ -100,13 +113,35 @@ def align_pair(
     if lo_day > hi_day:
         return list(primary), list(compare)
 
+    # Daily and coarser bars align by calendar day, not exact timestamp.
+    if interval is not None and not is_intraday(interval):
+        by_p = {
+            c.date.date(): c
+            for c in primary if lo_day <= c.date.date() <= hi_day
+        }
+        by_c = {
+            c.date.date(): c
+            for c in compare if lo_day <= c.date.date() <= hi_day
+        }
+        out_p: list[Candle] = []
+        out_c: list[Candle] = []
+        for day in sorted(set(by_p) | set(by_c)):
+            pbar = by_p.get(day)
+            cbar = by_c.get(day)
+            # Gap placeholders borrow a real bar's timestamp for the slot
+            # (at least one side is real for every merged day key).
+            ref = (pbar or cbar).date
+            out_p.append(pbar or Candle.gap(ref))
+            out_c.append(cbar or Candle.gap(ref))
+        return out_p, out_c
+
     _k = _normalize_pairing_key
     by_p = {_k(c.date): c for c in primary if lo_day <= c.date.date() <= hi_day}
     by_c = {_k(c.date): c for c in compare if lo_day <= c.date.date() <= hi_day}
     merged = sorted(set(by_p) | set(by_c))
 
-    out_p: list[Candle] = []
-    out_c: list[Candle] = []
+    out_p = []
+    out_c = []
     for d in merged:
         out_p.append(by_p.get(d) or Candle.gap(d))
         out_c.append(by_c.get(d) or Candle.gap(d))
@@ -124,5 +159,5 @@ def apply_pair_filter_and_align(
         primary_raw, compare_raw, interval, extended_hours,
     )
     if compare_raw is not None and primary and compare:
-        primary, compare = align_pair(primary, compare)
+        primary, compare = align_pair(primary, compare, interval)
     return primary, compare

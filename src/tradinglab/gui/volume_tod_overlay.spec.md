@@ -108,8 +108,12 @@ disagree (00:00–05:00 UTC) is post-market and filtered by
 
 `_bar_base_color(c)` replicates `tradinglab.rendering.vol_geometry`
 exactly:
-`to_rgba(BULL_COLOR if c.is_bull else BEAR_COLOR, 0.7 * extended_alpha)`
-where `extended_alpha = 0.45 if c.is_extended else 1.0`.
+`to_rgba(constants.BULL_COLOR if c.is_bull else constants.BEAR_COLOR, 0.7 * extended_alpha)`
+where `extended_alpha = 0.45 if c.is_extended else 1.0`. The palette is
+read **live** via `_constants.BULL_COLOR` / `_constants.BEAR_COLOR`
+attribute lookup (module imports `from .. import constants as
+_constants`, not a value-binding `from ..constants import BULL_COLOR`)
+so the Okabe-Ito toggle re-colours the overlay without a relaunch.
 Duplicated rather than imported (private helper). Pinned by
 smoke-gate pixel-equality probes.
 

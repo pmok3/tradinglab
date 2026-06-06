@@ -22,7 +22,7 @@ import tkinter as tk
 
 import numpy as np
 
-from ..constants import BEAR_COLOR, BULL_COLOR
+from .. import constants as _constants
 from ..core.viewport import y_limits_for_slice as _y_limits_for_slice
 from ..formatting import fmt_volume
 
@@ -1978,7 +1978,8 @@ class InteractionMixin:
                 if prev_close is not None and prev_close > 0:
                     pct = (c.close - prev_close) / prev_close * 100.0
                     pct_str = f"  {pct:+.2f}%"
-                    pct_color = BULL_COLOR if pct >= 0 else BEAR_COLOR
+                    pct_color = (_constants.BULL_COLOR if pct >= 0
+                                 else _constants.BEAR_COLOR)
                 else:
                     pct_str = ""
                     pct_color = self._theme["text"]

@@ -73,6 +73,8 @@ def test_public_api_only_contains_documented_tokens() -> None:
     assert sorted(colors.__all__) == sorted([
         "UP_GREEN",
         "DOWN_RED",
+        "up_green",
+        "down_red",
         "WARN_AMBER",
         "INFO_BLUE",
         "CAUTION_YELLOW",
