@@ -173,6 +173,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      - name: Checkout source
+        # Needed for CHANGELOG.md + tools/extract_changelog.py below.
+        uses: actions/checkout@v6
+
       - name: Download all arch artifacts
         uses: actions/download-artifact@v8
         with:
@@ -188,9 +192,29 @@ jobs:
       - name: List collected artifacts
         run: ls -lh dist/
 
+      - name: Build release notes from CHANGELOG
+        shell: bash
+        # Prepend the curated CHANGELOG section for this version to the
+        # release body so the changelog is VISIBLE in the GitHub release
+        # notes. ``generate_release_notes: true`` below still appends the
+        # auto "What's Changed" commit list underneath the changelog.
+        # On a manual ``workflow_dispatch`` (ref is a branch, not a
+        # ``vX.Y.Z`` tag) there's no matching section — fall back to an
+        # empty body so only the auto-notes show.
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if python3 tools/extract_changelog.py "$VERSION" CHANGELOG.md release_notes.md; then
+            echo "Using CHANGELOG section for $VERSION:"
+            cat release_notes.md
+          else
+            echo "No CHANGELOG section for '$VERSION' — auto-generated notes only."
+            : > release_notes.md
+          fi
+
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v3
         with:
           files: dist/TradingLab-*.zip
+          body_path: release_notes.md
           generate_release_notes: true
           fail_on_unmatched_files: true
