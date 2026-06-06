@@ -87,6 +87,13 @@ Saved strategies sit in the library. They only become active when you click
 **Arm** in the Entries tab. Arm state is per-session — it resets when you
 close the app.
 
+The Entries tab has a **Show: Mine | Templates | All** filter above the
+strategy table. It opens on **Mine** each session — your own strategies
+only — so the bundled starter templates don't clutter your working list.
+Switch to **Templates** to browse the starters, or **All** to see
+everything. A template you **Load** or **Duplicate** becomes your own
+strategy and shows under **Mine**.
+
 ---
 
 ## Exit strategies
@@ -99,7 +106,9 @@ directly — the entry's **on-fill exits** list is what creates the link.
 
 In the **Exits** tab, click **Edit Strategies** to open the exit library.
 Click **New** (or **Bracket Template** for a pre-built stop + target, or
-**Load Template** for other presets).
+**Load Template** for other presets). The exit library has the same
+**Show: Mine | Templates | All** filter as the Entries tab, defaulting to
+**Mine**.
 
 ### Trigger types — when to exit
 
@@ -374,7 +383,10 @@ Group [OR]
 
 ## Templates
 
-TradingLab ships with built-in templates to get you started:
+TradingLab ships with built-in templates to get you started. On first run
+they're seeded into your entry/exit libraries, but the **Show** filter
+defaults to **Mine**, so they stay out of the way until you switch it to
+**Templates** or **All**:
 
 ### Entry templates
 - **EMA 3/8 Cross Long** — enter long on fast/slow EMA crossover
@@ -390,7 +402,9 @@ TradingLab ships with built-in templates to get you started:
 - **Time Stop 15:55** — flatten at 15:55 ET
 - **Trailing 2%** — 2% trailing stop
 
-Load a template from the entry/exit editor, then customize it for your setup.
+Load a template from the entry/exit editor (or switch the **Show** filter to
+**Templates**), then customize it for your setup. A loaded or duplicated copy
+is saved as your own strategy and appears under **Mine**.
 
 ---
 

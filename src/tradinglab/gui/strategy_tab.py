@@ -47,6 +47,7 @@ from ..strategy_tester import (
 from ..strategy_tester.report import RunAggregate, load_aggregate
 from ..strategy_tester.universe import list_presets
 from ..watchlists import storage as _watchlists_storage
+from .colors import MUTED_GREY
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +141,11 @@ class StrategyTab(ttk.Frame):
         # Tk Variables for the Configure pane.
         self._var_entry_id = tk.StringVar(value="")
         self._var_exit_id = tk.StringVar(value="")
+        # Mine | Templates | All filter governing BOTH strategy dropdowns;
+        # defaults to "Mine" each time the tab is built (session-only, NOT
+        # persisted) so the pickers aren't buried under the ~21/22 bundled
+        # starter templates (id prefix ``tmpl-``). Audit ``template-filter``.
+        self._strategy_filter_var = tk.StringVar(value="mine")
         self._var_universe_kind = tk.StringVar(value=UniverseKind.SYMBOLS.value)
         self._var_universe_symbols = tk.StringVar(value="AAPL, MSFT, NVDA")
         self._var_universe_watchlist = tk.StringVar(value="")
@@ -212,6 +218,31 @@ class StrategyTab(ttk.Frame):
 
     def _build_configure(self, parent: ttk.Frame) -> None:
         row = 0
+        # Mine | Templates | All filter governing BOTH strategy dropdowns
+        # below. Defaults to "Mine" (session-only) so the pickers open
+        # decluttered instead of buried under the bundled starter
+        # templates (id prefix ``tmpl-``). Audit ``template-filter``.
+        filt = ttk.Frame(parent)
+        filt.grid(row=row, column=0, columnspan=2, sticky="w", pady=(0, 2))
+        ttk.Label(filt, text="Show:").pack(side="left")
+        self._strategy_filter_buttons: dict[str, ttk.Radiobutton] = {}
+        for _value, _label in (("mine", "Mine"), ("templates", "Templates"),
+                               ("all", "All")):
+            rb = ttk.Radiobutton(
+                filt, text=_label, value=_value,
+                variable=self._strategy_filter_var,
+                command=self._on_strategy_filter_change,
+            )
+            rb.pack(side="left", padx=(4, 0))
+            self._strategy_filter_buttons[_value] = rb
+        row += 1
+        self._strategy_filter_hint = ttk.Label(
+            parent, text="", foreground=MUTED_GREY, wraplength=320,
+            justify="left")
+        self._strategy_filter_hint.grid(row=row, column=0, columnspan=2,
+                                        sticky="w")
+        row += 1
+
         ttk.Label(parent, text="Entry strategy", font=("", 9, "bold")).grid(
             row=row, column=0, sticky="w", pady=(0, 2)
         )
@@ -646,14 +677,23 @@ class StrategyTab(ttk.Frame):
     # ------------------------------------------------------------------
 
     def _populate_pickers(self) -> None:
-        entry_values = [f"{e.name} · {e.id[:8]}" for e in self._entries]
-        exit_values = [f"{x.name} · {x.id[:8]}" for x in self._exits]
+        # Mine | Templates | All filter for the strategy dropdowns (audit
+        # ``template-filter``). Display-only: it never changes a selection
+        # already made, and ``_selected_entry`` / ``_selected_exit`` still
+        # resolve against the FULL library.
+        flt = (self._strategy_filter_var.get()
+               if hasattr(self, "_strategy_filter_var") else "all")
+        entries = [e for e in self._entries if self._filter_ok(e, flt)]
+        exits = [x for x in self._exits if self._filter_ok(x, flt)]
+        entry_values = [f"{e.name} · {e.id[:8]}" for e in entries]
+        exit_values = [f"{x.name} · {x.id[:8]}" for x in exits]
         self._cb_entry["values"] = entry_values
         self._cb_exit["values"] = exit_values
         if entry_values and not self._var_entry_id.get():
             self._var_entry_id.set(entry_values[0])
         if exit_values and not self._var_exit_id.get():
             self._var_exit_id.set(exit_values[0])
+        self._update_strategy_filter_hint(entry_values, exit_values)
 
         self._cb_watchlist["values"] = list(self._watchlist_names)
         if self._watchlist_names and not self._var_universe_watchlist.get():
@@ -665,6 +705,47 @@ class StrategyTab(ttk.Frame):
         self._cb_preset["values"] = [label for _pid, label in presets]
         if presets and not self._var_universe_preset.get():
             self._var_universe_preset.set(presets[0][1])
+
+    @staticmethod
+    def _is_template(strategy: Any) -> bool:
+        """True for a bundled starter template (seeded on first run),
+        identified by the ``tmpl-`` id prefix — NOT
+        ``created_with.template`` (a loaded/duplicated copy keeps a UUID
+        id and belongs under "Mine"). Audit ``template-filter``.
+        """
+        return str(getattr(strategy, "id", "")).startswith("tmpl-")
+
+    @classmethod
+    def _filter_ok(cls, strategy: Any, flt: str) -> bool:
+        is_tmpl = cls._is_template(strategy)
+        if flt == "mine":
+            return not is_tmpl
+        if flt == "templates":
+            return is_tmpl
+        return True
+
+    def _on_strategy_filter_change(self) -> None:
+        """Re-populate both dropdowns for the newly selected Mine/Templates/
+        All view (display-only; existing selections are preserved)."""
+        self._populate_pickers()
+
+    def _update_strategy_filter_hint(
+        self, entry_values: list, exit_values: list,
+    ) -> None:
+        if entry_values and exit_values:
+            msg = ""
+        else:
+            missing = []
+            if not entry_values:
+                missing.append("entry")
+            if not exit_values:
+                missing.append("exit")
+            msg = (f"No {' or '.join(missing)} strategies in this view — "
+                   "switch to Templates or All.")
+        try:
+            self._strategy_filter_hint.configure(text=msg)
+        except (tk.TclError, AttributeError):
+            pass
 
     # ------------------------------------------------------------------
     # Conditional-visibility callbacks

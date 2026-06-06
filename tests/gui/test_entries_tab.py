@@ -30,6 +30,7 @@ from tradinglab.entries import storage as _entries_storage
 from tradinglab.entries.audit import AuditLog
 from tradinglab.entries.evaluator import EntryEvaluator
 from tradinglab.entries.model import (
+    CreatedWith,
     Direction,
     EntryStrategy,
     EntryTrigger,
@@ -476,3 +477,87 @@ def test_on_dialog_save_persists_and_refreshes(root):
     assert loaded is not None
     assert new_strat.id in tab._tree.get_children("")
     tab.destroy()
+
+
+# ---------------------------------------------------------------------------
+# Mine | Templates | All filter (audit ``template-filter``)
+# ---------------------------------------------------------------------------
+
+
+def _template_strategy(name: str, tmpl_id: str) -> EntryStrategy:
+    """A bundled-seed-style strategy: same shape as ``_strategy`` but with
+    a ``tmpl-`` id (the marker the filter keys on)."""
+    s = _strategy(name)
+    s.id = tmpl_id
+    return s
+
+
+def test_filter_defaults_to_mine_and_hides_templates(root):
+    user1 = _strategy("My Long")
+    user2 = _strategy("My Short", direction=Direction.SHORT)
+    tmpl1 = _template_strategy("Starter A", "tmpl-starter-a")
+    tmpl2 = _template_strategy("Starter B", "tmpl-starter-b")
+    for s in (user1, user2, tmpl1, tmpl2):
+        _entries_storage.save(s)
+    tab = _make_tab(root)
+    try:
+        assert tab._filter_var.get() == "mine"
+        assert set(tab._tree.get_children("")) == {user1.id, user2.id}
+    finally:
+        tab.destroy()
+
+
+def test_filter_templates_then_all(root):
+    user1 = _strategy("My Long")
+    tmpl1 = _template_strategy("Starter A", "tmpl-starter-a")
+    tmpl2 = _template_strategy("Starter B", "tmpl-starter-b")
+    for s in (user1, tmpl1, tmpl2):
+        _entries_storage.save(s)
+    tab = _make_tab(root)
+    try:
+        tab._filter_var.set("templates")
+        tab._on_filter_change()
+        assert set(tab._tree.get_children("")) == {
+            "tmpl-starter-a", "tmpl-starter-b"}
+        tab._filter_var.set("all")
+        tab._on_filter_change()
+        assert set(tab._tree.get_children("")) == {
+            user1.id, "tmpl-starter-a", "tmpl-starter-b"}
+    finally:
+        tab.destroy()
+
+
+def test_loaded_template_copy_counts_as_mine(root):
+    """A copy the user makes via "Load template…" / Duplicate gets a fresh
+    UUID id but ``created_with.template=True``. Per the chosen design it
+    must show under "Mine" — so the filter keys on the ``tmpl-`` id
+    prefix, NOT ``created_with.template``."""
+    copy = _strategy("Loaded copy")
+    copy.created_with = CreatedWith(
+        app="tradinglab", version="1.0.0", template=True)
+    assert not copy.id.startswith("tmpl-")
+    seed = _template_strategy("Seed", "tmpl-seed")
+    assert EntriesTab._is_template(copy) is False
+    assert EntriesTab._is_template(seed) is True
+    _entries_storage.save(copy)
+    _entries_storage.save(seed)
+    tab = _make_tab(root)
+    try:
+        children = set(tab._tree.get_children(""))  # default "mine"
+        assert copy.id in children
+        assert "tmpl-seed" not in children
+    finally:
+        tab.destroy()
+
+
+def test_filter_labels_show_counts(root):
+    _entries_storage.save(_strategy("U1"))
+    _entries_storage.save(_template_strategy("T1", "tmpl-1"))
+    _entries_storage.save(_template_strategy("T2", "tmpl-2"))
+    tab = _make_tab(root)
+    try:
+        assert tab._filter_buttons["mine"].cget("text") == "Mine (1)"
+        assert tab._filter_buttons["templates"].cget("text") == "Templates (2)"
+        assert tab._filter_buttons["all"].cget("text") == "All (3)"
+    finally:
+        tab.destroy()

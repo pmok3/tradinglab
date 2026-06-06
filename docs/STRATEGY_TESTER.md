@@ -28,6 +28,11 @@ saved in the Entries and Exits tabs.
    right after Exits.
 
 3. **Configure** the run:
+   - **Show: Mine | Templates | All** — filters both pickers below.
+     Defaults to **Mine** (your own strategies) so the dropdowns aren't
+     buried under the bundled starter templates; switch to **Templates**
+     or **All** to test a starter. Filtering is display-only — your
+     selected entry/exit is preserved across filter changes.
    - **Entry strategy** — pick the saved EntryStrategy.
    - **Exit strategy** — pick the saved ExitStrategy.
    - **Universe** — three modes:

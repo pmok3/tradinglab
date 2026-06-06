@@ -102,6 +102,18 @@ harmless.
   — convenience for the "Attach → New strategy" UX in the exits tab.
 - **Save runs `validate_strategy`** and surfaces all errors in a
   message box; doesn't dismiss on failure.
+- **Mine | Templates | All filter** (audit `template-filter`). A radio
+  segment above the library `Listbox` filters the saved-strategy *view*;
+  it **defaults to "Mine" every time the dialog opens** (session-only
+  `tk.StringVar`, NOT persisted) so the list isn't buried under the ~22
+  bundled starter templates seeded on first run. A strategy is a
+  *bundled template* iff its `id` starts with `tmpl-` (`_is_template`) —
+  NOT `created_with.template` (a copy keeps a UUID id and stays "Mine").
+  `_populate_library_listbox` rebuilds the listbox from the filtered
+  subset and stores it as `self._visible_library`; `_on_library_select`
+  indexes **`_visible_library`** (NOT `self._library`) so a clicked row
+  maps to the correct strategy under any filter. Segment labels carry
+  live counts; an empty view shows a muted hint.
 
 ## Invariants
 

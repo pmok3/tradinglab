@@ -23,9 +23,23 @@ root in smoke tests). The popup wrapper + menubar wiring live in
 
 ## UX
 ### Configure pane (left)
+- **Show: Mine | Templates | All** — a radio segment at the top of the
+  pane that filters BOTH strategy dropdowns below. Defaults to **"Mine"**
+  on every construction (session-only `tk.StringVar`, NOT persisted) so
+  the pickers aren't buried under the ~21/22 bundled starter templates
+  seeded on first run. A strategy is a *bundled template* iff its `id`
+  starts with `tmpl-` (`_is_template` / `_filter_ok`) — NOT
+  `created_with.template` (a loaded/duplicated copy keeps a UUID id and
+  stays "Mine"). The filter is **display-only**: `_populate_pickers`
+  re-filters the combobox `values`, but a selection already made is
+  preserved (even if filtered out of the dropdown), and
+  `_selected_entry` / `_selected_exit` always resolve against the FULL
+  library. A muted hint appears when the active view leaves the entry or
+  exit dropdown empty (e.g. a fresh user under "Mine"). Audit
+  `template-filter`.
 - **Entry strategy** — readonly combobox listing
-  ``"<name> · <id_short>"`` for every saved entry strategy.
-- **Exit strategy** — same shape for saved exit strategies.
+  ``"<name> · <id_short>"`` for every entry strategy in the active view.
+- **Exit strategy** — same shape for the exit strategies in the view.
 - **Universe picker** — three radio modes:
 
   - `Symbols list` — comma / semicolon-separated tickers, case-folded

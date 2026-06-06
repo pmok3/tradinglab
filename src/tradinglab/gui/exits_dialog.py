@@ -69,7 +69,7 @@ logger = logging.getLogger(__name__)
 
 
 from ._modal_base import BaseModalDialog, make_scrollable_form, protect_combobox_wheel  # noqa: E402
-from .colors import ERROR_RED  # noqa: E402
+from .colors import ERROR_RED, MUTED_GREY  # noqa: E402
 from .exits_dialog_widgets import (  # noqa: E402
     _OCO_CANCEL_ON_CHOICES,
     _BracketDialog,
@@ -217,6 +217,11 @@ class ExitsDialog(BaseModalDialog):
         # Library state
         self._library: list[ExitStrategy] = []
         self._broken: list[_exits_storage.BrokenStrategy] = []
+        # The filtered subset (Mine/Templates/All) currently shown in the
+        # listbox — index-aligned with the listbox rows so a click maps
+        # back to the right strategy under any filter. Audit
+        # ``template-filter``.
+        self._visible_library: list[ExitStrategy] = []
         # Currently-edited strategy (clone of library entry, or None)
         self._draft: ExitStrategy | None = None
         # Per-leg-id frame map (cleared on rebuild)
@@ -303,10 +308,32 @@ class ExitsDialog(BaseModalDialog):
         outer.add(lib, weight=1)
 
         ttk.Label(lib, text="Strategies", font=("", 10, "bold")).pack(anchor="w")
+        # Mine | Templates | All filter — defaults to "Mine" each time the
+        # dialog opens (session-only) so the working list isn't buried
+        # under the ~22 bundled starter templates (id prefix ``tmpl-``).
+        # Audit ``template-filter``.
+        filt_row = ttk.Frame(lib)
+        filt_row.pack(fill="x", pady=(2, 0))
+        ttk.Label(filt_row, text="Show:").pack(side="left")
+        self._filter_var = tk.StringVar(value="mine")
+        self._filter_buttons: dict[str, ttk.Radiobutton] = {}
+        for _value, _label in (("mine", "Mine"), ("templates", "Templates"),
+                               ("all", "All")):
+            rb = ttk.Radiobutton(
+                filt_row, text=_label, value=_value,
+                variable=self._filter_var,
+                command=self._populate_library_listbox,
+            )
+            rb.pack(side="left", padx=(4, 0))
+            self._filter_buttons[_value] = rb
         self._library_lb = tk.Listbox(lib, exportselection=False, height=20, width=28)
         apply_listbox_theme(self._library_lb, current_theme(self.master))
         self._library_lb.pack(fill="both", expand=True, padx=2, pady=(4, 4))
         self._library_lb.bind("<<ListboxSelect>>", self._on_library_select)
+        self._filter_empty_hint = ttk.Label(
+            lib, text="", foreground=MUTED_GREY, wraplength=180,
+            justify="left")
+        self._filter_empty_hint.pack(anchor="w", padx=2)
 
         btnrow = ttk.Frame(lib)
         btnrow.pack(fill="x")
@@ -407,19 +434,73 @@ class ExitsDialog(BaseModalDialog):
 
     def _populate_library_listbox(self) -> None:
         self._library_lb.delete(0, "end")
+        # Mine | Templates | All filter (audit ``template-filter``). Counts
+        # span the WHOLE library so the segment labels stay accurate.
+        flt = self._filter_var.get() if hasattr(self, "_filter_var") else "all"
+        n_tmpl = sum(1 for s in self._library if self._is_template(s))
+        total = len(self._library)
+        visible: list[ExitStrategy] = []
         for s in self._library:
+            is_tmpl = self._is_template(s)
+            if flt == "mine" and is_tmpl:
+                continue
+            if flt == "templates" and not is_tmpl:
+                continue
+            visible.append(s)
             label = s.name or f"(unnamed {s.id[:6]})"
             self._library_lb.insert("end", label)
+        self._visible_library = visible
         if self._broken:
             self._library_lb.insert("end", f"⚠ {len(self._broken)} broken")
+        self._update_filter_labels(n_mine=total - n_tmpl, n_tmpl=n_tmpl,
+                                   total=total)
+        self._update_empty_hint(flt, len(visible))
 
     def _on_library_select(self, _event: tk.Event) -> None:
         sel = self._library_lb.curselection()
         if not sel:
             return
         idx = int(sel[0])
-        if 0 <= idx < len(self._library):
-            self.load_strategy_into_editor(self._library[idx])
+        # Map the listbox row to the FILTERED view (not self._library) so
+        # selection is correct under Mine/Templates/All. The trailing
+        # "⚠ N broken" row (idx == len(visible)) falls through harmlessly.
+        visible = getattr(self, "_visible_library", [])
+        if 0 <= idx < len(visible):
+            self.load_strategy_into_editor(visible[idx])
+
+    @staticmethod
+    def _is_template(strategy: ExitStrategy) -> bool:
+        """True for a bundled starter template (seeded on first run),
+        identified by the ``tmpl-`` id prefix the bundles use — NOT
+        ``created_with.template`` (a copy the user loads/duplicates gets a
+        fresh UUID id and belongs under "Mine"). Audit ``template-filter``.
+        """
+        return str(getattr(strategy, "id", "")).startswith("tmpl-")
+
+    def _update_filter_labels(self, *, n_mine: int, n_tmpl: int,
+                              total: int) -> None:
+        labels = {
+            "mine": f"Mine ({n_mine})",
+            "templates": f"Templates ({n_tmpl})",
+            "all": f"All ({total})",
+        }
+        for value, rb in getattr(self, "_filter_buttons", {}).items():
+            try:
+                rb.configure(text=labels[value])
+            except tk.TclError:
+                pass
+
+    def _update_empty_hint(self, flt: str, shown: int) -> None:
+        if shown > 0:
+            msg = ""
+        elif flt == "templates":
+            msg = "No bundled templates found."
+        else:
+            msg = "No exit strategies yet — click “+ New”, or pick Templates."
+        try:
+            self._filter_empty_hint.configure(text=msg)
+        except (tk.TclError, AttributeError):
+            pass
 
     def _on_new(self) -> None:
         self.load_strategy_into_editor(ExitStrategy(name="(new)"))

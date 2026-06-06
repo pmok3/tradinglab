@@ -58,6 +58,19 @@ class EntriesTab(ttk.Frame):
 - **Treeview, not Listbox.** Multiple sortable columns (Name / Dir /
   Kind / Universe / Enabled / Armed / Fires). Column widths tuned for
   ~6-character symbol lists. Selection state is single-row.
+- **Mine | Templates | All filter** (audit `template-filter`). A radio
+  segment above the Treeview filters the library *view*; it **defaults
+  to "Mine" on every construction** (session-only `tk.StringVar`, NOT
+  persisted) so the working list opens decluttered rather than buried
+  under the ~21 bundled starter templates seeded into the library on
+  first run. A strategy is a *bundled template* iff its `id` starts with
+  `tmpl-` (`_is_template`) — NOT `created_with.template`, because a copy
+  made via "Load template…" / Duplicate gets a fresh UUID id and belongs
+  under "Mine" even though it is template-derived. `_refresh_tree`
+  filters rows by the active view; the segment labels carry live counts
+  (`Mine (n)` / `Templates (n)` / `All (n)`); an empty filtered view
+  shows a muted hint. The filter is **display-only** — `refresh()` still
+  feeds the FULL library to `evaluator.set_strategies`.
 - **Toolbar Arm/Disarm guards.** Disabled when no row selected or
   the selected row is already in the requested state.
 - **Stats panel is read-only.** Hooks `evaluator.stats()` —
@@ -77,8 +90,10 @@ class EntriesTab(ttk.Frame):
 ## Invariants
 
 - All callbacks run on the Tk thread.
-- Library Treeview rows correspond 1:1 with `evaluator.all_strategies()`
-  after each `refresh()`.
+- Under the **All** filter, Library Treeview rows correspond 1:1 with the
+  loaded library after each `refresh()`. **Mine** hides bundled-template
+  (`tmpl-` id) rows; **Templates** shows only them. The view filter is
+  display-only — the evaluator is always fed the full library.
 - `Armed` column reflects `evaluator.is_armed(strategy_id)` at the
   moment of refresh.
 

@@ -40,11 +40,13 @@ from tradinglab.exits.model import (
 from tradinglab.gui.exits_dialog import (
     ExitsDialog,
     _BracketDialog,
+    make_bracket_strategy,
+    open_exits_dialog,
+)
+from tradinglab.gui.exits_dialog_widgets import (
     _LegFrame,
     _OCOGroupRow,
     _TriggerRow,
-    make_bracket_strategy,
-    open_exits_dialog,
 )
 
 # ---------------------------------------------------------------------------
@@ -500,3 +502,79 @@ def test_library_select_loads_strategy(root: tk.Toplevel) -> None:
         assert dlg.get_draft().name == "from-disk"
     finally:
         dlg.destroy()
+
+
+# ---------------------------------------------------------------------------
+# Mine | Templates | All filter (audit ``template-filter``)
+# ---------------------------------------------------------------------------
+
+
+def _save_template(name: str, tmpl_id: str) -> ExitStrategy:
+    """Persist a bundled-seed-style exit strategy (``tmpl-`` id marker)."""
+    s = ExitStrategy(
+        name=name,
+        legs=[ExitLeg(triggers=[ExitTrigger(kind=TriggerKind.MARKET)])],
+    )
+    s.id = tmpl_id
+    _exits_storage.save(s)
+    return s
+
+
+def test_exits_filter_defaults_to_mine(root: tk.Toplevel) -> None:
+    _clear_storage()
+    user = _save_strategy("My Exit")
+    _save_template("Starter Trail", "tmpl-exit-trail")
+    dlg = _make_dialog(root)
+    try:
+        assert dlg._filter_var.get() == "mine"
+        assert [s.id for s in dlg._visible_library] == [user.id]
+        labels = list(dlg._library_lb.get(0, "end"))
+        assert "My Exit" in labels
+        assert "Starter Trail" not in labels
+    finally:
+        dlg.destroy()
+
+
+def test_exits_filter_templates_and_all(root: tk.Toplevel) -> None:
+    _clear_storage()
+    user = _save_strategy("My Exit")
+    t1 = _save_template("Starter Trail", "tmpl-exit-trail")
+    t2 = _save_template("Starter Stop", "tmpl-exit-stop")
+    dlg = _make_dialog(root)
+    try:
+        dlg._filter_var.set("templates")
+        dlg._populate_library_listbox()
+        assert {s.id for s in dlg._visible_library} == {t1.id, t2.id}
+        dlg._filter_var.set("all")
+        dlg._populate_library_listbox()
+        assert {s.id for s in dlg._visible_library} == {user.id, t1.id, t2.id}
+    finally:
+        dlg.destroy()
+
+
+def test_exits_filter_selection_maps_to_filtered_view(root: tk.Toplevel) -> None:
+    """Under "templates", listbox row 0 must load the FIRST TEMPLATE, not
+    ``self._library[0]`` (which sorts to a user strategy here). Pins the
+    index-map fix that keeps selection correct under any filter."""
+    _clear_storage()
+    _save_strategy("AAA My Exit")  # sorts first by name in the full library
+    t1 = _save_template("ZZZ Starter", "tmpl-exit-z")
+    dlg = _make_dialog(root)
+    try:
+        dlg._filter_var.set("templates")
+        dlg._populate_library_listbox()
+        dlg._library_lb.selection_clear(0, "end")
+        dlg._library_lb.selection_set(0)
+        dlg._on_library_select(None)
+        assert dlg.get_draft() is not None
+        assert dlg.get_draft().id == t1.id
+    finally:
+        dlg.destroy()
+
+
+def test_exits_is_template_static() -> None:
+    seed = ExitStrategy(name="s")
+    seed.id = "tmpl-exit-x"
+    user = ExitStrategy(name="u")
+    assert ExitsDialog._is_template(seed) is True
+    assert ExitsDialog._is_template(user) is False

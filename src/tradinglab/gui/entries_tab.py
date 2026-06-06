@@ -46,6 +46,7 @@ from ..entries.model import (
     CreatedWith,
     EntryStrategy,
 )
+from .colors import MUTED_GREY
 from .entries_dialog import EntriesDialog
 
 logger = logging.getLogger(__name__)
@@ -262,6 +263,27 @@ class EntriesTab(ttk.Frame):
         tree_lf = ttk.LabelFrame(paned, text="Strategies")
         paned.add(tree_lf, weight=2)
 
+        # Mine | Templates | All filter row. Defaults to "Mine" on every
+        # launch (session-only, NOT persisted) so the working list opens
+        # decluttered; bundled starter templates (id prefix ``tmpl-``) are
+        # hidden until explicitly requested. Audit ``template-filter``.
+        filt_row = ttk.Frame(tree_lf)
+        filt_row.pack(fill="x", padx=2, pady=(2, 0))
+        ttk.Label(filt_row, text="Show:").pack(side="left")
+        self._filter_var = tk.StringVar(value="mine")
+        self._filter_buttons: dict[str, ttk.Radiobutton] = {}
+        for _value, _label in (("mine", "Mine"), ("templates", "Templates"),
+                               ("all", "All")):
+            rb = ttk.Radiobutton(
+                filt_row, text=_label, value=_value,
+                variable=self._filter_var, command=self._on_filter_change,
+            )
+            rb.pack(side="left", padx=(6, 0))
+            self._filter_buttons[_value] = rb
+        self._filter_empty_hint = ttk.Label(
+            filt_row, text="", foreground=MUTED_GREY)
+        self._filter_empty_hint.pack(side="left", padx=(10, 0))
+
         self._tree = ttk.Treeview(
             tree_lf, columns=_TREEVIEW_COLS, show="headings", height=10,
         )
@@ -348,7 +370,19 @@ class EntriesTab(ttk.Frame):
         except Exception:  # noqa: BLE001
             pass
 
+        # Mine | Templates | All filter (audit ``template-filter``). Counts
+        # are over the WHOLE library so the segment labels stay accurate
+        # regardless of which view is active.
+        flt = self._filter_var.get() if hasattr(self, "_filter_var") else "all"
+        n_tmpl = sum(1 for s in self._library if self._is_template(s))
+        total = len(self._library)
+        shown = 0
         for s in self._library:
+            is_tmpl = self._is_template(s)
+            if flt == "mine" and is_tmpl:
+                continue
+            if flt == "templates" and not is_tmpl:
+                continue
             iid = s.id
             armed_str = "yes" if iid in armed else "no"
             enabled_str = "yes" if s.enabled else "no"
@@ -367,8 +401,13 @@ class EntriesTab(ttk.Frame):
             )
             try:
                 self._tree.insert("", "end", iid=iid, values=values)
+                shown += 1
             except tk.TclError:
                 pass
+
+        self._update_filter_labels(n_mine=total - n_tmpl, n_tmpl=n_tmpl,
+                                   total=total)
+        self._update_empty_hint(flt, shown)
 
         # Restore selection if still present.
         keep = [iid for iid in prior_sel if iid in self._tree.get_children("")]
@@ -377,6 +416,47 @@ class EntriesTab(ttk.Frame):
                 self._tree.selection_set(keep)
             except tk.TclError:
                 pass
+
+    @staticmethod
+    def _is_template(strategy: Any) -> bool:
+        """True for a *bundled starter* template (seeded into the library
+        on first run). Identified by the ``tmpl-`` id prefix the bundles
+        use — NOT ``created_with.template``, because a strategy the user
+        loads via "Load template…" or duplicates gets a fresh UUID id and
+        belongs under "Mine" even though it is template-derived. Audit
+        ``template-filter``.
+        """
+        return str(getattr(strategy, "id", "")).startswith("tmpl-")
+
+    def _on_filter_change(self) -> None:
+        """Re-render the tree for the newly selected Mine/Templates/All
+        view. Lightweight — re-filters the in-memory library, no reload."""
+        self._refresh_tree()
+
+    def _update_filter_labels(self, *, n_mine: int, n_tmpl: int,
+                              total: int) -> None:
+        labels = {
+            "mine": f"Mine ({n_mine})",
+            "templates": f"Templates ({n_tmpl})",
+            "all": f"All ({total})",
+        }
+        for value, rb in getattr(self, "_filter_buttons", {}).items():
+            try:
+                rb.configure(text=labels[value])
+            except tk.TclError:
+                pass
+
+    def _update_empty_hint(self, flt: str, shown: int) -> None:
+        if shown > 0:
+            msg = ""
+        elif flt == "templates":
+            msg = "No bundled templates found."
+        else:
+            msg = "No strategies yet — click “+ New”, or pick Templates."
+        try:
+            self._filter_empty_hint.configure(text=msg)
+        except (tk.TclError, AttributeError):
+            pass
 
     def _refresh_audit_tail(self) -> None:
         audit = getattr(self._evaluator, "_audit", None)
