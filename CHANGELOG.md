@@ -1,5 +1,76 @@
 # Changelog
 
+## [0.3.5] - 2026-06-06
+
+### Changed
+
+- **Color-blind-safe (Okabe-Ito) palette now recolors the *entire* UI —
+  live, with no relaunch.** Previously, turning on **Settings → "Use
+  color-blind-safe palette (Okabe-Ito)"** only swapped the main chart's
+  candle colors; many other red/green surfaces stayed teal-green /
+  coral-red, which defeated the purpose for a color-blind user. This
+  release audits every *directional* color in the app (anything that
+  encodes up/down, bull/bear, gain/loss, profit/loss) and routes it
+  through a single source of truth so the toggle reaches all of it at
+  once. Now flipping the setting immediately recolors, with no restart:
+  - the **watchlist row background shading** and row text (the headline
+    fix — these were still red/green);
+  - the **Primary / Compare OHLC tables**;
+  - the **MACD histogram** (all four momentum classes);
+  - **Prior Day High / Low** reference lines;
+  - the hover **readout % change**;
+  - the **ChartStack** SPY/QQQ/VXX mini-cards;
+  - the Heikin-Ashi flat-bar hatching and the time-of-day volume overlay;
+  - **Strategy Tester** trade screenshots (entry/exit/MAE/MFE markers)
+    and the sandbox post-trade **P/L badge**.
+
+  Under the color-blind palette these all become **orange (bullish) /
+  sky-blue (bearish)** instead of green/red, while preserving each
+  theme's carefully tuned tint (light pastels stay pale, dark tints stay
+  muted). The default green/red palette is byte-for-byte unchanged.
+  Status colors (error/warning/info) are intentionally left alone — they
+  are a separate concern from the bull/bear distinction.
+
+### Added
+
+- **Watchlist column width is now a saved setting.** The width of the
+  right-hand watchlist / OHLC / scanner column is no longer reset to a
+  fixed golden-ratio default on every launch. Drag the divider to the
+  width you like, then **File → Save Configuration**; that width is
+  written to your configuration file and restored by **File → Load
+  Configuration** in future sessions (stored under
+  `layout.notebook_width_px`). No new dialog — it follows the same
+  drag-then-save flow as the rest of the layout. Configurations saved
+  before this release (which have no stored width) simply fall back to
+  the previous golden-ratio default.
+
+### Fixed
+
+- **Compare mode no longer shows a one-day gap on daily charts.** For
+  some tickers (e.g. MU), turning on compare mode against another symbol
+  rendered today's daily bar detached from yesterday's — a blank slot
+  appeared between the last two bars on one chart, and a blank
+  "tomorrow" slot on the other. Root cause: mid-session, today's daily
+  bar is synthesized from intraday data and carries the *session-open*
+  timestamp (e.g. 09:30 ET), while the compared symbol's same-day bar
+  came from the data provider stamped at midnight. The compare-mode
+  aligner keyed bars by their exact timestamp, so those two same-day
+  bars landed in different slots. Daily (and weekly / monthly) charts now
+  align bars by **calendar date**, so today snaps into a single shared
+  slot on both panels. Intraday compare alignment is unchanged
+  (sub-day bars are still matched by exact timestamp).
+
+### Removed
+
+- **Removed the "Update endpoint override" field from Settings.** This
+  power-user text box (for pointing the update checker at a fork or
+  self-hosted release manifest) is not something an end user should need
+  to touch, so it no longer clutters the Settings dialog. The underlying
+  capability is unchanged — the update endpoint still falls back to the
+  built-in GitHub Releases URL (or the `TRADINGLAB_UPDATE_URL`
+  environment variable), and the `update_check_url` setting can still be
+  edited directly in `settings.json` by anyone who genuinely needs it.
+
 ## [0.3.4] - 2026-06-05
 
 ### Added
