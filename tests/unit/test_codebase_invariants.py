@@ -159,6 +159,42 @@ def test_chartapp_last_base_is_tk_tk():
     )
 
 
+def test_app_spec_md_mro_matches_real_chartapp_bases():
+    """The ``class ChartApp(...)`` declaration in ``app.spec.md`` MUST
+    list exactly the real ``ChartApp.__bases__`` (same names, same
+    order). Guards the exact spec drift found in the 2026-06 audit, where
+    wave-3 added ``SandboxAppMixin`` / ``ScannerAppMixin`` to the class
+    but not to the spec declaration. The other MRO gates check the CODE
+    side; this one pins the SPEC side so the two can't diverge silently.
+
+    Audit ``codebase-invariants``.
+    """
+    import re
+
+    from tradinglab.app import ChartApp
+
+    real = [b.__name__ for b in ChartApp.__bases__]  # tk.Tk -> "Tk"
+
+    spec = (_SRC / "app.spec.md").read_text(encoding="utf-8")
+    match = re.search(r"class ChartApp\((.*?)\)", spec, flags=re.DOTALL)
+    assert match, (
+        "app.spec.md must document the `class ChartApp(...)` MRO line"
+    )
+    # Normalise: the spec writes the final base as ``tk.Tk`` while
+    # ``__name__`` is ``Tk`` — compare on the last dotted component.
+    spec_bases = [
+        tok.strip().split(".")[-1]
+        for tok in match.group(1).split(",")
+        if tok.strip()
+    ]
+    assert spec_bases == real, (
+        "app.spec.md ChartApp MRO is out of sync with the real class.\n"
+        f"  spec: {spec_bases}\n  code: {real}\n"
+        "Update the `class ChartApp(...)` line in app.spec.md (and the "
+        "§11/§12 mixin lists) to match src/tradinglab/app.py."
+    )
+
+
 # ---------------------------------------------------------------------------
 # 3. TriggerKind dispatch completeness
 # ---------------------------------------------------------------------------
