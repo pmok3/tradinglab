@@ -28,6 +28,7 @@ class EntriesAppMixin:
     def _build_entries_stack(self) -> None
     def _lazy_exit_storage(self)
     def _get_active_symbol_for_entries(self) -> str | None
+    def _sandbox_arming_intervals(self) -> frozenset[str] | None
     def _refresh_entries_for_sandbox(self) -> None
     def _redraw_entries_overlay(self) -> None
     def _redraw_evidence_overlay(self) -> None
@@ -84,6 +85,14 @@ subsystem.
   logs the request and relies on the evaluator's audit record.
 - **Settings persistence**: library on/off (`enabled` per strategy)
   via `entries.storage`. Arm state is runtime-only.
+- **Sandbox-aware arm guard**: `_sandbox_arming_intervals` returns the active
+  `SandboxController.display_intervals` (or `None` when no replay session is
+  running) and is wired into `EntriesTab(sandbox_intervals_provider=…)`. The
+  tab's `_on_arm` uses it so arming refuses a strategy the current sandbox
+  can't feed (e.g. a 5m strategy in a 1d-only sandbox) on top of the always-on
+  intraday-only-indicator check. Live (`None`) places no data-availability
+  restriction. See `gui/entries_tab.spec.md` and
+  `strategy_tester/interval_compat.spec.md`. Audit `intraday-interval-guard`.
 
 ## Invariants
 

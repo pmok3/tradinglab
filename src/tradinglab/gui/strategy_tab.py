@@ -44,6 +44,7 @@ from ..strategy_tester import (
 from ..strategy_tester import (
     run as run_strategy_test,
 )
+from ..strategy_tester.interval_compat import incompatible_indicators_for_interval
 from ..strategy_tester.report import RunAggregate, load_aggregate
 from ..strategy_tester.universe import list_presets
 from ..watchlists import storage as _watchlists_storage
@@ -921,6 +922,31 @@ class StrategyTab(ttk.Frame):
         assert entry is not None and exit_strat is not None
         entries_by_id = {entry.id: entry}
         exits_by_id = {exit_strat.id: exit_strat}
+
+        # Block Runs that reference an intraday-only indicator (VWAP, RVOL
+        # cumulative/time-of-day, RRVOL, Prior Day H/L) on a non-intraday
+        # interval — they resolve to NaN every bar, so the strategy would
+        # silently never trigger and the Run would report zero trades.
+        # Audit ``intraday-interval-guard``.
+        incompatible = incompatible_indicators_for_interval(
+            entry, exit_strat, cfg.interval,
+        )
+        if incompatible:
+            names = "\n".join(
+                f"  \u2022 {name} \u2014 {reason}" for name, reason in incompatible
+            )
+            messagebox.showerror(
+                "Strategy Tester \u2014 incompatible interval",
+                f"This strategy can't run on the \"{cfg.interval}\" interval.\n\n"
+                "It references indicator(s) that only work on intraday "
+                "intervals (e.g. 1m, 5m, 15m, 1h):\n\n"
+                f"{names}\n\n"
+                f"On \"{cfg.interval}\" bars those indicators have no value, so "
+                "the strategy would never trigger and the Run would produce "
+                "zero trades. Choose an intraday interval, or edit the "
+                "strategy to remove the intraday-only indicator(s).",
+            )
+            return
 
         # Screenshot opt-in
         screenshot_spec = ScreenshotSpec() if self._var_screenshots.get() else None

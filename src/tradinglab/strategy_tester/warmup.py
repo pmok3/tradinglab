@@ -277,6 +277,55 @@ def _walk_field_kinds(
     return out
 
 
+def collect_referenced_indicator_kinds(
+    entry_strategy: EntryStrategy | None,
+    exit_strategy: ExitStrategy | None,
+) -> list[tuple[str, str, dict[str, Any]]]:
+    """Return every ``(symbol, indicator_kind_id, params)`` triple the
+    strategies reference.
+
+    Walks the entry trigger's condition tree (INDICATOR triggers only),
+    every enabled exit-leg INDICATOR trigger's condition tree, and each
+    CHANDELIER exit trigger (which carries its own indicator-style
+    params). Shared by warmup sizing (:func:`required_warmup_bars` /
+    :func:`required_warmup_bars_by_symbol`) and the strategy_tester
+    interval-compatibility guard
+    (:func:`strategy_tester.interval_compat.incompatible_indicators_for_interval`)
+    so both walk the same surface.
+
+    SCANNER_ALERT entry triggers reference a scan definition that can't
+    be resolved here without touching disk; they're intentionally not
+    walked (matching the warmup behavior).
+    """
+    triples: list[tuple[str, str, dict[str, Any]]] = []
+
+    if entry_strategy is not None:
+        et = entry_strategy.trigger
+        if et.kind is EntryTriggerKind.INDICATOR and et.condition is not None:
+            triples.extend(_walk_field_kinds(et.condition))
+
+    if exit_strategy is not None:
+        for leg in exit_strategy.legs:
+            if not leg.enabled:
+                continue
+            for trig in leg.triggers:
+                if not trig.enabled:
+                    continue
+                if trig.kind is ExitTriggerKind.INDICATOR and trig.condition is not None:
+                    triples.extend(_walk_field_kinds(trig.condition))
+                elif trig.kind is ExitTriggerKind.CHANDELIER:
+                    triples.append((
+                        "",
+                        "chandelier",
+                        {
+                            "lookback": int(trig.chandelier_lookback),
+                            "atr_period": int(trig.chandelier_atr_period),
+                        },
+                    ))
+
+    return triples
+
+
 def required_warmup_bars(
     entry_strategy: EntryStrategy | None,
     exit_strategy: ExitStrategy | None,
@@ -296,39 +345,7 @@ def required_warmup_bars(
     aggregate active-symbol-equivalent warmup so v1 callers
     (runner.py) keep working unchanged.
     """
-    triples: list[tuple[str, str, dict[str, Any]]] = []
-
-    # Entry trigger condition tree (INDICATOR triggers).
-    if entry_strategy is not None:
-        et = entry_strategy.trigger
-        if et.kind is EntryTriggerKind.INDICATOR and et.condition is not None:
-            triples.extend(_walk_field_kinds(et.condition))
-        # SCANNER_ALERT entry references a scan definition that we can't
-        # cheaply resolve here without touching disk; the runner's
-        # condition walk in collect_interval_overrides loads it explicitly.
-        # For warmup, an unknown scan falls back to the default fallback
-        # via the empty-pairs branch below.
-
-    # Exit-leg INDICATOR triggers + CHANDELIER triggers (which carry their
-    # own indicator-style params on the trigger object itself).
-    if exit_strategy is not None:
-        for leg in exit_strategy.legs:
-            if not leg.enabled:
-                continue
-            for trig in leg.triggers:
-                if not trig.enabled:
-                    continue
-                if trig.kind is ExitTriggerKind.INDICATOR and trig.condition is not None:
-                    triples.extend(_walk_field_kinds(trig.condition))
-                elif trig.kind is ExitTriggerKind.CHANDELIER:
-                    triples.append((
-                        "",
-                        "chandelier",
-                        {
-                            "lookback": int(trig.chandelier_lookback),
-                            "atr_period": int(trig.chandelier_atr_period),
-                        },
-                    ))
+    triples = collect_referenced_indicator_kinds(entry_strategy, exit_strategy)
 
     if not triples:
         return 0
@@ -362,31 +379,7 @@ def required_warmup_bars_by_symbol(
     Returns an empty dict when neither strategy references any
     indicator-based trigger.
     """
-    triples: list[tuple[str, str, dict[str, Any]]] = []
-
-    if entry_strategy is not None:
-        et = entry_strategy.trigger
-        if et.kind is EntryTriggerKind.INDICATOR and et.condition is not None:
-            triples.extend(_walk_field_kinds(et.condition))
-
-    if exit_strategy is not None:
-        for leg in exit_strategy.legs:
-            if not leg.enabled:
-                continue
-            for trig in leg.triggers:
-                if not trig.enabled:
-                    continue
-                if trig.kind is ExitTriggerKind.INDICATOR and trig.condition is not None:
-                    triples.extend(_walk_field_kinds(trig.condition))
-                elif trig.kind is ExitTriggerKind.CHANDELIER:
-                    triples.append((
-                        "",
-                        "chandelier",
-                        {
-                            "lookback": int(trig.chandelier_lookback),
-                            "atr_period": int(trig.chandelier_atr_period),
-                        },
-                    ))
+    triples = collect_referenced_indicator_kinds(entry_strategy, exit_strategy)
 
     if not triples:
         return {}

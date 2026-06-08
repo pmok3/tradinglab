@@ -73,6 +73,18 @@ class EntriesTab(ttk.Frame):
   feeds the FULL library to `evaluator.set_strategies`.
 - **Toolbar Arm/Disarm guards.** Disabled when no row selected or
   the selected row is already in the requested state.
+- **Intraday-interval arm guard.** `_on_arm` calls
+  `strategy_tester.interval_compat.incompatible_arming_problems(strategy,
+  available_intervals=…, fallback_interval=evaluator._default_interval)`
+  BEFORE `evaluator.arm(sid)`. A non-empty result raises a
+  `messagebox.showerror` and skips the arm — refusing to arm a strategy that
+  can never fire: an intraday-only indicator (VWAP, RVOL cumulative, Prior-Day
+  H/L) at a non-intraday condition interval, or (in a sandbox) a condition tree
+  needing finer bars than the session serves. `available_intervals` comes from
+  the optional `sandbox_intervals_provider` ctor callback (`None` ⇒ live, only
+  the indicator check applies; a frozenset ⇒ the active sandbox's intervals).
+  MARKET entries (no condition tree) are never blocked. Audit
+  `intraday-interval-guard`.
 - **Stats panel is read-only.** Hooks `evaluator.stats()` —
   numbers are display-only; resetting a counter requires
   `reset_session()` via a future menu item.

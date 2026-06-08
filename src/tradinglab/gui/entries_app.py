@@ -139,6 +139,7 @@ class EntriesAppMixin:
                 self._notebook,
                 evaluator=self._entry_evaluator,
                 exit_storage=self._lazy_exit_storage(),
+                sandbox_intervals_provider=self._sandbox_arming_intervals,
             )
             exits_tab = getattr(self, "_exits_tab", None)
             insert_idx = "end"
@@ -212,6 +213,27 @@ class EntriesAppMixin:
     # ------------------------------------------------------------------
     # Per-tick + per-render hooks
     # ------------------------------------------------------------------
+
+    def _sandbox_arming_intervals(self) -> frozenset[str] | None:
+        """Intervals the active sandbox can serve, or ``None`` when live.
+
+        Wired into :class:`gui.entries_tab.EntriesTab` so the **Arm**
+        button can refuse a strategy whose condition tree needs bars the
+        current sandbox session doesn't provide (e.g. a 5m strategy in a
+        1d-only sandbox). Returns ``None`` when no replay session is
+        active — live arming places no data-availability restriction (any
+        interval is fetchable on demand); only intraday-only indicators
+        pinned to a non-intraday interval are blocked. See
+        ``strategy_tester.interval_compat.incompatible_arming_problems``.
+        """
+        sb = getattr(self, "_sandbox", None)
+        if sb is None:
+            return None
+        intervals = getattr(sb, "display_intervals", None)
+        if intervals:
+            return frozenset(str(i) for i in intervals if i)
+        primary = getattr(sb, "interval", None)
+        return frozenset({str(primary)}) if primary else None
 
     def _refresh_entries_for_sandbox(self) -> None:
         """Per-tick hook called from :meth:`replay.SandboxController.next_bar`.

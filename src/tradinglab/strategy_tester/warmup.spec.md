@@ -29,6 +29,14 @@ be fully hydrated by Day 1 of the active backtest period.
   triggers are present. The runner consumes this mapping directly:
   `""` controls the active symbol's warmup gate and each non-empty key
   controls that dependency symbol's companion-fetch window.
+- `collect_referenced_indicator_kinds(entry, exit) -> list[tuple[str, str, dict]]`
+  — the shared walker behind both `required_warmup_bars` and
+  `required_warmup_bars_by_symbol`: returns every `(symbol, kind_id, params)`
+  triple referenced by the entry INDICATOR-trigger condition tree, every
+  enabled exit-leg INDICATOR trigger, and each CHANDELIER exit trigger.
+  Also consumed by `strategy_tester.interval_compat` so the warmup sizer and
+  the intraday-interval guard walk the identical surface. SCANNER_ALERT
+  entries are not walked (their scan lives on disk).
 - `_walk_field_kinds(node) -> list[tuple[str, str, dict]]` — internal
   tree walker. Emits `(symbol, kind_id, params)` triples; the leading
   `symbol` slot is `""` for active-symbol refs and the pinned ticker

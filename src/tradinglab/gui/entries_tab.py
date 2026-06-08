@@ -159,6 +159,7 @@ class EntriesTab(ttk.Frame):
         exit_storage: Any = None,
         on_chart_focus: Callable[[str], None] | None = None,
         templates_dir: Path | None = None,
+        sandbox_intervals_provider: Callable[[], frozenset[str] | None] | None = None,
     ) -> None:
         super().__init__(master)
         self._evaluator = evaluator
@@ -169,6 +170,12 @@ class EntriesTab(ttk.Frame):
         self._exit_storage = exit_storage
         self._on_chart_focus = on_chart_focus
         self._templates_dir = Path(templates_dir or self.DEFAULT_TEMPLATES_DIR)
+        # Optional callback returning the set of intervals the current
+        # context can serve, or None when every interval is fetchable
+        # (live). Wired by ChartApp to the active sandbox's intervals so
+        # arming can block strategies the sandbox can't feed. See
+        # ``_on_arm`` and ``strategy_tester.interval_compat``.
+        self._sandbox_intervals_provider = sandbox_intervals_provider
 
         # Library snapshot (refreshed each refresh()).
         self._library: list[EntryStrategy] = []
@@ -664,6 +671,50 @@ class EntriesTab(ttk.Frame):
         sid = self.selected_strategy_id
         if not sid:
             return
+        # Interval-compatibility guard: refuse to arm a strategy that can
+        # never fire in the current context — an intraday-only indicator
+        # (VWAP, RVOL cumulative, Prior-Day H/L) at a non-intraday
+        # interval, or (in a sandbox) a condition tree that needs finer
+        # bars than the session provides. Audit ``intraday-interval-guard``.
+        strategy = next((s for s in self._library if s.id == sid), None)
+        if strategy is not None:
+            from ..strategy_tester.interval_compat import (
+                incompatible_arming_problems,
+            )
+            available: frozenset[str] | None = None
+            if self._sandbox_intervals_provider is not None:
+                try:
+                    available = self._sandbox_intervals_provider()
+                except Exception:  # noqa: BLE001
+                    available = None
+            fallback = getattr(self._evaluator, "_default_interval", "1m") or "1m"
+            problems = incompatible_arming_problems(
+                strategy,
+                available_intervals=available,
+                fallback_interval=fallback,
+            )
+            if problems:
+                bullets = "\n".join(f"  \u2022 {p}" for p in problems)
+                if available is None:
+                    hint = (
+                        "Edit the strategy so the affected condition uses an "
+                        "intraday interval (1m / 5m / 15m / 1h), or remove the "
+                        "intraday-only indicator."
+                    )
+                else:
+                    hint = (
+                        "This sandbox session can't provide the bars this "
+                        "strategy needs. Restart the sandbox with a finer "
+                        "interval, or arm a strategy that works on the "
+                        "loaded bars."
+                    )
+                messagebox.showerror(
+                    "Can't arm \u2014 incompatible interval",
+                    f"\"{strategy.name or sid}\" can't fire here:\n\n"
+                    f"{bullets}\n\n{hint}",
+                    parent=self.winfo_toplevel(),
+                )
+                return
         try:
             self._evaluator.arm(sid)
         except Exception as exc:  # noqa: BLE001

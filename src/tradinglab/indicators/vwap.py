@@ -29,7 +29,7 @@ import numpy as np
 
 from ..core.bars import Bars
 from ._palette import QUINARY
-from .base import BaseIndicator, LineStyle, ParamDef
+from .base import Availability, BaseIndicator, LineStyle, ParamDef, intraday_only
 from .sessions import is_intraday_np, session_groups_np
 
 _PRICE_SOURCES: tuple[str, ...] = ("typical", "close", "ohlc4")
@@ -69,6 +69,19 @@ class VWAP(BaseIndicator):
             )
         self.price_source = price_source
         self.name = "VWAP"
+
+    @staticmethod
+    def is_available_for(interval: str) -> Availability:
+        """VWAP is session-anchored — only meaningful on intraday bars.
+
+        On daily / weekly / monthly intervals each bar IS its own
+        session, so VWAP degenerates and ``compute_arr`` returns
+        all-NaN. Declaring it unavailable lets the chart menu grey it
+        out and lets the Strategy Tester block a Run that would
+        silently produce zero trades (the NaN VWAP never satisfies a
+        ``close > vwap`` style condition). Audit ``intraday-interval-guard``.
+        """
+        return intraday_only(interval)
 
     # --- public --------------------------------------------------------
 

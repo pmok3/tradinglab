@@ -93,7 +93,8 @@ root in smoke tests). The popup wrapper + menubar wiring live in
 
 ### Recent Runs sidebar (PR 5, bottom of Configure pane)
 - ``ttk.Treeview`` with ``selectmode="extended"`` listing the newest 50
-  runs from ``storage.list_runs_with_paths()`` with columns:
+  runs from ``storage.list_runs_with_paths()`` (ordered newest-first by the
+  ``Started`` timestamp) with columns:
   ``Started`` / ``Status`` / ``Label`` / ``Trades``.
 - **Load** button reads ``aggregate.json`` from the selected run via
   ``report.load_aggregate`` and re-renders the Report pane against it.
@@ -168,6 +169,18 @@ root in smoke tests). The popup wrapper + menubar wiring live in
   Configure pane below the screenshot opt-in; toggling it on reveals
   an inline amber warning that indicators (EMA, SMA, RSI, VWAP, ...)
   will be skewed by extended-hours data.
+- **Intraday-interval guard.** After the config is built and the
+  entry/exit are resolved (but BEFORE any worker starts),
+  `_on_run_clicked` calls
+  `strategy_tester.interval_compat.incompatible_indicators_for_interval(entry, exit, cfg.interval)`.
+  If it returns any `(indicator, reason)` pairs — i.e. the strategy
+  references an intraday-only indicator (VWAP, RVOL cumulative /
+  time-of-day, RRVOL, Prior Day H/L) while the run interval is daily /
+  weekly / monthly — a `messagebox.showerror` lists the offending
+  indicators and the Run is aborted (the running UI is never engaged,
+  `_worker` stays `None`). This stops the silent "zero trades on 1d"
+  outcome where the indicator is NaN every bar and the strategy never
+  triggers. Audit `intraday-interval-guard`.
 - A new ``AcceptanceToken`` is created and stashed; the kernel is
   invoked on a daemon ``threading.Thread`` so the UI stays responsive
   during long Runs.

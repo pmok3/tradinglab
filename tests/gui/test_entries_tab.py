@@ -561,3 +561,111 @@ def test_filter_labels_show_counts(root):
         assert tab._filter_buttons["all"].cget("text") == "All (3)"
     finally:
         tab.destroy()
+
+
+# ---------------------------------------------------------------------------
+# Intraday-interval arm guard (audit ``intraday-interval-guard``)
+# ---------------------------------------------------------------------------
+
+
+def _vwap_entry(
+    name: str, *, cond_interval: str = "5m", trigger_interval: str = "5m",
+) -> EntryStrategy:
+    """An INDICATOR entry whose condition reads ``close > vwap``."""
+    from tradinglab.scanner.model import OP_GT, Condition, FieldRef, Group
+
+    cond = Group(
+        combinator="and",
+        children=[
+            Condition(
+                left=FieldRef(kind="builtin", id="close"),
+                op=OP_GT,
+                params={"right": FieldRef(kind="indicator", id="vwap")},
+                interval=cond_interval,
+            ),
+        ],
+    )
+    return EntryStrategy(
+        name=name,
+        direction=Direction.LONG,
+        universe=Universe(symbols=("AAPL",)),
+        trigger=EntryTrigger(
+            kind=TriggerKind.INDICATOR, condition=cond,
+            interval=trigger_interval,
+        ),
+        sizing=SizingRule(kind=SizingKind.FIXED_QTY, qty=100.0),
+    )
+
+
+def test_arm_blocks_daily_vwap_strategy_live(root):
+    """A VWAP strategy authored on a daily condition can never fire (VWAP
+    is NaN on daily) — arming must be blocked with a popup, not armed."""
+    s = _vwap_entry("Daily VWAP", cond_interval="1d", trigger_interval="1d")
+    _entries_storage.save(s)
+    ev = _make_evaluator()
+    tab = _make_tab(root, evaluator=ev)
+    try:
+        tab._tree.selection_set(s.id)
+        with patch("tradinglab.gui.entries_tab.messagebox.showerror") as err:
+            tab._on_arm()
+        assert err.called, "expected an error popup blocking the arm"
+        assert not ev.is_armed(s.id), "strategy must NOT be armed"
+    finally:
+        tab.destroy()
+
+
+def test_arm_allows_5m_vwap_strategy_live(root):
+    """The same VWAP strategy on a 5m condition works live (5m bars are
+    fetchable) — arming must proceed normally."""
+    s = _vwap_entry("5m VWAP", cond_interval="5m", trigger_interval="5m")
+    _entries_storage.save(s)
+    ev = _make_evaluator()
+    tab = _make_tab(root, evaluator=ev)
+    try:
+        tab._tree.selection_set(s.id)
+        with patch("tradinglab.gui.entries_tab.messagebox.showerror") as err:
+            tab._on_arm()
+        assert not err.called, "no error popup expected for a 5m strategy"
+        assert ev.is_armed(s.id), "5m strategy must arm normally"
+    finally:
+        tab.destroy()
+
+
+def test_arm_blocks_5m_strategy_in_1d_sandbox(root):
+    """In a 1d-only sandbox, a 5m strategy can't be fed its bars — arming
+    must be blocked even though it's a perfectly valid live strategy."""
+    s = _vwap_entry("5m VWAP", cond_interval="5m", trigger_interval="5m")
+    _entries_storage.save(s)
+    ev = _make_evaluator()
+    tab = _make_tab(
+        root, evaluator=ev,
+        sandbox_intervals_provider=lambda: frozenset({"1d"}),
+    )
+    try:
+        tab._tree.selection_set(s.id)
+        with patch("tradinglab.gui.entries_tab.messagebox.showerror") as err:
+            tab._on_arm()
+        assert err.called, "expected an error popup in a 1d sandbox"
+        assert not ev.is_armed(s.id)
+    finally:
+        tab.destroy()
+
+
+def test_arm_allows_market_entry_in_1d_sandbox(root):
+    """A MARKET entry has no condition tree and fires on the tick — it must
+    arm fine even in a 1d-only sandbox (no false positive)."""
+    s = _strategy("Market")
+    _entries_storage.save(s)
+    ev = _make_evaluator()
+    tab = _make_tab(
+        root, evaluator=ev,
+        sandbox_intervals_provider=lambda: frozenset({"1d"}),
+    )
+    try:
+        tab._tree.selection_set(s.id)
+        with patch("tradinglab.gui.entries_tab.messagebox.showerror") as err:
+            tab._on_arm()
+        assert not err.called
+        assert ev.is_armed(s.id)
+    finally:
+        tab.destroy()
