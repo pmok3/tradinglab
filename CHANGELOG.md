@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.3.6] - 2026-06-08
+
+### Added
+
+- **"Show: Mine | Templates | All" filter declutters the strategy
+  lists.** TradingLab seeds ~21 entry and ~22 exit *starter templates*
+  into your library on first run. Those starters are handy, but they
+  buried your own saved strategies in three places: the **Entries** tab,
+  the **Exits → Edit Strategies** dialog, and the **Strategy Tester**'s
+  entry/exit pickers. Each of those now has a **Show** filter that opens
+  on **Mine** — your own strategies only — so the bundled starters stay
+  out of the way until you switch the filter to **Templates** (browse the
+  starters) or **All** (everything). Details:
+  - A strategy counts as a *bundled template* only if it's one of the
+    originals shipped with the app. The moment you **Load** or
+    **Duplicate** a template it becomes *your* strategy and shows under
+    **Mine** — so customizing a starter never makes it disappear.
+  - The filter is **display-only**: it never changes which strategies are
+    saved, armed, evaluated, or run. In the Strategy Tester your selected
+    entry/exit is preserved even if you flip the filter to a view that
+    hides it.
+  - It resets to **Mine** each time you open the app / dialog (it is not a
+    saved setting), and each segment shows a live count
+    (`Mine (n)` / `Templates (n)` / `All (n)`).
+
+### Fixed
+
+- Corrected an internal architecture spec that had drifted from the code
+  (the `ChartApp` mixin list in `app.spec.md`) and added a regression
+  test so it can't silently drift again. No user-visible behavior change.
+
 ## [0.3.5] - 2026-06-06
 
 ### Changed
