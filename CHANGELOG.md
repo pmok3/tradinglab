@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.3.7] - 2026-06-08
+
+### Added
+
+- **TradingLab now warns you instead of silently doing nothing when a
+  strategy can't work on the chosen interval.** Some indicators are
+  *intraday-only* — **VWAP**, the cumulative / time-of-day modes of
+  **RVOL** / **RRVOL**, and **Prior Day High/Low** — because they're
+  anchored to the trading session. On a **daily / weekly** chart each bar
+  *is* a whole session, so these indicators have no value and any rule
+  that reads them (e.g. *close > VWAP*) can never become true. Previously
+  a strategy built around one of them just produced **zero trades / zero
+  signals** with no explanation. Now the app checks for this mismatch and
+  shows a clear popup that names the offending indicator, in three places:
+  - **Strategy Tester** — clicking **Run** on a daily/weekly interval with
+    such an indicator is blocked up front (no more staring at an empty
+    0-trade result wondering why).
+  - **Arming an entry** (Entries tab) — arming a strategy that can never
+    fire (an intraday-only indicator pinned to a daily/weekly rule) is
+    blocked with an explanation.
+  - **Sandbox bar-replay** — if the sandbox session was loaded with only
+    daily data, arming an entry that needs finer (intraday) bars — or uses
+    an intraday-only indicator on those daily bars — is blocked, since the
+    session simply can't feed it. (A plain *market* entry, which fires on
+    the bar regardless of interval, is never blocked.)
+
+  Strategies that are fine on their interval are unaffected — e.g. a 5-minute
+  VWAP strategy still arms and runs normally.
+
+### Fixed
+
+- **Strategy Tester "Recent runs" now lists newest first.** The list was
+  sorted by an internal folder name (a configuration fingerprint), so runs
+  appeared in an effectively random order rather than by time. They are now
+  ordered by their **Started** timestamp, newest at the top.
+
 ## [0.3.6] - 2026-06-08
 
 ### Added
