@@ -23,7 +23,7 @@ On-disk persistence for Strategy Tester Runs. Atomic writes only — no in-fligh
 - `save_config(run_dir, TestConfig)` / atomic JSON write.
 - `save_manifest(run_dir, TestRun)` / `load_manifest(run_dir) -> TestRun | None`.
 - `save_session_result_for_symbol(run_dir, symbol, SessionResult)` / `load_session_result_for_symbol`.
-- `list_runs() -> list[TestRun]` — newest-first by directory name.
+- `list_runs() -> list[TestRun]` — newest-first by the manifest `started_at` timestamp.
 - `list_runs_with_paths() -> list[tuple[Path, TestRun]]` — same ordering as `list_runs`, but also returns the on-disk run directory so callers can load `aggregate.json` / `trades.csv` / screenshots. Used by the GUI Recent Runs sidebar (PR 5).
 - `delete_run(run_dir) -> bool` — recursive removal, swallows OSError.
 
@@ -33,7 +33,7 @@ On-disk persistence for Strategy Tester Runs. Atomic writes only — no in-fligh
 - `backtest.session.SessionResult` (round-trip)
 
 ## Design Decisions
-- **Directory name = `<run_id>-<iso_ts>`** — keeps Recent runs sortable lexicographically while still letting fingerprint-identical runs coexist (per the user's "always new Run" decision).
+- **Directory name = `<run_id>-<iso_ts>`** — the `<run_id>` is a config fingerprint (so fingerprint-identical configs coexist as separate dirs) and the `<iso_ts>` suffix makes every re-run a distinct directory (per the user's "always new Run" decision). **Recent runs are ordered by the manifest `started_at`, not by directory name** — the fingerprint prefix is not chronological, so a dir-name sort would scramble the timeline; the directory name is used only as a deterministic tiebreaker for equal `started_at`.
 - **Atomic JSON writes via `atomic_write_json`** — protects against crashes mid-write. Pretty-printed (`indent=2`) because humans occasionally read these.
 - **`per_symbol/<SYMBOL>.json` mirrors existing Sandbox post-mortem format** — Strategy Tester results reuse the live `SessionResult.to_dict` schema so the same renderer can display both.
 - **`load_manifest` swallows JSONDecodeError** — a half-written manifest (crashed mid-run) shows up as "missing" in `list_runs` rather than breaking the sidebar.

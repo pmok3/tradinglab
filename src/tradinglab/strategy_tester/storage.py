@@ -198,7 +198,12 @@ def list_runs_with_paths() -> list[tuple[Path, TestRun]]:
         if run is None:
             continue
         pairs.append((child.name, child, run))
-    pairs.sort(key=lambda triple: triple[0], reverse=True)
+    # Newest-first by the manifest ``started_at`` (the value shown in the
+    # Recent Runs "Started" column). The directory name is NOT chronological
+    # — it is prefixed with ``run_id``, a config fingerprint, so a dir-name
+    # sort groups by fingerprint instead of time. The directory name is kept
+    # only as a deterministic tiebreaker for runs sharing a ``started_at``.
+    pairs.sort(key=lambda triple: (triple[2].started_at or "", triple[0]), reverse=True)
     return [(p, r) for _n, p, r in pairs]
 
 

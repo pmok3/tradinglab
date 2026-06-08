@@ -82,34 +82,48 @@ def test_save_and_load_session_result_for_symbol(monkeypatch, tmp_path) -> None:
 
 
 def test_list_runs_returns_newest_first(monkeypatch, tmp_path) -> None:
+    """Runs sort by the manifest ``started_at`` (the Recent Runs "Started"
+    column), descending — NOT by the run_id-fingerprint-prefixed directory
+    name. The run_ids here ascend while ``started_at`` descends, so a
+    dir-name sort and a started_at sort give OPPOSITE results; the assert
+    pins that ``started_at`` wins.
+    """
     monkeypatch.setenv("TRADINGLAB_CACHE_DIR", str(tmp_path))
     cfg = _config()
-    for run_id, ts in (("aaa11111", "20260101T000000Z"),
-                        ("bbb22222", "20260201T000000Z"),
-                        ("ccc33333", "20260301T000000Z")):
-        d = storage.run_dir_for(run_id, started_iso=ts)
+    for run_id, started_at in (("aaa11111", "2026-03-01T00:00:00Z"),
+                               ("bbb22222", "2026-02-01T00:00:00Z"),
+                               ("ccc33333", "2026-01-01T00:00:00Z")):
+        d = storage.run_dir_for(run_id, started_iso="20260101T000000Z")
         run = TestRun(run_id=run_id, config=cfg, status=RunStatus.DONE,
+                      started_at=started_at,
                       app_version="0.1.1", engine_version="sandbox-1d")
         storage.save_manifest(d, run)
     runs = storage.list_runs()
-    assert [r.run_id for r in runs] == ["ccc33333", "bbb22222", "aaa11111"]
+    # Newest started_at first: aaa (Mar) > bbb (Feb) > ccc (Jan). A
+    # dir-name sort would have produced the reverse (ccc, bbb, aaa).
+    assert [r.run_id for r in runs] == ["aaa11111", "bbb22222", "ccc33333"]
 
 
 def test_list_runs_with_paths_pairs_dir_and_manifest(
     monkeypatch, tmp_path,
 ) -> None:
-    """list_runs_with_paths returns each Run alongside its on-disk dir."""
+    """list_runs_with_paths returns each Run alongside its on-disk dir,
+    newest-first by ``started_at``. run_id ``aaa`` is the NEWER run here, so
+    it must come before ``bbb`` even though a dir-name sort would reverse
+    them.
+    """
     monkeypatch.setenv("TRADINGLAB_CACHE_DIR", str(tmp_path))
     cfg = _config()
-    for run_id, ts in (("aaa11111", "20260101T000000Z"),
-                        ("bbb22222", "20260201T000000Z")):
-        d = storage.run_dir_for(run_id, started_iso=ts)
+    for run_id, started_at in (("aaa11111", "2026-02-01T00:00:00Z"),
+                               ("bbb22222", "2026-01-01T00:00:00Z")):
+        d = storage.run_dir_for(run_id, started_iso="20260101T000000Z")
         run = TestRun(run_id=run_id, config=cfg, status=RunStatus.DONE,
+                      started_at=started_at,
                       app_version="0.1.1", engine_version="sandbox-1d")
         storage.save_manifest(d, run)
     pairs = storage.list_runs_with_paths()
-    # Newest first.
-    assert [r.run_id for _p, r in pairs] == ["bbb22222", "aaa11111"]
+    # Newest started_at first (aaa = Feb, bbb = Jan).
+    assert [r.run_id for _p, r in pairs] == ["aaa11111", "bbb22222"]
     # Each path exists and matches the run_id.
     for path, run in pairs:
         assert path.exists()
