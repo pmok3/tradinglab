@@ -88,6 +88,24 @@ rolling median uses `np.lib.stride_tricks.sliding_window_view` +
 typical ~3500-bar 5-minute frames; mean is ~300× faster). RRVOL
 benefits proportionally since it computes RVOL on both legs.
 
+**`time_of_day` / `cumulative` are fully vectorised (compute #5).** Both
+build a `(sessions × tod-key)` matrix from the regular-session groups
+(`_regular_bar_index` → `np.add.at` for time-of-day volume sums;
+segmented `cumsum` + `np.maximum.at` for cumulative last-wins volume),
+then aggregate each cell over its prior `length` sessions with a single
+NaN-padded `sliding_window_view` (`_rolling_session_denom`, mean via
+`np.nanmean` / median via `np.nanmedian`, gated on ≥ `_MIN_WARMUP_SESSIONS`
+finite samples). `cumulative` forward-fills the matrix along the sorted
+tod-key axis (`_ffill_rows`) to reproduce the old per-session
+`bisect_right(keys, k) - 1` step-function lookup. `session_filter` is a
+no-op within the regular-only groups, so it is not consulted. Measured
+~90× faster than the prior per-bar gather loops on a 120-day 5m history;
+bit-equivalent on the median path and within float64 summation-order
+round-off on the mean path — pinned by
+`tests/unit/test_rvol_vectorized_equiv.py` against inline copies of the
+original loops (fuzzed over missing tod-keys, duplicate/DST timestamps,
+NaN volumes).
+
 ### Z-score (`z_score=True`)
 Rolling sample-stddev z with window=`length`:
 
@@ -102,6 +120,12 @@ z[i] = (rvol[i] - mean(window)) / std(window, ddof=1)
 - Window is always **bar count**, even when `length` is otherwise
   in days (`cumulative` / `time_of_day`). Matches legacy z-score
   family behaviour.
+- **Vectorised (compute #5):** a length-`L-1` NaN prefix + one
+  `sliding_window_view` yields each bar's trailing window; `np.nanmean`
+  / `np.nanstd(ddof=1)` over the gated rows reproduce the prior loop's
+  `finite.mean()` / `finite.std(ddof=1)` (median path bit-exact, mean/std
+  within summation-order ULPs ~1e-15). ~63× faster on 25k bars.
+
 
 ### Session filter
 `session_filter` controls which bars contribute to BOTH numerator

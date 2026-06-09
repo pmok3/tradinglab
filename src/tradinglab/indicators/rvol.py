@@ -106,7 +106,7 @@ pane.
 
 from __future__ import annotations
 
-import bisect
+import warnings
 from collections.abc import Mapping
 from typing import Any, ClassVar
 
@@ -335,6 +335,25 @@ def _rolling_aggregate_window_median(
     return out
 
 
+def _ffill_rows(matrix: np.ndarray) -> np.ndarray:
+    """Forward-fill each row over its columns (NaN-carrying the last finite
+    value to the right). A column with no finite value at-or-before it
+    stays NaN. Columns are in ascending tod-key order, so this reproduces
+    the prior ``bisect_right(keys, k) - 1`` "cumulative at-or-before k"
+    step-function lookup.
+    """
+    s_n, k_n = matrix.shape
+    if s_n == 0 or k_n == 0:
+        return matrix.copy()
+    mask = np.isfinite(matrix)
+    cols = np.broadcast_to(np.arange(k_n), (s_n, k_n))
+    idx = np.where(mask, cols, -1)
+    np.maximum.accumulate(idx, axis=1, out=idx)
+    safe = np.where(idx >= 0, idx, 0)
+    gathered = np.take_along_axis(matrix, safe, axis=1)
+    return np.where(idx >= 0, gathered, np.nan)
+
+
 def _compute_cumulative(
     bars: Bars,
     length: int,
@@ -345,76 +364,117 @@ def _compute_cumulative(
     volume at same wall-clock time over the prior ``length`` sessions.
 
     Intraday only. Returns all-NaN on non-intraday data.
+
+    Vectorised: builds a ``(sessions × tod-key)`` matrix of each session's
+    last-wins cumulative volume per tod-key, forward-fills it along the
+    sorted tod-key axis (replacing the prior per-session ``bisect``), then
+    aggregates each cell over its prior ``length`` sessions via
+    :func:`_rolling_session_denom` and divides today's cumulative by it.
+    Bit-equivalent to the prior per-bar gather loop (``session_filter`` is
+    a no-op within regular-only groups). Pinned by
+    ``tests/unit/test_rvol_vectorized_equiv.py``.
     """
     n = len(bars)
     out = np.full(n, np.nan, dtype=np.float64)
     if n == 0 or not is_intraday_np(bars):
         return out
 
-    admit_mask = session_filter_mask_np(bars, session_filter)
     groups = session_groups_np(bars, regular_only=True)
     if len(groups) < _MIN_WARMUP_SESSIONS + 1:
         return out
 
-    vol = bars.volume
-    tk = tod_key_np(bars)  # int32, h*60+m
+    reg_idx, sess, col, vol_clean, s_n, k_n = _regular_bar_index(bars, groups)
+    if reg_idx.size == 0:
+        return out
 
-    # Per-session cumulative-volume keyed by tod.
-    session_cum: list[dict[int, float]] = []
-    for grp in groups:
-        cum = 0.0
-        keyed: dict[int, float] = {}
-        for idx in grp:
-            if not admit_mask[idx]:
-                continue
-            v = float(vol[idx])
-            if not np.isfinite(v):
-                v = 0.0
-            cum += v
-            keyed[int(tk[idx])] = cum
-        session_cum.append(keyed)
+    # Within-session running cumulative volume (segmented cumsum).
+    sizes = np.array([g.size for g in groups], dtype=np.int64)
+    full_cum = np.cumsum(vol_clean)
+    seg_end_total = full_cum[np.cumsum(sizes) - 1]
+    prev_total = np.concatenate(([0.0], seg_end_total[:-1]))
+    cum_per_reg = full_cum - prev_total[sess]
 
-    # Pre-sort each session's tod-keys + cumulative-values into parallel
-    # arrays for O(log b) prefix lookup via bisect.
-    sorted_keyed: list[tuple[list[int], list[float]]] = []
-    for keyed in session_cum:
-        if not keyed:
-            sorted_keyed.append(([], []))
-            continue
-        items = sorted(keyed.items())
-        sorted_keyed.append(
-            ([k for k, _ in items], [v for _, v in items]),
-        )
+    # Last-wins cumulative per (session, tod-key): cumulative is
+    # non-decreasing within a session, so the last bar's value is the max.
+    m_raw = np.full((s_n, k_n), -np.inf, dtype=np.float64)
+    np.maximum.at(m_raw, (sess, col), cum_per_reg)
+    m_raw = np.where(np.isfinite(m_raw), m_raw, np.nan)
 
-    for s in range(_MIN_WARMUP_SESSIONS, len(groups)):
-        cur_grp = groups[s]
-        cur_keyed = session_cum[s]
-        prior_window = sorted_keyed[max(0, s - length):s]
-        for idx in cur_grp:
-            if not admit_mask[idx]:
-                continue
-            k = int(tk[idx])
-            today_cum = cur_keyed.get(k)
-            if today_cum is None:
-                continue
-            baseline_vals: list[float] = []
-            for keys_list, vals_list in prior_window:
-                if not keys_list:
-                    continue
-                pos = bisect.bisect_right(keys_list, k) - 1
-                if pos >= 0:
-                    baseline_vals.append(vals_list[pos])
-            if len(baseline_vals) < _MIN_WARMUP_SESSIONS:
-                continue
-            denom = _aggregate(
-                np.asarray(baseline_vals, dtype=np.float64),
-                aggregator,
-            )
-            if denom <= 0.0:
-                out[idx] = 0.0
-            else:
-                out[idx] = float(today_cum) / denom
+    today_cum = m_raw[sess, col]  # == cur_keyed.get(k) for this bar
+    m_cum = _ffill_rows(m_raw)    # cumulative at-or-before each tod-key
+    denom, gate = _rolling_session_denom(m_cum, length, aggregator)
+
+    d = denom[sess, col]
+    sel = gate[sess, col] & (sess >= _MIN_WARMUP_SESSIONS)
+    if np.any(sel):
+        dd = d[sel]
+        tc = today_cum[sel]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            res = np.where(dd <= 0.0, 0.0, tc / dd)
+        out[reg_idx[sel]] = res
     return out
+
+
+def _regular_bar_index(
+    bars: Bars, groups: list[np.ndarray],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, int, int]:
+    """Flat per-regular-bar indexing for the session×tod-key matrices.
+
+    Returns ``(reg_idx, sess_of_reg, col_of_reg, vol_clean_reg, n_sessions,
+    n_cols)`` where ``reg_idx`` are the global indices of every regular bar
+    (session order), ``sess_of_reg`` its 0-based session index,
+    ``col_of_reg`` its tod-key column index (dense), and ``vol_clean_reg``
+    its volume with non-finite → 0 (matching the scalar path).
+    """
+    sizes = np.array([g.size for g in groups], dtype=np.int64)
+    reg_idx = np.concatenate(groups) if groups else np.empty(0, dtype=np.int64)
+    sess_of_reg = np.repeat(np.arange(len(groups), dtype=np.int64), sizes)
+    tk = tod_key_np(bars)
+    keys_reg = tk[reg_idx].astype(np.int64)
+    _uniq, col_of_reg = np.unique(keys_reg, return_inverse=True)
+    vol_reg = bars.volume[reg_idx].astype(np.float64)
+    vol_clean_reg = np.where(np.isfinite(vol_reg), vol_reg, 0.0)
+    return (reg_idx, sess_of_reg, col_of_reg.astype(np.int64),
+            vol_clean_reg, len(groups), int(_uniq.size))
+
+
+def _rolling_session_denom(
+    M: np.ndarray, length: int, aggregator: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Aggregate, per ``(session, tod-key)`` cell, over the PRIOR ``length``
+    sessions of ``M`` (NaN-ignoring), gated on ``>= _MIN_WARMUP_SESSIONS``
+    finite samples.
+
+    Returns ``(denom, gate)`` of shape ``M.shape``. ``denom[s, c]`` is the
+    mean/median of the finite entries in ``M[max(0, s-length):s, c]`` (0.0
+    when that is non-finite, mirroring :func:`_aggregate`); ``gate[s, c]``
+    is True iff the window column held at least ``_MIN_WARMUP_SESSIONS``
+    finite samples. Vectorised via a length-``length`` NaN row-prefix so a
+    single ``sliding_window_view`` yields each session's exclusive prior
+    window.
+    """
+    s_n, k_n = M.shape
+    denom = np.full((s_n, k_n), np.nan, dtype=np.float64)
+    gate = np.zeros((s_n, k_n), dtype=bool)
+    if s_n == 0 or k_n == 0:
+        return denom, gate
+    pad = np.full((length, k_n), np.nan, dtype=np.float64)
+    padded = np.concatenate((pad, M), axis=0)
+    view = np.lib.stride_tricks.sliding_window_view(padded, length, axis=0)
+    view = view[:s_n]  # (S, K, length): view[s, c, :] == M[s-length:s, c]
+    cnt = np.isfinite(view).sum(axis=2)
+    g = cnt >= _MIN_WARMUP_SESSIONS
+    if not np.any(g):
+        return denom, gate
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        if aggregator == "median":
+            agg = np.nanmedian(view, axis=2)
+        else:
+            agg = np.nanmean(view, axis=2)
+    agg = np.where(np.isfinite(agg), agg, 0.0)
+    denom = np.where(g, agg, np.nan)
+    return denom, g
 
 
 def _compute_time_of_day(
@@ -427,56 +487,45 @@ def _compute_time_of_day(
     volumes across the last ``length`` regular sessions.
 
     Intraday only. Returns all-NaN on non-intraday data.
+
+    Vectorised: builds a ``(sessions × tod-key)`` volume matrix (DST /
+    duplicate timestamps summed per cell), aggregates each cell over its
+    prior ``length`` sessions via :func:`_rolling_session_denom`, then
+    gathers the per-bar denominator. Bit-equivalent to the prior per-bar
+    gather loop (``session_filter`` is a no-op within the regular-only
+    groups, so it is not consulted here). Pinned by
+    ``tests/unit/test_rvol_vectorized_equiv.py``.
     """
     n = len(bars)
     out = np.full(n, np.nan, dtype=np.float64)
     if n == 0 or not is_intraday_np(bars):
         return out
 
-    admit_mask = session_filter_mask_np(bars, session_filter)
     groups = session_groups_np(bars, regular_only=True)
     if len(groups) < _MIN_WARMUP_SESSIONS + 1:
         return out
 
-    vol = bars.volume
-    tk = tod_key_np(bars)
+    reg_idx, sess, col, vol_clean, s_n, k_n = _regular_bar_index(bars, groups)
+    if reg_idx.size == 0:
+        return out
 
-    # Per-session per-tod-key volume map.
-    per_session: list[dict[int, float]] = []
-    for grp in groups:
-        keyed: dict[int, float] = {}
-        for idx in grp:
-            if not admit_mask[idx]:
-                continue
-            v = float(vol[idx])
-            if not np.isfinite(v):
-                v = 0.0
-            k = int(tk[idx])
-            # Sum repeats (DST / duplicate timestamps).
-            keyed[k] = keyed.get(k, 0.0) + v
-        per_session.append(keyed)
+    # Per-(session, tod-key) summed volume; NaN where the cell is absent.
+    m_sum = np.zeros((s_n, k_n), dtype=np.float64)
+    m_cnt = np.zeros((s_n, k_n), dtype=np.float64)
+    np.add.at(m_sum, (sess, col), vol_clean)
+    np.add.at(m_cnt, (sess, col), 1.0)
+    matrix = np.where(m_cnt > 0, m_sum, np.nan)
 
-    for s in range(_MIN_WARMUP_SESSIONS, len(groups)):
-        cur_grp = groups[s]
-        prior_window = per_session[max(0, s - length):s]
-        for idx in cur_grp:
-            if not admit_mask[idx]:
-                continue
-            k = int(tk[idx])
-            baseline_vals = [d[k] for d in prior_window if k in d]
-            if len(baseline_vals) < _MIN_WARMUP_SESSIONS:
-                continue
-            v_now = float(vol[idx])
-            if not np.isfinite(v_now):
-                v_now = 0.0
-            denom = _aggregate(
-                np.asarray(baseline_vals, dtype=np.float64),
-                aggregator,
-            )
-            if denom <= 0.0:
-                out[idx] = 0.0
-            else:
-                out[idx] = v_now / denom
+    denom, gate = _rolling_session_denom(matrix, length, aggregator)
+
+    d = denom[sess, col]
+    sel = gate[sess, col] & (sess >= _MIN_WARMUP_SESSIONS)
+    if np.any(sel):
+        dd = d[sel]
+        vv = vol_clean[sel]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            res = np.where(dd <= 0.0, 0.0, vv / dd)
+        out[reg_idx[sel]] = res
     return out
 
 
@@ -493,6 +542,14 @@ def _rolling_zscore(rvol: np.ndarray, length: int) -> np.ndarray:
 
     The window is the last ``length`` consecutive bars (inclusive of
     the current bar).
+
+    Vectorised: a length-``L-1`` NaN prefix is prepended so a single
+    ``sliding_window_view`` yields, for every output bar ``i``, the row
+    ``padded[i:i+L]`` whose finite entries are EXACTLY the original
+    ``rvol[max(0, i-L+1):i+1]`` finite values (the pad NaNs drop out of
+    the NaN-aware reductions). ``np.nanmean`` / ``np.nanstd(ddof=1)`` over
+    that view reproduce the per-window ``finite.mean()`` /
+    ``finite.std(ddof=1)`` of the prior Python loop bit-for-bit.
     """
     n = rvol.shape[0]
     out = np.full(n, np.nan, dtype=np.float64)
@@ -500,19 +557,20 @@ def _rolling_zscore(rvol: np.ndarray, length: int) -> np.ndarray:
         return out
 
     L = int(length)
-    for i in range(n):
-        if not np.isfinite(rvol[i]):
-            continue
-        lo = max(0, i - L + 1)
-        window = rvol[lo : i + 1]
-        finite = window[np.isfinite(window)]
-        if finite.size < 2:
-            continue
-        mean = float(finite.mean())
-        std = float(finite.std(ddof=1))
-        if not np.isfinite(std) or std <= 0.0:
-            continue
-        out[i] = (float(rvol[i]) - mean) / std
+    padded = np.concatenate((np.full(L - 1, np.nan, dtype=np.float64), rvol))
+    view = np.lib.stride_tricks.sliding_window_view(padded, L)  # (n, L)
+    cnt = np.isfinite(view).sum(axis=1)
+    gate = (cnt >= 2) & np.isfinite(rvol)
+    if not np.any(gate):
+        return out
+    # Reduce only the gated rows so empty / 1-sample slices never raise the
+    # "Mean of empty slice" / "Degrees of freedom <= 0" RuntimeWarnings.
+    sub = view[gate]
+    mean = np.nanmean(sub, axis=1)
+    std = np.nanstd(sub, axis=1, ddof=1)
+    ok_local = np.isfinite(std) & (std > 0.0)
+    idx = np.flatnonzero(gate)[ok_local]
+    out[idx] = (rvol[idx] - mean[ok_local]) / std[ok_local]
     return out
 
 
