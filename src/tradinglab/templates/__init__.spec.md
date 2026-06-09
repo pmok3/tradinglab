@@ -1,7 +1,7 @@
 # templates/__init__.py — Spec
 
 ## Purpose
-Subpackage marker that re-exports the public API of `templates/seed.py` for the first-run starter-pack seeding flow.
+Subpackage marker that re-exports the public API of `templates/seed.py` for the startup template-seeding flow (additive per-template ledger).
 
 ## Public API
 Re-exported from `.seed`:

@@ -1,16 +1,19 @@
 """Starter-pack templates seeding.
 
-This subpackage owns the first-run seeding of the user-local
-strategy libraries with the templates that ship in ``data/``:
+This subpackage owns seeding the user-local strategy libraries with the
+templates that ship in ``data/``:
 
-- 5 entry-strategy JSONs   → ``<cache_dir>/entry_strategies/``
-- 5 exit-strategy JSONs    → ``<cache_dir>/exit_strategies/``
-- 5 scanner-definition JSONs → ``<cache_dir>/scans/``
+- entry-strategy JSONs     → ``<cache_dir>/entry_strategies/``
+- exit-strategy JSONs      → ``<cache_dir>/exit_strategies/``
+- scanner-definition JSONs → ``<cache_dir>/scans/``
 
-A sentinel file ``<cache_dir>/.templates_seeded`` is written after
-the first successful seed so subsequent launches are no-ops. The
-user can force a re-seed by deleting the sentinel before relaunching,
-or via a future Tools → Restore Default Templates affordance.
+Seeding is **additive**: each bundled template is offered to the user
+exactly once over the app's lifetime, tracked by filename in a JSON
+ledger ``<cache_dir>/.templates_seeded``. This delivers newly-shipped
+catalog templates to EXISTING users on upgrade — not just fresh installs
+— while never clobbering edits or resurrecting deletions. Deleting the
+ledger re-offers every bundled template; ``Tools → Restore Default
+Templates`` force-copies them all (overwriting same-named files).
 
 Indicator presets in ``data/indicator_presets/`` are bundled but NOT
 auto-loaded — they're consumed by a future Indicators → Load preset

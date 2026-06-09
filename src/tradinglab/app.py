@@ -420,14 +420,16 @@ class ChartApp(
         #   the AUMID via the Shell32 API instead.
         # * macOS uses Info.plist for both, so this is a no-op there.
         _identify_to_window_manager(self)
-        # First-run seeding of bundled starter-pack templates (5 entries,
-        # 5 exits, 5 scanners) into the user-local library. No-op once
-        # the sentinel exists. Failures are logged but non-fatal.
+        # First-run + per-upgrade seeding of bundled starter-pack
+        # templates (entries / exits / scanners) into the user-local
+        # library. Offers each bundled template exactly once (tracked in
+        # a JSON ledger), so newly-shipped catalog templates also reach
+        # existing users on upgrade. Failures are logged but non-fatal.
         # Deferred to ``after_idle`` so the first paint isn't blocked
         # on first-run file I/O (~50-200ms on cold install). Safe to
         # defer because the user can't open the Templates menu before
-        # the first idle event processes; subsequent launches are
-        # already no-ops via the sentinel guard.
+        # the first idle event processes; subsequent launches only copy
+        # templates not yet recorded in the seed ledger (cheap).
         def _seed_templates_idle() -> None:
             try:
                 from .templates import seed_default_templates_if_empty
@@ -6423,20 +6425,19 @@ class ChartApp(
     def _on_tools_restore_templates(self, _event=None) -> None:
         """Force-seed the bundled starter-pack strategy templates.
 
-        Unlike the first-run seed, this bypasses the "library is empty"
-        guard but still respects the per-file existence check: files
-        with the same id as a bundled template are overwritten, files
-        with different ids are untouched. The sentinel is rewritten so
-        the next first-run check still short-circuits.
+        Unlike the per-launch additive seed, this bypasses the
+        already-offered ledger and the "library is empty" guard: every
+        bundled template is (re)written, overwriting a same-named file
+        in the library while leaving the user's other strategies
+        untouched. Use it to restore the full catalog after pruning.
         """
         try:
             from tkinter import messagebox
             yes = messagebox.askyesno(
                 title="Restore Default Templates",
                 message=(
-                    "Copy the bundled starter-pack templates "
-                    "(5 entries / 5 exits / 5 scanners) into your "
-                    "library?\n\n"
+                    "Copy all bundled starter-pack templates "
+                    "(entries / exits / scanners) into your library?\n\n"
                     "Existing strategies of the same id will be "
                     "overwritten; your other strategies will be "
                     "untouched."

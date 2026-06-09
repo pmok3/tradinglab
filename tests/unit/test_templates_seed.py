@@ -11,7 +11,7 @@ from tradinglab.templates import (
     seed_default_templates,
     seed_default_templates_if_empty,
 )
-from tradinglab.templates.seed import _is_library_empty
+from tradinglab.templates.seed import _is_library_empty, _load_ledger
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -151,34 +151,135 @@ def test_seed_default_templates_force_overwrites(
 
 
 # ---------------------------------------------------------------------------
-# seed_default_templates_if_empty
+# seed_default_templates_if_empty — additive per-template ledger
 # ---------------------------------------------------------------------------
 
 
-def test_first_run_writes_sentinel(isolated_cache_dir: Path) -> None:
-    result = seed_default_templates_if_empty()
-    assert result["copied"] >= 15
-    sentinel = isolated_cache_dir / ".templates_seeded"
-    assert sentinel.exists()
-    assert "TradingLab" in sentinel.read_text(encoding="utf-8")
+def _bundled_names(sub: str) -> set[str]:
+    return {p.name for p in bundled_templates_dir(sub).glob("*.json")}
 
 
-def test_second_run_is_noop_when_sentinel_present(
+def _entries_dir():
+    from tradinglab.entries.storage import storage_dir
+    return storage_dir()
+
+
+def test_first_run_offers_all_bundled_and_writes_json_ledger(
     isolated_cache_dir: Path,
 ) -> None:
+    result = seed_default_templates_if_empty()
+    expected = (
+        len(_bundled_names("entry_strategy_templates"))
+        + len(_bundled_names("exit_strategy_templates"))
+        + len(_bundled_names("scanner_templates"))
+    )
+    assert result["copied"] == expected
+    # The entries library now holds every bundled entry template.
+    present = {p.name for p in _entries_dir().glob("tmpl-*.json")}
+    assert present == _bundled_names("entry_strategy_templates")
+    # The sentinel is now a JSON ledger recording the offered filenames.
+    ledger_path = isolated_cache_dir / ".templates_seeded"
+    assert ledger_path.exists()
+    data = json.loads(ledger_path.read_text(encoding="utf-8"))
+    assert data["version"] >= 1
+    assert set(data["seeded"]["entries"]) == _bundled_names(
+        "entry_strategy_templates"
+    )
+
+
+def test_second_run_is_idempotent(isolated_cache_dir: Path) -> None:
     seed_default_templates_if_empty()
     second = seed_default_templates_if_empty()
-    assert second == {"copied": 0, "skipped": 0, "by_kind": {}}
+    assert second["copied"] == 0
+    assert second["by_kind"]["entries"][0] == 0
 
 
-def test_deleting_sentinel_allows_reseed(isolated_cache_dir: Path) -> None:
+def test_upgrade_delivers_newly_bundled_templates(
+    isolated_cache_dir: Path,
+) -> None:
+    """Legacy text sentinel + the original starter pack → fill to full set.
+
+    Reproduces the reported bug: a user who installed before the catalog
+    expansion has only the original 5 entries plus the pre-ledger plain-
+    text sentinel. The first launch on a build with the ledger must
+    deliver the newly-bundled templates without re-copying the existing
+    ones.
+    """
+    # Legacy plain-text sentinel (pre-ledger).
+    (isolated_cache_dir / ".templates_seeded").write_text(
+        "TradingLab starter-pack templates seeded.\n", encoding="utf-8",
+    )
+    ent = _entries_dir()
+    ent.mkdir(parents=True, exist_ok=True)
+    bundled = sorted(
+        bundled_templates_dir("entry_strategy_templates").glob("*.json")
+    )
+    for src in bundled[:5]:
+        (ent / src.name).write_bytes(src.read_bytes())
+    assert len({p.name for p in ent.glob("tmpl-*.json")}) == 5
+
+    result = seed_default_templates_if_empty()
+
+    present = {p.name for p in ent.glob("tmpl-*.json")}
+    assert present == {p.name for p in bundled}, "all bundled entries delivered"
+    # The 5 pre-existing files were skipped (recorded), not re-copied.
+    copied, _skipped = result["by_kind"]["entries"]
+    assert copied == len(bundled) - 5
+    # Ledger migrated to JSON and records the full set.
+    data = json.loads(
+        (isolated_cache_dir / ".templates_seeded").read_text(encoding="utf-8")
+    )
+    assert set(data["seeded"]["entries"]) == {p.name for p in bundled}
+
+
+def test_deletion_is_respected_after_offer(isolated_cache_dir: Path) -> None:
+    """A template deleted after being offered is NOT resurrected."""
     seed_default_templates_if_empty()
-    (isolated_cache_dir / ".templates_seeded").unlink()
-    # Even without the sentinel, libraries are now non-empty so each
-    # kind is skipped — but the sentinel is rewritten.
+    ent = _entries_dir()
+    victim = sorted(ent.glob("tmpl-*.json"))[0]
+    victim_name = victim.name
+    victim.unlink()
     result = seed_default_templates_if_empty()
     assert result["copied"] == 0
-    assert (isolated_cache_dir / ".templates_seeded").exists()
+    assert not (ent / victim_name).exists(), "deleted template stays deleted"
+
+
+def test_user_edited_bundled_file_is_not_clobbered(
+    isolated_cache_dir: Path,
+) -> None:
+    ent = _entries_dir()
+    ent.mkdir(parents=True, exist_ok=True)
+    sample = sorted(
+        bundled_templates_dir("entry_strategy_templates").glob("*.json")
+    )[0]
+    (ent / sample.name).write_text('{"id": "user-edit"}', encoding="utf-8")
+    seed_default_templates_if_empty()
+    assert json.loads((ent / sample.name).read_text(encoding="utf-8")) == {
+        "id": "user-edit"
+    }
+    # Still recorded as offered so it's never reconsidered.
+    assert sample.name in _load_ledger()["entries"]
+
+
+def test_new_template_on_later_upgrade_is_offered(
+    isolated_cache_dir: Path,
+) -> None:
+    """A ledger missing one bundled name → only that one is offered."""
+    bundled = _bundled_names("entry_strategy_templates")
+    seed_default_templates_if_empty()
+    ent = _entries_dir()
+    # Simulate "this template shipped in a newer build": drop it from the
+    # ledger AND from the library, as if it never existed for this user.
+    newcomer = sorted(bundled)[0]
+    (ent / newcomer).unlink(missing_ok=True)
+    ledger = _load_ledger()
+    ledger["entries"].discard(newcomer)
+    from tradinglab.templates.seed import _write_ledger
+    _write_ledger(ledger)
+
+    result = seed_default_templates_if_empty()
+    assert result["by_kind"]["entries"][0] == 1
+    assert (ent / newcomer).exists()
 
 
 def test_on_seed_callback_is_invoked(isolated_cache_dir: Path) -> None:

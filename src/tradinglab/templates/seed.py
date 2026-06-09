@@ -3,26 +3,39 @@
 See :mod:`tradinglab.templates` package docstring for the high-
 level contract. This module is the implementation:
 
-- :func:`seed_default_templates_if_empty` — the safe entry point
-  that runs at app startup. No-op once the sentinel exists.
-- :func:`seed_default_templates` — unconditional seed; respects
-  per-storage-dir "library is empty" guards (set
-  ``force=True`` to overwrite existing files of the same id).
+- :func:`seed_default_templates_if_empty` — the startup entry point.
+  Offers each bundled template to the user's library **exactly once
+  ever**, tracked in a JSON ledger (``.templates_seeded``). This means
+  newly-shipped catalog templates reach EXISTING users on upgrade —
+  not just brand-new installs — while user edits/deletions are never
+  clobbered or resurrected. (Name retained for back-compat; before the
+  ledger it seeded only once, gated on an empty library + a binary
+  sentinel, so the 15 templates added after the original 5-template
+  starter pack never reached upgraders.)
+- :func:`seed_default_templates` — unconditional seed used by the
+  "Restore Default Templates" menu; respects per-storage-dir "library
+  is empty" guards (set ``force=True`` to overwrite existing files of
+  the same id).
 - :func:`bundled_templates_dir` — resolves a bundled template
   directory under ``data/`` for both source checkouts and frozen
   PyInstaller builds.
 
-The seeder is intentionally conservative:
+The startup seeder is conservative but **additive**:
 
-- Per-library, we ONLY seed when the target dir is empty (no
-  visible JSON files). If the user has already created their own
-  strategies, we never touch their library.
-- Each individual file copy is wrapped in try/except — one bad
-  template can't block the others, and a missing
-  ``data/<dir>`` (e.g. partial wheel) simply skips that library.
-- The sentinel is written ONCE at the end on best effort; if it
-  fails to write, the next launch re-seeds (idempotent because the
-  empty-library guard still holds).
+- A bundled template is offered (copied) once, then its filename is
+  recorded in the per-kind ledger. A recorded template is never
+  re-offered, so deleting a seeded template makes it stay deleted.
+- A bundled file is NEVER overwritten if a same-named file already
+  exists on disk (the user may have edited it); it is just recorded.
+- The legacy plain-text sentinel (pre-ledger) is treated as "nothing
+  recorded yet", so the first launch after upgrading fills the library
+  up to the full bundled set without clobbering existing files.
+- Each copy is wrapped in try/except — one bad template can't block the
+  others, and a missing ``data/<dir>`` (e.g. partial wheel) simply
+  skips that library.
+- The ledger is written best-effort at the end; if it fails to write,
+  the next launch re-offers (idempotent because the per-file existence
+  check still skips files already on disk).
 """
 from __future__ import annotations
 
@@ -37,6 +50,12 @@ from ..disk_cache import _cache_dir
 LOG = logging.getLogger(__name__)
 
 _SENTINEL_NAME = ".templates_seeded"
+#: Ledger format version. The ``.templates_seeded`` file is a JSON
+#: document ``{"version": 1, "seeded": {kind: [filenames]}}`` recording
+#: which bundled templates have already been offered to the user. A
+#: pre-ledger plain-text sentinel parses as "nothing recorded yet" so
+#: upgraders get the templates added since their last install.
+_LEDGER_VERSION = 1
 
 # Mapping: (bundled_subdir_under_data, target_storage_dir_callable).
 # We import storage helpers lazily inside _seed_one() to keep this
@@ -230,43 +249,180 @@ def _sentinel_path() -> Path:
     return _cache_dir() / _SENTINEL_NAME
 
 
+def _load_ledger() -> dict[str, set[str]]:
+    """Return ``{kind: set(seeded_filenames)}`` from the on-disk ledger.
+
+    Returns an empty mapping when the ledger is missing, unreadable, or
+    in the legacy plain-text format (pre-ledger sentinel). The empty
+    result is what makes an upgrade additive: every currently-bundled
+    template is treated as "not yet offered" and gets delivered (subject
+    to the per-file existence check) the first time the new build runs.
+    """
+    try:
+        raw = _sentinel_path().read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        # Legacy plain-text sentinel or a corrupt ledger → migrate by
+        # treating it as "nothing recorded yet".
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    seeded = data.get("seeded", {})
+    out: dict[str, set[str]] = {}
+    if isinstance(seeded, dict):
+        for kind, names in seeded.items():
+            if isinstance(names, list):
+                out[str(kind)] = {str(n) for n in names}
+    return out
+
+
+def _write_ledger(ledger: dict[str, set[str]]) -> None:
+    """Persist the seeded-template ledger (best effort)."""
+    path = _sentinel_path()
+    payload = {
+        "version": _LEDGER_VERSION,
+        "_comment": (
+            "TradingLab template-seed ledger. Records which bundled "
+            "templates have been offered to your library so new catalog "
+            "templates reach you on upgrade and your deletions are not "
+            "resurrected. Delete this file to re-offer every bundled "
+            "template on the next launch."
+        ),
+        "seeded": {k: sorted(v) for k, v in sorted(ledger.items())},
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        from ..core.io_helpers import atomic_write_json
+        atomic_write_json(path, payload)
+    except OSError as e:
+        LOG.warning("templates.seed: couldn't write ledger %s: %s", path, e)
+
+
+def _seed_one_additive(
+    kind: str,
+    bundled_subdir: str,
+    seeded_names: set[str],
+    *,
+    on_seed: Callable[[str, Path], None] | None,
+) -> tuple[int, int, set[str]]:
+    """Offer bundled templates of ``kind`` that haven't been offered yet.
+
+    A bundled file is copied only when its name is NOT already in
+    ``seeded_names`` AND no same-named file exists in the target library
+    (so user edits are never clobbered). Returns
+    ``(copied, skipped, considered)`` where ``considered`` is every
+    bundled filename seen this run — the caller folds it into the ledger
+    so each template is offered exactly once over the app's lifetime.
+    """
+    src_dir = bundled_templates_dir(bundled_subdir)
+    if not src_dir.exists() or not src_dir.is_dir():
+        LOG.debug("templates.seed: bundled dir missing %s; skipping", src_dir)
+        return (0, 0, set())
+    try:
+        target_dir = _target_storage_dir(kind)
+    except Exception as e:  # noqa: BLE001
+        LOG.warning("templates.seed: couldn't resolve target for %s: %s",
+                    kind, e)
+        return (0, 0, set())
+
+    copied = 0
+    skipped = 0
+    considered: set[str] = set()
+    for src in sorted(src_dir.glob("*.json")):
+        considered.add(src.name)
+        if src.name in seeded_names:
+            # Already offered before — respect prior state (incl. a
+            # deletion). Never re-offer.
+            continue
+        dst = target_dir / src.name
+        if dst.exists():
+            # User already has a file by this name (seeded earlier by a
+            # build that predates the ledger, or hand-placed). Don't
+            # clobber it; just record it as offered.
+            skipped += 1
+            continue
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            _copy_json(src, dst)
+            copied += 1
+            if on_seed is not None:
+                try:
+                    on_seed(kind, dst)
+                except Exception:  # noqa: BLE001
+                    pass
+        except Exception as e:  # noqa: BLE001
+            LOG.warning("templates.seed: failed to copy %s → %s: %s",
+                        src, dst, e)
+            skipped += 1
+    return (copied, skipped, considered)
+
+
 def seed_default_templates_if_empty(
     *,
     on_seed: Callable[[str, Path], None] | None = None,
 ) -> dict:
-    """First-run safe wrapper around :func:`seed_default_templates`.
+    """Offer any not-yet-offered bundled templates to the user libraries.
 
-    No-op if the sentinel file already exists. Otherwise runs the
-    seeder (which itself per-library guards on "is empty"), then
-    writes the sentinel.
+    Runs at every app startup (cheap: it globs a few dozen bundled JSON
+    files and reads a small ledger). For each template kind it copies
+    every bundled template the user has never been offered — recorded in
+    the ``.templates_seeded`` ledger by filename — skipping any file that
+    already exists on disk so user edits are preserved. Newly-shipped
+    catalog templates therefore reach EXISTING users on upgrade, while
+    templates the user has already seen (and possibly deleted) are never
+    re-offered.
 
-    Returns the same dict as :func:`seed_default_templates`, or
-    ``{"copied": 0, "skipped": 0, "by_kind": {}}`` on no-op.
+    Name kept for backward compatibility; the historical "no-op once the
+    sentinel exists / only seed an empty library" behaviour was the bug
+    that left upgraders stuck with the original 5-template starter pack.
+
+    Returns ``{"copied": int, "skipped": int, "by_kind": {kind: (c, s)}}``.
     """
-    try:
-        sentinel = _sentinel_path()
-    except Exception as e:  # noqa: BLE001
-        LOG.warning("templates.seed: couldn't resolve sentinel path: %s", e)
-        return {"copied": 0, "skipped": 0, "by_kind": {}}
-    if sentinel.exists():
-        return {"copied": 0, "skipped": 0, "by_kind": {}}
-
-    result = seed_default_templates(force=False, on_seed=on_seed)
-    try:
-        sentinel.parent.mkdir(parents=True, exist_ok=True)
-        sentinel.write_text(
-            "TradingLab starter-pack templates seeded.\n"
-            "Delete this file to re-seed on next launch.\n",
-            encoding="utf-8",
+    ledger = _load_ledger()
+    by_kind: dict = {}
+    total_copied = 0
+    total_skipped = 0
+    changed = False
+    for bundled_subdir, kind in _TEMPLATE_KINDS:
+        seeded_names = ledger.get(kind, set())
+        copied, skipped, considered = _seed_one_additive(
+            kind, bundled_subdir, seeded_names, on_seed=on_seed,
         )
-    except OSError as e:
-        LOG.warning("templates.seed: couldn't write sentinel %s: %s",
-                    sentinel, e)
-    if result["copied"]:
-        LOG.info("templates.seed: seeded %d starter templates "
+        new_names = seeded_names | considered
+        if copied or new_names != seeded_names:
+            changed = True
+        ledger[kind] = new_names
+        by_kind[kind] = (copied, skipped)
+        total_copied += copied
+        total_skipped += skipped
+
+    # Persist the ledger when it changed, or when the file doesn't exist
+    # yet / is still in the legacy plain-text format (so we migrate it to
+    # JSON exactly once).
+    try:
+        needs_write = changed
+        if not needs_write:
+            try:
+                json.loads(_sentinel_path().read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, ValueError):
+                needs_write = True
+        if needs_write:
+            _write_ledger(ledger)
+    except Exception as e:  # noqa: BLE001
+        LOG.warning("templates.seed: ledger persistence check failed: %s", e)
+
+    if total_copied:
+        LOG.info("templates.seed: offered %d new template(s) "
                  "(by kind: %s)",
-                 result["copied"], result["by_kind"])
-    return result
+                 total_copied, by_kind)
+    return {
+        "copied": total_copied,
+        "skipped": total_skipped,
+        "by_kind": by_kind,
+    }
 
 
 __all__ = [
