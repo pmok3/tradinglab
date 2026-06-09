@@ -19,6 +19,7 @@ collisions. No back-import of ``tradinglab.app``.
 from __future__ import annotations
 
 import tkinter as tk
+from typing import Any
 
 import numpy as np
 
@@ -431,12 +432,22 @@ class InteractionMixin:
 
     def _on_draw_event(self, _event) -> None:
         """Capture blit background after every matplotlib full-redraw (§11.2)."""
+        # Live-tick blit fast path: while seeding ``_tick_blit_bg`` we issue
+        # a full ``canvas.draw()`` with the data artists hidden. That draw
+        # fires this handler; suppress it so the data-less snapshot does not
+        # become ``_blit_bg`` (which would make hover/pan lose the candles).
+        if getattr(self, "_suspend_draw_capture", False):
+            return
         try:
             canvas = self._canvas
             self._blit_bg = canvas.copy_from_bbox(self._figure.bbox)
         except Exception:  # noqa: BLE001
             self._blit_bg = None
             return
+        # A genuine full redraw repainted the axes decorations, so the
+        # data-less tick-blit snapshot is now stale. Drop it; the next
+        # eligible tick re-seeds it lazily.
+        self._tick_blit_bg = None
         # Composite always-on overlays (data readout, plus any revived
         # crosshair / hover) on top of the freshly-captured background
         # so they don't disappear after a full redraw. Safe: blit() does
@@ -2162,6 +2173,156 @@ class InteractionMixin:
             canvas.blit(self._figure.bbox)
         except Exception:  # noqa: BLE001
             pass
+
+    # ------------------------------------------------------------------
+    # Live-tick blit fast path (cluster 1)
+    # ------------------------------------------------------------------
+    def _overlay_artist_ids(self) -> set[int]:
+        """``id()`` set of the always-on / hover overlay artists.
+
+        These are composited by :meth:`_blit_overlays` on top of
+        ``_blit_bg`` every frame, so they MUST be excluded from the
+        tick-blit data set — otherwise they would bake into the captured
+        ``_blit_bg`` and become "stuck" (a crosshair that never clears).
+        """
+        ids: set[int] = set()
+        for pair in (getattr(self, "_crosshair_artists", None) or {}).values():
+            try:
+                for a in pair:
+                    if a is not None:
+                        ids.add(id(a))
+            except TypeError:
+                pass
+        for src in (
+            getattr(self, "_price_label_artists", None),
+            getattr(self, "_time_label_artists", None),
+            getattr(self, "_readout_artists", None),
+        ):
+            for a in (src or {}).values():
+                if a is not None:
+                    ids.add(id(a))
+        ha = getattr(self, "_hover_ann", None)
+        if ha is not None:
+            ids.add(id(ha))
+        return ids
+
+    def _collect_tick_blit_artists(self) -> list[tuple[Any, Any]]:
+        """Return ``(axes, artist)`` pairs for every data artist to blit.
+
+        Walks each slot's price / volume / indicator axes and collects all
+        Collections, Line2Ds and Texts (candles, volume, indicators,
+        reference levels, drawings, the live-price line + label) MINUS the
+        overlay artists from :meth:`_overlay_artist_ids`. Deduplicated by
+        ``id()``. The live-price overlay artists are added explicitly as a
+        belt-and-braces in case a future matplotlib drops annotations from
+        ``ax.texts``.
+        """
+        exclude = self._overlay_artist_ids()
+        out: list[tuple[Any, Any]] = []
+        seen: set[int] = set()
+
+        def _add(ax: Any, art: Any) -> None:
+            if ax is None or art is None:
+                return
+            i = id(art)
+            if i in seen or i in exclude:
+                return
+            seen.add(i)
+            out.append((ax, art))
+
+        ps_map = getattr(self, "_panel_state", None) or {}
+        for ps in ps_map.values():
+            axes = []
+            for key in ("price_ax", "volume_ax"):
+                ax = ps.get(key)
+                if ax is not None:
+                    axes.append(ax)
+            for ax in ps.get("indicator_axes", []) or []:
+                if ax is not None:
+                    axes.append(ax)
+            for ax in axes:
+                for coll in list(getattr(ax, "collections", []) or []):
+                    _add(ax, coll)
+                for ln in list(getattr(ax, "lines", []) or []):
+                    _add(ax, ln)
+                for tx in list(getattr(ax, "texts", []) or []):
+                    _add(ax, tx)
+        overlay = getattr(self, "_live_price_overlay", None)
+        if overlay is not None:
+            for entry in (getattr(overlay, "_artists", None) or {}).values():
+                try:
+                    line, label = entry
+                except (TypeError, ValueError):
+                    continue
+                for art in (line, label):
+                    if art is not None:
+                        _add(getattr(art, "axes", None), art)
+        return out
+
+    def _paint_tick_frame(self, slot: str = "primary") -> bool:
+        """Blit the data artists onto a data-less background (ghost-free).
+
+        The forming bar shares a Collection with every sealed bar, so a
+        naive "restore full bg + redraw" ghosts when the bar's body
+        shrinks. Instead we keep ``_tick_blit_bg`` — a snapshot of the
+        figure with ALL data artists hidden (pure axes decorations) — and
+        redraw the data on top each tick. No ghost because the background
+        never contained the data.
+
+        Returns ``True`` if the frame was painted via blit; ``False`` to
+        tell the caller to fall back to ``canvas.draw_idle()``.
+        """
+        canvas = getattr(self, "_canvas", None)
+        figure = getattr(self, "_figure", None)
+        if canvas is None or figure is None:
+            return False
+        data = self._collect_tick_blit_artists()
+        if not data:
+            return False
+        try:
+            if self._tick_blit_bg is None:
+                # Seed the data-less background: hide every data artist,
+                # do ONE suppressed full draw, snapshot, then restore
+                # visibility. ``_suspend_draw_capture`` keeps the draw_event
+                # handler from clobbering ``_blit_bg`` with this hidden frame.
+                vis: list[tuple[Any, bool]] = []
+                for _ax, art in data:
+                    try:
+                        vis.append((art, bool(art.get_visible())))
+                        art.set_visible(False)
+                    except Exception:  # noqa: BLE001
+                        pass
+                self._suspend_draw_capture = True
+                try:
+                    canvas.draw()
+                    self._tick_blit_bg = canvas.copy_from_bbox(figure.bbox)
+                finally:
+                    self._suspend_draw_capture = False
+                    for art, was in vis:
+                        try:
+                            art.set_visible(was)
+                        except Exception:  # noqa: BLE001
+                            pass
+                if self._tick_blit_bg is None:
+                    return False
+            canvas.restore_region(self._tick_blit_bg)
+            for ax, art in data:
+                try:
+                    ax.draw_artist(art)
+                except Exception:  # noqa: BLE001
+                    pass
+            # The buffer now holds decorations + data (no overlays). Capture
+            # it as the fresh hover/pan background, then let _blit_overlays
+            # composite the always-on readout / crosshair on top and blit.
+            self._blit_bg = canvas.copy_from_bbox(figure.bbox)
+            self._blit_overlays()
+            self._tick_blit_fires = getattr(self, "_tick_blit_fires", 0) + 1
+            return True
+        except Exception:  # noqa: BLE001
+            # Any failure: drop the (possibly half-built) snapshot and ask
+            # the caller to do a normal full redraw.
+            self._tick_blit_bg = None
+            return False
 
     def _hide_overlays(self) -> None:
         self._hide_hover_only()

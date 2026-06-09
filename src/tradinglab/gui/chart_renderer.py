@@ -30,6 +30,11 @@ class ChartRenderer:
         self.panel_state: dict[str, dict[str, Any]] = {}
         self.ax_candle_map: OrderedDict[Any, tuple[list[Candle], str, int]] = OrderedDict()
         self.blit_bg = None
+        # Data-less background snapshot for the live-tick blit fast path
+        # (gui/interaction.py:_paint_tick_frame). Captured with the candle/
+        # volume/indicator/live-price artists hidden so they can be redrawn
+        # ghost-free on top each tick. Invalidated whenever ``blit_bg`` is.
+        self.tick_blit_bg = None
 
     def reset_slot_artists(self, slot: str) -> None:
         """Remove the candle/volume/shading artists held by ``panel_state[slot]``."""
@@ -309,8 +314,19 @@ class ChartRenderer:
         autoscale_slot_y: Callable[[str, int, int], None],
         autoscale_indicator_panes: Callable[[str], None],
         canvas_draw_idle: Callable[[], None],
+        blit_tick_frame: Callable[[str], bool] | None = None,
     ) -> None:
-        """Mutate in-place for a tick or fall back to a slice rebuild."""
+        """Mutate in-place for a tick or fall back to a slice rebuild.
+
+        When the in-place mutation succeeds AND the autoscale did not move
+        any axis limit (the common case: the forming bar ticks within the
+        current view), repaint via ``blit_tick_frame`` — a ~5x cheaper
+        blit of the data artists onto a cached data-less background —
+        instead of a full ``canvas.draw_idle()``. Any limit change, an
+        HA/highlight rebuild, or a blit failure falls back to the full
+        redraw (which also invalidates the blit background via the
+        draw_event handler).
+        """
         ps = self.panel_state.get(slot)
         if not ps:
             return
@@ -328,7 +344,9 @@ class ChartRenderer:
             except Exception:  # noqa: BLE001
                 pass
             return
-        if not apply_tick_to_artists(slot):
+        lims_before = self._snapshot_slot_limits(ps)
+        tick_ok = apply_tick_to_artists(slot)
+        if not tick_ok:
             draw_slice(slot, rs, re_)
         try:
             lo_f, hi_f = ps["price_ax"].get_xlim()
@@ -336,9 +354,41 @@ class ChartRenderer:
             hi = min(len(ps["candles"]), int(np.ceil(hi_f)))
             autoscale_slot_y(slot, lo, hi)
             autoscale_indicator_panes(slot)
+            lims_after = self._snapshot_slot_limits(ps)
+            if (
+                tick_ok
+                and blit_tick_frame is not None
+                and lims_after == lims_before
+                and blit_tick_frame(slot)
+            ):
+                return
             canvas_draw_idle()
         except Exception:  # noqa: BLE001
             pass
+
+    def _snapshot_slot_limits(self, ps: dict[str, Any]) -> tuple:
+        """Hashable ``(xlim, ylim)`` snapshot of a slot's axes.
+
+        Equal between two ticks iff no axis (price / volume / indicator
+        panes) moved — the precondition for a ghost-free tick blit against
+        a cached decorations-only background.
+        """
+        axes = []
+        for key in ("price_ax", "volume_ax"):
+            ax = ps.get(key)
+            if ax is not None:
+                axes.append(ax)
+        for ax in ps.get("indicator_axes", []) or []:
+            if ax is not None:
+                axes.append(ax)
+        snap = []
+        for ax in axes:
+            try:
+                snap.append((tuple(ax.get_xlim()), tuple(ax.get_ylim())))
+            except Exception:  # noqa: BLE001
+                snap.append(None)
+        return tuple(snap)
+
 
     def refresh_view_after_append(
         self,

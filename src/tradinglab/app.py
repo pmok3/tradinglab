@@ -340,8 +340,34 @@ class ChartApp(
         renderer = self.__dict__.get("_renderer")
         if renderer is None:
             self.__dict__["__legacy_blit_bg"] = value
+        else:
+            renderer.blit_bg = value
+        # Invalidating the hover/pan background ALSO invalidates the
+        # data-less tick-blit background: a None reset means the axes
+        # decorations are about to be repainted (render / pan / zoom), so
+        # the cached decorations-only snapshot is stale. Setting a fresh
+        # non-None value (the post-draw capture in ``_on_draw_event``) does
+        # NOT touch the tick bg — that path manages it explicitly.
+        if value is None:
+            if renderer is None:
+                self.__dict__["__legacy_tick_blit_bg"] = None
+            else:
+                renderer.tick_blit_bg = None
+
+    @property
+    def _tick_blit_bg(self):
+        renderer = self.__dict__.get("_renderer")
+        if renderer is None:
+            return self.__dict__.get("__legacy_tick_blit_bg")
+        return getattr(renderer, "tick_blit_bg", None)
+
+    @_tick_blit_bg.setter
+    def _tick_blit_bg(self, value) -> None:
+        renderer = self.__dict__.get("_renderer")
+        if renderer is None:
+            self.__dict__["__legacy_tick_blit_bg"] = value
             return
-        renderer.blit_bg = value
+        renderer.tick_blit_bg = value
 
     @property
     def _startup_defaults(self) -> dict[str, str]:
@@ -672,6 +698,11 @@ class ChartApp(
         self._ax_candle_map: OrderedDict[Any, tuple[list[Candle], str, int]] = self._renderer.ax_candle_map
         # Blit / overlay state (spec §11)
         self._blit_bg = self._renderer.blit_bg
+        # Live-tick blit fast path (gui/interaction.py:_paint_tick_frame).
+        # When True, ``_on_draw_event`` skips its capture/composite so the
+        # data-less background draw used to seed ``_tick_blit_bg`` doesn't
+        # clobber ``_blit_bg`` or recurse.
+        self._suspend_draw_capture = False
         self._hover_ann = None
         self._hover_visible = False
         self._crosshair_artists: dict[Any, tuple[Any, Any]] = {}
@@ -4112,6 +4143,18 @@ class ChartApp(
         )
 
     def _refresh_view_after_tick(self, slot: str = "primary") -> None:
+        # Slide the live-price dotted line + label to the freshest known
+        # price BEFORE the renderer repaints: the blit fast path paints the
+        # frame inside ``refresh_view_after_tick`` below, so the overlay
+        # must already sit at the new price or it would lag by one tick.
+        # The resolved price equals the close ``apply_tick_to_artists`` is
+        # about to write (both come from the same stream tick), so updating
+        # first introduces no staleness. No-op if the overlay has never
+        # been redrawn for this slot.
+        try:
+            self._update_live_price_overlay_for_slot(slot)
+        except Exception:  # noqa: BLE001
+            pass
         ChartApp._ensure_renderer(self).refresh_view_after_tick(
             slot,
             apply_tick_to_artists=self._apply_tick_to_artists,
@@ -4119,14 +4162,8 @@ class ChartApp(
             autoscale_slot_y=self._autoscale_slot_y,
             autoscale_indicator_panes=self._autoscale_indicator_panes_for_slot,
             canvas_draw_idle=self._canvas.draw_idle,
+            blit_tick_frame=self._paint_tick_frame,
         )
-        # After the per-tick artist mutation runs, slide the
-        # live-price dotted line + label to the freshest known price.
-        # No-op if the overlay has never been redrawn for this slot.
-        try:
-            self._update_live_price_overlay_for_slot(slot)
-        except Exception:  # noqa: BLE001
-            pass
 
     def _refresh_view_after_append(self, slot: str = "primary") -> None:
         ChartApp._ensure_renderer(self).refresh_view_after_append(

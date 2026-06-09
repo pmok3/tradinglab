@@ -37,7 +37,10 @@ by `ChartApp._build_ui`.
   single `_track_after` job. Pan/zoom drags short-circuit the
   throttle.
 - `_on_draw_event(event)` — capture full-figure `_blit_bg` after
-  every full mpl redraw.
+  every full mpl redraw. **Short-circuits when `_suspend_draw_capture`
+  is set** (the tick-blit seed below issues a hidden full draw that must
+  NOT overwrite `_blit_bg`). A genuine redraw also drops `_tick_blit_bg`
+  (decorations were repainted, so the data-less snapshot is stale).
 - `_on_key_press(event)` — accumulate keystrokes into
   `_typing_buffer` (alnum + `._-` only; digits ignored to avoid
   phantom buffers). Enter commits, Escape cancels, Backspace
@@ -110,6 +113,41 @@ by `ChartApp._build_ui`.
 - `_blit_overlays` — composes hover + crosshair + value label on
   top of `_blit_bg`.
 - `_hide_overlays` — universal hide.
+
+### Live-tick blit fast path (cluster 1)
+
+- `_paint_tick_frame(slot) -> bool` — repaints a streaming tick via blit
+  instead of a full `canvas.draw_idle()`. The forming (rightmost) bar
+  shares one Collection with every sealed bar, so a naive "restore full
+  background + redraw" **ghosts** when the bar's body shrinks. Instead we
+  keep `_tick_blit_bg` — a snapshot of the figure with ALL data artists
+  hidden (pure axes decorations) — and redraw the data on top each tick;
+  the background never contained the data, so there is no ghost.
+  - **Lazy seed.** When `_tick_blit_bg is None`, hide every data artist,
+    set `_suspend_draw_capture=True`, issue one `canvas.draw()`,
+    `copy_from_bbox` → `_tick_blit_bg`, then restore visibility. The
+    suspend flag keeps `_on_draw_event` from clobbering `_blit_bg` with
+    the hidden frame.
+  - **Blit.** `restore_region(_tick_blit_bg)` → `draw_artist` every data
+    artist → capture the buffer (decorations + data, no overlays) as the
+    fresh `_blit_bg` → `_blit_overlays()` composites the always-on readout
+    / crosshair and blits. Bumps the `_tick_blit_fires` counter (a
+    silent-fallback regression guard).
+  - Returns `False` (→ caller does `draw_idle`) on no canvas/figure, no
+    data artists, or any exception (the partial snapshot is dropped).
+- `_collect_tick_blit_artists() -> [(ax, artist)]` — every Collection /
+  Line2D / Text on each slot's price / volume / indicator axes (candles,
+  volume, indicators, reference levels, drawings, the live-price line +
+  label), MINUS `_overlay_artist_ids()`, deduplicated by `id()`. The
+  live-price overlay's `(line, label)` are also added explicitly.
+- `_overlay_artist_ids() -> set[int]` — `id()`s of the always-on / hover
+  overlays (`_crosshair_artists`, `_price_label_artists`,
+  `_time_label_artists`, `_readout_artists`, `_hover_ann`). Excluded from
+  the tick data set so they are not baked into `_blit_bg` (which would
+  make a crosshair "stick").
+- The live-price overlay is slid to the fresh price by
+  `ChartApp._refresh_view_after_tick` **before** the renderer repaints, so
+  the blit paints it at the new price (it would otherwise lag one tick).
 
 ### Click-to-type
 

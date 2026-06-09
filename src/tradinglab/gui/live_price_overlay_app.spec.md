@@ -28,7 +28,13 @@ mixin is purely the wiring.
 - `_update_live_price_overlay_for_slot(slot)` — in-place mutation
   of the line for a single slot. Pokes the overlay's per-slot
   artist. No-op if the overlay has never been redrawn (e.g.
-  before the first `_render`).
+  before the first `_render`). `ChartApp._refresh_view_after_tick`
+  calls this **before** delegating to the renderer's
+  `refresh_view_after_tick`, so the live-tick blit fast path
+  (`gui/interaction.py:_paint_tick_frame`, which repaints inside that
+  delegated call) paints the line at the fresh price instead of lagging
+  one tick. The resolved price equals the close the tick is about to
+  write, so updating first introduces no staleness.
 
 ## Dependencies
 
