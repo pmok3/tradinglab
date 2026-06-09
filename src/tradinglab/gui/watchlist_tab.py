@@ -921,11 +921,29 @@ class WatchlistTabMixin:
                 pass
 
     def _populate_all_watchlist_tabs(self) -> None:
-        """Repaint every pinned sub-tab. Used by the debounced refresh
-        path so background preload writes reach whichever sub-tab is
-        visible *and* keep the others current.
+        """Repaint the *visible* pinned sub-tab (qw-watchlist-visibletab).
+
+        Background preload writes arrive continuously while the Watchlist
+        tab is up, but only the selected sub-tab is on screen. Repainting
+        every hidden sub-tab on each debounced cycle is pure Tk widget
+        churn (delete-all + reinsert per tab, one Python→Tcl crossing per
+        row) the user can't see. Hidden sub-tabs read from the same shared
+        preload cache and are repainted lazily by
+        :meth:`_on_watchlist_subtab_changed` (which always repaints the
+        tab being switched to), so they're current the instant they're
+        shown.
+
+        Falls back to repainting every sub-tab when the selected name
+        isn't a known tree (early init / programmatic selection in flight)
+        so the strip is never left blank.
         """
-        for name in list(self._watchlist_trees.keys()):
+        try:
+            visible = self.watchlist_var.get() or ""
+        except Exception:  # noqa: BLE001
+            visible = ""
+        trees = self._watchlist_trees
+        names = [visible] if visible in trees else list(trees.keys())
+        for name in names:
             try:
                 self._populate_watchlist_tab(name)
             except Exception:  # noqa: BLE001
@@ -1801,6 +1819,28 @@ class WatchlistTabMixin:
         except tk.TclError:
             self._watchlist_poll_job = None
 
+    def _watchlist_tab_visible(self) -> bool:
+        """Return ``True`` when the Watchlist outer-notebook tab is on screen.
+
+        Drives the qw-watchlist-visguard skip in
+        :meth:`_watchlist_poll_tick`. A ``ttk.Notebook`` unmaps the
+        widgets of unselected tabs, so ``winfo_viewable()`` on the
+        Watchlist outer frame is ``0`` while the user is on the Chart /
+        Scanner / Sandbox tab and ``1`` when the Watchlist tab is up.
+
+        Defaults to ``True`` whenever the frame reference is missing or
+        Tk geometry can't be probed (early init, headless unit harnesses)
+        so the poll never erroneously starves a genuinely visible
+        watchlist.
+        """
+        frame = getattr(self, "_watchlist_outer_frame", None)
+        if frame is None:
+            return True
+        try:
+            return bool(frame.winfo_viewable())
+        except Exception:  # noqa: BLE001
+            return True
+
     def _watchlist_poll_tick(self) -> None:
         """Re-run the watchlist preload pipeline and re-arm.
 
@@ -1815,13 +1855,21 @@ class WatchlistTabMixin:
         during RTH costs zero HTTP calls. A tick after a transient
         fetch failure re-submits the missing tickers and clears
         the visible orphan.
+
+        qw-watchlist-visguard: the preload body is also skipped while
+        the Watchlist outer-notebook tab is off screen (user on the
+        Chart / Scanner / Sandbox tab). That background fetch + snapshot
+        work competes with chart interaction for the Tk thread + GIL and
+        its results aren't visible anyway; the tick still re-arms, so the
+        next tick after the user returns to the Watchlist tab refreshes
+        within one poll interval.
         """
         self._watchlist_poll_job = None
         try:
             sandbox_active = bool(self._is_sandbox_active())
         except Exception:  # noqa: BLE001
             sandbox_active = False
-        if not sandbox_active:
+        if not sandbox_active and self._watchlist_tab_visible():
             try:
                 self._preload_watchlist()
             except Exception:  # noqa: BLE001

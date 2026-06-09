@@ -673,6 +673,9 @@ class InteractionMixin:
             "press_x": event.x, "press_xlim": press_xlim,
             "width_px": width_px, "ax": ax,
         }
+        # qw-pan-autoscale: fresh gesture — clear the per-frame bar-range
+        # memo so the first drag frame recomputes the Y-fit.
+        self._pan_last_bar_range = None
         self._hide_overlays()
         # NOTE: Don't run ``_pan_setup_blit`` here. It marks data
         # artists ``animated=True`` and calls ``canvas.draw()`` (which
@@ -736,7 +739,32 @@ class InteractionMixin:
             )
             # Per-frame Y-autoscale (~0.25ms) so candles stay vertically
             # framed while panning.
-            self._autoscale_y_to_visible()
+            #
+            # qw-pan-autoscale: the Y-fit is a pure function of the integer
+            # bar range in view (the candle data is frozen for the duration
+            # of a pan gesture). A fast drag emits many frames that move
+            # less than one bar width, so the range is unchanged and the
+            # autoscale (per-ax get_xlim + integer slice + y-limit scan over
+            # every price/volume/indicator pane) is wasted. All price axes
+            # are sharex-linked with offset 0, so the panned axis's integer
+            # range is representative. Skip when it (and the virtualized
+            # render slice) are unchanged this gesture. The first frame
+            # (cache ``None``) and any slice change always recompute.
+            try:
+                _lo_f, _hi_f = st["ax"].get_xlim()
+                cur_bar_range = (
+                    int(np.ceil(_lo_f - 1e-6)),
+                    int(np.floor(_hi_f + 1e-6)),
+                )
+            except Exception:  # noqa: BLE001
+                cur_bar_range = None
+            if (
+                slice_changed
+                or cur_bar_range is None
+                or cur_bar_range != getattr(self, "_pan_last_bar_range", None)
+            ):
+                self._autoscale_y_to_visible()
+                self._pan_last_bar_range = cur_bar_range
             if slice_changed:
                 # New artists were created by _draw_slice and aren't
                 # animated. Rebind the animated set WITHOUT calling
@@ -780,6 +808,8 @@ class InteractionMixin:
         if self._pan_state is None:
             return
         self._pan_state = None
+        # qw-pan-autoscale: gesture over — drop the per-frame bar-range memo.
+        self._pan_last_bar_range = None
         # Tear down blit state: unmark animated artists so the next full
         # render includes them in the cached background again.
         for art in self._pan_animated:
@@ -1451,7 +1481,31 @@ class InteractionMixin:
         # panel based on the cursor's x position (sharex propagates the
         # same xdata across primary/compare/volume axes, so a cursor on
         # the volume panel still updates the price readout above it).
-        self._update_readout(event.xdata)
+        #
+        # qw-hover-cache: skip the readout string-churn (≈5 OHLCV f-strings
+        # + one per-indicator value format per price pane, allocated fresh
+        # every 16ms tick) when the cursor is still over the SAME sealed
+        # bar as the previous hover. Sealed bars are immutable, so the
+        # rendered strings are byte-identical — only the crosshair (updated
+        # later) actually moves. Every axes registers offset 0
+        # (``_ax_candle_map``), so ``round(xdata)`` is the shared bar index
+        # across all panes; an unchanged index means no box would repaint.
+        # The forming/last bar streams in place, so it is never cached
+        # (``ro_idx < len(candles) - 1``); off-chart / gap hovers key as
+        # ``None`` and always refresh.
+        ro_idx = None
+        if event.xdata is not None:
+            ri = int(round(event.xdata - offset))
+            if 0 <= ri < len(candles):
+                ro_idx = ri
+        ro_key = (
+            (id(candles), ro_idx)
+            if ro_idx is not None and ro_idx < len(candles) - 1
+            else None
+        )
+        if ro_key is None or ro_key != getattr(self, "_last_readout_key", None):
+            self._update_readout(event.xdata)
+            self._last_readout_key = ro_key
 
         if event.xdata is None or event.ydata is None:
             self._update_crosshair(ax, None, None)
@@ -1947,6 +2001,12 @@ class InteractionMixin:
         Only the trailing ``%change`` segment is bull/bear coloured;
         the rest stays in the theme's neutral text colour.
         """
+        # qw-hover-cache: a ``None`` call is the always-refresh path
+        # (post-render artist rebuild, streaming revival, cursor-left).
+        # Invalidate the hover gate so the next in-bar hover repaints the
+        # strip against the fresh data / render generation.
+        if xdata is None:
+            self._last_readout_key = None
         for ax, box in self._readout_artists.items():
             try:
                 entry = self._ax_candle_map.get(ax)

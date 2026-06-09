@@ -175,6 +175,15 @@ during drag.
   non-empty `_pan_animated` → skip the full setup. Pan → release
   → pan saves ~30–80 ms.
 - **Per-frame Y autoscale** during pan (~0.25 ms; affordable at 60 FPS).
+  **qw-pan-autoscale memo**: `_pan_drag` skips `_autoscale_y_to_visible`
+  when the panned axis's integer bar range `(ceil(lo_f-eps),
+  floor(hi_f+eps))` is unchanged from the previous frame AND the
+  virtualized render slice didn't change. The Y-fit is a pure function
+  of the integer bar slice (candle data is frozen for the gesture) and
+  all price axes are sharex with offset 0, so the panned axis is
+  representative. Memo `_pan_last_bar_range` is reset in `_pan_begin`
+  (fresh gesture → first frame recomputes) and cleared in `_pan_end`
+  (whose final settle autoscale always runs unconditionally).
 - **Fallback non-blit path** if `_pan_setup_blit` failed (very
   early startup): 16 ms `after()` doing `canvas.draw_idle()`.
 - **Rubber-band zoom via `Rectangle` patch** — keeps custom styling.
@@ -238,6 +247,17 @@ during drag.
   latest non-gap bar inside rendered window so the strip is never blank.
   Pct color via `box._pct_text._text.set_color(...)` (`TextArea` has no
   public `set_color`).
+  - **qw-hover-cache**: `_dispatch_hover` only calls `_update_readout`
+    when the cursor's bar changed. It keys on `(id(candles), ro_idx)`
+    where `ro_idx = round(xdata - offset)` (offset is 0 on every axes,
+    so the same index applies to all panes), and gates on
+    `ro_idx < len(candles) - 1` — sealed bars are immutable so the OHLCV
+    + %chg + per-indicator value strings are byte-identical, while the
+    forming/last bar (which streams in place) is never cached. The memo
+    `_last_readout_key` is reset whenever `_update_readout(None)` runs
+    (post-render artist rebuild / streaming revival / cursor-left) so the
+    next in-bar hover repaints against fresh data. The crosshair updates
+    every event regardless — only the string churn is skipped.
   - **Overlay legend rows** (TradingView-style; replaces the retired Tk
     `OverlayLegend` pill). Built by `_build_readout_indicator_rows(ax,
     theme)` which enumerates via the pure
@@ -286,7 +306,9 @@ _pan_drag(event):
     update xlim by pixel delta
     prev_ranges = snapshot each slot's (render_start, render_end)
     for slot: _ensure_rendered_for_view(slot)
-    autoscale_y
+    cur_bar_range = (ceil(lo_f-eps), floor(hi_f+eps)) of panned ax
+    if slice_changed or cur_bar_range != _pan_last_bar_range:  # qw-pan-autoscale
+        autoscale_y; _pan_last_bar_range = cur_bar_range
     if any range changed: _pan_rebind_animated_after_slice()  # NO canvas.draw
     restore_region(_pan_bg); draw_artist(each animated); blit(figure.bbox)
 ```

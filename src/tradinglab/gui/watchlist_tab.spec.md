@@ -95,8 +95,12 @@ larger; pinning makes a list reachable from the main UI.
   by `(is_missing, value)` so blanks always trail, then sorts
   with `list.sort(reverse=reverse)`. (Negate-value approach was
   buggy for prefix-string columns like `A` vs `AA`.)
-- `_populate_all_watchlist_tabs()` — loop over every pinned
-  sub-tab (used by debounced refresh).
+- `_populate_all_watchlist_tabs()` — repaints **only the visible
+  sub-tab** (`watchlist_var.get()`); hidden sub-tabs are repainted
+  lazily on switch by `_on_watchlist_subtab_changed` from the same
+  shared preload cache (qw-watchlist-visibletab). Falls back to
+  repainting every sub-tab when the selected name isn't a known tree.
+  Used by the debounced refresh.
 - `_watchlist_sort_key(col, ticker, snap) -> (is_missing, value)`.
 - `_schedule_watchlist_tab_refresh(delay_ms=60)` /
   `_run_watchlist_tab_refresh()` — debounce; callback hits every
@@ -165,11 +169,21 @@ larger; pinning makes a list reachable from the main UI.
   advancement, so we skip the preload body BUT still re-arm so
   polling resumes immediately on sandbox exit (different from
   `_schedule_next_bar_fetch`, which drops the timer entirely on
-  sandbox). The preload helpers own their own cache-freshness +
-  in-flight dedup, so a tick on a fully-cached watchlist during
-  RTH costs zero HTTP calls. A tick after a transient fetch
-  failure re-submits the missing tickers and clears the visible
-  orphan.
+  sandbox). **Visibility guard (qw-watchlist-visguard)**: the preload
+  body is also skipped when `_watchlist_tab_visible()` is False (the
+  Watchlist outer-notebook tab is off screen) — the fetch + snapshot
+  work competes with chart interaction and isn't visible anyway; the
+  tick still re-arms, so the data refreshes within one poll interval
+  of the user returning to the Watchlist tab. The preload helpers own
+  their own cache-freshness + in-flight dedup, so a tick on a
+  fully-cached watchlist during RTH costs zero HTTP calls. A tick
+  after a transient fetch failure re-submits the missing tickers and
+  clears the visible orphan.
+- `_watchlist_tab_visible() -> bool` — `True` when the Watchlist
+  outer frame `winfo_viewable()` is truthy. Defaults to `True` when
+  `_watchlist_outer_frame` is missing or Tk geometry can't be probed
+  (early init / headless harness) so a visible watchlist is never
+  starved.
 - **Orphan-snapshot recovery** in `_preload_watchlist` /
   `_preload_watchlist_daily`: when the disk-cache is fresh but the
   `_watchlist_snapshot` row is missing `last` / `change_1d` /

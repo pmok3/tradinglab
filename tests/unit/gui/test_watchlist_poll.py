@@ -317,6 +317,29 @@ class TestPollTick:
         # But re-armed so it resumes on sandbox exit.
         assert len(h.after_calls) == 1
 
+    def test_hidden_tab_skips_preload_but_rearms(self):
+        # qw-watchlist-visguard: when the Watchlist outer tab is off
+        # screen the preload body is skipped, but the tick still re-arms
+        # so the data refreshes within one interval of returning.
+        h = _Harness(stale=True)
+        with patch.object(_Harness, "_watchlist_poll_in_rth_now", return_value=True), \
+                patch.object(_Harness, "_watchlist_tab_visible", return_value=False):
+            h._watchlist_poll_tick()
+        assert h._executor.submitted == []
+        assert len(h.after_calls) == 1
+        assert h.after_calls[0][1] == h._watchlist_poll_tick
+
+    def test_visible_tab_runs_preload(self):
+        # Default visibility (no outer frame) resolves True, so the
+        # preloads run as before — guards against the helper accidentally
+        # starving a genuinely visible watchlist.
+        h = _Harness(stale=True)
+        assert h._watchlist_tab_visible() is True
+        with patch.object(_Harness, "_watchlist_poll_in_rth_now", return_value=True):
+            h._watchlist_poll_tick()
+        assert len(h._executor.submitted) == 4
+        assert len(h.after_calls) == 1
+
     def test_disabled_no_rearm(self):
         h = _Harness(stale=True)
         with patch.object(_d, "get",
