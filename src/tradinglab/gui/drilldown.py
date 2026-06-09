@@ -36,9 +36,11 @@ from __future__ import annotations
 from concurrent.futures import Future
 from dataclasses import dataclass
 from datetime import date as _date_t
+from datetime import timedelta
 from typing import Any
 
 from .. import disk_cache
+from ..constants import INTERVAL_PERIODS
 from ..data import DATA_SOURCES
 from ..models import Candle
 
@@ -92,9 +94,13 @@ class DrilldownMixin:
 
         1. **Cache hit + day covered**: drill down immediately, return
            True. Any outstanding pending request is superseded.
-        2. **Cache hit, day not covered** (yfinance ~60d intraday limit):
-           emit a status WARN explaining the limit and return False. No
-           sync fetch — yfinance won't return that data.
+        2. **Cache hit, day not covered**: the cache can be stale or only
+           partially companion-prefetched, so if the day is within the
+           provider's intraday window (a fresh 5m fetch could reach it —
+           the same data a manual 5m toggle loads) fall through to the
+           fetch path (branch 3). Only when the day predates the window
+           (genuinely beyond yfinance's ~60d intraday limit) emit a status
+           WARN and return False.
         3. **Cache missing** (race vs companion prefetch): create or
            retarget a :class:`_DrilldownRequest`, schedule a 1.5s grace
            timer to wait for the in-flight prefetch, then fall back to
@@ -133,20 +139,30 @@ class DrilldownMixin:
                 if req is not None:
                     self._finish_drilldown_request(req)
                 return self._do_drilldown(day)
-            # Branch 2: out of coverage. Surface the limit and stop.
-            try:
-                self._status.warn(
-                    f"Drill-down no-op: 5m data only available from "
-                    f"{oldest_5m_day} onward (yfinance ~60 day intraday "
-                    f"limit) — requested {day}")
-            except Exception:  # noqa: BLE001
-                pass
-            req = self._drilldown_request
-            if req is not None:
-                self._finish_drilldown_request(req)
-            return False
+            # Branch 2: the clicked day isn't in this 5m cache. The cache
+            # may be stale or only partially companion-prefetched (the
+            # user is sitting on the 1d chart), so a fresh fetch can often
+            # still reach the day — exactly what a manual 5m toggle does.
+            # Only treat it as genuinely unavailable when the day predates
+            # the provider's intraday window; otherwise fall through to
+            # the fetch path (Branch 3) below.
+            if not self._day_within_intraday_fetch_window(day, "5m"):
+                try:
+                    self._status.warn(
+                        f"Drill-down no-op: 5m data only available from "
+                        f"{oldest_5m_day} onward (yfinance ~60 day intraday "
+                        f"limit) — requested {day}")
+                except Exception:  # noqa: BLE001
+                    pass
+                req = self._drilldown_request
+                if req is not None:
+                    self._finish_drilldown_request(req)
+                return False
+            # In-window but not in this cache → fetch it (fall through to
+            # Branch 3, identical to a cold cache miss).
 
-        # Branch 3: cache missing. Queue or retarget a request.
+        # Branch 3: cache missing, or cached-but-incomplete within the
+        # provider window. Queue or retarget a request.
         existing = self._drilldown_request
         if (
             existing is not None
@@ -215,6 +231,42 @@ class DrilldownMixin:
         )
         return False
 
+    def _day_within_intraday_fetch_window(
+        self, day, interval: str = "5m",
+    ) -> bool:
+        """True if a fresh ``interval`` fetch could plausibly include ``day``.
+
+        yfinance serves intraday bars only for a recent trailing window
+        (:data:`tradinglab.constants.INTERVAL_PERIODS` — e.g. ~60 calendar
+        days for 5m). A day inside that window is fetchable on demand even
+        when the current cache doesn't contain it — the cache may be stale
+        or only partially companion-prefetched while the user sits on the
+        1d chart (this is the bug: drilling into *today* or a recent day
+        used to error "only available from … onward" instead of fetching,
+        even though a manual 5m toggle loads it fine). A day that predates
+        the window is genuinely beyond the provider's reach.
+
+        Deliberately generous: a one-week buffer is added so boundary days
+        / provider jitter never produce a false "unavailable". A day that
+        turns out to be just out of reach simply triggers a fetch that
+        returns no coverage, after which :meth:`_on_drilldown_fetch_done`
+        warns with the accurate range.
+        """
+        if not isinstance(day, _date_t):
+            return False
+        period = str(INTERVAL_PERIODS.get(interval, "60d")).strip().lower()
+        try:
+            if period.endswith("d"):
+                window_days = int(period[:-1])
+            elif period.endswith("y"):
+                window_days = int(period[:-1]) * 366
+            else:  # "max" or unrecognised → effectively unbounded
+                return True
+        except ValueError:
+            window_days = 60
+        cutoff = _date_t.today() - timedelta(days=window_days + 7)
+        return day >= cutoff
+
     def _drilldown_request_is_valid(
         self, req: _DrilldownRequest | None,
     ) -> bool:
@@ -276,10 +328,18 @@ class DrilldownMixin:
                 self._finish_drilldown_request(req)
                 self._do_drilldown(day)
                 return
+            # Day still not in the prefetched cache. If a fresh fetch can
+            # reach it (within the provider's intraday window), fall back
+            # to the sync fetch — same as a cold cache miss. Only warn
+            # when the day genuinely predates the window.
+            if self._day_within_intraday_fetch_window(req.day, "5m"):
+                self._drilldown_sync_fetch(req)
+                return
             try:
                 self._status.warn(
                     f"Drill-down no-op: 5m data only available from "
-                    f"{oldest_5m_day} onward — requested {req.day}")
+                    f"{oldest_5m_day} onward (yfinance ~60 day intraday "
+                    f"limit) — requested {req.day}")
             except Exception:  # noqa: BLE001
                 pass
             self._finish_drilldown_request(req)

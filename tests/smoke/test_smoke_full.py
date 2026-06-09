@@ -5155,7 +5155,9 @@ def check_d38_drilldown_race_and_coverage(app) -> None:
             assert app.interval_var.get() == "5m", \
                 "drill-down should have switched interval to 5m"
 
-        # ---- Sub-test B: out-of-coverage (cache hit, day not covered) ----
+        # ---- Sub-test B: out-of-coverage, GENUINELY beyond the provider
+        # window (cache hit, day not covered AND older than yfinance's
+        # ~60d 5m window) → synchronous WARN, no fetch. ----
         reset_state("COVR")
         state["delay_5m"] = 0.0
         # Pre-populate 5m cache with only last 30 days.
@@ -5163,18 +5165,51 @@ def check_d38_drilldown_race_and_coverage(app) -> None:
         app._full_cache[(src, "COVR", "1d")] = make_1d_bars(120)
         app.interval_var.set("1d")
         app.ticker_var.set("COVR")
-        # Skip the reload — manually set up state.
-        old_day = (datetime(2026, 4, 29) - timedelta(days=90)).date()
+        # A day far outside yfinance's intraday window relative to *today*
+        # (robust regardless of run date / the stub's fixed 2026-04-29
+        # anchor): a fresh fetch could not reach it, so warn + no fetch.
+        old_day = _date_t.today() - timedelta(days=400)
         pre_hist_count = len(app._status.history())
         result = app._zoom_5m_for_date(old_day)
-        assert result is False, "out-of-coverage click should return False"
+        assert result is False, "out-of-window click should return False"
         assert app._drilldown_request is None, \
-            "out-of-coverage should NOT leave a pending request"
+            "out-of-window day should NOT queue a fetch"
         new_warns = [
             e for e in app._status.history()[pre_hist_count:]
             if e.level == "WARN" and "only available from" in e.message
         ]
-        assert new_warns, "out-of-coverage should log a WARN with the limit"
+        assert new_warns, "out-of-window day should log a WARN with the limit"
+
+        # ---- Sub-test B2: cache present but the clicked day is WITHIN the
+        # provider window and just not cached (stale / partial prefetch).
+        # This is the reported bug — drilling into today / a recent day
+        # used to error "5m data only available from … onward" even though
+        # a manual 5m toggle loads it. It must now FETCH on demand (route
+        # to the request path) instead of warning. ----
+        app._full_cache[(src, "COVR", "5m")] = make_5m_bars(30)
+        app.interval_var.set("1d")
+        app.ticker_var.set("COVR")
+        recent_uncovered = _date_t.today() - timedelta(days=1)
+        cached_days = {
+            c.date.date() for c in app._full_cache[(src, "COVR", "5m")]
+        }
+        assert recent_uncovered not in cached_days, \
+            "recent day must be absent from the fixed-anchor stub cache"
+        pre_hist_b2 = len(app._status.history())
+        result_b2 = app._zoom_5m_for_date(recent_uncovered)
+        assert result_b2 is False, "within-window drill defers to a fetch"
+        assert app._drilldown_request is not None, (
+            "within-window uncovered day must queue a fetch (the fix), not "
+            "emit a synchronous out-of-coverage WARN")
+        b2_warns = [
+            e for e in app._status.history()[pre_hist_b2:]
+            if e.level == "WARN" and "only available from" in e.message
+        ]
+        assert not b2_warns, \
+            "within-window day must NOT log the out-of-coverage WARN"
+        # Clean up the queued request so it doesn't leak into later sub-tests.
+        app._finish_drilldown_request(app._drilldown_request)
+        app._drilldown_request = None
 
         # ---- Sub-test C: latest-click-wins (retarget pending day) ----
         # Drain any lingering prefetches from sub-tests A/B so LCW's

@@ -50,5 +50,36 @@ short-circuits, but a same-context async-load completion no longer
 discards the user's drill intent. See d38 sub-test C (latest-click-wins,
 retarget pending day).
 
+## Coverage check & the intraday fetch window
+
+When the 5m cache is present but the clicked day isn't in it
+(`has_day` is False in `_zoom_5m_for_date` and
+`_retry_drilldown_after_prefetch`), the day is NOT assumed unavailable.
+The cache can be stale or only partially companion-prefetched while the
+user sits on the 1d chart, so a recent day — including **today** — may
+be missing even though a manual 5m toggle would load it. The fix:
+
+- `_day_within_intraday_fetch_window(day, interval="5m")` returns True
+  when `day` is within the provider's intraday window for the interval
+  (`constants.INTERVAL_PERIODS` — e.g. `"60d"` for 5m), measured against
+  `date.today()` with a generous 7-day buffer. `"max"`/year-spec periods
+  are treated as effectively unbounded.
+- **Day inside the window** → fall through to the fetch path (branch 3 /
+  `_drilldown_sync_fetch`), identical to a cold cache miss. The fetch
+  uses the same `DATA_SOURCES` fetcher a manual toggle uses;
+  `_on_drilldown_fetch_done` re-checks coverage and drills, or warns
+  `"5m data fetched but does not cover …"` if the provider genuinely
+  lacks it.
+- **Day predates the window** → the synchronous WARN `"Drill-down
+  no-op: 5m data only available from … onward"` and no fetch (the only
+  case that warning now fires).
+
+This fixed the reported bug where drilling into today / a recent day (or
+any gap in a stale cache) errored "only available from … onward" even
+though the day was well within yfinance's reach. Pinned by
+`tests/unit/gui/test_drilldown_fetch_window.py` (window logic) and
+`test_smoke_full.py::check_d38…` sub-tests B (out-of-window → WARN) and
+B2 (in-window-but-uncovered → fetch).
+
 ## app.py impact
 7516 → 6193 lines (−1323 / −17.6%) across all three Phase 2-3 extractions.
