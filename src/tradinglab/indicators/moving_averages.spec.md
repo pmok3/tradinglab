@@ -59,6 +59,16 @@ dispatcher:
   and the legacy incremental-protocol tests in `tests/unit/`.
 - NOT registered as menu entries. The unified `MovingAverage` is the
   only one users see.
+- **`EMA.compute_arr` routes through the vectorised `_iir.ema_sma_seeded`
+  kernel** (same kernel `MovingAverage(ma_type="EMA")` / `ma_kernels.ema`
+  use) — no per-bar Python loop. Reachable on the scanner / entries /
+  exits / strategy-tester paths (which keep `kind_id="ema"` un-migrated,
+  unlike chart configs). Measured 3.2–6.9× faster on an 11k-bar series.
+  The closed-form tail differs from the prior scalar recurrence only by
+  float64 round-off (~1e-12 over short series, growing slowly with length);
+  `EMA.inc_step` remains a true recurrence, so the full=kernel / inc=loop
+  split now mirrors what `MovingAverage` already shipped — parity tests
+  assert `assert_allclose(rtol=1e-12, atol=1e-12)`, not byte-equality.
 - **Scanner opt-in:** `SMA.scannable_outputs = (("sma","numeric"),)` and `EMA.scannable_outputs = (("ema","numeric"),)`. The unified `MovingAverage` (kind_id `"ma"`) deliberately does NOT declare `scannable_outputs` — the scanner keeps SMA/EMA as separate field ids (`_CHART_ONLY_MIGRATION_KIND_IDS = {"sma","ema"}` in `indicators/base.py` preserves the asymmetry: chart configs migrate `sma`/`ema` → `ma`, scanner FieldRefs stay at `sma`/`ema`).
 
 ## Dependencies

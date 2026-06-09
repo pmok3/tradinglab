@@ -34,6 +34,7 @@ Design notes
 
 from __future__ import annotations
 
+import calendar
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -48,6 +49,25 @@ def _to_naive_utc(dt: datetime) -> datetime:
     if dt.tzinfo is not None:
         return dt.astimezone(timezone.utc).replace(tzinfo=None)
     return dt
+
+
+def _epoch_ns(dt: datetime) -> int:
+    """Naive-UTC epoch nanoseconds for ``dt`` — bit-identical to
+    ``np.datetime64(_to_naive_utc(dt), "ns")`` but without the per-bar
+    ``astimezone`` object allocation.
+
+    * tz-aware: ``round(dt.timestamp() * 1e6) * 1000``. ``timestamp()`` is
+      the fast C path (no intermediate datetime). Whole-second bars (every
+      real OHLCV candle) are exactly representable as float through year
+      ~2096, so the round-trip is exact for any market data this app sees.
+    * naive: the wall-clock fields are taken verbatim as UTC (matching
+      ``_to_naive_utc``, which returns a naive datetime unchanged), via
+      integer ``calendar.timegm`` — ``timestamp()`` must NOT be used here
+      because it would reinterpret the fields in the local zone.
+    """
+    if dt.tzinfo is not None:
+        return round(dt.timestamp() * 1_000_000) * 1000
+    return (calendar.timegm(dt.timetuple()) * 1_000_000 + dt.microsecond) * 1000
 
 
 @dataclass(frozen=True)
@@ -88,7 +108,16 @@ class Bars:
 
     @classmethod
     def from_candles(cls, candles: Sequence[Candle]) -> Bars:
-        """Single-source ``np.fromiter`` extraction. **The** OHLCV builder."""
+        """Single-pass OHLCV + timestamp + session extraction. **The** OHLCV builder.
+
+        One Python loop fills six pre-allocated numpy arrays plus the
+        object session array, replacing the former five ``np.fromiter``
+        passes + two ``np.array`` list-comprehensions (seven walks of the
+        candle list). Timestamps are accumulated as ``int64`` epoch-ns via
+        :func:`_epoch_ns` (no per-bar ``astimezone``) and reinterpreted as
+        ``datetime64[ns]`` with a zero-copy ``.view`` — bit-identical to the
+        old ``np.array([_to_naive_utc(c.date) …], "datetime64[ns]")`` path.
+        """
         n = len(candles)
         if n == 0:
             empty_f = np.empty(0, dtype=np.float64)
@@ -99,15 +128,25 @@ class Bars:
                 session=np.empty(0, dtype=object),
                 candles=list(candles) if not isinstance(candles, list) else candles,
             )
+        open_ = np.empty(n, dtype=np.float64)
+        high = np.empty(n, dtype=np.float64)
+        low = np.empty(n, dtype=np.float64)
+        close = np.empty(n, dtype=np.float64)
+        volume = np.empty(n, dtype=np.float64)
+        ts = np.empty(n, dtype=np.int64)
+        session = np.empty(n, dtype=object)
+        for i, c in enumerate(candles):
+            open_[i] = c.open
+            high[i] = c.high
+            low[i] = c.low
+            close[i] = c.close
+            volume[i] = c.volume
+            session[i] = c.session
+            ts[i] = _epoch_ns(c.date)
         return cls(
-            open=np.fromiter((c.open  for c in candles), dtype=np.float64, count=n),
-            high=np.fromiter((c.high  for c in candles), dtype=np.float64, count=n),
-            low =np.fromiter((c.low   for c in candles), dtype=np.float64, count=n),
-            close=np.fromiter((c.close for c in candles), dtype=np.float64, count=n),
-            volume=np.fromiter((c.volume for c in candles), dtype=np.float64, count=n),
-            timestamps=np.array([_to_naive_utc(c.date) for c in candles],
-                                dtype="datetime64[ns]"),
-            session=np.array([c.session for c in candles], dtype=object),
+            open=open_, high=high, low=low, close=close, volume=volume,
+            timestamps=ts.view("datetime64[ns]"),
+            session=session,
             candles=list(candles) if not isinstance(candles, list) else candles,
         )
 
@@ -134,10 +173,10 @@ class Bars:
         n = int(close.size)
         if timestamps is None:
             if candles is not None and len(candles) == n:
-                timestamps = np.array(
-                    [_to_naive_utc(c.date) for c in candles],
-                    dtype="datetime64[ns]",
-                )
+                ts = np.empty(n, dtype=np.int64)
+                for i, c in enumerate(candles):
+                    ts[i] = _epoch_ns(c.date)
+                timestamps = ts.view("datetime64[ns]")
             else:
                 timestamps = np.empty(n, dtype="datetime64[ns]")
         if session is None:

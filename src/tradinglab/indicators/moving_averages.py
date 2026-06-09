@@ -7,6 +7,7 @@ from typing import ClassVar
 import numpy as np
 
 from ..core.bars import Bars
+from ._iir import ema_sma_seeded as _ema_sma_seeded
 from ._palette import PRIMARY_LINE, SECONDARY_LINE, TAB10_GRAY, TERTIARY_LINE
 from .base import BaseIndicator, LineStyle, ParamDef
 
@@ -138,20 +139,16 @@ class EMA(BaseIndicator):
         self.name = f"EMA({length})"
 
     def compute_arr(self, bars: Bars) -> dict[str, np.ndarray]:
-        closes = bars.close
-        n = closes.size
-        out = np.full(n, np.nan, dtype=np.float64)
-        L = self.length
-        if n < L:
-            return {"ema": out}
-        a = self.alpha
-        seed = float(closes[:L].mean())
-        out[L - 1] = seed
-        prev = seed
-        for i in range(L, n):
-            prev = a * float(closes[i]) + (1.0 - a) * prev
-            out[i] = prev
-        return {"ema": out}
+        # Route through the shared vectorised IIR kernel (the same one
+        # ``MovingAverage(ma_type="EMA")`` and ``ma_kernels.ema`` use) —
+        # no per-bar Python loop. The kernel seeds with the SMA of the
+        # first ``length`` closes published at index ``length-1``, matching
+        # this class's documented convention. The closed-form tail differs
+        # from a scalar recurrence only by float64 round-off; the
+        # incremental ``inc_step`` path (a true recurrence) stays within
+        # the same ~1e-12 tolerance the parity tests assert — the exact
+        # full=kernel / inc=loop split already shipped for ``MovingAverage``.
+        return {"ema": _ema_sma_seeded(bars.close, self.length)}
 
 
     # --- incremental protocol -------------------------------------------
