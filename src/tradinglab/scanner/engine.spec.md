@@ -22,6 +22,29 @@ Pure-Python tri-valued (Kleene) scan evaluator. Takes a
 - `evaluate_condition(cond, ctx) -> Optional[bool]` — dispatches all
   19 operators on named params.
 - `evaluate_group(group, ctx) -> Optional[bool]` — tri-valued AND/OR.
+- `evaluate_group_vec(group, ctx) -> Optional[tuple[np.ndarray, np.ndarray]]`
+  — **all-bars vectorized** evaluation. Returns `(is_true, is_false)`
+  boolean masks of length `len(ctx.bars)` encoding the per-bar tri-valued
+  result (True where `is_true`, False where `is_false`, None where
+  neither), or `None` when the tree is outside the vectorizable subset so
+  the caller falls back to the per-bar `evaluate_group` loop. **Safety
+  contract:** `None` is returned (fall back) for any within-last
+  quantifier, cross-interval `Condition`, cross-symbol/cross-interval
+  `FieldRef`, non-column builtin field, or operator outside
+  `_VEC_SUPPORTED_OPS` — so the supported subset is bit-equivalent to the
+  scalar path and the remainder stays on it. Used by the Conditions-mode
+  custom-indicator `compute_arr` (compute #2; ~3 orders of magnitude faster
+  than the per-bar walk on a 25k-bar series). Pinned by
+  `tests/unit/scanner/test_evaluate_group_vec.py`.
+  - `_VEC_SUPPORTED_OPS`: `> < >= <= == != between crosses_above
+    crosses_below within_pct`. Windowed ops (`is_rising` / `new_high_n` /
+    `holding_*` / `inside_bar` / `nr7` / …) fall back.
+  - `_VEC_SIMPLE_BUILTINS`: `close open high low volume` (pure column
+    reads). Literals → constant column; indicators → the memo array (free).
+  - Helpers: `_field_array_vec` (ref → length-n float column, NaN where the
+    scalar returns None), `_op_masks_vec` (leaf operator masks),
+    `_condition_masks_vec`, `_group_masks_vec` (Kleene AND = `&` of trues /
+    `|` of falses; OR = `|` of trues / `&` of falses), `_shift_vec`.
 - `evaluate_scan(scan, ctx) -> Optional[bool]` — top-level entry.
 - `validate_scan(scan, *, bars_registry=None) -> List[str]` —
   human-readable validation errors. Walks every `Condition`/`FieldRef`

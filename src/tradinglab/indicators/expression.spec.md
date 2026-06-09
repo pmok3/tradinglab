@@ -54,6 +54,20 @@ auto-registers the indicator via the existing loader.
     insufficient data). NaN-padded warmup is sized via
     :func:`warmup_for_conditions` at indicator-instantiation time so the
     output matches the strategy_tester warmup contract (§7.16).
+  - **Vectorized fast path (compute #2):** `compute_arr` first tries
+    `scanner.engine.evaluate_group_vec(group, ctx)` — one all-bars numpy
+    evaluation. On a non-`None` result it applies the warmup gate
+    (`np.arange(n) >= warmup`) and the `is_true`/`is_false` masks directly,
+    skipping the per-bar loop entirely (~3 orders of magnitude faster on a
+    25k-bar series). `evaluate_group_vec` returns `None` for any tree
+    outside its supported subset (within-last / cross-interval /
+    cross-symbol / unsupported op or field), in which case the generated
+    code falls back to the proven per-bar `evaluate_group` loop. The two
+    paths are bit-equivalent — pinned by
+    `tests/unit/scanner/test_evaluate_group_vec.py` and the codegen
+    end-to-end cases in `tests/unit/indicators/test_conditions_codegen.py`.
+    Older generated files (pre-fast-path) still import only `evaluate_group`
+    and keep working on the per-bar loop until re-saved.
   - When `scannable=True`, declares `scannable_outputs = (("value", "numeric"),)` on the class.
   Raises `ExpressionError` for invalid names, malformed group dicts, or
   references to unknown indicator kind_ids.

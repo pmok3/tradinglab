@@ -743,7 +743,12 @@ import json
 import numpy as np
 
 from tradinglab.indicators.base import BaseIndicator, register_indicator
-from tradinglab.scanner.engine import IndicatorMemo, EvaluationContext, evaluate_group
+from tradinglab.scanner.engine import (
+    EvaluationContext,
+    IndicatorMemo,
+    evaluate_group,
+    evaluate_group_vec,
+)
 from tradinglab.scanner.model import Group
 
 
@@ -798,6 +803,22 @@ class _CustomCondition(BaseIndicator):
             current_index=warmup,
             memo=memo,
         )
+        # Vectorized fast path: evaluate the whole tree across all bars at
+        # once (~6x vs the per-bar walk). ``evaluate_group_vec`` returns None
+        # for any tree outside the supported subset (within-last /
+        # cross-interval / cross-symbol / unsupported op or field); we then
+        # fall back to the proven per-bar loop below. The two paths are
+        # bit-equivalent (tests/unit/scanner/test_evaluate_group_vec.py).
+        try:
+            _masks = evaluate_group_vec(self._group, ctx)
+        except Exception:
+            _masks = None
+        if _masks is not None:
+            _is_true, _is_false = _masks
+            _region = np.arange(n) >= warmup
+            out[np.asarray(_is_true, dtype=bool) & _region] = 1.0
+            out[np.asarray(_is_false, dtype=bool) & _region] = 0.0
+            return {{"value": out}}
         for i in range(warmup, n):
             ctx.current_index = i
             ctx.evidence = []

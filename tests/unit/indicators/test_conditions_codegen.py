@@ -212,3 +212,83 @@ def test_warmup_for_conditions_zero_when_no_indicators() -> None:
         ),
     ])
     assert warmup_for_conditions(g.to_dict()) == 0
+
+
+# ---------------------------------------------------------------------------
+# Vectorized fast-path wiring (compute #2): the generated compute_arr tries
+# evaluate_group_vec first, falling back to the per-bar loop. Both paths must
+# produce the SAME 1.0/0.0/NaN series as a per-bar scalar reference.
+# ---------------------------------------------------------------------------
+
+
+def _scalar_reference(group: Group, candles: list[Candle]) -> np.ndarray:
+    """The pure per-bar reference the codegen would produce without the vec
+    fast path (loop ``evaluate_group`` with the same warmup gate)."""
+    from tradinglab.scanner.engine import (
+        EvaluationContext,
+        IndicatorMemo,
+        evaluate_group,
+    )
+
+    bars = Bars.from_candles(candles)
+    memo = IndicatorMemo(candles=candles)
+    memo._bars = bars
+    interval = getattr(bars, "interval", None) or "1d"
+    warmup = warmup_for_conditions(group.to_dict())
+    n = len(candles)
+    out = np.full(n, np.nan, dtype=float)
+    ctx = EvaluationContext(
+        symbol="<custom>", interval=interval, bars=bars, candles=candles,
+        current_index=warmup, memo=memo,
+    )
+    for i in range(warmup, n):
+        ctx.current_index = i
+        ctx.evidence = []
+        try:
+            v = evaluate_group(group, ctx)
+        except Exception:  # noqa: BLE001
+            v = None
+        if v is True:
+            out[i] = 1.0
+        elif v is False:
+            out[i] = 0.0
+    return out
+
+
+def test_generated_indicator_supported_tree_matches_scalar_reference() -> None:
+    # crosses_above over two EMAs → the vectorized fast path engages.
+    g = Group(combinator="and", children=[
+        Condition(
+            left=FieldRef.indicator("ema", params={"length": 9}),
+            op="crosses_above",
+            params={"right": FieldRef.indicator("ema", params={"length": 20}),
+                    "lookback": 1},
+            interval="1d",
+        ),
+    ])
+    src = conditions_to_python(name="cond_vec_match", group_dict=g.to_dict())
+    _exec_source(src)
+    ind = ind_base.INDICATORS["cond_vec_match"]()
+    bars = Bars.from_candles(_synthetic_candles(160))
+    got = ind.compute_arr(bars)["value"]
+    ref = _scalar_reference(g, list(bars.candles))
+    assert np.array_equal(got, ref, equal_nan=True)
+
+
+def test_generated_indicator_unsupported_tree_falls_back_correctly() -> None:
+    # is_rising is NOT vectorized → generated code uses the per-bar loop.
+    g = Group(combinator="and", children=[
+        Condition(
+            left=FieldRef.builtin("close"),
+            op="is_rising",
+            params={"lookback": 3},
+            interval="1d",
+        ),
+    ])
+    src = conditions_to_python(name="cond_fallback_match", group_dict=g.to_dict())
+    _exec_source(src)
+    ind = ind_base.INDICATORS["cond_fallback_match"]()
+    bars = Bars.from_candles(_synthetic_candles(120))
+    got = ind.compute_arr(bars)["value"]
+    ref = _scalar_reference(g, list(bars.candles))
+    assert np.array_equal(got, ref, equal_nan=True)

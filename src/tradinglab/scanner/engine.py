@@ -70,6 +70,16 @@ from .model import (
     FIELD_KIND_BUILTIN,
     FIELD_KIND_INDICATOR,
     FIELD_KIND_LITERAL,
+    OP_BETWEEN,
+    OP_CROSSES_ABOVE,
+    OP_CROSSES_BELOW,
+    OP_EQ,
+    OP_GE,
+    OP_GT,
+    OP_LE,
+    OP_LT,
+    OP_NE,
+    OP_WITHIN_PCT,
     WITHIN_LAST_MODE_ALL,
     WITHIN_LAST_MODE_EXACTLY,
     Condition,
@@ -881,6 +891,266 @@ def _evaluate_child_group_at(
     return _evaluate_group_at(
         grp, ctx, index, _in_lookback_walk=_in_lookback_walk
     )
+
+
+# ---------------------------------------------------------------------------
+# Vectorized group evaluation (perf: Conditions-mode custom indicators)
+# ---------------------------------------------------------------------------
+#
+# ``evaluate_group_vec`` evaluates an ENTIRE group tree across ALL bars at
+# once, returning a pair of boolean masks ``(is_true, is_false)`` that encode
+# the tri-valued (Kleene) result per bar — True where ``is_true``, False where
+# ``is_false``, None/unknown where neither. It is a strict, opt-in fast path
+# for the Conditions-mode custom-indicator ``compute_arr`` (which otherwise
+# walks ``evaluate_group`` once per bar — O(N) Python interpreter overhead,
+# ~31 ms over 25k bars for one trivial condition).
+#
+# SAFETY CONTRACT: the function returns ``None`` (NOT a mask pair) for ANY
+# tree it cannot evaluate bit-identically to the per-bar scalar path —
+# unsupported operator, unsupported field, within-last quantifier,
+# cross-interval, or cross-symbol reference. Callers fall back to the scalar
+# loop on ``None``. The supported subset is therefore guaranteed equivalent to
+# ``evaluate_group``; the remainder stays on the proven per-bar path. Pinned by
+# tests/unit/scanner/test_evaluate_group_vec.py.
+
+#: Operators with an exact, elementwise (or simple-shift) numpy form. Windowed
+#: operators (is_rising/new_high_n/holding_*/inside_bar/nr7/…) intentionally
+#: fall back to the scalar path for now — they're rarer and trickier to pin.
+_VEC_SUPPORTED_OPS: frozenset[str] = frozenset({
+    OP_GT, OP_LT, OP_GE, OP_LE, OP_EQ, OP_NE, OP_BETWEEN,
+    OP_CROSSES_ABOVE, OP_CROSSES_BELOW, OP_WITHIN_PCT,
+})
+
+#: Builtin field ids that are pure per-bar column reads (so the whole column
+#: vectorizes trivially). Every other builtin (HA streaks, daily-reset, key
+#: bar, …) is per-index / stateful → the tree falls back to the scalar path.
+_VEC_SIMPLE_BUILTINS: dict[str, str] = {
+    "close": "close", "open": "open", "high": "high",
+    "low": "low", "volume": "volume",
+}
+
+
+def _shift_vec(arr: np.ndarray, k: int) -> np.ndarray:
+    """``arr`` shifted right by ``k`` bars (NaN-filled at the front)."""
+    out = np.full_like(arr, np.nan)
+    if 0 <= k < arr.shape[0]:
+        out[k:] = arr[: arr.shape[0] - k]
+    return out
+
+
+def _field_array_vec(
+    ref: FieldRef, ctx: EvaluationContext, n: int
+) -> np.ndarray | None:
+    """Resolve ``ref`` to a length-``n`` float column (NaN where the scalar
+    :func:`evaluate_field_at` returns ``None``), or ``None`` if the ref is not
+    vectorizable (cross-symbol / cross-interval / non-column builtin).
+    """
+    if ref.symbol:
+        return None
+    if ref.interval is not None and ref.interval != ctx.interval:
+        return None
+    if ref.kind == FIELD_KIND_LITERAL:
+        f = _coerce_float(ref.value)
+        return np.full(n, np.nan if f is None else f, dtype=np.float64)
+    if ref.kind == FIELD_KIND_BUILTIN:
+        attr = _VEC_SIMPLE_BUILTINS.get(ref.id)
+        if attr is None:
+            return None
+        col = getattr(ctx.bars, attr, None)
+        if col is None:
+            return None
+        col = np.asarray(col, dtype=np.float64)
+        if col.shape[0] != n:
+            return None
+        return col
+    if ref.kind == FIELD_KIND_INDICATOR:
+        key = ref.output_key
+        if not key:
+            spec = get_field(ref.id, kind="indicator")
+            if spec is None:
+                return None
+            key = spec.default_output_key
+        out = ctx.memo.get(ref.id, ref.params or {})
+        arr = out.get(key) if out else None
+        if arr is None:
+            # Scalar resolves every bar to None → an all-NaN column.
+            return np.full(n, np.nan, dtype=np.float64)
+        arr = np.asarray(arr, dtype=np.float64)
+        if arr.shape[0] == n:
+            return arr
+        # Length mismatch: scalar returns None for OOB indices → NaN-pad.
+        padded = np.full(n, np.nan, dtype=np.float64)
+        m = min(n, arr.shape[0])
+        padded[:m] = arr[:m]
+        return padded
+    return None
+
+
+def _op_masks_vec(
+    cond: Condition, ctx: EvaluationContext, n: int
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """``(is_true, is_false)`` boolean masks for a leaf condition's operator,
+    or ``None`` if any operand field is not vectorizable. Tri-valued: where an
+    operand is non-finite (or history is insufficient) BOTH masks are False
+    (= the scalar ``None``)."""
+    left = _field_array_vec(cond.left, ctx, n)
+    if left is None:
+        return None
+    params = cond.params or {}
+    fin_l = np.isfinite(left)
+    op = cond.op
+
+    def field(key: str) -> np.ndarray | None:
+        ref = params.get(key)
+        if not isinstance(ref, FieldRef):
+            return None
+        return _field_array_vec(ref, ctx, n)
+
+    if op in (OP_GT, OP_LT, OP_GE, OP_LE, OP_EQ, OP_NE):
+        right = field("right")
+        if right is None:
+            return None
+        valid = fin_l & np.isfinite(right)
+        with np.errstate(invalid="ignore"):
+            if op == OP_GT:
+                cmp = left > right
+            elif op == OP_LT:
+                cmp = left < right
+            elif op == OP_GE:
+                cmp = left >= right
+            elif op == OP_LE:
+                cmp = left <= right
+            elif op == OP_EQ:
+                cmp = left == right
+            else:
+                cmp = left != right
+        return (valid & cmp, valid & ~cmp)
+
+    if op == OP_BETWEEN:
+        lo = field("low")
+        hi = field("high")
+        if lo is None or hi is None:
+            return None
+        valid = fin_l & np.isfinite(lo) & np.isfinite(hi)
+        with np.errstate(invalid="ignore"):
+            cmp = (lo <= left) & (left <= hi)
+        return (valid & cmp, valid & ~cmp)
+
+    if op in (OP_CROSSES_ABOVE, OP_CROSSES_BELOW):
+        try:
+            lookback = int(params["lookback"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        right = field("right")
+        if right is None:
+            return None
+        if lookback < 1:
+            return (np.zeros(n, dtype=bool), np.zeros(n, dtype=bool))
+        prev_l = _shift_vec(left, lookback)
+        prev_r = _shift_vec(right, lookback)
+        valid = (
+            np.isfinite(prev_l) & np.isfinite(prev_r)
+            & fin_l & np.isfinite(right)
+        )
+        with np.errstate(invalid="ignore"):
+            if op == OP_CROSSES_ABOVE:
+                cmp = (prev_l <= prev_r) & (left > right)
+            else:
+                cmp = (prev_l >= prev_r) & (left < right)
+        return (valid & cmp, valid & ~cmp)
+
+    if op == OP_WITHIN_PCT:
+        target = field("target")
+        if target is None:
+            return None
+        try:
+            tol = float(params["tolerance_pct"])
+        except (KeyError, TypeError, ValueError):
+            return (np.zeros(n, dtype=bool), np.zeros(n, dtype=bool))
+        valid = fin_l & np.isfinite(target) & (target != 0.0)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            cmp = np.abs((left - target) / target) * 100.0 <= tol
+        return (valid & cmp, valid & ~cmp)
+
+    return None
+
+
+def _condition_masks_vec(
+    cond: Condition, ctx: EvaluationContext, n: int
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Leaf masks, or ``None`` if the condition is outside the vectorizable
+    subset (within-last / cross-interval / unsupported op)."""
+    if not cond.enabled:
+        return (np.zeros(n, dtype=bool), np.zeros(n, dtype=bool))
+    if cond.within_last_bars > 0:
+        return None
+    if cond.interval and cond.interval != ctx.interval:
+        return None
+    if cond.op not in _VEC_SUPPORTED_OPS:
+        return None
+    return _op_masks_vec(cond, ctx, n)
+
+
+def _group_masks_vec(
+    grp: Group, ctx: EvaluationContext, n: int
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Recursive Kleene AND/OR over child masks, or ``None`` (fall back) if any
+    descendant is unsupported."""
+    if grp.within_last_bars > 0:
+        return None
+    if not grp.enabled:
+        return (np.zeros(n, dtype=bool), np.zeros(n, dtype=bool))
+    child_masks: list[tuple[np.ndarray, np.ndarray]] = []
+    for child in grp.children:
+        if not getattr(child, "enabled", True):
+            continue  # disabled children contribute nothing (scalar parity)
+        if isinstance(child, Condition):
+            m = _condition_masks_vec(child, ctx, n)
+        elif isinstance(child, Group):
+            m = _group_masks_vec(child, ctx, n)
+        else:
+            return None
+        if m is None:
+            return None
+        child_masks.append(m)
+    if not child_masks:
+        return (np.zeros(n, dtype=bool), np.zeros(n, dtype=bool))
+    if grp.combinator == "and":
+        is_true = np.ones(n, dtype=bool)
+        is_false = np.zeros(n, dtype=bool)
+        for t, f in child_masks:
+            is_true &= t
+            is_false |= f
+    else:  # "or" (anything non-"and" behaves as OR, matching the scalar path)
+        is_true = np.zeros(n, dtype=bool)
+        is_false = np.ones(n, dtype=bool)
+        for t, f in child_masks:
+            is_true |= t
+            is_false &= f
+    return (is_true, is_false)
+
+
+def evaluate_group_vec(
+    grp: Group, ctx: EvaluationContext
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """All-bars vectorized evaluation of ``grp`` (see the section header).
+
+    Returns ``(is_true, is_false)`` boolean arrays of length ``len(ctx.bars)``
+    encoding the per-bar tri-valued result, or ``None`` when the tree is
+    outside the vectorizable subset — in which case the caller must fall back
+    to the per-bar :func:`evaluate_group` loop. Any unexpected error is also
+    swallowed into ``None`` so the safe scalar path always wins.
+    """
+    try:
+        n = len(ctx.bars)
+    except Exception:  # noqa: BLE001
+        return None
+    if n == 0:
+        return None
+    try:
+        return _group_masks_vec(grp, ctx, n)
+    except Exception:  # noqa: BLE001 — any surprise → safe scalar fallback
+        return None
 
 
 # ---------------------------------------------------------------------------
