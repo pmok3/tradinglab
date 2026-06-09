@@ -17796,14 +17796,17 @@ def check_d27_floating_price_label_on_crosshair(app) -> None:
 def check_d61_time_label_on_crosshair(app) -> None:
     """Floating time badge tracks the vertical crosshair (spec §11.5).
 
-    A single animated annotation lives on the bottom-most axes (volume
-    when present, lowest indicator pane otherwise), pinned at ``y=0``
-    in axes-fraction via a blended transform so it slides left/right
-    with the cursor and hugs the bottom edge. Text is
-    ``YYYY-MM-DD HH:MM`` for intraday bars (with display tz applied)
-    and ``YYYY-MM-DD`` for daily / weekly / monthly bars. Hidden when
-    xdata is ``None`` (cursor off-chart) or resolves to a non-bar (out
-    of the bar range).
+    One animated annotation per pane (slot), each anchored to that
+    pane's bottom-most axes (volume when present, lowest indicator pane
+    otherwise), pinned at ``y=0`` in axes-fraction via a blended
+    transform so it slides left/right with the cursor and hugs the
+    bottom edge of its pane. In compare mode the badge therefore appears
+    under the hovered chart, not always the globally lowest one.
+    ``_time_label_artist`` is a back-compat alias onto the primary
+    pane's badge. Text is ``YYYY-MM-DD HH:MM`` for intraday bars (with
+    display tz applied) and ``YYYY-MM-DD`` for daily / weekly / monthly
+    bars. Hidden when xdata is ``None`` (cursor off-chart) or resolves
+    to a non-bar (out of the bar range).
     """
     app.compare_var.set(False)
     app.interval_var.set("5m")
@@ -17890,7 +17893,65 @@ def check_d61_time_label_on_crosshair(app) -> None:
     assert new_time_label is not None and new_time_label is not daily_label, (
         "post-render must rebuild the time-badge artist")
 
-    print("  [OK] floating time badge tracks crosshair on bottom-most axes")
+    # --- Compare mode: a badge per pane, shown under the hovered chart.
+    # Pre-fix a single badge sat on the globally bottom-most axes (the
+    # compare pane), so hovering the TOP chart wrongly showed the time on
+    # the BOTTOM chart. Now each pane owns a badge on its own bottom edge.
+    saved_cmp_ticker = app.compare_ticker_var.get()
+    saved_cmp_on = app.compare_var.get()
+    try:
+        app.compare_ticker_var.set("SPY")
+        app.compare_var.set(True)
+        app._schedule_reload(delay_ms=0)
+        _pump(app, 0.8)
+        ps = app._panel_state
+        cmp_ax = ps.get("compare", {}).get("price_ax")
+        if cmp_ax is not None:
+            labels = app._time_label_artists
+            assert set(labels) >= {"primary", "compare"}, (
+                "compare mode must create a time badge per pane; "
+                f"got slots {sorted(labels)}")
+            prim_lbl = labels["primary"]
+            cmp_lbl = labels["compare"]
+            # Each badge hugs the bottom of its OWN pane: the primary
+            # (top) pane's badge sits ABOVE the compare (bottom) pane's.
+            assert (prim_lbl.axes.get_position().y0
+                    > cmp_lbl.axes.get_position().y0), (
+                "primary-pane badge must sit above the compare-pane badge")
+            prim_cands = ps["primary"]["candles"]
+            idx = float(len(prim_cands) // 2)
+
+            # Hover the TOP (primary) chart → its badge shows; the
+            # compare-pane badge hides. This is the reported bug.
+            app._update_crosshair(ps["primary"]["price_ax"], idx, 100.0)
+            assert prim_lbl.get_visible(), (
+                "hovering the top chart must show the TOP chart's time badge")
+            assert not cmp_lbl.get_visible(), (
+                "compare-pane badge must hide when hovering the top chart")
+            assert app._slot_key_for_axes(prim_lbl.axes) == "primary"
+
+            # Hover the BOTTOM (compare) chart → its badge shows; primary
+            # hides.
+            app._update_crosshair(cmp_ax, idx, 100.0)
+            assert cmp_lbl.get_visible(), (
+                "hovering the bottom chart must show the BOTTOM chart's badge")
+            assert not prim_lbl.get_visible(), (
+                "top-pane badge must hide when hovering the bottom chart")
+            assert app._slot_key_for_axes(cmp_lbl.axes) == "compare"
+
+            # Cursor off-chart hides every pane's badge.
+            app._update_crosshair(None, None, None)
+            assert not prim_lbl.get_visible() and not cmp_lbl.get_visible(), (
+                "all pane badges must hide when the cursor leaves the chart")
+            print("  [OK] compare mode shows the time badge under the "
+                  "hovered chart")
+    finally:
+        app.compare_var.set(saved_cmp_on)
+        app.compare_ticker_var.set(saved_cmp_ticker)
+        app._schedule_reload(delay_ms=0)
+        _pump(app, 0.6)
+
+    print("  [OK] floating time badge tracks crosshair on each pane's bottom")
 
 
 def check_d62_overlay_legend_eye_toggles(app) -> None:

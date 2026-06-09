@@ -1109,6 +1109,7 @@ class InteractionMixin:
         self._crosshair_artists = {}
         self._price_label_artists = {}
         self._time_label_artist = None
+        self._time_label_artists = {}
         self._hover_ann = None
         axes = list(self._ax_candle_map.keys())
         if not axes:
@@ -1155,27 +1156,33 @@ class InteractionMixin:
                 self._price_label_artists[ax] = label
             except Exception:  # noqa: BLE001
                 pass
-        # Time badge under the x-crosshair on the bottom-most axes
-        # (TradingView parity). Anchored at xdata in data coords / y=0
-        # axes-fraction via a blended transform so it slides left/right
-        # with the cursor and hugs the bottom edge. Opaque bbox occludes
-        # the x-tick labels baked into the blit background. Text format
+        # Time badge under the x-crosshair — ONE per pane (slot), each
+        # anchored to that pane's bottom-most axes (TradingView parity).
+        # Anchored at xdata in data coords / y=0 axes-fraction via a
+        # blended transform so it slides left/right with the cursor and
+        # hugs the bottom edge of its pane. Opaque bbox occludes the
+        # x-tick labels baked into the blit background. Text format
         # mirrors the hover tooltip — ``YYYY-MM-DD HH:MM`` for intraday
         # bars (with the user's display tz applied via ``format_dt``)
         # and ``YYYY-MM-DD`` for daily / weekly / monthly bars.
-        try:
-            bottom_ax = min(
-                (ax for ax in axes if self._ax_candle_map.get(ax)),
-                key=lambda a: a.get_position().y0,
-                default=None,
-            )
-        except Exception:  # noqa: BLE001
-            bottom_ax = None
-        if bottom_ax is not None:
+        #
+        # Per-pane (not a single global-bottom badge) so that in compare
+        # mode the badge appears under the cursor's chart instead of
+        # always the globally lowest chart. Axes are grouped by panel-
+        # state slot via ``_slot_key_for_axes``; axes that resolve to no
+        # slot fall back to a single ``None``-keyed group (degenerate /
+        # pre-panel-state render), preserving the original behaviour.
+        slot_axes: dict = {}
+        for ax in axes:
+            if not self._ax_candle_map.get(ax):
+                continue
+            slot_axes.setdefault(self._slot_key_for_axes(ax), []).append(ax)
+        for slot_key, sl_axes in slot_axes.items():
             try:
+                bottom_ax = min(sl_axes, key=lambda a: a.get_position().y0)
                 blended_t = blended_transform_factory(
                     bottom_ax.transData, bottom_ax.transAxes)
-                self._time_label_artist = bottom_ax.annotate(
+                self._time_label_artists[slot_key] = bottom_ax.annotate(
                     "", xy=(0.0, 0.0), xycoords=blended_t,
                     xytext=(0, -3), textcoords="offset points",
                     ha="center", va="top",
@@ -1187,7 +1194,15 @@ class InteractionMixin:
                     clip_on=False,
                 )
             except Exception:  # noqa: BLE001
-                self._time_label_artist = None
+                pass
+        # Back-compat alias: call sites + tests that predate the per-pane
+        # split read ``_time_label_artist``. Point it at the primary
+        # pane's badge (the only badge in non-compare mode, and the
+        # bottom-most axes there).
+        self._time_label_artist = (
+            self._time_label_artists.get("primary")
+            or next(iter(self._time_label_artists.values()), None)
+        )
         # Top-left OHLCV / %change readout — price panels only (spec §11.6).
         # Built as an AnchoredOffsetbox holding two TextAreas so the
         # bull/bear-coloured pct can sit immediately to the right of the
@@ -1811,19 +1826,22 @@ class InteractionMixin:
                     label.set_visible(False)
             except Exception:  # noqa: BLE001
                 pass
-        # Time badge — only on the bottom-most axes, only when xdata
-        # resolves to a real bar (filters cursor in margin / between bars).
-        time_label = getattr(self, "_time_label_artist", None)
-        if time_label is not None:
+        # Time badge — on the pane (slot) the cursor is over, anchored at
+        # the bottom of THAT pane; every other pane's badge hides. Shown
+        # only when xdata resolves to a real bar (filters cursor in
+        # margin / between bars). In single-chart mode there is just the
+        # one ("primary") badge.
+        time_labels = getattr(self, "_time_label_artists", None) or {}
+        current_slot = self._slot_key_for_axes(current_ax)
+        time_text = None
+        if xdata is not None and current_ax is not None:
+            time_text = self._format_time_for_label(current_ax, xdata)
+        for slot_key, time_label in time_labels.items():
             try:
-                if xdata is not None and current_ax is not None:
-                    text = self._format_time_for_label(current_ax, xdata)
-                    if text:
-                        time_label.xy = (float(xdata), 0.0)
-                        time_label.set_text(text)
-                        time_label.set_visible(True)
-                    else:
-                        time_label.set_visible(False)
+                if slot_key == current_slot and time_text:
+                    time_label.xy = (float(xdata), 0.0)
+                    time_label.set_text(time_text)
+                    time_label.set_visible(True)
                 else:
                     time_label.set_visible(False)
             except Exception:  # noqa: BLE001
@@ -2061,13 +2079,16 @@ class InteractionMixin:
             for ax, label in self._price_label_artists.items():
                 if label.get_visible():
                     ax.draw_artist(label)
-            # Time badge — same rationale as the price badge but for the
-            # x-axis tick labels at the bottom of the figure.
-            time_label = getattr(self, "_time_label_artist", None)
-            if time_label is not None and time_label.get_visible():
-                ann_ax = time_label.axes
-                if ann_ax is not None:
-                    ann_ax.draw_artist(time_label)
+            # Time badges (one per pane) — same rationale as the price
+            # badge but for the x-axis tick labels at the bottom of each
+            # pane. Only the hovered pane's badge is visible at a time.
+            for time_label in (
+                getattr(self, "_time_label_artists", None) or {}
+            ).values():
+                if time_label is not None and time_label.get_visible():
+                    ann_ax = time_label.axes
+                    if ann_ax is not None:
+                        ann_ax.draw_artist(time_label)
             # Top-left OHLCV / pct readout (spec §11.6) — always-on per
             # price axes. Drawn before the hover tooltip so a hover bbox
             # over the corner still wins z-order.

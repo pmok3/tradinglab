@@ -672,6 +672,12 @@ class ChartApp(
         # in line with the vertical crosshair (spec §11.5 — TradingView
         # parity).
         self._time_label_artist: Any = None
+        # Per-pane x-axis time badges, keyed by slot ("primary" /
+        # "compare"), each anchored to that pane's bottom-most axes so
+        # the badge appears under the cursor's chart in compare mode.
+        # ``_time_label_artist`` above is a back-compat alias onto the
+        # primary pane's badge.
+        self._time_label_artists: dict[Any, Any] = {}
         # Top-left "data readout" badges per price axes (spec §11.6) —
         # OHLCV + Vol + bull/bear-coloured %change of the bar at the
         # cursor's x position (latest bar when off-chart).

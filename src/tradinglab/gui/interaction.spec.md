@@ -92,11 +92,21 @@ by `ChartApp._build_ui`.
   volume** axes, stored in `self._price_label_artists[ax]`.
   Anchored axes-fraction x=0 via blended transform; opaque round
   bbox occludes y-tick labels.
-- Time label: `_format_time_for_label(ax, xdata)` — single
-  annotation `self._time_label_artist` on the figure-bottom
-  axes. Intraday → `YYYY-MM-DD HH:MM` (via
-  `formatting.format_dt` with display tz); daily/weekly/monthly →
-  `YYYY-MM-DD`. Empty when xdata out of candle range (caller hides).
+- Time label: `_format_time_for_label(ax, xdata)` — **one
+  annotation per pane (slot)**, stored in
+  `self._time_label_artists[slot_key]`, each anchored to that
+  pane's bottom-most axes. `_update_crosshair` shows the badge for
+  the hovered pane (`_slot_key_for_axes(current_ax)`) and hides the
+  others, so in compare mode the time badge appears under the
+  hovered chart, not always the globally lowest chart.
+  `self._time_label_artist` is a back-compat alias onto the
+  `"primary"` pane's badge (single-chart mode has only that one, on
+  the figure-bottom axes — what older callers/tests read). Axes that
+  resolve to no slot fall back to a single `None`-keyed badge on the
+  global bottom (degenerate / pre-panel-state render). Intraday →
+  `YYYY-MM-DD HH:MM` (via `formatting.format_dt` with display tz);
+  daily/weekly/monthly → `YYYY-MM-DD`. Empty when xdata out of
+  candle range (caller hides).
 - `_blit_overlays` — composes hover + crosshair + value label on
   top of `_blit_bg`.
 - `_hide_overlays` — universal hide.
