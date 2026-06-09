@@ -41,6 +41,25 @@ Collections without rebuilding formatters/locators.
     polygon omitted for that bar.
   - When any hatch is emitted, `bodies._sc_accent_mode = True` so the H1
     fastpath bails (rightmost-only mutation can't safely re-derive masks).
+  - **Vectorized geometry (perf sprint #2)**: the non-hollow path builds
+    all wick/body vertices + RGBA colours with numpy via
+    `_vectorized_candle_geometry` — no per-bar Python loop. Bit-for-bit
+    identical to looping `bar_geometry` (pinned by
+    `tests/unit/test_rendering_vectorized.py`); ~3.3× faster on large
+    slices (zoom-out 60k bars: ~200ms→~60ms). The hollow path keeps the
+    legacy per-bar loop (wick-splitting + per-bar face/linewidth don't
+    vectorize cleanly, and Highlight-Key-Bars is never the hot path).
+    `flat_overlay` works on top of either (it iterates the built body
+    vertices, numpy rows or list tuples).
+  - **`_sc_*` cache dtypes**: `_sc_verts` (bodies) and `_sc_segments`
+    (wicks) are the vectorized numpy arrays `(M,4,2)` / `(M,2,2)` (only
+    the H1 fastpath touches them, via `[-1] = <tuple>` + `set_*`, both
+    ndarray-safe). `_sc_colors` and `_sc_src_indices` are Python **lists**
+    (consumers — the fastpath + `volume_tod_overlay.suppress_default_volume_fill`
+    — use `or []` / `not` / item-assignment / `zip` semantics). wicks and
+    bodies keep SEPARATE `_sc_colors` lists (the tick fastpath rewrites
+    `wicks._sc_colors[-1]` only — prior behaviour preserved exactly).
+
 - `brighter_shade(rgba, *, dark_mode) -> rgba` — RGB→HLS, saturation=1.0,
   lightness clamped: dark `max(0.55, l)`; light `min(0.55, max(0.40, l))`.
   Alpha passthrough. Used by `ChartApp._ha_flat_overlay_for` in dark mode.
@@ -50,7 +69,10 @@ Collections without rebuilding formatters/locators.
   `ChartApp._ha_flat_overlay_for` in light mode.
 - `draw_volume(ax, candles, x_offset=0, start=0, end=None) -> bars`
   `PolyCollection`. RTH bars at 0.7 alpha, extended-hours at
-  `0.7 * _EXTENDED_ALPHA` (≈0.315).
+  `0.7 * _EXTENDED_ALPHA` (≈0.315). Geometry + colours built vectorized
+  via `_vectorized_vol_geometry` (bit-for-bit identical to looping
+  `vol_geometry`); `_sc_verts` is the numpy `(M,4,2)` array, `_sc_colors`
+  a Python list (per the fastpath / suppression consumers).
 - `draw_session_shading(ax, candles, x_offset=0, start=0, end=None, pre_color, post_color, intraday=False) -> List`
   Soft vertical bands behind contiguous extended-hours runs. Uses a
   blended transform (data X, axes Y) so bands always span full axes height;
@@ -70,7 +92,12 @@ Collections without rebuilding formatters/locators.
   (`hspace=0` collision with the price/volume boundary).
 - Geometry helpers `bar_geometry`, `vol_geometry` and an optional
   `body_half: Optional[float]` on `draw_candlesticks`/`draw_volume` support
-  the H1 stream-tick fastpath. Module constants `_DENSE_PX_PER_BAR_THRESHOLD
+  the H1 stream-tick fastpath. The single-bar helpers remain the source of
+  truth for the fastpath; the slice-build hot path uses their vectorized
+  twins `_vectorized_candle_geometry` / `_vectorized_vol_geometry` (plus
+  the shared `_extract_slice_arrays` single-pass OHLCV/session extractor
+  and `_bar_colors_vec` RGBA builder), which produce byte-identical output.
+  Module constants `_DENSE_PX_PER_BAR_THRESHOLD
   = 4.0`, `_BODY_HALF = 0.6`, `_BODY_HALF_FLOOR = 0.05`; helper
   `dynamic_body_half(ax, n_visible)` clamps `_BODY_HALF * ratio` between
   floor and `_BODY_HALF` when px/bar drops below the threshold (no-op at or

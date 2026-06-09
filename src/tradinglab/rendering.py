@@ -12,6 +12,7 @@ from __future__ import annotations
 import colorsys
 from collections.abc import Mapping
 
+import numpy as np
 from matplotlib.colors import to_rgba
 
 from . import constants as _constants
@@ -219,6 +220,155 @@ def vol_geometry(
     return ((x0, 0), (x0, v), (x1, v), (x1, 0)), color
 
 
+def _extract_slice_arrays(
+    candles: list[Candle], start: int, end: int,
+) -> tuple[np.ndarray, ...]:
+    """One Python pass over ``candles[start:end]`` → six numpy columns.
+
+    Returns ``(opens, highs, lows, closes, volumes, sessions)`` — the
+    float64 OHLCV columns plus an object-dtype ``session`` array. This is
+    the only per-bar Python loop left on the geometry path; it does pure
+    attribute reads (no function calls / tuple building / colour parsing),
+    which is what the vectorized builders below eliminate from the
+    expensive part.
+    """
+    m = end - start
+    opens = np.empty(m, dtype=np.float64)
+    highs = np.empty(m, dtype=np.float64)
+    lows = np.empty(m, dtype=np.float64)
+    closes = np.empty(m, dtype=np.float64)
+    volumes = np.empty(m, dtype=np.float64)
+    sessions = np.empty(m, dtype=object)
+    for k in range(m):
+        c = candles[start + k]
+        opens[k] = c.open
+        highs[k] = c.high
+        lows[k] = c.low
+        closes[k] = c.close
+        volumes[k] = c.volume
+        sessions[k] = c.session
+    return opens, highs, lows, closes, volumes, sessions
+
+
+def _bar_colors_vec(
+    bull: np.ndarray, extended: np.ndarray, *, volume: bool,
+) -> np.ndarray:
+    """Vectorized ``(M, 4)`` RGBA matching :func:`_bar_rgba` / :func:`vol_geometry`.
+
+    ``BULL_COLOR`` / ``BEAR_COLOR`` are read live (two ``to_rgba`` calls
+    per draw, not per bar) so the Okabe-Ito palette toggle still repaints.
+    Volume bars apply the extra ``0.7`` body alpha.
+    """
+    rgb_bull = np.asarray(to_rgba(_constants.BULL_COLOR)[:3], dtype=np.float64)
+    rgb_bear = np.asarray(to_rgba(_constants.BEAR_COLOR)[:3], dtype=np.float64)
+    n = bull.shape[0]
+    colors = np.empty((n, 4), dtype=np.float64)
+    colors[:, :3] = np.where(bull[:, None], rgb_bull, rgb_bear)
+    alpha = np.where(extended, _EXTENDED_ALPHA, 1.0)
+    if volume:
+        alpha = 0.7 * alpha
+    colors[:, 3] = alpha
+    return colors
+
+
+def _vectorized_candle_geometry(
+    candles: list[Candle], x_offset: int, start: int, end: int, body_half: float,
+) -> tuple[list[int], np.ndarray | None, np.ndarray | None, np.ndarray | None]:
+    """Numpy build of ``(src_indices, colors, body_verts, wick_segments)``.
+
+    Bit-for-bit identical to looping :func:`bar_geometry` over each
+    non-gap bar (pinned by ``tests/unit/test_rendering_vectorized.py``).
+    ``colors`` is ``(M, 4)``, ``body_verts`` ``(M, 4, 2)``,
+    ``wick_segments`` ``(M, 2, 2)``; ``src_indices`` is a Python list of
+    GLOBAL candle indices. Returns ``([], None, None, None)`` when the
+    slice has no non-gap bars.
+    """
+    opens, highs, lows, closes, _vols, sessions = _extract_slice_arrays(
+        candles, start, end,
+    )
+    keep = np.flatnonzero(sessions != "gap")
+    if keep.size == 0:
+        return [], None, None, None
+    o = opens[keep]
+    h = highs[keep]
+    lo = lows[keep]
+    cl = closes[keep]
+    sess = sessions[keep]
+    extended = (sess == "pre") | (sess == "post")
+    bull = cl >= o
+    src_global = keep + start
+    x = (src_global + x_offset).astype(np.float64)
+    colors = _bar_colors_vec(bull, extended, volume=False)
+
+    body_low = np.where(bull, o, cl)
+    body_high = np.where(bull, cl, o)
+    eq = body_high == body_low
+    span = h - lo
+    pad = np.where(span != 0, span * 0.01, 0.01)
+    body_low = np.where(eq, body_low - pad, body_low)
+    body_high = np.where(eq, body_high + pad, body_high)
+    x0 = x - body_half
+    x1 = x + body_half
+
+    m = keep.size
+    body_verts = np.empty((m, 4, 2), dtype=np.float64)
+    body_verts[:, 0, 0] = x0
+    body_verts[:, 0, 1] = body_low
+    body_verts[:, 1, 0] = x0
+    body_verts[:, 1, 1] = body_high
+    body_verts[:, 2, 0] = x1
+    body_verts[:, 2, 1] = body_high
+    body_verts[:, 3, 0] = x1
+    body_verts[:, 3, 1] = body_low
+
+    wick_segments = np.empty((m, 2, 2), dtype=np.float64)
+    wick_segments[:, 0, 0] = x
+    wick_segments[:, 0, 1] = lo
+    wick_segments[:, 1, 0] = x
+    wick_segments[:, 1, 1] = h
+    return src_global.tolist(), colors, body_verts, wick_segments
+
+
+def _vectorized_vol_geometry(
+    candles: list[Candle], x_offset: int, start: int, end: int, body_half: float,
+) -> tuple[list[int], np.ndarray | None, np.ndarray | None]:
+    """Numpy build of ``(src_indices, colors, vol_verts)`` for volume bars.
+
+    Bit-for-bit identical to looping :func:`vol_geometry`. ``colors`` is
+    ``(M, 4)``, ``vol_verts`` ``(M, 4, 2)``. Returns ``([], None, None)``
+    when the slice has no non-gap bars.
+    """
+    opens, _highs, _lows, closes, vols, sessions = _extract_slice_arrays(
+        candles, start, end,
+    )
+    keep = np.flatnonzero(sessions != "gap")
+    if keep.size == 0:
+        return [], None, None
+    o = opens[keep]
+    cl = closes[keep]
+    v = vols[keep]
+    sess = sessions[keep]
+    extended = (sess == "pre") | (sess == "post")
+    bull = cl >= o
+    src_global = keep + start
+    x = (src_global + x_offset).astype(np.float64)
+    colors = _bar_colors_vec(bull, extended, volume=True)
+    x0 = x - body_half
+    x1 = x + body_half
+
+    m = keep.size
+    vol_verts = np.empty((m, 4, 2), dtype=np.float64)
+    vol_verts[:, 0, 0] = x0
+    vol_verts[:, 0, 1] = 0.0
+    vol_verts[:, 1, 0] = x0
+    vol_verts[:, 1, 1] = v
+    vol_verts[:, 2, 0] = x1
+    vol_verts[:, 2, 1] = v
+    vol_verts[:, 3, 0] = x1
+    vol_verts[:, 3, 1] = 0.0
+    return src_global.tolist(), colors, vol_verts
+
+
 def draw_candlesticks(
     ax,
     candles: list[Candle],
@@ -291,41 +441,60 @@ def draw_candlesticks(
     if end <= start:
         return None, None
 
-    wick_segments: list = []
-    wick_colors: list = []
-    body_polys: list = []
-    colors: list = []
-    src_indices: list[int] = []
-    for src_i in range(start, end):
-        c = candles[src_i]
-        if c.is_gap:
-            # Leave this x-slot visually empty — don't add wick/body artists.
-            continue
-        x = src_i + x_offset
-        wick_seg, body_verts, color = bar_geometry(c, x, body_half=body_half)
-        if hollow_indices and src_i in hollow_indices:
-            # Split the wick around the body so a hollow candle reads as
-            # truly empty — no vertical line cutting through the interior.
-            # ``body_verts`` is ordered (low-left, high-left, high-right,
-            # low-right); pull the body Y bounds back out (these include
-            # the doji-pad nudge from ``bar_geometry``).
-            body_low = body_verts[0][1]
-            body_high = body_verts[1][1]
-            if c.high > body_high:
-                wick_segments.append(((x, body_high), (x, c.high)))
-                wick_colors.append(color)
-            if c.low < body_low:
-                wick_segments.append(((x, c.low), (x, body_low)))
-                wick_colors.append(color)
-        else:
-            wick_segments.append(wick_seg)
-            wick_colors.append(color)
-        body_polys.append(body_verts)
-        colors.append(color)
-        src_indices.append(src_i)
+    has_hollow = bool(hollow_indices)
+    body_half_resolved = _BODY_HALF if body_half is None else body_half
 
-    if not body_polys:
-        return None, None
+    if has_hollow:
+        # Per-bar path: hollow candles split the wick around the body and
+        # carry per-bar face / linewidth, which doesn't vectorize cleanly.
+        # This is the *Highlight key bars* View toggle — never the
+        # streaming / pan / zoom-out hot path — so the legacy loop stays.
+        wick_segments: list = []
+        wick_colors: list = []
+        body_polys: list | np.ndarray = []
+        colors: list | np.ndarray = []
+        src_indices: list[int] = []
+        for src_i in range(start, end):
+            c = candles[src_i]
+            if c.is_gap:
+                # Leave this x-slot visually empty — no wick/body artists.
+                continue
+            x = src_i + x_offset
+            wick_seg, body_verts, color = bar_geometry(c, x, body_half=body_half_resolved)
+            if src_i in hollow_indices:
+                # Split the wick around the body so a hollow candle reads
+                # as truly empty — no vertical line cutting through the
+                # interior. ``body_verts`` is ordered (low-left, high-left,
+                # high-right, low-right); pull the body Y bounds back out
+                # (these include the doji-pad nudge from ``bar_geometry``).
+                body_low = body_verts[0][1]
+                body_high = body_verts[1][1]
+                if c.high > body_high:
+                    wick_segments.append(((x, body_high), (x, c.high)))
+                    wick_colors.append(color)
+                if c.low < body_low:
+                    wick_segments.append(((x, c.low), (x, body_low)))
+                    wick_colors.append(color)
+            else:
+                wick_segments.append(wick_seg)
+                wick_colors.append(color)
+            body_polys.append(body_verts)
+            colors.append(color)
+            src_indices.append(src_i)
+        if not body_polys:
+            return None, None
+    else:
+        # Vectorized hot path: build all wick/body geometry + colours with
+        # numpy, no per-bar Python loop. Bit-for-bit identical to looping
+        # ``bar_geometry`` (pinned by tests/unit/test_rendering_vectorized.py).
+        # ``body_polys`` is an ``(M, 4, 2)`` array, ``wick_segments``
+        # ``(M, 2, 2)``, ``colors`` ``(M, 4)``; ``src_indices`` a list.
+        src_indices, colors, body_polys, wick_segments = _vectorized_candle_geometry(
+            candles, x_offset, start, end, body_half_resolved,
+        )
+        if not src_indices:
+            return None, None
+        wick_colors = colors
 
     wicks = LineCollection(wick_segments, colors=wick_colors, linewidths=1.0, zorder=2)
     # Disable matplotlib's path-snap on BOTH the wick LineCollection and
@@ -354,7 +523,6 @@ def draw_candlesticks(
     # mechanism layers ADDITIONAL collections on top rather than
     # mutating per-bar face color, so the underlying bull/bear hue is
     # preserved on flat HA bars.
-    has_hollow = bool(hollow_indices)
     if has_hollow:
         face_list = []
         line_widths = []
@@ -384,11 +552,26 @@ def draw_candlesticks(
     # a flat-HA overlay — the fastpath bails on either (per-bar
     # facecolor / per-bar hatch mutations are the caller's job to
     # detect, not the artist's).
+    #
+    # The geometry caches (``_sc_verts`` / ``_sc_segments``) keep the
+    # vectorized numpy arrays — only the tick fastpath touches them, via
+    # ``[-1] = <tuple>`` + ``set_*``, both of which accept ndarrays. The
+    # colour + index caches are materialized as Python LISTS because the
+    # volume-TOD suppression + fastpath consumers rely on list semantics
+    # (``or []`` / ``not`` / item-assignment / ``zip``). wicks and bodies
+    # keep SEPARATE colour lists — the tick fastpath rewrites
+    # ``wicks._sc_colors[-1]`` only — preserving prior behaviour exactly.
+    if has_hollow:
+        wick_colors_cache = wick_colors
+        body_colors_cache = colors
+    else:
+        wick_colors_cache = [tuple(c) for c in colors]
+        body_colors_cache = [tuple(c) for c in colors]
     wicks._sc_segments = wick_segments
-    wicks._sc_colors = wick_colors
+    wicks._sc_colors = wick_colors_cache
     wicks._sc_src_indices = src_indices
     bodies._sc_verts = body_polys
-    bodies._sc_colors = colors  # shared list — wicks + bodies use same colors
+    bodies._sc_colors = body_colors_cache
     bodies._sc_src_indices = src_indices
     bodies._sc_hollow_mode = has_hollow
     # Build the per-direction hatched overlay collections. Bull and bear
@@ -482,20 +665,14 @@ def draw_volume(
     if end <= start:
         return None
 
-    polys: list = []
-    colors: list = []
-    src_indices: list[int] = []
-    for src_i in range(start, end):
-        c = candles[src_i]
-        if c.is_gap:
-            continue
-        x = src_i + x_offset
-        verts, color = vol_geometry(c, x, body_half=body_half)
-        polys.append(verts)
-        colors.append(color)
-        src_indices.append(src_i)
-
-    if not polys:
+    body_half_resolved = _BODY_HALF if body_half is None else body_half
+    # Vectorized build — bit-for-bit identical to looping ``vol_geometry``
+    # (pinned by tests/unit/test_rendering_vectorized.py). ``polys`` is an
+    # ``(M, 4, 2)`` array, ``colors`` ``(M, 4)``; ``src_indices`` a list.
+    src_indices, colors, polys = _vectorized_vol_geometry(
+        candles, x_offset, start, end, body_half_resolved,
+    )
+    if not src_indices:
         return None
 
     bars = PolyCollection(
@@ -503,7 +680,9 @@ def draw_volume(
         linewidths=0.0, zorder=2,
     )
     bars._sc_verts = polys
-    bars._sc_colors = colors
+    # ``_sc_colors`` must be a Python list — ``suppress_default_volume_fill``
+    # iterates it with ``or []`` / ``not`` / ``zip`` semantics.
+    bars._sc_colors = [tuple(c) for c in colors]
     bars._sc_src_indices = src_indices
     ax.add_collection(bars)
     return bars
