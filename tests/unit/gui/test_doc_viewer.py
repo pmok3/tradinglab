@@ -24,6 +24,7 @@ from tradinglab.gui.doc_viewer import (
     _DOC_ORDER,
     _DOC_TITLES,
     _GITHUB_DOCS_BASE,
+    _HIDDEN_DOCS,
     TAG_NAMES,
     _apply_inline_markup,
     _discover_doc_files,
@@ -411,6 +412,9 @@ def test_discover_doc_files_returns_known_docs(monkeypatch, tmp_path):
     (docs / "PAINT_PIPELINE_REFACTOR.md").write_text("# Paint\n")
     (docs / "SPEC_INDEX.md").write_text("# Spec Index\n")
     (docs / "SPEC_STYLE.md").write_text("# Spec Style\n")
+    (docs / "JIT_FEASIBILITY.md").write_text("# JIT\n")
+    (docs / "PERFORMANCE.md").write_text("# Performance\n")
+    (docs / "spec.md").write_text("# Application Spec\n")
     (docs / "extra.md").write_text("# Extra\n")
     (docs / "ignore.txt").write_text("not markdown")
 
@@ -430,7 +434,8 @@ def test_discover_doc_files_returns_known_docs(monkeypatch, tmp_path):
     assert "ignore.txt" not in names
     # Developer-only docs are filtered even when present on disk.
     for hidden in ("BUILDING_EXE.md", "PAINT_PIPELINE_REFACTOR.md",
-                   "SPEC_INDEX.md", "SPEC_STYLE.md"):
+                   "SPEC_INDEX.md", "SPEC_STYLE.md",
+                   "JIT_FEASIBILITY.md", "PERFORMANCE.md", "spec.md"):
         assert hidden not in names
 
 
@@ -446,6 +451,41 @@ def test_discover_doc_files_returns_empty_when_docs_missing(monkeypatch, tmp_pat
     monkeypatch.setattr(tradinglab, "_resources", _FakeResources,
                         raising=False)
     assert _discover_doc_files() == []
+
+
+def test_hidden_docs_in_sync_with_pyinstaller_spec():
+    """``doc_viewer._HIDDEN_DOCS`` must equal ``TradingLab.spec``'s
+    ``_docs_exclude``.
+
+    A doc hidden from the in-app viewer should also be physically
+    excluded from the frozen redistributable (and vice-versa), per the
+    contract documented next to both denylists. This invariant prevents
+    the two lists silently drifting apart — e.g. a developer-only doc
+    that is hidden in the viewer but still shipped inside the ``.exe``.
+    """
+    import ast
+
+    spec_path = Path(__file__).resolve().parents[3] / "TradingLab.spec"
+    assert spec_path.exists(), f"TradingLab.spec missing at {spec_path}"
+    tree = ast.parse(spec_path.read_text(encoding="utf-8"))
+    excluded: set[str] | None = None
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        for tgt in node.targets:
+            if (isinstance(tgt, ast.Name) and tgt.id == "_docs_exclude"
+                    and isinstance(node.value, ast.Set)):
+                excluded = {
+                    el.value for el in node.value.elts
+                    if isinstance(el, ast.Constant) and isinstance(el.value, str)
+                }
+    assert excluded is not None, "_docs_exclude set not found in TradingLab.spec"
+    assert excluded == set(_HIDDEN_DOCS), (
+        "doc_viewer._HIDDEN_DOCS and TradingLab.spec _docs_exclude have "
+        "drifted:\n"
+        f"  only in _HIDDEN_DOCS:  {sorted(set(_HIDDEN_DOCS) - excluded)}\n"
+        f"  only in _docs_exclude: {sorted(excluded - set(_HIDDEN_DOCS))}"
+    )
 
 
 def test_display_title_for_known_doc():

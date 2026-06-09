@@ -176,12 +176,15 @@ code change).
 Files in `_HIDDEN_DOCS` are skipped during discovery so they never
 appear in the in-app viewer even when present on disk in a source-tree
 run. Currently this is `{"BUILDING_EXE.md",
-"PAINT_PIPELINE_REFACTOR.md", "SPEC_INDEX.md", "SPEC_STYLE.md"}` — the
-PyInstaller release guide, the multi-week paint-pipeline scope doc, and
-the spec-authoring references are all developer-only and live on GitHub,
-not in the shipped `.exe`. `TradingLab.spec` mirrors this denylist
-(`_docs_exclude`) so the files are also physically excluded from the
-frozen redistributable; keep the two in sync.
+"PAINT_PIPELINE_REFACTOR.md", "SPEC_INDEX.md", "SPEC_STYLE.md",
+"JIT_FEASIBILITY.md", "PERFORMANCE.md", "spec.md"}` — the PyInstaller
+release guide, the multi-week paint-pipeline scope doc, the
+spec-authoring references, the JIT / native-compute feasibility study,
+the indicator performance write-up, and the top-level Application Spec
+are all developer-only and live on GitHub, not in the shipped `.exe`.
+`TradingLab.spec` mirrors this denylist (`_docs_exclude`) so the files
+are also physically excluded from the frozen redistributable; keep the
+two in sync.
 
 `_display_title_for(path)` resolves the label in three steps: an
 explicit `_DOC_TITLES` override, else the document's first `# ` (H1)

@@ -102,14 +102,21 @@ _DOC_ORDER: tuple[str, ...] = (
 #: ``.exe``. ``BUILDING_EXE.md`` is the PyInstaller release guide;
 #: ``PAINT_PIPELINE_REFACTOR.md`` is a multi-week refactor scope doc;
 #: ``SPEC_INDEX.md`` / ``SPEC_STYLE.md`` are the spec-authoring
-#: references. Filtered in :func:`_discover_doc_files` so they stay
-#: hidden even in a source-tree run where ``docs/`` is present. Keep
-#: this in sync with ``TradingLab.spec``'s ``_docs_exclude``.
+#: references; ``JIT_FEASIBILITY.md`` (JIT / native indicator-compute
+#: feasibility study), ``PERFORMANCE.md`` (indicator perf write-up), and
+#: ``spec.md`` (the "Application Spec" architectural doc) are likewise
+#: contributor-facing only. Filtered in :func:`_discover_doc_files` so
+#: they stay hidden even in a source-tree run where ``docs/`` is
+#: present. Keep this in sync with ``TradingLab.spec``'s
+#: ``_docs_exclude``.
 _HIDDEN_DOCS: frozenset[str] = frozenset({
     "BUILDING_EXE.md",
     "PAINT_PIPELINE_REFACTOR.md",
     "SPEC_INDEX.md",
     "SPEC_STYLE.md",
+    "JIT_FEASIBILITY.md",
+    "PERFORMANCE.md",
+    "spec.md",
 })
 
 #: Human-readable display titles for known docs. Anything not in this

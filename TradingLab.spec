@@ -81,16 +81,21 @@ if _sp500_csv.exists():
 # path resolution works in the source tree because resource_root()
 # returns the repo root in non-frozen contexts.
 #
-# Developer-only docs (the PyInstaller release guide) are excluded from
-# the redistributable — they live on GitHub for contributors, not in the
-# shipped .exe. Keep this denylist in sync with
-# ``tradinglab.gui.doc_viewer._HIDDEN_DOCS``.
+# Developer-only docs (the PyInstaller release guide, the paint-pipeline
+# scope doc, the spec-authoring references, the JIT/native-compute
+# feasibility study, the indicator performance write-up, and the
+# top-level Application Spec) are excluded from the redistributable — they
+# live on GitHub for contributors, not in the shipped .exe. Keep this
+# denylist in sync with ``tradinglab.gui.doc_viewer._HIDDEN_DOCS``.
 _docs_dir = _REPO_ROOT / "docs"
 _docs_exclude = {
     "BUILDING_EXE.md",
     "PAINT_PIPELINE_REFACTOR.md",
     "SPEC_INDEX.md",
     "SPEC_STYLE.md",
+    "JIT_FEASIBILITY.md",
+    "PERFORMANCE.md",
+    "spec.md",
 }
 if _docs_dir.exists():
     for _doc in _docs_dir.rglob("*"):
