@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.3.8] - 2026-06-09
+
+### Changed
+
+- **The app is snappier — especially with many indicators, long histories,
+  and during live streaming.** A performance pass made the chart, scanner,
+  and Strategy Tester noticeably more responsive:
+  - **Live charts stay smooth while streaming.** Each incoming price tick
+    now updates the chart with a lightweight repaint instead of redrawing
+    the whole figure, cutting per-tick drawing work by roughly **5×** — the
+    chart no longer stutters when quotes arrive quickly.
+  - **Indicators and scans compute faster.** The visual Conditions builder
+    (shared by the Scanner, Entries, and Exits), the built-in indicators
+    (RSI, ATR, MACD, Bollinger Bands, VWAP, Anchored VWAP, ADX, RVOL /
+    RRVOL), and the candle / volume drawing were rewritten to do far less
+    repeated work, so live charts, scans, and Strategy Tester runs over
+    long histories and multi-indicator setups finish quicker.
+  - These are **speed-only** changes — every indicator value, signal,
+    screenshot, and journal number is identical to before (pinned by
+    equivalence tests).
+
 ## [0.3.7] - 2026-06-08
 
 ### Added
