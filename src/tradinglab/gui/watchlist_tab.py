@@ -280,6 +280,13 @@ class WatchlistTabMixin:
         self._watchlist_subnotebook = sub
         self._watchlist_sub_frames: dict[str, ttk.Frame] = {}
         self._watchlist_trees: dict[str, ttk.Treeview] = {}
+        # Per-tree rendered-row cache for the incremental Treeview diff
+        # (qw-watchlist-diff): name -> {ticker: (values_tuple, tag_tuple)}.
+        # Lets _populate_watchlist_tab skip the Python->Tcl crossing for
+        # rows whose displayed cells are unchanged. Self-heals: a recreated
+        # (empty) tree has no children, so the order check forces a full
+        # rebuild that repopulates the cache.
+        self._watchlist_row_cache: dict[str, dict[str, tuple]] = {}
         self._watchlist_sort_by_name: dict[
             str, tuple[str | None, bool]] = {}
         # Placeholder frame for the empty-pin state.
@@ -856,11 +863,6 @@ class WatchlistTabMixin:
         tree = self._watchlist_trees.get(name) if name else None
         if tree is None:
             return
-        try:
-            for iid in tree.get_children():
-                tree.delete(iid)
-        except Exception:  # noqa: BLE001
-            return
 
         tickers = list(self._watchlist_tickers(name))
         sort_col, reverse = self._watchlist_sort_by_name.get(
@@ -891,6 +893,10 @@ class WatchlistTabMixin:
         except Exception:  # noqa: BLE001
             pass
 
+        # Build the desired (values, tag) for every row up front.
+        import time as _time
+        now_ms = int(_time.time() * 1000)
+        rows: list[tuple[str, tuple, tuple]] = []
         for t in tickers:
             snap = self._watchlist_snapshot.get(t, {})
             last = snap.get("last")
@@ -907,18 +913,79 @@ class WatchlistTabMixin:
                 bundle = self._events_cache.get(t.upper())
             except AttributeError:
                 bundle = None
-            import time as _time
-            now_ms = int(_time.time() * 1000)
             next_earn_s, _td = _format_next_earn(bundle, now_ms=now_ms)
-            tag = ()
+            tag: tuple = ()
             if isinstance(chg, (int, float)):
                 tag = ("bull",) if chg >= 0 else ("bear",)
+            rows.append((t, (t, last_s, chg_s, pct_s, next_earn_s), tag))
+
+        self._diff_watchlist_rows(name, tree, rows)
+
+    def _diff_watchlist_rows(
+        self,
+        name: str,
+        tree: ttk.Treeview,
+        rows: list[tuple[str, tuple, tuple]],
+    ) -> None:
+        """Apply ``rows`` to ``tree`` with the minimum Tk widget churn.
+
+        ``rows`` is ``[(ticker, values_tuple, tag_tuple), ...]`` in display
+        order. Each ticker doubles as the row's Treeview iid, so when the
+        ordered ticker list is unchanged we mutate only the rows whose
+        displayed cells actually changed (one ``tree.item`` Tcl call each),
+        instead of the legacy delete-all + reinsert-all (two crossings per
+        row, every refresh). This also preserves the user's selection and
+        scroll position across the 60 ms live-price refresh cycle.
+
+        Falls back to a full rebuild (with auto-assigned iids and no cache)
+        when tickers are not unique, since duplicate iids are illegal.
+        """
+        desired = [t for t, _v, _tag in rows]
+        cache = self._watchlist_row_cache
+
+        if len(set(desired)) != len(desired):
+            # Duplicate tickers — ticker-as-iid is impossible. Legacy path.
+            cache.pop(name, None)
             try:
-                tree.insert("", "end",
-                            values=(t, last_s, chg_s, pct_s, next_earn_s),
-                            tags=tag)
+                for iid in tree.get_children():
+                    tree.delete(iid)
+                for _t, values, tag in rows:
+                    tree.insert("", "end", values=values, tags=tag)
             except Exception:  # noqa: BLE001
                 pass
+            return
+
+        row_cache = cache.setdefault(name, {})
+        try:
+            current = list(tree.get_children())
+        except Exception:  # noqa: BLE001
+            current = []
+
+        if current == desired:
+            # Same rows in the same order — update only changed cells.
+            for t, values, tag in rows:
+                if row_cache.get(t) != (values, tag):
+                    try:
+                        tree.item(t, values=values, tags=tag)
+                    except Exception:  # noqa: BLE001
+                        continue
+                    row_cache[t] = (values, tag)
+            return
+
+        # Row set or order changed — rebuild, keying each row by ticker.
+        try:
+            for iid in current:
+                tree.delete(iid)
+        except Exception:  # noqa: BLE001
+            pass
+        new_cache: dict[str, tuple] = {}
+        for t, values, tag in rows:
+            try:
+                tree.insert("", "end", iid=t, values=values, tags=tag)
+            except Exception:  # noqa: BLE001
+                continue
+            new_cache[t] = (values, tag)
+        cache[name] = new_cache
 
     def _populate_all_watchlist_tabs(self) -> None:
         """Repaint the *visible* pinned sub-tab (qw-watchlist-visibletab).

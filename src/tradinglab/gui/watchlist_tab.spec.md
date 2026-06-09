@@ -94,7 +94,21 @@ larger; pinning makes a list reachable from the main UI.
   pinned watchlist `name` (or current if None). Partitions rows
   by `(is_missing, value)` so blanks always trail, then sorts
   with `list.sort(reverse=reverse)`. (Negate-value approach was
-  buggy for prefix-string columns like `A` vs `AA`.)
+  buggy for prefix-string columns like `A` vs `AA`.) Builds the
+  desired `(ticker, values, tag)` rows then delegates to
+  `_diff_watchlist_rows` for minimal-churn application.
+- `_diff_watchlist_rows(name, tree, rows)` — incremental Treeview
+  update (qw-watchlist-diff). Each ticker doubles as its row iid, so
+  when the ordered ticker list is unchanged only rows whose displayed
+  cells changed are touched (one `tree.item` call each, gated by the
+  per-name `_watchlist_row_cache`), instead of the legacy delete-all +
+  reinsert-all every 60 ms refresh. Side benefit: the user's selection
+  and scroll position survive a live-price refresh. Full rebuild (keyed
+  by ticker iid) fires only on row add/remove/reorder. Falls back to a
+  legacy auto-iid rebuild (and drops the cache for that name) when the
+  ticker list has duplicates, since duplicate iids are illegal. The
+  cache self-heals: a recreated (empty) tree has no children, so the
+  order check forces a rebuild that repopulates it.
 - `_populate_all_watchlist_tabs()` — repaints **only the visible
   sub-tab** (`watchlist_var.get()`); hidden sub-tabs are repainted
   lazily on switch by `_on_watchlist_subtab_changed` from the same
@@ -245,7 +259,10 @@ larger; pinning makes a list reachable from the main UI.
 
 - `_watchlist_snapshot` keys are upper-cased ticker symbols.
 - Row tags are `("bull",)`, `("bear",)`, or `()` only.
-- `_populate_watchlist_tab(name)` fully replaces existing rows.
+- `_populate_watchlist_tab(name)` makes the Treeview's visible rows
+  equal the desired (sorted) row set — via an incremental diff
+  (`_diff_watchlist_rows`) that updates only changed cells when the
+  ordered ticker list is unchanged, else a full ticker-iid rebuild.
 - Sort with missing values: blanks at bottom regardless of dir.
 - `_watchlist_trees.keys() == WatchlistManager.pinned_names()`
   after every rebuild (or `{}` in empty state).
