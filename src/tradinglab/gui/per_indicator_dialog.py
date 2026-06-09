@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import tkinter as tk
 from tkinter import ttk
+from typing import ClassVar
 
 from ..indicators._palette import FALLBACK_GRAY
 from ..indicators.base import LineStyle
@@ -126,6 +127,14 @@ class _PerIndicatorDialog(IndicatorDialog):
     instantiate directly so the ``ChartApp._per_indicator_dialogs``
     singleton bookkeeping stays in sync.
     """
+
+    #: The single-overlay quick-edit popup renders LIVE (no Apply /
+    #: deferral). A focused one-indicator tweak benefits from instant
+    #: feedback, and a single overlay's re-render is the cheap case the
+    #: deferred-apply flow was never about. Deliberate exception to the
+    #: deferred-render pattern — documented + still classified by the
+    #: deferred-apply meta-test (it asserts this dialog renders live).
+    _DEFERS_RENDER: ClassVar[bool] = False
 
     def __init__(self, app: tk.Tk, config_id: int,
                  slot: str | None = None) -> None:

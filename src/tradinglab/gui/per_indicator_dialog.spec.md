@@ -106,6 +106,16 @@ popup can never drift from the canonical editor.
   on every `update` event on the tracked config. Base
   `_on_manager_event` is super()-chained to keep the auto-close path
   intact. Radio visibility also re-evaluated on update.
+- **Renders live — deliberate deferred-render exception**. Sets
+  `_DEFERS_RENDER = False` (the base `IndicatorDialog` is `True`). A
+  focused single-overlay quick-edit benefits from instant visual
+  feedback, so the popup keeps the legacy live-render behaviour: every
+  commit repaints the chart immediately and there is **no Apply button
+  or Auto-apply checkbox** (both are gated on `_defers_render` in the
+  base). The popup is still *classified* by the deferred-render
+  meta-test (`tests/unit/gui/test_indicator_apply_defer.py` asserts
+  `_PerIndicatorDialog._DEFERS_RENDER is False`) so the live exception
+  is explicit and can't silently regress.
 - **Cleanup must remove from registry**. `_on_close` calls
   `super()._on_close()` then evicts `self` from registry — only when
   the slot still points at `self`, so racing close paths don't

@@ -202,12 +202,61 @@ smoke-test path. Unknown rows participate (reorder is purely positional).
 
 ## Save / Cancel
 
-`[Save and Close] [Cancel]`. Snapshots `manager.to_dict()` on open. Cancel
+`[Apply] [Save and Close] [Cancel]` (Apply omitted on the live popup —
+see below). Snapshots `manager.to_dict()` on open. Cancel
 (Escape, X-button, WM_DELETE_WINDOW) restores via `manager.load_dict()`.
 Save and Close (Ctrl+S) accepts live state for the session and tears down
 the dialog — preset persistence is via Indicators → Save Preset. Dirty
 tracking: `_mark_dirty()` fires on any commit/remove, enables Save (disabled
 when clean), appends `•` to title bar.
+
+### Deferred render + Apply button (snappy editing)
+
+The full Manage Indicators dialog **defers chart repaints** while it is
+open, so a flurry of per-row edits (params, scopes, colors, intervals,
+add/remove) mutates the live `IndicatorManager` but triggers **zero**
+`_render()` calls until the user explicitly Applies. One full `_render()`
+(gridspec/figure rebuild) per settled edit was the source of the editing
+lag. Controlled by the `_DEFERS_RENDER` class attribute (default `True`;
+the per-indicator popup overrides to `False`).
+
+- **App-side gate** (`app.py`): a depth counter `_defer_indicator_render`
+  is checked at the top of `_on_indicator_event` — when `> 0` the
+  coalesced-render scheduling is skipped entirely. Menu Add / Clear /
+  Load-Preset and config-load never increment it, so those paths still
+  render immediately. API: `_begin_defer_indicator_render()` /
+  `_end_defer_indicator_render()` (balanced, depth-counted) and
+  `_flush_indicator_render()` (forces exactly one render now, cancelling
+  any pending scheduled one). `_indicator_render_count` is a test seam
+  bumped on every real render.
+- **Dialog lifecycle**: `__init__` calls `_begin_render_deferral()` last
+  (iff `_defers_render` and auto-apply OFF); `_teardown` calls
+  `_end_render_deferral()` FIRST so the app counter never leaks. Both
+  helpers are idempotent (guarded by `_render_deferred_active`) and no-op
+  when the app lacks the defer hooks (stub-root unit tests).
+- **Two dirty flags**: `_dirty` = session state worth keeping (drives the
+  `•` title + Save enable); `_pending_dirty` = there are manager changes
+  the chart has NOT been repainted with yet (drives the Apply enable).
+  `_mark_pending()` sets `_pending_dirty` and is wired next to every
+  `_mark_dirty()` call site (`_commit_now`, the remove path, and the
+  external-mutation branch of `_on_manager_event`); it is inert unless
+  `_render_deferred_active`.
+- **Apply** (`_apply`, button + `Ctrl+Return`/`Ctrl+KP_Enter`): flushes
+  exactly one render, clears `_pending_dirty`, disables the button, and
+  **re-snapshots** `manager.to_dict()` — so Apply becomes the new Cancel
+  baseline (classic property-sheet "Apply commits, Cancel discards
+  un-applied edits"). Guarded no-op when nothing is pending, so the
+  shortcut is harmless. Bound to `Ctrl+Return` rather than bare Return
+  (bare Return commits the focused param widget).
+- **Save and Close** does an **implicit Apply** before teardown (never
+  keep a config the user has not seen rendered), then discards the
+  snapshot.
+- **Cancel** reverts the manager to `_snapshot`; the chart already shows
+  the snapshot state (renders were deferred), so no extra flush is needed
+  beyond the revert's own event.
+- **Auto-apply checkbox** (default OFF): ON ends deferral + flushes
+  immediately (live exploratory scrubbing); OFF re-enters deferral. Only
+  shown when `_defers_render`.
 
 ### Save-and-Close validation hook (`_collect_save_close_errors`)
 
@@ -241,3 +290,14 @@ to any future "common picks plus free-text" param. Audit
 - Only one instance per app; `open_indicator_dialog` is idempotent.
 - Dialog state mirrors `app._indicator_manager` after every observed event.
 - Editing an unknown-kind row is impossible (UI disabled).
+- Render deferral is depth-balanced: every `_begin_render_deferral` is
+  matched by exactly one `_end_render_deferral` (on teardown, or on
+  auto-apply ON), so `app._defer_indicator_render` returns to its prior
+  value when the dialog closes. The `_render_deferred_active` guard makes
+  both idempotent.
+- In deferred mode the chart is never left showing un-applied edits after
+  the dialog closes: Save-and-Close implicitly Applies; Cancel reverts to
+  the snapshot. The Apply button is enabled iff `_pending_dirty`.
+- The deferred-render contract (every indicator-editing window is
+  classified `_DEFERS_RENDER` True/live-False) is pinned by
+  `tests/unit/gui/test_indicator_apply_defer.py`.

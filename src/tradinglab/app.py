@@ -641,6 +641,16 @@ class ChartApp(
         # Idle-coalesced indicator redraw (one per tick; see
         # ``_sched_indicator_redraw`` / ``_run_indicator_redraw``).
         self._indicator_redraw_pending = False
+        # Deferred-render mode for the Manage Indicators dialog. Depth
+        # counter: while > 0, indicator-manager mutations still apply to
+        # the manager but DO NOT paint the chart — the dialog's "Apply"
+        # button flushes one render via ``_flush_indicator_render``. Set
+        # only by the editing dialog (scoped to its edit flow); menu
+        # Add/Clear/Load-Preset and config load never set it, so they
+        # still render immediately. ``_indicator_render_count`` is a test
+        # seam counting actual indicator-driven chart renders.
+        self._defer_indicator_render = 0
+        self._indicator_render_count = 0
 
         # --- caches + data state ----------------------------------------
         self._data_ctrl = DataController(
@@ -4167,12 +4177,21 @@ class ChartApp(
                 self._materialize_blank_avwap_anchors()
             except Exception:  # noqa: BLE001
                 pass
+        # Deferred-render mode (Manage Indicators dialog open without
+        # auto-apply): the manager has already mutated, but the chart
+        # paint is suppressed until the user clicks "Apply"
+        # (``_flush_indicator_render``). Scoped to the dialog edit flow —
+        # menu Add/Clear/Load-Preset and config load never increment the
+        # counter, so they still render immediately.
+        if self._defer_indicator_render > 0:
+            return
         if self._indicator_redraw_pending:
             return
         self._indicator_redraw_pending = True
 
         def _run() -> None:
             self._indicator_redraw_pending = False
+            self._indicator_render_count += 1
             try:
                 self._render()
             except Exception as e:  # noqa: BLE001
@@ -4186,8 +4205,42 @@ class ChartApp(
         except Exception:  # noqa: BLE001
             # Fallback for headless contexts.
             self._indicator_redraw_pending = False
+            self._indicator_render_count += 1
             try:
                 self._render()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _begin_defer_indicator_render(self) -> None:
+        """Suspend chart renders driven by indicator-manager mutations.
+
+        Used by the Manage Indicators dialog (deferred-apply mode) so
+        per-row edits don't each trigger a full ``_render()``; the
+        dialog's Apply button flushes one render via
+        :meth:`_flush_indicator_render`. Depth-counted so multiple
+        openers (or an Apply mid-session) balance correctly.
+        """
+        self._defer_indicator_render += 1
+
+    def _end_defer_indicator_render(self) -> None:
+        """Resume indicator-driven chart renders (balances ``_begin_...``)."""
+        if self._defer_indicator_render > 0:
+            self._defer_indicator_render -= 1
+
+    def _flush_indicator_render(self) -> None:
+        """Force one indicator chart render now, bypassing deferral.
+
+        Called by the dialog's ``Apply`` / ``Save and Close`` to push the
+        current indicator-manager state onto the chart. Cancels any
+        pending scheduled render so it can't double-paint.
+        """
+        self._indicator_redraw_pending = False
+        self._indicator_render_count += 1
+        try:
+            self._render()
+        except Exception as e:  # noqa: BLE001
+            try:
+                self._status.warn(f"Indicator render error: {e}")
             except Exception:  # noqa: BLE001
                 pass
 

@@ -340,6 +340,16 @@ class IndicatorDialog(BaseModalDialog):
     #: specify ``ma_type``.
     _last_used_ma_type: ClassVar[str] = "SMA"
 
+    #: Whether this dialog DEFERS chart renders while editing (the
+    #: snappy "Apply"-button flow). True for the full Manage Indicators
+    #: dialog; the single-overlay quick-edit popup
+    #: (:class:`_PerIndicatorDialog`) overrides this to ``False`` so it
+    #: keeps rendering live (a focused single-indicator edit benefits
+    #: from instant feedback — deliberate exception, see its spec). The
+    #: deferred-apply meta-test classifies every indicator-editing window
+    #: by this flag.
+    _DEFERS_RENDER: ClassVar[bool] = True
+
     def __init__(
         self,
         app: tk.Tk,
@@ -428,6 +438,18 @@ class IndicatorDialog(BaseModalDialog):
         # reverts to its pre-dialog state.
         self._snapshot = self._manager.to_dict()
         self._dirty = False
+        # Deferred-render ("Apply") state. ``_pending_dirty`` = there are
+        # indicator changes the chart has NOT been repainted with yet
+        # (distinct from ``_dirty`` = there is session state worth
+        # keeping). ``_render_deferred_active`` tracks whether we have an
+        # outstanding ``app._begin_defer_indicator_render`` to balance on
+        # teardown. ``_auto_apply_var`` (default OFF) flips to live
+        # rendering. Only meaningful when ``_defers_render`` is True.
+        self._defers_render: bool = bool(type(self)._DEFERS_RENDER)
+        self._pending_dirty = False
+        self._render_deferred_active = False
+        self._auto_apply_var = tk.BooleanVar(value=False)
+        self._apply_btn: ttk.Button | None = None
         self._base_title = "Manage Indicators"
         # Build the chrome.
         self._build_layout()
@@ -459,6 +481,12 @@ class IndicatorDialog(BaseModalDialog):
         # ``_finalize_modal`` call at the end of __init__; Ctrl+S is
         # an IndicatorDialog-specific extension layered on top.
         self.bind("<Control-s>", lambda _e: self._on_save_close())
+        # Apply (deferred-render flush). Ctrl+Return — NOT bare Return,
+        # which commits the focused param Entry/Spinbox/Combobox. Fires
+        # from anywhere in the dialog, including inside a field.
+        if self._defers_render:
+            self.bind("<Control-Return>", lambda _e: self._apply())
+            self.bind("<Control-KP_Enter>", lambda _e: self._apply())
         # Resize reactivity (audit item #1): bind the Toplevel's
         # ``<Configure>`` event so dragging the dialog edge re-flows
         # each row's param grid. Debounced 100 ms; uses the
@@ -471,6 +499,16 @@ class IndicatorDialog(BaseModalDialog):
         except tk.TclError:
             self._rows_resize_bind_id = None
         self.bind("<Destroy>", self._on_destroy_resize_binding, add="+")
+        # Backstop: balance any outstanding render-deferral if the window
+        # is destroyed by a path other than _teardown (which also ends
+        # it, idempotently). Filter to the Toplevel's OWN destroy so a
+        # child-widget destroy during a row rebuild can't end deferral
+        # mid-edit.
+        self.bind(
+            "<Destroy>",
+            lambda e: self._end_render_deferral() if e.widget is self else None,
+            add="+",
+        )
 
         # Final modal wiring — wire ESC/WM_DELETE to ``_on_cancel`` and
         # leave Return unbound (``primary=None``). ``grab=False`` is
@@ -478,6 +516,14 @@ class IndicatorDialog(BaseModalDialog):
         # user must be able to interact with the chart while it's
         # open). See class docstring + CLAUDE.md notes.
         self._finalize_modal(primary=None, cancel=self._on_cancel, grab=False)
+        # Enter deferred-render mode last, once the window is fully built
+        # and seeded. From here, per-row edits mutate the manager but do
+        # NOT repaint the chart until the user clicks Apply (or Save and
+        # Close). Scoped to this dialog via the app's depth counter; the
+        # quick-edit popup (``_DEFERS_RENDER=False``) skips this and keeps
+        # rendering live.
+        if self._defers_render and not self._auto_apply_var.get():
+            self._begin_render_deferral()
 
     # ------------------------------------------------------------------
     # Theme
@@ -555,6 +601,9 @@ class IndicatorDialog(BaseModalDialog):
     def _teardown(self) -> None:
         """Mechanical teardown: unsubscribe, cancel debounces, clear
         singleton, destroy window. Shared by cancel and save-close."""
+        # Balance any outstanding render-deferral FIRST so the app's
+        # depth counter never leaks if a later step raises.
+        self._end_render_deferral()
         try:
             self._unsubscribe()
         except Exception:  # noqa: BLE001
@@ -633,6 +682,10 @@ class IndicatorDialog(BaseModalDialog):
             except tk.TclError:
                 pass
             return
+        # Implicit Apply: never keep a config the user hasn't seen
+        # rendered. Flushes one render iff there are pending changes
+        # (no-op otherwise). Live mode already painted.
+        self._apply()
         self._snapshot = None  # discard the revert point
         self._teardown()
 
@@ -712,6 +765,110 @@ class IndicatorDialog(BaseModalDialog):
             pass
 
     # ------------------------------------------------------------------
+    # Deferred render / Apply (snappy indicator editing)
+    # ------------------------------------------------------------------
+
+    def _begin_render_deferral(self) -> None:
+        """Ask the app to suppress indicator-driven chart paints.
+
+        Idempotent per dialog: tracks ``_render_deferred_active`` so a
+        second call (e.g. toggling auto-apply off then on then off)
+        cannot leave the app's depth counter unbalanced. No-op when the
+        app has no defer hook (stub-root unit tests)."""
+        if self._render_deferred_active:
+            return
+        begin = getattr(self._app, "_begin_defer_indicator_render", None)
+        if not callable(begin):
+            return
+        try:
+            begin()
+            self._render_deferred_active = True
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _end_render_deferral(self) -> None:
+        """Balance :meth:`_begin_render_deferral` (idempotent)."""
+        if not self._render_deferred_active:
+            return
+        end = getattr(self._app, "_end_defer_indicator_render", None)
+        self._render_deferred_active = False
+        if callable(end):
+            try:
+                end()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _mark_pending(self) -> None:
+        """Flag that the chart has un-rendered indicator changes.
+
+        Called on every dialog-driven manager mutation. A no-op in live
+        mode (``_defers_render`` False or auto-apply on) — there the
+        chart already repainted, so nothing is pending. Enables the
+        Apply button as the pending signal."""
+        if not self._render_deferred_active:
+            return
+        self._pending_dirty = True
+        self._update_apply_state()
+
+    def _update_apply_state(self) -> None:
+        """Enable Apply iff there are un-rendered changes."""
+        btn = getattr(self, "_apply_btn", None)
+        if btn is None:
+            return
+        try:
+            btn.configure(state="normal" if self._pending_dirty else "disabled")
+        except tk.TclError:
+            pass
+
+    def _apply(self) -> None:
+        """Render the current indicator settings to the chart now.
+
+        Flushes exactly one ``_render`` via the app, clears the pending
+        flag, and makes this the new Cancel baseline (so a later Cancel
+        reverts only the changes made *after* this Apply — classic
+        Apply semantics). Guarded no-op when nothing is pending (keeps
+        the Ctrl+Return shortcut harmless)."""
+        if not self._defers_render or not self._pending_dirty:
+            return
+        flush = getattr(self._app, "_flush_indicator_render", None)
+        if callable(flush):
+            try:
+                flush()
+            except Exception:  # noqa: BLE001
+                pass
+        self._pending_dirty = False
+        # Apply becomes the revert point: Cancel after Apply keeps the
+        # applied work and only discards subsequent un-applied edits.
+        try:
+            self._snapshot = self._manager.to_dict()
+        except Exception:  # noqa: BLE001
+            pass
+        self._update_apply_state()
+
+    def _on_auto_apply_toggled(self) -> None:
+        """Auto-apply checkbox flipped.
+
+        ON  → resume live rendering (end deferral) and flush the current
+              state so the chart immediately reflects it.
+        OFF → re-enter deferral (subsequent edits wait for Apply)."""
+        if not self._defers_render:
+            return
+        if bool(self._auto_apply_var.get()):
+            self._end_render_deferral()
+            # Push current state to the chart so turning auto-apply on
+            # behaves like an immediate Apply.
+            flush = getattr(self._app, "_flush_indicator_render", None)
+            if callable(flush):
+                try:
+                    flush()
+                except Exception:  # noqa: BLE001
+                    pass
+            self._pending_dirty = False
+            self._update_apply_state()
+        else:
+            self._begin_render_deferral()
+
+    # ------------------------------------------------------------------
     # Layout
     # ------------------------------------------------------------------
 
@@ -755,6 +912,15 @@ class IndicatorDialog(BaseModalDialog):
         ttk.Button(bar, text="Remove Selected",
                    command=self._on_click_remove).pack(side="left",
                                                        padx=(6, 0))
+        # Auto-apply toggle (deferred-render feature). Default OFF: edits
+        # wait for Apply. ON: edits render live (exploratory scrubbing).
+        # Only meaningful for the full dialog (the popup renders live).
+        if self._defers_render:
+            self._auto_apply_chk = ttk.Checkbutton(
+                bar, text="Auto-apply", variable=self._auto_apply_var,
+                command=self._on_auto_apply_toggled,
+            )
+            self._auto_apply_chk.pack(side="left", padx=(12, 0))
         self._budget_label = ttk.Label(bar, text="", foreground=WARN_AMBER)
         self._budget_label.pack(side="left", padx=(8, 0))
         ttk.Button(bar, text="Cancel",
@@ -764,6 +930,15 @@ class IndicatorDialog(BaseModalDialog):
             state="disabled",
         )
         self._save_close_btn.pack(side="right", padx=(0, 6))
+        # Apply (deferred-render flush) — sits left of Save and Close so
+        # it's closest to the rows it affects. Enabled only when there
+        # are un-rendered changes. Omitted entirely for live dialogs
+        # (the per-indicator popup), which never defer.
+        if self._defers_render:
+            self._apply_btn = ttk.Button(
+                bar, text="Apply", command=self._apply, state="disabled",
+            )
+            self._apply_btn.pack(side="right", padx=(0, 6))
         # --- Scrollable rows region --- fills the remaining middle space.
         # Canvas + Scrollbar + inner Frame triple is built by
         # :func:`_modal_base.make_scrollable_form` (audit item #5).
@@ -1639,6 +1814,9 @@ class IndicatorDialog(BaseModalDialog):
         if event in ("add", "remove", "update", "clear", "reorder",
                       "loaded", "preset_loaded"):
             self._mark_dirty()
+            # An external (non-own-commit) mutation while deferring means
+            # the chart is now behind — surface it via Apply.
+            self._mark_pending()
         try:
             if not self.winfo_exists():
                 return
@@ -2531,6 +2709,9 @@ class IndicatorDialog(BaseModalDialog):
         # here rather than in _on_manager_event because _reconciling
         # suppresses the event callback during our own commits.
         self._mark_dirty()
+        # Deferred-render: this commit mutated the manager but (in
+        # deferred mode) did not repaint the chart — light up Apply.
+        self._mark_pending()
 
     def _revert_row_to_last_good(self, row: _IndicatorRow) -> None:
         """After a validation failure, set every param widget back to
@@ -2697,3 +2878,4 @@ class IndicatorDialog(BaseModalDialog):
             pass
         self._selected_key.set(0)
         self._mark_dirty()
+        self._mark_pending()
