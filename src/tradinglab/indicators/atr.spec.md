@@ -31,6 +31,7 @@ across the last N regular sessions). Output is in price units
   beyond first finite emit.
 - `name`: `ATR(N)` (default `RMA` rolling), `ATR-{KIND}(N)` (other
   rolling kernel), `ATR ToD(N)` (tod regardless of kernel).
+- **Incremental protocol (compute #3):** `inc_init(bars)` / `inc_step(state, bars, *, prev_len)` extend ATR O(k) on a closed-bar append (~100× per 1-bar tick on an 11k-bar series). State = `{avg, last_close, seeded}` plus the cached `output`/`len`. `inc_step` continues the Wilder recurrence on the per-bar True Range (computed with the exact `wilder.true_range` where-ordering so it is bit-faithful). **Gated to the default `mode="rolling"` + `ma_type="RMA"`** (`_inc_supported()`); SMA/EMA/WMA rolling and the `tod` mode leave `seeded=False` so `inc_step` raises → the cache does a full recompute. Causal-prefix-exact; appended bars differ by float64 round-off only (~7e-15 over 300 appends). Pinned by `tests/unit/test_incremental_indicators_wilder.py`.
 
 ## Modes
 

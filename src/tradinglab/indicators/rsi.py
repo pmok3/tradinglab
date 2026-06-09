@@ -88,4 +88,75 @@ class RSI(BaseIndicator):
         out[n:] = rsi
         return {"rsi": out}
 
+    # --- incremental protocol (closed-bar appends) ----------------------
+    # RSI is a Wilder recurrence on the average gain / loss. A closed-bar
+    # append extends it in O(k) from the committed averages instead of a
+    # full O(N) recompute. The kernel is causal so the cached prefix is
+    # bit-identical to a full recompute; only the k appended bars differ
+    # from the vectorized kernel by float64 round-off (pinned within a
+    # tight tolerance by tests/unit/test_incremental_indicators_wilder.py).
+
+    def inc_init(self, bars: Bars) -> dict[str, object]:
+        out = self.compute_arr(bars)["rsi"]
+        closes = bars.close
+        n_bars = int(closes.size)
+        L = self.length
+        state: dict[str, object] = {"output": {"rsi": out}, "len": n_bars}
+        if n_bars > L:
+            deltas = np.diff(closes)
+            gains = np.where(deltas > 0, deltas, 0.0)
+            losses = np.where(deltas < 0, -deltas, 0.0)
+            ag = wilder_smooth_avg(gains, L)
+            al = wilder_smooth_avg(losses, L)
+            state["avg_gain"] = float(ag[-1])
+            state["avg_loss"] = float(al[-1])
+            state["last_close"] = float(closes[-1])
+            state["seeded"] = True
+        else:
+            state["seeded"] = False
+        return state
+
+    def inc_step(
+        self, state: dict[str, object], bars: Bars, *, prev_len: int,
+    ) -> dict[str, object]:
+        closes = bars.close
+        n_bars = int(closes.size)
+        if n_bars <= prev_len:
+            raise ValueError(
+                f"RSI.inc_step requires growth: prev_len={prev_len}, new_len={n_bars}"
+            )
+        if not state.get("seeded"):
+            # Pre-seed appends (still in the warmup window) re-seed the
+            # Wilder average non-trivially — defer to a full recompute.
+            raise ValueError("RSI.inc_step: state not seeded yet")
+        L = self.length
+        q = (L - 1.0) / L
+        a = 1.0 / L
+        avg_gain = float(state["avg_gain"])  # type: ignore[arg-type]
+        avg_loss = float(state["avg_loss"])  # type: ignore[arg-type]
+        prev_c = float(state["last_close"])  # type: ignore[arg-type]
+        old_out = state["output"]["rsi"]  # type: ignore[index]
+        new_out = np.empty(n_bars, dtype=np.float64)
+        new_out[:prev_len] = old_out
+        for j in range(prev_len, n_bars):
+            c = float(closes[j])
+            delta = c - prev_c
+            gain = delta if delta > 0.0 else 0.0
+            loss = -delta if delta < 0.0 else 0.0
+            avg_gain = avg_gain * q + gain * a
+            avg_loss = avg_loss * q + loss * a
+            if avg_loss > 0.0:
+                new_out[j] = 100.0 - 100.0 / (1.0 + avg_gain / avg_loss)
+            else:
+                new_out[j] = 100.0
+            prev_c = c
+        return {
+            "output": {"rsi": new_out},
+            "len": n_bars,
+            "avg_gain": avg_gain,
+            "avg_loss": avg_loss,
+            "last_close": prev_c,
+            "seeded": True,
+        }
+
 

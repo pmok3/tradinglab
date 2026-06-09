@@ -64,6 +64,7 @@ from .sessions import (
     tod_key_np,
 )
 from .wilder import true_range as _true_range
+from .wilder import wilder_smooth_avg as _wilder_smooth_avg
 
 _DEFAULT_COLOR_BY_MA: dict[str, str] = {
     "RMA": "#ffbb78",          # tab20 light-orange — off-palette by design
@@ -198,6 +199,75 @@ class ATR(BaseIndicator):
 
         # mode == "tod" — session bucketing path.
         return self._compute_tod_arr(bars, tr)
+
+    # --- incremental protocol (closed-bar appends) ----------------------
+    # Only the default rolling Wilder (RMA) form is incremental: it is a
+    # first-order recurrence on the True Range, so a closed-bar append
+    # extends it in O(k) from the committed average. SMA/EMA/WMA rolling
+    # and the time-of-day mode fall back to a full recompute (inc_step
+    # raises → the cache recomputes). The kernel is causal so the cached
+    # prefix is bit-identical; the k appended bars differ from the
+    # vectorized kernel only by float64 round-off (pinned by
+    # tests/unit/test_incremental_indicators_wilder.py).
+
+    def _inc_supported(self) -> bool:
+        return self.mode == "rolling" and self.ma_type == "RMA"
+
+    def inc_init(self, bars: Bars) -> dict[str, object]:
+        out = self.compute_arr(bars)["atr"]
+        n_bars = len(bars)
+        L = self.length
+        state: dict[str, object] = {"output": {"atr": out}, "len": n_bars}
+        if self._inc_supported() and n_bars > L:
+            tr = _true_range(bars.high, bars.low, bars.close)
+            avg = _wilder_smooth_avg(tr, L)
+            state["avg"] = float(avg[-1])
+            state["last_close"] = float(bars.close[-1])
+            state["seeded"] = True
+        else:
+            state["seeded"] = False
+        return state
+
+    def inc_step(
+        self, state: dict[str, object], bars: Bars, *, prev_len: int,
+    ) -> dict[str, object]:
+        n_bars = len(bars)
+        if n_bars <= prev_len:
+            raise ValueError(
+                f"ATR.inc_step requires growth: prev_len={prev_len}, new_len={n_bars}"
+            )
+        if not (self._inc_supported() and state.get("seeded")):
+            raise ValueError("ATR.inc_step: unsupported config or unseeded state")
+        L = self.length
+        q = (L - 1.0) / L
+        a = 1.0 / L
+        avg = float(state["avg"])  # type: ignore[arg-type]
+        prev_c = float(state["last_close"])  # type: ignore[arg-type]
+        highs, lows, closes = bars.high, bars.low, bars.close
+        old_out = state["output"]["atr"]  # type: ignore[index]
+        new_out = np.empty(n_bars, dtype=np.float64)
+        new_out[:prev_len] = old_out
+        for j in range(prev_len, n_bars):
+            h = float(highs[j])
+            lo = float(lows[j])
+            c = float(closes[j])
+            # Exact replica of wilder.true_range's where-ordering so the
+            # incremental TR is bit-identical to the vectorized path.
+            hl = h - lo
+            hpc = abs(h - prev_c)
+            lpc = abs(lo - prev_c)
+            tr = hpc if hpc > hl else hl
+            tr = lpc if lpc > tr else tr
+            avg = avg * q + tr * a
+            new_out[j] = avg
+            prev_c = c
+        return {
+            "output": {"atr": new_out},
+            "len": n_bars,
+            "avg": avg,
+            "last_close": prev_c,
+            "seeded": True,
+        }
 
 
     def _compute_tod_arr(self, bars: Bars, tr: np.ndarray) -> dict[str, np.ndarray]:

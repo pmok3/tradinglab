@@ -218,12 +218,16 @@ def test_memo_advance_drops_unsupported_indicator():
     """Indicator without inc_init/inc_step → falls back (drops cache entry)."""
     candles = _random_walk(40, seed=43)
     memo = IndicatorMemo(candles=list(candles[:30]))
-    # ATR has compute_arr but (today) no inc_step.
-    memo.get("atr", {"length": 14})
+    # MACD has compute_arr but (today) no inc_step. (RSI/ATR are now
+    # incremental — see test_incremental_indicators_wilder.py — so this
+    # negative case uses MACD instead.)
+    macd_params = {"fast_length": 12, "slow_length": 26, "signal_length": 9}
+    memo.get("macd", macd_params)
     sink = {}
     new_bars = Bars.from_candles(candles)
     memo.advance_for_append(new_bars, prev_len=30, stats_sink=sink)
-    assert ("atr", (("length", 14),)) not in memo.cache
+    macd_key = ("macd", tuple(sorted(macd_params.items())))
+    assert macd_key not in memo.cache
     assert sink.get("incremental_falls_back") == 1
     assert sink.get("incremental_steps", 0) == 0
 

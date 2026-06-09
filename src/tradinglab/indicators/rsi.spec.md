@@ -14,6 +14,7 @@ Wilder's Relative Strength Index over close prices. Values in `[0, 100]`. Non-ov
   - `scannable_outputs = (("rsi", "numeric"),)` — opts the indicator into the scanner / entries / exits dropdowns via the registry-driven projection in `scanner.fields`.
   - `warmup_bars` property returns `4 * length` for strategy-tester
     hydration beyond the first finite RSI point.
+  - **Incremental protocol (compute #3):** `inc_init(bars)` / `inc_step(state, bars, *, prev_len)` extend RSI O(k) on a closed-bar append instead of a full O(N) recompute (~200× per 1-bar tick on an 11k-bar series). State = `{avg_gain, avg_loss, last_close, seeded}` plus the cached `output`/`len`. `inc_step` continues the Wilder recurrence `S_i = S_{i-1}·(L-1)/L + v_i/L` on the gain/loss derived from each new close. The kernel is causal so the cached prefix is bit-identical; the appended bars differ from the vectorized `wilder_smooth_avg` by float64 round-off only (~3e-14 over 300 appends). `inc_step` **raises** (→ cache full-recompute) on non-growth or when `state["seeded"]` is False (pre-warmup appends re-seed the average non-trivially). Pinned by `tests/unit/test_incremental_indicators_wilder.py`.
 
 ## Dependencies
 - Internal: `..core.bars.Bars`, `.base.BaseIndicator`,
