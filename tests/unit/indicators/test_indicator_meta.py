@@ -162,14 +162,11 @@ _INCREMENTAL_EXPECTED: dict[str, bool] = {
     "bbands": True,     # SMA + rolling sums
     "adx": True,        # chained Wilder recurrences
     "vwap": True,       # session-cumulative
+    "avwap": True,      # running Welford from a fixed anchor (compute #6)
     # --- NOT incremental (rationale) ---
     # Keltner: EMA basis is incremental but the ATR band uses the same
     #   rolling machinery; deferred (compound, lower priority).
     "keltner": False,
-    # Anchored VWAP: anchor can move arbitrarily (user re-anchors) → the
-    #   cumulative window is not append-only. Welford from a fixed anchor
-    #   is a future inc candidate (compute #6).
-    "avwap": False,
     # SMI: double-smoothed stochastic; vectorized but the inc state is a
     #   2-stage EMA cascade — deferred.
     "smi": False,
@@ -223,7 +220,6 @@ def test_incremental_coverage_is_classified():
 #: flagged.)
 _LOOP_ALLOWLIST: dict[str, str] = {
     "vwap": "per-session cumulative loop is O(#days), not O(#bars)",
-    "avwap": "anchored running-Welford variance is a sequential recurrence",
     "prior_day_hlc": "per-day group loop is O(#days)",
 }
 

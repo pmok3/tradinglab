@@ -76,6 +76,19 @@ in `tests/smoke/test_smoke_full.py`.
 - `_format_anchor_for_label(anchor_ts: str) -> str` — module-level helper backing the `legend_label` override. Pure: date-only strings pass through; datetime strings parsed via `datetime.fromisoformat` then formatted with the rules above; unparseable strings fall back to a `T → space` substitution so the legend never raises.
 - `compute(candles) -> {"avwap", "upper1", "lower1", "upper2", "lower2"}`.
   Always returns all five keys; unrequested band keys are NaN-filled.
+- `compute_arr(bars) -> {...}` — thin wrapper returning
+  `self._compute_with_state(bars)[0]`.
+- `_compute_with_state(bars) -> (out, state)` — the `compute_arr` core
+  that ALSO returns the final Welford state
+  `{start_idx, cum_w, mean, m2}` so `inc_init` can seed an incremental
+  continuation without a second pass.
+- `_avwap_emit(p, v, cum_w, mean, m2, want_1, want_2, track_var)` —
+  module-level helper that processes ONE regular bar of the Welford
+  recurrence and returns `(avwap, upper1, lower1, upper2, lower2,
+  cum_w, mean, m2)`. Shared by `_compute_with_state` and `inc_step`
+  so the batch and incremental paths are byte-identical.
+- `inc_init(bars)` / `inc_step(state, bars, *, prev_len)` — incremental
+  protocol (see "Incremental protocol" below).
 - `first_eligible_anchor_ts(candles) -> str` — ISO date of the first
   non-gap regular-session bar, or `""`. Used by
   `ChartApp._materialize_blank_avwap_anchors`.
@@ -135,3 +148,34 @@ for i in [start_idx, n):
         std = sqrt(max(0, m2 / cum_w))
         emit ±1σ and/or ±2σ
 ```
+
+## Incremental protocol (closed-bar appends)
+Anchored VWAP is a running Welford recurrence from a **fixed** anchor:
+appending closed bars at the end never moves the anchor, so the
+accumulation simply extends `O(k)` from the committed
+`(cum_w, mean, m2)`. Both the batch (`_compute_with_state`) and
+incremental (`inc_step`) paths funnel each bar through the same
+`_avwap_emit` helper, so an incremental continuation is **byte-identical**
+to a full recompute (not merely round-off-close).
+
+- `inc_init(bars) -> {"output", "len", seeded, [cum_w, mean, m2]}` —
+  runs `_compute_with_state` once and captures the final Welford state.
+  `seeded=True` only once the anchor has actually been reached
+  (`start_idx is not None`); otherwise `seeded=False` and no state is
+  carried.
+- `inc_step(state, bars, *, prev_len)` — copies the cached `output`
+  prefix, then walks `[prev_len, n)` through `_avwap_emit` from the
+  carried `(cum_w, mean, m2)`. Returns the extended output plus the new
+  state.
+- **Fallback (full recompute) is triggered by raising:**
+  `inc_step` raises `ValueError` when `n <= prev_len` (non-growth) or
+  when `state["seeded"]` is false (anchor not yet reached). Per the
+  cache contract (`indicators/cache.py:get_or_compute_incremental`), any
+  raise falls back to a clean full recompute — so the unseeded /
+  anchor-still-ahead case is always correct, just not fast.
+
+Pinned by the registry-driven parity meta-test in
+`tests/unit/indicators/test_indicator_meta.py`
+(`test_incremental_parity_matches_full_recompute`), which asserts the
+running incremental output equals a from-scratch recompute at every
+length over a multi-day intraday RTH fixture.

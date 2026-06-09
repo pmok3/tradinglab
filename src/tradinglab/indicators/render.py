@@ -480,17 +480,21 @@ def _draw_histogram(
 
     finite_mask = np.isfinite(arr)
     classes = classify_histogram(arr)
-    segments = []
-    colors = []
-    for i in range(arr.size):
-        if not finite_mask[i]:
-            continue
-        c = int(classes[i])
-        if c < 0:
-            continue
-        y_val = float(arr[i])
-        segments.append([(float(x[i]), 0.0), (float(x[i]), y_val)])
-        colors.append(palette[c])
+    # Vectorized segment + color build (compute #6): one bar = one vertical
+    # segment from y=0 to the histogram value, coloured by its 0..3 class.
+    # Replaces a per-bar Python append loop.
+    valid = finite_mask & (classes >= 0)
+    idx = np.flatnonzero(valid)
+    x_arr = np.asarray(x, dtype=np.float64)
+    xs = x_arr[idx]
+    ys = arr[idx].astype(np.float64)
+    segments = np.empty((idx.size, 2, 2), dtype=np.float64)
+    segments[:, 0, 0] = xs
+    segments[:, 0, 1] = 0.0
+    segments[:, 1, 0] = xs
+    segments[:, 1, 1] = ys
+    palette_arr = np.array(palette, dtype=object)
+    colors = list(palette_arr[classes[idx].astype(np.int64)])
 
     prior = existing.get(key)
     if prior is not None and not isinstance(prior, LineCollection):

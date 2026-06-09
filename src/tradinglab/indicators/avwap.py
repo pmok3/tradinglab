@@ -48,6 +48,46 @@ _BANDS_CHOICES: tuple[str, ...] = ("off", "1σ", "2σ", "both")
 _OUTPUT_KEYS: tuple[str, ...] = ("avwap", "upper1", "lower1", "upper2", "lower2")
 
 
+def _avwap_emit(
+    p: float, v: float, cum_w: float, mean: float, m2: float,
+    want_1: bool, want_2: bool, track_var: bool,
+) -> tuple[float, float, float, float, float, float, float, float]:
+    """Process one regular bar of the anchored-VWAP Welford recurrence.
+
+    Returns ``(avwap, upper1, lower1, upper2, lower2, cum_w, mean, m2)`` with
+    NaN for any output not emitted. Shared by ``compute_arr`` and the
+    incremental ``inc_step`` so the two paths are byte-identical.
+    """
+    avwap = u1 = l1 = u2 = l2 = np.nan
+    if v <= 0.0:
+        if cum_w > 0.0:
+            avwap = mean
+            if track_var:
+                std = math.sqrt(max(0.0, m2 / cum_w))
+                if want_1:
+                    u1 = mean + std
+                    l1 = mean - std
+                if want_2:
+                    u2 = mean + 2.0 * std
+                    l2 = mean - 2.0 * std
+        return avwap, u1, l1, u2, l2, cum_w, mean, m2
+    new_w = cum_w + v
+    delta = p - mean
+    mean = mean + (v / new_w) * delta
+    m2 = m2 + v * delta * (p - mean)
+    cum_w = new_w
+    avwap = mean
+    if track_var and cum_w > 0.0:
+        std = math.sqrt(max(0.0, m2 / cum_w))
+        if want_1:
+            u1 = mean + std
+            l1 = mean - std
+        if want_2:
+            u2 = mean + 2.0 * std
+            l2 = mean - 2.0 * std
+    return avwap, u1, l1, u2, l2, cum_w, mean, m2
+
+
 def _format_anchor_for_label(anchor_ts: str) -> str:
     """Render an ISO-8601 anchor timestamp readably for the legend.
 
@@ -186,34 +226,42 @@ class AnchoredVWAP(BaseIndicator):
     # --- public --------------------------------------------------------
 
     def compute_arr(self, bars: Bars) -> dict[str, np.ndarray]:
+        return self._compute_with_state(bars)[0]
+
+    def _compute_with_state(
+        self, bars: Bars,
+    ) -> tuple[dict[str, np.ndarray], dict[str, object]]:
+        """``compute_arr`` core that also returns the final Welford state
+        ``{start_idx, cum_w, mean, m2}`` so :meth:`inc_init` can seed an
+        incremental continuation without a second pass."""
         n = len(bars)
         out: dict[str, np.ndarray] = {
             k: np.full(n, np.nan, dtype=np.float64) for k in _OUTPUT_KEYS
         }
+        empty_state: dict[str, object] = {
+            "start_idx": None, "cum_w": 0.0, "mean": 0.0, "m2": 0.0,
+        }
         if n == 0:
-            return out
+            return out, empty_state
 
         anchor_dt = _parse_anchor(self.anchor_ts)
         if anchor_dt is None:
-            # Default anchor — use first non-gap candle.
             if bars.candles is None:
-                return out
+                return out, empty_state
             start_idx = _find_start_index(bars.candles, None)
         else:
-            # Vectorised search via timestamps array.
             anchor_np = np.datetime64(_strip_tz(anchor_dt), "ns")
             keep = bars.session != "gap"
             ts = bars.timestamps
             cand = np.flatnonzero(keep & (ts >= anchor_np))
             start_idx = int(cand[0]) if cand.size else None
         if start_idx is None:
-            return out
+            return out, empty_state
 
         want_1 = self.bands in ("1σ", "both")
         want_2 = self.bands in ("2σ", "both")
         track_var = want_1 or want_2
 
-        # Pre-extract column views from the Bars.
         prices = _price_arr_avwap(bars, self.price_source)
         vols = bars.volume
         sess = bars.session
@@ -227,43 +275,89 @@ class AnchoredVWAP(BaseIndicator):
         u2, l2 = out["upper2"], out["lower2"]
 
         for i in range(start_idx, n):
-            if sess[i] == "gap":
-                continue
             if sess[i] != "regular":
                 continue
             v_raw = float(vols[i])
             v = v_raw if (np.isfinite(v_raw) and v_raw > 0.0) else 0.0
-            if v <= 0.0:
-                if cum_w > 0.0:
-                    avwap_out[i] = mean
-                    if track_var:
-                        var = max(0.0, m2 / cum_w)
-                        std = math.sqrt(var)
-                        if want_1:
-                            u1[i] = mean + std
-                            l1[i] = mean - std
-                        if want_2:
-                            u2[i] = mean + 2.0 * std
-                            l2[i] = mean - 2.0 * std
-                continue
             p = float(prices[i])
-            new_w = cum_w + v
-            delta = p - mean
-            mean = mean + (v / new_w) * delta
-            m2 = m2 + v * delta * (p - mean)
-            cum_w = new_w
-            avwap_out[i] = mean
-            if track_var and cum_w > 0.0:
-                var = max(0.0, m2 / cum_w)
-                std = math.sqrt(var)
-                if want_1:
-                    u1[i] = mean + std
-                    l1[i] = mean - std
-                if want_2:
-                    u2[i] = mean + 2.0 * std
-                    l2[i] = mean - 2.0 * std
+            a, uu1, ll1, uu2, ll2, cum_w, mean, m2 = _avwap_emit(
+                p, v, cum_w, mean, m2, want_1, want_2, track_var)
+            avwap_out[i] = a
+            if want_1:
+                u1[i] = uu1
+                l1[i] = ll1
+            if want_2:
+                u2[i] = uu2
+                l2[i] = ll2
 
-        return out
+        state = {"start_idx": start_idx, "cum_w": cum_w, "mean": mean, "m2": m2}
+        return out, state
+
+    # --- incremental protocol (closed-bar appends) ----------------------
+    # Anchored VWAP is a running Welford recurrence from a FIXED anchor; an
+    # append at the end never moves the anchor, so the accumulation extends
+    # O(k) from the committed (cum_w, mean, m2). Both paths share
+    # :func:`_avwap_emit`, so the continuation is byte-identical to a full
+    # recompute. Seeded once the anchor has been reached.
+
+    def inc_init(self, bars: Bars) -> dict[str, object]:
+        out, st = self._compute_with_state(bars)
+        n = len(bars)
+        state: dict[str, object] = {"output": out, "len": n}
+        if st["start_idx"] is not None:
+            state["cum_w"] = st["cum_w"]
+            state["mean"] = st["mean"]
+            state["m2"] = st["m2"]
+            state["seeded"] = True
+        else:
+            state["seeded"] = False
+        return state
+
+    def inc_step(
+        self, state: dict[str, object], bars: Bars, *, prev_len: int,
+    ) -> dict[str, object]:
+        n = len(bars)
+        if n <= prev_len:
+            raise ValueError(
+                f"AVWAP.inc_step requires growth: prev_len={prev_len}, new_len={n}"
+            )
+        if not state.get("seeded"):
+            raise ValueError("AVWAP.inc_step: anchor not yet reached (unseeded)")
+        want_1 = self.bands in ("1σ", "both")
+        want_2 = self.bands in ("2σ", "both")
+        track_var = want_1 or want_2
+        cum_w = float(state["cum_w"])  # type: ignore[arg-type]
+        mean = float(state["mean"])  # type: ignore[arg-type]
+        m2 = float(state["m2"])  # type: ignore[arg-type]
+        prices = _price_arr_avwap(bars, self.price_source)
+        vols = bars.volume
+        sess = bars.session
+        old = state["output"]  # type: ignore[index]
+        new_out: dict[str, np.ndarray] = {}
+        for k in _OUTPUT_KEYS:
+            col = np.empty(n, dtype=np.float64)
+            col[:prev_len] = old[k]
+            col[prev_len:] = np.nan
+            new_out[k] = col
+        for i in range(prev_len, n):
+            if sess[i] != "regular":
+                continue
+            v_raw = float(vols[i])
+            v = v_raw if (np.isfinite(v_raw) and v_raw > 0.0) else 0.0
+            p = float(prices[i])
+            a, uu1, ll1, uu2, ll2, cum_w, mean, m2 = _avwap_emit(
+                p, v, cum_w, mean, m2, want_1, want_2, track_var)
+            new_out["avwap"][i] = a
+            if want_1:
+                new_out["upper1"][i] = uu1
+                new_out["lower1"][i] = ll1
+            if want_2:
+                new_out["upper2"][i] = uu2
+                new_out["lower2"][i] = ll2
+        return {
+            "output": new_out, "len": n,
+            "cum_w": cum_w, "mean": mean, "m2": m2, "seeded": True,
+        }
 
 
 
