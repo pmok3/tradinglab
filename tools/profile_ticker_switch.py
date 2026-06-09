@@ -26,6 +26,20 @@ from pathlib import Path
 os.environ.setdefault("TRADINGLAB_HEADLESS", "1")
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
+# CACHE ISOLATION (critical): this profiler installs a FAKE fetcher and
+# builds a real ChartApp, which auto-loads the default AMD primary + SPY
+# compare. Without isolating the data dir, those synthetic 150-bar fakes
+# get saved straight over the user's REAL %LOCALAPPDATA%\TradingLab cache
+# (AMD/SPY .jsonl), plus the TESTSYM* files this script switches to.
+# TRADINGLAB_DATA_DIR takes precedence over every other root (see
+# tradinglab.paths) and MUST be set before any tradinglab import, since
+# paths.py resolves the root on first use. Force-set (not setdefault) so
+# the profiler can NEVER touch real data, even if the env already points
+# somewhere. The throwaway dir is left in TEMP for post-hoc inspection.
+import tempfile as _tempfile  # noqa: E402
+
+os.environ["TRADINGLAB_DATA_DIR"] = _tempfile.mkdtemp(prefix="tl_profile_cache_")
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
