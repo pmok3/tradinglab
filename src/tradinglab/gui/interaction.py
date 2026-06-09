@@ -2237,7 +2237,7 @@ class InteractionMixin:
                 ax = ps.get(key)
                 if ax is not None:
                     axes.append(ax)
-            for ax in ps.get("indicator_axes", []) or []:
+            for ax in ps.get("ind_axes", []) or []:
                 if ax is not None:
                     axes.append(ax)
             for ax in axes:

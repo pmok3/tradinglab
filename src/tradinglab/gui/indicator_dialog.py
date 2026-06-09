@@ -443,12 +443,18 @@ class IndicatorDialog(BaseModalDialog):
         # (distinct from ``_dirty`` = there is session state worth
         # keeping). ``_render_deferred_active`` tracks whether we have an
         # outstanding ``app._begin_defer_indicator_render`` to balance on
-        # teardown. ``_auto_apply_var`` (default OFF) flips to live
-        # rendering. Only meaningful when ``_defers_render`` is True.
+        # teardown. ``_auto_apply_var`` (default ON → render live) gates
+        # whether per-edit chart paints happen immediately. Default ON
+        # makes Manage Indicators render live: the recent perf work
+        # (vectorized indicators + scanner + the live-tick blit) made the
+        # deferred "Apply" stopgap — built for slow chart loads —
+        # unnecessary, and live rendering correctly spawns new lower panes
+        # (e.g. RRVOL) on add. Unchecking the box restores the deferred +
+        # Apply flow. Only meaningful when ``_defers_render`` is True.
         self._defers_render: bool = bool(type(self)._DEFERS_RENDER)
         self._pending_dirty = False
         self._render_deferred_active = False
-        self._auto_apply_var = tk.BooleanVar(value=False)
+        self._auto_apply_var = tk.BooleanVar(value=True)
         self._apply_btn: ttk.Button | None = None
         self._base_title = "Manage Indicators"
         # Build the chrome.
@@ -516,12 +522,12 @@ class IndicatorDialog(BaseModalDialog):
         # user must be able to interact with the chart while it's
         # open). See class docstring + CLAUDE.md notes.
         self._finalize_modal(primary=None, cancel=self._on_cancel, grab=False)
-        # Enter deferred-render mode last, once the window is fully built
-        # and seeded. From here, per-row edits mutate the manager but do
-        # NOT repaint the chart until the user clicks Apply (or Save and
-        # Close). Scoped to this dialog via the app's depth counter; the
-        # quick-edit popup (``_DEFERS_RENDER=False``) skips this and keeps
-        # rendering live.
+        # Live by default (auto-apply ON): per-row edits mutate the manager
+        # AND repaint the chart immediately. Only when the user unchecks
+        # Auto-apply do we enter deferred-render mode — edits then wait for
+        # the Apply button (or Save and Close). Scoped to this dialog via
+        # the app's depth counter; the quick-edit popup
+        # (``_DEFERS_RENDER=False``) always renders live.
         if self._defers_render and not self._auto_apply_var.get():
             self._begin_render_deferral()
 
@@ -912,8 +918,9 @@ class IndicatorDialog(BaseModalDialog):
         ttk.Button(bar, text="Remove Selected",
                    command=self._on_click_remove).pack(side="left",
                                                        padx=(6, 0))
-        # Auto-apply toggle (deferred-render feature). Default OFF: edits
-        # wait for Apply. ON: edits render live (exploratory scrubbing).
+        # Auto-apply toggle. Default ON: indicator edits render live (the
+        # recent perf work made the deferred "Apply" stopgap unnecessary).
+        # Uncheck to restore the deferred flow (edits wait for Apply).
         # Only meaningful for the full dialog (the popup renders live).
         if self._defers_render:
             self._auto_apply_chk = ttk.Checkbutton(
