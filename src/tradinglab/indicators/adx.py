@@ -198,3 +198,128 @@ class ADX(BaseIndicator):
         return {"plus_di": plus_di_out, "minus_di": minus_di_out,
                 "adx": adx_out}
 
+    # --- incremental protocol (closed-bar appends) ----------------------
+    # ADX is a chain of Wilder recurrences: sum-smoothed TR / +DM / -DM →
+    # +DI / -DI → DX → average-smoothed ADX. A closed-bar append extends
+    # the whole chain O(k) from the committed smoothed sums + ADX value.
+    # All recurrences are causal so the cached prefix is bit-identical;
+    # appended bars differ from the vectorized kernel by float64 round-off.
+
+    def inc_init(self, bars: Bars) -> dict[str, object]:
+        out = self.compute_arr(bars)
+        n_bars = len(bars)
+        L = self.length
+        state: dict[str, object] = {"output": out, "len": n_bars}
+        if n_bars > 2 * L:
+            highs, lows, closes = bars.high, bars.low, bars.close
+            tr = _true_range(highs, lows, closes)
+            up = np.empty(n_bars, dtype=np.float64)
+            down = np.empty(n_bars, dtype=np.float64)
+            up[0] = np.nan
+            down[0] = np.nan
+            up[1:] = highs[1:] - highs[:-1]
+            down[1:] = lows[:-1] - lows[1:]
+            plus_dm = np.where((up > down) & (up > 0), up, 0.0)
+            minus_dm = np.where((down > up) & (down > 0), down, 0.0)
+            plus_dm[0] = np.nan
+            minus_dm[0] = np.nan
+            str_ = _wilder_smooth_sum(tr, L)
+            spdm = _wilder_smooth_sum(plus_dm, L)
+            smdm = _wilder_smooth_sum(minus_dm, L)
+            s_tr = float(str_[-1])
+            s_pdm = float(spdm[-1])
+            s_mdm = float(smdm[-1])
+            adx_last = float(out["adx"][-1])
+            if all(np.isfinite(x) for x in (s_tr, s_pdm, s_mdm, adx_last)):
+                state["str"] = s_tr
+                state["spdm"] = s_pdm
+                state["smdm"] = s_mdm
+                state["adx"] = adx_last
+                state["last_high"] = float(highs[-1])
+                state["last_low"] = float(lows[-1])
+                state["last_close"] = float(closes[-1])
+                state["seeded"] = True
+                return state
+        state["seeded"] = False
+        return state
+
+    def inc_step(
+        self, state: dict[str, object], bars: Bars, *, prev_len: int,
+    ) -> dict[str, object]:
+        n_bars = len(bars)
+        if n_bars <= prev_len:
+            raise ValueError(
+                f"ADX.inc_step requires growth: prev_len={prev_len}, new_len={n_bars}"
+            )
+        if not state.get("seeded"):
+            raise ValueError("ADX.inc_step: unseeded state")
+        L = self.length
+        q = (L - 1.0) / L
+        str_ = float(state["str"])  # type: ignore[arg-type]
+        spdm = float(state["spdm"])  # type: ignore[arg-type]
+        smdm = float(state["smdm"])  # type: ignore[arg-type]
+        adx = float(state["adx"])  # type: ignore[arg-type]
+        last_high = float(state["last_high"])  # type: ignore[arg-type]
+        last_low = float(state["last_low"])  # type: ignore[arg-type]
+        last_close = float(state["last_close"])  # type: ignore[arg-type]
+        highs, lows, closes = bars.high, bars.low, bars.close
+        old = state["output"]  # type: ignore[index]
+        pdi_out = np.empty(n_bars, dtype=np.float64)
+        mdi_out = np.empty(n_bars, dtype=np.float64)
+        adx_out = np.empty(n_bars, dtype=np.float64)
+        pdi_out[:prev_len] = old["plus_di"]
+        mdi_out[:prev_len] = old["minus_di"]
+        adx_out[:prev_len] = old["adx"]
+        for j in range(prev_len, n_bars):
+            h = float(highs[j])
+            lo = float(lows[j])
+            c = float(closes[j])
+            up = h - last_high
+            down = last_low - lo
+            plus_dm = up if (up > down and up > 0.0) else 0.0
+            minus_dm = down if (down > up and down > 0.0) else 0.0
+            hl = h - lo
+            hpc = abs(h - last_close)
+            lpc = abs(lo - last_close)
+            tr = hpc if hpc > hl else hl
+            tr = lpc if lpc > tr else tr
+            str_ = str_ * q + tr
+            spdm = spdm * q + plus_dm
+            smdm = smdm * q + minus_dm
+            if not np.isfinite(str_):
+                plus_di = np.nan
+                minus_di = np.nan
+            elif str_ == 0.0:
+                plus_di = 0.0
+                minus_di = 0.0
+            else:
+                plus_di = 100.0 * spdm / str_
+                minus_di = 100.0 * smdm / str_
+            di_sum = plus_di + minus_di
+            if not np.isfinite(di_sum):
+                dx = np.nan
+            elif di_sum == 0.0:
+                dx = 0.0
+            else:
+                dx = 100.0 * abs(plus_di - minus_di) / di_sum
+            dx_eff = dx if np.isfinite(dx) else 0.0
+            adx = adx * q + dx_eff / L
+            pdi_out[j] = plus_di
+            mdi_out[j] = minus_di
+            adx_out[j] = adx
+            last_high = h
+            last_low = lo
+            last_close = c
+        return {
+            "output": {"plus_di": pdi_out, "minus_di": mdi_out, "adx": adx_out},
+            "len": n_bars,
+            "str": str_,
+            "spdm": spdm,
+            "smdm": smdm,
+            "adx": adx,
+            "last_high": last_high,
+            "last_low": last_low,
+            "last_close": last_close,
+            "seeded": True,
+        }
+

@@ -118,6 +118,85 @@ class VWAP(BaseIndicator):
             out[grp] = vw
         return {"vwap": out}
 
+    # --- incremental protocol (closed-bar appends) ----------------------
+    # VWAP is a per-session cumulative Σ(price·vol)/Σ(vol). A closed-bar
+    # append extends it O(k): accumulate within the current session,
+    # RESET at each new calendar (UTC) day, and skip non-regular bars
+    # (they receive NaN and contribute nothing) — exactly mirroring the
+    # per-group cumsum in ``compute_arr``. Non-intraday inputs leave
+    # ``seeded=False`` (compute_arr is all-NaN there) → full recompute.
+
+    def _day_int_at(self, bars: Bars, j: int) -> int:
+        return int(bars.timestamps[j].astype("datetime64[D]").astype("int64"))
+
+    def inc_init(self, bars: Bars) -> dict[str, object]:
+        out = self.compute_arr(bars)
+        n_bars = len(bars)
+        state: dict[str, object] = {"output": out, "len": n_bars}
+        if n_bars >= 2 and is_intraday_np(bars):
+            groups = session_groups_np(bars, regular_only=True)
+            if groups and groups[-1].size > 0:
+                last = groups[-1]
+                price = _price_arr(bars, self.price_source)
+                vol = np.where(np.isfinite(bars.volume), bars.volume, 0.0)
+                p = price[last]
+                v = vol[last]
+                valid = np.isfinite(p)
+                cum_pv = float(np.where(valid, p * v, 0.0).sum())
+                cum_v = float(np.where(valid, v, 0.0).sum())
+                state["cum_pv"] = cum_pv
+                state["cum_v"] = cum_v
+                state["cur_day"] = self._day_int_at(bars, int(last[-1]))
+                state["seeded"] = True
+                return state
+        state["seeded"] = False
+        return state
+
+    def inc_step(
+        self, state: dict[str, object], bars: Bars, *, prev_len: int,
+    ) -> dict[str, object]:
+        n_bars = len(bars)
+        if n_bars <= prev_len:
+            raise ValueError(
+                f"VWAP.inc_step requires growth: prev_len={prev_len}, new_len={n_bars}"
+            )
+        if not state.get("seeded"):
+            raise ValueError("VWAP.inc_step: unseeded state (non-intraday or empty)")
+        cum_pv = float(state["cum_pv"])  # type: ignore[arg-type]
+        cum_v = float(state["cum_v"])  # type: ignore[arg-type]
+        cur_day = int(state["cur_day"])  # type: ignore[arg-type]
+        price = _price_arr(bars, self.price_source)
+        sess = bars.session
+        vols = bars.volume
+        old = state["output"]["vwap"]  # type: ignore[index]
+        new_out = np.empty(n_bars, dtype=np.float64)
+        new_out[:prev_len] = old
+        for j in range(prev_len, n_bars):
+            if sess[j] != "regular":
+                new_out[j] = np.nan
+                continue
+            day_j = self._day_int_at(bars, j)
+            if day_j != cur_day:
+                cum_pv = 0.0
+                cum_v = 0.0
+                cur_day = day_j
+            p = float(price[j])
+            v = float(vols[j])
+            if not np.isfinite(v):
+                v = 0.0
+            if np.isfinite(p):
+                cum_pv += p * v
+                cum_v += v
+            new_out[j] = cum_pv / cum_v if cum_v > 0.0 else np.nan
+        return {
+            "output": {"vwap": new_out},
+            "len": n_bars,
+            "cum_pv": cum_pv,
+            "cum_v": cum_v,
+            "cur_day": cur_day,
+            "seeded": True,
+        }
+
 
 
 # --- helpers -----------------------------------------------------------

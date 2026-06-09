@@ -67,3 +67,6 @@ for i, c in enumerate(candles):
   meaningful on every interval.
 - Day-boundary detection assumes the candle stream's `date` is in
   the desired session timezone; no rebasing here.
+
+## Incremental protocol (compute #3)
+- `inc_init(bars)` / `inc_step(state, bars, *, prev_len)` extend the session VWAP O(k). State = `{cum_pv, cum_v, cur_day, seeded}` + cached `output`/`len`: accumulate `price*vol` / `vol` within the current UTC day, RESET at each new day (`cur_day` change), and skip non-regular bars (NaN, no contribution) — mirroring compute_arr's per-group cumsum. Non-intraday inputs leave `seeded=False` (compute_arr is all-NaN there) → full recompute. Pinned by the generic parity meta-test (multi-day intraday fixture exercises the reset).

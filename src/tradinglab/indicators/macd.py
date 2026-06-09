@@ -250,3 +250,76 @@ class MACD(BaseIndicator):
             "signal": signal_line,
             "histogram": histogram,
         }
+
+    # --- incremental protocol (closed-bar appends) ----------------------
+    # MACD is three chained EMAs (fast, slow, and the signal EMA of the
+    # macd line). A closed-bar append extends all three O(k) from the
+    # committed EMA values. Gated to the default ma_type="EMA"; SMA/WMA/RMA
+    # leave seeded=False → the cache full-recomputes. EMAs are causal so
+    # the cached prefix is bit-identical; appended bars differ from the
+    # vectorized kernel by float64 round-off only.
+
+    def _inc_supported(self) -> bool:
+        return self.ma_type == "EMA"
+
+    def inc_init(self, bars: Bars) -> dict[str, object]:
+        out = self.compute_arr(bars)
+        n_bars = len(bars)
+        state: dict[str, object] = {"output": out, "len": n_bars}
+        if self._inc_supported() and n_bars > self.warmup_bars:
+            src = _select_source(bars, self.source)
+            fast = apply_ma("EMA", src, self.fast_length)
+            slow = apply_ma("EMA", src, self.slow_length)
+            f_last = float(fast[-1])
+            s_last = float(slow[-1])
+            sig_last = float(out["signal"][-1])
+            if np.isfinite(f_last) and np.isfinite(s_last) and np.isfinite(sig_last):
+                state["fast"] = f_last
+                state["slow"] = s_last
+                state["signal"] = sig_last
+                state["seeded"] = True
+                return state
+        state["seeded"] = False
+        return state
+
+    def inc_step(
+        self, state: dict[str, object], bars: Bars, *, prev_len: int,
+    ) -> dict[str, object]:
+        n_bars = len(bars)
+        if n_bars <= prev_len:
+            raise ValueError(
+                f"MACD.inc_step requires growth: prev_len={prev_len}, new_len={n_bars}"
+            )
+        if not (self._inc_supported() and state.get("seeded")):
+            raise ValueError("MACD.inc_step: unsupported config or unseeded state")
+        af = 2.0 / (self.fast_length + 1.0)
+        as_ = 2.0 / (self.slow_length + 1.0)
+        asig = 2.0 / (self.signal_length + 1.0)
+        fast = float(state["fast"])  # type: ignore[arg-type]
+        slow = float(state["slow"])  # type: ignore[arg-type]
+        signal = float(state["signal"])  # type: ignore[arg-type]
+        src = _select_source(bars, self.source)
+        old = state["output"]  # type: ignore[index]
+        macd_out = np.empty(n_bars, dtype=np.float64)
+        sig_out = np.empty(n_bars, dtype=np.float64)
+        hist_out = np.empty(n_bars, dtype=np.float64)
+        macd_out[:prev_len] = old["macd"]
+        sig_out[:prev_len] = old["signal"]
+        hist_out[:prev_len] = old["histogram"]
+        for j in range(prev_len, n_bars):
+            x = float(src[j])
+            fast = af * x + (1.0 - af) * fast
+            slow = as_ * x + (1.0 - as_) * slow
+            macd_j = fast - slow
+            signal = asig * macd_j + (1.0 - asig) * signal
+            macd_out[j] = macd_j
+            sig_out[j] = signal
+            hist_out[j] = macd_j - signal
+        return {
+            "output": {"macd": macd_out, "signal": sig_out, "histogram": hist_out},
+            "len": n_bars,
+            "fast": fast,
+            "slow": slow,
+            "signal": signal,
+            "seeded": True,
+        }

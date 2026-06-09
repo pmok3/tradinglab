@@ -65,3 +65,6 @@ S_-DM  = wilder_smooth_sum(-DM, length)
 DX     = 100 * |+DI - -DI| / (+DI + -DI)
 ADX    = wilder_smooth_avg(DX, length)
 ```
+
+## Incremental protocol (compute #3)
+- `inc_init(bars)` / `inc_step(state, bars, *, prev_len)` extend the whole DI/DX/ADX chain O(k). State = `{str, spdm, smdm, adx, last_high, last_low, last_close, seeded}` + cached `output`/`len`: the sum-form Wilder recurrences (smoothed TR / +DM / -DM) and the average-form ADX are continued per bar, with the same flat-TR / both-flat-DI zero guards as compute_arr. Seeded when `n > 2*length` (ADX hydrated). Causal-prefix-exact; appended bars differ by float64 round-off. Pinned by the generic parity meta-test.

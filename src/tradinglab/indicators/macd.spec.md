@@ -96,3 +96,6 @@ histogram = macd - signal
   bar-chart Axes type. See `render.spec.md` for the dispatch.
 - **`output_kinds` ClassVar** is optional and backwards-compatible —
   indicators without it stay on the all-line render path.
+
+## Incremental protocol (compute #3)
+- `inc_init(bars)` / `inc_step(state, bars, *, prev_len)` extend MACD O(k) on a closed-bar append. State = `{fast, slow, signal, seeded}` + cached `output`/`len`: the three chained EMAs (fast, slow, and the signal EMA of the macd line) are continued with `alpha=2/(L+1)` per leg. **Gated to `ma_type=='EMA'`** (the default) via `_inc_supported()`; SMA/WMA/RMA leave `seeded=False` so `inc_step` raises and the cache full-recomputes. Causal-prefix-exact; appended bars differ from the kernel by float64 round-off. Pinned by `tests/unit/indicators/test_indicator_meta.py` (generic parity).

@@ -80,3 +80,6 @@ middle[length-1:] = center[length-1:]
 upper [warmup-1:] = middle[warmup-1:] + num_std * sigma_aligned
 lower [warmup-1:] = middle[warmup-1:] - num_std * sigma_aligned
 ```
+
+## Incremental protocol (compute #3)
+- `inc_init(bars)` / `inc_step(state, bars, *, prev_len)` extend the bands O(k). State = `{sum_n, sum_m, sumsq_m, seeded}` + cached `output`/`len`: `sum_n` is the rolling SMA window sum (middle), `sum_m`/`sumsq_m` the rolling population-variance running sums (std = sqrt(max(sumsq_m/m - mean_m**2, 0))). **Gated to `ma_type=='SMA'`** (the default); EMA/WMA/RMA leave `seeded=False` → full recompute. Causal-prefix-exact; appended bars differ from compute_arr's cumsum form by float64 round-off. Pinned by the generic parity meta-test.

@@ -148,3 +148,82 @@ class BollingerBands(BaseIndicator):
 
         return {"middle": middle, "upper": upper, "lower": lower}
 
+    # --- incremental protocol (closed-bar appends) ----------------------
+    # Gated to the default ma_type="SMA": the middle is a rolling SMA and
+    # the band is a rolling population std, both maintainable with O(1)
+    # running sums per appended bar (sum for the mean, sum + sum-of-squares
+    # for the variance). EMA/WMA/RMA leave seeded=False → full recompute.
+    # The window sums are causal so the cached prefix is exact; appended
+    # bars differ from compute_arr's cumsum form by float64 round-off only.
+
+    def _inc_supported(self) -> bool:
+        return self.ma_type == "SMA"
+
+    def inc_init(self, bars: Bars) -> dict[str, object]:
+        out = self.compute_arr(bars)
+        closes = bars.close
+        n_bars = int(closes.size)
+        nn = self.length
+        mm = self.std_length
+        warmup = max(nn, mm)
+        state: dict[str, object] = {"output": out, "len": n_bars}
+        if self._inc_supported() and n_bars > warmup:
+            win_n = closes[n_bars - nn:n_bars]
+            win_m = closes[n_bars - mm:n_bars]
+            state["sum_n"] = float(win_n.sum())
+            state["sum_m"] = float(win_m.sum())
+            state["sumsq_m"] = float((win_m * win_m).sum())
+            state["seeded"] = True
+        else:
+            state["seeded"] = False
+        return state
+
+    def inc_step(
+        self, state: dict[str, object], bars: Bars, *, prev_len: int,
+    ) -> dict[str, object]:
+        closes = bars.close
+        n_bars = int(closes.size)
+        if n_bars <= prev_len:
+            raise ValueError(
+                f"Bollinger.inc_step requires growth: prev_len={prev_len}, new_len={n_bars}"
+            )
+        if not (self._inc_supported() and state.get("seeded")):
+            raise ValueError("Bollinger.inc_step: unsupported config or unseeded state")
+        nn = self.length
+        mm = self.std_length
+        k = self.num_std
+        sum_n = float(state["sum_n"])  # type: ignore[arg-type]
+        sum_m = float(state["sum_m"])  # type: ignore[arg-type]
+        sumsq_m = float(state["sumsq_m"])  # type: ignore[arg-type]
+        old = state["output"]  # type: ignore[index]
+        mid_out = np.empty(n_bars, dtype=np.float64)
+        up_out = np.empty(n_bars, dtype=np.float64)
+        lo_out = np.empty(n_bars, dtype=np.float64)
+        mid_out[:prev_len] = old["middle"]
+        up_out[:prev_len] = old["upper"]
+        lo_out[:prev_len] = old["lower"]
+        for j in range(prev_len, n_bars):
+            c = float(closes[j])
+            out_n = float(closes[j - nn])
+            out_m = float(closes[j - mm])
+            sum_n += c - out_n
+            sum_m += c - out_m
+            sumsq_m += c * c - out_m * out_m
+            mean_n = sum_n / nn
+            mean_m = sum_m / mm
+            var = sumsq_m / mm - mean_m * mean_m
+            if var < 0.0:
+                var = 0.0
+            std = np.sqrt(var)
+            mid_out[j] = mean_n
+            up_out[j] = mean_n + k * std
+            lo_out[j] = mean_n - k * std
+        return {
+            "output": {"middle": mid_out, "upper": up_out, "lower": lo_out},
+            "len": n_bars,
+            "sum_n": sum_n,
+            "sum_m": sum_m,
+            "sumsq_m": sumsq_m,
+            "seeded": True,
+        }
+
