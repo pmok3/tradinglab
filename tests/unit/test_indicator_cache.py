@@ -55,6 +55,32 @@ def _mk_candles(n: int, seed: float = 0.0) -> list[Candle]:
     return out
 
 
+def test_config_hash_folds_reference_generation_for_rrvol() -> None:
+    """RRVOL's config hash changes when reference data arrives; other
+    kinds are unaffected — so a reference arrival no longer thrashes the
+    whole IndicatorCache (it used to ``clear()`` everything)."""
+    from tradinglab.core import reference_data
+
+    reference_data.clear()
+    try:
+        bars = Bars.from_candles(_mk_candles(5))
+        rrvol_params = {"length": 14, "compare_symbol": "SPY"}
+
+        rrvol_before = config_hash("rrvol", rrvol_params)
+        ema_before = config_hash("ema", {"length": 20})
+
+        # A reference-bar arrival bumps the generation counter.
+        reference_data.set_reference_bars("yfinance", "SPY", "5m", bars)
+
+        rrvol_after = config_hash("rrvol", rrvol_params)
+        ema_after = config_hash("ema", {"length": 20})
+
+        assert rrvol_before != rrvol_after  # RRVOL cache key invalidates
+        assert ema_before == ema_after      # every other indicator stable
+    finally:
+        reference_data.clear()
+
+
 def test_fingerprint_fallback_hits_on_same_content() -> None:
     candles = _mk_candles(60)
     cache = IndicatorCache(capacity=8)

@@ -18,6 +18,33 @@ PrefetchArrivalFn = Callable[[CacheKey, list[Candle]], None]
 WorkerInboxFn = Callable[[str, Any], None]
 
 
+def _candles_extended_or_updated(
+    base: list[Candle] | None, merged: list[Candle],
+) -> bool:
+    """Cheap proxy for "did the merge change anything worth persisting".
+
+    Replaces the previous ``disk_existing != merged`` check, which walked
+    both lists element-by-element (Candle dataclass ``__eq__``) — ~5-10ms
+    on an 11k-bar pair. Compares length + the last bar's date/OHLCV, which
+    catches the two real cases: appended bars (length grows) and an updated
+    in-progress last bar. A mid-history provider revision that leaves the
+    last bar identical is not detected — that matches the existing
+    "cached copy wins on historical revision" policy (see
+    ``disk_cache.merge_candles`` docstring and CLAUDE.md §7.14).
+    """
+    if base is None:
+        return bool(merged)
+    if len(base) != len(merged):
+        return True
+    if not merged:
+        return False
+    a, b = base[-1], merged[-1]
+    return (
+        a.date != b.date or a.open != b.open or a.high != b.high
+        or a.low != b.low or a.close != b.close or a.volume != b.volume
+    )
+
+
 class FetchService:
     """Own thread pools and background fetch/prefetch orchestration."""
 
@@ -161,12 +188,19 @@ class FetchService:
                         return
                 except Exception:  # noqa: BLE001
                     pass
-            disk_existing = disk_cache_mod.load(*key)
-            merged = disk_cache_mod.merge_candles(disk_existing, fetched)
-            if current:
-                merged = disk_cache_mod.merge_candles(current, merged)
+            # The in-memory copy is disk-authoritative: ``_load_data_async``
+            # saves the merged result to disk BEFORE notifying the Tk thread,
+            # so ``current`` already reflects the on-disk file. Reuse it
+            # instead of a full JSONL re-read + parse (~26ms on an 11k-bar
+            # file). Only hit disk when this key was never loaded into memory
+            # (e.g. a watchlist prefetch for a never-viewed ticker, where
+            # disk may hold prior-session bars the in-memory cache lacks).
+            base = current if current is not None else disk_cache_mod.load(*key)
+            # Both sides are date-ascending (disk saved sorted; fetchers
+            # return time-ordered) → skip merge_candles' O(N) sort checks.
+            merged = disk_cache_mod.merge_candles(base, fetched, presorted=True)
             stash_fn(key, merged)
-            if disk_existing != merged:
+            if _candles_extended_or_updated(base, merged):
                 try:
                     disk_cache_mod.save(*key, merged)
                 except Exception:  # noqa: BLE001

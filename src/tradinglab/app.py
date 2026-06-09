@@ -2191,11 +2191,17 @@ class ChartApp(
         )
 
     def _reference_data_redraw(self) -> None:
-        """Tk-thread handler: invalidate indicator cache + redraw."""
-        try:
-            self._indicator_cache.clear()
-        except Exception:  # noqa: BLE001
-            pass
+        """Tk-thread handler: redraw so reference-dependent panes repaint.
+
+        Does NOT clear the whole ``IndicatorCache`` any more. The
+        reference-data generation counter is folded into the config hash
+        of reference-dependent indicators (currently RRVOL) by
+        ``indicators.cache.config_hash``, so ONLY those recompute on the
+        next render — against the freshly-arrived compare-symbol bars —
+        while every other indicator keeps its cached result. The old
+        ``self._indicator_cache.clear()`` here needlessly recomputed
+        EMA/RSI/MACD/etc. for every symbol/slot on each reference arrival.
+        """
         try:
             # Reuse the indicator event path so reference arrivals are
             # coalesced with user-triggered indicator redraws.
@@ -2640,13 +2646,13 @@ class ChartApp(
             c_merged: list | None = None
             try:
                 if p:
-                    p_merged = disk_cache.merge_candles(p_disk, p)
+                    p_merged = disk_cache.merge_candles(p_disk, p, presorted=True)
                     disk_cache.save(src, raw_primary, interval, p_merged)
             except Exception:  # noqa: BLE001
                 p_merged = None
             try:
                 if c:
-                    c_merged = disk_cache.merge_candles(c_disk, c)
+                    c_merged = disk_cache.merge_candles(c_disk, c, presorted=True)
                     disk_cache.save(src, raw_compare, interval, c_merged)
             except Exception:  # noqa: BLE001
                 c_merged = None
@@ -4183,7 +4189,7 @@ class ChartApp(
         # (``_flush_indicator_render``). Scoped to the dialog edit flow —
         # menu Add/Clear/Load-Preset and config load never increment the
         # counter, so they still render immediately.
-        if self._defer_indicator_render > 0:
+        if getattr(self, "_defer_indicator_render", 0) > 0:
             return
         if self._indicator_redraw_pending:
             return
@@ -4191,7 +4197,8 @@ class ChartApp(
 
         def _run() -> None:
             self._indicator_redraw_pending = False
-            self._indicator_render_count += 1
+            self._indicator_render_count = getattr(
+                self, "_indicator_render_count", 0) + 1
             try:
                 self._render()
             except Exception as e:  # noqa: BLE001
@@ -4205,7 +4212,8 @@ class ChartApp(
         except Exception:  # noqa: BLE001
             # Fallback for headless contexts.
             self._indicator_redraw_pending = False
-            self._indicator_render_count += 1
+            self._indicator_render_count = getattr(
+                self, "_indicator_render_count", 0) + 1
             try:
                 self._render()
             except Exception:  # noqa: BLE001

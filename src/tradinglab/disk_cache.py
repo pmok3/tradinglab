@@ -239,6 +239,7 @@ def save(source: str, ticker: str, interval: str, candles: list[Candle]) -> None
 
 def merge_candles(
     old: list[Candle] | None, new: list[Candle] | None,
+    *, presorted: bool = False,
 ) -> list[Candle]:
     """Merge two candle lists by ``date``, newer wins on overlap.
 
@@ -255,6 +256,15 @@ def merge_candles(
     output, and we can't compare mixed-tz dates in this function
     anyway. Better to drop cross-session history than to raise on a
     real fetch path.
+
+    ``presorted=True`` lets a caller that KNOWS both inputs are already
+    date-ascending skip the two O(N) ``_is_sorted_by_date`` scans (~5.6ms
+    on an 11k-bar pair). The disk side is always saved sorted and every
+    production fetcher (yfinance/Alpaca/Polygon) returns time-ordered
+    data, so this is safe on the live load/prefetch paths. If the claim
+    is wrong the linear merge still degrades gracefully — a mixed-tz pair
+    raises ``TypeError`` and falls back to ``list(new)`` exactly as
+    before.
     """
     if not old and not new:
         return []
@@ -263,7 +273,7 @@ def merge_candles(
     if not new:
         return list(old)
     try:
-        if _is_sorted_by_date(old) and _is_sorted_by_date(new):
+        if presorted or (_is_sorted_by_date(old) and _is_sorted_by_date(new)):
             return _merge_sorted_candles(old, new)
         return _merge_candles_dict_sort(old, new)
     except TypeError:

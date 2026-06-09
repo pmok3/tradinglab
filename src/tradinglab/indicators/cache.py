@@ -42,7 +42,17 @@ from typing import Any, NamedTuple
 
 import numpy as np
 
+from ..core.reference_data import generation as _reference_generation
 from ..models import Candle
+
+# Indicator kinds whose ``compute_arr`` reads cross-symbol reference data
+# (currently only RRVOL, via ``core.reference_data.get_reference_bars``).
+# Their cache key MUST invalidate when fresh reference bars land, so we
+# fold the reference-data generation counter into their config hash. Every
+# OTHER indicator's hash is reference-independent and survives a reference
+# arrival untouched — replacing the old "clear the whole cache on every
+# reference arrival" thrash (see app.py ``_reference_data_redraw``).
+_REFERENCE_DEPENDENT_KINDS = frozenset({"rrvol"})
 
 
 class _Entry(NamedTuple):
@@ -95,14 +105,23 @@ def config_hash(kind_id: str, params: dict[str, Any]) -> str:
     Style/visibility/scope/intervals do NOT participate — they affect
     rendering, not numerics. Only ``kind_id`` and ``params`` matter
     for the cache key.
+
+    For reference-dependent kinds (RRVOL), the current
+    ``core.reference_data`` generation counter is folded in so the entry
+    invalidates — and recomputes against the freshly-arrived compare
+    symbol — the moment new reference bars land, without disturbing any
+    other indicator's cached result.
     """
-    payload = json.dumps(
-        {"kind_id": kind_id, "params": params},
+    payload: dict[str, Any] = {"kind_id": kind_id, "params": params}
+    if kind_id in _REFERENCE_DEPENDENT_KINDS:
+        payload["_ref_gen"] = _reference_generation()
+    payload_bytes = json.dumps(
+        payload,
         sort_keys=True,
         separators=(",", ":"),
         default=repr,
     ).encode("utf-8")
-    return hashlib.sha1(payload).hexdigest()[:16]
+    return hashlib.sha1(payload_bytes).hexdigest()[:16]
 
 
 class IndicatorCache:

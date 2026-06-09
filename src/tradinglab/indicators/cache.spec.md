@@ -16,10 +16,17 @@ identity verification on lookup.
 - `config_hash(kind_id, params) -> str` — short stable hash (16-hex
   prefix of SHA-1). Only compute-affecting fields participate (no
   style / scopes / intervals / visibility). JSON-serialized with
-  `sort_keys=True` so dict ordering is irrelevant.
+  `sort_keys=True` so dict ordering is irrelevant. For reference-
+  dependent kinds (`_REFERENCE_DEPENDENT_KINDS`, currently `{"rrvol"}`)
+  the current `core.reference_data.generation()` is folded in, so the
+  entry invalidates + recomputes the moment new compare-symbol bars
+  arrive — without disturbing any other indicator's cached result
+  (replaces the old whole-cache `clear()` on reference arrival).
 
 ## Dependencies
 - External: `hashlib`, `json`, `collections.OrderedDict`, `numpy`.
+- Internal: `..core.reference_data.generation` (folded into the config
+  hash of reference-dependent kinds).
 - Internal: `..models.Candle`.
 
 ## Design Decisions

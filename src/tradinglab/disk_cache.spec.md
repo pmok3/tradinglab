@@ -40,9 +40,13 @@ Durable cache of fetched candle data, keyed by `(source, ticker, interval)`. Act
   list. Used by the Export Bars to CSV dialog to enumerate what's
   available for export. Files that don't match the canonical filename
   pattern are silently ignored.
-- `merge_candles(old, new) -> List[Candle]` — merges by `date`,
-  newer wins on overlap. Sorted inputs use a linear two-pointer merge;
-  unsorted inputs fall back to the dict+sort path.
+- `merge_candles(old, new, *, presorted=False) -> List[Candle]` — merges
+  by `date`, newer wins on overlap. Sorted inputs use a linear two-pointer
+  merge; unsorted inputs fall back to the dict+sort path. `presorted=True`
+  lets a caller that knows both inputs are already date-ascending skip the
+  two O(N) sortedness scans (~5.6ms on an 11k-bar pair) — used on the live
+  load/prefetch paths where the disk file is saved sorted and fetchers
+  return time-ordered data.
 - `mark_no_persist(source) / unmark_no_persist(source) /
   is_no_persist(source) / clear_no_persist()` — opt-source-out-of-
   persistence registry. When a source name is in the no-persist set,
@@ -80,7 +84,11 @@ Durable cache of fetched candle data, keyed by `(source, ticker, interval)`. Act
   be sorted ascending by `date`. `merge_candles` detects sorted inputs
   and performs an O(N+M) two-pointer merge that collapses duplicate
   date runs with "last within side wins, then new side wins". If either
-  input is unsorted, it preserves the older dict+sort behavior.
+  input is unsorted, it preserves the older dict+sort behavior. Callers
+  that already know both sides are sorted pass `presorted=True` to skip
+  the two O(N) `_is_sorted_by_date` scans (a mixed-tz pair still raises
+  `TypeError` inside `_merge_sorted_candles` and falls back to `list(new)`
+  exactly as the auto-detect path does).
 
 ## Invariants
 - After `merge_candles(old, new)` on the happy path, the result is

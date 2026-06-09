@@ -35,16 +35,25 @@ Owns:
 - **Two-stage prefetch apply**: the network fetch runs on the worker pool, but the final merge/apply step is re-entered through the app's worker inbox so Tk-thread cache mutations stay centralized.
 - **Legacy attribute compatibility**: `ChartApp` keeps exposing `_executor`, `_fetch_executor`, `_prefetch_inflight`, `_prefetch_futures`, `_poll_job`, `_reload_job`, `_poll_retry_count`, and `_poll_retry_expected_min_ts`, but those are now backed by this service.
 - **Reference-data path stays async**: RRVOL-style secondary-symbol requests still use the general worker pool and trigger redraw through `core.reference_data`'s arrival callback.
-- **No-op prefetch writes are skipped**: `apply_prefetch_result` still
-  applies the merged candles to the in-memory cache, but it compares the
-  merged output with the disk-loaded list and avoids `disk_cache.save`
-  when the on-disk cache is already identical.
+- **No-op prefetch writes are skipped, and the disk re-read is avoided**:
+  the in-memory cache is *disk-authoritative* (`_load_data_async` saves the
+  merged result to disk before notifying the Tk thread), so
+  `apply_prefetch_result` reuses the `full_cache` entry as the merge base
+  instead of re-reading + re-parsing the JSONL (~26ms on an 11k-bar file,
+  on the Tk thread). It only falls back to `disk_cache.load` when the key
+  was never loaded into memory (a watchlist prefetch for a never-viewed
+  ticker). The save is then gated by a cheap length+last-bar proxy
+  (`_candles_extended_or_updated`) rather than an O(N) `list.__eq__`.
 
 ## Invariants
 - Prefetches are deduped by `(source, ticker, interval)` and capped by the caller-provided inflight limit.
 - Empty/failed prefetches clear their inflight slot.
-- A prefetch whose merged candle list equals the disk-loaded list must
-  not rewrite the JSONL file.
+- A prefetch that adds no new bars to the disk-authoritative in-memory
+  cache must not rewrite the JSONL file (gated by the cheap
+  length+last-bar proxy, not an O(N) list comparison).
+- When the prefetched key is present in `full_cache`, the on-disk JSONL
+  is NOT re-read (the in-memory copy is authoritative); a disk read only
+  happens for a key absent from memory.
 - `shutdown()` leaves both executors unusable and clears fetch-related bookkeeping.
 - `await_future_on_tk()` never uses `Future.add_done_callback()` to call Tk APIs from a worker thread.
 
