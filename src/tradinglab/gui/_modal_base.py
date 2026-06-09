@@ -527,6 +527,17 @@ def make_scrollable_form(
     Returns ``(inner_frame, canvas)``.
     """
     canvas = tk.Canvas(parent, borderwidth=0, highlightthickness=0)
+    # A classic ``tk.Canvas`` is NOT reached by the ttk ``ThemeController``
+    # sweep, so its scroll gutter shows as bright white in dark mode
+    # unless painted explicitly (see gui/native_theme.py, CLAUDE.md
+    # §7.31). Resolve the active theme from the parent's ``_theme_ctrl``
+    # chain and paint the canvas background. Best-effort: a plain stub
+    # parent (tests / previews) falls back to the light window bg.
+    try:
+        from .native_theme import apply_canvas_theme, current_theme
+        apply_canvas_theme(canvas, current_theme(parent))
+    except Exception:  # noqa: BLE001
+        pass
     vbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
     if horizontal:
         hbar = ttk.Scrollbar(parent, orient="horizontal", command=canvas.xview)

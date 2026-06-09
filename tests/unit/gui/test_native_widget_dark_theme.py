@@ -196,3 +196,174 @@ def test_color_palette_canvas_uses_dark_theme(dark_root: tk.Toplevel) -> None:
             )
     finally:
         dlg.destroy()
+
+
+# ===========================================================================
+# Meta-test: every window's classic Tk widgets are linked to the dark theme.
+#
+# ``ttk.Style`` does not reach ``tk.Listbox`` / ``tk.Text`` / ``tk.Canvas``;
+# a dialog that forgets to theme them shows bright white chrome in dark mode
+# (the reported Documentation-viewer bug). Rather than rely solely on the
+# per-dialog exact-colour tests above, this generic probe constructs each
+# registered window under a dark ``_theme_ctrl`` and asserts that EVERY
+# classic Tk widget resolves to a dark background — catching any window that
+# isn't colour-linked, regardless of which exact dark palette it uses.
+#
+# Add a new combobox/listbox/text/canvas-bearing window to ``_DARK_WINDOWS``
+# and it is protected automatically.
+# ===========================================================================
+
+_CLASSIC_TK_TYPES = (tk.Listbox, tk.Text, tk.Canvas)
+
+
+def _bg_is_dark(widget: tk.Widget) -> bool:
+    """True if ``widget``'s resolved background is a dark shade.
+
+    Resolves hex AND named/system colours via ``winfo_rgb`` (0..65535 per
+    channel) so an unthemed widget left on its system default (white-ish
+    on a light-mode host) is correctly flagged.
+    """
+    try:
+        bg = str(widget.cget("background"))
+        r, g, b = widget.winfo_rgb(bg)
+    except tk.TclError:
+        return False
+    luma = (0.299 * r + 0.587 * g + 0.114 * b) / 65535.0
+    return luma < 0.5
+
+
+def _classic_widgets(root: tk.Misc) -> list[tk.Widget]:
+    """Every ``tk.Listbox`` / ``tk.Text`` / ``tk.Canvas`` descendant.
+
+    Skips widgets explicitly tagged theme-exempt (``_no_theme``) — e.g.
+    colour-swatch canvases whose background IS the data being shown.
+    """
+    out: list[tk.Widget] = []
+
+    def _walk(w: tk.Misc) -> None:
+        try:
+            children = w.winfo_children()
+        except tk.TclError:
+            return
+        for child in children:
+            if isinstance(child, _CLASSIC_TK_TYPES) and not getattr(
+                child, "_no_theme", False
+            ):
+                out.append(child)
+            _walk(child)
+
+    _walk(root)
+    return out
+
+
+def _assert_window_classic_widgets_dark(dialog: tk.Misc, label: str) -> int:
+    widgets = _classic_widgets(dialog)
+    assert widgets, f"{label}: no classic Tk widget found to check"
+    light = [w for w in widgets if not _bg_is_dark(w)]
+    assert not light, (
+        f"{label}: {len(light)} classic Tk widget(s) NOT linked to the dark "
+        f"theme (white/light background under dark mode). Theme them via "
+        f"gui/native_theme.py (or the window's own dark palette). Offenders: "
+        + ", ".join(
+            f"{type(w).__name__}={str(w.cget('background'))}" for w in light[:6]
+        )
+    )
+    return len(widgets)
+
+
+# --- window registry -------------------------------------------------------
+
+
+def _build_doc_viewer(dark_root, _monkeypatch):
+    from tradinglab.gui.doc_viewer import DocViewerDialog
+    return DocViewerDialog(dark_root)
+
+
+def _build_watchlist(dark_root, _monkeypatch):
+    dark_root._watchlists = _FakeWatchlists()  # type: ignore[attr-defined]
+    return dialogs._WatchlistDialog(dark_root)  # noqa: SLF001
+
+
+def _build_exits(dark_root, monkeypatch):
+    monkeypatch.setattr(exits_dialog._exits_storage, "load_all", lambda: ([], []))
+    return exits_dialog.ExitsDialog(dark_root)
+
+
+def _build_sandbox_panel(dark_root, _monkeypatch):
+    return sandbox_panel.SandboxPanel(dark_root, _FakeSandboxController())
+
+
+def _build_post_trade_review(dark_root, _monkeypatch):
+    post = SimpleNamespace(
+        side="long", symbol="AAPL", quantity=1.0,
+        entry_ts=1_700_000_000, exit_ts=1_700_000_060,
+        entry_price=100.0, exit_price=101.0, pnl=1.0, pnl_pct=0.01,
+        mae=0.5, mae_pct=0.005, mfe=1.5, mfe_pct=0.015,
+    )
+    return sandbox_review_dialog.PostTradeReviewDialog(dark_root, post)
+
+
+def _build_tags_editor(dark_root, _monkeypatch):
+    return sandbox_review_dialog.TagsEditorDialog(dark_root, _FakeTagStore())
+
+
+def _build_load_scan(dark_root, _monkeypatch):
+    return scanner_tab._LoadScanDialog(  # noqa: SLF001
+        dark_root, [("scan-1", SimpleNamespace(name="Breakout"))],
+    )
+
+
+def _build_pre_trade(dark_root, _monkeypatch):
+    return pre_trade_dialog.PreTradeFormDialog(dark_root, "AAPL", setup_tags=["Gap"])
+
+
+def _build_color_chooser(dark_root, _monkeypatch):
+    from tradinglab.gui.color_palette import ThemedColorChooser
+    return ThemedColorChooser(dark_root, initial="#1f77b4")
+
+
+_DARK_WINDOWS = {
+    "DocViewerDialog": _build_doc_viewer,
+    "WatchlistDialog": _build_watchlist,
+    "ExitsDialog": _build_exits,
+    "SandboxPanel": _build_sandbox_panel,
+    "PostTradeReviewDialog": _build_post_trade_review,
+    "TagsEditorDialog": _build_tags_editor,
+    "LoadScanDialog": _build_load_scan,
+    "PreTradeFormDialog": _build_pre_trade,
+    "ThemedColorChooser": _build_color_chooser,
+}
+
+
+@pytest.mark.parametrize("window_name", sorted(_DARK_WINDOWS))
+def test_window_classic_widgets_linked_to_dark_theme(
+    window_name, dark_root, monkeypatch,
+) -> None:
+    """Every classic Tk widget in the window resolves to a dark background.
+
+    Fails for any window that leaves a ``tk.Listbox`` / ``tk.Text`` /
+    ``tk.Canvas`` on its (light) system default in dark mode — the
+    Documentation-viewer dark-mode bug, generalised across the roster.
+    """
+    builder = _DARK_WINDOWS[window_name]
+    try:
+        dlg = builder(dark_root, monkeypatch)
+    except tk.TclError as exc:
+        pytest.skip(f"{window_name} could not open headlessly: {exc}")
+    try:
+        _assert_window_classic_widgets_dark(dlg, window_name)
+    finally:
+        with contextlib.suppress(tk.TclError):
+            dlg.destroy()
+
+
+def test_probe_flags_unthemed_classic_widget(dark_root) -> None:
+    """The probe has teeth: an unthemed Listbox/Text/Canvas is flagged."""
+    top = tk.Toplevel(dark_root)
+    try:
+        tk.Listbox(top).pack()  # left on the light system default
+        with pytest.raises(AssertionError, match="NOT linked to the dark"):
+            _assert_window_classic_widgets_dark(top, "synthetic-unthemed")
+    finally:
+        with contextlib.suppress(tk.TclError):
+            top.destroy()

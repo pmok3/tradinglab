@@ -188,15 +188,50 @@ def _theme_palette(dark: bool) -> dict[str, str]:
     }
 
 
-def _is_parent_dark(parent: Any) -> bool:
-    """Best-effort dark-mode detection.
+def _color_is_dark(color: str) -> bool:
+    """True if ``color`` (a ``#rrggbb`` hex string) is a dark shade.
 
-    Looks for ``parent.dark_var.get()`` (ChartApp convention), then
-    ``parent._dark_mode`` flag. Defaults to ``False`` (light theme)
-    when neither is present — every dialog is reachable from
-    ChartApp in practice, but a defensive fallback keeps the doc
-    viewer usable from harnesses / preview scripts.
+    Used to classify the active theme's ``win_bg`` into the doc viewer's
+    binary light/dark palette. Non-hex / named colours conservatively
+    return False (light).
     """
+    c = (color or "").strip()
+    if c.startswith("#") and len(c) == 7:
+        try:
+            r = int(c[1:3], 16)
+            g = int(c[3:5], 16)
+            b = int(c[5:7], 16)
+        except ValueError:
+            return False
+        # Rec. 601 luma; < 128 (of 255) ⇒ dark.
+        return (0.299 * r + 0.587 * g + 0.114 * b) < 128
+    return False
+
+
+def _is_parent_dark(parent: Any) -> bool:
+    """Best-effort dark-mode detection for the doc viewer palette.
+
+    Resolves the active theme via :func:`gui.native_theme.current_theme`,
+    which walks the widget ``master`` chain for the app's ``_theme_ctrl``
+    (the **canonical** theme source used by the rest of TradingLab) and
+    falls back to ``parent.dark_var`` / ``parent._dark_mode``. The
+    resolved theme is classified by the luminance of its ``win_bg``.
+
+    Consulting ``_theme_ctrl`` (not just ``dark_var``) fixes the reported
+    bug where the Documentation viewer stayed light in dark mode: the app
+    drives theming through ``ThemeController``, so a dialog that only
+    checked the legacy ``dark_var`` flag missed the active dark theme.
+    The remaining ``dark_var`` / ``_dark_mode`` fallback keeps the viewer
+    usable from non-Tk harnesses / preview scripts.
+    """
+    try:
+        from .native_theme import current_theme
+        theme = current_theme(parent)
+        win_bg = theme.get("win_bg") if isinstance(theme, dict) else None
+        if isinstance(win_bg, str) and win_bg:
+            return _color_is_dark(win_bg)
+    except Exception:  # noqa: BLE001
+        pass
     var = getattr(parent, "dark_var", None)
     if var is not None:
         try:

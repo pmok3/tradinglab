@@ -91,8 +91,14 @@ Hand-rolled scanner — no third-party Markdown dep:
 
 ## Theme integration
 
-Theme picked at construction via `_is_parent_dark(parent)` (checks
-`parent.dark_var.get()`, then `parent._dark_mode`). `_theme_palette(dark)`
+Theme picked at construction via `_is_parent_dark(parent)`, which
+resolves the active theme through `gui.native_theme.current_theme`
+(walking the widget `master` chain for the app's **canonical**
+`_theme_ctrl`, then falling back to `parent.dark_var` / `parent._dark_mode`)
+and classifies it by the luminance of `win_bg` (`_color_is_dark`).
+Consulting `_theme_ctrl` — not just the legacy `dark_var` flag — fixed
+the reported bug where the viewer stayed light in dark mode (the app
+drives theming through `ThemeController`). `_theme_palette(dark)`
 returns bg / fg / muted / code-bg / code-fg / link / hr / sidebar
 (`sidebar_bg` / `sidebar_fg` / `sidebar_sel_bg` / `sidebar_sel_fg`) /
 button (`btn_bg` / `btn_fg`) colours. `btn_bg` is deliberately distinct

@@ -57,10 +57,17 @@ helpers.
   bind_mousewheel=True) -> tuple[ttk.Frame, tk.Canvas]` — builds a
   `Canvas` + scrollbar(s) + inner `ttk.Frame` form skeleton. The
   returned canvas is the intended `scroll_target` for
-  `protect_combobox_wheel`. When `bind_mousewheel=True`, canvas
-  enter/leave installs and removes global wheel bindings, with an
-  inner-frame destroy backstop so the binding does not leak after
-  dialog close.
+  `protect_combobox_wheel`. The classic `tk.Canvas` is painted with
+  the active theme's `win_bg` via `native_theme.apply_canvas_theme(
+  canvas, current_theme(parent))` at creation — the ttk
+  `ThemeController` sweep does not reach a `tk.Canvas`, so the scroll
+  gutter would otherwise show bright white in dark mode (CLAUDE.md
+  §7.31). This centrally dark-themes every dialog's scrollable form;
+  pinned by `tests/unit/gui/test_native_widget_dark_theme.py`
+  (ExitsDialog canvas case + the per-window meta-test). When
+  `bind_mousewheel=True`, canvas enter/leave installs and removes
+  global wheel bindings, with an inner-frame destroy backstop so the
+  binding does not leak after dialog close.
   - **No-scroll-when-fitting guard.** The wheel handlers consult an
     internal `_v_can_scroll()` predicate that returns `True` only when
     the form content overflows the viewport (`canvas.yview()` is not
