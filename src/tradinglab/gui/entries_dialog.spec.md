@@ -82,6 +82,12 @@ Caller callbacks are stored as ``self._on_save_cb`` /
   the INDICATOR ``block_editor`` field delegates to
   ``_build_indicator_block_editor`` (which owns the interval
   picker + intrabar checkbox + nested ``BlockEditor``).
+- **Trigger-kind change is idempotent (flicker fix).**
+  ``_on_trigger_kind_changed`` short-circuits when the resolved kind
+  equals ``_draft.trigger.kind``, so re-picking the current kind — or a
+  spurious combobox event — does NOT rebuild the per-kind param widgets
+  (the "window flickers when I touch the dropdown" bug). Pinned by
+  ``tests/unit/gui/test_dialog_combobox_no_flicker.py``.
 - **`threshold_warn` / `threshold_extreme` fields are NOT shown**
   on the RVOL / RRVOL operator subforms for indicator triggers —
   removed in the recent five-item UX batch. They were always purely

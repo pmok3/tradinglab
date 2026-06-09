@@ -52,6 +52,12 @@ class _OCOGroupRow(ttk.Frame):
   param is a one-line addition to a `_FieldSpec` list; the row's
   `collect`/`validate` introspect the spec list, keeping
   layout + parse + format + validate in lockstep.
+- **`_on_kind_changed` is idempotent (flicker fix).** It short-circuits
+  when the resolved kind equals `_trigger.kind`, so re-picking the
+  current kind — or a spurious combobox event — does NOT tear down +
+  rebuild the per-kind param subform (the "window flickers when I touch
+  the dropdown" bug). A genuine kind change still rebuilds. Pinned by
+  `tests/unit/gui/test_dialog_combobox_no_flicker.py`.
 - **Renderer lifted to `gui._trigger_field_renderer` (audit #8).**
   ``_FieldSpec`` and the per-kind widget construction (formerly
   ``_TriggerRow._render_field``) now live in

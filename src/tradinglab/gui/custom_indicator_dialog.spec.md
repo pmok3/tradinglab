@@ -118,6 +118,14 @@ template that already defines a class and calls `register_indicator`.
   body (`Group` / expression text / Python source), and sets the status
   to `Mode switched`. Name + description survive because they are held
   in `StringVar`s outside the swapped frame.
+- **Mode-change is idempotent (flicker fix).** `_on_mode_changed`
+  short-circuits when `_mode_var.get() == _rendered_mode` (the mode
+  whose body is currently mounted, recorded at the end of every
+  `_render_compose_for_mode()`). Re-picking the current mode — or a
+  spurious combobox event — must NOT capture + tear down + rebuild the
+  composition body; that rebuild on a no-op selection is the
+  "window flickers when I touch the dropdown" bug. Pinned codebase-wide
+  by `tests/unit/gui/test_dialog_combobox_no_flicker.py`.
 - **`protect_combobox_wheel(self, scroll_target=...)` is reapplied
   after every `_render_compose_for_mode()` rebuild AND every
   `_on_block_editor_changed()` edit** (HARD project rule —

@@ -254,6 +254,14 @@ Cancel, `transient` parent — hence the macOS smoke-skip per §7.1).
   - `Compact rows` shows enabled checkbox + trader-readable summary +
     delete button; editable controls are hidden until the user switches
     back to Auto/Detailed.
+  - **`set_view_mode` is idempotent (flicker fix).** It records the
+    rendered mode in `_rendered_view_mode` (set by `_render_root`) and
+    short-circuits when the requested mode already matches, so a re-pick
+    of the current view — or a spurious `<<ComboboxSelected>>` — does
+    NOT destroy + rebuild the entire group tree (the "window flickers
+    when I touch the dropdown" bug). A genuine mode change still
+    re-renders. Pinned by
+    `tests/unit/gui/test_dialog_combobox_no_flicker.py`.
 
 #### Dual-mode layout (inline ↔ stacked)
 

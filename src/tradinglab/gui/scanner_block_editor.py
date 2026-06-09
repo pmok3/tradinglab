@@ -2878,6 +2878,12 @@ class BlockEditor(ttk.Frame):
         self._data_status_provider = data_status_provider
         self._root_group: Group = root or Group(combinator="and", children=[])
         self._root_frame: _GroupFrame | None = None
+        # The view mode whose group tree is currently rendered. Tracked
+        # so ``set_view_mode`` can short-circuit a re-pick of the current
+        # mode (or a spurious combobox event) instead of destroying +
+        # rebuilding the entire condition tree — the "window flickers
+        # when I touch the dropdown" bug. Set by ``_render_root``.
+        self._rendered_view_mode: str | None = None
         self._view_var = tk.StringVar(value=VIEW_AUTO)
         header = ttk.Frame(self)
         header.pack(fill="x", pady=(0, 4))
@@ -2910,6 +2916,12 @@ class BlockEditor(ttk.Frame):
         if mode not in (VIEW_AUTO, VIEW_COMPACT, VIEW_DETAILED):
             mode = VIEW_AUTO
         self._view_var.set(mode)
+        if mode == self._rendered_view_mode and self._root_frame is not None:
+            # Idempotency guard (flicker fix): the group tree is already
+            # rendered in this view mode, so a re-pick of the same value
+            # (or a spurious combobox event) must NOT destroy + rebuild
+            # the whole tree.
+            return
         self._render_root()
 
     def _on_view_mode_change(self) -> None:
@@ -2934,6 +2946,7 @@ class BlockEditor(ttk.Frame):
             data_status_provider=self._data_status_provider,
         )
         self._root_frame.pack(fill="x", expand=True)
+        self._rendered_view_mode = self._view_var.get()
 
 
 # ---------------------------------------------------------------------------

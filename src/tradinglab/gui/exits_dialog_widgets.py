@@ -403,6 +403,12 @@ class _TriggerRow(ttk.Frame):
         new = _TRIGGER_KIND_BY_LABEL.get(self._kind_var.get())
         if new is None:
             return
+        if new == self._trigger.kind:
+            # Idempotency guard (flicker fix): re-selecting the current
+            # kind (or a spurious combobox event) must NOT tear down +
+            # rebuild the per-kind param widgets — that rebuild is the
+            # "window flickers when I touch the dropdown" bug.
+            return
         self._trigger.kind = new
         self._render_params()
 

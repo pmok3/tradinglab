@@ -228,6 +228,7 @@ class _IndicatorRow:
         "is_unknown",
         "suppress",
         "debounce_after_id",
+        "applied_kind_id",
     )
 
     def __init__(self, row_key: int) -> None:
@@ -304,6 +305,15 @@ class _IndicatorRow:
         self.suppress: bool = True
         # Pending debounce job id (Tk ``after`` handle) for typing.
         self.debounce_after_id: str | None = None
+        # The ``kind_id`` whose param widgets are currently rendered in
+        # this row. Tracked so :meth:`IndicatorDialog._on_kind_changed`
+        # can short-circuit a spurious ``<FocusOut>`` on the kind
+        # combobox (Windows fires ``<FocusOut>`` when the dropdown
+        # popdown is posted/dismissed, even when the value is
+        # unchanged) instead of tearing the row down + re-theming the
+        # whole dialog — the "window flickers when I click the
+        # dropdown" bug. ``None`` until the first param build.
+        self.applied_kind_id: str | None = None
 
 
 class IndicatorDialog(BaseModalDialog):
@@ -1206,6 +1216,12 @@ class IndicatorDialog(BaseModalDialog):
         sub = row.param_subframe
         if sub is None:
             return
+        # Record the kind whose widgets we are about to render so a
+        # later spurious ``<FocusOut>`` on the kind combobox can
+        # short-circuit in ``_on_kind_changed`` (see that method + the
+        # ``applied_kind_id`` field doc) rather than rebuilding the row
+        # and re-walking the whole dialog via ``_apply_theme``.
+        row.applied_kind_id = kind_id
         for w in sub.winfo_children():
             try:
                 w.destroy()
@@ -1882,6 +1898,18 @@ class IndicatorDialog(BaseModalDialog):
             new_kind_id = self._kinds_by_display[new_display]
             row.kind_var.set(new_display)
         self._refresh_kind_tooltip(row, new_kind_id)
+        # Idempotency guard (flicker fix). The kind combobox binds
+        # ``<FocusOut>`` so a typed-and-tabbed-away kind name still
+        # commits — but on Windows ttk also fires ``<FocusOut>`` when
+        # the dropdown popdown is merely posted/dismissed, and a
+        # re-pick of the same value fires ``<<ComboboxSelected>>``.
+        # In both cases the resolved kind is UNCHANGED, so tearing down
+        # + rebuilding the param widgets and re-walking the entire
+        # dialog via ``_apply_theme`` would just make the window flicker
+        # for no state change. Only rebuild when the kind actually
+        # differs from what's currently rendered (``applied_kind_id``).
+        if new_kind_id == row.applied_kind_id:
+            return
         # Suppress while we tear down + rebuild widgets so the trace
         # callbacks fired by ``var.set`` during construction don't
         # ping us back into another commit cycle.

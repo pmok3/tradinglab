@@ -198,6 +198,13 @@ class CustomIndicatorDialog(BaseModalDialog):
         self._name_var = tk.StringVar(value="")
         self._desc_var = tk.StringVar(value="")
         self._mode_var = tk.StringVar(value=_CONDITIONS_MODE)
+        # The authoring mode whose composition body is currently
+        # rendered. Tracked so ``_on_mode_changed`` can short-circuit a
+        # re-pick of the same mode (or a spurious combobox event)
+        # instead of tearing the body down + rebuilding it — the
+        # "window flickers when I touch the dropdown" bug. Updated at
+        # the end of every ``_render_compose_for_mode``.
+        self._rendered_mode: str | None = None
         self._overlay_var = tk.BooleanVar(value=False)
         # "Expose to scanner" — when True, the generated source embeds
         # ``scannable_outputs = (("value", "numeric"),)`` so the indicator
@@ -558,6 +565,9 @@ class CustomIndicatorDialog(BaseModalDialog):
         # Mode combobox itself plus any new comboboxes inside the
         # embedded BlockEditor are protected (CLAUDE.md §7.11).
         self._reprotect_comboboxes()
+        # Record the mode we just rendered so a no-op mode re-pick can
+        # short-circuit in ``_on_mode_changed`` (flicker fix).
+        self._rendered_mode = self._mode_var.get()
 
         # Freshly-built Text bodies (Expression/Python) start with default
         # white backgrounds — re-theme so a mode switch keeps dark mode.
@@ -926,6 +936,11 @@ class CustomIndicatorDialog(BaseModalDialog):
     # Mode / validate / preview
     # ------------------------------------------------------------------
     def _on_mode_changed(self, _event: object = None) -> None:
+        if self._mode_var.get() == self._rendered_mode:
+            # Idempotency guard (flicker fix): re-selecting the current
+            # mode (or a spurious combobox event) must NOT capture +
+            # tear down + rebuild the composition body.
+            return
         self._capture_body_state()
         self._render_compose_for_mode()
         self._set_status("Mode switched", level="info")

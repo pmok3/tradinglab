@@ -146,6 +146,18 @@ checkbox groups, called from `_on_menu_sandbox_start` / `_on_menu_sandbox_end`.
   and one-match Return/FocusOut commits switch the row kind. This
   mirrors `_FieldRefPicker` search while preserving the existing
   tooltip/help icon behavior.
+- **Kind-change is idempotent (flicker fix).** `_on_kind_changed`
+  short-circuits when the resolved kind equals `_IndicatorRow.applied_kind_id`
+  (the kind whose param widgets are currently rendered, set in
+  `_build_param_widgets`). The `<FocusOut>` binding stays (so a
+  typed-and-tabbed-away kind name still commits), but a spurious
+  `<FocusOut>` — Windows ttk fires one when the dropdown popdown is
+  posted/dismissed — or a re-pick of the same value no longer tears
+  down + rebuilds the param widgets and re-walks the whole window via
+  `_apply_theme`. Pre-fix that whole-tree reconfigure on every dropdown
+  click made the window visibly flicker. A genuine kind change still
+  rebuilds exactly once and updates `applied_kind_id`. Pinned by
+  `tests/unit/gui/test_indicator_dialog_kind_flicker.py`.
 - **No upper column-count clamp.** `_compute_max_cols_for_schema` floors
   to an integer column count with no cap — the fit-based math itself
   prevents overflow, and a hard cap (the legacy `min(4, cols)`) just

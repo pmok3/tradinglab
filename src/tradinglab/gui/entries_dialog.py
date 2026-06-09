@@ -775,6 +775,12 @@ class EntriesDialog(BaseModalDialog):
         new = _TRIGGER_KIND_BY_LABEL.get(self._trigger_kind_var.get())
         if new is None:
             return
+        if new == self._draft.trigger.kind:
+            # Idempotency guard (flicker fix): re-selecting the current
+            # trigger kind (or a spurious combobox event) must NOT
+            # rebuild the per-kind param widgets — that rebuild is the
+            # "window flickers when I touch the dropdown" bug.
+            return
         self._draft.trigger.kind = new
         # Reset interval to a sensible default for INDICATOR.
         if new == TriggerKind.INDICATOR and not self._draft.trigger.interval:
