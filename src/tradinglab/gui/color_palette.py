@@ -332,7 +332,7 @@ class ThemedColorChooser(BaseModalDialog):
             parent,
             title=title,
             geometry_key="dlg.color_palette",
-            default_geometry="560x440",
+            default_geometry="560x470",
             resizable=(False, False),
         )
         self.result: str | None = None
@@ -374,6 +374,22 @@ class ThemedColorChooser(BaseModalDialog):
         outer = tk.Frame(self, padx=10, pady=10, background=self._bg)
         outer.pack(fill="both", expand=True)
 
+        # Footer FIRST (canonical fixed-footer pack pattern): packing the
+        # OK/Cancel bar with side="bottom" BEFORE the expanding body
+        # guarantees it always claims its natural height and can never be
+        # clipped off the bottom of the fixed-size, non-resizable window —
+        # even when the body content is taller than expected on a
+        # larger-font / HiDPI display. (The previous order packed the
+        # body first, so on such displays the OK button — the only way to
+        # select the colour — was pushed off-screen and unreachable.)
+        bar = tk.Frame(outer, background=self._bg)
+        bar.pack(side="bottom", fill="x", pady=(10, 0))
+        self._cancel_btn = ttk.Button(bar, text="Cancel",
+                                      command=self._on_cancel)
+        self._cancel_btn.pack(side="right")
+        self._ok_btn = ttk.Button(bar, text="OK", command=self._on_ok)
+        self._ok_btn.pack(side="right", padx=(0, 6))
+
         body = tk.Frame(outer, background=self._bg)
         body.pack(side="top", fill="both", expand=True)
 
@@ -392,15 +408,6 @@ class ThemedColorChooser(BaseModalDialog):
         self._build_pad_and_slider(right)
         self._build_preview(right)
         self._build_fields(right)
-
-        # Footer.
-        bar = tk.Frame(outer, background=self._bg)
-        bar.pack(side="bottom", fill="x", pady=(10, 0))
-        self._cancel_btn = ttk.Button(bar, text="Cancel",
-                                      command=self._on_cancel)
-        self._cancel_btn.pack(side="right")
-        self._ok_btn = ttk.Button(bar, text="OK", command=self._on_ok)
-        self._ok_btn.pack(side="right", padx=(0, 6))
 
     def _build_basic_grid(self, parent: tk.Frame) -> None:
         tk.Label(parent, text="Basic colors:",

@@ -298,6 +298,73 @@ def test_ok_commits_current_color(
         raise
 
 
+def test_ok_cancel_footer_packed_first_so_never_clipped(
+    root: tk.Tk, custom_colors_tmp: Path,
+) -> None:
+    """The OK/Cancel footer must be packed ``side="bottom"`` BEFORE the
+    expanding body (canonical fixed-footer pattern), so the OK button —
+    the only control that commits the chosen colour — can never be
+    clipped off the bottom of the fixed-size, non-resizable window on a
+    larger-font / HiDPI display.
+
+    Regression for the user report "there is no button to select a colour
+    in the colour palette": previously the body was packed first with
+    ``expand=True``, so on displays where the content was taller than the
+    560x440 window the footer was pushed off-screen and unreachable.
+    """
+    dlg = _make_dialog(root, initial="#1f77b4")
+    try:
+        dlg.update_idletasks()
+        # The OK ("select") button exists and is wired to a command.
+        assert dlg._ok_btn is not None
+        assert str(dlg._ok_btn.cget("text")) == "OK"
+        assert str(dlg._ok_btn.cget("command")), "OK button has no command"
+        footer = dlg._ok_btn.master
+        assert dlg._cancel_btn.master is footer, "OK + Cancel share the footer"
+        # Footer anchored to the bottom of the outer frame...
+        assert str(footer.pack_info()["side"]) == "bottom"
+        outer = footer.master
+        slaves = outer.pack_slaves()
+        # ...and packed FIRST, so it claims its height before the body —
+        # the canonical pattern that prevents the footer being clipped.
+        assert slaves[0] is footer, (
+            "footer must be packed before the body so it is never clipped"
+        )
+        # The body that follows expands to fill the remaining space.
+        body = slaves[1]
+        info = body.pack_info()
+        assert str(info["side"]) == "top"
+        assert str(info["expand"]) in ("1", "true", "True")
+    finally:
+        dlg.destroy()
+
+
+def test_ok_button_is_mapped_within_window_bounds(
+    root: tk.Tk, custom_colors_tmp: Path,
+) -> None:
+    """End-to-end geometry check: after a real layout pass the OK button
+    is mapped and its bottom edge sits within the window height (i.e. not
+    clipped). Skips if the headless WM never maps the toplevel to a real
+    size (winfo_height stays at the unmapped 1px)."""
+    dlg = _make_dialog(root, initial="#1f77b4")
+    try:
+        dlg.deiconify()
+        dlg.update_idletasks()
+        dlg.update()
+        win_h = dlg.winfo_height()
+        if win_h <= 1:
+            pytest.skip("headless WM did not map the dialog to a real size")
+        assert dlg._ok_btn.winfo_ismapped()
+        ok_bottom = (dlg._ok_btn.winfo_rooty() - dlg.winfo_rooty()
+                     + dlg._ok_btn.winfo_height())
+        assert ok_bottom <= win_h, (
+            f"OK button bottom {ok_bottom} is below the window height "
+            f"{win_h} — it is clipped/unreachable"
+        )
+    finally:
+        dlg.destroy()
+
+
 def test_cancel_returns_none(
     root: tk.Tk, custom_colors_tmp: Path,
 ) -> None:

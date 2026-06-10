@@ -123,6 +123,24 @@ contract that `pick_color(parent, initial="red")` is valid.
 `protect_combobox_wheel(self)` is invoked at the end of `__init__`,
 covering all 6 numeric `ttk.Spinbox` widgets in one sweep.
 
+### Footer pack order (OK / Cancel never clipped)
+`_build_ui` packs the OK / Cancel footer **first** with
+`side="bottom"`, BEFORE the `expand=True` body — the canonical
+fixed-footer pack pattern (same one documented in
+`indicator_dialog.py`). This guarantees the footer always claims its
+natural height and the OK button (the only control that commits the
+chosen colour) can never be clipped off the bottom of the fixed-size,
+non-resizable window, even when the body content is taller than
+expected on a larger-font / HiDPI display. The earlier order packed
+the body first, leaving only ~8px of slack at the `560x440` default —
+on bigger-font displays that pushed the footer off-screen, so the user
+saw no button to select a colour. The default geometry was also bumped
+to `560x470` for body headroom. Pinned by
+`test_ok_cancel_footer_packed_first_so_never_clipped` (pack-order
+invariant) + `test_ok_button_is_mapped_within_window_bounds`
+(end-to-end geometry, skipped when the headless WM won't map the
+toplevel).
+
 ### Geometry persistence
 `geometry_key="dlg.color_palette"` re-uses the historical key so
 the dialog remembers its position across launches.
@@ -144,8 +162,9 @@ the dialog remembers its position across launches.
   surface: helper round-trips (`_normalise` / `_load_*` / `_save_*`),
   dialog widget attributes, initial-colour seeding (hex + X11 name),
   field bi-directional round-trips (hex ↔ RGB ↔ HSL), OK / Cancel
-  result wiring, Add-to-Custom persistence, dark-theme chrome colour
-  assertions, wheel-over-spinbox guard.
+  result wiring, the footer-first pack-order invariant (OK button
+  never clipped), dark-theme chrome colour assertions, wheel-over-
+  spinbox guard.
 - `tests/unit/test_hex_case_constants.py::test_palette_normalise_returns_lowercase`
   pins `_normalise` lowercase contract.
 - `tests/smoke/test_smoke_full.py::check_b42_indicator_color_palette`
