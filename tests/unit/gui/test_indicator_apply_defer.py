@@ -192,63 +192,81 @@ def _mutate_first_row(dlg) -> None:
     dlg._commit_now(row)
 
 
-def test_dialog_opens_live_by_default(app_root) -> None:
-    """Manage Indicators now renders live on open (auto-apply ON default).
+def test_dialog_opens_live_with_no_apply_ui(app_root) -> None:
+    """Manage Indicators renders live on open with NO Apply UI.
 
-    The deferred 'Apply' stopgap is opt-in (uncheck Auto-apply). Live
-    rendering is what correctly spawns a new lower pane (e.g. RRVOL) the
-    moment an indicator is added."""
+    The deferred 'Apply' stopgap is hidden from the user
+    (``_SHOW_APPLY_UI`` False): no Apply button, no Auto-apply checkbox,
+    no Ctrl+Return shortcut. Live rendering is what correctly spawns a new
+    lower pane (e.g. RRVOL) the moment an indicator is added. The
+    machinery is retained behind the flag for a future bring-back."""
     _seed_bbands(app_root)
     dlg = IndicatorDialog(app_root)
     try:
         assert dlg._defers_render is True  # the dialog CAN defer...
-        assert bool(dlg._auto_apply_var.get()) is True  # ...but defaults live
+        assert dlg._SHOW_APPLY_UI is False  # ...but the UI is hidden
+        assert bool(dlg._auto_apply_var.get()) is True  # defaults live
         assert app_root._defer_calls["begin"] == 0, "must not defer on open"
         assert dlg._render_deferred_active is False
-        # Apply button still exists (opt-in stopgap) but is disabled.
-        assert dlg._apply_btn is not None
-        assert str(dlg._apply_btn.cget("state")) == "disabled"
-        # A live edit renders via the manager subscriber (no pending,
-        # Apply stays disabled).
+        # The user-facing Apply controls are gone.
+        assert dlg._apply_btn is None, "Apply button must not be shown"
+        assert dlg._auto_apply_chk is None, "Auto-apply checkbox must not be shown"
+        assert not dlg.bind("<Control-Return>"), "Ctrl+Return Apply must be unbound"
+        # A live edit renders via the manager subscriber (nothing pending).
         _mutate_first_row(dlg)
         assert dlg._pending_dirty is False
-        assert str(dlg._apply_btn.cget("state")) == "disabled"
     finally:
         dlg._on_cancel()
     assert app_root._defer_indicator_render == 0
 
 
-def test_deferred_mode_defers_edits_and_flushes_on_apply(app_root) -> None:
-    """Opt into deferred mode (uncheck Auto-apply): edits then wait for Apply."""
+def test_retained_deferral_machinery_still_works(app_root) -> None:
+    """The deferral path is hidden but NOT removed — driving it directly
+    (as a future re-enabled UI would) still defers + flushes correctly.
+
+    This guards the retained machinery against rot so bringing the Apply
+    UI back is a one-line ``_SHOW_APPLY_UI`` flip with nothing else to fix."""
     _seed_bbands(app_root)
     dlg = IndicatorDialog(app_root)
     try:
-        # Opt into the deferred stopgap.
+        # Opt into the deferred path programmatically (what the hidden
+        # Auto-apply checkbox would do).
         dlg._auto_apply_var.set(False)
         dlg._on_auto_apply_toggled()
         assert app_root._defer_calls["begin"] == 1
         assert dlg._render_deferred_active is True
-        assert dlg._apply_btn is not None
-        assert str(dlg._apply_btn.cget("state")) == "disabled"
 
-        # An edit must NOT render — it only marks pending + lights Apply.
+        # An edit must NOT render — it only marks pending.
         _mutate_first_row(dlg)
         assert app_root._defer_calls["flush"] == 0, "edit must not render"
         assert dlg._pending_dirty is True
-        assert str(dlg._apply_btn.cget("state")) == "normal"
 
-        # Apply flushes exactly one render and clears pending.
+        # _apply flushes exactly one render and clears pending.
         dlg._apply()
         assert app_root._defer_calls["flush"] == 1
         assert dlg._pending_dirty is False
-        assert str(dlg._apply_btn.cget("state")) == "disabled"
 
-        # A second Apply with nothing pending is a no-op (guarded).
+        # A second _apply with nothing pending is a no-op (guarded).
         dlg._apply()
         assert app_root._defer_calls["flush"] == 1
     finally:
         dlg._on_cancel()  # real close path → _teardown → end deferral
     assert app_root._defer_calls["end"] >= 1, "deferral must be balanced on close"
+    assert app_root._defer_indicator_render == 0
+
+
+def test_show_apply_ui_flag_brings_widgets_back(app_root) -> None:
+    """Flipping ``_SHOW_APPLY_UI`` True restores the Apply button +
+    Auto-apply checkbox — the supported bring-back path."""
+    _seed_bbands(app_root)
+    with mock.patch.object(IndicatorDialog, "_SHOW_APPLY_UI", True):
+        dlg = IndicatorDialog(app_root)
+        try:
+            assert dlg._apply_btn is not None
+            assert dlg._auto_apply_chk is not None
+            assert bool(dlg.bind("<Control-Return>"))
+        finally:
+            dlg._on_cancel()
     assert app_root._defer_indicator_render == 0
 
 

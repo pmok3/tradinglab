@@ -350,6 +350,18 @@ class IndicatorDialog(BaseModalDialog):
     #: by this flag.
     _DEFERS_RENDER: ClassVar[bool] = True
 
+    #: Whether the user-facing deferred-"Apply" controls are shown — the
+    #: Auto-apply checkbox, the Apply button, and the ``Ctrl+Return``
+    #: Apply shortcut. **Default OFF**: the recent perf work (vectorized
+    #: indicators + scanner + live-tick blit) made the deferred stopgap
+    #: unnecessary, so the dialog renders live with no Apply UI. The whole
+    #: deferral machinery (``_begin/_end_render_deferral``, ``_apply``,
+    #: ``_on_auto_apply_toggled``, the app-side ``_*_defer_indicator_render``
+    #: hooks) is intentionally retained behind this single flag so the
+    #: feature can be brought back by flipping it to ``True`` — nothing
+    #: else needs to change.
+    _SHOW_APPLY_UI: ClassVar[bool] = False
+
     def __init__(
         self,
         app: tk.Tk,
@@ -455,6 +467,7 @@ class IndicatorDialog(BaseModalDialog):
         self._pending_dirty = False
         self._render_deferred_active = False
         self._auto_apply_var = tk.BooleanVar(value=True)
+        self._auto_apply_chk: ttk.Checkbutton | None = None
         self._apply_btn: ttk.Button | None = None
         self._base_title = "Manage Indicators"
         # Build the chrome.
@@ -489,8 +502,11 @@ class IndicatorDialog(BaseModalDialog):
         self.bind("<Control-s>", lambda _e: self._on_save_close())
         # Apply (deferred-render flush). Ctrl+Return — NOT bare Return,
         # which commits the focused param Entry/Spinbox/Combobox. Fires
-        # from anywhere in the dialog, including inside a field.
-        if self._defers_render:
+        # from anywhere in the dialog, including inside a field. Gated
+        # behind ``_SHOW_APPLY_UI`` (default OFF) along with the Apply
+        # button + Auto-apply checkbox — the deferred stopgap is hidden
+        # from the user but the machinery is retained (see class attr).
+        if self._defers_render and self._SHOW_APPLY_UI:
             self.bind("<Control-Return>", lambda _e: self._apply())
             self.bind("<Control-KP_Enter>", lambda _e: self._apply())
         # Resize reactivity (audit item #1): bind the Toplevel's
@@ -918,11 +934,12 @@ class IndicatorDialog(BaseModalDialog):
         ttk.Button(bar, text="Remove Selected",
                    command=self._on_click_remove).pack(side="left",
                                                        padx=(6, 0))
-        # Auto-apply toggle. Default ON: indicator edits render live (the
-        # recent perf work made the deferred "Apply" stopgap unnecessary).
-        # Uncheck to restore the deferred flow (edits wait for Apply).
-        # Only meaningful for the full dialog (the popup renders live).
-        if self._defers_render:
+        # Auto-apply toggle + Apply button — the user-facing deferred
+        # stopgap. Hidden by default (``_SHOW_APPLY_UI`` False): the
+        # dialog renders live, so there is nothing to apply. The widgets
+        # (and the whole deferral path) are retained behind the flag so
+        # the feature can be brought back without re-plumbing.
+        if self._defers_render and self._SHOW_APPLY_UI:
             self._auto_apply_chk = ttk.Checkbutton(
                 bar, text="Auto-apply", variable=self._auto_apply_var,
                 command=self._on_auto_apply_toggled,
@@ -939,9 +956,10 @@ class IndicatorDialog(BaseModalDialog):
         self._save_close_btn.pack(side="right", padx=(0, 6))
         # Apply (deferred-render flush) — sits left of Save and Close so
         # it's closest to the rows it affects. Enabled only when there
-        # are un-rendered changes. Omitted entirely for live dialogs
-        # (the per-indicator popup), which never defer.
-        if self._defers_render:
+        # are un-rendered changes. Hidden by default (``_SHOW_APPLY_UI``
+        # False); omitted entirely for live dialogs (the per-indicator
+        # popup), which never defer.
+        if self._defers_render and self._SHOW_APPLY_UI:
             self._apply_btn = ttk.Button(
                 bar, text="Apply", command=self._apply, state="disabled",
             )

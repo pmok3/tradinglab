@@ -210,22 +210,31 @@ the dialog — preset persistence is via Indicators → Save Preset. Dirty
 tracking: `_mark_dirty()` fires on any commit/remove, enables Save (disabled
 when clean), appends `•` to title bar.
 
-### Live render by default + opt-in deferred "Apply" (legacy stopgap)
+### Live render, Apply UI hidden (legacy stopgap retained behind a flag)
 
-The full Manage Indicators dialog **renders live by default** (auto-apply
-ON): every settled per-row edit (params, scopes, colors, intervals,
-add/remove) mutates the live `IndicatorManager` AND triggers one coalesced
-`_render()`, so a freshly-added pane-requiring indicator (e.g. RRVOL)
-spawns its lower pane immediately. The recent perf work (vectorized
-indicators + scanner + the live-tick blit) made the old deferred "Apply"
-stopgap — built to mask slow chart loads — unnecessary.
+The full Manage Indicators dialog **renders live**: every settled per-row
+edit (params, scopes, colors, intervals, add/remove) mutates the live
+`IndicatorManager` AND triggers one coalesced `_render()`, so a
+freshly-added pane-requiring indicator (e.g. RRVOL) spawns its lower pane
+immediately. The recent perf work (vectorized indicators + scanner + the
+live-tick blit) made the old deferred "Apply" stopgap — built to mask slow
+chart loads — unnecessary, so its **user-facing controls are hidden**.
 
-The deferred flow is still available as an **opt-in**: unchecking
-Auto-apply re-enters deferral, where edits wait for the Apply button (or
-Save and Close). Controlled by the `_DEFERS_RENDER` class attribute
-(default `True` = "this dialog is *capable* of deferring"; the
-per-indicator popup overrides to `False`) and `_auto_apply_var` (default
-`True` = render live).
+The deferred machinery is **retained but dormant**, gated by a single
+class attribute so it can be brought back without re-plumbing:
+
+- `_DEFERS_RENDER` (default `True`): "this dialog is *capable* of
+  deferring" (the per-indicator popup overrides to `False`). Drives the
+  meta-test classification.
+- `_SHOW_APPLY_UI` (default **`False`**): whether the user-facing deferred
+  controls — the **Auto-apply checkbox**, the **Apply button**, and the
+  **`Ctrl+Return` Apply shortcut** — are created. Hidden by default. Flip
+  to `True` to bring the whole Apply UI back; nothing else changes.
+- `_auto_apply_var` (default `True` = render live). With the checkbox
+  hidden there is no way to flip it in the UI, so the dialog stays live;
+  the startup gate `if _defers_render and not _auto_apply_var.get()` never
+  begins deferral. Tests/automation can still drive `_auto_apply_var` +
+  `_on_auto_apply_toggled()` directly to exercise the retained path.
 
 - **App-side gate** (`app.py`): a depth counter `_defer_indicator_render`
   is checked at the top of `_on_indicator_event` — when `> 0` the
@@ -249,24 +258,25 @@ per-indicator popup overrides to `False`) and `_auto_apply_var` (default
   `_mark_dirty()` call site (`_commit_now`, the remove path, and the
   external-mutation branch of `_on_manager_event`); it is inert unless
   `_render_deferred_active` (i.e. inert in the default live mode).
-- **Apply** (`_apply`, button + `Ctrl+Return`/`Ctrl+KP_Enter`): flushes
-  exactly one render, clears `_pending_dirty`, disables the button, and
+- **Apply** (`_apply`, method; the button + `Ctrl+Return`/`Ctrl+KP_Enter`
+  shortcut are only created when `_SHOW_APPLY_UI`): flushes exactly one
+  render, clears `_pending_dirty`, disables the button (if shown), and
   **re-snapshots** `manager.to_dict()` — so Apply becomes the new Cancel
   baseline (classic property-sheet "Apply commits, Cancel discards
   un-applied edits"). Guarded no-op when nothing is pending (always the
-  case in live mode), so the shortcut is harmless. Bound to `Ctrl+Return`
-  rather than bare Return (bare Return commits the focused param widget).
+  case in the default live mode). Bound to `Ctrl+Return` rather than bare
+  Return (bare Return commits the focused param widget).
 - **Save and Close** does an **implicit Apply** before teardown (in
   deferred mode; a no-op flush in live mode where nothing is pending),
   then discards the snapshot.
 - **Cancel** reverts the manager to `_snapshot`; the revert fires its own
   manager event, which renders live (or, in deferred mode, the chart
   already shows the snapshot state) — no extra flush needed.
-- **Auto-apply checkbox** (default ON = live): unchecking begins deferral;
-  re-checking ends deferral + flushes immediately. Only shown when
-  `_defers_render`. The Apply button is still rendered (disabled while
-  live, since nothing is ever pending) so it is available the moment the
-  user opts into deferred mode.
+- **Auto-apply checkbox + Apply button** are created only when
+  `_SHOW_APPLY_UI` is `True` (default `False`, so they are absent and
+  `_auto_apply_chk` / `_apply_btn` stay `None`). When shown: the checkbox
+  defaults ON (live); unchecking begins deferral; re-checking ends
+  deferral + flushes; the Apply button enables iff `_pending_dirty`.
 
 ### Save-and-Close validation hook (`_collect_save_close_errors`)
 
@@ -309,10 +319,14 @@ to any future "common picks plus free-text" param. Audit
 - Live by default: adding a pane-requiring indicator (e.g. RRVOL) spawns
   its lower pane on the live render. Pinned by
   `tests/unit/gui/test_indicator_live_pane.py`.
-- In opt-in deferred mode the chart is never left showing un-applied edits
-  after the dialog closes: Save-and-Close implicitly Applies; Cancel
-  reverts to the snapshot. The Apply button is enabled iff `_pending_dirty`.
+- The Apply UI is hidden by default (`_SHOW_APPLY_UI` False): no Apply
+  button, no Auto-apply checkbox, no `Ctrl+Return` Apply binding. The
+  deferral machinery is retained and still functions when driven directly
+  (so flipping `_SHOW_APPLY_UI` True is the complete bring-back). When the
+  flag is on, the chart is never left showing un-applied edits after close
+  (Save-and-Close implicitly Applies; Cancel reverts), and the Apply
+  button enables iff `_pending_dirty`.
 - The render-mode contract (every indicator-editing window is classified
-  `_DEFERS_RENDER` True/live-False, and the full dialog defaults to live
-  with deferral opt-in) is pinned by
+  `_DEFERS_RENDER` True/live-False; the full dialog renders live with the
+  Apply UI hidden but the deferral path retained) is pinned by
   `tests/unit/gui/test_indicator_apply_defer.py`.
