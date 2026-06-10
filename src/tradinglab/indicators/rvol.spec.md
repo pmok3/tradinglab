@@ -128,8 +128,10 @@ z[i] = (rvol[i] - mean(window)) / std(window, ddof=1)
 
 
 ### Session filter
-`session_filter` controls which bars contribute to BOTH numerator
-and denominator. Default `regular_only` mirrors VWAP convention.
+For `simple`, `session_filter` controls which bars contribute to BOTH
+numerator and denominator. `cumulative` and `time_of_day` build
+regular-session groups and currently do not consult `session_filter`.
+Default `regular_only` mirrors VWAP convention.
 
 ### Reference levels
 `z_score=False`: `1.0 / threshold_warn / threshold_extreme`.

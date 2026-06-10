@@ -4,7 +4,7 @@
 Live-data fetcher backed by yfinance. Thin adapter: pulls a DataFrame via `yf.Ticker(t).history(...)` and delegates to the vectorized `candles_from_dataframe` normalizer.
 
 ## Public API
-- `fetch_live_data(ticker="AMD", interval="1d") -> Optional[List[Candle]]`. Returns `None` on any failure (import error — yfinance isn't installed; network error; empty frame). Registered as `"yfinance"` in `DATA_SOURCES`.
+- `fetch_live_data(ticker="AMD", interval="1d") -> Optional[List[Candle]]`. Returns `None` on any failure (import error — yfinance isn't installed; network error; empty frame). May return `[]` when the frame was non-empty but every provider row was dropped by normalization (for example non-finite OHLC). Registered as `"yfinance"` in `DATA_SOURCES`.
 
 ## Dependencies
 - Internal: `..constants.INTERVAL_PERIODS`, `..constants.is_intraday`, `..models.Candle`, `.normalize.candles_from_dataframe`.
@@ -16,10 +16,11 @@ Live-data fetcher backed by yfinance. Thin adapter: pulls a DataFrame via `yf.Ti
 - **`prepost=intraday`**: intraday fetches include pre/post bars; daily+ fetches don't. Session tagging is delegated to `candles_from_dataframe` → `classify_session`.
 - **`period` chosen from `INTERVAL_PERIODS`** (e.g. `"5m"→"60d"`, `"1h"→"730d"`): maximizes history within yfinance's per-interval caps. Fallback `"2y"` for unknown intervals.
 - **Uses `candles_from_dataframe` (not iterrows)**: 5–20× faster on typical intraday fetches; also populates the prebuilt-arrays side channel so the subsequent `SeriesArrays` build skips extraction.
-- **Errors are caught at the source layer, never propagated** — a broad `except Exception` swallows yfinance's varied HTTP/JSON/KeyError failures and returns `None`. Diagnostics go via `print()` at `yfinance_source.py:45` (no `_status` available in this stateless module). This honours the `data/base.py` contract that fetchers MUST NOT raise.
+- **Non-finite OHLC rows are dropped by the shared normalizer**: Yahoo can emit a phantom current-session row before any trade prints (NaN OHLC, sometimes stray volume). `candles_from_dataframe` filters those rows before `Candle` construction; NaN volume on otherwise-valid bars is still coerced to `0`.
+- **Errors are caught at the source layer, never propagated** — a broad `except Exception` swallows yfinance's varied HTTP/JSON/KeyError failures and returns `None`. Diagnostics go via `print()` at `yfinance_source.py:43` (no `_status` available in this stateless module). This honours the `data/base.py` contract that fetchers MUST NOT raise.
 
 ## Invariants
-- `fetch_live_data(t, i)` returns either `None` or a non-empty `List[Candle]`. Empty frames are coerced to `None`.
+- `fetch_live_data(t, i)` returns either `None` or a `List[Candle]` (possibly empty after non-finite-OHLC filtering). Empty frames are coerced to `None`.
 - Returned bars carry US/Eastern tz for US equities (yfinance default for that asset class).
 - For intraday calls, the result may contain pre/post bars (with correct session tags) if the ticker has them.
 

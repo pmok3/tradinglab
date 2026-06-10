@@ -15,13 +15,14 @@ Resolve the well-known basket names ("S&P 500", "Nasdaq-100 / QQQ", "NYSE", "NAS
 - `FULL_EXCHANGE_BASKETS: frozenset` — `{"nyse", "nasdaq"}`. Used by the prepare-universe dialog to gate the amber survivorship banner; future full-exchange baskets get the treatment automatically.
 
 ## Dependencies
-- Internal: none (pure data + stdlib).
+- Internal: `_resources.resource_path` (frozen-mode-aware `tools/*.csv` path
+  resolution).
 - External: `csv`, `pathlib`.
 
 ## Design Decisions
 - **Centralized CSV loader (`_load_symbols_csv`).** The three CSV-backed loaders (sp500, nyse, nasdaq) share a single helper to keep CSV-shape drift between snapshots impossible. The helper takes an optional `munge_dots` flag so NASDAQ's already-clean feed bypasses dot-translation.
 - **Hardcoded QQQ snapshot, not scraped.** Wikipedia / Invesco scraping is fragile (table layouts change, CDN throttling, bot-detection), and the failure mode of a stale snapshot is benign: the preload's per-symbol failure list collects any delisted / renamed tickers and the user can decide whether to continue with the partial universe. A `QQQ_LAST_REFRESHED` constant keeps freshness visible.
-- **`tools/sp500.csv` is the source of truth for SP500.** It already ships in the repo for the existing `tools/universe_cache.py` batch fetcher; duplicating it under `src/` would create a synchronisation hazard. The loader resolves the path relative to the module file, so cwd-independent.
+- **`tools/sp500.csv` is the source of truth for SP500.** It already ships in the repo for the existing `tools/universe_cache.py` batch fetcher; duplicating it under `src/` would create a synchronisation hazard. The loader resolves the path via `_resources.resource_path` (handling both source checkouts and PyInstaller frozen bundles under `_internal/tools/`), so cwd-independent.
 - **NYSE & NASDAQ snapshots ship as `tools/{nyse,nasdaq}.csv` with a canonical 4-column schema** (`Symbol,Name,Exchange,SnapshotDate`) decoupled from NASDAQ Trader's pipe-delimited vendor format. Curation (drop preferreds, warrants, units, rights, ETFs, halted / deficient / bankrupt names) happens at snapshot-build time inside `tools/refresh_exchange_lists.py`, NOT here — keeping this module's hot path a single CSV read.
 - **NYSE-proper only.** `nyse_symbols()` is `Exchange='N'` in NASDAQ Trader's `otherlisted.txt`, i.e. the Big Board. NYSE American (A), Arca (P, mostly ETFs), and Cboe BZX (Z) are excluded. Future composite or per-venue baskets can be separate entries in the registry without renaming this one.
 - **No network, no caching.** This is a pure resolver. The preload service does the network work; the disk_cache does the persistence work; this module just answers "what symbols are in basket X?".

@@ -44,7 +44,8 @@ Unknown kinds are accepted and preserved on write (forward-compat).
 
 ## Dependencies
 
-- Internal: `paths.app_data_dir`, `core.io_helpers.atomic_write_json`.
+- Internal: `paths.app_data_dir`, `core.io_helpers.read_json` (reads) +
+  `core.io_helpers.atomic_write_json` (writes).
 - External: stdlib only.
 
 ## Design notes

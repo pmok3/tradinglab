@@ -12,7 +12,7 @@ option A); each card just owns its strip of that canvas.
   `binding`.
 - `bbox` — figure-coord bbox (forwarded from the Axes position).
 - `set_binding(binding)` — update binding, reset controller, redraw
-  placeholder.
+  placeholder with the panel's resolved theme palette when available.
 - `set_focus_indicator(focused)` — toggle focus ring (M1 stub; M2
   wires the visual).
 - `is_focused() -> bool`.
@@ -21,6 +21,9 @@ option A); each card just owns its strip of that canvas.
 - **No per-card canvas.** A second `FigureCanvasTkAgg` would
   multiply blit budgets and complicate the existing `_blit_bg` /
   `_pan_bg` infra in `app.py`. One Figure / N Axes wins.
+- **Theme-aware placeholder.** `set_binding` forwards
+  `owner_panel._theme_palette` into `draw_card_placeholder` so empty
+  / loading cards match dark mode before the first sparkline render.
 - **Click-to-promote NOT wired in M1.** Axes can't bind Tk events
   directly; the panel will register an `mpl_connect` handler on the
   shared canvas in M2 and hit-test against `ax.contains`.

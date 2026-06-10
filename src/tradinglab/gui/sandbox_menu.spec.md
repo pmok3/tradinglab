@@ -3,7 +3,8 @@
 ## Purpose
 
 Menu-callback handlers for the **Sandbox** cascade — Start, End,
-Performance, Save, Load, Tags, Prepare Universe Data. Extracted
+Performance, Save, Load, Tags — plus the Tools-menu Prepare Universe
+Data command. Extracted
 from `app.py` so menu wiring is decoupled from sandbox lifecycle
 helpers (those remain on ChartApp because they're also called from
 non-menu paths: ticker entry, watchlist, drilldown).
@@ -13,7 +14,8 @@ non-menu paths: ticker entry, watchlist, drilldown).
 `class SandboxMenuMixin` (all methods private):
 
 - `_on_menu_sandbox_start()` — open `SandboxStartDialog`,
-  sync-fetch SPY at chosen interval if not cached, build
+  resolve the reference symbol from `sandbox_reference_symbol`
+  (default `SPY`), sync-fetch it at chosen interval if not cached, build
   `SessionSpec` via `_build_sandbox_spec`, construct
   `SandboxController`, call `start_session`, restrict toolbar
   intervals, mount SandboxPanel, install strict-offline universe
@@ -71,9 +73,9 @@ non-menu paths: ticker entry, watchlist, drilldown).
 
 ## Locked Design Decisions
 
-- **Reference symbol**: SPY anchors the master clock. If SPY
-  can't be fetched, fail fast with a status message rather than
-  synthesizing a fallback timeline.
+- **Reference symbol**: `sandbox_reference_symbol` (default `SPY`)
+  anchors the master clock. If it can't be fetched, fail fast with a
+  status message rather than synthesizing a fallback timeline.
 - **Sandbox intervals**: `["1m", "2m", "5m", "15m", "30m", "1h"]`
   only (master clock is intraday).
 - **Daily reference fetch** (`daily_lookback_bars > 0`): degrades

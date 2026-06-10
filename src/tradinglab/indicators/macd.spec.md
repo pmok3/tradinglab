@@ -23,8 +23,8 @@ bounded oscillators.
   - `ma_type: choice` (default `"EMA"`, `SMA | EMA | WMA | RMA`) —
     applied uniformly to fast, slow, and signal.
   - `source: choice` (default `"close"`, `close | hl2 | hlc3 | ohlc4`).
-- `default_style`: `macd` `#2ca02c` w=1.4; `signal` `#ff7f0e` w=1.2;
-  `histogram` `#26a69a` w=1.0 (bar colors come from `histogram_palette`
+- `default_style`: `macd` `#2ca02c` w=1.4 and `signal` `#ff7f0e` w=1.2
+  via `_palette`; `histogram` `#26a69a` w=1.0 (bar colors come from `histogram_palette`
   via the classifier — the style color is only used for legend hint).
 - `output_kinds: ClassVar[Mapping[str, str]]` —
   `{"macd": "line", "signal": "line", "histogram": "histogram"}`.
@@ -55,8 +55,8 @@ bounded oscillators.
   `MACD(8,21,5)`).
 
 ## Dependencies
-- Internal: `..models.Candle`, `..core.bars.Bars`,
-  `.base.LineStyle`, `.base.ParamDef`,
+- Internal: `..constants.macd_histogram_palette`, `..core.bars.Bars`,
+  `._palette`, `.base.BaseIndicator`, `.base.LineStyle`, `.base.ParamDef`,
   `.ma_kernels.MA_TYPES`, `.ma_kernels.apply_ma`.
 - External: `numpy`.
 

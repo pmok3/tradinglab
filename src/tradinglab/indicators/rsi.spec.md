@@ -10,7 +10,7 @@ Wilder's Relative Strength Index over close prices. Values in `[0, 100]`. Non-ov
   entries NaN. Raises `ValueError` on `length < 2`.
   - `params_schema = (ParamDef("length", "int", 14, min=2,
     max=2000),)` — schema enforces `length >= 2` at dialog level.
-  - `default_style = {"rsi": LineStyle(color="#d62728", width=1.4)}`.
+  - `default_style = {"rsi": LineStyle(color="#d62728", width=1.4)}` via `_palette.QUATERNARY`.
   - `scannable_outputs = (("rsi", "numeric"),)` — opts the indicator into the scanner / entries / exits dropdowns via the registry-driven projection in `scanner.fields`.
   - `warmup_bars` property returns `4 * length` for strategy-tester
     hydration beyond the first finite RSI point.
@@ -18,7 +18,8 @@ Wilder's Relative Strength Index over close prices. Values in `[0, 100]`. Non-ov
 
 ## Dependencies
 - Internal: `..core.bars.Bars`, `.base.BaseIndicator`,
-  `.base.LineStyle`, `.base.ParamDef`, `.wilder.wilder_smooth_avg`.
+  `._palette.QUATERNARY`, `.base.LineStyle`, `.base.ParamDef`,
+  `.wilder.wilder_smooth_avg`.
 - External: `numpy`.
 
 ## Design Decisions
@@ -51,4 +52,3 @@ al = avg_loss[n-1:]
 rs = where(al > 0, ag / al, inf)
 out[n:] = 100 - 100/(1 + rs)
 ```
-

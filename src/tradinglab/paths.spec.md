@@ -12,7 +12,6 @@ cache, logs, indicator plugins, broker tokens).
 ├── watchlists.json
 ├── credentials.dat
 ├── *.jsonl                   (candle JSONL — disk_cache; at root for back-compat)
-├── .pkl-purged-v1            (sentinel; legacy-purge marker — internal only)
 ├── logs\
 ├── events\
 ├── indicators\

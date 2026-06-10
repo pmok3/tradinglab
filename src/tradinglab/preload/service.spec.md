@@ -46,7 +46,7 @@ Pure-logic batch fetch loop for the sandbox universe-preload feature. Serial, ca
 
 ## Invariants
 - `result.per_symbol` length ≤ `len(symbols)` (cancellation may end the loop early, in which case some trailing symbols have no SymbolOutcome).
-- For every emitted `IntervalOutcome`, `bars >= 0` and `error == ""` whenever `status != "failed"`.
+- For every emitted `IntervalOutcome`, `bars >= 0`; `error` is non-empty for `"failed"` and may carry the last transient error for `"cancelled"`.
 - `loaded_per_symbol()` keys ⊆ `set(symbols)`; values are tuples of strings ⊆ `set(intervals)`.
 - The total number of `kind="symbol"` ProgressEvents equals `sum(len(so.intervals) for so in result.per_symbol)`.
 - Exactly one `kind="start"` and one `kind="finish"` event are emitted per call.

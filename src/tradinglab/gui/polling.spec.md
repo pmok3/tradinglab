@@ -99,9 +99,10 @@ Also hosts the pure scheduler helpers (only caller is here).
 ## Dependencies
 
 - Internal: `..constants.interval_minutes`, `..constants.is_intraday`,
-  `..data.DATA_SOURCES`. Reads (no writes) many `ChartApp` attrs.
-- External: `tkinter` (TclError class only), `zoneinfo` (lazy),
-  `datetime`, `queue`, `time`, `contextlib`. No matplotlib.
+  `..data.DATA_SOURCES`, `..core.timezones.ET` (lazy inside scheduler
+  helpers). Reads (no writes) many `ChartApp` attrs.
+- External: `tkinter` (TclError class only), `datetime`, `queue`,
+  `time`, `contextlib`. No matplotlib.
 
 ## Design Decisions
 

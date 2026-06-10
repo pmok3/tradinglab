@@ -27,7 +27,8 @@ population-σ window regardless of kernel.
   defined for future per-instance default swapping.
 - `scannable_outputs = (("middle","numeric"),("upper","numeric"),("lower","numeric"))` — exposes the three lines to the scanner registry.
 - `effective_output_keys(cls, params) -> ("upper", "middle", "lower")` — classmethod overriding `BaseIndicator.effective_output_keys` (`default_style` insertion order is `middle, upper, lower`) so the in-readout overlay legend (`gui/readout_legend.py`) renders the bands in canonical **top-down visual order on the chart** (`upper` above `middle` above `lower`). Without this override the row would read `BB(20) middle <v> upper <v> lower <v>`, which contradicts the chart geometry. Audit `legend-condensation`.
-- `compute(candles) -> {"middle", "upper", "lower"}`. First
+- `compute_arr(bars) -> {"middle", "upper", "lower"}` (and inherited
+  `compute(candles)` via `BaseIndicator`). First
   `max(length, std_length) - 1` entries of the bands are NaN; the
   centerline alone is defined from `length-1` onward (so for
   `std_length > length` the middle shows during a warmup where bands
@@ -37,8 +38,9 @@ population-σ window regardless of kernel.
   decoupled (e.g. `BB(20,2,EMA,σ=10)`).
 
 ## Dependencies
-- Internal: `..models.Candle`, `.base.LineStyle`, `.base.ParamDef`,
-  `.ma_kernels.MA_TYPES`, `.ma_kernels.apply_ma`.
+- Internal: `..core.bars.Bars`, `._palette`, `.base.BaseIndicator`,
+  `.base.LineStyle`, `.base.ParamDef`, `.ma_kernels.MA_TYPES`,
+  `.ma_kernels.apply_ma`.
 - External: `numpy`.
 
 ## Design Decisions
@@ -68,7 +70,7 @@ population-σ window regardless of kernel.
 
 ## Data Flow / Algorithm
 ```
-closes = fromiter(c.close for c in candles)
+closes = bars.close
 center = apply_ma(ma_type, closes, length)            # MA kernel
 csum   = concat([0], cumsum(closes))
 csum2  = concat([0], cumsum(closes**2))

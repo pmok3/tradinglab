@@ -17,7 +17,7 @@ Save / load a sandbox session to a single JSON file plus an optional sibling scr
 - **Versioned envelope**, not bare `SessionResult.to_dict()`. The thin wrapper carries `format`, `version`, `saved_at`, `session_id` so a future schema break can fail loudly rather than silently misinterpret an old file. Embedding `result` keeps `SessionResult`'s own field-level round-trip contract authoritative.
 - **Byte-stable canonical JSON**: `json.dumps(envelope, sort_keys=True, separators=(",", ":"))`. Two saves of the same result produce the same bytes — useful for the smoke round-trip check.
 - **Screenshots are copied, not moved**: an in-progress session can save snapshots without losing the live capture history. Refresh-on-resave: any prior copy is `rmtree`'d first so deleted snapshots propagate (the on-disk archive mirrors the source).
-- **`saved_at` uses `utcnow().replace(microsecond=0).isoformat() + "+00:00"`**: stable, second-precision, explicitly UTC. (Keeping a wall-clock field means consecutive saves *do* differ by `saved_at`; the byte-stability claim above is per-result, not per-save.)
+- **`saved_at` uses `datetime.now(timezone.utc).replace(microsecond=0).isoformat()`**: stable, second-precision, explicitly UTC. (Keeping a wall-clock field means consecutive saves *do* differ by `saved_at`; the byte-stability claim above is per-result, not per-save.)
 - **Hard fail on `format`/`version` mismatch**: better than silent misinterpretation of a future schema.
 
 ## Invariants

@@ -1,15 +1,15 @@
 # gui/performance_view.py — Spec
 
 ## Purpose
-Phase 1d read-only Performance View Toplevel. Three-pane window driven by a [`SessionResult`](../backtest/session.spec.md): an equity-curve chart, a sortable trade table (one row per closed round-trip), and a per-setup aggregates table. Bottom button bar carries `Export CSV…` and `Copy to clipboard`. Used both for "View Performance…" on a live or just-ended session and for the post-Load review window.
+Phase 1d read-only Performance View Toplevel. Multi-pane window driven by a [`SessionResult`](../backtest/session.spec.md): a summary line, an equity-curve chart, a sortable trade table (one row per closed round-trip), a per-setup aggregates table, and a per-proximity aggregates table. Bottom button bar carries `Export CSV…`, `Copy to clipboard`, and `Close`. Used both for "View Performance…" on a live or just-ended session and for the post-Load review window.
 
 ## Public API
-- `class PerformanceView(tk.Toplevel)` — `__init__(parent, result: SessionResult, *, title="Sandbox — Performance", screenshot_dir: Optional[Path] = None)`. `screenshot_dir` is the directory holding `<order_id>_pre.png` / `<ref_id>_post.png` files captured by [`SandboxController`](../backtest/replay.spec.md); when provided, `Export CSV…` mirrors them into a sibling bundle.
+- `class PerformanceView(BaseModalDialog)` — `__init__(parent, result: SessionResult, *, title="Sandbox — Performance", screenshot_dir: Optional[Path] = None)`. `screenshot_dir` is the directory holding `<order_id>_pre.png` / `<ref_id>_post.png` files captured by [`SandboxController`](../backtest/replay.spec.md); when provided, `Export CSV…` mirrors them into a sibling bundle.
 - `_fmt_ts(ts: int) -> str` — render epoch-seconds as `YYYY-MM-DD HH:MM` UTC.
 - `_truncate(s, n=60) -> str` — single-line, ellipsis-clipped string for the thesis column.
 
 ## Dependencies
-- Internal: [`..backtest.performance`](../backtest/performance.spec.md) (`build_trade_rows`, `build_setup_aggregates`, `TradeRow`, `SetupAggregate`, `realized_pnl_curve`, `trade_rows_to_tsv`, `write_trade_rows_csv`), [`..backtest.session.SessionResult`](../backtest/session.spec.md).
+- Internal: [`..backtest.performance`](../backtest/performance.spec.md) (`build_trade_rows`, `build_setup_aggregates`, `build_proximity_aggregates`, `TradeRow`, `SetupAggregate`, `ProximityAggregate`, `realized_pnl_curve`, `trade_rows_to_tsv`, `write_trade_rows_csv`), [`..backtest.session.SessionResult`](../backtest/session.spec.md), `gui._modal_base.BaseModalDialog` / `protect_combobox_wheel`.
 - External: `tkinter`, `tkinter.ttk`, `tkinter.filedialog` (module-level import so smoke tests can patch `performance_view.filedialog.asksaveasfilename`); `matplotlib` (`Figure`, `FigureCanvasTkAgg`, `matplotlib.dates`) imported lazily inside `_build_equity_chart` to keep module import cheap.
 
 ## Design Decisions
@@ -18,6 +18,7 @@ Phase 1d read-only Performance View Toplevel. Three-pane window driven by a [`Se
 - **`ax.step` for realized**: closed-trade P&L is discrete — it should jump at `exit_ts` and stay flat between closes. A plain line plot would imply gradual change between closes and mislead a trader.
 - **Chart pane hidden when `result.equity_curve` is empty** (engine never ticked, headless smoke). The trade table is still useful in that case.
 - **Trade table is sortable, aggregates are not**: discretionary traders sort trades by P/L / setup / conviction freely; aggregates are intentionally pinned to the canonical `(-count, tag)` order from `build_setup_aggregates` so screenshots / cross-session comparisons are stable.
+- **Per-proximity aggregates are not sortable**: market-event proximity rows come from `build_proximity_aggregates` and use the same count/win-rate/expectancy shape as setup aggregates; an empty proximity key renders as `(no-proximity)`.
 - **Sort is stable across re-clicks**: clicking the same column toggles direction; the underlying sort uses Python's stable `sorted` so within-bucket ordering is preserved.
 - **UTC everywhere** (`_fmt_ts` and the chart's `mdates.DateFormatter`): saved sessions render identically across timezones — the main chart's display-tz setting governs chart axes only, not the analytics window.
 - **Thesis truncated to 60 chars in the table**; the full text is preserved in the CSV / clipboard exports.
@@ -38,4 +39,4 @@ Phase 1d read-only Performance View Toplevel. Three-pane window driven by a [`Se
 - `check_d57_performance_view_equity_csv_export` covers the chart-toggle wiring, both export buttons (CSV with mirrored-screenshots bundle, TSV-to-clipboard), the cancel path, and the screenshot-filename fallback for unattributed closes.
 
 ## Modal keys
-`__init__` calls `bind_modal_keys(self, cancel=self.destroy, primary=None)`; this is a read-only window so ESC closes and Return is intentionally a no-op.
+`__init__` calls `_finalize_modal(primary=None, cancel=self.destroy, grab=False)`; this is a read-only non-modal window so ESC closes, Return is intentionally a no-op, and the parent chart remains interactive while the view is open.

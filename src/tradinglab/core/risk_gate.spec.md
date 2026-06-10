@@ -23,7 +23,7 @@ Pre-submit risk gate consulted by the entry evaluator just before an `EntrySigna
 - **Protocol, not ABC**: any duck-typed `check()` is accepted. Apps that want to compose multiple gates can stack them with a small wrapper that returns the first non-None.
 - **Limits are individually optional**: setting `daily_loss_limit=None` disables that check without affecting the others. Lets users adopt gates incrementally.
 - **`RiskBlock.meta` is intentionally untyped (`Dict[str, Any]`)**: each gate decides what numbers to surface. The audit log persists the dict verbatim; the UI can format on demand.
-- **`_ref_price` priority**: `signal.price` (LIMIT/STOP_LIMIT) → `signal.stop_price` (STOP) → `signal.extra["ref_price"]` (MARKET/INDICATOR/SCANNER_ALERT triggers stuff `bar.close` here) → `0.0`. A 0.0 fallback no-ops notional gates rather than crashing.
+- **`_ref_price` priority**: `signal.price` (LIMIT/STOP_LIMIT) → `signal.stop_price` (STOP) → `signal.extra["ref_price"]` (falling back to legacy `signal.meta["ref_price"]`; MARKET/INDICATOR/SCANNER_ALERT triggers stuff `bar.close` here) → `0.0`. A 0.0 fallback no-ops notional gates rather than crashing.
 - **`AllowAllRiskGate`** is provided so the engine can be constructed with a non-`None` default — callers don't need to special-case "no gate".
 
 ## Invariants
@@ -33,4 +33,3 @@ Pre-submit risk gate consulted by the entry evaluator just before an `EntrySigna
 
 ## Testing
 - Covered indirectly via integration smoke tests; `tests/unit/` placement: a per-gate truth-table is recommended (covered indirectly today).
-

@@ -19,7 +19,7 @@ Declares the `Indicator` Protocol, the `INDICATORS` display registry, and the ty
 - `register_legacy_indicator(name, factory)` — idempotent; adds to `_BY_KIND_ID` ONLY. Used for indicator families that consolidated into a single replacement (e.g. SMA + EMA → MovingAverage): the legacy class stays discoverable for in-memory configs and tests, but is excluded from the Add Indicator menu.
 - `factory_by_kind_id(kind_id) -> Optional[(name, factory)]` — stable-id lookup for persistence rehydration.
 - `kind_id_for(name) -> Optional[str]`.
-- `iter_indicator_factories() -> Iterator[(kind_id, name, factory)]` — registration-ordered walk over `_BY_KIND_ID`. Used by `scanner.fields._indicator_field_specs` to project ClassVar opt-ins into FieldSpecs (replaces the old hand-curated `SCANNABLE_INDICATORS` dict).
+- `iter_indicator_factories() -> list[tuple[str, str, IndicatorFactory]]` — registration-ordered walk over `_BY_KIND_ID`. Used by `scanner.fields._indicator_field_specs` to project ClassVar opt-ins into FieldSpecs (replaces the old hand-curated `SCANNABLE_INDICATORS` dict).
 - `indicator_scannable_outputs(factory) -> Tuple[Tuple[str, str], ...]` — safe getattr on the factory's `scannable_outputs` ClassVar (empty tuple if missing). Empty tuple means the indicator opted out of the scanner.
 - `indicator_resets_daily(factory) -> bool` — safe getattr on the `resets_daily` ClassVar (False default).
 - `migrate_kind_id(kind_id, params) -> (kind_id, params)` — applies the
@@ -41,12 +41,22 @@ Declares the `Indicator` Protocol, the `INDICATORS` display registry, and the ty
   `_CHART_ONLY_MIGRATION_KIND_IDS` (currently `"sma"`/`"ema"`): scanner
   surfaces intentionally keep those as separate scannable field ids
   backed by the legacy registry entries.
+  The same helper also renames legacy `lookback_days` to `length` for
+  the unified `rvol` / `rrvol` family, both during kind-id migration and
+  for already-migrated configs that still carry the old param name.
 
 - `_LEGACY_MA_OUTPUT_KEYS: dict[str, str]` — maps a legacy MA `kind_id` (`"sma"` / `"ema"`) to the output-key name the legacy class persisted (`"sma"` / `"ema"`). `IndicatorConfig.from_dict` reads this BEFORE migration so it can remap the user's customised `style[legacy_key]` → `style["ma"]` after the kind_id rewrite — mirrors the `_LEGACY_Z_OUTPUT_KIND_IDS` pattern used by the RVOL family.
+- `_LEGACY_Z_OUTPUT_KIND_IDS: frozenset[str]` — legacy RVOL z-score
+  kind ids whose persisted style/output key was `"z"` and must remap to
+  unified output key `"rvol"`.
+- `_LOOKBACK_DAYS_RENAME_FAMILIES: frozenset[str]` and
+  `_rename_legacy_lookback_days(new_kind_id, params)` — targeted
+  compatibility shim for RVOL/RRVOL configs written with
+  `lookback_days` instead of `length`.
 
 ## Dependencies
 - Internal: `..constants.INTRADAY_INTERVALS`, `..core.bars.Bars`,
-  `..models.Candle`.
+  `..models.Candle`, `._palette.FALLBACK_GRAY`.
 - External: `inspect`, `numpy`, `typing`.
 
 ## Design Decisions

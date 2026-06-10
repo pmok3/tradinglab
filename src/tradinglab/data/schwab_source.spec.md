@@ -6,6 +6,7 @@ Charles Schwab Market Data API (`/pricehistory`) → `List[Candle]`. Two-layer m
 ## Public API
 - `candles_from_schwab_response(payload: dict, *, interval: str) -> List[Candle]` — pure mapper. Tolerates both the standard `{"candles": [...]}` envelope and a bare list (some streaming-adjacent endpoints). Honors `empty: true` (returns `[]`). Uses `candles_from_json_rows` with `ts_unit="ms"`.
 - `fetch_schwab_data(ticker="AAPL", interval="1d") -> Optional[List[Candle]]` — `DataFetcher`-compatible. Returns `None` on missing credentials, missing/expired refresh token, network error, or unsupported interval. **Never raises.**
+- `SCHWAB_REGISTRATION_ENABLED: bool = False` — registry/UI gate kept false until `_http_get_pricehistory` is implemented and the `"schwab"` source is actually registered.
 
 ## Dependencies
 - Internal: `..models.Candle`, `.credentials.SchwabCredentials`, `.credentials.get_credentials`, `.normalize.candles_from_json_rows`, `.schwab_auth.get_access_token`.
@@ -16,6 +17,7 @@ Charles Schwab Market Data API (`/pricehistory`) → `List[Candle]`. Two-layer m
 - **Interval map**: Schwab speaks `(periodType, frequencyType, frequency)` triples. Intraday uses `periodType="day"`; daily+ uses `periodType="year"`. The `"1h"` slot is mapped to 30-minute bars (Schwab has no 60-minute frequency) — would need downsampling at the consumer for true hour bars; current callers tolerate 30-min.
 - **`_http_get_pricehistory` is currently a `NotImplementedError` stub**. The OAuth lifecycle is complete (`schwab_login` + `schwab_auth`) but the REST GET against `/pricehistory` has not been wired. `data/__init__.py` deliberately leaves the `"schwab"` source de-registered even when credentials are configured, so users never see a broken option in the dropdown. Re-enable the `register_source("schwab", ...)` line once `_http_get_pricehistory` is implemented.
 - **Layered responsibility**: the pure mapper (`candles_from_schwab_response`) is unit-tested with hand-rolled payload dicts; the HTTP path is exercised only in integration.
+- **Non-finite OHLC rows are dropped by the shared normalizer**: `candles_from_json_rows` skips provider rows whose open/high/low/close are NaN or infinite before building `Candle` objects.
 
 ## Invariants
 - Returns either `None` or a list of `Candle`. Never raises.

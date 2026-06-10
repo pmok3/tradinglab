@@ -11,7 +11,7 @@ HA smooths candles to emphasize trend continuation. Used in two opt-in places:
 ```python
 ha_arrays(open_, high, low, close) -> (ha_o, ha_h, ha_l, ha_c)
 ```
-All four inputs are 1-D NumPy arrays of equal length; outputs are float64 same length.
+All four inputs are 1-D NumPy arrays of equal length (`ValueError` otherwise); outputs are float64 same length.
 
 ```python
 heikin_ashi_candles(candles: List[Candle]) -> List[Candle]

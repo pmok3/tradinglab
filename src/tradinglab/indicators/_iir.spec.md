@@ -47,6 +47,6 @@ chunked-cumsum kernel — zero new dependencies, identical float64 output.
   `tests/unit/indicators/test_iir_vectorization.py`.
 
 ## Consumers
-- `ma_kernels.ema` (→ MACD, Keltner, Chandelier-ATR, MA indicator).
+- `ma_kernels.ema` (→ MACD, Keltner EMA paths, MA indicator).
 - `smi._ema_with_nan` (×5 per SMI compute).
 - `lrsi.compute_arr` (4-stage Laguerre cascade via sequential `iir_tail`).

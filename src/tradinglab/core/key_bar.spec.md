@@ -26,7 +26,7 @@ Direction: `close > open` → `+1`; `close < open` → `-1`; `close == open` →
 | Interval | baseline TR | baseline volume |
 |---|---|---|
 | Intraday | `ATR(mode="tod", length=20).compute(candles)["atr"]` | `RVOL(mode="time_of_day", length=20, aggregator="mean", session_filter="regular_only").compute(candles)["rvol"]` (already a ratio; threshold `> 1.1`) |
-| Daily / weekly / monthly | rolling 20-bar mean of TR (delegated to ATR ToD's daily-fallback path inline) | `vol[i] / mean(vol[i-20:i])` |
+| Daily / weekly / monthly | inline rolling 20-bar mean of TR over `tr[i-19:i+1]` | `vol[i] / mean(vol[i-20:i])` |
 
 Reusing chart indicators is deliberate: a chart-overlay ATR ToD / RVOL ToD agrees exactly with values driving a scanner match.
 

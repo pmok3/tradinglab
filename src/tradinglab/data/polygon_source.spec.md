@@ -4,11 +4,11 @@
 Polygon.io Aggregates v2 → `List[Candle]`. Two-layer module: a pure response-mapper for offline tests and an HTTP fetcher gated on credentials.
 
 ## Public API
-- `candles_from_polygon_response(payload: dict, *, interval: str) -> List[Candle]` — pure mapper. Accepts either the standard envelope `{"results": [...]}` or a bare list. Delegates to `candles_from_json_rows` with `ts_unit="ms"`.
+- `candles_from_polygon_response(payload: dict, *, interval: str) -> List[Candle]` — pure mapper. Accepts either the standard envelope `{"results": [...]}` or a bare list. Delegates to `candles_from_json_rows` with `ts_unit="ms"`; non-finite OHLC rows are skipped by that shared normalizer.
 - `fetch_polygon_data(ticker="AAPL", interval="1d", *, lookback_days=None) -> Optional[List[Candle]]` — `DataFetcher`-compatible. Returns `None` whenever credentials are missing, the interval is unsupported, or the HTTP call fails. Registered as `"polygon"` in `DATA_SOURCES` when `PolygonCredentials.is_configured()` is True.
 
 ## Dependencies
-- Internal: `..models.Candle`, `.credentials.PolygonCredentials`, `.credentials.get_credentials`, `.normalize.candles_from_json_rows`.
+- Internal: `..models.Candle`, `.credentials.PolygonCredentials`, `.credentials.get_credentials`, `.normalize.candles_from_json_rows`, `._http.{MAX_RESPONSE_BYTES, credentialed_opener}`.
 - External: stdlib `urllib`, `json` (no external HTTP client).
 
 ## Design Decisions

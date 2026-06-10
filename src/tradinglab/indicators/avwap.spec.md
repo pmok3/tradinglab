@@ -61,7 +61,8 @@ in `tests/smoke/test_smoke_full.py`.
   - `price_source: choice` (default `"typical"`, choices
     `typical | close | ohlc4`).
   - `bands: choice` (default `"off"`, choices `off | 1σ | 2σ | both`).
-- `default_style`: `avwap` brown `#8c564b` width 1.6; band keys
+- `default_style`: `avwap` brown `#8c564b` via `_palette.TAB10_BROWN`
+  width 1.6; band keys
   (`upper1`, `lower1`, `upper2`, `lower2`) mid-blue `#4393c3` width
   1.0. The mid-blue clears WCAG-AA non-text contrast in both themes
   (~3.39:1 on white, ~4.92:1 on dark `#1e1e1e`).
@@ -94,19 +95,21 @@ in `tests/smoke/test_smoke_full.py`.
   so the batch and incremental paths are byte-identical.
 - `inc_init(bars)` / `inc_step(state, bars, *, prev_len)` — incremental
   protocol (see "Incremental protocol" below).
-- `first_eligible_anchor_ts(candles) -> str` — ISO date of the first
+- `first_eligible_anchor_ts(candles) -> str` — ISO timestamp of the first
   non-gap regular-session bar, or `""`. Used by
   `ChartApp._materialize_blank_avwap_anchors`.
 
 ## Dependencies
-- Internal: `..models.Candle`, `.base.LineStyle`, `.base.ParamDef`.
+- Internal: `..core.bars.Bars`, `..models.Candle`, `._palette.TAB10_BROWN`,
+  `.base.BaseIndicator`, `.base.LineStyle`, `.base.ParamDef`.
 - External: `numpy`, `math`, `datetime`.
 
 ## Design Decisions
 - **Anchor stored as ISO string in `params`.** Persists across
-  save/load and timeframe changes. Compute snaps to the first non-gap
-  regular-session bar with `date >= anchor_dt`, so changing TF keeps
-  the calendar instant pinned.
+  save/load and timeframe changes. Blank anchors fall back to the first
+  non-gap regular-session candle; explicit anchors snap to the first
+  non-gap `Bars` timestamp at or after the anchor and still emit only on
+  regular bars.
 - **Timezone-naive comparison.** Both the parsed anchor and each
   candle's `date` have tzinfo stripped (after astimezone-to-UTC for
   aware values). Avoids `TypeError` on tz-aware feeds.
@@ -136,7 +139,7 @@ in `tests/smoke/test_smoke_full.py`.
 ## Data Flow / Algorithm
 ```
 anchor_dt = parse(anchor_ts) or None  (None ⇒ "first eligible bar")
-start_idx = first i with candles[i] non-gap, regular, _strip_tz(date) >= anchor_dt
+start_idx = first non-gap bar at/after anchor_ts (or first eligible regular bar when blank)
 cum_w = mean = m2 = 0.0
 for i in [start_idx, n):
     c = candles[i]

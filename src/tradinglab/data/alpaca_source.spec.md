@@ -4,11 +4,11 @@
 Alpaca Market Data v2 → `List[Candle]`. Two-layer module: a pure response-mapper for offline tests and an HTTP fetcher gated on credentials.
 
 ## Public API
-- `candles_from_alpaca_response(payload: dict, *, interval: str) -> List[Candle]` — pure mapper. Accepts either the standard envelope `{"bars": [...]}` or a bare list. Uses `candles_from_json_rows` with `ts_unit="iso"` (Alpaca returns ISO-8601 `t` values).
+- `candles_from_alpaca_response(payload: dict, *, interval: str) -> List[Candle]` — pure mapper. Accepts either the standard envelope `{"bars": [...]}` or a bare list. Uses `candles_from_json_rows` with `ts_unit="iso"` (Alpaca returns ISO-8601 `t` values); non-finite OHLC rows are skipped by that shared normalizer.
 - `fetch_alpaca_data(ticker="AAPL", interval="1d", *, lookback_days=None) -> Optional[List[Candle]]` — `DataFetcher`-compatible. Returns `None` on missing credentials, unsupported interval, or HTTP failure. Registered as `"alpaca"` in `DATA_SOURCES` when `AlpacaCredentials.is_configured()`.
 
 ## Dependencies
-- Internal: `..models.Candle`, `.credentials.AlpacaCredentials`, `.credentials.get_credentials`, `.normalize.candles_from_json_rows`.
+- Internal: `..models.Candle`, `.credentials.AlpacaCredentials`, `.credentials.get_credentials`, `.normalize.candles_from_json_rows`, `._http.{MAX_RESPONSE_BYTES, credentialed_opener}`.
 - External: stdlib `urllib`, `json`.
 
 ## Design Decisions
@@ -23,10 +23,11 @@ Alpaca Market Data v2 → `List[Candle]`. Two-layer module: a pure response-mapp
 - **`adjustment=raw`**: returns un-split-adjusted prices. Different from yfinance, which is `auto_adjust=True`. Documented as a known divergence at the chart layer.
 - **Default lookback**: 60 days for intraday intervals, 730 days for daily+. Matches the other vendor fetchers.
 - **Interval map**: `{1m,5m,15m,30m,1h,1d,1wk,1mo} → Alpaca's `"1Min" / "1Hour" / "1Day"` etc.`
+- **Non-finite OHLC rows are dropped by the shared normalizer** before `Candle` construction.
 - **Never raises**: HTTP/JSON errors caught broadly; logged at WARNING; returns `None`.
 
 ## Invariants
-- Returns either `None` or a list of `Candle`. Never raises.
+- Returns either `None` or a (possibly empty) list of `Candle`. Never raises.
 - Timestamps stay in UTC (Alpaca returns ISO with `Z` suffix; normalizer parses to aware UTC).
 - The interval keyspace matches `_INTERVAL_TO_ALPACA`; other intervals are rejected before HTTP.
 

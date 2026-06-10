@@ -15,6 +15,8 @@ historical fetcher. This module only fills the intraday gap.
 
 * `BarResampler(target_interval: str, *, session_open_time=(9, 30))`
   — raises `ValueError` on unsupported targets.
+* `target_interval` / `target_minutes` — read-only properties exposing
+  the configured interval string and minute width.
 * `on_1m_tick(candle, *, forming) -> List[BarEvent]` — main entry.
 * `current_forming() -> Optional[Candle]` — peek at the in-progress
   bucket.
@@ -58,3 +60,6 @@ contributions, by contrast, are eagerly copied out into scalar state.
 On bucket rollover any still-pending 1m is treated as locked at its
 last seen values before the bucket is sealed, so a missing `forming=False`
 event for the boundary minute can't leak data forward.
+
+Out-of-order ticks whose bucket is older than the current bucket are
+ignored and emit no events.

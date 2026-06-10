@@ -36,6 +36,9 @@ fix to Wilder semantics covers every consumer.
   index, not 0.
 - **Mid-stream NaNs treated as 0 in the recurrence** — keeps the line
   continuous through gap rows.
+- **Vectorized chunked closed form.** Both smoothers delegate to the
+  private `_wilder_iir_vec`, which evaluates the same recurrence with
+  chunked NumPy `cumsum` substitution instead of a per-bar Python loop.
 - **`true_range` is the single TR primitive** for ADX, ATR,
   Chandelier Stops, and Keltner (`method="atr"`) — no parallel
   implementations.

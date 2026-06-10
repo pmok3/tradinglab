@@ -26,6 +26,6 @@ Shared primitive for running I/O-bound fetch chunks concurrently. Rationale: the
 - Not exercised by the current smoke suite (yfinance single-request path doesn't need chunking, and synthetic is in-process). The primitive is kept ready for Polygon-style providers.
 
 ## Known limitations
-- **Reserved for future Polygon integration** — module is documented but not used by any shipped data source. Will be exercised once a multi-symbol-per-request source is added.
+- **Currently unused by shipped data sources** — Polygon and Alpaca now ship as single-request provider adapters and do not use this primitive. It remains ready for a future multi-symbol-per-request or date-chunked source.
 - No per-chunk retry/backoff policy. If/when a flaky provider is integrated, wrap `worker` with retry logic at the call site rather than adding parameters here.
 

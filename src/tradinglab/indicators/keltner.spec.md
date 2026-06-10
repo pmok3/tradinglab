@@ -27,18 +27,18 @@ share the same output schema (`method` choice param).
   - `atr_ma_type: choice` (default `"RMA"`, choices `SMA | EMA | WMA
     | RMA`) — ATR kernel. Modern method only.
   - `method: choice` (default `"atr"`, choices `atr | original`).
-- `default_style`: orange (`#ff7f0e`) for all three keys; `middle`
+- `default_style`: orange (`#ff7f0e`, sourced from `_palette`) for all three keys; `middle`
   width 1.2, `upper` / `lower` 1.0. Per-MA color palette
   (`SMA→#1f77b4`, `EMA→#ff7f0e`, `WMA→#9467bd`, `RMA→#17becf`) defined
   for future per-instance default swapping.
-- `compute(candles) -> {"middle", "upper", "lower"}`. All three
-  outputs are length `len(candles)`.
+- `compute_arr(bars) -> {"middle", "upper", "lower"}`. All three
+  outputs are length `len(bars)`; inherited `compute(candles)` forwards through `BaseIndicator`.
 - `name`: compact label. Tags appear only when a parameter differs
   from its (method-appropriate) default. Examples: `KC(20,2)`,
   `KC(20,2,EMA/SMA)`, `KC(20,2,σ=14)`, `KC-Orig(20,2)`.
 
 ## Dependencies
-- Internal: `..models.Candle`, `..core.bars.Bars`,
+- Internal: `..core.bars.Bars`, `._palette`, `.base.BaseIndicator`,
   `.base.LineStyle`, `.base.ParamDef`, `.ma_kernels.MA_TYPES`,
   `.ma_kernels.apply_ma`, `.wilder.true_range`.
 - External: `numpy`.

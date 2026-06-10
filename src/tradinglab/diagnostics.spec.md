@@ -62,7 +62,7 @@ requests. Credentials / tokens / API keys are redacted before write.
   three regex patterns and one helper:
   - `_BEARER_RE` — case-insensitive `Bearer\s+\S+`.
   - `_BASIC_RE`  — case-insensitive `Basic\s+\S+`.
-  - `_SECRET_URL_RE` — `[?&](apikey|api_key|access_token|token|secret|key|password|passwd|pwd|auth)=…` until next `&` / end.
+  - `_SECRET_URL_RE` — `[?&](apikey|api_key|access[_-]?token|refresh[_-]?token|token|client[_-]?secret|password|passwd|pwd|secret|sig|signature)=…` until next `&` / whitespace / quote.
   - `redact_log_line(line: str) -> str` — applies all three; idempotent.
   - `_read_and_redact(path: Path) -> str` — reads UTF-8 text and
     pipes every line through `redact_log_line`.

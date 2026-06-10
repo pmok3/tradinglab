@@ -2,8 +2,8 @@
 
 ## Purpose
 Brand-new users get a single dismissable one-row banner above the chart
-pointing them at Help → Getting Started and at two undiscoverable hotkeys
-(Ctrl+\` for ChartStack, Ctrl+H to drop a horizontal line). A sentinel
+pointing them at Help → Getting Started, Settings, and two undiscoverable
+hotkeys (Ctrl+\` for ChartStack, Ctrl+H to drop a horizontal line). A sentinel
 file suppresses the banner on every subsequent launch after dismissal with
 "Don't show again" ticked.
 
@@ -20,8 +20,9 @@ file suppresses the banner on every subsequent launch after dismissal with
     the sentinel exists.
   - `_force_show_first_run_banner(parent=None)` — Help-menu hook;
     also clears the sentinel so the choice persists.
-  - `_dismiss_first_run_banner()` — destroy the widget + write
-    the sentinel.
+  - `_dismiss_first_run_banner()` — destroy the widget; write the
+    sentinel only when "Don't show again" is checked (or when called
+    by a host that never built the checkbox).
 
 ## Sentinel location
 `paths.app_data_dir() / ".first_run_dismissed"` — zero-byte touch

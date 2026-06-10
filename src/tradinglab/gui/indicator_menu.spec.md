@@ -19,8 +19,10 @@ mutates `self._indicator_manager`, and reports outcome via `self._status`.
   - `_on_menu_add_indicator(kind_id, params, scopes=None)`
   - `_on_menu_clear_indicators()`
   - `_populate_indicator_preset_menu(menu, action)` — `postcommand`
-    handler that rebuilds Load/Delete cascades when opened so the
-    list always reflects the live `IndicatorManager.list_presets()`.
+    handler for Load/Delete cascades. Caches by `(action,
+    tuple(names), active)` on the `Menu` widget and skips rebuilding
+    when neither the preset list nor active preset changed; any
+    save/load/delete mutates that key so the next open rebuilds.
   - `_on_menu_save_indicator_preset()`
   - `_on_menu_load_indicator_preset(name)`
   - `_on_menu_delete_indicator_preset(name)`
@@ -36,8 +38,7 @@ mutates `self._indicator_manager`, and reports outcome via `self._status`.
 
 - No `__init__`.
 - No cooperative `super()` — method resolution relies on plain MRO
-  through `ChartApp(InteractionMixin, WatchlistTabMixin,
-  WorkerPoolMixin, IndicatorMenuMixin, SandboxMenuMixin, tk.Tk)`.
+  through `ChartApp`'s mixin block (with `tk.Tk` last).
 - No name collisions with other mixins or `ChartApp`.
 
 ## Required Instance State (provided by ChartApp)
@@ -51,7 +52,7 @@ mutates `self._indicator_manager`, and reports outcome via `self._status`.
 ## Notes
 
 - `_populate_indicator_preset_menu` reapplies the menubar theme after
-  `delete + add_command` because the per-entry `activebackground` /
-  `foreground` only sticks after a repaint.
+  an actual `delete + add_command` rebuild because the per-entry
+  `activebackground` / `foreground` only sticks after a repaint.
 - Theme fallback: if `self._theme` isn't set yet (extremely-early
   startup), defaults to `LIGHT_THEME` from `tradinglab.constants`.

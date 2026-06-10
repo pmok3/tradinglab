@@ -64,7 +64,7 @@ Surfaces signals via callback rather than filling — for users who paper-trade 
 
 ## `SchwabTraderSink`
 
-Explicit stub. Mutators audit then raise `SchwabTraderNotConfigured`. Lets the GUI list the option without silently dropping signals.
+Explicit stub. `submit` audits then raises `SchwabTraderNotConfigured`; cancel mutators raise the same typed error. Lets the GUI list the option without silently dropping signals.
 
 ## Error semantics
 

@@ -47,6 +47,10 @@ Own TradingLab's panel rendering state and the helper methods that mutate candle
   `canvas_draw_idle()` — which repaints the decorations and invalidates
   the blit background through the draw-event handler. The
   `forming-bar-not-rightmost` branch (`render_end != n`) always full-draws.
+- **Live indicator updates by default.** After mutating the rightmost
+  candle / volume artists, `apply_tick_to_artists` calls the supplied
+  `render_indicators(slot)` callback so indicator lines/panes recompute
+  against the forming bar before the blit/full-draw decision.
 
 ## Invariants
 - Methods are fail-soft: rendering overlays and derived computations must never abort a paint.

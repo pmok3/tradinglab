@@ -23,7 +23,8 @@ across the last N regular sessions). Output is in price units
     `regular_only | regular_plus_premarket | extended`) — tod only.
   - `aggregator: choice` (default `"mean"`, choices `mean | median`)
     — tod only.
-- `default_style.atr`: light orange `#ffbb78`, width 1.4.
+- `default_style.atr`: light orange `#ffbb78`, width 1.4; non-default
+  MA colors use `_palette` tab10 constants.
 - `scannable_outputs = (("atr","numeric"),)` — opts the indicator into the scanner registry.
 - `compute(candles) -> {"atr": ndarray}`.
 - `warmup_bars` property returns `4 * length` for `ma_type="RMA"`,
@@ -58,8 +59,10 @@ collapses to a plain 20-bar rolling mean of TR
 
 ## Dependencies
 - Internal: `..core.bars.Bars`, `.base.BaseIndicator`,
-  `.base.LineStyle`, `.base.ParamDef`, `.ma_kernels.{MA_TYPES,apply_ma}`,
-  `.wilder.true_range`, `.sessions.{is_intraday_np,session_filter_mask_np,session_groups_np,tod_key_np}`.
+  `._palette`, `.base.LineStyle`, `.base.ParamDef`,
+  `.ma_kernels.{MA_TYPES,apply_ma}`, `.wilder.true_range`,
+  `.wilder.wilder_smooth_avg`,
+  `.sessions.{is_intraday_np,session_filter_mask_np,session_groups_np,tod_key_np}`.
 - External: `numpy`.
 
 ## Design Decisions

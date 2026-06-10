@@ -17,19 +17,21 @@ own session), so the line auto-hides.
 - `default_style.vwap`: purple `#9467bd`, width 1.6.
 - `scannable_outputs = (("vwap","numeric"),)` and `resets_daily = True` — opts the indicator into the scanner AND declares it as session-anchored so engine/runner know to evict cached prefixes at session boundaries (see `scanner.fields.field_ref_resets_daily`).
 - `is_available_for(interval) -> Availability` (static) — returns `intraday_only(interval)`: `ok=False` on daily / weekly / monthly, `ok=True` on intraday. Lets the chart Add-Indicator menu grey VWAP out on a daily chart AND lets the Strategy Tester's `interval_compat` guard block a Run that references VWAP on a non-intraday interval (it would resolve to NaN every bar → zero trades). Audit `intraday-interval-guard`.
-- `compute(candles) -> {"vwap": ndarray}`. Indices where VWAP is
+- `compute_arr(bars) -> {"vwap": ndarray}`. Indices where VWAP is
   undefined (warmup, pre/post bars, gap fillers, daily+ intervals)
-  are NaN.
+  are NaN; inherited `compute(candles)` forwards through `BaseIndicator`.
 
 ## Dependencies
-- Internal: `..models.Candle`, `.base.LineStyle`, `.base.ParamDef`.
+- Internal: `..core.bars.Bars`, `._palette`, `.base.Availability`,
+  `.base.BaseIndicator`, `.base.LineStyle`, `.base.ParamDef`,
+  `.base.intraday_only`, `.sessions.is_intraday_np`,
+  `.sessions.session_groups_np`.
 - External: `numpy`.
 
 ## Design Decisions
-- **Day boundary uses the candle's own `date`**, which the data layer
-  normalises to US/Eastern for US equities (see
-  `data/normalize.spec.md`). For non-ET feeds VWAP resets at that
-  feed's local midnight.
+- **Day boundary uses `session_groups_np(bars, regular_only=True)`**,
+  grouping admitted regular bars by the `Bars.timestamps` calendar day
+  (the data layer normalises US equities to exchange-local timestamps).
 - **Pre/post-market bars excluded** from both cumulative sums and
   the rendered line, even when extended-hours rendering is enabled.
   Differs from TradingView's "Session" VWAP.
@@ -48,25 +50,20 @@ own session), so the line auto-hides.
 
 ## Data Flow / Algorithm
 ```
-cum_pv, cum_v = 0, 0
-cur_day       = None
-for i, c in enumerate(candles):
-    if c.is_gap:        skip
-    if c.session != "regular": skip   # NaN at this index
-    if c.date.date() != cur_day:
-        cur_day = c.date.date()
-        cum_pv = cum_v = 0
-    p = price_for(c, price_source)    # typical / close / ohlc4
-    cum_pv += p * c.volume
-    cum_v  += c.volume
-    if cum_v > 0: out[i] = cum_pv / cum_v
+price = _price_arr(bars, price_source)
+for grp in session_groups_np(bars, regular_only=True):
+    p = price[grp]
+    v = finite_volume_or_zero(bars.volume[grp])
+    cum_pv = cumsum(where(isfinite(p), p * v, 0))
+    cum_v  = cumsum(where(isfinite(p), v, 0))
+    out[grp] = where(cum_v > 0, cum_pv / cum_v, NaN)
 ```
 
 ## Known limitations
 - **Anchored VWAP** lives in `avwap.py` — cumulative across sessions,
   meaningful on every interval.
-- Day-boundary detection assumes the candle stream's `date` is in
-  the desired session timezone; no rebasing here.
+- Day-boundary detection assumes `Bars.timestamps` are already in the
+  desired session timezone; no rebasing here.
 
 ## Incremental protocol (compute #3)
-- `inc_init(bars)` / `inc_step(state, bars, *, prev_len)` extend the session VWAP O(k). State = `{cum_pv, cum_v, cur_day, seeded}` + cached `output`/`len`: accumulate `price*vol` / `vol` within the current UTC day, RESET at each new day (`cur_day` change), and skip non-regular bars (NaN, no contribution) — mirroring compute_arr's per-group cumsum. Non-intraday inputs leave `seeded=False` (compute_arr is all-NaN there) → full recompute. Pinned by the generic parity meta-test (multi-day intraday fixture exercises the reset).
+- `inc_init(bars)` / `inc_step(state, bars, *, prev_len)` extend the session VWAP O(k). State = `{cum_pv, cum_v, cur_day, seeded}` + cached `output`/`len`: accumulate `price*vol` / `vol` within the current timestamp day, RESET at each new day (`cur_day` change), and skip non-regular bars (NaN, no contribution) — mirroring compute_arr's per-group cumsum. Non-intraday inputs leave `seeded=False` (compute_arr is all-NaN there) → full recompute. Pinned by the generic parity meta-test (multi-day intraday fixture exercises the reset).

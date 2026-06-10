@@ -1,8 +1,9 @@
 # BarsKeyedCache
 
-Tiny LRU cache shared by the Heikin-Ashi and key-bar field clusters in
-`scanner/fields.py`. Replaces the two ad-hoc `OrderedDict + Lock` blocks
-that grew up independently.
+Tiny LRU cache shared by per-`BarsNp` field derivations in
+`scanner/fields.py` (session-day masks, Heikin-Ashi arrays, flat-HA arrays,
+and key-bar arrays). Replaces the ad-hoc `OrderedDict + Lock` blocks that
+grew up independently.
 
 ## Design
 
@@ -14,7 +15,7 @@ that grew up independently.
   *A* does not block a concurrent miss on snapshot *B*. Duplicate compute
   on the same bars under contention is acceptable and self-corrects.
 - `extra_key` lets a single cache instance distinguish multiple
-  derivations of the same `BarsNp` (the HA cache uses `len(b)` as a
+  derivations of the same `BarsNp` (date/session/HA caches use a size-based
   tiebreaker; KB cache leaves it `()`).
 
 ## Public API
