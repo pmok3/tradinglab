@@ -25,6 +25,8 @@ long-term caches — so there is no memory-leak risk.
 
 from __future__ import annotations
 
+import logging
+import math
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -34,6 +36,8 @@ import numpy as np
 
 from ..constants import classify_session, is_intraday
 from ..models import Candle
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Arrays bundle + prebuilt stash
@@ -160,17 +164,44 @@ def candles_from_dataframe(
     closes = df[cols["close"]].to_numpy(dtype=np.float64)
     volumes = df[cols["volume"]].to_numpy(dtype=np.float64)
 
+    # DatetimeIndex → Python datetimes. to_pydatetime() is vectorized
+    # internally; calling it once is far cheaper than per-row
+    # ts.to_pydatetime() in the iterrows loop.
+    dts = df.index.to_pydatetime()
+
+    # Drop rows whose OHLC is not all-finite. Providers (Yahoo in
+    # particular) emit a placeholder row for the current/next session
+    # BEFORE any trades print — NaN OHLC, sometimes with a stray volume.
+    # Left in, such a row renders as an invisible candle (NaN body/wick
+    # verts) sitting behind a visible volume bar: the "today's OHLC is
+    # missing but I can still see the volume" bug. A bar with no price is
+    # not a valid bar, so drop it; once real trades print the provider
+    # returns finite OHLC and the bar appears normally. (Volume NaN is
+    # still coerced to 0 below — a finite-OHLC bar with NaN/0 volume is
+    # legitimate, e.g. extended-hours bars.)
+    finite_ohlc = (
+        np.isfinite(opens) & np.isfinite(highs)
+        & np.isfinite(lows) & np.isfinite(closes)
+    )
+    if not finite_ohlc.all():
+        dropped = int((~finite_ohlc).sum())
+        opens = opens[finite_ohlc]
+        highs = highs[finite_ohlc]
+        lows = lows[finite_ohlc]
+        closes = closes[finite_ohlc]
+        volumes = volumes[finite_ohlc]
+        dts = dts[finite_ohlc]
+        logger.debug(
+            "candles_from_dataframe: dropped %d row(s) with non-finite OHLC "
+            "(provider placeholder for an un-started session)", dropped,
+        )
+
     # Volumes as int64 with NaN→0 coercion. Yahoo's chart API emits NaN
     # (rarely) or 0 (commonly) for extended-hours bars since their volume
     # aggregation excludes the TRF tape; raw int() on NaN would raise
     # ValueError on modern numpy. Convert once, vectorized, then index
     # cheaply in the per-row loops below.
     volumes_int = np.nan_to_num(volumes, nan=0.0).astype(np.int64, copy=False)
-
-    # DatetimeIndex → Python datetimes. to_pydatetime() is vectorized
-    # internally; calling it once is far cheaper than per-row
-    # ts.to_pydatetime() in the iterrows loop.
-    dts = df.index.to_pydatetime()
 
     intraday = is_intraday(interval)
     n = len(dts)
@@ -315,19 +346,39 @@ def candles_from_json_rows(
     intraday = is_intraday(interval)
     candles: list[Candle] = [None] * n  # type: ignore[list-item]
 
-    for i, row in enumerate(rows):
+    # ``j`` is the write cursor: rows whose OHLC is not all-finite are
+    # skipped (same rationale as candles_from_dataframe — provider
+    # placeholder rows for an un-started session carry no price and would
+    # render as an invisible candle behind a visible volume bar), so ``j``
+    # can trail the loop counter. Arrays + candle list are truncated to
+    # ``j`` at the end so the stash stays length-aligned with ``candles``.
+    j = 0
+    for row in rows:
         dt = _coerce_timestamp(row[k_ts], ts_unit)
         o = float(row[k_o]); h = float(row[k_h])
         lo = float(row[k_l]); c = float(row[k_c])
+        if not (math.isfinite(o) and math.isfinite(h)
+                and math.isfinite(lo) and math.isfinite(c)):
+            continue
         v_raw = row[k_v]
         v = 0 if v_raw is None else int(float(v_raw))
-        opens[i] = o; highs[i] = h; lows[i] = lo
-        closes[i] = c; volumes[i] = float(v)
+        opens[j] = o; highs[j] = h; lows[j] = lo
+        closes[j] = c; volumes[j] = float(v)
         sess = classify_session(dt.hour, dt.minute) if intraday else "regular"
-        candles[i] = Candle(
+        candles[j] = Candle(
             date=dt, open=o, high=h, low=lo, close=c,
             volume=v, session=sess,
         )
+        j += 1
+
+    if j < n:
+        logger.debug(
+            "candles_from_json_rows: dropped %d row(s) with non-finite OHLC",
+            n - j,
+        )
+        candles = candles[:j]
+        opens = opens[:j]; highs = highs[:j]; lows = lows[:j]
+        closes = closes[:j]; volumes = volumes[:j]
 
     stash_arrays(candles, CandleArrays(
         opens=opens, highs=highs, lows=lows, closes=closes, volumes=volumes,

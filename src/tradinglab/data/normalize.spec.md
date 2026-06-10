@@ -7,8 +7,8 @@ Format-specific vectorized translators from provider native shapes to `List[Cand
 - `@dataclass(frozen=True) class CandleArrays` — column-major NumPy view: `opens`, `highs`, `lows`, `closes`, `volumes` (all `np.ndarray`, same length). `volumes` is `float64` (not int64) to match `SeriesArrays`'s `np.nanmax` requirements for gap bars.
 - `stash_arrays(candles, arrays)` — register pre-extracted arrays for a candle list. Keyed by `id(candles)`; stored as `(candles_ref, arrays)` tuple so identity is verified on pop. Bounded: `_PREBUILT_ARRAYS_MAX = 32`, oldest-evicted FIFO.
 - `pop_prebuilt_arrays(candles) -> Optional[CandleArrays]` — retrieve + remove; returns `None` if the stashed entry was for a different list that happens to share this id (GC-driven id reuse defense).
-- `candles_from_dataframe(df, *, interval, ohlcv_cols=None) -> List[Candle]` — columnar `.to_numpy()` extraction, `df.index.to_pydatetime()` once, tight loop building `Candle` objects with `classify_session` for intraday. Stashes arrays before returning. Used by `data/yfinance_source.fetch_live_data`.
-- `candles_from_json_rows(rows, *, interval, keymap, ts_unit) -> List[Candle]` — generic vendor-JSON → `List[Candle]` mapper. `keymap` maps logical OHLCV/ts names to vendor JSON keys; `ts_unit ∈ {"s", "ms", "ns", "iso"}`. Validates keymap, materializes rows once, single pass building `Candle` objects (with `classify_session` for intraday). Stashes arrays. Used by Schwab / Alpaca / Polygon. Raises `ValueError` if any logical field missing from keymap.
+- `candles_from_dataframe(df, *, interval, ohlcv_cols=None) -> List[Candle]` — columnar `.to_numpy()` extraction, `df.index.to_pydatetime()` once, **drops rows whose OHLC is not all-finite** (see Design Decisions), then a tight loop building `Candle` objects with `classify_session` for intraday. Stashes the (post-filter) arrays before returning. Used by `data/yfinance_source.fetch_live_data`.
+- `candles_from_json_rows(rows, *, interval, keymap, ts_unit) -> List[Candle]` — generic vendor-JSON → `List[Candle]` mapper. `keymap` maps logical OHLCV/ts names to vendor JSON keys; `ts_unit ∈ {"s", "ms", "ns", "iso"}`. Validates keymap, materializes rows once, single pass building `Candle` objects (with `classify_session` for intraday), **skipping rows whose OHLC is not all-finite** (write-cursor `j` trails the loop; arrays + list truncated to `j`). Stashes arrays. Used by Schwab / Alpaca / Polygon. Raises `ValueError` if any logical field missing from keymap.
 - `_PREBUILT_ARRAYS`, `_PREBUILT_ARRAYS_MAX` (private).
 
 ## Dependencies
@@ -20,6 +20,7 @@ Internal: `..constants.classify_session`, `..constants.is_intraday`, `..models.C
 - **Columnar `.to_numpy()`** per OHLCV column is ~10× cheaper than `df.iterrows()` (each iterrows iteration constructs a fresh `Series`). On a ~5k-bar intraday fetch, vectorized extraction is 5–20× faster.
 - **`df.index.to_pydatetime()` once, not per row** (per-row `.to_pydatetime()` is quadratic).
 - **Candle volume as int with NaN→0 coercion** (`np.nan_to_num(volumes, nan=0.0).astype(np.int64, copy=False)` in the DataFrame path): Yahoo emits NaN/0 for extended-hours bars (volume aggregation excludes TRF tape). Raw `int()` on NaN raises `ValueError` on modern numpy. The stashed `CandleArrays.volumes` side channel remains `float64`.
+- **Drop non-finite-OHLC rows.** Both translators discard any input row whose `open`/`high`/`low`/`close` is not all-finite (NaN or ±Inf). Providers (Yahoo especially) emit a placeholder row for the current/next session BEFORE any trades print — NaN OHLC, sometimes with a stray volume. Left in, it became a NON-gap candle with NaN OHLC that renders as an invisible candle (NaN body/wick verts) behind a *visible* volume bar — the "today's OHLC is missing but I can still see the volume" bug. A bar with no price is not a valid bar. NOTE: only **OHLC** gates row validity — a finite-OHLC bar with NaN/0 volume is legitimate (extended-hours) and is kept (volume → 0). This is distinct from a *gap* candle (§ `is_gap`), which is deliberately inserted with all-NaN OHLC for compare-mode alignment and never originates from a provider row. DataFrame path masks vectorized (`np.isfinite(...) & ...`); JSON path skips per-row via a write cursor. Pinned by `tests/unit/test_data_normalize_finite_ohlc.py`.
 - **Prebuilt-arrays side channel**: first consumer (`build_series_safe` → `SeriesArrays.from_arrays`) pops and uses arrays directly, skipping five `np.fromiter` passes. Stash lifetime is milliseconds.
 - **`(candles_ref, arrays)` tuple in the stash, not just `arrays`**: Python reuses `id()` after GC. A naive `{id → arrays}` map would hand stale arrays to a different list. `pop_prebuilt_arrays` verifies `stashed_candles is candles` and returns `None` on mismatch. **Concrete bug this fixed**: AMD's pair-aligned daily candles received SPY's arrays after compare-mode interval switches, producing SPY's y-axis range on AMD's price panel.
 - **Bounded stash (32, FIFO)**: defense in depth if pop-and-consume ever breaks. Dict preserves insertion order; `next(iter(d))` gives oldest. 32 >> `_fetch_executor.max_workers=8`, so legitimate flows never evict.
@@ -33,14 +34,17 @@ Internal: `..constants.classify_session`, `..constants.is_intraday`, `..models.C
 - Non-intraday candles all have `session="regular"`; intraday have `session = classify_session(date.hour, date.minute)`.
 - Normalised candles preserve the provider/index timezone in the DataFrame path; JSON epoch / ISO inputs are normalised to aware UTC. Session classification uses the timestamp's own hour/minute, so vendor adapters must request bars in the intended market timezone when ET session labels matter.
 - `volumes` in `stash_arrays` is float64; `Candle.volume` is plain `int` — dual representation.
+- Every returned `Candle` has all-finite OHLC (non-finite-OHLC provider rows are dropped before construction); the stashed `CandleArrays` is length-aligned with the returned list after any drop.
 
 ## Algorithm
 ```
 candles_from_dataframe(df, interval):
     if df.empty: return []
     for col in OHLCV: arr = df[col].to_numpy(dtype=float64)
-    volumes_int = nan_to_num(volumes, 0.0).astype(int64)
     dts = df.index.to_pydatetime()
+    finite = isfinite(open)&isfinite(high)&isfinite(low)&isfinite(close)
+    if not finite.all(): filter every array + dts by finite   # drop placeholder rows
+    volumes_int = nan_to_num(volumes, 0.0).astype(int64)
     if is_intraday(interval):
         for i: candles[i] = Candle(..., session=classify_session(dts[i].hour, dts[i].minute))
     else:
