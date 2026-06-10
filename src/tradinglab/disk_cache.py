@@ -128,6 +128,45 @@ def _candle_from_dict(d: dict[str, Any]) -> Candle | None:
     )
 
 
+def _is_finite_ohlc(c: Candle) -> bool:
+    """True when all four OHLC values are finite (not NaN / ±Inf).
+
+    Mirrors the row-validity gate the source normalizers apply
+    (``data.normalize.candles_from_dataframe`` /
+    ``candles_from_json_rows``): a bar with non-finite OHLC carries no
+    price and is not a valid candle.
+    """
+    return (
+        math.isfinite(c.open) and math.isfinite(c.high)
+        and math.isfinite(c.low) and math.isfinite(c.close)
+    )
+
+
+def _drop_nonfinite_ohlc(candles: list[Candle]) -> list[Candle]:
+    """Return ``candles`` without any non-finite-OHLC bars.
+
+    Identity-preserving fast path: when every bar is finite (the common
+    case), the original list object is returned unchanged so callers that
+    rely on object identity / avoid spurious copies are unaffected. Only
+    when a poison bar is present is a filtered copy allocated.
+
+    Why this lives at the disk-cache boundary, not just in the fetch
+    normalizers: providers (Yahoo especially) occasionally emit a row
+    with NaN OHLC but a real volume for a session — e.g. a corrupt daily
+    bar for a day that clearly traded. The normalizers drop it from
+    *fresh* fetches, but once such a bar is on disk, fresh data never
+    carries that date again to overwrite it, and ``merge_candles``
+    retains the non-overlapping stale bar forever. It then renders as an
+    invisible NaN candle behind a visible volume bar ("today's OHLC is
+    missing but I can still see the volume"). Filtering on load + merge
+    heals the cache and guarantees a poison bar can never persist or
+    render.
+    """
+    if all(_is_finite_ohlc(c) for c in candles):
+        return candles
+    return [c for c in candles if _is_finite_ohlc(c)]
+
+
 # Sources opted out of disk-cache persistence. BYOD (local) sources are
 # registered here on each call to ``data.register_local_sources()`` so
 # imported CSV bars never leak into the user's on-disk pickle cache —
@@ -199,7 +238,30 @@ def load(source: str, ticker: str, interval: str) -> list[Candle] | None:
                     candles.append(c)
     except OSError:
         return None
-    return candles if candles else None
+    # Heal poison on read: a NaN-OHLC bar (e.g. a corrupt provider daily
+    # row for a day that traded) must never reach the cache or render.
+    # See _drop_nonfinite_ohlc for the full rationale.
+    cleaned = _drop_nonfinite_ohlc(candles)
+    if not cleaned:
+        return None
+    # Heal-on-read PERSISTENCE: when poison bars were actually dropped,
+    # rewrite the cleaned file so the NaN-OHLC line is removed from disk
+    # for good — not merely filtered on every subsequent read. Without
+    # this the poison line lingers indefinitely (dropped on load but
+    # never erased): the series' visible tail keeps under-reporting the
+    # last real bar, the stale row can re-surface through any path that
+    # reads the raw file, and a forced re-fetch is required every session
+    # to paper over it. ``_drop_nonfinite_ohlc`` returns the *same* list
+    # object when nothing was dropped, so the identity check tells us a
+    # rewrite is needed without a second scan. Best-effort + atomic
+    # (``save`` uses temp + os.replace); a write failure never affects
+    # the returned data and ``load`` still never raises.
+    if cleaned is not candles:
+        try:
+            save(source, ticker, interval, cleaned)
+        except Exception:  # noqa: BLE001
+            pass
+    return cleaned
 
 
 def save(source: str, ticker: str, interval: str, candles: list[Candle]) -> None:
@@ -269,16 +331,21 @@ def merge_candles(
     if not old and not new:
         return []
     if not old:
-        return list(new or [])
+        return _drop_nonfinite_ohlc(list(new or []))
     if not new:
-        return list(old)
+        return _drop_nonfinite_ohlc(list(old))
     try:
         if presorted or (_is_sorted_by_date(old) and _is_sorted_by_date(new)):
-            return _merge_sorted_candles(old, new)
-        return _merge_candles_dict_sort(old, new)
+            merged = _merge_sorted_candles(old, new)
+        else:
+            merged = _merge_candles_dict_sort(old, new)
     except TypeError:
         # tz-aware vs tz-naive comparison — give up on merge, use new.
-        return list(new)
+        merged = list(new)
+    # A non-finite-OHLC bar present on either side (typically a stale
+    # poison bar already on disk) is dropped from the merged result so it
+    # can never be re-persisted or rendered. See _drop_nonfinite_ohlc.
+    return _drop_nonfinite_ohlc(merged)
 
 
 def _is_sorted_by_date(candles: list[Candle]) -> bool:

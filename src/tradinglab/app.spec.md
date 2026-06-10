@@ -97,7 +97,7 @@ Interval- and session-aware:
 ### Rendering (`_render`)
 - `figure.clear()` lives here only.
 - Topology by mode: plain = `[price, volume, rsi]` (`[6, 1.5, 2]`); compare = `[primary_price, compare_price, volume, rsi]`.
-- `_preserve_xlim_on_render` — capture xlim before clear, restore after. Never auto-cleared; reset only by `_reset_view` / `_do_scheduled_reload`.
+- `_preserve_xlim_on_render` — capture xlim before clear, restore after. Never auto-cleared at end of `_render`; reset only by explicit user intent: `_reset_view`, `_do_scheduled_reload`, and `_on_explicit_axis_change` (source / interval / pre-post change — bar-index xlim from the previous interval is meaningless on the new series, so the new series snaps to the right-edge default window).
 - `_slide_xlim_to_right_edge` — one-shot, consumed at top of `_render`; shifts the preserved xlim forward so right edge = `n-0.5`. Set by `_next_bar_fetch_tick` when user was glued to the right edge.
 
 ### Adaptive x-axis locator (`_AdaptiveXLocator`)
@@ -305,7 +305,7 @@ Pinned by `tests/unit/gui/test_avwap_anchor_pick_iconify.py` (6 tests covering p
 3. `_full_cache` size ≤ `_FULL_CACHE_MAX=16` for non-pinned entries; pinned entries never evicted by trim. Read sites in `_load_data` promote the accessed key.
 4. `_series_cache` entries rebuilt on id-reuse (`sa._candles is not candles`).
 5. `figure.clear()` only inside `_render`.
-6. `_preserve_xlim_on_render` is never auto-reset; only `_reset_view` / `_do_scheduled_reload` clear it.
+6. `_preserve_xlim_on_render` is never auto-reset at the end of `_render`; only `_reset_view` / `_do_scheduled_reload` / `_on_explicit_axis_change` clear it (all explicit-user-intent paths).
 7. `_slide_xlim_to_right_edge` is one-shot — consumed-and-cleared at top of `_render`.
 8. `_after_jobs` contains every pending `after` id; `_on_close` cancels all.
 9. Stream tick mutates rightmost bar in-place (preserves `id()`).

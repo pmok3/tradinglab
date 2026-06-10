@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from collections import OrderedDict
 from collections.abc import Collection
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from .. import disk_cache
@@ -13,6 +14,56 @@ from ..core.pairing import apply_pair_filter_and_align
 from ..models import Candle
 
 CacheKey = tuple[str, str, str]
+
+#: How many trailing daily bars the gap-aware staleness check scans. Keeps
+#: the check O(window) and only reacts to *recent* gaps — an ancient holiday
+#: deep in a multi-year series is never re-fetched.
+_DAILY_GAP_WINDOW = 8
+
+
+def _as_date(value: Any) -> date | None:
+    """Return a ``date`` for a ``Candle.date`` (datetime or date), else None."""
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return None
+
+
+def _business_days_strictly_between(d0: date, d1: date) -> list[str]:
+    """Weekday (Mon-Fri) dates strictly between ``d0`` and ``d1``, ISO strings.
+
+    A normal consecutive series yields none (``Fri -> Mon`` spans only the
+    weekend); a hole where a weekday is missing (e.g. a dropped NaN-OHLC
+    poison bar) yields that weekday's date.
+    """
+    out: list[str] = []
+    if d1 <= d0:
+        return out
+    cur = d0 + timedelta(days=1)
+    while cur < d1:
+        if cur.weekday() < 5:  # Mon-Fri
+            out.append(cur.isoformat())
+        cur += timedelta(days=1)
+    return out
+
+
+def _recent_interior_gap_dates(
+    candles: list[Candle], *, window: int = _DAILY_GAP_WINDOW,
+) -> list[str]:
+    """ISO dates of weekdays missing between adjacent bars in the tail window."""
+    tail = candles[-window:] if len(candles) > window else candles
+    missing: list[str] = []
+    prev_date: date | None = None
+    for c in tail:
+        cur = _as_date(getattr(c, "date", None))
+        if cur is None:
+            prev_date = None
+            continue
+        if prev_date is not None and cur > prev_date:
+            missing.extend(_business_days_strictly_between(prev_date, cur))
+        prev_date = cur
+    return missing
 
 
 class DataController:
@@ -28,6 +79,9 @@ class DataController:
         self._series_cache: dict[int, Any] = {}
         self._fetch_token: int = 0
         self._preload_inflight: set[CacheKey] = set()
+        # Gap signatures already acted on this session (loop guard for the
+        # gap-aware branch of ``is_stale``). See ``_daily_has_unseen_gap``.
+        self._stale_gap_seen: set[tuple[str, tuple[str, ...]]] = set()
 
     @property
     def primary(self) -> list[Candle]:
@@ -126,7 +180,38 @@ class DataController:
             interval_sec = int(interval[:-2] or "1") * 30 * 86400
         else:
             interval_sec = 86400
-        return (now_s - last_ts) > 2 * interval_sec
+        if (now_s - last_ts) > 2 * interval_sec:
+            return True
+        # Gap-aware refetch (1d only): an interior missing trading day
+        # (typically a dropped NaN-OHLC poison bar that left a hole
+        # between two present bars) is invisible to the last-bar age
+        # check above — the series can look "fresh" while a weekday is
+        # silently absent. Flag such a series stale ONCE per unique gap
+        # per controller session so a single re-fetch + merge can fill
+        # it. A no-op merge (a genuine market holiday the heuristic
+        # can't distinguish) records the signature and never re-fires,
+        # so this cannot loop. Weekly/monthly are excluded — their gap
+        # structure is not a simple business-day cadence.
+        if interval == "1d" and self._daily_has_unseen_gap(candles, interval):
+            return True
+        return False
+
+    def _daily_has_unseen_gap(self, candles: list[Candle], interval: str) -> bool:
+        """True the FIRST time a recent interior weekday gap is seen.
+
+        Records the gap's date signature so a permanent (e.g. holiday)
+        gap is reported stale at most once per controller session — the
+        loop guard that lets the gap-aware branch of :meth:`is_stale`
+        force a single corrective re-fetch without re-firing forever.
+        """
+        gap_dates = _recent_interior_gap_dates(candles)
+        if not gap_dates:
+            return False
+        sig = (interval, tuple(gap_dates))
+        if sig in self._stale_gap_seen:
+            return False
+        self._stale_gap_seen.add(sig)
+        return True
 
     def trim(
         self,

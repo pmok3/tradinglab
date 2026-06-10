@@ -30,7 +30,20 @@ Durable cache of fetched candle data, keyed by `(source, ticker, interval)`. Act
 - `load(source, ticker, interval) -> Optional[List[Candle]]` — streams
   the JSONL file line by line; one corrupt line is skipped, an
   all-corrupt file returns `None`. Legacy `.pkl` files are
-  intentionally NEVER opened.
+  intentionally NEVER opened. Bars whose OHLC is not all-finite are
+  dropped on read (`_drop_nonfinite_ohlc`) so a stale poison bar can
+  never reach the cache or render. **Heal-on-load persistence:** when
+  poison bars are actually dropped, `load` atomically rewrites the
+  cleaned file (via `save`) so the NaN-OHLC line is erased from disk —
+  not merely filtered on every subsequent read. This stops the poison
+  row from lingering forever (dropped on load but never erased), which
+  otherwise keeps the series' visible tail under-reporting the last
+  real bar and lets the stale row re-surface through any raw-file
+  reader. The rewrite is best-effort (`save` swallows write errors) and
+  only fires when a drop occurred (`_drop_nonfinite_ohlc` returns the
+  same list object when nothing was dropped — an identity check, no
+  second scan); a clean file is never rewritten. `load` still never
+  raises.
 - `save(source, ticker, interval, candles)` — atomic write
   (`tempfile.mkstemp` in the same directory + `os.replace`). Writes
   one JSON object per line via `_candle_to_dict`.
@@ -46,7 +59,16 @@ Durable cache of fetched candle data, keyed by `(source, ticker, interval)`. Act
   lets a caller that knows both inputs are already date-ascending skip the
   two O(N) sortedness scans (~5.6ms on an 11k-bar pair) — used on the live
   load/prefetch paths where the disk file is saved sorted and fetchers
-  return time-ordered data.
+  return time-ordered data. The merged result is passed through
+  `_drop_nonfinite_ohlc`, so a non-finite-OHLC bar present on either side
+  (typically a stale poison bar already on disk) is removed and never
+  re-persisted.
+- `_is_finite_ohlc(c) / _drop_nonfinite_ohlc(candles)` — row-validity
+  gate mirroring `data.normalize`: a bar with NaN/±Inf OHLC carries no
+  price and is dropped. `_drop_nonfinite_ohlc` returns the original list
+  object unchanged on the all-finite fast path (no spurious copy / object
+  identity preserved); it only allocates a filtered copy when a poison
+  bar is present.
 - `mark_no_persist(source) / unmark_no_persist(source) /
   is_no_persist(source) / clear_no_persist()` — opt-source-out-of-
   persistence registry. When a source name is in the no-persist set,
@@ -68,10 +90,23 @@ Durable cache of fetched candle data, keyed by `(source, ticker, interval)`. Act
   (a 5-year-of-1m AAPL cache is ~750k lines, ~50 MB). The legacy
   pickle path required loading the whole list into memory before
   yielding.
-- **NaN → null → nan round-trip.** Gap candles preserve their NaN
-  prices through the JSONL format via `_candle_to_dict` (emits
-  `null`) and `_candle_from_dict` (rehydrates `null` to `math.nan`).
-  Strict-JSON compatible — no `Infinity`/`NaN` literals.
+- **NaN → null → nan format round-trip, but non-finite-OHLC bars are
+  dropped on load/merge.** The on-disk format itself is lossless for
+  NaN prices (`_candle_to_dict` emits `null`, `_candle_from_dict`
+  rehydrates `null` to `math.nan`) and stays strict-JSON compatible (no
+  `Infinity`/`NaN` literals). However, a bar with non-finite OHLC is not
+  a valid price bar — providers (Yahoo especially) occasionally emit a
+  corrupt daily row with NaN OHLC + a real volume for a day that traded.
+  The fetch normalizers drop such rows from *fresh* data, but once one is
+  on disk, fresh data never carries that date again to overwrite it and
+  `merge_candles` would retain the non-overlapping stale bar forever —
+  it then renders as an invisible NaN candle behind a visible volume bar
+  ("today's OHLC is missing but I can still see the volume"). `load()`
+  and `merge_candles()` therefore drop non-finite-OHLC bars, which heals
+  the cache on the next read/merge. Gap candles (`Candle.gap()`) are a
+  compare-view render artifact produced AFTER load/merge by
+  `core.pairing.align_pair` and are never persisted, so this filter does
+  not affect them.
 - **`fromisoformat()` for dates.** Round-trips tz-aware and tz-naive
   datetimes losslessly. Cross-process date precision matches what
   the fetchers emit.
@@ -96,6 +131,11 @@ Durable cache of fetched candle data, keyed by `(source, ticker, interval)`. Act
 - On overlap by `date`, the entry from `new` wins.
 - Duplicate dates within one side collapse to that side's last candle
   for the duplicate date.
+- Neither `load()` nor `merge_candles()` ever returns a bar with
+  non-finite OHLC — poison bars are dropped (`_drop_nonfinite_ohlc`).
+- After `load()` reads a file that contained poison bars, the on-disk
+  file no longer contains them (heal-on-load persistence). A clean file
+  is left byte-for-byte unchanged (no spurious rewrite).
 - `load()` never raises — corrupt → `None`.
 - `save()` either replaces the destination atomically or leaves the
   prior file intact.
@@ -111,6 +151,9 @@ Durable cache of fetched candle data, keyed by `(source, ticker, interval)`. Act
   merge-on-fetch.
 - `tests/unit/test_disk_cache_list_entries.py` — `list_entries()`
   filename enumeration.
+- `tests/unit/test_disk_cache_nonfinite_load.py` — poison-bar drop on
+  load, all-poison → `None`, and heal-on-load persistence (the cleaned
+  file is rewritten when poison is dropped; a clean file is not).
 - `tests/unit/test_paths_purge_pkl.py` — one-shot legacy-`.pkl`
   purge.
 - `check_e0_disk_cache_persist` — end-to-end smoke covering the

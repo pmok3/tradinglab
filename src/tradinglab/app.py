@@ -5341,6 +5341,11 @@ class ChartApp(
         watchlist double-click) intentionally do NOT clear it — those
         go through ``_reload_preserving_drilldown``.
 
+        Also drops the sticky ``_preserve_xlim_on_render`` flag so the
+        new series renders at the right-edge default window rather than
+        reusing the previous interval's (now meaningless) bar-index
+        xlim — see the inline note below.
+
         While a sandbox session is active, the interval combobox is
         intercepted: the only valid choices are the sandbox's locked
         intraday interval and ``"1d"`` (for daily-context display).
@@ -5351,6 +5356,19 @@ class ChartApp(
             self._sandbox_handle_interval_change()
             return
         self._drilldown_day = None
+        # An explicit source / interval / pre-post change re-bases the
+        # x-axis: bar-index coordinates from the previous interval are
+        # meaningless on the new series. Without clearing the sticky
+        # preserve flag, the old window (e.g. the last 200 *daily* bars,
+        # index ~[300, 500]) is reapplied to the new series (e.g. ~11k 5m
+        # bars), landing the view months in the past with data still to
+        # the right of it. Clear both preserve flags so _render snaps to
+        # the right-edge default window — the expected "show me this
+        # interval now" behavior. Mirrors _reset_view /
+        # _do_scheduled_reload, which also drop the bar-index preserve on
+        # explicit user intent.
+        self._preserve_xlim_on_render = False
+        self._preserve_xlim_by_time_on_render = False
         self._load_data_async()
 
     def _sandbox_handle_interval_change(self) -> None:

@@ -117,3 +117,54 @@ def test_merge_candles_tz_aware_fallback():
     # And crucially: the tz-naive ``old`` bar is dropped — the fallback
     # branch returns ``list(new)``, not a union.
     assert all(c.date.tzinfo is timezone.utc for c in merged)
+
+
+def _nan_candle(date: datetime, volume: int = 100) -> Candle:
+    """A poison bar: NaN OHLC but a real volume (the Yahoo-corrupt shape)."""
+    nan = float("nan")
+    return Candle(
+        date=date, open=nan, high=nan, low=nan, close=nan,
+        volume=volume, session="regular",
+    )
+
+
+def test_merge_candles_drops_stale_nan_ohlc_in_old():
+    # The exact poison scenario: disk (``old``) holds a NaN-OHLC bar for
+    # a date that the fresh fetch (``new``) no longer carries (the
+    # normalizer dropped it). Without filtering, merge_candles retains
+    # the non-overlapping NaN bar forever → "today's 1d bar is all NaN".
+    t1 = datetime(2024, 1, 1)
+    t2 = datetime(2024, 1, 2)
+    t3 = datetime(2024, 1, 3)  # NaN, present only on disk
+    old = [_candle(t1, 1.0), _candle(t2, 2.0), _nan_candle(t3)]
+    new = [_candle(t1, 1.0), _candle(t2, 2.0)]
+
+    merged = merge_candles(old, new)
+
+    assert [c.date for c in merged] == [t1, t2]
+    assert all(
+        not (c.close != c.close)  # NaN != NaN
+        for c in merged
+    )
+
+
+def test_merge_candles_drops_nan_ohlc_in_new():
+    t1 = datetime(2024, 1, 1)
+    t2 = datetime(2024, 1, 2)
+    old = [_candle(t1, 1.0)]
+    new = [_candle(t1, 1.0), _nan_candle(t2)]
+
+    merged = merge_candles(old, new)
+
+    assert [c.date for c in merged] == [t1]
+
+
+def test_merge_candles_all_finite_preserves_identity_fast_path():
+    # When nothing is dropped, the merged objects are the same Candle
+    # instances (no spurious copy) — pins the identity-preserving fast
+    # path the streaming/series caches rely on.
+    t1 = datetime(2024, 1, 1, 9, 30)
+    only_old = _candle(t1, 1.0)
+    assert merge_candles([only_old], [])[0] is only_old
+    only_new = _candle(t1, 2.0)
+    assert merge_candles([], [only_new])[0] is only_new
