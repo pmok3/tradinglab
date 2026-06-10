@@ -1,17 +1,23 @@
-"""Anchor-pick mode iconifies + restores every visible indicator dialog.
+"""Anchor-pick mode hides + restores every visible indicator dialog.
 
-Pins the contract that ``ChartApp._begin_anchor_pick`` minimises EVERY
-visible indicator dialog (Manage Indicators ``self._indicator_dialog``
-AND every per-config ``self._per_indicator_dialogs[cfg_id]``) so the
-chart underneath is unobstructed for the anchor click, and
-``_cancel_anchor_pick`` restores them all on success/cancel/Esc.
+Pins the contract that ``ChartApp._begin_anchor_pick`` **withdraws**
+(fully hides) EVERY visible indicator dialog (Manage Indicators
+``self._indicator_dialog`` AND every per-config
+``self._per_indicator_dialogs[cfg_id]``) so the chart underneath is
+unobstructed for the anchor click, and ``_cancel_anchor_pick`` restores
+them all on success/cancel/Esc.
+
+``withdraw`` (not ``iconify``) is used deliberately: on Windows
+``iconify`` only minimises the dialog to the taskbar — it stays listed
+there and grabs focus for a beat — whereas ``withdraw`` removes it
+entirely so the chart is cleanly reachable while picking the anchor.
 
 Audit ``avwap-anchor-pick-iconifies-per-indicator-dialog``.
 
 The original bug: the user opens AVWAP from the per-indicator dialog
 (a Toplevel pinned to a specific config_id), clicks "Pick Anchor…",
 and the dialog stays on top of the chart obscuring the bars the user
-wants to click. Only the Manage Indicators dialog was being iconified
+wants to click. Only the Manage Indicators dialog was being hidden
 because ``_begin_anchor_pick`` only inspected ``self._indicator_dialog``
 — per-indicator dialogs (stored in ``self._per_indicator_dialogs``)
 were ignored.
@@ -111,7 +117,7 @@ def _call_cancel(stub: Any) -> None:
 
 def test_begin_anchor_pick_iconifies_per_indicator_dialog(root: tk.Toplevel):
     """The per-indicator dialog (`self._per_indicator_dialogs[cfg_id]`)
-    must be iconified by `_begin_anchor_pick` so the chart is reachable.
+    must be withdrawn by `_begin_anchor_pick` so the chart is reachable.
     """
     per = tk.Toplevel(root)
     per.update_idletasks()
@@ -124,9 +130,9 @@ def test_begin_anchor_pick_iconifies_per_indicator_dialog(root: tk.Toplevel):
     try:
         _call_begin(stub, 1)
         per.update_idletasks()
-        assert per.state() == "iconic", (
+        assert per.state() == "withdrawn", (
             f"per-indicator dialog state is {per.state()!r}; expected "
-            "'iconic' after _begin_anchor_pick"
+            "'withdrawn' after _begin_anchor_pick"
         )
         assert stub._anchor_pick_state is not None
     finally:
@@ -135,7 +141,7 @@ def test_begin_anchor_pick_iconifies_per_indicator_dialog(root: tk.Toplevel):
 
 def test_cancel_anchor_pick_restores_per_indicator_dialog(root: tk.Toplevel):
     """`_cancel_anchor_pick` must `deiconify()` the per-indicator
-    dialog that `_begin_anchor_pick` minimised.
+    dialog that `_begin_anchor_pick` hid.
     """
     per = tk.Toplevel(root)
     per.update_idletasks()
@@ -147,7 +153,7 @@ def test_cancel_anchor_pick_restores_per_indicator_dialog(root: tk.Toplevel):
     try:
         _call_begin(stub, 1)
         per.update_idletasks()
-        assert per.state() == "iconic"
+        assert per.state() == "withdrawn"
 
         _call_cancel(stub)
         per.update_idletasks()
@@ -182,10 +188,10 @@ def test_begin_anchor_pick_iconifies_both_dialog_types_when_both_visible(
         _call_begin(stub, 1)
         mgr.update_idletasks()
         per.update_idletasks()
-        assert mgr.state() == "iconic", \
-            "Manage Indicators dialog must be iconified"
-        assert per.state() == "iconic", \
-            "Per-indicator dialog must be iconified"
+        assert mgr.state() == "withdrawn", \
+            "Manage Indicators dialog must be withdrawn"
+        assert per.state() == "withdrawn", \
+            "Per-indicator dialog must be withdrawn"
 
         _call_cancel(stub)
         mgr.update_idletasks()
@@ -219,13 +225,13 @@ def test_begin_anchor_pick_iconifies_all_per_indicator_dialogs(
         per_indicator_dialogs={1: per_1, 2: per_2, 3: per_3},
     )
     try:
-        # Picking from config_id=1; even per_2 / per_3 should iconify.
+        # Picking from config_id=1; even per_2 / per_3 should hide.
         _call_begin(stub, 1)
         for w in (per_1, per_2, per_3):
             w.update_idletasks()
-        assert per_1.state() == "iconic"
-        assert per_2.state() == "iconic"
-        assert per_3.state() == "iconic"
+        assert per_1.state() == "withdrawn"
+        assert per_2.state() == "withdrawn"
+        assert per_3.state() == "withdrawn"
 
         _call_cancel(stub)
         for w in (per_1, per_2, per_3):
@@ -256,7 +262,7 @@ def test_begin_anchor_pick_handles_destroyed_dialog_gracefully(
     try:
         _call_begin(stub, 1)
         per_alive.update_idletasks()
-        assert per_alive.state() == "iconic"
+        assert per_alive.state() == "withdrawn"
         assert stub._anchor_pick_state is not None
 
         _call_cancel(stub)

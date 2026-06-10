@@ -4340,12 +4340,12 @@ class ChartApp(
         keeps the mode active so the user can retry.
 
         While pick mode is active EVERY visible indicator dialog is
-        iconified (minimised to the taskbar) so the chart underneath
-        is unobstructed and the user can reach any candle. This
-        covers BOTH the Manage Indicators dialog (``self.
+        withdrawn (fully hidden — NOT just minimised) so the chart
+        underneath is unobstructed and the user can reach any candle.
+        This covers BOTH the Manage Indicators dialog (``self.
         _indicator_dialog``) AND every per-indicator dialog
         (``self._per_indicator_dialogs`` — any of which may overlap
-        the chart geometry). Each iconified dialog's original window
+        the chart geometry). Each hidden dialog's original window
         state is captured and restored when pick mode ends (success,
         cancel, or Esc) via :meth:`_cancel_anchor_pick`.
 
@@ -4354,11 +4354,11 @@ class ChartApp(
         cfg = self._indicator_manager.get(config_id)
         if cfg is None or getattr(cfg, "kind_id", "") != "avwap":
             return
-        # Collect EVERY visible indicator dialog so we can iconify all
-        # of them and restore later. Capture each dialog's current
-        # state (`state()` returns "normal" / "iconic" / "withdrawn"
-        # / "zoomed") so a withdrawn/iconic dialog stays in its
-        # original state on restore.
+        # Collect EVERY visible indicator dialog so we can hide all of
+        # them and restore later. Capture each dialog's current state
+        # (`state()` returns "normal" / "iconic" / "withdrawn" /
+        # "zoomed") so an already-hidden dialog stays in its original
+        # state on restore.
         candidates: list[tk.Toplevel] = []
         mgr_dlg = getattr(self, "_indicator_dialog", None)
         if mgr_dlg is not None:
@@ -4367,7 +4367,7 @@ class ChartApp(
         for d in per_dlgs.values():
             if d is not None and d is not mgr_dlg:
                 candidates.append(d)
-        iconified: list[tuple[Any, str | None]] = []
+        hidden: list[tuple[Any, str | None]] = []
         for dlg in candidates:
             try:
                 if not dlg.winfo_exists():
@@ -4378,22 +4378,28 @@ class ChartApp(
                 prior_state = dlg.state()
             except Exception:  # noqa: BLE001
                 prior_state = None
-            # Don't re-iconify an already-iconified dialog; leave it
-            # alone on restore too.
-            if prior_state == "iconic":
+            # Only hide dialogs that are currently visible; leave an
+            # already-hidden (iconic / withdrawn) dialog untouched so we
+            # don't force-show it on restore.
+            if prior_state in ("iconic", "withdrawn"):
                 continue
             try:
-                dlg.iconify()
+                # ``withdraw`` (NOT ``iconify``): on Windows ``iconify``
+                # only minimises to the taskbar — the window stays listed
+                # there and grabs focus for a beat. ``withdraw`` removes
+                # it entirely so the chart is cleanly unobstructed while
+                # the user clicks the anchor bar. Restored via
+                # ``deiconify`` in :meth:`_cancel_anchor_pick`.
+                dlg.withdraw()
             except Exception:  # noqa: BLE001
                 continue
-            iconified.append((dlg, prior_state))
+            hidden.append((dlg, prior_state))
         self._anchor_pick_state = {
             "config_id": config_id,
-            "iconified_dialogs": iconified,
-            # Back-compat alias for callers / tests that read
-            # ``dialog_prior_state`` directly — refers to the
-            # first-iconified dialog (typically Manage Indicators).
-            "dialog_prior_state": iconified[0][1] if iconified else None,
+            "hidden_dialogs": hidden,
+            # Prior window state of the first-hidden dialog (typically
+            # Manage Indicators) — kept for callers that inspect it.
+            "dialog_prior_state": hidden[0][1] if hidden else None,
         }
         self._pan_state = None
         self._zoom_state = None
@@ -4415,7 +4421,7 @@ class ChartApp(
     def _cancel_anchor_pick(self, *, status_msg: str | None = None) -> None:
         """Clear anchor-pick mode and restore the cursor / status.
 
-        Every indicator dialog iconified by :meth:`_begin_anchor_pick`
+        Every indicator dialog hidden by :meth:`_begin_anchor_pick`
         is deiconified back to its prior state (typically "normal"
         but preserving "zoomed" if that's what it was) and lifted
         over the chart so the user can keep editing params right
@@ -4423,10 +4429,10 @@ class ChartApp(
 
         Audit ``avwap-anchor-pick-iconifies-per-indicator-dialog``.
         """
-        iconified: list[tuple[Any, str | None]] = []
+        hidden: list[tuple[Any, str | None]] = []
         if self._anchor_pick_state is not None:
-            iconified = list(
-                self._anchor_pick_state.get("iconified_dialogs", []) or []
+            hidden = list(
+                self._anchor_pick_state.get("hidden_dialogs", []) or []
             )
         self._anchor_pick_state = None
         try:
@@ -4435,16 +4441,16 @@ class ChartApp(
             tk_widget.unbind("<Escape>")
         except Exception:  # noqa: BLE001
             pass
-        for dlg, prior_state in iconified:
+        for dlg, prior_state in hidden:
             try:
                 if not dlg.winfo_exists():
                     continue
             except Exception:  # noqa: BLE001
                 continue
             try:
-                # Only deiconify if it WAS visible before we minimised
-                # it. If the user had it withdrawn for some reason,
-                # preserve that state.
+                # Only re-show if it WAS visible before we hid it. If the
+                # user had it withdrawn/iconic for some reason, preserve
+                # that state (those were skipped at hide time anyway).
                 if prior_state in ("normal", "zoomed", None):
                     dlg.deiconify()
                     if prior_state == "zoomed":

@@ -16,16 +16,21 @@ Manage Indicators dialog or in a per-indicator popup):
 
 1. `IndicatorDialog._on_pick_anchor(row)` calls
    `ChartApp._begin_anchor_pick(config_id)`.
-2. `_begin_anchor_pick` iconifies **every visible indicator dialog**
-   so the chart underneath is unobstructed and the user can click
-   any candle without first moving the popup. This covers BOTH:
+2. `_begin_anchor_pick` **withdraws** (fully hides) **every visible
+   indicator dialog** so the chart underneath is unobstructed and the
+   user can click any candle without first moving the popup. This
+   covers BOTH:
    - the Manage Indicators dialog (`self._indicator_dialog`), AND
    - every per-indicator dialog in `self._per_indicator_dialogs`
      (any one may overlap the chart; the user typically clicks Pick
      Anchor from one of these).
-   Each dialog's prior state (`"normal"` / `"zoomed"` / `"iconic"` /
-   `"withdrawn"`) is captured before iconifying — already-iconic
-   dialogs are left alone. Audit
+   `withdraw` is used rather than `iconify`: on Windows `iconify`
+   only minimises the dialog to the taskbar (it stays listed there
+   and grabs focus for a beat), whereas `withdraw` removes the window
+   entirely. Each dialog's prior state (`"normal"` / `"zoomed"` /
+   `"iconic"` / `"withdrawn"`) is captured before hiding — dialogs
+   that are already hidden (`"iconic"` / `"withdrawn"`) are left
+   untouched so they aren't force-shown on restore. Audit
    `avwap-anchor-pick-iconifies-per-indicator-dialog`.
 3. Cursor flips to `crosshair`; status hint reads
    "Click a bar to anchor VWAP — Esc to cancel".
@@ -35,8 +40,8 @@ Manage Indicators dialog or in a per-indicator popup):
    updates `cfg.params["anchor_ts"]` via
    `IndicatorManager.update(config_id, params=...)`. `price_source`
    and `bands` are preserved (merge).
-5. On success / Esc / cancel, `_cancel_anchor_pick` restores every
-   previously-iconified dialog to its captured prior state and lifts
+5. On success / Esc / cancel, `_cancel_anchor_pick` `deiconify`s every
+   previously-hidden dialog back to its captured prior state and lifts
    it back over the chart so the user can keep editing.
 
 Pinned by `tests/unit/gui/test_avwap_anchor_pick_iconify.py`
