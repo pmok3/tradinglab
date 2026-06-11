@@ -1,5 +1,77 @@
 # Changelog
 
+## [0.3.8] - 2026-06-11
+
+### Added
+
+- **Anchored VWAP now keeps a separate anchor for each symbol.**
+  Previously a single Anchored VWAP used the *same* anchor date for every
+  ticker — so the anchor you picked on one stock was wrongly forced onto
+  the compare ticker and onto whatever symbol you switched to next. Now
+  each symbol remembers its own anchor: pick an anchor on AAPL and another
+  on the SPY compare pane, and each draws from its own point. A symbol you
+  haven't anchored yet shows **"Not set"** and draws no line (instead of
+  silently anchoring to the first bar) until you pick one. A new **"Apply
+  anchor to all symbols"** checkbox keeps the old one-anchor-for-everything
+  behaviour when you want it (e.g. anchoring every chart to the same
+  macro event). Existing saved Anchored VWAPs keep working — they load as
+  "apply to all symbols" so nothing changes unless you opt into per-symbol.
+- **Relative Volume panes can switch to a logarithmic scale.** When you
+  stack a smooth RVOL (e.g. Cumulative) and a spiky one (Time-of-Day) in
+  the same pane, a big opening spike used to squash the calmer line into
+  an unreadable sliver. A new **"Log scale"** option in the RVOL settings
+  (off by default) plots the pane on a log axis so both stay legible while
+  the full spike remains visible.
+
+### Changed
+
+- **The app is snappier — especially with many indicators, long histories,
+  and during live streaming.** A performance pass made the chart, scanner,
+  and Strategy Tester noticeably more responsive:
+  - **Live charts stay smooth while streaming.** Each incoming price tick
+    now updates the chart with a lightweight repaint instead of redrawing
+    the whole figure, cutting per-tick drawing work by roughly **5×** — the
+    chart no longer stutters when quotes arrive quickly.
+  - **Indicators and scans compute faster.** The visual Conditions builder
+    (shared by the Scanner, Entries, and Exits), the built-in indicators
+    (RSI, ATR, MACD, Bollinger Bands, VWAP, Anchored VWAP, ADX, RVOL /
+    RRVOL), and the candle / volume drawing were rewritten to do far less
+    repeated work, so live charts, scans, and Strategy Tester runs over
+    long histories and multi-indicator setups finish quicker.
+  - These are **speed-only** changes — every indicator value, signal,
+    screenshot, and journal number is identical to before (pinned by
+    equivalence tests).
+- **Indicators update live as you edit them by default.** Tweaking an
+  indicator's settings now reflects on the chart immediately rather than
+  waiting behind a separate "Apply" step.
+- **Switching ticker, interval, or pre/post-market now snaps the view to
+  the latest bars.** An explicit chart change no longer reuses the previous
+  interval's zoom window (which could leave you parked months in the past
+  with data off to the right).
+
+### Fixed
+
+- **Relative Volume panes with two RVOL indicators now show both
+  correctly.** When RVOL Cumulative and RVOL Time-of-Day shared one pane:
+  the pane auto-scaled to only one of them (clipping the other's spikes);
+  hovering showed only one indicator's value; and clicking the pane label
+  to edit always opened the first one. Now the pane fits **both** series,
+  the hover readout lists **every** indicator's value at the cursor, and
+  each indicator name in the pane label is individually clickable so you
+  edit the one you actually clicked.
+- **No more phantom current-day bar.** A data-provider quirk could insert a
+  bar with no real price (blank OHLC) for the current session before any
+  trade printed — showing as an invisible gap behind a stray volume bar.
+  These bars are now dropped on load and never cached, and a corrupt cached
+  bar self-heals on next read. Daily charts with a recently-missing trading
+  day also re-fetch once to fill the hole.
+- **"Pick Anchor" no longer leaves dialogs stuck on the taskbar.** Choosing
+  an Anchored VWAP anchor now fully hides the open indicator dialogs while
+  you click the chart, then restores them — instead of minimising them to
+  the taskbar where they grabbed focus.
+- **Colour picker OK button is no longer clipped** off the bottom of the
+  themed colour chooser.
+
 ## [0.3.7] - 2026-06-08
 
 ### Added
