@@ -124,15 +124,15 @@ def _filter_indicator_kind_displays(
 def _format_anchor_label(ts: str) -> str:
     """Render an ISO ``anchor_ts`` value as a compact ``YYYY-MM-DD HH:MM``.
 
-    Returns ``"(first bar)"`` for blank values (the default seed when
-    a fresh Anchored VWAP is created — the manager event handler
-    resolves it to a real timestamp asynchronously). Falls back to the
-    raw string if parsing fails so the user still sees something
+    Returns ``"Not set"`` for blank values — AVWAP anchors are
+    symbol-keyed and explicit, so a symbol with no anchor reads
+    "Not set" (there is no auto-first-eligible default). Falls back to
+    the raw string if parsing fails so the user still sees something
     informative rather than a cryptic empty label.
     """
     raw = (ts or "").strip()
     if not raw:
-        return "(first bar)"
+        return "Not set"
     try:
         from datetime import datetime
         s = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
@@ -1412,6 +1412,21 @@ class IndicatorDialog(BaseModalDialog):
         if kind_id == "ma" and "ma_type" not in seed_values:
             seed_values = dict(seed_values)
             seed_values["ma_type"] = type(self)._last_used_ma_type
+        # AVWAP anchors are symbol-keyed: seed the anchor widget's label
+        # with the EFFECTIVE anchor for the active primary symbol (or
+        # the shared anchor) so it shows the right date — or "Not set"
+        # when this symbol has no anchor yet. The raw ``anchor_ts`` in
+        # params is a legacy/mirror field; the source of truth is the
+        # ``anchors`` map / ``shared_anchor_ts``. See avwap.spec.md.
+        if kind_id == "avwap":
+            seed_values = dict(seed_values)
+            try:
+                from ..indicators.avwap import resolve_anchor_ts
+                slot_symbol = getattr(self._app, "_slot_symbol", None)
+                sym = str(slot_symbol("primary")) if callable(slot_symbol) else ""
+                seed_values["anchor_ts"] = resolve_anchor_ts(seed_values, sym)
+            except Exception:  # noqa: BLE001
+                pass
         # Clear existing.
         sub = row.param_subframe
         if sub is None:
@@ -2219,6 +2234,23 @@ class IndicatorDialog(BaseModalDialog):
                 out[pdef.name] = match
             else:
                 out[pdef.name] = str(raw)
+        # Preserve params that are NOT schema-rendered widgets — e.g.
+        # AVWAP's symbol-keyed ``anchors`` map and ``shared_anchor_ts``,
+        # which the Pick-Anchor flow sets directly (no widget). Without
+        # this they'd be silently dropped on any unrelated edit (toggling
+        # bands, changing price source). Scope the carry-over to keys the
+        # target factory's ``__init__`` actually accepts so a kind change
+        # (e.g. avwap→ma) can't smuggle a stale key into the new kind and
+        # break ``cls(**params)``. See indicators/avwap.spec.md.
+        import inspect
+        try:
+            accepted = set(inspect.signature(cls.__init__).parameters) - {"self"}
+        except (TypeError, ValueError):
+            accepted = set()
+        schema_names = {pdef.name for pdef in schema}
+        for k, v in (row.last_good_params or {}).items():
+            if k not in schema_names and k not in out and k in accepted:
+                out[k] = v
         return out
 
     def _build_scopes(self, row: _IndicatorRow) -> tuple[frozenset[str], bool]:

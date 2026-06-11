@@ -7201,15 +7201,16 @@ def check_d58_anchored_vwap(app) -> None:
     D. **Pre/post-market bars are skipped** like session VWAP.
     E. **Daily bars work** (no all-NaN guard like session VWAP).
     F. **Pick-Anchor click flow**: ``app._begin_anchor_pick`` arms;
-       a synthesized button-press event on a bar updates ``anchor_ts``
-       on the config and merges (``price_source`` / ``bands``
-       preserved); a click on a pre-market bar snaps forward to the
-       next regular bar; a missed click leaves pick mode armed.
-    G. **Default-anchor materialization**: adding a fresh AVWAP via
-       the manager with blank ``anchor_ts`` resolves to the first
-       eligible bar's ISO timestamp via the ``add`` event hook.
-    H. **Dump/load round-trip**: ``manager.dump`` + ``load`` preserve
-       ``anchor_ts`` byte-identically.
+       a synthesized button-press event on a bar sets the effective
+       anchor for the clicked slot's symbol (per-symbol ``anchors``
+       map; ``price_source`` / ``bands`` preserved); a click on a
+       pre-market bar snaps forward to the next regular bar; a missed
+       click leaves pick mode armed.
+    G. **No auto-anchor**: adding a fresh AVWAP with a blank anchor
+       stays unset (resolves to ``""`` → "Not set") — the former
+       first-eligible materialization was removed.
+    H. **Dump/load round-trip**: ``manager.to_dict`` + ``load_dict``
+       preserve the per-symbol ``anchors`` map.
     """
     from datetime import timedelta, timezone
 
@@ -7218,7 +7219,7 @@ def check_d58_anchored_vwap(app) -> None:
     from tradinglab.indicators.avwap import (
         AnchoredVWAP,
         _strip_tz,
-        first_eligible_anchor_ts,
+        resolve_anchor_ts,
     )
     from tradinglab.indicators.config import IndicatorConfig, IndicatorManager
     from tradinglab.models import Candle
@@ -7279,7 +7280,10 @@ def check_d58_anchored_vwap(app) -> None:
     for i in range(8):
         sess = "pre" if i < 2 else ("post" if i >= 6 else "regular")
         candles_d.append(mk(base + timedelta(minutes=i), 100.0 + i, sess=sess))
-    d_ind = AnchoredVWAP(anchor_ts="")  # blank → first eligible
+    # Anchor at the first regular bar (idx 2); pre/post bars must be
+    # skipped regardless. (Blank anchors no longer auto-start — they
+    # read "Not set".)
+    d_ind = AnchoredVWAP(anchor_ts=_strip_tz(candles_d[2].date).isoformat())
     out_d = d_ind.compute(candles_d)
     assert np.isnan(out_d["avwap"][0]) and np.isnan(out_d["avwap"][1]), \
         "D: pre-market bars must not contribute"
@@ -7396,9 +7400,10 @@ def check_d58_anchored_vwap(app) -> None:
             cfg_after = mgr.get(cfg.id)
             assert cfg_after is not None
             expected_anchor = _strip_tz(candles_live[target_reg].date).isoformat()
-            assert cfg_after.params.get("anchor_ts") == expected_anchor, (
-                f"F.2: anchor_ts must update; expected {expected_anchor}, "
-                f"got {cfg_after.params.get('anchor_ts')!r}")
+            sym_f = (app._slot_symbol("primary") or "")
+            assert resolve_anchor_ts(cfg_after.params, sym_f) == expected_anchor, (
+                f"F.2: effective anchor must update; expected {expected_anchor}, "
+                f"got {resolve_anchor_ts(cfg_after.params, sym_f)!r}")
             assert cfg_after.params.get("price_source") == "typical", \
                 "F.2: price_source must be preserved across pick"
             assert cfg_after.params.get("bands") == "off", \
@@ -7418,9 +7423,10 @@ def check_d58_anchored_vwap(app) -> None:
             app._handle_anchor_pick_click(ev)
             cfg_after = mgr.get(cfg.id)
             expected_snap = _strip_tz(candles_live[target_pre_next_reg].date).isoformat()
-            assert cfg_after.params.get("anchor_ts") == expected_snap, (
+            sym_f3 = (app._slot_symbol("primary") or "")
+            assert resolve_anchor_ts(cfg_after.params, sym_f3) == expected_snap, (
                 f"F.3: pre-bar click must snap to first regular; expected "
-                f"{expected_snap}, got {cfg_after.params.get('anchor_ts')!r}")
+                f"{expected_snap}, got {resolve_anchor_ts(cfg_after.params, sym_f3)!r}")
 
         # F.4: missed click (xdata far from any bar center) keeps mode armed.
         if target_reg is not None:
@@ -7440,7 +7446,7 @@ def check_d58_anchored_vwap(app) -> None:
                 "F.4: missed click must keep pick state armed"
             app._cancel_anchor_pick()
 
-    # ---- G: blank-anchor materialization on add ----
+    # ---- G: blank anchor stays "Not set" (no auto-materialization) ----
     mgr.clear()
     _pump(app, 0.1)
     if candles_live and price_ax is not None:
@@ -7458,17 +7464,32 @@ def check_d58_anchored_vwap(app) -> None:
         _pump(app, 0.3)
         cfg_g = mgr.get(cfg_blank.id)
         assert cfg_g is not None
-        # The hook must materialize a non-empty timestamp matching the
-        # first eligible bar in the live primary candles.
-        ps_g = app._panel_state.get("primary") or {}
-        cs_g = ps_g.get("candles") or []
-        expected_g = first_eligible_anchor_ts(cs_g)
-        assert cfg_g.params.get("anchor_ts") == expected_g, (
-            f"G: blank anchor_ts must materialize; expected "
-            f"{expected_g}, got {cfg_g.params.get('anchor_ts')!r}")
+        # No auto-anchor: a blank-anchor AVWAP is NOT materialized — it
+        # resolves to "" (renders "Not set") until the user picks one.
+        sym_g = (app._slot_symbol("primary") or "")
+        assert resolve_anchor_ts(cfg_g.params, sym_g) == "", (
+            "G: blank anchor must stay unset (no auto-materialization); "
+            f"got {resolve_anchor_ts(cfg_g.params, sym_g)!r}")
 
-    # ---- H: dump / load round-trip ----
+    # ---- H: dump / load round-trip of a per-symbol anchor ----
     if candles_live and price_ax is not None:
+        sym_h = (app._slot_symbol("primary") or "TEST").upper()
+        anchor_h = _strip_tz(candles_live[10].date).isoformat()
+        mgr.clear()
+        _pump(app, 0.05)
+        cfg_h_src = IndicatorConfig(
+            kind_id="avwap",
+            kind_version=1,
+            display_name="Anchored VWAP",
+            params={"anchors": {sym_h: anchor_h}, "anchor_shared": False,
+                    "price_source": "typical", "bands": "off"},
+            style={},
+            intervals=(),
+            scopes=frozenset({"main"}),
+            visible=True,
+        )
+        mgr.add(cfg_h_src)
+        _pump(app, 0.05)
         before = mgr.to_dict()
         mgr.clear()
         _pump(app, 0.05)
@@ -7476,8 +7497,53 @@ def check_d58_anchored_vwap(app) -> None:
         _pump(app, 0.05)
         cfg_h = next((c for c in mgr.list() if c.kind_id == "avwap"), None)
         assert cfg_h is not None, "H: AVWAP must round-trip through dump/load"
-        assert cfg_h.params.get("anchor_ts"), \
-            "H: anchor_ts must persist (non-empty) after load"
+        assert resolve_anchor_ts(cfg_h.params, sym_h) == anchor_h, \
+            "H: per-symbol anchor must persist after dump/load"
+
+    # ---- I: readout shows "Not set" for an unanchored AVWAP ----
+    if candles_live and price_ax is not None:
+        mgr.clear()
+        _pump(app, 0.05)
+        sym_i = (app._slot_symbol("primary") or "TEST").upper()
+        # Unanchored for this symbol → readout must read "Not set".
+        cfg_unset = IndicatorConfig(
+            kind_id="avwap",
+            kind_version=1,
+            display_name="Anchored VWAP",
+            params={"anchors": {}, "anchor_shared": False,
+                    "price_source": "typical", "bands": "off"},
+            style={},
+            intervals=(),
+            scopes=frozenset({"main"}),
+            visible=True,
+        )
+        mgr.add(cfg_unset)
+        _pump(app, 0.2)
+        ps_i = app._panel_state.get("primary") or {}
+        ax_i = ps_i.get("price_ax")
+        if ax_i is not None:
+            _packers, meta_i = app._build_readout_indicator_rows(ax_i, app._theme)
+            row_i = next((m for m in meta_i if m.get("config_id") == cfg_unset.id), None)
+            assert row_i is not None, "I: unanchored AVWAP must appear in the readout"
+            seg_i = (row_i.get("outputs") or [{}])[0]
+            assert seg_i.get("notset") is True, \
+                "I: unanchored AVWAP segment must be flagged notset"
+            ta_i = seg_i.get("value_textarea")
+            assert ta_i is not None and ta_i.get_text().strip() == "Not set", (
+                "I: unanchored AVWAP readout value must read 'Not set'; got "
+                f"{ta_i.get_text()!r}" if ta_i is not None else "I: missing TextArea")
+            # Now anchor it for this symbol → no longer "Not set".
+            mgr.update(cfg_unset.id, params={
+                "anchors": {sym_i: candles_live[5].date.isoformat()},
+                "anchor_shared": False, "price_source": "typical", "bands": "off"})
+            _pump(app, 0.2)
+            ax_i2 = (app._panel_state.get("primary") or {}).get("price_ax") or ax_i
+            _p2, meta_i2 = app._build_readout_indicator_rows(ax_i2, app._theme)
+            row_i2 = next((m for m in meta_i2 if m.get("config_id") == cfg_unset.id), None)
+            if row_i2 is not None:
+                seg_i2 = (row_i2.get("outputs") or [{}])[0]
+                assert seg_i2.get("notset") is False, \
+                    "I: anchored AVWAP segment must NOT be flagged notset"
 
     # Restore prior state for downstream tests.
     mgr.clear()
@@ -7489,8 +7555,8 @@ def check_d58_anchored_vwap(app) -> None:
     _pump(app, 0.1)
 
     print("  [OK] d58 Anchored VWAP: cumulation/bands/TZ/pre-post/daily, "
-          "pick-anchor click + snap + miss, blank-anchor materialize, "
-          "dump/load")
+          "pick-anchor click + snap + miss, no auto-anchor, dump/load, "
+          "symbol-keyed + 'Not set' readout")
 
 
 def check_d50_indicators_menu_wiring(app) -> None:

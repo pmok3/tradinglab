@@ -308,12 +308,20 @@ during drag.
     `box._ind_rows` is now
     `{"config_id", "label", "visible", "container": HPacker,
     "outputs": [{"output_key", "color", "line", "value_textarea",
-    "key_label"}, ...]}` where `outputs` enumerates the visible bands
+    "key_label", "notset"}, ...]}` where `outputs` enumerates the visible bands
     in indicator-declared top-down order (via
     `Indicator.effective_output_keys(params)`). `_update_readout`
     walks `outputs` per row and writes `_line_value_at(line, idx)` into
     each segment's `value_textarea` (visible rows) or leaves the
-    placeholder + greyed label (hidden rows / hidden bands). Slot→scope
+    placeholder + greyed label (hidden rows / hidden bands).
+    **AVWAP "Not set":** when a row is an `avwap` config whose effective
+    anchor for THIS slot's symbol is empty (resolved via
+    `indicators.avwap.resolve_anchor_ts(cfg.params, slot_symbol)`), the
+    `notset` flag is set on every output meta; the value `TextArea` then
+    reads `"Not set"` (both the initial seed and on every
+    `_update_readout`) instead of a blank — an unanchored AVWAP draws no
+    line, so there is no value to show. The slot symbol comes from
+    `_slot_symbol(slot_key)`. Slot→scope
     via `_READOUT_SCOPE_FOR_SLOT` (`primary`→`main`,
     `compare`→`compare`). Transparent background (no overlap with the
     OHLCV strip). Click routing: see `_maybe_handle_readout_legend_click`

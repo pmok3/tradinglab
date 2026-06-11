@@ -109,6 +109,12 @@ def test_incremental_protocol_parity(kid):
     assert inst is not None
     candles = _CANDLES
     n_total = len(candles)
+    # AVWAP is all-NaN until anchored (symbol-keyed anchors mean a bare
+    # factory() is unanchored → "Not set"). Give it a concrete early
+    # anchor so the incremental fast path is actually exercised.
+    if kid == "avwap":
+        from tradinglab.indicators.avwap import _strip_tz
+        inst.anchor_ts = _strip_tz(candles[0].date).isoformat()
     warmup = int(getattr(inst, "warmup_bars", 0) or 0)
     init_len = min(max(warmup + 5, 60), n_total - 30)
     assert init_len < n_total

@@ -17,7 +17,14 @@ observer callbacks on every mutation.
   - `to_dict() / from_dict(d)` round-trip. `id` is NOT persisted —
     re-issued process-monotonically on hydrate. `pane_group` is
     persisted; legacy configs default to "" and the factory-level
-    value applies.
+    value applies. **AVWAP anchor migration:** `from_dict` promotes a
+    legacy symbol-blind `avwap` config (a single `params["anchor_ts"]`
+    with none of the new `anchors` / `shared_anchor_ts` /
+    `anchor_shared` keys) to shared-anchor mode
+    (`anchor_shared=True`, `shared_anchor_ts=anchor_ts`) via
+    `_migrate_avwap_anchor_params`, preserving the prior "one anchor on
+    every symbol" behaviour. A legacy blank anchor stays per-symbol
+    (empty) → renders "Not set". See `indicators/avwap.spec.md`.
   - `applies_to(scope, interval) -> bool` — visibility + scope +
     interval filter (empty `intervals` = all) + params-aware factory
     availability via `factory_is_available_for`.

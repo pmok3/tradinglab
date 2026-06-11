@@ -126,6 +126,30 @@ def effective_pane_group(cfg: IndicatorConfig) -> str:
 # --- Config dataclass --------------------------------------------------------
 
 
+def _migrate_avwap_anchor_params(params: dict[str, Any]) -> dict[str, Any]:
+    """Promote a legacy symbol-blind AVWAP anchor to shared-anchor mode.
+
+    Pre-symbol-keyed AVWAP configs stored a single ``anchor_ts`` that
+    applied to every rendered symbol — exactly the new "shared" anchor
+    semantics. A legacy config carrying a concrete ``anchor_ts`` and
+    NONE of the new keys (``anchors`` / ``shared_anchor_ts`` /
+    ``anchor_shared``) is promoted to ``anchor_shared=True`` with
+    ``shared_anchor_ts`` set, so the line keeps drawing on every symbol
+    exactly as before. A legacy blank/absent anchor stays per-symbol
+    (empty) so the indicator reads "Not set" until the user picks one.
+    See `indicators/avwap.spec.md` "Symbol-keyed anchors".
+    """
+    if any(k in params for k in ("anchors", "shared_anchor_ts", "anchor_shared")):
+        return params
+    legacy = str(params.get("anchor_ts") or "").strip()
+    if not legacy:
+        return params
+    migrated = dict(params)
+    migrated["anchor_shared"] = True
+    migrated["shared_anchor_ts"] = legacy
+    return migrated
+
+
 @dataclass
 class IndicatorConfig:
     """One user-configured indicator instance.
@@ -265,6 +289,8 @@ class IndicatorConfig:
         # unified replacement with the appropriate discriminator param
         # baked in.
         kind_id, params = migrate_kind_id(kind_id, params, include_chart_only=True)
+        if kind_id == "avwap":
+            params = _migrate_avwap_anchor_params(params)
         unknown = factory_by_kind_id(kind_id) is None
         style = {}
         for k, sd in (d.get("style") or {}).items():

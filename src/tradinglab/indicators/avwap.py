@@ -8,12 +8,18 @@ follow that day's volume-weighted average.
 
 Per the colocated ``avwap.spec.md``:
 
-* **Anchor**: ISO-8601 timestamp stored in ``params["anchor_ts"]``.
-  Comparison is timezone-naive (any ``tzinfo`` is stripped before
-  compare) so naive smoke fakes and tz-aware yfinance candles both
-  work without raising ``TypeError``.
-  The compute loop snaps to the first non-gap, regular-session bar
-  whose ``date >= anchor_dt``.
+* **Anchor**: symbol-keyed. Per-symbol anchors live in
+  ``params["anchors"]`` (``{SYMBOL: ISO-8601 ts}``); an optional shared
+  anchor (``params["anchor_shared"]`` + ``params["shared_anchor_ts"]``)
+  applies one anchor to every symbol. The chart render layer resolves
+  the effective anchor for each slot's symbol via
+  :func:`resolve_anchor_ts` and injects it as the compute's scalar
+  ``anchor_ts``. Comparison is timezone-naive (any ``tzinfo`` is
+  stripped before compare) so naive smoke fakes and tz-aware yfinance
+  candles both work without raising ``TypeError``. The compute loop
+  snaps to the first non-gap, regular-session bar whose
+  ``date >= anchor_dt``. An unset effective anchor (``""``) draws
+  nothing — the readout shows "Not set" until the user picks one.
 * **Bars considered**: ``session == "regular"`` only — pre/post bars
   are skipped (consistent with session VWAP).
 * **Price input**: configurable; default *typical price* ``(H+L+C)/3``.
@@ -125,6 +131,10 @@ class AnchoredVWAP(BaseIndicator):
             description="Anchor",
         ),
         ParamDef(
+            "anchor_shared", "bool", default=False,
+            description="Apply anchor to all symbols",
+        ),
+        ParamDef(
             "price_source", "choice", default="typical",
             choices=_PRICE_SOURCES,
             description="Price",
@@ -153,8 +163,11 @@ class AnchoredVWAP(BaseIndicator):
     def __init__(
         self,
         anchor_ts: str = "",
+        anchor_shared: bool = False,
         price_source: str = "typical",
         bands: str = "off",
+        anchors: dict | None = None,
+        shared_anchor_ts: str = "",
     ) -> None:
         if price_source not in _PRICE_SOURCES:
             raise ValueError(
@@ -165,6 +178,19 @@ class AnchoredVWAP(BaseIndicator):
             raise ValueError(
                 f"bands must be one of {_BANDS_CHOICES!r}; got {bands!r}"
             )
+        # Symbol-keyed anchors (per-symbol map) + an optional shared
+        # anchor that applies to every symbol. ``anchor_ts`` is the
+        # EFFECTIVE scalar anchor the compute uses; the chart render
+        # layer injects it per slot via ``resolve_anchor_ts`` so the
+        # same config draws AAPL's anchor on the primary pane and SPY's
+        # on the compare pane. The map / shared / legacy fields are kept
+        # so the config round-trips and so direct (non-render) builds
+        # can still self-resolve a shared anchor. See avwap.spec.md.
+        self.anchor_shared = bool(anchor_shared)
+        self.anchors = dict(anchors or {})
+        self.shared_anchor_ts = str(shared_anchor_ts or "")
+        if not anchor_ts and self.anchor_shared:
+            anchor_ts = self.shared_anchor_ts
         self.anchor_ts = anchor_ts
         self.price_source = price_source
         self.bands = bands
@@ -202,11 +228,14 @@ class AnchoredVWAP(BaseIndicator):
         the generic ``params_schema`` walker so the readout legend
         shows just:
 
-        - ``AVWAP`` when ``anchor_ts`` is blank (uninitialised → the
-          compute layer falls back to the first eligible bar);
-        - ``AVWAP(2025-09-15)`` for daily/weekly/monthly anchors
-          (date-only ISO strings pass through unchanged);
-        - ``AVWAP(2025-09-15 09:30)`` for intraday anchors — the
+        - ``AVWAP`` in per-symbol mode — the anchor differs per symbol
+          and the legend prefix is symbol-agnostic (shared across the
+          primary / compare panes), so the per-symbol anchor surfaces
+          as the readout value (or "Not set") rather than the prefix;
+        - ``AVWAP(2025-09-15)`` in shared mode — one anchor applies to
+          every symbol, so it is safe to show in the prefix (date-only
+          ISO strings pass through unchanged);
+        - ``AVWAP(2025-09-15 09:30)`` for intraday shared anchors — the
           ``T`` separator is replaced with a space, and a trailing
           zero-seconds (``:00``) is dropped for readability;
         - ``AVWAP(2025-09-15 09:31:45)`` when the seconds are
@@ -218,10 +247,16 @@ class AnchoredVWAP(BaseIndicator):
         # If display_name already has a parenthesised suffix, trust it.
         if "(" in name and name.endswith(")"):
             return name
-        anchor = ((params or {}).get("anchor_ts") or "").strip()
-        if not anchor:
-            return name
-        return f"{name}({_format_anchor_for_label(anchor)})"
+        p = params or {}
+        # Only shared mode has a single symbol-agnostic anchor safe to
+        # show in the prefix; per-symbol anchors surface as the readout
+        # value (or "Not set").
+        if p.get("anchor_shared"):
+            anchor = (str(p.get("shared_anchor_ts") or "").strip()
+                      or str(p.get("anchor_ts") or "").strip())
+            if anchor:
+                return f"{name}({_format_anchor_for_label(anchor)})"
+        return name
 
     # --- public --------------------------------------------------------
 
@@ -246,15 +281,16 @@ class AnchoredVWAP(BaseIndicator):
 
         anchor_dt = _parse_anchor(self.anchor_ts)
         if anchor_dt is None:
-            if bars.candles is None:
-                return out, empty_state
-            start_idx = _find_start_index(bars.candles, None)
-        else:
-            anchor_np = np.datetime64(_strip_tz(anchor_dt), "ns")
-            keep = bars.session != "gap"
-            ts = bars.timestamps
-            cand = np.flatnonzero(keep & (ts >= anchor_np))
-            start_idx = int(cand[0]) if cand.size else None
+            # Blank/unset effective anchor: AVWAP is "Not set" for this
+            # symbol — emit nothing (all-NaN) so no line is drawn until
+            # the user picks an anchor. The auto-first-eligible default
+            # was deliberately removed; see avwap.spec.md "Unset anchor".
+            return out, empty_state
+        anchor_np = np.datetime64(_strip_tz(anchor_dt), "ns")
+        keep = bars.session != "gap"
+        ts = bars.timestamps
+        cand = np.flatnonzero(keep & (ts >= anchor_np))
+        start_idx = int(cand[0]) if cand.size else None
         if start_idx is None:
             return out, empty_state
 
@@ -370,6 +406,35 @@ def _price_arr_avwap(bars: Bars, source: str) -> np.ndarray:
     if source == "ohlc4":
         return (bars.open + bars.high + bars.low + bars.close) / 4.0
     return (bars.high + bars.low + bars.close) / 3.0
+
+
+def resolve_anchor_ts(params: dict, symbol: str) -> str:
+    """Return the effective ISO anchor for ``symbol`` from AVWAP params.
+
+    Resolution order (see avwap.spec.md "Symbol-keyed anchors"):
+
+    - **Shared mode** (``anchor_shared`` truthy): the single
+      ``shared_anchor_ts`` applies to every symbol (falling back to the
+      legacy scalar ``anchor_ts`` for configs migrated from the
+      pre-symbol-keyed format).
+    - **Per-symbol mode** (default): the anchor stored under
+      ``anchors[SYMBOL]`` (symbol upper-cased). ``""`` when this symbol
+      has no anchor yet — the indicator renders nothing and the readout
+      shows "Not set".
+
+    Pure + symbol-aware: the chart render layer calls this per slot and
+    injects the result as the compute instance's scalar ``anchor_ts``.
+    """
+    p = params or {}
+    if p.get("anchor_shared"):
+        shared = str(p.get("shared_anchor_ts") or "").strip()
+        if shared:
+            return shared
+        return str(p.get("anchor_ts") or "").strip()
+    anchors = p.get("anchors")
+    if isinstance(anchors, dict):
+        return str(anchors.get((symbol or "").upper(), "") or "").strip()
+    return ""
 
 
 def _strip_tz(dt: datetime) -> datetime:

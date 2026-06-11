@@ -4208,18 +4208,11 @@ class ChartApp(
             "preset_loaded", "loaded", "redraw",
         }:
             return
-        # AVWAP default-anchor materialization. When a fresh Anchored
-        # VWAP is added (dialog "Add" or preset load) without an
-        # ``anchor_ts``, resolve to the first eligible bar in the
-        # primary candles and merge the resolved timestamp back into
-        # the config's params. This gives the indicator a real anchor
-        # that survives interval changes (a blank anchor would
-        # silently re-snap to the new interval's first bar instead).
-        if event_kind in ("add", "loaded", "preset_loaded"):
-            try:
-                self._materialize_blank_avwap_anchors()
-            except Exception:  # noqa: BLE001
-                pass
+        # NOTE: Anchored VWAP no longer auto-materializes a default
+        # anchor on add/load. Anchors are symbol-keyed and explicit —
+        # an AVWAP with no anchor for the active symbol renders nothing
+        # and the readout shows "Not set" until the user picks one (see
+        # indicators/avwap.spec.md "Unset anchor").
         # Deferred-render mode (Manage Indicators dialog open without
         # auto-apply): the manager has already mutated, but the chart
         # paint is suppressed until the user clicks "Apply"
@@ -4295,38 +4288,6 @@ class ChartApp(
 
 
 
-
-    def _materialize_blank_avwap_anchors(self) -> None:
-        """Resolve ``anchor_ts == ""`` on any AVWAP configs.
-
-        When the user adds an Anchored VWAP via the dialog or loads a
-        preset that defaulted ``anchor_ts``, the persisted value is
-        the empty string. The compute layer falls back to "first
-        eligible bar," but we want the anchor to survive interval
-        changes — so we materialize the actual timestamp here and
-        merge it into the config's params.
-        """
-        from .indicators.avwap import first_eligible_anchor_ts
-
-        ps = self._panel_state.get("primary") or {}
-        candles = ps.get("candles") or []
-        if not candles:
-            return
-        ts = first_eligible_anchor_ts(candles)
-        if not ts:
-            return
-        for cfg in list(self._indicator_manager.list()):
-            if getattr(cfg, "kind_id", "") != "avwap":
-                continue
-            params = dict(cfg.params or {})
-            cur = params.get("anchor_ts") or ""
-            if cur:
-                continue
-            params["anchor_ts"] = ts
-            # Update without firing the materialization recursively;
-            # the manager will emit "update" but our handler bails
-            # out at the kind_id check above (cur becomes truthy).
-            self._indicator_manager.update(cfg.id, params=params)
 
     def _begin_anchor_pick(self, config_id: int) -> None:
         """Arm one-shot anchor-pick capture for ``config_id``.
@@ -4544,9 +4505,30 @@ class ChartApp(
             self._cancel_anchor_pick()
             return True
         params = dict(cfg.params or {})
-        params["anchor_ts"] = ts
+        # Symbol-keyed anchors: write into the slot the click landed in
+        # so the primary and compare panes keep independent anchors. In
+        # shared mode one anchor applies to every symbol. See
+        # indicators/avwap.spec.md "Symbol-keyed anchors".
+        slot = self._slot_key_for_axes(ax) or "primary"
+        symbol = (self._slot_symbol(slot) or "").upper()
+        if params.get("anchor_shared"):
+            params["shared_anchor_ts"] = ts
+            scope_note = "all symbols"
+        else:
+            anchors = dict(params.get("anchors") or {})
+            if symbol:
+                anchors[symbol] = ts
+                scope_note = symbol
+            else:
+                # No confirmed ticker for this slot (rare pre-confirm
+                # state) — fall back to the legacy scalar so the pick
+                # isn't silently dropped.
+                params["anchor_ts"] = ts
+                scope_note = "this symbol"
+            params["anchors"] = anchors
         self._indicator_manager.update(cfg_id, params=params)
-        self._cancel_anchor_pick(status_msg=f"Anchor set: {ts[:16].replace('T', ' ')}")
+        self._cancel_anchor_pick(
+            status_msg=f"Anchor set ({scope_note}): {ts[:16].replace('T', ' ')}")
         return True
 
     def _refresh_overlay_legend(self) -> None:

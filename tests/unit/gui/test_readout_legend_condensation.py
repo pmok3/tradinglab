@@ -141,14 +141,16 @@ class TestFormatIndicatorLabel:
             display_name="AVWAP",
             params={
                 "anchor_ts": "2025-09-15T09:30:00",
+                "anchor_shared": True,
+                "shared_anchor_ts": "2025-09-15T09:30:00",
                 "price_source": "typical",
                 "bands": "off",
             },
             style={},
         )
         # ISO-8601 anchor formatted human-readably: ``T`` → space and
-        # the trailing ``:00`` seconds dropped. Audit
-        # ``avwap-anchor-only-label``.
+        # the trailing ``:00`` seconds dropped. Shown only in shared mode
+        # (the prefix is symbol-agnostic). Audit ``avwap-anchor-only-label``.
         assert format_indicator_label(cfg) == "AVWAP(2025-09-15 09:30)"
 
     def test_avwap_anchor_drops_seconds_only_when_zero(self):
@@ -157,8 +159,9 @@ class TestFormatIndicatorLabel:
 
         cfg = IndicatorConfig(
             id=1, kind_id="avwap", kind_version=1, display_name="AVWAP",
-            params={"anchor_ts": "2025-09-15T09:31:45", "price_source": "typical",
-                    "bands": "off"},
+            params={"anchor_ts": "2025-09-15T09:31:45", "anchor_shared": True,
+                    "shared_anchor_ts": "2025-09-15T09:31:45",
+                    "price_source": "typical", "bands": "off"},
             style={},
         )
         # Non-zero seconds should be preserved (it's a precise anchor).
@@ -170,8 +173,9 @@ class TestFormatIndicatorLabel:
 
         cfg = IndicatorConfig(
             id=1, kind_id="avwap", kind_version=1, display_name="AVWAP",
-            params={"anchor_ts": "2025-09-15", "price_source": "typical",
-                    "bands": "off"},
+            params={"anchor_ts": "2025-09-15", "anchor_shared": True,
+                    "shared_anchor_ts": "2025-09-15",
+                    "price_source": "typical", "bands": "off"},
             style={},
         )
         # Daily/weekly/monthly anchors are date-only strings; pass through.

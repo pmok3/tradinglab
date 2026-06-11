@@ -130,7 +130,15 @@ checkbox groups, called from `_on_menu_sandbox_start` / `_on_menu_sandbox_end`.
   rendering, and the `param_vars` / `param_widgets` bookkeeping; it
   also keeps the `anchor_ts` special-case inline so the inner Button
   remains individually addressable for the unknown-row read-only
-  path. Commit policy is `"debounced"` with
+  path. For `avwap` rows the anchor widget is seeded with the
+  EFFECTIVE anchor for the active primary symbol (resolved via
+  `indicators.avwap.resolve_anchor_ts`) so the label shows that
+  symbol's anchor or **"Not set"**; the "Apply anchor to all symbols"
+  checkbox is the `anchor_shared` bool ParamDef (auto-rendered). The
+  symbol-keyed `anchors` map / `shared_anchor_ts` are NON-schema params
+  set by the Pick-Anchor flow — `_collect_param_values` preserves every
+  non-schema key from `last_good_params` so an unrelated edit (bands,
+  price source) never drops them. Commit policy is `"debounced"` with
   `on_commit_eager=_commit_now` to preserve the
   click-checkbox/pick-combobox/arrow-spinbox commits-instantly UX
   while keeping typing debounced 250 ms. Width is computed up-front

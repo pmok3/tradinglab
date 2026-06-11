@@ -204,7 +204,7 @@ def _format_anchor_label(ts: str) -> str:
     """
     raw = (ts or "").strip()
     if not raw:
-        return "(first bar)"
+        return "Not set"
     try:
         from datetime import datetime
         s = raw[:-1] + "+00:00" if raw.endswith("Z") else raw

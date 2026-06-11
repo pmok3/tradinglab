@@ -356,13 +356,26 @@ def _compute_for_config(
     cls = factory_by_kind_id(cfg.kind_id)
     if cls is None:
         return None
+    # AVWAP anchors are symbol-keyed: resolve the effective scalar
+    # anchor for THIS slot's symbol (surfaced on the render context as
+    # ``primary_symbol`` — it's the slot's ticker, primary or compare)
+    # and build the instance with it, so one shared config draws each
+    # pane's ticker at its own anchor. The resolved anchor also feeds
+    # the cache hash below so primary/compare don't collide on identical
+    # ``cfg.params``. Every other indicator builds straight from params.
+    build_params = cfg.params
+    if cfg.kind_id == "avwap":
+        from ..core.render_context import current_context
+        from .avwap import resolve_anchor_ts
+        symbol = str(current_context().get("primary_symbol", "") or "")
+        build_params = {**cfg.params, "anchor_ts": resolve_anchor_ts(cfg.params, symbol)}
     try:
-        ind = cls(**cfg.params)
+        ind = cls(**build_params)
     except Exception:  # noqa: BLE001
         return None
     n_full = len(candles)
     if gap_mask is None or not gap_mask.any():
-        h = config_hash(cfg.kind_id, cfg.params)
+        h = config_hash(cfg.kind_id, build_params)
         try:
             bars = cache.bars_for(list(candles)) if not isinstance(candles, list) \
                 else cache.bars_for(candles)
@@ -385,7 +398,7 @@ def _compute_for_config(
         return None
     raw_h = config_hash(
         cfg.kind_id,
-        {**cfg.params, "_gapfp": int(gap_mask.tobytes().__hash__() & 0xFFFFFFFF)},
+        {**build_params, "_gapfp": int(gap_mask.tobytes().__hash__() & 0xFFFFFFFF)},
     )
     try:
         nongap_bars = cache.bars_for(nongap_candles)

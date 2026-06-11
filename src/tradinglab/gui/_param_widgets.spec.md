@@ -94,7 +94,11 @@ When `pdef.kind == "str"` AND `pdef.name == "anchor_ts"`, the
 helper builds a read-only label + "Pick Anchor…" Button pair (the
 Anchored VWAP convention). The button command is wired to
 `anchor_pick_callback` (defaults to no-op). The returned `widget`
-is a `ttk.Frame` containing the label+button cluster.
+is a `ttk.Frame` containing the label+button cluster. The label
+formats the anchor via `_format_anchor_label` — a blank/unset anchor
+reads **"Not set"** (AVWAP anchors are symbol-keyed + explicit; there
+is no auto-first-eligible default). This `_format_anchor_label` MUST
+stay byte-identical to `indicator_dialog._format_anchor_label`.
 
 ## Why this is separate from `exits_dialog_widgets._render_field`
 

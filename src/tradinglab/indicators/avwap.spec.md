@@ -9,6 +9,13 @@ variance. Overlay on price axis. Anchor is picked via the dialog's
 "Pick Anchor…" button (see `gui/indicator_dialog.py`,
 `gui/interaction.py`).
 
+**Anchors are symbol-keyed.** A single AVWAP config can render on the
+primary AND compare panes (different tickers); each pane resolves its
+OWN anchor from `params["anchors"][SYMBOL]`. An optional shared mode
+(`params["anchor_shared"]`) pins ONE anchor (`shared_anchor_ts`) that
+applies to every symbol. A symbol with no anchor draws nothing and the
+readout reads "Not set" — there is NO auto-anchor default.
+
 ## Pick Anchor UX
 
 When the user clicks the "Pick Anchor…" button (either in the
@@ -37,9 +44,16 @@ Manage Indicators dialog or in a per-indicator popup):
 4. `InteractionMixin._on_button_press` short-circuits the next
    left-click to `_handle_anchor_pick_click`, which snaps to the
    nearest non-gap regular-session bar at or after the click and
-   updates `cfg.params["anchor_ts"]` via
-   `IndicatorManager.update(config_id, params=...)`. `price_source`
-   and `bands` are preserved (merge).
+   writes the anchor into the config via
+   `IndicatorManager.update(config_id, params=...)`. WHERE it writes
+   depends on the config's mode and the SLOT the click landed in:
+   - **Per-symbol mode** (default): `params["anchors"][SYMBOL]` where
+     `SYMBOL` is the ticker shown in the clicked slot
+     (`ChartApp._slot_symbol`). Picking on the compare pane anchors the
+     compare ticker; the primary ticker's anchor is untouched.
+   - **Shared mode** (`anchor_shared` checked):
+     `params["shared_anchor_ts"]` — the one anchor for all symbols.
+   `price_source` / `bands` / the other-mode slot are preserved (merge).
 5. On success / Esc / cancel, `_cancel_anchor_pick` `deiconify`s every
    previously-hidden dialog back to its captured prior state and lifts
    it back over the chart so the user can keep editing.
@@ -50,17 +64,32 @@ dialog + no-dialog edge cases) and the `check_d42_avwap_*` sub-test
 in `tests/smoke/test_smoke_full.py`.
 
 ## Public API
-- `class AnchoredVWAP(anchor_ts="", price_source="typical", bands="off")`
-  — `kind_id="avwap"`, `kind_version=1`, `overlay=True`. Display
-  registry key: `"Anchored VWAP"`.
+- `class AnchoredVWAP(anchor_ts="", anchor_shared=False,
+  price_source="typical", bands="off", anchors=None,
+  shared_anchor_ts="")` — `kind_id="avwap"`, `kind_version=1`,
+  `overlay=True`. Display registry key: `"Anchored VWAP"`. `anchor_ts`
+  is the EFFECTIVE scalar anchor the compute uses; the render layer
+  injects it per slot via `resolve_anchor_ts`. The `anchors` map /
+  `shared_anchor_ts` / `anchor_shared` fields are stored so the config
+  round-trips and so a direct (non-render) build self-resolves the
+  shared anchor (`anchor_ts` defaults to `shared_anchor_ts` when shared
+  mode is on and no explicit `anchor_ts` was passed).
 - `params_schema`:
-  - `anchor_ts: str` (default `""`) — ISO-8601 anchor timestamp.
+  - `anchor_ts: str` (default `""`) — the effective/legacy anchor.
     Dialog renders this with a label + "Pick Anchor…" button (no
-    free-text Entry). Blank ⇒ falls back to the first eligible bar
-    until the app's `add` event hook materializes a real timestamp.
+    free-text Entry); the label shows the active symbol's resolved
+    anchor or "Not set". Blank effective anchor ⇒ draws nothing
+    ("Not set") — there is no auto-first-eligible fallback.
+  - `anchor_shared: bool` (default `False`) — the "Apply anchor to all
+    symbols" checkbox. When checked, one `shared_anchor_ts` applies to
+    every symbol; when unchecked, anchors are per-symbol.
   - `price_source: choice` (default `"typical"`, choices
     `typical | close | ohlc4`).
   - `bands: choice` (default `"off"`, choices `off | 1σ | 2σ | both`).
+- Non-schema params (set by the pick flow, not typed in the dialog):
+  - `anchors: dict[str, str]` — `{SYMBOL_UPPER: ISO ts}` per-symbol
+    anchors (the source of truth in per-symbol mode).
+  - `shared_anchor_ts: str` — the anchor used in shared mode.
 - `default_style`: `avwap` brown `#8c564b` via `_palette.TAB10_BROWN`
   width 1.6; band keys
   (`upper1`, `lower1`, `upper2`, `lower2`) mid-blue `#4393c3` width
@@ -73,13 +102,14 @@ in `tests/smoke/test_smoke_full.py`.
   - `bands="2σ"` → `("upper2", "avwap", "lower2")`
   - `bands="both"` → `("upper2", "upper1", "avwap", "lower1", "lower2")`
   This is what fixes the "AVWAP shows 5 legend rows when bands are disabled" bug — the `compute(...)` output schema still always returns all 5 keys (invariant 2 below), but the legend only renders the visible subset.
-- `legend_label(cls, display_name, params) -> str | None` — classmethod overriding `BaseIndicator.legend_label` so the consolidated readout-legend row shows only the **anchor point** (the only "important detail" for an anchored indicator) instead of rendering every schema param. Returns:
-  - bare ``Anchored VWAP`` (or whatever `display_name` is set to) when `anchor_ts` is blank — i.e. the user hasn't picked an anchor yet and the compute layer is falling back to the first eligible bar;
-  - ``Anchored VWAP(2025-09-15)`` for date-only anchors (daily / weekly / monthly intervals);
-  - ``Anchored VWAP(2025-09-15 09:30)`` for intraday anchors — the ISO ``T`` separator becomes a space and a trailing zero-seconds suffix is dropped for readability;
-  - ``Anchored VWAP(2025-09-15 09:31:45)`` when the anchor's seconds are non-zero (precise anchor — preserved verbatim).
+- `legend_label(cls, display_name, params) -> str | None` — classmethod overriding `BaseIndicator.legend_label`. The legend prefix is symbol-agnostic (shared across the primary / compare panes), so it can only safely show a per-config anchor in **shared mode**:
+  - bare ``Anchored VWAP`` in per-symbol mode — the anchor differs per symbol, so it surfaces as the readout value (or "Not set") rather than the prefix;
+  - ``Anchored VWAP(2025-09-15)`` in shared mode for date-only anchors (daily / weekly / monthly intervals);
+  - ``Anchored VWAP(2025-09-15 09:30)`` for intraday shared anchors — the ISO ``T`` separator becomes a space and a trailing zero-seconds suffix is dropped for readability;
+  - ``Anchored VWAP(2025-09-15 09:31:45)`` when the shared anchor's seconds are non-zero (precise anchor — preserved verbatim).
   ``price_source`` and ``bands`` never appear in the label (rendering knobs, not "important details"). Audit ``avwap-anchor-only-label``.
 - `_format_anchor_for_label(anchor_ts: str) -> str` — module-level helper backing the `legend_label` override. Pure: date-only strings pass through; datetime strings parsed via `datetime.fromisoformat` then formatted with the rules above; unparseable strings fall back to a `T → space` substitution so the legend never raises.
+- `resolve_anchor_ts(params, symbol) -> str` — module-level helper returning the EFFECTIVE ISO anchor for `symbol`. Shared mode → `shared_anchor_ts` (falling back to legacy `anchor_ts`); per-symbol mode → `anchors[symbol.upper()]`; `""` when unset. Pure; called by the render layer per slot and by the readout to decide "Not set".
 - `compute(candles) -> {"avwap", "upper1", "lower1", "upper2", "lower2"}`.
   Always returns all five keys; unrequested band keys are NaN-filled.
 - `compute_arr(bars) -> {...}` — thin wrapper returning
@@ -96,8 +126,10 @@ in `tests/smoke/test_smoke_full.py`.
 - `inc_init(bars)` / `inc_step(state, bars, *, prev_len)` — incremental
   protocol (see "Incremental protocol" below).
 - `first_eligible_anchor_ts(candles) -> str` — ISO timestamp of the first
-  non-gap regular-session bar, or `""`. Used by
-  `ChartApp._materialize_blank_avwap_anchors`.
+  non-gap regular-session bar, or `""`. Retained helper (the
+  auto-materialize-on-add caller was removed when the first-eligible
+  default was dropped); still usable by callers that want a sensible
+  default anchor to seed a pick.
 
 ## Dependencies
 - Internal: `..core.bars.Bars`, `..models.Candle`, `._palette.TAB10_BROWN`,
@@ -105,10 +137,23 @@ in `tests/smoke/test_smoke_full.py`.
 - External: `numpy`, `math`, `datetime`.
 
 ## Design Decisions
+- **Symbol-keyed anchors.** Anchors live in `params["anchors"]`
+  (`{SYMBOL: ISO ts}`) so one config renders the right anchor on each
+  pane (primary vs compare are different tickers). The render layer
+  resolves the slot's symbol → effective `anchor_ts` via
+  `resolve_anchor_ts` and injects it before compute. An optional
+  `anchor_shared` mode pins one `shared_anchor_ts` for every symbol
+  (e.g. a macro/Fed event). Migrated legacy configs (single
+  symbol-blind `anchor_ts`) land in shared mode so behaviour is
+  preserved (see `config.spec.md`).
+- **Unset anchor ⇒ "Not set", no line.** A symbol with no resolved
+  anchor produces all-NaN output (no line) and the readout legend shows
+  "Not set". The previous auto-first-eligible default was deliberately
+  removed so an unanchored symbol is explicit, not silently anchored to
+  bar 0.
 - **Anchor stored as ISO string in `params`.** Persists across
-  save/load and timeframe changes. Blank anchors fall back to the first
-  non-gap regular-session candle; explicit anchors snap to the first
-  non-gap `Bars` timestamp at or after the anchor and still emit only on
+  save/load and timeframe changes. Explicit anchors snap to the first
+  non-gap `Bars` timestamp at or after the anchor and emit only on
   regular bars.
 - **Timezone-naive comparison.** Both the parsed anchor and each
   candle's `date` have tzinfo stripped (after astimezone-to-UTC for
@@ -135,11 +180,14 @@ in `tests/smoke/test_smoke_full.py`.
    NaN.
 6. Bands on/off does not change the `avwap` output values.
 7. Compute is deterministic and pure.
+8. A blank/unset effective `anchor_ts` ⇒ every output key is all-NaN
+   (no auto-anchor). `resolve_anchor_ts` returns `""` for a symbol with
+   no anchor in per-symbol mode.
 
 ## Data Flow / Algorithm
 ```
-anchor_dt = parse(anchor_ts) or None  (None ⇒ "first eligible bar")
-start_idx = first non-gap bar at/after anchor_ts (or first eligible regular bar when blank)
+anchor_dt = parse(effective anchor_ts) or None  (None ⇒ all-NaN, "Not set")
+start_idx = first non-gap regular bar at/after anchor_dt  (None ⇒ all-NaN)
 cum_w = mean = m2 = 0.0
 for i in [start_idx, n):
     c = candles[i]

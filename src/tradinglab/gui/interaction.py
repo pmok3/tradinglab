@@ -1378,10 +1378,26 @@ class InteractionMixin:
         if ps_match is not None:
             state = ps_match.get("ind_state")
             overlay_lines = getattr(state, "overlay_lines", {}) or {}
+        # Slot symbol for symbol-keyed AVWAP "Not set" detection.
+        try:
+            slot_symbol = str(self._slot_symbol(str(slot_key)) or "")
+        except Exception:  # noqa: BLE001
+            slot_symbol = ""
         muted = theme.get("muted") or theme.get("axis") or "#888888"
         for row in rows:
             visible = row.visible
             label_color = theme["text"] if visible else muted
+            # AVWAP "Not set": an unanchored AVWAP for this slot's symbol
+            # draws no line — show "Not set" in the value slot instead of
+            # a blank. See indicators/avwap.spec.md "Unset anchor".
+            row_notset = False
+            try:
+                cfg = mgr.get(row.config_id)
+                if cfg is not None and getattr(cfg, "kind_id", "") == "avwap":
+                    from ..indicators.avwap import resolve_anchor_ts
+                    row_notset = not resolve_anchor_ts(cfg.params, slot_symbol)
+            except Exception:  # noqa: BLE001
+                row_notset = False
             # Prefix TextArea: "IndicatorName(params) " in neutral colour.
             children: list = [TextArea(
                 f"{row.label} ",
@@ -1404,9 +1420,11 @@ class InteractionMixin:
                     ))
                 # The value placeholder — updated live by
                 # :meth:`_update_readout`. Trailing space gives a
-                # consistent gap before the next band's label.
+                # consistent gap before the next band's label. Unanchored
+                # AVWAP seeds "Not set" so it reads correctly before the
+                # first hover update too.
                 value_ta = TextArea(
-                    "  ",   # placeholder until first hover update
+                    "Not set " if row_notset else "  ",
                     textprops=dict(
                         color=seg_color,
                         fontsize=9, family="monospace",
@@ -1432,6 +1450,7 @@ class InteractionMixin:
                     "key_label": seg.key_label,
                     "line": line,
                     "value_textarea": value_ta,
+                    "notset": row_notset,
                 })
             container = HPacker(
                 children=children, align="center", pad=0, sep=0,
@@ -2097,6 +2116,10 @@ class InteractionMixin:
                         for seg in outputs:
                             ta = seg.get("value_textarea")
                             if ta is None:
+                                continue
+                            if seg.get("notset"):
+                                # Unanchored AVWAP for this slot's symbol.
+                                ta.set_text("Not set ")
                                 continue
                             line = seg.get("line")
                             val = (self._line_value_at(line, idx)
