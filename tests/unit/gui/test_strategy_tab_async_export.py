@@ -15,6 +15,7 @@ Validates that ``_on_export_pdf`` / ``_on_export_html`` / ``_on_export_csv``:
 
 from __future__ import annotations
 
+import gc
 import pathlib
 import tempfile
 import threading
@@ -42,6 +43,32 @@ from tradinglab.exits.model import TriggerKind as ExitTriggerKind  # noqa: E402
 # ---------------------------------------------------------------------------
 # Tk fixture
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _no_cyclic_gc_during_export():
+    """Disable CPython's cyclic GC for each export test's duration.
+
+    These tests spawn a daemon export thread while a real ``tk.Tk()`` root
+    is alive. If the cyclic collector fires ON that daemon thread and
+    reclaims a Tk-backed object, the resulting cross-thread Tcl call
+    aborts the process with ``Tcl_AsyncDelete`` — surfacing in CI as
+    "Windows fatal exception: code 0x80000003" during the worker thread's
+    teardown (the ``__del__`` neuters in ``tests/conftest.py`` cover
+    ``Variable``/``Image``/``Font`` but not objects reclaimed inside a
+    reference cycle). Mirrors the belt-and-suspenders guard the
+    synthetic-stream test uses (see ``tests/conftest.py`` §7.5). Re-enable
+    and collect on the MAIN thread at teardown so nothing leaks across
+    tests. Harmless locally; prevents a timing-dependent CI abort.
+    """
+    was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        yield
+    finally:
+        if was_enabled:
+            gc.enable()
+        gc.collect()
 
 
 @pytest.fixture()

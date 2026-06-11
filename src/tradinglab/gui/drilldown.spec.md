@@ -70,8 +70,8 @@ be missing even though a manual 5m toggle would load it. The fix:
   `_on_drilldown_fetch_done` re-checks coverage and drills, or warns
   `"5m data fetched but does not cover …"` if the provider genuinely
   lacks it.
-- **Day predates the window** → the synchronous WARN `"Drill-down
-  no-op: 5m data only available from … onward"` and no fetch (the only
+- **Day predates the window** → the synchronous WARN `"… no-op: 5m
+  data only available from … onward"` and no fetch (the only
   case that warning now fires).
 
 This fixed the reported bug where drilling into today / a recent day (or
