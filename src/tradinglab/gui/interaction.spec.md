@@ -71,6 +71,12 @@ by `ChartApp._build_ui`.
   with epsilon so only bars whose centers lie inside the xlim
   contribute (half-overlapping neighbors excluded — matters for
   drilldown across day-gaps).
+- `_autoscale_indicator_pane(ax, lo, hi)` — refits ONE pane during
+  pan/zoom. Unions the lines of EVERY config whose `state.panes[cid]
+  is ax` (not just the first), so a shared pane (RVOL Cumulative +
+  ToD) fits both series. Reference axhlines are excluded (they live on
+  `ax.lines`, not `pane_lines`). Mirrors the full-render path in
+  `ChartRenderer.autoscale_indicator_panes_for_slot`.
 
 ### Hover, crosshair, value labels
 
@@ -78,7 +84,17 @@ by `ChartApp._build_ui`.
   `_show_hover`, `_hide_hover`, `_hide_hover_only`,
   `_indicator_lines_at`, `_find_indicator_panel_for_axes`,
   `_line_value_at`. Lower-pane indicator labels use the same hover
-  dispatch to show a `hand2` cursor while clickable.
+  dispatch to show a `hand2` cursor while clickable. On a non-overlay
+  pane, `_indicator_lines_at` enumerates EVERY config whose
+  `state.panes[cid] is ax` (so a shared RVOL pane reads out BOTH
+  Cumulative and ToD values), not just the first.
+- `_pane_indicator_label_hit` iterates the pane's per-config name
+  artists (`ax._sc_pane_label_artists`) and returns the config of the
+  name under the cursor (each carries a length-1
+  `_sc_pane_label_config_ids`; `•` spacers carry `()` and are skipped),
+  so clicking a name on a shared pane opens THAT indicator. Falls back
+  to the legacy singular `_sc_pane_label_artist` when the list is
+  absent.
 - Crosshair: `_update_crosshair`, `_update_crosshair_pixels`
   (revives after re-render using cached pixel coords).
 - Price value label: `_format_price_for_label(ax, value)` —

@@ -89,7 +89,11 @@ Collections without rebuilding formatters/locators.
   from a bar reaching the pane's bottom edge, and the label collided with
   whatever indicator pane the user placed below volume). Audit
   ``volume-axis-prune-both``. `setup_price_axes` prunes lower tick only
-  (`hspace=0` collision with the price/volume boundary).
+  (`hspace=0` collision with the price/volume boundary). `style_axes`
+  also recolors any in-pane indicator-name label artists on theme swap:
+  it iterates `ax._sc_pane_label_artists` (the per-config name + spacer
+  `Text` artists created by `indicators.render._render_pane_labels`),
+  falling back to the legacy singular `ax._sc_pane_label_artist`.
 - Geometry helpers `bar_geometry`, `vol_geometry` and an optional
   `body_half: Optional[float]` on `draw_candlesticks`/`draw_volume` support
   the H1 stream-tick fastpath. The single-bar helpers remain the source of

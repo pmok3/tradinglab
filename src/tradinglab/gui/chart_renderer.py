@@ -513,10 +513,9 @@ class ChartRenderer:
             hi = min(n, int(np.ceil(hi_f - offset)))
         except Exception:  # noqa: BLE001
             return
-        for cfg_id, lower_ax in getattr(state, "panes", {}).items():
-            lines = getattr(state, "pane_lines", {}).get(cfg_id, {}).values()
+        for ax_obj, lines in _ind_render.lines_by_pane_axes(state):
             try:
-                _ind_render.autoscale_pane_y(lower_ax, lines, lo, hi)
+                _ind_render.autoscale_pane_y(ax_obj, lines, lo, hi)
             except Exception:  # noqa: BLE001
                 pass
 

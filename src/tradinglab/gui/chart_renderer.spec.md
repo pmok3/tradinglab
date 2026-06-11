@@ -25,7 +25,7 @@ Own TradingLab's panel rendering state and the helper methods that mutate candle
   - `autoscale_slot_y(...)`, `ensure_rendered_for_view(...)` — viewport maintenance helpers.
   - `apply_tick_to_artists(...)`, `refresh_view_after_tick(...)`, `refresh_view_after_append(...)` — streaming fast paths.
   - `_snapshot_slot_limits(ps)` — hashable `(xlim, ylim)` tuple over a slot's price / volume / indicator axes; equal between two ticks iff no axis moved. Backs the tick-blit eligibility test.
-  - `render_indicators_for_slot(...)`, `autoscale_indicator_panes_for_slot(slot)` — indicator delegation + pane scaling.
+  - `render_indicators_for_slot(...)`, `autoscale_indicator_panes_for_slot(slot)` — indicator delegation + pane scaling. `autoscale_indicator_panes_for_slot` groups pane lines by their shared `Axes` (via `indicators.render.lines_by_pane_axes`) and calls `autoscale_pane_y` ONCE per distinct axes with the UNION of every config's lines on it — so a shared pane (e.g. RVOL Cumulative + ToD) fits both series instead of last-config-wins.
   - `render_event_glyphs_for_slot(...)`, `render_volume_tod_for_slot(...)` — overlay delegation helpers.
   - `suppress_default_volume_fill(slot, suppress_indices)` — mutate volume-bar colors for the ToD overlay.
 

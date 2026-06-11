@@ -26,6 +26,7 @@ this stock trading at an unusual rate vs its recent normal pace?".
 | `z_score` | bool | False | output = rolling sample-stddev z of rvol series, window=`length` |
 | `threshold_warn` | float | 2.0 | reference dash; ignored when `z_score=True`. Cosmetic-only |
 | `threshold_extreme` | float | 5.0 | reference dash; ignored when `z_score=True`. Cosmetic-only |
+| `log_scale` | bool | False | **view-only** (no compute effect): render the pane on a log y-axis. Honored only on the ratio pane (`z_score=False`); a log axis can't show the z-score pane's 0.0 baseline / negatives. Opt-in spike-readability for stacking spiky modes (e.g. ToD) with smooth ones (Cumulative) on one shared scale. See `indicators/render.py` pane-group log handling + `autoscale_pane_y` log-awareness. |
 
 ### `TRIGGER_RELEVANT_PARAMS`
 
@@ -36,10 +37,11 @@ Class-level whitelist of params that actually affect compute output:
  "denominator_includes_current", "z_score")
 ```
 
-`threshold_warn` / `threshold_extreme` are excluded — they only paint
-axhlines. `scanner.fields._build_indicator_specs` prunes them from
-the entries / exits / scanner block-editor forms; the chart-side
-Manage Indicators dialog still surfaces the full schema.
+`threshold_warn` / `threshold_extreme` / `log_scale` are excluded — they only
+paint axhlines / set the pane y-scale. `scanner.fields._build_indicator_specs`
+prunes them from the entries / exits / scanner block-editor forms; the
+chart-side Manage Indicators dialog still surfaces the full schema (so the
+`log_scale` checkbox is reachable there).
 
 ### Output
 
@@ -150,6 +152,18 @@ y-axis of the shared pane.
 else `"rvol"`. `config.effective_pane_group` prefers this over the
 persisted `cfg.pane_group`, so toggling `z_score` triggers an instant
 pane reflow on the next render.
+
+`mode` does NOT split the pane: RVOL Cumulative and RVOL ToD (both
+`z_score=False`) share the one `"rvol"` pane intentionally — they are
+the same 1.0-centered ratio unit and the high-value read is the gap
+between them against shared 1×/2×/5× reference lines. The shared-pane
+consumers fit/read/click ALL configs on the pane: y-autoscale unions
+every config's lines (`indicators.render.lines_by_pane_axes`), the
+hover readout enumerates every config (`_indicator_lines_at`), and each
+config's name is its own clickable label (`_render_pane_labels` →
+`_pane_indicator_label_hit`). When a spiky mode (ToD) compresses a
+smooth one (Cumulative) on a shared linear scale, opt into `log_scale`
+(per above) rather than splitting the pane.
 
 ## Interval gating
 

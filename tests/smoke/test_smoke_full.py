@@ -7912,6 +7912,61 @@ def check_d59_relative_volume(app) -> None:
     assert len(groups[0]) == 3, \
         f"J: shared group must contain all 3 configs; got {len(groups[0])}"
 
+    # ---- P: shared-pane consumers (render_for_slot → state wiring) ----
+    # The reported bug: RVOL Cum + ToD share one pane but autoscale /
+    # hover / label-click collapsed to the first config. Render both onto
+    # real axes and assert the render layer wires BOTH onto one shared
+    # axes with one clickable label EACH, and that lines_by_pane_axes
+    # unions them for autoscale. (Numeric union-fit / hover / hit-test
+    # are pinned deterministically in tests/unit/gui/test_shared_pane_consumers.py.)
+    import matplotlib
+    matplotlib.use("Agg")
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+
+    from tradinglab.indicators.cache import IndicatorCache
+
+    figP = Figure(figsize=(10, 3), dpi=100)
+    FigureCanvasAgg(figP)
+    axP_price = figP.add_subplot(211)
+    axP_pane = figP.add_subplot(212)
+    stP = _ind_render.PanelIndicatorState()
+    mgr_p = IndicatorManager()
+    p_cum = IndicatorConfig(
+        kind_id="rvol", display_name="RVOL Cum(20)",
+        params={"mode": "cumulative", "length": 20},
+        pane_group="rvol", scopes=frozenset({"main"}))
+    p_tod = IndicatorConfig(
+        kind_id="rvol", display_name="RVOL ToD(20)",
+        params={"mode": "time_of_day", "length": 20, "log_scale": True},
+        pane_group="rvol", scopes=frozenset({"main"}))
+    mgr_p.add(p_cum)
+    mgr_p.add(p_tod)
+    _ind_render.render_for_slot(
+        price_ax=axP_price, pane_axes=[axP_pane], candles=candles, offset=0,
+        manager=mgr_p, cache=IndicatorCache(), interval="5m", scope="main",
+        state=stP,
+    )
+    # Both configs map to the SAME shared pane axes.
+    assert stP.panes.get(p_cum.id) is axP_pane and stP.panes.get(p_tod.id) is axP_pane, \
+        "P: RVOL Cum + ToD must share ONE pane axes"
+    # lines_by_pane_axes unions both configs onto that one axes.
+    groupedP = _ind_render.lines_by_pane_axes(stP)
+    assert len(groupedP) == 1 and len(groupedP[0][1]) >= 2, \
+        "P: lines_by_pane_axes must union BOTH configs on the shared axes"
+    # One clickable label artist per config (each carrying its own id).
+    name_artists = [
+        a for a in (getattr(axP_pane, "_sc_pane_label_artists", []) or [])
+        if getattr(a, "_sc_pane_label_config_ids", ())
+    ]
+    assert len(name_artists) == 2, \
+        "P: shared pane must render one clickable label per config"
+    assert {a._sc_pane_label_config_ids for a in name_artists} == {(p_cum.id,), (p_tod.id,)}, \
+        "P: each label artist must carry exactly its own config id"
+    # log_scale on a visible non-z config flips the pane to a log y-axis.
+    assert str(axP_pane.get_yscale()) == "log", \
+        "P: log_scale=True on a ratio config must set the pane y-axis to log"
+
     # ---- L: Persistence round-trip ----
     cfg_l = IndicatorConfig(
         kind_id="rvol",

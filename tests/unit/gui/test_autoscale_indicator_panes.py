@@ -113,7 +113,38 @@ def test_helper_calls_autoscale_for_each_pane():
     assert axes_passed == {pane1_ax, pane2_ax}
 
 
-def test_helper_clamps_lo_hi_to_candle_range():
+def test_helper_unions_lines_for_shared_axes():
+    # Two configs sharing ONE pane axes (e.g. RVOL Cumulative + ToD):
+    # the helper must call autoscale ONCE for that axes with the UNION
+    # of both configs' lines — not once per config (last-writer-wins,
+    # which clipped one indicator).
+    shared = _StubAx(xlim=(0.0, 5.0))
+    l1 = _StubLine([1.0, 2.0, 3.0, 4.0, 5.0])
+    l2 = _StubLine([1.0, 8.0, 2.0, 9.0, 3.0])
+    state = SimpleNamespace(
+        panes={"cum": shared, "tod": shared},
+        pane_lines={"cum": {"rvol": l1}, "tod": {"rvol": l2}},
+    )
+    price_ax = _StubAx(xlim=(0.0, 5.0))
+    app = _StubApp(panel_state={
+        "primary": {
+            "price_ax": price_ax,
+            "ind_state": state,
+            "candles": [object()] * 5,
+            "offset": 0,
+        }
+    })
+    with mock.patch(
+        "tradinglab.indicators.render.autoscale_pane_y"
+    ) as autoscale_mock:
+        _load_method()(app, "primary")
+    assert autoscale_mock.call_count == 1, "shared axes must autoscale once"
+    ax_arg = autoscale_mock.call_args.args[0]
+    lines_arg = list(autoscale_mock.call_args.args[1])
+    assert ax_arg is shared
+    assert len(lines_arg) == 2, "must union BOTH configs' lines on the shared axes"
+    assert l1 in lines_arg and l2 in lines_arg
+
     pane_ax = _StubAx()
     line = _StubLine([1.0, 2.0, 3.0])
     state = SimpleNamespace(

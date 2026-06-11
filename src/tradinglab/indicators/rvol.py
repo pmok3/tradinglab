@@ -652,6 +652,8 @@ class RVOL(BaseIndicator):
                  step=0.1, description="Warn level"),
         ParamDef("threshold_extreme", "float", default=5.0, min=0.1,
                  max=100.0, step=0.1, description="Extreme level"),
+        ParamDef("log_scale", "bool", default=False,
+                 description="Log scale"),
     )
     default_style: ClassVar[dict[str, LineStyle]] = {
         "rvol": LineStyle(color="#aec7e8", width=1.4),
@@ -700,6 +702,7 @@ class RVOL(BaseIndicator):
         z_score: bool = False,
         threshold_warn: float = 2.0,
         threshold_extreme: float = 5.0,
+        log_scale: bool = False,
     ) -> None:
         if mode not in _MODES:
             raise ValueError(f"mode must be one of {_MODES!r}")
@@ -719,6 +722,10 @@ class RVOL(BaseIndicator):
         self.threshold_warn, self.threshold_extreme = _validate_thresholds(
             threshold_warn, threshold_extreme,
         )
+        # View-only knob (does not affect compute): render the pane on a
+        # log y-axis. Honored only on the ratio pane (z_score=False);
+        # see indicators/render.py pane-group log handling.
+        self.log_scale = bool(log_scale)
         # Per-instance reference levels: z-scores get the Bellafiore
         # 0/+2σ pair; plain RVOL gets the 1.0 baseline + warn/extreme.
         if self.z_score:

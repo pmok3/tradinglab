@@ -544,6 +544,84 @@ def _draw_histogram(
         pass
 
 
+def _render_pane_labels(ax_lower: Any, visible_label_cfgs: list, scope: str) -> None:
+    """(Re)create per-config clickable in-pane name labels.
+
+    Each visible config gets its OWN pickable ``Text`` artist (carrying a
+    length-1 ``_sc_pane_label_config_ids``) laid left-to-right with dim,
+    non-pickable ``•`` spacers between, so a click targets the SPECIFIC
+    indicator under the cursor — not just the first config on a shared
+    pane (e.g. RVOL Cumulative + ToD). All created artists (names +
+    spacers) are stored on ``ax_lower._sc_pane_label_artists`` for
+    teardown + hit-testing (spacers carry an empty id tuple so the
+    hit-tester skips them); ``_sc_pane_label_artist`` keeps pointing at
+    the first NAME artist for back-compat (theme recolor / legacy reads).
+
+    Remove-and-recreate each render — labels are cheap and only rebuilt
+    on a full render, never on the blit path. X-layout uses an estimated
+    per-character width; precise hit-testing uses each artist's real
+    window extent at click time, so a slight layout estimate only needs
+    to avoid gross overlap.
+    """
+    for old in getattr(ax_lower, "_sc_pane_label_artists", []) or []:
+        _safe_remove_line(old)
+    ax_lower._sc_pane_label_artists = []
+    ax_lower._sc_pane_label_artist = None
+    if not visible_label_cfgs:
+        return
+    try:
+        text_color = ax_lower.yaxis.label.get_color() or FALLBACK_GRAY
+    except Exception:  # noqa: BLE001
+        text_color = FALLBACK_GRAY
+    try:
+        fig = ax_lower.figure
+        dpi = float(fig.get_dpi())
+        ax_w_px = max(1.0, fig.get_figwidth() * dpi * ax_lower.get_position().width)
+        char_frac = ((8.0 * dpi / 72.0) * 0.58) / ax_w_px
+    except Exception:  # noqa: BLE001
+        char_frac = 0.012
+    sep_frac = 2.0 * char_frac
+    created: list[Any] = []
+    x = 0.005
+    n = len(visible_label_cfgs)
+    for i, cfg in enumerate(visible_label_cfgs):
+        name = str(cfg.display_name or cfg.kind_id)
+        try:
+            t = ax_lower.text(
+                x, 0.97, name, transform=ax_lower.transAxes,
+                ha="left", va="top", fontsize=8, color=text_color,
+                alpha=0.85, zorder=10, clip_on=False,
+            )
+        except Exception:  # noqa: BLE001
+            continue
+        try:
+            t.set_picker(True)
+            t._sc_pane_label_config_ids = (int(cfg.id),)
+            t._sc_pane_label_scope = scope
+        except Exception:  # noqa: BLE001
+            pass
+        created.append(t)
+        x += len(name) * char_frac
+        if i < n - 1:
+            try:
+                sp = ax_lower.text(
+                    x + sep_frac * 0.25, 0.97, "\u2022",
+                    transform=ax_lower.transAxes, ha="left", va="top",
+                    fontsize=8, color=text_color, alpha=0.5, zorder=10,
+                    clip_on=False,
+                )
+                sp._sc_pane_label_config_ids = ()
+                created.append(sp)
+            except Exception:  # noqa: BLE001
+                pass
+            x += sep_frac
+    ax_lower._sc_pane_label_artists = created
+    ax_lower._sc_pane_label_artist = next(
+        (a for a in created if getattr(a, "_sc_pane_label_config_ids", ())),
+        None,
+    )
+
+
 def render_for_slot(
     *,
     price_ax: Any,
@@ -642,66 +720,32 @@ def render_for_slot(
     # share one Axes (``pane_group`` field). Each group consumes one
     # axes from ``pane_axes`` (caller must size accordingly).
     for ax_lower, group in zip(pane_axes, pane_groups, strict=False):
-        # In-pane label: "RVOL ToD(20)  •  RVOL Cum(20)" pinned to
-        # the upper-left in axes coords. Lets the user identify what
-        # the pane is showing without expanding the side legend.
-        # Only configs that are visible contribute, so toggling a
-        # config off removes it from the label too.
+        # In-pane labels: one clickable name per visible config, e.g.
+        # "RVOL ToD(20)  •  RVOL Cum(20)" pinned upper-left. Each name is
+        # its OWN pickable artist so a click opens the indicator under
+        # the cursor (not just the first config). Only visible configs
+        # contribute, so toggling one off removes its name too.
         visible_label_cfgs = [
             cfg for cfg in group
             if bool(cfg.visible) and (cfg.display_name or cfg.kind_id)
         ]
-        label_parts = [(cfg.display_name or cfg.kind_id) for cfg in visible_label_cfgs]
-        label_text = "  \u2022  ".join(label_parts)
-        label_config_ids = tuple(int(cfg.id) for cfg in visible_label_cfgs)
-        existing_label = getattr(ax_lower, "_sc_pane_label_artist", None)
-        if label_text:
-            if existing_label is None:
-                try:
-                    # Inherit theme color from the axis label artist that
-                    # ``style_axes`` already coloured. Falls back to a
-                    # neutral grey if for some reason we're rendering
-                    # before any theme has been applied.
-                    try:
-                        text_color = ax_lower.yaxis.label.get_color() or FALLBACK_GRAY
-                    except Exception:  # noqa: BLE001
-                        text_color = FALLBACK_GRAY
-                    artist = ax_lower.text(
-                        0.005, 0.97, label_text,
-                        transform=ax_lower.transAxes,
-                        ha="left", va="top",
-                        fontsize=8,
-                        color=text_color,
-                        alpha=0.85,
-                        zorder=10,
-                        clip_on=False,
-                    )
-                    try:
-                        artist.set_picker(True)
-                        artist._sc_pane_label_config_ids = label_config_ids
-                        artist._sc_pane_label_scope = scope
-                    except Exception:  # noqa: BLE001
-                        pass
-                    ax_lower._sc_pane_label_artist = artist
-                except Exception:  # noqa: BLE001
-                    pass
-            else:
-                try:
-                    if existing_label.get_text() != label_text:
-                        existing_label.set_text(label_text)
-                    existing_label.set_picker(True)
-                    existing_label._sc_pane_label_config_ids = label_config_ids
-                    existing_label._sc_pane_label_scope = scope
-                    existing_label.set_visible(True)
-                except Exception:  # noqa: BLE001
-                    pass
-        else:
-            if existing_label is not None:
-                try:
-                    existing_label._sc_pane_label_config_ids = ()
-                    existing_label.set_visible(False)
-                except Exception:  # noqa: BLE001
-                    pass
+        _render_pane_labels(ax_lower, visible_label_cfgs, scope)
+
+        # Per-pane log y-scale (opt-in, off by default). Honored only on
+        # the ratio pane (any visible non-z config requesting it) — a
+        # log axis can't render the 0.0 baseline / negative z-scores of
+        # the z-score pane. Set every render because fig.clear() recreates
+        # the axes. See rvol.spec.md "log_scale".
+        want_log = any(
+            bool(cfg.visible)
+            and bool((cfg.params or {}).get("log_scale"))
+            and not bool((cfg.params or {}).get("z_score"))
+            for cfg in group
+        )
+        try:
+            ax_lower.set_yscale("log" if want_log else "linear")
+        except Exception:  # noqa: BLE001
+            pass
 
         # Reference levels: union (deduped, ordered) across every
         # config in this group, so a shared pane gets one set of
@@ -809,6 +853,30 @@ def render_for_slot(
     )
 
 
+def lines_by_pane_axes(state: Any) -> list[tuple[Any, list]]:
+    """Group a slot's pane lines by their shared Axes object.
+
+    Multiple indicator configs can share ONE lower-pane Axes (same
+    ``pane_group`` — e.g. RVOL Cumulative + RVOL ToD). ``state.panes``
+    maps every config-id to its Axes, so several ids point at the SAME
+    Axes object; ``state.pane_lines`` holds each config's own lines.
+
+    Returns ``[(axes, [all Line2D / histogram artists for EVERY config
+    on that axes])]`` — one entry per distinct Axes (keyed by identity),
+    so callers fit / read the pane against the UNION of its configs
+    rather than a single arbitrary config. Reference axhlines are NOT
+    included (they live on ``ax.lines``, not ``pane_lines``), matching
+    :func:`autoscale_pane_y`'s exclusion of them.
+    """
+    panes = getattr(state, "panes", {}) or {}
+    pane_lines = getattr(state, "pane_lines", {}) or {}
+    by_ax: dict[int, tuple[Any, list]] = {}
+    for cfg_id, ax_lower in panes.items():
+        _ax, bucket = by_ax.setdefault(id(ax_lower), (ax_lower, []))
+        bucket.extend(pane_lines.get(cfg_id, {}).values())
+    return list(by_ax.values())
+
+
 def autoscale_pane_y(ax_lower: Any, lines: Iterable[Any], lo: int, hi: int) -> None:
     """Fit a pane's Y to the visible portion of its lines.
 
@@ -821,6 +889,15 @@ def autoscale_pane_y(ax_lower: Any, lines: Iterable[Any], lo: int, hi: int) -> N
     """
     mins: list[float] = []
     maxs: list[float] = []
+    # On a log y-axis, non-positive values can't be plotted/limited —
+    # restrict the fit to strictly-positive samples and floor the lower
+    # bound so set_ylim never raises (RVOL ratios are >= 0; warmup 0s /
+    # no-volume bars are excluded here).
+    is_log = False
+    try:
+        is_log = str(ax_lower.get_yscale()) == "log"
+    except Exception:  # noqa: BLE001
+        is_log = False
     for ln in lines:
         y = getattr(ln, "_sc_y_data", None)
         if y is None:
@@ -839,6 +916,8 @@ def autoscale_pane_y(ax_lower: Any, lines: Iterable[Any], lo: int, hi: int) -> N
             continue
         seg = arr[a:b]
         seg = seg[np.isfinite(seg)]
+        if is_log:
+            seg = seg[seg > 0.0]
         if seg.size == 0:
             continue
         mins.append(float(seg.min()))
@@ -849,6 +928,15 @@ def autoscale_pane_y(ax_lower: Any, lines: Iterable[Any], lo: int, hi: int) -> N
     hi_y = max(maxs)
     if hi_y <= lo_y:
         hi_y = lo_y + 1.0
+    if is_log:
+        # Multiplicative padding on a log axis (additive padding is
+        # meaningless across decades); guard the strictly-positive floor.
+        lo_y = max(lo_y, 1e-6)
+        try:
+            ax_lower.set_ylim(lo_y / 1.1, hi_y * 1.1)
+        except Exception:  # noqa: BLE001
+            pass
+        return
     pad = 0.05 * (hi_y - lo_y)
     try:
         ax_lower.set_ylim(lo_y - pad, hi_y + pad)

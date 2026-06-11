@@ -149,36 +149,49 @@ class InteractionMixin:
         ax = getattr(event, "inaxes", None)
         if ax is None:
             return None, None
-        label = getattr(ax, "_sc_pane_label_artist", None)
-        if label is None:
-            return None, None
+        # Per-config pickable labels: iterate every name artist on the
+        # pane and return the one whose extent contains the click, so a
+        # shared pane (e.g. RVOL Cum • ToD) targets the clicked indicator
+        # — not just the first. Spacer artists carry an empty id tuple
+        # and are skipped. Mirrors ``_readout_legend_row_hit``.
+        artists = getattr(ax, "_sc_pane_label_artists", None)
+        if not artists:
+            single = getattr(ax, "_sc_pane_label_artist", None)
+            artists = [single] if single is not None else []
+        renderer = None
         try:
-            if not label.get_visible():
-                return None, None
+            renderer = self._canvas.get_renderer()
         except Exception:  # noqa: BLE001
-            return None, None
-        config_ids = tuple(getattr(label, "_sc_pane_label_config_ids", ()) or ())
-        if not config_ids:
-            return None, None
-        hit = False
-        try:
-            hit = bool(label.contains(event)[0])
-        except Exception:  # noqa: BLE001
-            hit = False
-        if not hit:
+            renderer = None
+        for label in artists:
+            if label is None:
+                continue
             try:
-                renderer = self._canvas.get_renderer()
-                bbox = label.get_window_extent(renderer)
-                hit = bool(bbox.contains(float(event.x), float(event.y)))
+                if not label.get_visible():
+                    continue
+            except Exception:  # noqa: BLE001
+                continue
+            config_ids = tuple(getattr(label, "_sc_pane_label_config_ids", ()) or ())
+            if not config_ids:
+                continue  # spacer / non-pickable
+            hit = False
+            try:
+                hit = bool(label.contains(event)[0])
             except Exception:  # noqa: BLE001
                 hit = False
-        if not hit:
-            return None, None
-        try:
-            config_id = int(config_ids[0])
-        except (TypeError, ValueError):
-            return None, None
-        return label, config_id
+            if not hit and renderer is not None:
+                try:
+                    bbox = label.get_window_extent(renderer)
+                    hit = bool(bbox.contains(float(event.x), float(event.y)))
+                except Exception:  # noqa: BLE001
+                    hit = False
+            if not hit:
+                continue
+            try:
+                return label, int(config_ids[0])
+            except (TypeError, ValueError):
+                return None, None
+        return None, None
 
     def _maybe_handle_readout_legend_click(self, event) -> bool:
         """Open per-indicator edit/menu when an in-readout legend row is clicked.
@@ -1115,9 +1128,11 @@ class InteractionMixin:
 
         Walks ``_panel_state`` to find the slot whose ``ind_state`` owns
         ``ax`` as a pane axis, then delegates to
-        :func:`indicators.render.autoscale_pane_y` against the lines
-        tracked in ``state.pane_lines[cfg_id]``. Reference axhlines
-        (e.g. SMI's ±40/0) are excluded because they live on
+        :func:`indicators.render.autoscale_pane_y` against the UNION of
+        the lines tracked in ``state.pane_lines[cfg_id]`` for EVERY
+        config sharing ``ax`` (e.g. RVOL Cumulative + ToD), so the fit
+        covers both — not just the first config found. Reference
+        axhlines (e.g. SMI's ±40/0) are excluded because they live on
         ``ax.lines`` directly, not in ``pane_lines``.
         """
         from ..indicators import render as _ind_render
@@ -1126,14 +1141,16 @@ class InteractionMixin:
             state = ps.get("ind_state")
             if state is None:
                 continue
+            lines: list = []
             for cfg_id, pane_ax in getattr(state, "panes", {}).items():
                 if pane_ax is ax:
-                    lines = state.pane_lines.get(cfg_id, {}).values()
-                    try:
-                        _ind_render.autoscale_pane_y(ax, lines, lo, hi)
-                    except Exception:  # noqa: BLE001
-                        pass
-                    return
+                    lines.extend(state.pane_lines.get(cfg_id, {}).values())
+            if lines:
+                try:
+                    _ind_render.autoscale_pane_y(ax, lines, lo, hi)
+                except Exception:  # noqa: BLE001
+                    pass
+                return
 
     # ---- hover + crosshair (spec §11) ---------------------------------
     def _ensure_overlay_artists(self) -> None:
@@ -1813,13 +1830,15 @@ class InteractionMixin:
         if kind == "price":
             items = list(state.overlay_lines.items())
         else:
-            target_cid = next(
-                (cid for cid, pa in state.panes.items() if pa is ax),
-                None,
-            )
-            if target_cid is None:
+            # A shared pane can host several configs (e.g. RVOL Cum +
+            # ToD); enumerate EVERY config whose pane is this axes so
+            # the readout shows all of them, not just the first.
+            items = [
+                (cid, state.pane_lines.get(cid, {}))
+                for cid, pa in state.panes.items() if pa is ax
+            ]
+            if not items:
                 return out
-            items = [(target_cid, state.pane_lines.get(target_cid, {}))]
         for cid, lines in items:
             if not lines:
                 continue

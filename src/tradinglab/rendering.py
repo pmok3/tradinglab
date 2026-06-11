@@ -891,11 +891,17 @@ def style_axes(ax, theme: dict) -> None:
     for spine in ax.spines.values():
         spine.set_color(theme["spine"])
     ax.grid(True, linestyle="--", alpha=0.35, color=theme["grid"])
-    # Re-color the in-pane indicator-name label if one was rendered
+    # Re-color the in-pane indicator-name label(s) if any were rendered
     # (set by ``indicators.render.render_for_slot``). Theme swaps invoke
-    # ``style_axes`` again, which is when this branch fires.
-    pane_label = getattr(ax, "_sc_pane_label_artist", None)
-    if pane_label is not None:
+    # ``style_axes`` again, which is when this branch fires. Multiple
+    # per-config name + spacer artists may exist on a shared pane.
+    pane_labels = getattr(ax, "_sc_pane_label_artists", None)
+    if not pane_labels:
+        single = getattr(ax, "_sc_pane_label_artist", None)
+        pane_labels = [single] if single is not None else []
+    for pane_label in pane_labels:
+        if pane_label is None:
+            continue
         try:
             pane_label.set_color(theme["text"])
         except Exception:  # noqa: BLE001
