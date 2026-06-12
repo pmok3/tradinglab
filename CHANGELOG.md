@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.3.9] - 2026-06-12
+
+### Changed
+
+- **Relative Volume panes now read at a glance.** The RVOL and RRVOL panes
+  default to a new **centered scale**: the **1.0 "average" line sits in the
+  middle of the pane**, 0 is pinned to the bottom, and the busiest bar
+  autoscales to the top. Previously, on a plain 0–8 scale a normal ~1× day
+  was squashed near the floor and hard to read against the occasional spike.
+  The pane keeps a **5× floor** so the 2× and 5× reference lines stay put on
+  calm days, and only the top half re-scales when a genuine 5×+ spike shows
+  up. You can still switch any RVOL/RRVOL pane to **Log** or **Linear** from
+  *Manage Indicators → RVOL → Y-axis scale* — and the old "Log scale"
+  checkbox is now folded into that selector (existing setups keep working).
+
+### Fixed
+
+- **Relative Volume log-scale labels are readable in dark mode.** When a
+  RVOL pane was set to a logarithmic scale, the small in-between axis labels
+  (2, 3, 4, 6 …) stayed black and vanished against the dark background. They
+  now follow the theme like every other axis label.
+- **Typing a ticker after viewing a brand-new IPO no longer shrinks the
+  chart to 2 candles.** A freshly-IPO'd name (e.g. one showing only a
+  pre-IPO reference bar plus its first trading day) has just ~1 day of
+  history. The app deliberately keeps the same time window when you switch
+  symbols, but for a 2-bar IPO that "window" is ~1 day — so switching to a
+  liquid name like AMD was carrying that single day across and showing only
+  ~2 candles. The app now recognises that viewing a symbol's *entire* (tiny)
+  history isn't a deliberate zoom, and opens the new ticker at its normal
+  default view. Carrying a real zoom (e.g. a specific week you panned to)
+  across symbols still works exactly as before.
+
 ## [0.3.8] - 2026-06-11
 
 ### Added

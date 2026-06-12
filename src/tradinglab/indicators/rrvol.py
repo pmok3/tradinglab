@@ -91,10 +91,12 @@ from .rvol import (
     _INTRADAY_MODES,
     _MODES,
     _SESSION_FILTERS,
+    AXIS_MODES,
     _dispatch_compute,
     _rolling_zscore,
     _validate_length,
     _validate_thresholds,
+    resolve_axis_mode,
 )
 
 #: Common ETF benchmarks shown in the editable combobox for the
@@ -306,6 +308,8 @@ class RRVOL(BaseIndicator):
                  step=0.1, description="Warn level"),
         ParamDef("threshold_extreme", "float", default=5.0, min=0.1,
                  max=100.0, step=0.1, description="Extreme level"),
+        ParamDef("axis_mode", "choice", default="centered",
+                 choices=AXIS_MODES, description="Y-axis scale"),
     )
     default_style: ClassVar[dict[str, LineStyle]] = {
         "rvol": LineStyle(color="#c5b0d5", width=1.4),
@@ -343,6 +347,7 @@ class RRVOL(BaseIndicator):
         threshold_warn: float = 2.0,
         threshold_extreme: float = 5.0,
         compare_symbol: str = "SPY",
+        axis_mode: str = "centered",
     ) -> None:
         if mode not in _MODES:
             raise ValueError(f"mode must be one of {_MODES!r}")
@@ -381,6 +386,12 @@ class RRVOL(BaseIndicator):
             self.reference_levels = (
                 1.0, float(self.threshold_warn), float(self.threshold_extreme),
             )
+        # View-only y-axis scale for the ratio pane (z_score=False). Default
+        # "centered" pins the 1.0 baseline to the vertical center; see
+        # indicators/render.py. RRVOL never carried the legacy ``log_scale``
+        # bool, so there is no back-compat mapping to apply here.
+        self.axis_mode = resolve_axis_mode(axis_mode)
+        self.log_scale = self.axis_mode == "log"
         suffix = " Z" if self.z_score else ""
         mode_short = {"simple": "", "cumulative": " Cum",
                       "time_of_day": " ToD"}[self.mode]

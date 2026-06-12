@@ -26,11 +26,12 @@ return-shape contract.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
+from matplotlib.ticker import FuncFormatter, Locator
 
 from ..models import Candle
 from ._palette import FALLBACK_GRAY
@@ -57,6 +58,169 @@ def _drawstyle_for_output_kind(kind: str | None) -> str:
     rendering paths (which both materialize ``Line2D`` artists).
     """
     return _DRAWSTYLE_BY_OUTPUT_KIND.get(kind or "", "default")
+
+
+# ---------------------------------------------------------------------------
+# RVOL / RRVOL pane y-axis modes (audit ``rvol-centered-axis``)
+# ---------------------------------------------------------------------------
+# The ratio pane (z_score=False) renders on one of three view-only scales,
+# selected by the ``axis_mode`` param (default ``"centered"``):
+#
+#   centered  piecewise FuncScale — 0 at the bottom, the 1.0 "average"
+#             baseline pinned to the vertical CENTER, the visible max at the
+#             top. ``[0,1] → bottom half``, ``[1, top] → top half``. ``top``
+#             is read live from ``ax._sc_centered_top`` so pan/zoom/stream
+#             autoscale only updates that attribute + ``ylim`` — no
+#             ``set_yscale`` churn. A 5x floor keeps the 2x / 5x bands stable
+#             in calm windows; above 5x the upper half rescales (the trade).
+#   log       opt-in spike-readability log scale (cannot show 0 at the bottom).
+#   linear    legacy plain autoscaled scale.
+#
+# z-score panes (pane_group ``rvol_z``) always stay linear. See rvol.spec.md
+# "axis_mode" and render.spec.md.
+_CENTERED_FLOOR = 5.0
+
+
+def _centered_top(ax: Any) -> float:
+    """Current upper bound of a centered-ratio pane (>= the 5x floor, > 1)."""
+    try:
+        top = float(getattr(ax, "_sc_centered_top", _CENTERED_FLOOR))
+    except (TypeError, ValueError):
+        top = _CENTERED_FLOOR
+    if not np.isfinite(top) or top <= 1.0:
+        top = _CENTERED_FLOOR
+    return top
+
+
+def _make_centered_funcs(ax: Any):
+    """Build the (forward, inverse) piecewise transform for ``ax``.
+
+    Both close over ``ax`` and read ``_sc_centered_top`` on every call, so a
+    later ``ax._sc_centered_top = ...`` + ``set_ylim`` re-maps the upper half
+    without re-installing the scale.
+    """
+
+    def _forward(values):
+        v = np.asarray(values, dtype=float)
+        top = _centered_top(ax)
+        return np.where(v <= 1.0, 0.5 * v, 0.5 + 0.5 * (v - 1.0) / (top - 1.0))
+
+    def _inverse(values):
+        s = np.asarray(values, dtype=float)
+        top = _centered_top(ax)
+        return np.where(s <= 0.5, 2.0 * s, 1.0 + (2.0 * s - 1.0) * (top - 1.0))
+
+    return _forward, _inverse
+
+
+def _format_centered_tick(value: float, _pos: Any = None) -> str:
+    """Compact label: integer when near-whole, else one decimal."""
+    if abs(value - round(value)) < 0.05:
+        return f"{int(round(value))}"
+    return f"{value:.1f}"
+
+
+class _CenteredRatioLocator(Locator):
+    """Right-side ticks for the centered-ratio pane, sized to pane height.
+
+    Always emits ``0`` (bottom), ``1`` (center) and ``top``; adds the 2x / 5x
+    decision bands when the pane is tall enough (``height_px // min_label_px``
+    budget, same heuristic as ``setup_indicator_pane_axes``). Reads
+    ``ax._sc_centered_top`` on every call so pan/zoom/stream need no reinstall.
+    """
+
+    def __init__(self, ax: Any, *, min_label_px: int = 28) -> None:
+        self._sc_ax = ax
+        self._sc_min_px = int(min_label_px)
+
+    def _positions(self) -> list[float]:
+        top = _centered_top(self._sc_ax)
+        base = [0.0, 1.0, top]
+        try:
+            height_px = float(self._sc_ax.bbox.height)
+        except Exception:  # noqa: BLE001 - axes may not be realized yet
+            height_px = 0.0
+        cap = max(3, int(height_px // self._sc_min_px)) if height_px > 0 else 5
+        allow = max(0, cap - 3)
+        optional = [lvl for lvl in (2.0, 5.0) if 0.0 < lvl < top * 0.92]
+        ticks = sorted(set(base + optional[:allow]))
+        return [t for t in ticks if 0.0 <= t <= top]
+
+    def __call__(self) -> list[float]:
+        return self._positions()
+
+    def tick_values(self, vmin: float, vmax: float) -> list[float]:  # noqa: ARG002
+        return self._positions()
+
+
+def _config_axis_mode(params: Mapping[str, Any] | None) -> str:
+    """Resolve one config's view-only axis mode from its params dict.
+
+    ``axis_mode`` wins when set to a known value; otherwise a truthy legacy
+    ``log_scale`` (the only knob pre-``axis_mode`` configs carried) maps to
+    ``"log"``. Default ``"centered"``. Mirrors ``rvol.resolve_axis_mode`` but
+    reads the persisted params dict (what the render layer actually has).
+    """
+    p = params or {}
+    raw = str(p.get("axis_mode", "") or "").lower()
+    if raw in ("centered", "log", "linear"):
+        return raw
+    if p.get("log_scale"):
+        return "log"
+    return "centered"
+
+
+def _resolve_pane_axis_mode(group: Sequence[Any]) -> str:
+    """Pick ONE y-scale for a (possibly shared) pane group.
+
+    Considers only visible, non-z-score configs — z-score panes stay linear.
+    Precedence ``log > centered > linear``: an explicit log request anywhere
+    wins (preserving the legacy ``any(log_scale)`` semantics on shared panes);
+    otherwise the centered-ratio default dominates; the pane is linear only
+    when every visible config explicitly asked for linear.
+    """
+    modes = [
+        _config_axis_mode(getattr(cfg, "params", None))
+        for cfg in group
+        if bool(getattr(cfg, "visible", False))
+        and not bool((getattr(cfg, "params", None) or {}).get("z_score"))
+    ]
+    if not modes:
+        return "linear"
+    if "log" in modes:
+        return "log"
+    if "centered" in modes:
+        return "centered"
+    return "linear"
+
+
+def _apply_pane_axis_scale(ax_lower: Any, mode: str) -> None:
+    """Set a pane axes to ``mode`` and tag it for :func:`autoscale_pane_y`.
+
+    Re-applied every full render because ``fig.clear()`` recreates the axes.
+    ``set_yscale`` resets locators/formatters (and can reset the tick side),
+    so the centered locator/formatter + right-side ticks are (re)installed
+    AFTER the scale call — the same trap behind the log-axis dark-mode
+    tick-theming bug. Tick label COLORS survive ``set_yscale`` because
+    ``rendering.style_axes`` stores them via ``tick_params(which="both")``.
+    """
+    try:
+        if mode == "log":
+            ax_lower.set_yscale("log")
+        elif mode == "centered":
+            if not hasattr(ax_lower, "_sc_centered_top"):
+                ax_lower._sc_centered_top = _CENTERED_FLOOR
+            forward, inverse = _make_centered_funcs(ax_lower)
+            ax_lower.set_yscale("function", functions=(forward, inverse))
+            ax_lower.yaxis.set_major_locator(_CenteredRatioLocator(ax_lower))
+            ax_lower.yaxis.set_major_formatter(FuncFormatter(_format_centered_tick))
+            ax_lower.yaxis.tick_right()
+            ax_lower.yaxis.set_label_position("right")
+        else:
+            ax_lower.set_yscale("linear")
+        ax_lower._sc_axis_mode = mode
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def factory_by_kind_id(kind_id):
@@ -731,21 +895,12 @@ def render_for_slot(
         ]
         _render_pane_labels(ax_lower, visible_label_cfgs, scope)
 
-        # Per-pane log y-scale (opt-in, off by default). Honored only on
-        # the ratio pane (any visible non-z config requesting it) — a
-        # log axis can't render the 0.0 baseline / negative z-scores of
-        # the z-score pane. Set every render because fig.clear() recreates
-        # the axes. See rvol.spec.md "log_scale".
-        want_log = any(
-            bool(cfg.visible)
-            and bool((cfg.params or {}).get("log_scale"))
-            and not bool((cfg.params or {}).get("z_score"))
-            for cfg in group
-        )
-        try:
-            ax_lower.set_yscale("log" if want_log else "linear")
-        except Exception:  # noqa: BLE001
-            pass
+        # Per-pane y-scale (view-only). Honored only on the ratio pane
+        # (visible non-z configs); z-score panes always stay linear. Resolved
+        # to ONE mode for a shared pane and re-applied every render because
+        # fig.clear() recreates the axes. See rvol.spec.md "axis_mode" and the
+        # ``rvol-centered-axis`` helpers above.
+        _apply_pane_axis_scale(ax_lower, _resolve_pane_axis_mode(group))
 
         # Reference levels: union (deduped, ordered) across every
         # config in this group, so a shared pane gets one set of
@@ -898,6 +1053,7 @@ def autoscale_pane_y(ax_lower: Any, lines: Iterable[Any], lo: int, hi: int) -> N
         is_log = str(ax_lower.get_yscale()) == "log"
     except Exception:  # noqa: BLE001
         is_log = False
+    is_centered = getattr(ax_lower, "_sc_axis_mode", None) == "centered"
     for ln in lines:
         y = getattr(ln, "_sc_y_data", None)
         if y is None:
@@ -928,6 +1084,18 @@ def autoscale_pane_y(ax_lower: Any, lines: Iterable[Any], lo: int, hi: int) -> N
     hi_y = max(maxs)
     if hi_y <= lo_y:
         hi_y = lo_y + 1.0
+    if is_centered:
+        # Centered-ratio pane: 0 pinned to the bottom, 1.0 to the center,
+        # the visible max to the top. Push the live ``top`` (>= the 5x floor)
+        # onto the axes so the FuncScale transform + locator re-map, then fix
+        # ylim to [0, top]. Floor keeps 2x/5x stable in calm windows.
+        top = max(hi_y, _CENTERED_FLOOR)
+        ax_lower._sc_centered_top = top
+        try:
+            ax_lower.set_ylim(0.0, top)
+        except Exception:  # noqa: BLE001
+            pass
+        return
     if is_log:
         # Multiplicative padding on a log axis (additive padding is
         # meaningless across decades); guard the strictly-positive floor.

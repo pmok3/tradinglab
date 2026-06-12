@@ -135,9 +135,75 @@ def test_zero_overlap_after_remap_returns_none():
     assert result is None
 
 
-def test_xlim_clamped_when_out_of_range():
-    """Negative or out-of-range xlim values clamp to valid indices."""
+def test_left_clamp_within_subwindow():
+    """Negative left xlim clamps to 0 while staying a proper sub-window."""
     dates = _series(datetime(2026, 5, 1, 9, 30), 30)
-    # xlim runs past the right edge — clamp hi_i to n_prev - 1.
-    result = remap_window_by_time(dates, (-5.0, 100.0), dates)
-    assert result == (0, 30)
+    # hi_i=20 < 29 → still a sub-window (only the left edge is clamped).
+    result = remap_window_by_time(dates, (-5.0, 20.0), dates)
+    assert result == (0, 21)
+
+
+def test_right_clamp_within_subwindow():
+    """Right xlim past the end clamps to n-1 while staying a sub-window."""
+    dates = _series(datetime(2026, 5, 1, 9, 30), 30)
+    # lo_i=10 > 0 → still a sub-window (only the right edge is clamped).
+    result = remap_window_by_time(dates, (10.0, 100.0), dates)
+    assert result == (10, 30)
+
+
+# ---------------------------------------------------------------------------
+# Full-source-coverage intent guard (IPO / very-short-history)
+# ---------------------------------------------------------------------------
+
+
+def test_two_bar_ipo_source_does_not_crush_long_destination():
+    """The motivating bug: a 2-bar IPO source must NOT carry its ~1-day
+    window onto a long-history destination (which would show ~2 bars).
+
+    A freshly-loaded 2-bar chart gets xlim (-0.5, 1.5) from default
+    windowing; that spans the ENTIRE 2-bar source → no zoom to preserve →
+    None → caller uses its default right-edge window.
+    """
+    today = datetime(2026, 6, 12)
+    spcx = [today - timedelta(days=1), today]  # pre-IPO bar + first session
+    amd = [today - timedelta(days=i) for i in range(360, -1, -1)]  # ~1y daily
+    assert remap_window_by_time(spcx, (-0.5, 1.5), amd) is None
+
+
+def test_full_coverage_identical_series_returns_none():
+    """Viewing a symbol's ENTIRE history (even a long one) is not a zoom."""
+    dates = _series(datetime(2026, 5, 1, 9, 30), 100)
+    # xlim spanning all 100 bars (lo_i=0, hi_i=99) → full coverage → None.
+    assert remap_window_by_time(dates, (-0.5, 99.5), dates) is None
+
+
+def test_full_coverage_out_of_range_returns_none():
+    """An xlim past BOTH edges clamps to full coverage → None (was the old
+    ``test_xlim_clamped_when_out_of_range`` input; the contract changed)."""
+    dates = _series(datetime(2026, 5, 1, 9, 30), 30)
+    assert remap_window_by_time(dates, (-5.0, 100.0), dates) is None
+
+
+def test_deliberate_narrow_subwindow_is_preserved():
+    """A deliberate narrow zoom (proper sub-window) is still carried over —
+    the intent guard must NOT over-correct it the way a result-floor would."""
+    dates = _series(datetime(2026, 5, 1, 9, 30), 100)
+    # 3-bar zoom in the middle: lo_i=50 > 0 and hi_i=52 < 99 → preserved.
+    result = remap_window_by_time(dates, (50.0, 52.0), dates)
+    assert result == (50, 53)
+
+
+def test_left_edge_only_pan_is_preserved():
+    """Viewing the START of a series (lo at bar 0 but hi well short of the
+    end) is a deliberate pan, not full coverage → preserved."""
+    dates = _series(datetime(2026, 5, 1, 9, 30), 100)
+    result = remap_window_by_time(dates, (-0.5, 20.0), dates)
+    assert result == (0, 21)
+
+
+def test_right_edge_only_pan_is_preserved():
+    """Viewing the END of a series (hi at the last bar but lo well past 0)
+    is a deliberate pan, not full coverage → preserved."""
+    dates = _series(datetime(2026, 5, 1, 9, 30), 100)
+    result = remap_window_by_time(dates, (80.0, 99.5), dates)
+    assert result == (80, 100)

@@ -91,6 +91,13 @@ def remap_window_by_time(
       * Result is a half-open ``[lo, hi)`` slice with ``hi > lo``.
         Returns ``None`` when the remapped window has zero or one bar
         (caller should fall back to default windowing).
+      * Returns ``None`` when the SOURCE window spans the entire source
+        series (``lo_i == 0`` AND ``hi_i == len(prev_dates) - 1``): viewing
+        a symbol's whole (often tiny) history is not a deliberate zoom, so
+        there is no calendar selection to preserve. This is the IPO /
+        short-history guard — a 2-bar source must not crush a long-history
+        destination to 2 bars. A proper sub-window (however narrow) is
+        still remapped.
 
     Pure: takes any sequence of comparable timestamps (datetime,
     np.datetime64, etc.) so it's testable without Tk/matplotlib.
@@ -107,6 +114,17 @@ def remap_window_by_time(
     lo_i = max(0, min(n_prev - 1, int(round(lo_f))))
     hi_i = max(0, min(n_prev - 1, int(round(hi_f))))
     if hi_i <= lo_i:
+        return None
+    # Intent guard: when the source window spans the ENTIRE source series
+    # (first bar through last), the user was NOT zoomed into a sub-window —
+    # there is no calendar selection worth carrying onto the new symbol.
+    # This is the IPO / very-short-history case (e.g. a 2-bar chart showing
+    # all it has): preserving it would crush a long-history destination
+    # (e.g. AMD) down to ~2 bars. Returning None makes the caller fall back
+    # to its default right-edge window. A deliberate sub-window
+    # (``lo_i > 0`` OR ``hi_i < n_prev - 1``), however narrow, is still
+    # preserved. See viewport.spec.md.
+    if lo_i <= 0 and hi_i >= n_prev - 1:
         return None
     try:
         t_lo = prev_dates[lo_i]

@@ -136,6 +136,29 @@ _SESSION_FILTERS: tuple[str, ...] = (
 #: Modes that require intraday data. Used by :meth:`RVOL.is_available_for`.
 _INTRADAY_MODES: tuple[str, ...] = ("cumulative", "time_of_day")
 
+#: View-only y-axis scale modes for the ratio pane (z_score=False). Shared
+#: with RRVOL. ``centered`` is the default: 0 at the bottom, the 1.0 average
+#: pinned to the vertical center, the visible max at the top (a piecewise
+#: FuncScale with a 5x floor — see indicators/render.py). ``log`` is the
+#: opt-in spike-readability scale; ``linear`` is the legacy plain scale.
+#: Excluded from ``TRIGGER_RELEVANT_PARAMS`` (purely cosmetic).
+AXIS_MODES: tuple[str, ...] = ("centered", "linear", "log")
+
+
+def resolve_axis_mode(axis_mode: str = "centered", *, log_scale: bool = False) -> str:
+    """Normalise the view-only axis-scale selection for an RVOL/RRVOL config.
+
+    ``axis_mode`` wins when it is a known mode. Otherwise (or when it is the
+    default ``"centered"``) a truthy legacy ``log_scale`` — the only knob
+    pre-``axis_mode`` configs carried — maps to ``"log"`` for back-compat.
+    """
+    mode = str(axis_mode or "").lower()
+    if mode not in AXIS_MODES:
+        mode = "centered"
+    if mode == "centered" and bool(log_scale):
+        mode = "log"
+    return mode
+
 #: Minimum prior sessions before partial-warmup output begins.
 _MIN_WARMUP_SESSIONS = 5
 
@@ -652,8 +675,8 @@ class RVOL(BaseIndicator):
                  step=0.1, description="Warn level"),
         ParamDef("threshold_extreme", "float", default=5.0, min=0.1,
                  max=100.0, step=0.1, description="Extreme level"),
-        ParamDef("log_scale", "bool", default=False,
-                 description="Log scale"),
+        ParamDef("axis_mode", "choice", default="centered",
+                 choices=AXIS_MODES, description="Y-axis scale"),
     )
     default_style: ClassVar[dict[str, LineStyle]] = {
         "rvol": LineStyle(color="#aec7e8", width=1.4),
@@ -702,6 +725,7 @@ class RVOL(BaseIndicator):
         z_score: bool = False,
         threshold_warn: float = 2.0,
         threshold_extreme: float = 5.0,
+        axis_mode: str = "centered",
         log_scale: bool = False,
     ) -> None:
         if mode not in _MODES:
@@ -722,10 +746,14 @@ class RVOL(BaseIndicator):
         self.threshold_warn, self.threshold_extreme = _validate_thresholds(
             threshold_warn, threshold_extreme,
         )
-        # View-only knob (does not affect compute): render the pane on a
-        # log y-axis. Honored only on the ratio pane (z_score=False);
-        # see indicators/render.py pane-group log handling.
-        self.log_scale = bool(log_scale)
+        # View-only knob (does not affect compute): which y-axis scale the
+        # ratio pane (z_score=False) renders on. Default "centered" pins the
+        # 1.0 average to the vertical center with 0 at the bottom; "log" and
+        # "linear" are the alternatives. Honored only on the ratio pane; see
+        # indicators/render.py pane-axis handling. ``log_scale`` is the legacy
+        # bool kept for back-compat with pre-axis_mode persisted configs.
+        self.axis_mode = resolve_axis_mode(axis_mode, log_scale=log_scale)
+        self.log_scale = self.axis_mode == "log"
         # Per-instance reference levels: z-scores get the Bellafiore
         # 0/+2σ pair; plain RVOL gets the 1.0 baseline + warn/extreme.
         if self.z_score:

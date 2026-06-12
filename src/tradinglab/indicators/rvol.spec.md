@@ -26,7 +26,7 @@ this stock trading at an unusual rate vs its recent normal pace?".
 | `z_score` | bool | False | output = rolling sample-stddev z of rvol series, window=`length` |
 | `threshold_warn` | float | 2.0 | reference dash; ignored when `z_score=True`. Cosmetic-only |
 | `threshold_extreme` | float | 5.0 | reference dash; ignored when `z_score=True`. Cosmetic-only |
-| `log_scale` | bool | False | **view-only** (no compute effect): render the pane on a log y-axis. Honored only on the ratio pane (`z_score=False`); a log axis can't show the z-score pane's 0.0 baseline / negatives. Opt-in spike-readability for stacking spiky modes (e.g. ToD) with smooth ones (Cumulative) on one shared scale. See `indicators/render.py` pane-group log handling + `autoscale_pane_y` log-awareness. |
+| `axis_mode` | choice | `centered` | **view-only** (no compute effect): which y-axis scale the ratio pane (`z_score=False`) renders on. `centered` *(default)* = piecewise FuncScale pinning **0 to the bottom, the 1.0 average to the vertical center, the visible max to the top** (`[0,1]→bottom half`, `[1,top]→top half`; `top = max(visible_max, 5.0)` — a 5× floor that keeps the 2×/5× bands stable in calm windows and only lets the upper half rescale once a >5× spike enters). `log` = opt-in spike-readability log scale (can't show 0 at the bottom). `linear` = legacy plain autoscale. Honored only on the ratio pane; z-score panes (`pane_group="rvol_z"`) always stay linear. See `indicators/render.py` `_resolve_pane_axis_mode` / `_apply_pane_axis_scale` / `autoscale_pane_y` centered branch. Back-compat: the legacy `log_scale` bool is still accepted by `__init__` and maps to `axis_mode="log"` (see `resolve_axis_mode`). Dark-mode note (log mode): the log axis's readable labels in a typical sub-decade RVOL range are matplotlib **minor** ticks; `rendering.style_axes` recolors them via `tick_params(which="both")` so they follow the theme. |
 
 ### `TRIGGER_RELEVANT_PARAMS`
 
@@ -37,11 +37,11 @@ Class-level whitelist of params that actually affect compute output:
  "denominator_includes_current", "z_score")
 ```
 
-`threshold_warn` / `threshold_extreme` / `log_scale` are excluded — they only
+`threshold_warn` / `threshold_extreme` / `axis_mode` are excluded — they only
 paint axhlines / set the pane y-scale. `scanner.fields._build_indicator_specs`
 prunes them from the entries / exits / scanner block-editor forms; the
 chart-side Manage Indicators dialog still surfaces the full schema (so the
-`log_scale` checkbox is reachable there).
+`axis_mode` selector is reachable there).
 
 ### Output
 
@@ -161,9 +161,12 @@ consumers fit/read/click ALL configs on the pane: y-autoscale unions
 every config's lines (`indicators.render.lines_by_pane_axes`), the
 hover readout enumerates every config (`_indicator_lines_at`), and each
 config's name is its own clickable label (`_render_pane_labels` →
-`_pane_indicator_label_hit`). When a spiky mode (ToD) compresses a
-smooth one (Cumulative) on a shared linear scale, opt into `log_scale`
-(per above) rather than splitting the pane.
+`_pane_indicator_label_hit`). The shared pane resolves ONE y-scale across its
+configs (`indicators.render._resolve_pane_axis_mode`, precedence
+`log > centered > linear`); the default `centered` scale keeps the 1.0 average
+mid-pane while a spiky mode (ToD) and a smooth one (Cumulative) co-exist. Set
+`axis_mode="log"` (per above) for log spike-readability rather than splitting
+the pane.
 
 ## Interval gating
 

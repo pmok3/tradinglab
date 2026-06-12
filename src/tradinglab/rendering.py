@@ -884,7 +884,16 @@ def setup_volume_axes(ax) -> None:
 def style_axes(ax, theme: dict) -> None:
     """Apply theme colors to an axes' background, ticks, spines, and grid."""
     ax.set_facecolor(theme["ax_bg"])
-    ax.tick_params(colors=theme["text"])
+    # ``which="both"`` so MINOR tick marks + labels follow the theme too,
+    # not just majors (``tick_params`` defaults to ``which="major"``). This
+    # matters on a log y-scale pane (e.g. RVOL with ``log_scale=True``): for
+    # a typical sub-decade ratio range the readable labels (2,3,4,6×10ⁿ) are
+    # MINOR ticks, which otherwise stay default-black and vanish in dark
+    # mode. The kwarg persists onto minor ticks created later (e.g. when the
+    # render pass calls ``set_yscale("log")`` after this), and recolors
+    # existing minor ticks on a live theme swap. No-op on linear panes that
+    # have no minor ticks. See rvol.spec.md "log_scale".
+    ax.tick_params(which="both", colors=theme["text"])
     ax.yaxis.label.set_color(theme["text"])
     ax.xaxis.label.set_color(theme["text"])
     ax.title.set_color(theme["text"])

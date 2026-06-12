@@ -22,6 +22,7 @@ ticker the data source can resolve via the `compare_symbol` param).
 | `compare_symbol` | str (open-choice) | `SPY` | denominator ticker. Editable combobox in the dialog seeded with SPY/QQQ/IWM/DIA + XL\* sector SPDRs (see `COMPARE_SYMBOL_SUGGESTIONS`); free-typing supported. Validated on Save and Close via `validate_compare_symbol`. Audit `rrvol-compare-symbol`. |
 | `threshold_warn` | float | 2.0 | reference dash; ignored when `z_score=True`. Cosmetic-only |
 | `threshold_extreme` | float | 5.0 | reference dash; ignored when `z_score=True`. Cosmetic-only |
+| `axis_mode` | choice | `centered` | **view-only** (no compute effect): ratio-pane y-scale, identical semantics to `RVOL.axis_mode` (`centered` default = 0 bottom / 1.0 center / max top with a 5× floor; `log`; `linear`). Excluded from `TRIGGER_RELEVANT_PARAMS`. RRVOL never carried the legacy `log_scale` bool, so there is no back-compat mapping. See `indicators/render.py` pane-axis handling. |
 
 `TRIGGER_RELEVANT_PARAMS` mirrors `RVOL` plus `compare_symbol`
 (switching benchmarks changes the denominator entirely, so triggers
@@ -88,7 +89,9 @@ benchmark switches.
 ## Pane sharing
 
 `pane_group_for(params)` returns `"rvol_z"` when `z_score=True`, else
-`"rvol"`. RRVOL co-renders with RVOL on the same pane by default.
+`"rvol"`. RRVOL co-renders with RVOL on the same pane by default — and shares
+its y-scale, resolved by `indicators.render._resolve_pane_axis_mode` (default
+`centered`; `log > centered > linear` precedence on a mixed shared pane).
 
 ## Interval gating
 

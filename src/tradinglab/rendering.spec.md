@@ -90,6 +90,14 @@ Collections without rebuilding formatters/locators.
   whatever indicator pane the user placed below volume). Audit
   ``volume-axis-prune-both``. `setup_price_axes` prunes lower tick only
   (`hspace=0` collision with the price/volume boundary). `style_axes`
+  recolors ticks via `ax.tick_params(which="both", ...)` so MINOR tick
+  marks + labels are themed alongside majors — required for a log y-scale
+  pane (e.g. RVOL `log_scale=True`), where a typical sub-decade ratio range
+  renders its readable labels (`2,3,4,6×10ⁿ`) as MINOR ticks that would
+  otherwise stay default-black and vanish in dark mode. The kwarg persists
+  onto minor ticks created by a later `set_yscale("log")` and recolors
+  existing minors on a live theme swap; it is a no-op on linear panes with
+  no minor ticks. `style_axes`
   also recolors any in-pane indicator-name label artists on theme swap:
   it iterates `ax._sc_pane_label_artists` (the per-config name + spacer
   `Text` artists created by `indicators.render._render_pane_labels`),
