@@ -147,9 +147,23 @@ class LivePriceOverlay:
         return self._artists.get(slot)
 
     def clear(self) -> None:
-        """Drop Python refs to artists. Does not detach them from the
-        axes — caller is responsible for that (typically via
-        ``figure.clear()``)."""
+        """Detach every overlay artist from its axes, then drop refs.
+
+        Detaching (not merely dropping refs) makes the overlay safe to clear
+        WITHOUT a surrounding ``figure.clear()`` — required by the
+        topology-preserving paint pipeline fast path
+        (``docs/PAINT_PIPELINE_REFACTOR.md``). Idempotent + defensive: an
+        artist already detached (e.g. by a prior ``figure.clear()``) raises on
+        ``.remove()``, which is swallowed. End state is identical to the old
+        ref-drop in the current ``figure.clear()`` flow.
+        """
+        for line, label in self._artists.values():
+            for art in (line, label):
+                if art is not None:
+                    try:
+                        art.remove()
+                    except Exception:  # noqa: BLE001
+                        pass
         self._artists.clear()
 
     def close(self) -> None:

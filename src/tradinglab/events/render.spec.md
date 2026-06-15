@@ -26,7 +26,7 @@ Internal: none (record/view inputs are duck-typed with `getattr` lookups for sha
 - A blind-mode call never produces a tooltip containing the absolute year of a forward event.
 
 ## Algorithm
-1. For each past event, compute matching `bar_index` via linear scan over candle dates (visible windows are O(100s); bisect setup not worth it).
+1. Precompute a `day → first-bar-index` map ONCE per call (`_build_day_index_map`, one `date.timestamp()` per candle), then resolve each event's `bar_index` via an O(1) lookup keyed by `ts_ms // MS_PER_DAY`. Projection is **O(bars + events)** — previously each event ran an independent O(bars) linear scan (O(events × bars)), which dominated the per-render events cost on symbols with many dividends/earnings in view (measured ~3 ms/render on a 140-bar/68-event window, more as events grow). `_bar_index_for_ts` (the single-shot linear scan) is retained for back-compat callers but is no longer on the hot path. First-index-wins on day collisions matches the old scan.
 2. Build tooltip and marker letter per record (`_earnings_tooltip` / `_dividend_tooltip`, `EVENT_MARKER_GLYPH`).
 3. Forward earnings: emit in-pane glyph if date inside window; outside-window records emit nothing.
 4. If forward badges exist and `forward_earnings` is empty, emit one right-edge badge using the nearest badge.

@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.3.10] - 2026-06-15
+
+### Changed
+
+- **The chart redraws far faster when you have several indicators on.**
+  Adding a 5th, 6th, or 7th indicator pane used to make panning, zooming,
+  streaming, and ticker switches feel sluggish, because every redraw tore
+  down and rebuilt the entire figure from scratch. The app now recognises
+  when the *layout* hasn't changed (same panes, same interval, same
+  compare on/off) and **reuses the existing chart, repainting only the
+  data** — about **80% faster** in the heavy multi-indicator case. Anything
+  that genuinely changes the layout (toggling compare, adding/removing a
+  pane, changing interval, drilling into a day) still does a full rebuild,
+  so nothing looks different — it just gets there quicker. Power-user
+  escape hatch: set `paint_topology_preserve` to `false` in settings to
+  force the old full-rebuild path.
+
+### Fixed
+
+- **Indicator names on the price pane now follow a dark-mode switch
+  immediately.** If you set up overlays in light mode and then switched to
+  dark mode, the indicator names stayed black on the chart until you opened
+  *Manage Indicators* (which forced a redraw). The theme toggle now recolors
+  those names in place right away — visible names take the theme text colour,
+  hidden ones stay greyed.
+- **Non-volume indicators are snappy again.** A regression in 0.3.9 made
+  *every* indicator pane (RSI, ATR, MACD, ADX, …) quietly use the new,
+  more expensive Relative-Volume "centered" axis maths — so charts with
+  several indicators felt less responsive than before. The centered scale
+  is now correctly limited to the RVOL/RRVOL panes it was designed for.
+- **Event markers load faster on long histories.** Building the
+  earnings/dividend/split markers scaled with *bars × events*, which
+  dragged on multi-year intraday charts. It now scales linearly, with no
+  change to which markers appear or where.
+
 ## [0.3.9] - 2026-06-12
 
 ### Changed

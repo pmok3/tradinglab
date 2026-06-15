@@ -20,7 +20,7 @@ from __future__ import annotations
 #: Package semantic version. **THIS IS THE ONLY LINE THE BUMP SCRIPT
 #: REWRITES** — keep the format ``__version__ = "X.Y.Z"`` literal so
 #: the regex in ``tools/bump_version.py`` matches.
-__version__ = "0.3.9"
+__version__ = "0.3.10"
 
 
 # Build-time metadata — populated by ``tools/build_exe.ps1`` (and the

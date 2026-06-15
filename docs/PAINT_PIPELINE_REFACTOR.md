@@ -1,6 +1,21 @@
 # Topology-Preserving Paint Pipeline — Design Doc
 
-> **Status:** scoped, not started. Multi-day refactor; not autopilot-friendly.
+> **Status:** Stages 0, 1, 3–5, the Stage 6 dispatch tests, and the Stage 7
+> **default-ON roll-out** are SHIPPED. Stage 0 = overlay detach contracts +
+> topology-key instrumentation; Stage 1
+> = opt-in fast path (`_paint_topology_preserve`, slow-path
+> fallback); Stages 3–5 = the slow + fast paths now share `_draw_slice`,
+> `_finalize_render`, `_compute_slot_window` (window/xlim) and
+> `_paint_slot_watermark`, so there is ONE implementation of each per-slot
+> piece (no drift); Stage 6 = a focused dispatch suite
+> (`tests/smoke/test_smoke_paint_fast_path.py`). **Stage 7 (this release):**
+> the flag now defaults **ON** — escape hatch to the legacy `figure.clear()`
+> rebuild is env `TRADINGLAB_PAINT_TOPOLOGY_PRESERVE=0` OR settings
+> `"paint_topology_preserve": false` (env wins). Validated by the full smoke
+> suite passing both default/fast-path AND escape-hatch/slow-path. Measured
+> win: 5-pane `_render` 51.8 ms → 10.2 ms (**80% faster**). Remaining: the
+> final flag DELETION (hardwire the fast path, drop the slow rebuild) after
+> an extended real-world bake — a LATER release, intentionally not done yet.
 > **Author:** GitHub Copilot, 2026-05-28 (session 45f6024f).
 > **Audit references:** `audit-consolidated.md` Tier 3.1 + 3.3; CLAUDE.md §7.14
 > (ticker-switch latency H4).
@@ -24,6 +39,76 @@ Realistic effort: **3-5 focused days** with careful test coverage. NOT
 autopilot-friendly — every transition (compare on/off, indicator add/remove,
 interval change, drill-down) is a potential silent regression in
 pan/zoom/streaming.
+
+---
+
+## ⚠ Validation addendum — 2026-06-12 (verified against current code)
+
+> The body below was authored 2026-05-28 and has **drifted**. This addendum
+> is the current-accurate scope; where they conflict, trust the addendum.
+> Validated by a code-reading pass against `app.py` / `gui/chart_renderer.py`
+> / `gui/interaction.py` / `indicators/render.py` and a fresh profile.
+
+**Verdict: GO, behind a feature flag.** Core premise still holds —
+`ChartApp._render()` still does `self._figure.clear()` (`app.py:3395`, `:3456`).
+
+**Re-quantified payoff (bigger than the original headline).** Fresh profile
+(`tools/profile_render_indicators.py`, 140-bar + 5 lower panes) = **~52 ms
+`_render()` (stable min), dominated by matplotlib artist creation.** Realistic
+per-render saving from reusing axes + decorations and refreshing only data
+artists:
+- 0–1 indicators: ~10–20 ms · 3 indicators: ~20–35 ms · **5+ panes: ~30–45 ms**.
+The win is **largest for the exact "5+ indicators feels laggy" case.**
+
+**🔴 Biggest risk (NEW — gates everything): artist-lifecycle drift.** Several
+overlay `clear()` helpers only drop Python refs and rely on `figure.clear()`
+to actually DETACH the matplotlib artists — e.g. live-price
+(`gui/live_price_overlay.py:149-153`), exits (`gui/exits_overlay.py:255-260`),
+entries (`gui/entries_overlay.py:321-323`), evidence
+(`gui/evidence_overlay.py:343-360`), the ticker watermark (untracked), and
+`_ensure_overlay_artists` readout/crosshair (`gui/interaction.py:1156-1343`).
+Without `figure.clear()`, the fast path would **duplicate orphaned artists**.
+→ **Add a Stage 0: give every overlay a real detach/replace contract BEFORE
+any fast-path dispatch.**
+
+**Topology-key refinement.** Make the key an immutable ordered signature, not
+raw `IndicatorConfig` lists:
+`(compare_on, interval, drilldown_day, pane_signature_by_slot)` where
+`pane_signature = tuple(tuple(cfg.id for cfg in group) ...)` per slot (ordered
+→ catches reorder; identities → catches add/remove/scope). **`axis_mode`
+(centered/log/linear) is FAST-PATH-SAFE and must NOT force the slow path** —
+`indicators/render.py:render_for_slot` re-applies `_apply_pane_axis_scale`
+every render, so a scale toggle is handled by the per-pane data update. Same
+for HA toggle, pre/post, key-bar/HA-flat highlight, theme, resize (data/glyph
+only, no axes-topology change). Slow path stays required for: compare on/off,
+interval, pane add/remove/scope/**reorder**, drilldown enter/exit, and (at
+least initially) `_preserve_xlim_on_render`.
+
+**Overlay-refresh checklist the original MISSED** (fast path must refresh or
+explicitly preserve each): event glyphs (`chart_renderer.py:522-577`),
+volume-ToD overlay (`:578-676`), **ticker watermark** (`app.py:3567-3585`),
+overlay legend (`:4534-4585`), exits/entries/evidence overlays, HA-flat hatch +
+key-bar hollowing, crosshair/hover/readout box, price log/linear scale, X
+locator/formatter, plus blit invalidation of `_blit_bg` / `_tick_blit_bg` /
+`_pan_bg` / `_pan_animated` / `_pan_anim_fingerprint`.
+
+**Ownership note.** `_panel_state` / `_ax_candle_map` now live on `ChartRenderer`
+(`gui/chart_renderer.py:26-37`) with legacy aliases on `ChartApp`
+(`app.py:695-698`). Good news: pan/zoom (`_ensure_rendered_for_view`,
+`_pan_end`), streaming-tick refresh, and drawing-only repaint **already tolerate
+persisted axes** (they're built for it). The fresh-axes-assuming consumers are
+exactly the overlay/watermark/readout helpers in the Stage-0 list above.
+
+**Refined staging.** Insert **Stage 0** (overlay detach contracts +
+topology-key instrumentation, no behavior change) before the original Stage 1.
+Stages 3–4 can lean on existing `ChartRenderer.reset_slot_artists()` +
+`render_for_slot()` (much factoring already exists). Add tests for: axis_mode
+= same-topology, events-glyph refresh, watermark update, overlay
+duplicate-prevention, and compare-ticker-only fast path.
+
+**Updated effort: 5–7 days realistic, 8–10 pessimistic** (vs the original
+3.5/5/7-8) — the extra is the Stage-0 artist-lifecycle work the original doc
+didn't account for.
 
 ---
 
@@ -279,11 +364,18 @@ fast-path detection silently dropping to slow-path is visible.
 
 ### Stage 7 — Roll out + delete flag
 
-After 1-2 weeks of the flag being on by default in dev builds:
-- Default `paint_topology_preserve_enabled` to True.
-- Add a new smoke check that asserts a plain ticker switch fires the fast
-  path (regression guard).
-- Delete the flag in a follow-up release once stable.
+**Default-ON roll-out: DONE (this release).**
+- ✅ `_paint_topology_preserve` now defaults **True** (env
+  `TRADINGLAB_PAINT_TOPOLOGY_PRESERVE=0` / settings
+  `"paint_topology_preserve": false` are the escape hatch back to the
+  legacy `figure.clear()` rebuild; env wins).
+- ✅ Regression guard `test_default_is_on_and_fires_fast_path` in
+  `tests/smoke/test_smoke_paint_fast_path.py` asserts a re-render with the
+  shipped default (no flag manipulation) takes the fast path.
+
+**Flag DELETION: deferred to a LATER release** once the default-ON path has
+baked in real-world use. That follow-up hardwires the fast path and deletes
+the slow `figure.clear()` rebuild + the flag plumbing.
 
 ---
 

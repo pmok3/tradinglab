@@ -253,10 +253,24 @@ class ExitsOverlay:
         return sum(len(v) for v in self._artists.values())
 
     def clear(self) -> None:
-        """Drop every artist reference. Safe to call repeatedly."""
-        # We don't call .remove() on the Line2D / Text — figure.clear()
-        # is the canonical owner of axes lifetime, and the artists may
-        # already be detached from a now-dead axes. Just release refs.
+        """Detach every overlay artist from its axes, then drop refs.
+
+        Detaching (not merely dropping refs) makes the overlay safe to clear
+        WITHOUT a surrounding ``figure.clear()`` — required by the
+        topology-preserving paint pipeline fast path
+        (``docs/PAINT_PIPELINE_REFACTOR.md``). Idempotent + defensive: an
+        artist already detached (e.g. by a prior ``figure.clear()``) raises on
+        ``.remove()``, which is swallowed. End state is identical to the old
+        ref-drop in the current ``figure.clear()`` flow.
+        """
+        for bucket in self._artists.values():
+            for line, label in bucket:
+                for art in (line, label):
+                    if art is not None:
+                        try:
+                            art.remove()
+                        except Exception:  # noqa: BLE001
+                            pass
         self._artists.clear()
 
     def close(self) -> None:

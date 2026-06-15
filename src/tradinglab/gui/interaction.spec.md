@@ -322,11 +322,16 @@ during drag.
     render as `LABEL upper <v1> middle <v2> lower <v3>` on a single
     visual row with each band's value in its own colour. Row meta on
     `box._ind_rows` is now
-    `{"config_id", "label", "visible", "container": HPacker,
+    `{"config_id", "label", "label_textarea": TextArea, "visible",
+    "container": HPacker,
     "outputs": [{"output_key", "color", "line", "value_textarea",
     "key_label", "notset"}, ...]}` where `outputs` enumerates the visible bands
     in indicator-declared top-down order (via
-    `Indicator.effective_output_keys(params)`). `_update_readout`
+    `Indicator.effective_output_keys(params)`). `label_textarea` is the
+    "NAME(params) " prefix artist, stashed so a live theme swap can recolor
+    just the indicator name in place — see
+    `theme_controller._apply_overlay_artists` ("Live theme swap" below).
+    `_update_readout`
     walks `outputs` per row and writes `_line_value_at(line, idx)` into
     each segment's `value_textarea` (visible rows) or leaves the
     placeholder + greyed label (hidden rows / hidden bands).
@@ -342,6 +347,16 @@ during drag.
     `compare`→`compare`). Transparent background (no overlap with the
     OHLCV strip). Click routing: see `_maybe_handle_readout_legend_click`
     / `_readout_legend_row_hit` above.
+  - **Live theme swap.** The OHLCV `_main_text` AND every overlay legend
+    row's name/segments bake their colour at build time, so a light↔dark
+    toggle must recolor them in place. `theme_controller._apply_overlay_artists`
+    iterates `box._ind_rows`: a visible row recolors its `label_textarea`
+    to `theme["text"]`; a hidden row recolors every child `TextArea` to the
+    muted colour. Without this the indicator names stay their old colour
+    (e.g. black after switching to dark) until the next full `_render`
+    (the reported bug, where opening "Manage Indicators" was the re-render
+    trigger). The recolor lands before `ThemeController.apply`'s trailing
+    `draw_idle` → `_on_draw_event` → `_blit_overlays` re-composite.
 - **`_last_hovered_slot`**: tracks last axes' slot
   ("primary"/"compare"); persists across Notebook tab switches
   so watchlist double-click + click-to-type route to the last

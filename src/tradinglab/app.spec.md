@@ -7,7 +7,7 @@ Top-level Tk + matplotlib application. Owns all runtime state (Tk widgets, `Figu
 - `class ChartApp(PollingMixin, InteractionMixin, WatchlistTabMixin, WorkerPoolMixin, IndicatorMenuMixin, SandboxMenuMixin, ConfigMenuMixin, DrilldownMixin, EntriesAppMixin, ExitsAppMixin, HelpMenuMixin, FirstRunBannerMixin, DrawingsAppMixin, LivePriceOverlayAppMixin, RecentMenusMixin, SandboxAliasMixin, SandboxAppMixin, ScannerAppMixin, SnapshotMixin, UpdateCheckMixin, tk.Tk)`
 - `ChartApp()` — construct + open the window.
 - `_load_data()` / `_load_data_async()` — synchronous / executor-backed fetch + render.
-- `_render()` — rebuild figure from in-memory series. Sole site of `figure.clear()`.
+- `_render()` — rebuild figure from in-memory series. Sole site of `figure.clear()` (in its slow path; the topology-preserving fast path reuses axes — see Rendering §).
 - `_reset_view()` — switch to `1d`, clear preserve-xlim, snap to right-edge 200-bar window.
 - `set_worker_count(n)` — swap the executor.
 - `_on_close()` — cancel `after` jobs, stop streams, shut down executor, destroy.
@@ -95,7 +95,11 @@ Interval- and session-aware:
 - `_drain_stream_queue` (Tk-thread, `after(30)`): dispatches `"tick"` → `_apply_stream_tick` (rightmost in-place mutation, preserves identity), `"rollover"` → `_apply_stream_rollover` (upsert/append). Stale-token events silently dropped. Slot prefix `"card:N"` routes to ChartStack panel.
 
 ### Rendering (`_render`)
-- `figure.clear()` lives here only.
+- `figure.clear()` lives here only — and only in the SLOW path (see fast path below).
+- **Topology-preserving fast path (`docs/PAINT_PIPELINE_REFACTOR.md`).** **ON by default (Stage 4 roll-out)** via `_paint_topology_preserve`; disable (legacy `figure.clear()` rebuild) via env `TRADINGLAB_PAINT_TOPOLOGY_PRESERVE=0` OR settings `"paint_topology_preserve": false` (env wins). At the top of `_render`, after consuming the one-shot xlim signals + capturing prev-primary dates/xlim, it dispatches to `_render_topology_preserved` when ALL hold: flag on · `not preserve` (drilldown excluded) · `not slide_to_right` · `_last_topology_key is not None` · `_panel_state` non-empty · `_compute_topology_key() == _last_topology_key`. The fast path REUSES every `_panel_state` Axes (no `figure.clear`/`add_subplot`/`setup_*`/X-formatter reinstall — the interval is part of the topology key so axis config persists): per slot it re-points candles + `_ax_candle_map`, detaches+repaints the watermark, recomputes xlim (ticker-switch time-remap else right-edge default), and calls `_draw_slice` (which detaches old artists via `_reset_slot_artists` + `ind_state.clear()` and rebuilds candle/volume/shading/indicator/event/vol-ToD). Any exception → `logger.warning` + fall through to the slow rebuild, so a fast-path bug degrades to the legacy behavior rather than breaking. `_render_topology_preserved_fires` counts successful fast renders (test seam). Artist-lifecycle safety relies on the Stage 0 overlay detach contracts.
+- **`_finalize_render()`** — shared post-per-slot tail used by BOTH paths (so they can't drift): back-compat handles, blit/pan-state invalidation, `_apply_price_scale`, `_ensure_overlay_artists`, overlay legend, exits/entries/evidence overlays, drawings, live-price overlay, table refill, `draw_idle`, cursor revival, and the `_last_topology_key` stamp.
+- **Shared per-slot helpers (Stages 3–5)** — both paths call ONE implementation each: `_draw_slice` (detach + rebuild candle/volume/shading/indicator/event/vol-ToD), `_compute_slot_window(slot, ax_p, candles, *, preserve, preserved_xlim, slide_to_right, prev_primary_dates, prev_primary_xlim) -> (lo, hi, xlim_set)` (ticker-switch time-remap / drilldown preserve+slide / right-edge default — returns whether it already applied the xlim), and `_paint_slot_watermark(slot, ax_p)` (centered ticker watermark). The fast path passes `preserve=False`/`preserved_xlim=None`/`slide_to_right=False` (those cases are dispatch-excluded); time-remap rides on `prev_primary_dates`/`xlim` (None ⇒ skipped).
+- `_compute_topology_key()` → `(compare_on, interval, drilldown_day, main_pane_id_signature, compare_pane_id_signature)` — ordered config-ids per slot (reorder ⇒ different key); `axis_mode`/style/params excluded (per-pane data updates the fast path re-applies via `render_for_slot`). Defensive; never raises.
 - Topology by mode: plain = `[price, volume, rsi]` (`[6, 1.5, 2]`); compare = `[primary_price, compare_price, volume, rsi]`.
 - `_preserve_xlim_on_render` — capture xlim before clear, restore after. Never auto-cleared at end of `_render`; reset only by explicit user intent: `_reset_view`, `_do_scheduled_reload`, and `_on_explicit_axis_change` (source / interval / pre-post change — bar-index xlim from the previous interval is meaningless on the new series, so the new series snaps to the right-edge default window).
 - `_slide_xlim_to_right_edge` — one-shot, consumed at top of `_render`; shifts the preserved xlim forward so right edge = `n-0.5`. Set by `_next_bar_fetch_tick` when user was glued to the right edge.
@@ -304,7 +308,7 @@ Pinned by `tests/unit/gui/test_avwap_anchor_pick_iconify.py` (6 tests covering p
 2. `_stream_token` monotonically increases; stream drain checks against it.
 3. `_full_cache` size ≤ `_FULL_CACHE_MAX=16` for non-pinned entries; pinned entries never evicted by trim. Read sites in `_load_data` promote the accessed key.
 4. `_series_cache` entries rebuilt on id-reuse (`sa._candles is not candles`).
-5. `figure.clear()` only inside `_render`.
+5. `figure.clear()` only inside `_render`'s slow path (the topology-preserving fast path, when enabled, reuses the existing axes and skips it).
 6. `_preserve_xlim_on_render` is never auto-reset at the end of `_render`; only `_reset_view` / `_do_scheduled_reload` / `_on_explicit_axis_change` clear it (all explicit-user-intent paths).
 7. `_slide_xlim_to_right_edge` is one-shot — consumed-and-cleared at top of `_render`.
 8. `_after_jobs` contains every pending `after` id; `_on_close` cancels all.

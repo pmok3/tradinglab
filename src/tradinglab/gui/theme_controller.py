@@ -241,6 +241,7 @@ class ThemeController:
                 art.set_color(theme["tooltip_fg"])
             except Exception:  # noqa: BLE001
                 pass
+        readout_muted = theme.get("muted") or theme.get("axis") or "#888888"
         for box in getattr(root, "_readout_artists", {}).values():
             try:
                 main_t = getattr(box, "_main_text", None)
@@ -248,6 +249,30 @@ class ThemeController:
                     main_t._text.set_color(theme["text"])
             except Exception:  # noqa: BLE001
                 pass
+            # Per-indicator legend rows (the overlay NAME labels on the price
+            # pane) bake the theme text/muted colour at BUILD time, so a live
+            # theme swap must recolor them here — otherwise the names keep
+            # their old colour (e.g. black after switching light→dark) until
+            # the next full render (the reported bug, where opening "Manage
+            # Indicators" was what forced the re-render). Visible row → name in
+            # text colour; hidden row → every segment muted. See
+            # ``interaction._build_readout_indicator_rows``.
+            for row in getattr(box, "_ind_rows", None) or ():
+                try:
+                    if row.get("visible"):
+                        lta = row.get("label_textarea")
+                        lt = getattr(lta, "_text", None)
+                        if lt is not None:
+                            lt.set_color(theme["text"])
+                    else:
+                        container = row.get("container")
+                        kids = container.get_children() if container is not None else ()
+                        for ta in kids:
+                            t = getattr(ta, "_text", None)
+                            if t is not None:
+                                t.set_color(readout_muted)
+                except Exception:  # noqa: BLE001
+                    pass
         for art in getattr(root, "_typing_preview_artists", {}).values():
             try:
                 art.set_color(theme["text"])

@@ -21,6 +21,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import math
+import os
 import queue
 import time
 import tkinter as tk
@@ -840,6 +841,29 @@ class ChartApp(
 
         # --- render-related flags ---------------------------------------
         self._preserve_xlim_on_render = False
+        # Stage 0 of the topology-preserving paint pipeline
+        # (docs/PAINT_PIPELINE_REFACTOR.md): the figure-topology signature
+        # of the most recent slow-path render. COMPUTED but NOT yet consulted
+        # — the fast-path branch lands in a later stage. Pure instrumentation;
+        # `_compute_topology_key` is total + defensive so it can never break
+        # a render.
+        self._last_topology_key: tuple | None = None
+        # Topology-preserving fast path. Stage 4 roll-out: **ON by default** —
+        # when the topology key is unchanged, `_render` reuses the existing
+        # axes instead of `figure.clear()`-rebuilding them (~80% faster with
+        # 5+ panes). Still wrapped in try/except → slow-path fallback, so a
+        # fast-path bug degrades to the legacy rebuild rather than breaking.
+        # Escape hatch (legacy rebuild): env
+        # `TRADINGLAB_PAINT_TOPOLOGY_PRESERVE=0` OR settings
+        # `"paint_topology_preserve": false`. `_fires` is test/diagnostic
+        # instrumentation (count of fast-path renders).
+        _env_tpp = os.environ.get("TRADINGLAB_PAINT_TOPOLOGY_PRESERVE")
+        if _env_tpp is not None:
+            self._paint_topology_preserve = _env_tpp == "1"
+        else:
+            self._paint_topology_preserve = bool(
+                _settings.get("paint_topology_preserve", True))
+        self._render_topology_preserved_fires = 0
         # When True, _render captures the *timestamp* range of the
         # primary panel's current xlim BEFORE figure.clear() and remaps
         # it to bar-index coordinates in the freshly-loaded primary
@@ -3392,6 +3416,49 @@ class ChartApp(
             self._pending_idle_render = False
             self._render()
 
+    def _compute_topology_key(self) -> tuple:
+        """Hashable signature that is EQUAL iff the figure topology is unchanged.
+
+        Stage 0 instrumentation for the topology-preserving paint pipeline
+        (``docs/PAINT_PIPELINE_REFACTOR.md``). Stashed on
+        ``_last_topology_key`` at the end of every slow-path :meth:`_render`
+        but **not yet consulted** — the fast-path branch lands in a later
+        stage. Two keys being equal means a future fast path could reuse the
+        existing axes instead of calling ``figure.clear()``.
+
+        The per-slot pane signature uses **ordered config ids** (not just a
+        count) so an indicator reorder — same pane count, different host axes —
+        registers as a topology change. ``axis_mode`` / style / params /
+        visibility-of-data are deliberately NOT in the key: those are per-pane
+        DATA updates the fast path re-applies via ``render_for_slot``, not
+        structural changes. Totally defensive (never raises) because it runs
+        on the render hot path purely as instrumentation.
+        """
+        try:
+            compare_on = bool(self.compare_var.get()) and bool(self._compare)
+        except Exception:  # noqa: BLE001
+            compare_on = False
+        try:
+            interval = self.interval_var.get()
+        except Exception:  # noqa: BLE001
+            interval = ""
+
+        def _pane_signature(scope: str) -> tuple:
+            try:
+                groups = _ind_render.applicable_pane_groups(
+                    self._indicator_manager, scope, interval)
+            except Exception:  # noqa: BLE001
+                return ()
+            return tuple(
+                tuple(int(getattr(cfg, "id", 0)) for cfg in group)
+                for group in groups
+            )
+
+        main_sig = _pane_signature("main")
+        compare_sig = _pane_signature("compare") if compare_on else ()
+        drill_day = getattr(self, "_drilldown_day", None)
+        return (compare_on, interval, drill_day, main_sig, compare_sig)
+
     def _render(self) -> None:
         """Re-draw the price + volume panels for the current candles.
 
@@ -3451,6 +3518,31 @@ class ChartApp(
             except Exception:  # noqa: BLE001
                 prev_primary_dates = None
                 prev_primary_xlim = None
+
+        # Stage 1: topology-preserving fast path. When enabled AND the
+        # topology key is unchanged AND this isn't a drill-down preserve or a
+        # right-edge slide (both carry axes-lifecycle / xlim assumptions the
+        # fast path doesn't replicate), reuse the existing axes instead of
+        # figure.clear()-rebuilding them. Wrapped so ANY failure falls back to
+        # the slow rebuild below — the default (flag-off) path is unaffected.
+        if (self._paint_topology_preserve
+                and not preserve
+                and not slide_to_right
+                and self._last_topology_key is not None
+                and self._panel_state
+                and self._compute_topology_key() == self._last_topology_key):
+            try:
+                self._render_topology_preserved(
+                    compare_on=compare_on,
+                    prev_primary_dates=prev_primary_dates,
+                    prev_primary_xlim=prev_primary_xlim,
+                )
+                self._render_topology_preserved_fires += 1
+                return
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "topology-preserved fast path failed; falling back to a "
+                    "full figure rebuild", exc_info=True)
 
         # --- rebuild figure topology fresh -----------------------------
         self._figure.clear()
@@ -3564,25 +3656,9 @@ class ChartApp(
                 ax.tick_params(axis="x", labelbottom=False)
             stack[-1].tick_params(axis="x", labelbottom=True, labelsize=9)
 
-            # Ticker watermark, centered in the price axes.
-            if slot_key == "primary":
-                wm_text = (self._confirmed_primary_ticker
-                           or self.ticker_var.get().strip().upper() or "")
-            else:
-                wm_text = (self._confirmed_compare_ticker
-                           or self.compare_ticker_var.get().strip().upper() or "")
-            if wm_text:
-                try:
-                    ax_p.text(
-                        0.5, 0.5, wm_text,
-                        transform=ax_p.transAxes,
-                        ha="center", va="center",
-                        fontsize=56, fontweight="bold",
-                        color=theme["watermark"],
-                        alpha=0.18, zorder=0, clip_on=True,
-                    )
-                except Exception:  # noqa: BLE001
-                    pass
+            # Ticker watermark, centered in the price axes — tracked in
+            # _panel_state so the fast path can detach + replace it.
+            wm_artist = self._paint_slot_watermark(slot_key, ax_p)
 
             n = len(candles)
             # Seed panel_state with empty handles; _draw_slice fills them.
@@ -3590,6 +3666,7 @@ class ChartApp(
                 "candles": candles, "offset": 0,
                 "price_ax": ax_p, "vol_ax": ax_v,
                 "render_start": 0, "render_end": 0,
+                "watermark": wm_artist,
                 "price_wicks": None, "price_bodies": None,
                 "vol_bars": None, "price_shades": [], "vol_shades": [],
                 # Phase 2a: indicator state for this slot.
@@ -3609,71 +3686,128 @@ class ChartApp(
             if n == 0:
                 continue
 
-            # Time-window remap (ticker-switch paths). Resolve the
-            # captured time range to bar indices in this slot's candle
-            # list via the pure helper. Applies to the primary slot
-            # only — the compare slot's xlim follows via sharex. If
-            # remap returns None (no overlap, degenerate window), fall
-            # through to the default windowing.
-            time_remap_applied = False
-            if (slot_key == "primary"
-                    and prev_primary_dates is not None
-                    and prev_primary_xlim is not None
-                    and not (preserve and preserved_xlim is not None)):
-                new_dates = [c.date for c in candles]
-                rmap = _remap_window_by_time(
-                    prev_primary_dates, prev_primary_xlim, new_dates,
-                )
-                if rmap is not None:
-                    lo, hi = rmap
-                    try:
-                        ax_p.set_xlim(lo - 0.5, hi - 0.5)
-                    except Exception:  # noqa: BLE001
-                        pass
-                    time_remap_applied = True
-
-            if preserve and preserved_xlim is not None:
-                try:
-                    lo_f, hi_f = preserved_xlim
-                    # Explicit "slide to right edge" signal from the
-                    # poll-tick path: shift the window forward by
-                    # (new_right_edge - old_right_edge) keeping width.
-                    # This is set at tick-time while we still know the
-                    # user was glued to the current right edge, avoiding
-                    # fragile delta-threshold heuristics here.
-                    if slide_to_right:
-                        right_edge = n - 0.5
-                        width = hi_f - lo_f
-                        hi_f = right_edge
-                        lo_f = hi_f - width
-                    lo = max(0, int(np.floor(lo_f)))
-                    hi = min(n, int(np.ceil(hi_f)))
-                    if hi <= lo:
-                        lo, hi = max(0, n - _defaults.get("default_window_bars")), n
-                        lo_f, hi_f = lo - 0.5, hi - 0.5
-                except Exception:  # noqa: BLE001
-                    lo, hi = max(0, n - _defaults.get("default_window_bars")), n
-                    lo_f, hi_f = lo - 0.5, hi - 0.5
-                # Also restore the xlim so the axes match the slice.
-                try:
-                    ax_p.set_xlim(lo_f, hi_f)
-                except Exception:  # noqa: BLE001
-                    pass
-            elif not time_remap_applied:
-                lo, hi = max(0, n - _defaults.get("default_window_bars")), n
-
+            # Resolve the visible window (ticker-switch time-remap / drill-down
+            # preserve+slide / right-edge default) via the shared helper, then
+            # draw the slice. ``xlim_set`` True means the helper already
+            # applied the xlim; otherwise apply it AFTER the draw.
+            lo, hi, xlim_set = self._compute_slot_window(
+                slot_key, ax_p, candles,
+                preserve=preserve, preserved_xlim=preserved_xlim,
+                slide_to_right=slide_to_right,
+                prev_primary_dates=prev_primary_dates,
+                prev_primary_xlim=prev_primary_xlim,
+            )
             start, end = _compute_render_range(
                 lo, hi, n, _MIN_RENDER_CANDLES, _MAX_RENDER_CANDLES,
             )
             self._draw_slice(slot_key, start, end)
-
-            if not (preserve and preserved_xlim is not None) and not time_remap_applied:
+            if not xlim_set:
                 try:
                     ax_p.set_xlim(lo - 0.5, hi - 0.5)
                 except Exception:  # noqa: BLE001
                     pass
             self._autoscale_slot_y(slot_key, lo, hi)
 
+        self._finalize_render()
+
+    def _render_topology_preserved(
+        self, *, compare_on: bool,
+        prev_primary_dates: list | None,
+        prev_primary_xlim: tuple[float, float] | None,
+    ) -> None:
+        """Fast path: redraw data + overlays onto the EXISTING axes.
+
+        Precondition (enforced by the :meth:`_render` dispatch): the topology
+        key is unchanged and this is neither a drill-down preserve nor a
+        right-edge slide. Reuses every ``Axes`` from ``_panel_state`` (no
+        ``figure.clear()`` / ``add_subplot`` / per-axes ``setup_*`` — the X
+        formatter/locator + axis styling persist from the prior render because
+        the interval is part of the topology key). Per slot it re-points the
+        candle list + ``_ax_candle_map``, replaces the watermark, recomputes
+        the xlim window (time-remap on ticker switch, else right-edge default),
+        and calls :meth:`_draw_slice` — which detaches the previous slot
+        artists (``_reset_slot_artists`` + ``ind_state.clear``) and rebuilds
+        candle / volume / shading / indicator / event / vol-ToD artists in the
+        same axes. Shares :meth:`_finalize_render` with the slow path.
+
+        Raises on any structural mismatch (missing slot/axes) so the caller
+        falls back to the full rebuild. Artist-lifecycle safety comes from the
+        Stage 0 detach contracts (overlays + ``_ensure_overlay_artists``).
+        """
+        slots = [("primary", self._primary)]
+        if compare_on:
+            slots.append(("compare", self._compare))
+
+        for slot_key, candles in slots:
+            ps = self._panel_state.get(slot_key)
+            if ps is None:
+                raise RuntimeError(f"fast path: panel_state missing slot {slot_key!r}")
+            ax_p = ps.get("price_ax")
+            ax_v = ps.get("vol_ax")
+            if ax_p is None or ax_v is None:
+                raise RuntimeError("fast path: panel_state slot missing axes")
+            ind_axes = list(ps.get("ind_axes", []))
+
+            # Re-point candles + the axes→candles map (axes identity kept).
+            ps["candles"] = candles
+            self._ax_candle_map[ax_p] = (candles, "price", 0)
+            self._ax_candle_map[ax_v] = (candles, "volume", 0)
+            for ax_i in ind_axes:
+                self._ax_candle_map[ax_i] = (candles, "indicator", 0)
+
+            # Watermark: detach the old (tracked in Stage 0), repaint via the
+            # shared helper — the ticker may have changed.
+            old_wm = ps.get("watermark")
+            if old_wm is not None:
+                try:
+                    old_wm.remove()
+                except Exception:  # noqa: BLE001
+                    pass
+            ps["watermark"] = self._paint_slot_watermark(slot_key, ax_p)
+
+            n = len(candles)
+            if n == 0:
+                self._reset_slot_artists(slot_key)
+                ps["render_start"] = 0
+                ps["render_end"] = 0
+                continue
+
+            # Window via the shared helper. drill-down preserve + slide are
+            # excluded by the dispatch (passed False/None); ticker-switch
+            # time-remap rides on prev_primary_dates/xlim (None when the render
+            # wasn't a preserve_by_time ticker switch).
+            lo, hi, xlim_set = self._compute_slot_window(
+                slot_key, ax_p, candles,
+                preserve=False, preserved_xlim=None, slide_to_right=False,
+                prev_primary_dates=prev_primary_dates,
+                prev_primary_xlim=prev_primary_xlim,
+            )
+            start, end = _compute_render_range(
+                lo, hi, n, _MIN_RENDER_CANDLES, _MAX_RENDER_CANDLES,
+            )
+            self._draw_slice(slot_key, start, end)
+            if not xlim_set:
+                try:
+                    ax_p.set_xlim(lo - 0.5, hi - 0.5)
+                except Exception:  # noqa: BLE001
+                    pass
+            self._autoscale_slot_y(slot_key, lo, hi)
+
+        self._finalize_render()
+
+    def _finalize_render(self) -> None:
+        """Shared post-per-slot finalization for both render paths.
+
+        Back-compat handles, blit/pan-state invalidation, price scale, overlay
+        artists (crosshair/readout/hover), per-overlay legend, exits / entries
+        / evidence overlays, drawings, live-price overlay, table refill,
+        ``canvas.draw_idle()``, cursor revival, and the topology-key stamp.
+
+        Called by BOTH the slow ``figure.clear()`` rebuild and the
+        topology-preserving fast path (:meth:`_render_topology_preserved`) so
+        the two can't drift. Self-contained: reads only ``self`` + the freshly
+        populated ``_panel_state`` / ``_ax_candle_map``.
+        """
         # Keep single-panel back-compat handles for legacy helpers.
         prim = self._panel_state.get("primary", {})
         self._wicks = prim.get("price_wicks")
@@ -3770,6 +3904,13 @@ class ChartApp(
                     pass
         # NOTE: _preserve_xlim_on_render is deliberately NOT reset here
         # (spec §9.3 invariant #9).
+
+        # Stage 0 instrumentation: record the topology just rendered so a
+        # future fast path can compare against it. NOT consulted yet.
+        try:
+            self._last_topology_key = self._compute_topology_key()
+        except Exception:  # noqa: BLE001
+            self._last_topology_key = None
 
     # ---- virtualized-render primitives (spec §6.3) --------------------
     def _reset_slot_artists(self, slot: str) -> None:
@@ -3995,6 +4136,95 @@ class ChartApp(
             self._canvas.draw_idle()
         except Exception:  # noqa: BLE001
             pass
+
+    def _paint_slot_watermark(self, slot: str, ax_p) -> Any:
+        """Paint the centered ticker watermark on a slot's price axes.
+
+        Returns the ``Text`` artist (or ``None`` when there's no ticker / on
+        failure). Shared by the slow rebuild AND the topology-preserving fast
+        path so the watermark text/style can't drift. The CALLER detaches any
+        prior watermark first (slow path via ``figure.clear()``; fast path via
+        an explicit ``remove()`` on the tracked ``_panel_state[slot]["watermark"]``).
+        """
+        if slot == "primary":
+            wm_text = (self._confirmed_primary_ticker
+                       or self.ticker_var.get().strip().upper() or "")
+        else:
+            wm_text = (self._confirmed_compare_ticker
+                       or self.compare_ticker_var.get().strip().upper() or "")
+        if not wm_text:
+            return None
+        try:
+            return ax_p.text(
+                0.5, 0.5, wm_text, transform=ax_p.transAxes,
+                ha="center", va="center", fontsize=56, fontweight="bold",
+                color=self._theme["watermark"], alpha=0.18, zorder=0,
+                clip_on=True,
+            )
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _compute_slot_window(
+        self, slot: str, ax_p, candles, *, preserve: bool,
+        preserved_xlim: tuple[float, float] | None, slide_to_right: bool,
+        prev_primary_dates: list | None,
+        prev_primary_xlim: tuple[float, float] | None,
+    ) -> tuple[int, int, bool]:
+        """Resolve a slot's visible ``(lo, hi)`` bar window.
+
+        Returns ``(lo, hi, xlim_set)``: when ``xlim_set`` is False the caller
+        applies ``set_xlim(lo - 0.5, hi - 0.5)`` AFTER drawing (the slice draw
+        can change the data-coordinate scale); when True this helper already
+        applied the xlim (ticker-switch time-remap or drill-down/scroll
+        preserve). Shared by both render paths so the window logic can't drift.
+        Only call for ``n = len(candles) > 0``. ``prev_primary_dates`` /
+        ``prev_primary_xlim`` are non-None only on a time-window-preserve
+        ticker switch (the slow-path capture gates on ``preserve_by_time``); a
+        ``None`` pair simply skips the remap.
+        """
+        n = len(candles)
+        default_win = _defaults.get("default_window_bars")
+        time_remap_applied = False
+        if (slot == "primary"
+                and prev_primary_dates is not None
+                and prev_primary_xlim is not None
+                and not (preserve and preserved_xlim is not None)):
+            new_dates = [c.date for c in candles]
+            rmap = _remap_window_by_time(
+                prev_primary_dates, prev_primary_xlim, new_dates)
+            if rmap is not None:
+                lo, hi = rmap
+                try:
+                    ax_p.set_xlim(lo - 0.5, hi - 0.5)
+                except Exception:  # noqa: BLE001
+                    pass
+                time_remap_applied = True
+        if preserve and preserved_xlim is not None:
+            try:
+                lo_f, hi_f = preserved_xlim
+                # "slide to right edge" (poll-tick glued-to-right): shift the
+                # window forward keeping width.
+                if slide_to_right:
+                    right_edge = n - 0.5
+                    width = hi_f - lo_f
+                    hi_f = right_edge
+                    lo_f = hi_f - width
+                lo = max(0, int(np.floor(lo_f)))
+                hi = min(n, int(np.ceil(hi_f)))
+                if hi <= lo:
+                    lo, hi = max(0, n - default_win), n
+                    lo_f, hi_f = lo - 0.5, hi - 0.5
+            except Exception:  # noqa: BLE001
+                lo, hi = max(0, n - default_win), n
+                lo_f, hi_f = lo - 0.5, hi - 0.5
+            try:
+                ax_p.set_xlim(lo_f, hi_f)
+            except Exception:  # noqa: BLE001
+                pass
+            return lo, hi, True
+        if not time_remap_applied:
+            lo, hi = max(0, n - default_win), n
+        return lo, hi, time_remap_applied
 
     def _draw_slice(self, slot: str, new_start: int, new_end: int) -> None:
         """Redraw the ``candles[new_start:new_end]`` slice into ``slot``.

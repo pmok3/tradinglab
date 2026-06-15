@@ -1153,6 +1153,38 @@ class InteractionMixin:
                 return
 
     # ---- hover + crosshair (spec §11) ---------------------------------
+    def _detach_overlay_artists(self) -> None:
+        """Remove every animated hover / crosshair / readout overlay artist
+        from its axes.
+
+        Stage 0 of the topology-preserving paint pipeline
+        (``docs/PAINT_PIPELINE_REFACTOR.md``): :meth:`_ensure_overlay_artists`
+        historically just dropped the registry refs and relied on the
+        preceding ``figure.clear()`` to detach these animated artists. The
+        fast path reuses axes (no ``figure.clear()``), so the previous
+        render's overlays must be explicitly removed first or they orphan and
+        duplicate. Idempotent + defensive: an already-detached artist raises
+        on ``.remove()`` (the legacy figure.clear() flow), which is swallowed.
+        """
+        def _rm(obj) -> None:
+            if obj is None:
+                return
+            try:
+                obj.remove()
+            except Exception:  # noqa: BLE001
+                pass
+
+        for pair in getattr(self, "_crosshair_artists", {}).values():
+            for art in pair:
+                _rm(art)
+        for art in getattr(self, "_price_label_artists", {}).values():
+            _rm(art)
+        for art in getattr(self, "_time_label_artists", {}).values():
+            _rm(art)
+        for art in getattr(self, "_readout_artists", {}).values():
+            _rm(art)
+        _rm(getattr(self, "_hover_ann", None))
+
     def _ensure_overlay_artists(self) -> None:
         """(Re)build the animated hover annotation + crosshair artists.
 
@@ -1163,7 +1195,13 @@ class InteractionMixin:
         """
         from matplotlib.transforms import blended_transform_factory
 
-        # Drop any stale artists tied to now-dead axes.
+        # Detach the PREVIOUS render's overlay artists before dropping refs.
+        # In the legacy flow figure.clear() already detached them (the
+        # .remove() calls below no-op on dead artists); the topology-preserving
+        # fast path reuses axes, so this prevents orphaned/duplicate overlays.
+        # See docs/PAINT_PIPELINE_REFACTOR.md. No behavior change today.
+        self._detach_overlay_artists()
+        # Reset the registries (their artists are detached above).
         self._crosshair_artists = {}
         self._price_label_artists = {}
         self._time_label_artist = None
@@ -1416,12 +1454,16 @@ class InteractionMixin:
             except Exception:  # noqa: BLE001
                 row_notset = False
             # Prefix TextArea: "IndicatorName(params) " in neutral colour.
-            children: list = [TextArea(
+            # Captured by name + stashed in ``meta`` so a live theme swap can
+            # recolor JUST the indicator-name label without rebuilding the row
+            # (see ``theme_controller._apply_overlay_artists``).
+            label_ta = TextArea(
                 f"{row.label} ",
                 textprops=dict(
                     color=label_color, fontsize=9, family="monospace",
                 ),
-            )]
+            )
+            children: list = [label_ta]
             output_metas: list[dict] = []
             for seg in row.outputs:
                 seg_color = seg.color if visible else muted
@@ -1476,6 +1518,7 @@ class InteractionMixin:
             meta.append({
                 "config_id": row.config_id,
                 "label": row.label,
+                "label_textarea": label_ta,
                 "visible": visible,
                 "container": container,
                 "outputs": output_metas,

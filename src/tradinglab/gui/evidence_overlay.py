@@ -341,6 +341,23 @@ class EvidenceOverlay:
         return len(self._artists)
 
     def clear(self) -> None:
+        """Detach every marker artist from its axes, then drop refs.
+
+        Detaching (not merely dropping refs) makes the overlay safe to clear
+        WITHOUT a surrounding ``figure.clear()`` — required by the
+        topology-preserving paint pipeline fast path
+        (``docs/PAINT_PIPELINE_REFACTOR.md``). Idempotent + defensive: an
+        artist already detached raises on ``.remove()``, which is swallowed.
+        End state is identical to the old ref-drop in the current
+        ``figure.clear()`` flow.
+        """
+        for line, label in self._artists:
+            for art in (line, label):
+                if art is not None:
+                    try:
+                        art.remove()
+                    except Exception:  # noqa: BLE001
+                        pass
         self._artists.clear()
 
     def close(self) -> None:

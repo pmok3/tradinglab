@@ -81,17 +81,40 @@ class TestParamModel:
 # --------------------------------------------------------------------------- #
 # Pane-mode resolution (shared panes + z-score carve-out + legacy)
 # --------------------------------------------------------------------------- #
-def _cfg(visible=True, **params):
-    return SimpleNamespace(visible=visible, params=params)
+def _cfg(visible=True, kind_id="rvol", **params):
+    # Default kind_id is an axis_mode-CAPABLE indicator (rvol) so these
+    # cases exercise the centered/log/linear resolution. Non-capable
+    # indicators (rsi/atr/…) are covered by the dedicated regression test.
+    return SimpleNamespace(visible=visible, kind_id=kind_id, params=params)
 
 
 class TestResolvePaneAxisMode:
-    def test_config_axis_mode_default_and_legacy(self):
-        assert R._config_axis_mode({}) == "centered"
-        assert R._config_axis_mode({"axis_mode": "linear"}) == "linear"
-        assert R._config_axis_mode({"log_scale": True}) == "log"
+    def test_config_axis_mode_capable_default_and_legacy(self):
+        # Capable indicator (rvol): default centered; explicit + legacy honored.
+        assert R._config_axis_mode(_cfg()) == "centered"
+        assert R._config_axis_mode(_cfg(axis_mode="linear")) == "linear"
+        assert R._config_axis_mode(_cfg(log_scale=True)) == "log"
         # Explicit axis_mode beats a stale legacy log_scale.
-        assert R._config_axis_mode({"axis_mode": "centered", "log_scale": True}) == "centered"
+        assert R._config_axis_mode(_cfg(axis_mode="centered", log_scale=True)) == "centered"
+
+    def test_config_axis_mode_none_for_non_capable_indicators(self):
+        # RSI / ATR / MACD / ADX do NOT expose axis_mode → None (linear pane).
+        # Regression for the 0.3.9 bug where every pane inherited "centered".
+        for kid in ("rsi", "atr", "macd", "adx"):
+            assert R._config_axis_mode(_cfg(kind_id=kid, length=14)) is None, kid
+
+    def test_kind_supports_axis_mode(self):
+        assert R._kind_supports_axis_mode("rvol") is True
+        assert R._kind_supports_axis_mode("rrvol") is True
+        assert R._kind_supports_axis_mode("rsi") is False
+        assert R._kind_supports_axis_mode("atr") is False
+        assert R._kind_supports_axis_mode("nonexistent-kind") is False
+
+    def test_non_rvol_pane_is_linear(self):
+        # The motivating regression: a lone RSI pane must be linear, not
+        # centered (so it keeps the cheap set_yscale + correct scale).
+        assert R._resolve_pane_axis_mode([_cfg(kind_id="rsi", length=14)]) == "linear"
+        assert R._resolve_pane_axis_mode([_cfg(kind_id="macd")]) == "linear"
 
     def test_single_centered_default(self):
         assert R._resolve_pane_axis_mode([_cfg(mode="simple")]) == "centered"

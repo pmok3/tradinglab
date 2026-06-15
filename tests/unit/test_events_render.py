@@ -148,3 +148,34 @@ def test_forward_in_pane_glyph_suppresses_right_edge_badge():
 
 def test_none_view_returns_empty():
     assert build_event_glyphs(None, _candles_jan()) == []
+
+
+_MS_PER_DAY = 86_400_000
+
+
+def test_day_index_map_matches_linear_scan():
+    """Perf opt: the O(1) ``_build_day_index_map`` lookup must agree with the
+    legacy O(bars) ``_bar_index_for_ts`` linear scan for every visible day AND
+    for an off-window timestamp (-1)."""
+    from tradinglab.events.render import _bar_index_for_ts, _build_day_index_map
+
+    candles = _candles_jan()  # Jan 2..11 2024
+    day_map = _build_day_index_map(candles)
+    for i in range(2, 12):
+        ts_ms = _ms(2024, 1, i)
+        assert day_map.get(ts_ms // _MS_PER_DAY, -1) == _bar_index_for_ts(candles, ts_ms)
+    off = _ms(2023, 12, 1)
+    assert day_map.get(off // _MS_PER_DAY, -1) == _bar_index_for_ts(candles, off) == -1
+
+
+def test_day_index_map_first_index_wins_on_duplicate_day():
+    """Two candles on the same calendar day → map points at the FIRST (matches
+    the linear scan's first-match semantics)."""
+    from tradinglab.events.render import _build_day_index_map
+
+    same_day = [
+        _Candle(date=_dt.datetime(2024, 1, 5, 9, 30, tzinfo=_dt.timezone.utc)),
+        _Candle(date=_dt.datetime(2024, 1, 5, 15, 0, tzinfo=_dt.timezone.utc)),
+    ]
+    m = _build_day_index_map(same_day)
+    assert m[_ms(2024, 1, 5) // _MS_PER_DAY] == 0

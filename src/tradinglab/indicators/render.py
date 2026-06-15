@@ -26,7 +26,7 @@ return-shape contract.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -153,15 +153,42 @@ class _CenteredRatioLocator(Locator):
         return self._positions()
 
 
-def _config_axis_mode(params: Mapping[str, Any] | None) -> str:
-    """Resolve one config's view-only axis mode from its params dict.
+def _kind_supports_axis_mode(kind_id: str) -> bool:
+    """True iff the indicator ``kind_id`` exposes the view-only ``axis_mode``
+    param (i.e. it is an RVOL/RRVOL-style ratio pane).
 
-    ``axis_mode`` wins when set to a known value; otherwise a truthy legacy
-    ``log_scale`` (the only knob pre-``axis_mode`` configs carried) maps to
-    ``"log"``. Default ``"centered"``. Mirrors ``rvol.resolve_axis_mode`` but
-    reads the persisted params dict (what the render layer actually has).
+    Non-capable panes (RSI, ATR, MACD, ADX, …) must NOT inherit the
+    centered-ratio default — they always render on a plain linear scale.
+    Cheap: a registry lookup + a short schema scan; ``factory_by_kind_id``
+    is already called elsewhere in the pane loop.
     """
-    p = params or {}
+    factory = factory_by_kind_id(kind_id)
+    if factory is None:
+        return False
+    try:
+        return any(
+            getattr(p, "name", "") == "axis_mode"
+            for p in (getattr(factory, "params_schema", ()) or ())
+        )
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _config_axis_mode(cfg: Any) -> str | None:
+    """Resolve ONE config's view-only axis mode, or ``None`` when the
+    indicator has no ``axis_mode`` capability.
+
+    Returning ``None`` for non-RVOL/RRVOL indicators is what keeps an RSI /
+    ATR / MACD pane on a plain linear scale — the centered-ratio default
+    applies ONLY to ratio panes. For a capable indicator: an explicit
+    ``axis_mode`` wins; else a truthy legacy ``log_scale`` (the only knob
+    pre-``axis_mode`` configs carried) maps to ``"log"``; else the
+    ``"centered"`` default. Mirrors ``rvol.resolve_axis_mode`` but reads the
+    persisted params dict (what the render layer actually has).
+    """
+    if not _kind_supports_axis_mode(getattr(cfg, "kind_id", "")):
+        return None
+    p = getattr(cfg, "params", None) or {}
     raw = str(p.get("axis_mode", "") or "").lower()
     if raw in ("centered", "log", "linear"):
         return raw
@@ -173,17 +200,20 @@ def _config_axis_mode(params: Mapping[str, Any] | None) -> str:
 def _resolve_pane_axis_mode(group: Sequence[Any]) -> str:
     """Pick ONE y-scale for a (possibly shared) pane group.
 
-    Considers only visible, non-z-score configs — z-score panes stay linear.
-    Precedence ``log > centered > linear``: an explicit log request anywhere
-    wins (preserving the legacy ``any(log_scale)`` semantics on shared panes);
-    otherwise the centered-ratio default dominates; the pane is linear only
-    when every visible config explicitly asked for linear.
+    Considers only visible, non-z-score configs of ``axis_mode``-capable
+    indicators (RVOL/RRVOL); z-score panes and every other indicator stay
+    linear. Precedence ``log > centered > linear``: an explicit log request
+    anywhere wins (preserving the legacy ``any(log_scale)`` semantics on
+    shared panes); otherwise the centered-ratio default dominates; the pane
+    is linear when no capable config requests centered/log.
     """
     modes = [
-        _config_axis_mode(getattr(cfg, "params", None))
+        m
         for cfg in group
         if bool(getattr(cfg, "visible", False))
         and not bool((getattr(cfg, "params", None) or {}).get("z_score"))
+        for m in (_config_axis_mode(cfg),)
+        if m is not None
     ]
     if not modes:
         return "linear"
