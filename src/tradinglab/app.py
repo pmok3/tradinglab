@@ -5954,6 +5954,54 @@ class ChartApp(
         except Exception:  # noqa: BLE001
             pass
 
+    def _capture_theme_setting(self) -> None:
+        """Snapshot the live light/dark theme into
+        ``settings['startup_defaults']['theme']``.
+
+        Called by :class:`gui.config_manager.ConfigManager` right
+        before ``File → Save Configuration`` exports the settings
+        store, so the user's current theme is persisted in the saved
+        config and restored by ``File → Load Configuration`` (audit
+        ``config-theme-roundtrip``). Routes through
+        ``set_startup_default`` so the sparse-vs-builtin persistence +
+        validation rules apply: a light theme equal to the builtin is
+        not written, a dark theme is.
+        """
+        try:
+            dark = bool(self.dark_var.get())
+        except Exception:  # noqa: BLE001
+            return
+        try:
+            self.set_startup_default("theme", "dark" if dark else "light")
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _capture_indicators_setting(self) -> None:
+        """Snapshot the live indicator manager state into
+        ``settings['indicators']``.
+
+        Captures the active indicator list, the named presets, and the
+        active-preset pointer (``IndicatorManager.to_dict()``). Called by
+        :class:`gui.config_manager.ConfigManager` right before
+        ``File → Save Configuration`` exports the settings store, so the
+        user's chart indicators + saved presets are persisted in the saved
+        config and restored by ``File → Load Configuration`` (audit
+        ``config-indicators-roundtrip``).
+
+        Without this the manager's state lived only in memory: nothing ever
+        wrote ``settings['indicators']``, so Save Configuration dropped every
+        indicator + preset and the next Load restored nothing. The load side
+        is handled by ``apply_loaded_config`` → ``_indicator_manager.load_dict``.
+        """
+        try:
+            mgr = getattr(self, "_indicator_manager", None)
+            if mgr is None:
+                return
+            from . import settings as _settings
+            _settings.set("indicators", mgr.to_dict())
+        except Exception:  # noqa: BLE001
+            pass
+
     def _apply_notebook_width_setting(self) -> None:
         """Force the live ``_main_paned`` sash to the saved notebook
         width in ``settings["layout.notebook_width_px"]``.
@@ -6003,6 +6051,102 @@ class ChartApp(
             live_w, chartstack_visible=cs_visible, notebook_width_px=width)
         try:
             self._apply_forced_sash(paned, positions)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _apply_persisted_view_settings(self) -> None:
+        """Re-apply persisted *live* view/behaviour settings after a config
+        load, so File → Load Configuration restores them without a relaunch.
+
+        Called by :class:`gui.config_manager.ConfigManager.apply_loaded_config`
+        after ``settings.import_from_file`` (audit ``config-roundtrip-meta``).
+        These keys are written elsewhere via ``settings.set(...)`` when the
+        user toggles them, but were historically only read at startup — so
+        loading a config left them stale until a relaunch (same bug class as
+        the theme bug). Each setting routes through its canonical setter /
+        toggle so the side effects (re-render, font reconfigure, palette
+        mutation, pool rebuild, pane show/hide) match a manual change. Every
+        block is individually guarded — a missing var / handler (headless
+        stub) is a silent no-op for that one setting.
+
+        The keys covered here are exactly the ``ROUNDTRIP`` view-settings in
+        ``tests/_config_roundtrip_spec.py`` minus the ones already handled by
+        dedicated blocks in ``apply_loaded_config`` (timezone, scroll-zoom,
+        theme + overrides, startup defaults, indicators, notebook width).
+        """
+        from . import settings as _settings
+
+        # Plain BooleanVar visual toggles: set the var; the trailing
+        # _render() in apply_loaded_config repaints the chart that reads them.
+        for var_name, key in (
+            ("_ha_display_var", "heikin_ashi"),
+            ("_highlight_key_bars_var", "highlight_key_bars"),
+            ("_highlight_ha_flat_var", "highlight_ha_flat"),
+        ):
+            try:
+                var = getattr(self, var_name, None)
+                if var is not None:
+                    var.set(bool(_settings.get(key, False)))
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            self._sync_highlight_ha_flat_menu_state()
+        except Exception:  # noqa: BLE001
+            pass
+
+        # Drawing snap: cheap attr + persist; apply via the canonical setter.
+        try:
+            self.set_drawings_snap_to_ohlc(
+                bool(_settings.get("drawings_snap_to_ohlc", False)))
+        except Exception:  # noqa: BLE001
+            pass
+
+        # Colour-blind palette: mutates module-level candle colours; only
+        # re-apply when the loaded state differs from the live one.
+        try:
+            from . import constants as _constants
+            target_cb = bool(_settings.get("use_colorblind_palette", False))
+            current_cb = (
+                _constants.BULL_COLOR == _constants._COLORBLIND_BULL_COLOR)
+            if target_cb != current_cb:
+                self.set_use_colorblind_palette(target_cb)
+        except Exception:  # noqa: BLE001
+            pass
+
+        # Time-of-day volume overlay: only flip when it actually changed.
+        try:
+            target_vt = bool(_settings.get("volume_tod_enabled", False))
+            if bool(self._volume_tod_var.get()) != target_vt:
+                self.set_volume_tod_enabled(target_vt)
+        except Exception:  # noqa: BLE001
+            pass
+
+        # UI scale: reconfigures every named font; only when it changed.
+        try:
+            target_scale = float(_settings.get("ui_scale", _UI_SCALE_DEFAULT))
+            current_scale = float(getattr(self, "_ui_scale", _UI_SCALE_DEFAULT))
+            if abs(target_scale - current_scale) > 1e-9:
+                self.set_ui_scale(target_scale)
+        except Exception:  # noqa: BLE001
+            pass
+
+        # ChartStack visibility: rebuild the panes only when the loaded
+        # state differs from the live one (avoids a redundant forget/insert).
+        try:
+            target_cs = bool(_settings.get("chartstack.enabled", False))
+            if bool(self._chartstack_visible_var.get()) != target_cs:
+                self._toggle_chartstack(target=target_cs)
+        except Exception:  # noqa: BLE001
+            pass
+
+        # Worker pool: apply an explicit persisted override (a positive
+        # count). The 0 / absent sentinel means auto-detect, which we leave
+        # to the current pool rather than churn it on every load.
+        try:
+            wc = _settings.get("worker_count")
+            if isinstance(wc, int) and wc > 0 and wc != getattr(
+                    self, "_worker_count", None):
+                self._apply_worker_count(wc)
         except Exception:  # noqa: BLE001
             pass
 

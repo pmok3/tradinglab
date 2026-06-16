@@ -158,6 +158,20 @@ def export_to_file(path: Any, *, include_comments: bool = False) -> bool:
     return True
 
 
+def mark_clean() -> None:
+    """Reset the dirty flag without writing to disk.
+
+    Used after :func:`gui.config_manager.ConfigManager.apply_loaded_config`
+    re-applies a freshly-imported config to live state: the re-application
+    calls value setters (``set_ui_scale``, ``set_use_colorblind_palette``,
+    ``_apply_worker_count`` …) that re-write *identical* values into the
+    store, which would otherwise mark it dirty even though the store still
+    equals the just-loaded file. A loaded config is, by definition, clean.
+    """
+    global _dirty
+    _dirty = False
+
+
 def loaded_path() -> Path | None:
     """Return the path of the most recently loaded/exported config, or None."""
     return _loaded_path

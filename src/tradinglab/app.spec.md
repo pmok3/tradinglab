@@ -195,7 +195,7 @@ toolbar dropdown never offers a scaffolding-only source. See
 contract.
 
 ### Startup parameters (persisted defaults)
-Settings dialog → "Startup parameters" sub-frame. Builtins: `constants.BUILTIN_STARTUP_DEFAULTS` (AMD / SPY / 1d / yfinance / light). Stored sparsely under `settings.json["startup_defaults"]`. `constants.resolve_startup_defaults(...)` validates per-key (interval / source allow-lists, theme ∈ {light, dark}, ticker upper-strip). Public: `set_startup_default` / `clear_startup_defaults` / `replace_startup_defaults`. Changes apply on next launch.
+Settings dialog → "Startup parameters" sub-frame. Builtins: `constants.BUILTIN_STARTUP_DEFAULTS` (AMD / SPY / 1d / yfinance / light). Stored sparsely under `settings.json["startup_defaults"]`. `constants.resolve_startup_defaults(...)` validates per-key (interval / source allow-lists, theme ∈ {light, dark}, ticker upper-strip). Public: `set_startup_default` / `clear_startup_defaults` / `replace_startup_defaults`. Changes apply on next launch — **except `theme`, which additionally applies live when a config is loaded** (audit `config-theme-roundtrip`; see "Light/dark theme round-trip" below).
 
 ### Display timezone
 Settings dialog → "Display timezone" combobox. Stored under `settings.json["display_tz"]`, read into `self._display_tz`. Used by `formatting.format_dt(...)` at three intraday display sites: x-axis `%H:%M` ticks, `_format_candle_date`'s intraday branch, OHLC table rows. Daily+ never converts (a daily bar is a date label, not an instant). `set_display_tz(tz_name)` persists, clears `_SeriesArrays._tooltip_cache`, calls `_refill_table`. Bad IANA names silently fall through to raw `strftime` via `format_dt`'s try/except.
@@ -256,6 +256,33 @@ The right-side notebook (watchlist / OHLC / scanner / sandbox / entries / exits)
 - **Startup:** `_build_ui` passes the saved width into `compute_main_paned_sashes` (no-op on a fresh launch since the in-memory store is empty until the user loads a config).
 
 Helpers (all duck-typed + guarded so unit tests pass stub paned objects): `_current_notebook_width() -> int` (0 when unmeasurable, so no bogus capture); `_capture_notebook_width_setting()` (no-op on width 0); `_apply_notebook_width_setting()` (no-op when the setting is absent / non-positive / unparseable); `_chartstack_currently_visible(paned) -> bool`. Pinned by `tests/unit/gui/test_notebook_width_setting.py` + `tests/unit/test_main_paned_layout.py::TestNotebookWidthOverride`.
+
+### Light/dark theme round-trip (audit `config-theme-roundtrip`)
+The base light/dark theme round-trips through File → Save/Load Configuration alongside the timezone, scroll-zoom direction, and theme colour overrides. Its persisted home is `settings["startup_defaults"]["theme"]` (∈ {light, dark}). Flow:
+- **Save:** `_capture_layout_into_settings(parent)` also calls `ChartApp._capture_theme_setting()` BEFORE `settings.export_to_file`. It reads the live `dark_var` and routes `"dark"`/`"light"` through `set_startup_default("theme", …)`, so the sparse-vs-builtin rule applies — a light theme (equal to the builtin) is omitted; a dark theme is written. This captures a theme set via the toolbar/menu toggle, not just via the Settings dialog's "capture current as default".
+- **Load:** `ConfigManager.apply_loaded_config`, after re-resolving `startup_defaults`, sets the live `dark_var` from the loaded `theme` and cascades `ChartApp._apply_theme()` — so a config saved in dark mode re-enters dark mode (and a light config resets a dark session) without a relaunch. Guarded: a parent without `dark_var` / `_apply_theme` is a silent no-op.
+
+Helper `_capture_theme_setting()` (duck-typed + guarded). Pinned by `tests/unit/gui/test_config_theme_roundtrip.py`.
+
+### Persisted view-settings round-trip (audit `config-roundtrip-meta`)
+The live view/behaviour toggles that are persisted via `settings.set(...)` are also re-applied on File → Load Configuration, so a loaded config restores them without a relaunch (historically they were read only at startup — the same bug class as the theme bug). `ConfigManager.apply_loaded_config` calls `ChartApp._apply_persisted_view_settings()` after `settings.import_from_file`, which idempotently re-applies each through its canonical setter / toggle (so re-render / font reconfigure / palette mutation / pool rebuild / pane show-hide match a manual change), guarded per-setting:
+
+| settings key | applied via | live target |
+|---|---|---|
+| `heikin_ashi` / `highlight_key_bars` / `highlight_ha_flat` | set Tk var + trailing `_render()` | candle / glyph render |
+| `drawings_snap_to_ohlc` | `set_drawings_snap_to_ohlc` | `_drawings_snap_to_ohlc` |
+| `use_colorblind_palette` | `set_use_colorblind_palette` (only when changed) | `constants.BULL_COLOR/BEAR_COLOR` |
+| `volume_tod_enabled` | `set_volume_tod_enabled` (only when changed) | `_volume_tod_var` overlay |
+| `ui_scale` | `set_ui_scale` (only when changed) | named-font scale |
+| `chartstack.enabled` | `_toggle_chartstack` (only when changed) | ChartStack pane |
+| `worker_count` | `_apply_worker_count` (positive override only) | background pool size |
+
+Because these setters re-write identical values into the store, `apply_loaded_config` calls `settings.mark_clean()` at the end so a freshly-loaded config doesn't show phantom unsaved-changes. The **save** side needs no extra capture — each is eagerly mirrored to `settings` when the user toggles it.
+
+The full classification of which persisted keys round-trip (vs. intentionally next-launch: `chartstack.fixed_preset_symbols`, `chartstack.binding.mode`, `local_data`) lives in `tests/_config_roundtrip_spec.py`. A drift guard (`tests/unit/gui/test_config_roundtrip_meta.py`) fails the build when a new `settings.set("KEY", …)` is added but left unclassified; the behavioral round-trip is pinned end-to-end by `tests/smoke/test_smoke_full.py::check_d35b_view_settings_round_trip`.
+
+### Indicators + presets round-trip (audit `config-indicators-roundtrip`)
+The chart's indicator state — the active `IndicatorConfig` list, the named **presets** (`save_preset` / `set_preset` / `delete_preset`), and the active-preset pointer — lives only in `IndicatorManager` memory; nothing mirrors it into `settings` as it changes (unlike the view toggles). So the **save** side needs an explicit capture: `_capture_layout_into_settings` calls `ChartApp._capture_indicators_setting()` which writes `IndicatorManager.to_dict()` to `settings["indicators"]` before export. The **load** side was already wired — `apply_loaded_config` reads `settings["indicators"]` and calls `_indicator_manager.load_dict(...)` (which re-issues config ids, restores presets, and schedules a redraw). Back-compat: a config with no `indicators` key (older save, pre-fix) leaves the live manager untouched; a config with an empty `indicators` dict clears it. Pinned by `tests/unit/gui/test_config_indicators_roundtrip.py` + `tests/smoke/test_smoke_full.py::check_d35c_indicator_presets_round_trip`.
 
 ### ChartStack toggle preserves the notebook column (audit `chartstack-toggle-preserves-notebook`)
 `_toggle_chartstack` does **not** reuse the startup ratio path. Instead it pins the watchlist column to its *current* position so a toggle only resizes the chart. Flow:

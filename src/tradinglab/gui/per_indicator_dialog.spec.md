@@ -188,9 +188,13 @@ Popup buttons are `[Save and Close] [Cancel]`. Snapshot of single
 `super().__init__` takes the full manager snapshot. **Cancel**
 restores the single config via targeted `manager.update(...)` from
 the snapshot, or removes the scope-split clone and restores the
-original's scopes if a split occurred. **Save and Close** persists
-all indicator state via `settings.set("indicators", ...)` +
-`app._on_menu_save_config()`. Dirty tracking + `•` title indicator
+original's scopes if a split occurred. **Save and Close** accepts
+the current live manager state for the session (discards the revert
+snapshot) and closes — it does NOT itself write `settings.json`.
+Persistence to a config file happens through File → Save
+Configuration, which captures the manager state via
+`ChartApp._capture_indicators_setting()` (audit
+`config-indicators-roundtrip`). Dirty tracking + `•` title indicator
 inherited from base; `_refresh_title` overridden to include `•`
 when dirty.
 

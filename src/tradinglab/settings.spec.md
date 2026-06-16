@@ -20,6 +20,7 @@ ever auto-created in `%LOCALAPPDATA%`).
 - `export_to_file(path, *, include_comments=False) -> bool` — atomic write via shared `core.io_helpers.atomic_write_json` (tmp + fsync + `os.replace`). Resets dirty + sets loaded_path on success. Strips `_`-prefixed keys by default.
 - `loaded_path() -> Path | None` — most recently loaded/exported file.
 - `is_dirty() -> bool` — True if mutations occurred since last load/export.
+- `mark_clean() -> None` — reset the dirty flag without writing to disk. Used by `ConfigManager.apply_loaded_config` after it re-applies a just-loaded config via value setters that re-write identical values (which would otherwise mark the store dirty even though it still equals the loaded file).
 
 ## Dependencies
 

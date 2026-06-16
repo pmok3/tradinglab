@@ -64,6 +64,23 @@ class ConfigManager:
             )
         except Exception:  # noqa: BLE001
             pass
+        # Apply the loaded light/dark theme to the live app (audit
+        # ``config-theme-roundtrip``). ``startup_defaults['theme']`` is the
+        # persisted home for the base theme, so a config saved in dark mode
+        # re-enters dark mode on load — mirroring how the timezone,
+        # scroll-zoom direction, and theme colour overrides are already
+        # applied live above. Cascades through ``_apply_theme`` so the
+        # menubar + modeless dialogs repaint, exactly like a manual toggle.
+        try:
+            theme = self._startup_defaults.get("theme")
+            dark_var = getattr(parent_widget, "dark_var", None)
+            if dark_var is not None and theme in ("light", "dark"):
+                dark_var.set(theme == "dark")
+                apply_theme = getattr(parent_widget, "_apply_theme", None)
+                if callable(apply_theme):
+                    apply_theme()
+        except Exception:  # noqa: BLE001
+            pass
         try:
             ind_data = _settings.get("indicators")
             if isinstance(ind_data, dict):
@@ -85,9 +102,29 @@ class ConfigManager:
                 apply_width()
         except Exception:  # noqa: BLE001
             pass
+        # Re-apply the persisted *live* view/behaviour settings (Heikin-Ashi,
+        # key-bar / HA-flat highlights, time-of-day volume, colour-blind
+        # palette, drawing snap, ChartStack visibility, UI scale, worker
+        # pool) so a loaded config restores them without a relaunch (audit
+        # ``config-roundtrip-meta``). No-op for a parent lacking the hook.
+        try:
+            apply_view = getattr(
+                parent_widget, "_apply_persisted_view_settings", None)
+            if callable(apply_view):
+                apply_view()
+        except Exception:  # noqa: BLE001
+            pass
         try:
             parent_widget._render()
             parent_widget._refill_table()
+        except Exception:  # noqa: BLE001
+            pass
+        # The re-applies above call value setters that re-write identical
+        # values into the store, which would mark it dirty even though the
+        # store still equals the just-loaded file. Reset the flag so the
+        # title bar / close prompt don't show phantom unsaved changes.
+        try:
+            _settings.mark_clean()
         except Exception:  # noqa: BLE001
             pass
         self.refresh_title(
@@ -123,17 +160,35 @@ class ConfigManager:
 
     @staticmethod
     def _capture_layout_into_settings(parent_widget: Any) -> None:
-        """Snapshot the live watchlist (notebook) width into settings
-        before an export, so File → Save Configuration persists the
-        user's dragged divider position (audit
-        ``watchlist-width-setting``). Duck-typed + guarded — a parent
-        without the hook (or a headless test stub) is a silent no-op.
+        """Snapshot live UI state into settings before an export, so
+        File → Save Configuration persists it. Captures the user's
+        dragged watchlist (notebook) divider position (audit
+        ``watchlist-width-setting``), the active light/dark theme (audit
+        ``config-theme-roundtrip``), and the indicator manager state —
+        active indicators + named presets + active preset (audit
+        ``config-indicators-roundtrip``). Duck-typed + guarded — a
+        parent missing a given hook (or a headless test stub) is a
+        silent no-op for that capture.
         """
         try:
             capture = getattr(
                 parent_widget, "_capture_notebook_width_setting", None)
             if callable(capture):
                 capture()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            capture_theme = getattr(
+                parent_widget, "_capture_theme_setting", None)
+            if callable(capture_theme):
+                capture_theme()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            capture_indicators = getattr(
+                parent_widget, "_capture_indicators_setting", None)
+            if callable(capture_indicators):
+                capture_indicators()
         except Exception:  # noqa: BLE001
             pass
 

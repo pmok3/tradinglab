@@ -4388,6 +4388,316 @@ def check_d35_config_import_export_round_trip(app) -> None:
             pass
 
 
+def check_d35a_config_theme_round_trip(app) -> None:
+    """Light/dark theme survives File → Save/Load Configuration.
+
+    Audit ``config-theme-roundtrip``. Two halves:
+      * SAVE captures the live ``dark_var`` into
+        ``settings['startup_defaults']['theme']`` (so a theme set via the
+        toolbar toggle — not just the Settings dialog's capture-as-default
+        — is persisted; a light theme is sparse-omitted).
+      * LOAD re-applies the saved theme to the live ``dark_var`` and
+        cascades ``_apply_theme``: a config saved in dark mode re-enters
+        dark mode; a light config resets a dark session.
+
+    Drives the real ConfigManager internals (``_capture_layout_into_settings``
+    + ``export_to_file`` on save; ``import_from_file`` +
+    ``apply_loaded_config`` on load) — only the filedialog/messagebox
+    wrappers are skipped. Render/theme-only (no data fetch), so it can't
+    pollute ``_primary`` / ``_full_cache`` (§7.2). Fully restores the
+    global settings store + live theme in ``finally``.
+    """
+    import tempfile
+    from pathlib import Path
+
+    from tradinglab import settings as _settings
+
+    cm = app._config_manager
+    original_store = _settings.load()
+    original_dirty = _settings.is_dirty()
+    original_dark = bool(app.dark_var.get())
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="tradinglab_theme_"))
+    dark_cfg = tmp_dir / "dark.json"
+    light_cfg = tmp_dir / "light.json"
+    try:
+        # SAVE while dark (set via the toolbar-toggle code path).
+        _settings.clear()
+        app.dark_var.set(True)
+        app.on_theme_toggle()
+        cm._capture_layout_into_settings(app)
+        assert _settings.export_to_file(dark_cfg) is True
+        assert _settings.load().get("startup_defaults", {}).get("theme") == "dark", (
+            "save must capture the live dark theme into startup_defaults")
+
+        # SAVE while light → theme equals builtin → sparse-omitted.
+        _settings.clear()
+        app.dark_var.set(False)
+        app.on_theme_toggle()
+        cm._capture_layout_into_settings(app)
+        assert _settings.export_to_file(light_cfg) is True
+        assert "theme" not in _settings.load().get("startup_defaults", {})
+
+        # LOAD the dark config from a light session → enters dark.
+        app.dark_var.set(False)
+        app.on_theme_toggle()
+        assert _settings.import_from_file(dark_cfg) is True
+        cm.apply_loaded_config(app)
+        assert app.dark_var.get() is True, (
+            "loading a dark config must re-enter dark mode on the live app")
+
+        # LOAD the light config from a dark session → resets to light.
+        assert _settings.import_from_file(light_cfg) is True
+        cm.apply_loaded_config(app)
+        assert app.dark_var.get() is False, (
+            "loading a light config must reset a dark session to light")
+        print("  [OK] config-theme-roundtrip: dark/light survives save+load")
+    finally:
+        # Restore the global settings store + live theme so downstream
+        # checks see the world they expect (§7.2 hygiene).
+        _settings.clear()
+        for k, v in original_store.items():
+            _settings.set(k, v)
+        try:
+            cm.apply_loaded_config(app)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            app.dark_var.set(original_dark)
+            app._apply_theme()
+        except Exception:  # noqa: BLE001
+            pass
+        _settings._dirty = original_dirty  # noqa: SLF001
+        try:
+            for f in tmp_dir.iterdir():
+                f.unlink()
+            tmp_dir.rmdir()
+        except OSError:
+            pass
+
+
+def check_d35b_view_settings_round_trip(app) -> None:
+    """Every persisted live view/behaviour setting survives Save/Load Config.
+
+    Audit ``config-roundtrip-meta``. For each ROUNDTRIP_BEHAVIORAL key
+    (Heikin-Ashi, key-bar / HA-flat highlights, time-of-day volume,
+    colour-blind palette, drawing snap, ChartStack visibility, UI scale,
+    worker pool) drive a real round-trip on the live ChartApp:
+
+        set non-default → Save (export) → flip to default → Load (import +
+        apply_loaded_config) → assert the live state was restored.
+
+    The registry below is asserted to equal ``ROUNDTRIP_BEHAVIORAL_KEYS`` from
+    ``tests/_config_roundtrip_spec.py`` so it can't silently drift out of sync
+    with the unit drift-guard (``test_config_roundtrip_meta.py``). Every
+    setting is restored to its session-entry value in ``finally`` so the
+    shared smoke app is untouched.
+    """
+    import tempfile
+    from pathlib import Path
+
+    from tests._config_roundtrip_spec import ROUNDTRIP_BEHAVIORAL_KEYS
+    from tradinglab import constants as _constants
+    from tradinglab import settings as _settings
+
+    cm = app._config_manager
+
+    def _set_toggle(var_name, handler, v):
+        getattr(app, var_name).set(bool(v))
+        handler()
+
+    # key -> (set_live, read_live, nondefault, default)
+    registry = {
+        "heikin_ashi": (
+            lambda v: _set_toggle("_ha_display_var",
+                                  app._on_menu_toggle_heikin_ashi, v),
+            lambda: bool(app._ha_display_var.get()), True, False),
+        "highlight_key_bars": (
+            lambda v: _set_toggle("_highlight_key_bars_var",
+                                  app._on_menu_toggle_highlight_key_bars, v),
+            lambda: bool(app._highlight_key_bars_var.get()), True, False),
+        "highlight_ha_flat": (
+            lambda v: _set_toggle("_highlight_ha_flat_var",
+                                  app._on_menu_toggle_highlight_ha_flat, v),
+            lambda: bool(app._highlight_ha_flat_var.get()), True, False),
+        "volume_tod_enabled": (
+            lambda v: app.set_volume_tod_enabled(bool(v)),
+            lambda: bool(app._volume_tod_var.get()), True, False),
+        "use_colorblind_palette": (
+            lambda v: app.set_use_colorblind_palette(bool(v)),
+            lambda: _constants.BULL_COLOR == _constants._COLORBLIND_BULL_COLOR,
+            True, False),
+        "drawings_snap_to_ohlc": (
+            lambda v: app.set_drawings_snap_to_ohlc(bool(v)),
+            lambda: bool(app._drawings_snap_to_ohlc), True, False),
+        "chartstack.enabled": (
+            lambda v: app._toggle_chartstack(target=bool(v)),
+            lambda: bool(app._chartstack_visible_var.get()), True, False),
+        "ui_scale": (
+            lambda v: app.set_ui_scale(float(v)),
+            lambda: round(float(app._ui_scale), 3), 1.3, 1.0),
+        "worker_count": (
+            lambda v: app._apply_worker_count(int(v)),
+            lambda: int(app._worker_count), 3, 2),
+    }
+
+    # The behavioral registry MUST match the spec set exactly (keeps this
+    # check and the unit drift-guard in lockstep).
+    assert set(registry) == set(ROUNDTRIP_BEHAVIORAL_KEYS), (
+        "check_d35b registry out of sync with ROUNDTRIP_BEHAVIORAL_KEYS: "
+        f"registry-only={sorted(set(registry) - set(ROUNDTRIP_BEHAVIORAL_KEYS))} "
+        f"spec-only={sorted(set(ROUNDTRIP_BEHAVIORAL_KEYS) - set(registry))}"
+    )
+
+    orig_store = _settings.load()
+    orig_dirty = _settings.is_dirty()
+    orig_live = {k: spec[1]() for k, spec in registry.items()}
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="tradinglab_viewrt_"))
+    cfg = tmp_dir / "view.json"
+    try:
+        for key, (set_live, read_live, nondefault, default) in registry.items():
+            # SAVE a config carrying this setting = non-default.
+            _settings.clear()
+            set_live(nondefault)
+            assert _settings.export_to_file(cfg) is True
+            # Flip the live value to the default so the load is a real test.
+            set_live(default)
+            _pump(app, 0.02)
+            assert read_live() == default, f"{key}: pre-load reset failed"
+            # LOAD it back and assert the live value was restored.
+            assert _settings.import_from_file(cfg) is True
+            cm.apply_loaded_config(app)
+            _pump(app, 0.05)
+            assert read_live() == nondefault, (
+                f"{key}: not restored on load (got {read_live()!r}, "
+                f"expected {nondefault!r})")
+            # A freshly loaded config must not look dirty.
+            assert _settings.is_dirty() is False, (
+                f"{key}: settings left dirty after load")
+        print("  [OK] config-roundtrip-meta: all view settings survive "
+              "save+load")
+    finally:
+        # Restore every live value to its session-entry state, then rebuild
+        # the exact original store + dirty flag (§7.2 hygiene).
+        for key, (set_live, _read, _nd, _df) in registry.items():
+            try:
+                set_live(orig_live[key])
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            _pump(app, 0.05)
+        except Exception:  # noqa: BLE001
+            pass
+        _settings.clear()
+        for k, v in orig_store.items():
+            _settings.set(k, v)
+        try:
+            _settings._dirty = orig_dirty  # noqa: SLF001
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            for f in tmp_dir.iterdir():
+                f.unlink()
+            tmp_dir.rmdir()
+        except OSError:
+            pass
+
+
+def check_d35c_indicator_presets_round_trip(app) -> None:
+    """Active indicators + named presets survive Save/Load Configuration.
+
+    Audit ``config-indicators-roundtrip``. The IndicatorManager state (active
+    list, named presets, active preset) lives only in memory; File → Save
+    Configuration must capture it via ``ChartApp._capture_indicators_setting``
+    so File → Load Configuration restores it (the load side was already wired
+    via ``apply_loaded_config`` → ``_indicator_manager.load_dict`` — only the
+    save-capture was missing, so indicators + presets were silently lost on
+    save). Builds 2 indicators + a named preset, saves, wipes the manager,
+    loads, and asserts full restoration. The manager + settings store are
+    restored to their session-entry state in ``finally``.
+    """
+    import tempfile
+    from pathlib import Path
+
+    from tradinglab import settings as _settings
+    from tradinglab.indicators.config import IndicatorConfig
+
+    cm = app._config_manager
+    mgr = app._indicator_manager
+    orig_store = _settings.load()
+    orig_dirty = _settings.is_dirty()
+    orig_ind = mgr.to_dict()
+
+    def _wipe_manager():
+        mgr.clear()
+        for nm in list(mgr.list_presets()):
+            mgr.delete_preset(nm)
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="tradinglab_indrt_"))
+    cfg = tmp_dir / "ind.json"
+    try:
+        _settings.clear()
+        _wipe_manager()
+        mgr.add(IndicatorConfig(kind_id="ema", params={"length": 9}))
+        mgr.add(IndicatorConfig(kind_id="ema", params={"length": 21}))
+        mgr.save_preset("_d35c_ema")
+        # Capture content as the manager actually stores it (kind_id may be
+        # normalized internally; the round-trip just has to be faithful).
+        before_lengths = sorted(int(c.params.get("length", 0)) for c in mgr.list())
+        assert before_lengths == [9, 21], (
+            f"test-data sanity: {before_lengths}")
+        assert "_d35c_ema" in mgr.list_presets()
+
+        # SAVE — the manager state must land in the exported config.
+        cm._capture_layout_into_settings(app)
+        assert _settings.export_to_file(cfg) is True
+        saved_ind = _settings.load().get("indicators")
+        assert isinstance(saved_ind, dict), "save did not capture indicators"
+        assert len(saved_ind.get("active_configs", [])) == 2, (
+            "active indicators not captured on save")
+        assert "_d35c_ema" in saved_ind.get("presets", {}), (
+            "named preset not captured on save")
+
+        # WIPE then LOAD — manager must be fully restored.
+        _wipe_manager()
+        assert len(mgr.list()) == 0 and mgr.list_presets() == []
+        assert _settings.import_from_file(cfg) is True
+        cm.apply_loaded_config(app)
+        _pump(app, 0.05)
+        assert len(mgr.list()) == 2, "active indicators not restored on load"
+        after_lengths = sorted(int(c.params.get("length", 0)) for c in mgr.list())
+        assert after_lengths == before_lengths, (
+            f"indicator params not restored: {after_lengths} != {before_lengths}")
+        assert "_d35c_ema" in mgr.list_presets(), "preset not restored on load"
+        # Exercise the restored preset: applying it must rebuild the 2 configs.
+        assert mgr.set_preset("_d35c_ema") is True, "restored preset not loadable"
+        preset_lengths = sorted(int(c.params.get("length", 0)) for c in mgr.list())
+        assert preset_lengths == [9, 21], (
+            f"preset content not restored: {preset_lengths}")
+        assert _settings.is_dirty() is False, "settings left dirty after load"
+        print("  [OK] config-indicators-roundtrip: indicators + presets "
+              "survive save+load")
+    finally:
+        try:
+            mgr.load_dict(orig_ind)
+        except Exception:  # noqa: BLE001
+            pass
+        _settings.clear()
+        for k, v in orig_store.items():
+            _settings.set(k, v)
+        try:
+            _settings._dirty = orig_dirty  # noqa: SLF001
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            for f in tmp_dir.iterdir():
+                f.unlink()
+            tmp_dir.rmdir()
+        except OSError:
+            pass
+
+
 def check_d36_watchlist_explicit_save(app) -> None:
     """Watchlists are in-memory + explicit save (no auto-persist).
 
@@ -19673,6 +19983,9 @@ def _run_all_checks(app) -> None:
     check_d34_compare_toggle_after_drilldown_ylim(app)
     check_d53_compare_off_during_drilldown_ylim(app)
     check_d35_config_import_export_round_trip(app)
+    check_d35a_config_theme_round_trip(app)
+    check_d35b_view_settings_round_trip(app)
+    check_d35c_indicator_presets_round_trip(app)
     check_d36_watchlist_explicit_save(app)
     check_d37_status_bar(app)
     check_d38_drilldown_race_and_coverage(app)
@@ -19972,6 +20285,12 @@ def _build_check_sequence():
          check_d53_compare_off_during_drilldown_ylim),
         ("check_d35_config_import_export_round_trip",
          check_d35_config_import_export_round_trip),
+        ("check_d35a_config_theme_round_trip",
+         check_d35a_config_theme_round_trip),
+        ("check_d35b_view_settings_round_trip",
+         check_d35b_view_settings_round_trip),
+        ("check_d35c_indicator_presets_round_trip",
+         check_d35c_indicator_presets_round_trip),
         ("check_d36_watchlist_explicit_save", check_d36_watchlist_explicit_save),
         ("check_d37_status_bar", check_d37_status_bar),
         ("check_d38_drilldown_race_and_coverage",
