@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.3.11] - 2026-06-16
+
+### Fixed
+
+- **Saving and loading a configuration now preserves your theme.** If you
+  switched to dark mode and saved a config, loading it back used to come up in
+  light mode — the saved theme was applied to the colour *overrides* but never
+  to the base light/dark mode. The theme now round-trips correctly through
+  File → Save/Load Configuration, with no relaunch needed.
+- **Your chart view toggles now survive Save/Load Configuration.** Heikin-Ashi
+  candles, the key-bar and flat-bar highlights, the time-of-day volume overlay,
+  the colour-blind palette, magnetic drawing snap, the ChartStack panel, the UI
+  scale, and the worker-pool size were all written to your config file but never
+  re-applied when you loaded it — they only took effect on the *next* launch.
+  They now restore immediately on load.
+- **Indicators and indicator presets are now saved with your configuration.**
+  Previously the active indicators on your chart *and* your named indicator
+  presets were never written to the config file at all, so File → Save
+  Configuration silently dropped them and a later Load restored nothing. They
+  are now captured on save and fully restored on load — including re-applying a
+  saved preset.
+
 ## [0.3.10] - 2026-06-15
 
 ### Changed
