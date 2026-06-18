@@ -92,6 +92,10 @@ _DIALOG_COVERAGE_EXEMPTIONS: dict[str, str] = {
         "Pure ttk form (Entry + Buttons) — ttk widgets are themed "
         "globally."
     ),
+    "SchwabConnectDialog": (
+        "Pure ttk dialog (Labels + Entry + Buttons + Separator) — no "
+        "classic Tk widgets; chrome themed by the global ttk ThemeController."
+    ),
     "DrawingDialog": (
         "Pure ttk form — sliders / spinboxes / combobox styled via "
         "ttk.Style."

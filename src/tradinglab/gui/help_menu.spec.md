@@ -58,6 +58,10 @@ check, onboarding banner, credentials, and reset / purge.
   (Linux). Falls back to path-display dialog.
 - `_on_help_configure_credentials` —
   `gui.credentials_dialog.open_credentials_dialog(self)`.
+- `_on_help_connect_schwab` —
+  `gui.schwab_connect_dialog.open_schwab_connect_dialog(self)` (guarded
+  import). Interactive Schwab OAuth sign-in (system browser + paste-back; no
+  embedded webview). Wired as **Tools → "Connect to Schwab…"**.
 - `_on_help_check_for_updates` — fires
   `updates.schedule_check_async(self.after, _present, force=True)`
   and presents the `UpdateResult` as a messagebox.

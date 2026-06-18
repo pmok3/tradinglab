@@ -10,7 +10,7 @@
   6. **Exits** — Edit Strategies.
   7. **Strategy** — Open Strategy Tester.
   8. **View** — Heikin-Ashi (cascade: Show Heikin-Ashi Candles + Highlight Flat Bars), Highlight Key Bars, Volume time-of-day shading, ChartStack (cascade: Show ChartStack + Settings…), Heatmap.
-  9. **Tools** — Credentials, Local Data, Download Replay Data, Export CSV, Status History, Reveal Data Folder, Restore Templates.
+  9. **Tools** — Credentials, Connect to Schwab, Local Data, Download Replay Data, Export CSV, Status History, Reveal Data Folder, Restore Templates.
   10. **Help** — built by `HelpMenuMixin._build_help_menu`.
 - Keep menu commands routed back into `ChartApp` through a narrow callback protocol so the builder owns widget construction, not app business logic.
 
