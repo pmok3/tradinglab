@@ -48,6 +48,13 @@ from .normalize import (
 )
 from .parallel import fetch_chunks_parallel
 from .polygon_source import candles_from_polygon_response, fetch_polygon_data
+from .ratio_source import (
+    RATIO_SYMBOLS,
+    compute_ratio_candles,
+    fetch_ratio,
+    is_ratio_symbol,
+    parse_ratio_symbol,
+)
 from .schwab_source import candles_from_schwab_response, fetch_schwab_data
 from .synthetic_source import fetch_synthetic_data, fetch_synthetic_stream_bootstrap
 from .yfinance_source import fetch_live_data
@@ -165,6 +172,11 @@ __all__ = [
     "pop_prebuilt_arrays",
     "stash_arrays",
     "fetch_chunks_parallel",
+    "RATIO_SYMBOLS",
+    "compute_ratio_candles",
+    "fetch_ratio",
+    "is_ratio_symbol",
+    "parse_ratio_symbol",
     "Credentials",
     "SchwabCredentials",
     "AlpacaCredentials",

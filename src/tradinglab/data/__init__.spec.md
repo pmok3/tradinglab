@@ -24,6 +24,7 @@ Aggregates the data-source plugins (yfinance, synthetic, synthetic-stream bootst
   in the Configure Local Data dialog.
 - `make_local_fetcher`, `discover_subsources` — re-exported from
   `.local_source` (see `data/local_source.spec.md`).
+- `RATIO_SYMBOLS`, `parse_ratio_symbol`, `is_ratio_symbol`, `compute_ratio_candles`, `fetch_ratio` — re-exported from `.ratio_source` (see `data/ratio_source.spec.md`). Synthetic ratio pseudo-symbols (e.g. `RSPSPY` = RSP / SPY). NOT a `DATA_SOURCES` entry — resolution is hooked into `fetch_live_data`, so a ratio symbol is a typed *ticker*, not a selectable *source*.
 
 ## Dependencies
 - Internal: all data submodules.

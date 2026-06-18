@@ -5,9 +5,10 @@ Live-data fetcher backed by yfinance. Thin adapter: pulls a DataFrame via `yf.Ti
 
 ## Public API
 - `fetch_live_data(ticker="AMD", interval="1d") -> Optional[List[Candle]]`. Returns `None` on any failure (import error — yfinance isn't installed; network error; empty frame). May return `[]` when the frame was non-empty but every provider row was dropped by normalization (for example non-finite OHLC). Registered as `"yfinance"` in `DATA_SOURCES`.
+  - **Ratio pseudo-symbols resolved FIRST.** If `parse_ratio_symbol(ticker)` matches (e.g. `RSPSPY` = RSP / SPY — see `data/ratio_source.spec.md`), the function returns `fetch_ratio(ticker, interval, leg_fetcher=fetch_live_data)` before any yfinance call, recursing on the two legs through this same fetcher. This makes a ratio symbol work as primary / compare / watchlist / prefetch / synth-today-bar ticker anywhere a real symbol does, with no per-surface wiring.
 
 ## Dependencies
-- Internal: `..constants.INTERVAL_PERIODS`, `..constants.is_intraday`, `..models.Candle`, `.normalize.candles_from_dataframe`.
+- Internal: `..constants.INTERVAL_PERIODS`, `..constants.is_intraday`, `..models.Candle`, `.normalize.candles_from_dataframe`, `.ratio_source.{fetch_ratio, parse_ratio_symbol}`.
 - External: `yfinance` (lazy-imported inside the function so the package can import successfully even without yfinance installed — smoke tests run on the synthetic source).
 
 ## Design Decisions

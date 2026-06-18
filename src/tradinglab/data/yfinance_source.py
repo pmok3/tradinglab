@@ -5,6 +5,7 @@ from __future__ import annotations
 from ..constants import INTERVAL_PERIODS, is_intraday
 from ..models import Candle
 from .normalize import candles_from_dataframe
+from .ratio_source import fetch_ratio, parse_ratio_symbol
 
 
 def fetch_live_data(ticker: str = "AMD", interval: str = "1d") -> list[Candle] | None:
@@ -15,6 +16,11 @@ def fetch_live_data(ticker: str = "AMD", interval: str = "1d") -> list[Candle] |
     :func:`candles_from_dataframe` which classifies each bar's
     hour/minute against US Eastern exchange hours.
 
+    Ratio pseudo-symbols (e.g. ``RSPSPY`` = RSP / SPY — see
+    :mod:`tradinglab.data.ratio_source`) are resolved FIRST by recursing
+    on the two legs through this same fetcher, so they work as a primary /
+    compare / watchlist ticker anywhere a real symbol does.
+
     Uses the vectorized ``candles_from_dataframe`` normalizer rather
     than ``df.iterrows()``: on typical intraday fetches (~5k bars) this
     is 5–20× faster because iterrows materializes a fresh ``Series``
@@ -24,6 +30,8 @@ def fetch_live_data(ticker: str = "AMD", interval: str = "1d") -> list[Candle] |
 
     Returns ``None`` on any failure (import error, network, empty frame).
     """
+    if parse_ratio_symbol(ticker) is not None:
+        return fetch_ratio(ticker, interval, leg_fetcher=fetch_live_data)
     try:
         import yfinance as yf  # type: ignore
     except ImportError:
