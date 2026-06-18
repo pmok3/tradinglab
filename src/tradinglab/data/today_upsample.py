@@ -143,6 +143,26 @@ def find_best_intraday_source(
     return None
 
 
+def daily_last_bar_is_today(
+    daily: Sequence[Candle], *, today_et: date | None = None,
+) -> bool:
+    """True when ``daily``'s last bar already covers today's ET session.
+
+    Used to decide whether a synthetic today-bar (and the intraday
+    prefetch that feeds it) is needed: when the provider has already
+    emitted today's daily bar there's nothing to synthesise. Empty series
+    → ``False`` (a synth/prefetch attempt is harmless and self-corrects).
+    """
+    if not daily:
+        return False
+    if today_et is None:
+        today_et = _today_et()
+    try:
+        return _et_date_of(daily[-1].date) >= today_et
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def upsample_daily_with_today(
     daily_candles: Sequence[Candle] | None,
     *,

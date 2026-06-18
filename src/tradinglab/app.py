@@ -68,6 +68,9 @@ from .data.today_upsample import (
     SUPPORTED_INTERVALS as _DAILY_UPSAMPLE_INTERVALS,
 )
 from .data.today_upsample import (
+    daily_last_bar_is_today as _daily_last_bar_is_today,
+)
+from .data.today_upsample import (
     find_best_intraday_source as _find_best_intraday_source,
 )
 from .data.today_upsample import (
@@ -2316,6 +2319,26 @@ class ChartApp(
             self._full_cache, source=source, symbol=symbol,
         )
         if intraday is None:
+            # No intraday cached → can't synthesize today's bar yet. Warm
+            # the symbol's 5m companion so the synth can run once it lands
+            # (the prefetch-arrival handler re-renders via
+            # ``_refresh_daily_synth_for_active_view``). This is what makes
+            # the synth SELF-HEAL for a daily served WARM from cache —
+            # e.g. SPY, preloaded as the default compare + ChartStack
+            # reference, whose cold-path companion prefetch (in
+            # ``_load_data_async``) never fires because its daily isn't
+            # missing/stale. Without this, such a symbol's 1d chart sticks
+            # on yesterday while freshly-charted (cold) stocks show today.
+            # Gated: in-session only (today's intraday bars exist) and only
+            # when the cached daily doesn't already carry today's bar.
+            # ``_ensure_prefetched`` dedups via staleness + in-flight, so a
+            # repeat call is cheap. Audit ``daily-today-upsample``.
+            try:
+                if (self._intraday_session_open(time.time())
+                        and not _daily_last_bar_is_today(candles)):
+                    self._prefetch_companion_intervals([symbol])
+            except Exception:  # noqa: BLE001
+                pass
             return candles
         return _upsample_daily_with_today(
             candles, intraday_candles=intraday,

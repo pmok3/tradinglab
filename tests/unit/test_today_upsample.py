@@ -8,6 +8,7 @@ import pytest
 
 from tradinglab.data.today_upsample import (
     SUPPORTED_INTERVALS,
+    daily_last_bar_is_today,
     find_best_intraday_source,
     synthesize_today_daily_candle,
     upsample_daily_with_today,
@@ -270,3 +271,31 @@ def test_supported_intervals_contains_1d_only():
     assert "1wk" not in SUPPORTED_INTERVALS
     assert "1mo" not in SUPPORTED_INTERVALS
     assert "5m" not in SUPPORTED_INTERVALS
+
+
+# ---------------------------------------------------------------------------
+# daily_last_bar_is_today (audit daily-today-upsample self-heal prefetch)
+# ---------------------------------------------------------------------------
+
+def test_daily_last_bar_is_today_true():
+    today = dt.date(2026, 6, 18)
+    series = [_daily(dt.date(2026, 6, 16)), _daily(dt.date(2026, 6, 17)),
+              _daily(today)]
+    assert daily_last_bar_is_today(series, today_et=today) is True
+
+
+def test_daily_last_bar_is_today_false_when_ends_yesterday():
+    today = dt.date(2026, 6, 18)
+    series = [_daily(dt.date(2026, 6, 16)), _daily(dt.date(2026, 6, 17))]
+    assert daily_last_bar_is_today(series, today_et=today) is False
+
+
+def test_daily_last_bar_is_today_empty_is_false():
+    assert daily_last_bar_is_today([], today_et=dt.date(2026, 6, 18)) is False
+
+
+def test_daily_last_bar_is_today_future_bar_counts_as_today():
+    # Defensive: a last bar dated >= today (e.g. a synth bar already laid
+    # on) must read True so we don't re-prefetch.
+    today = dt.date(2026, 6, 18)
+    assert daily_last_bar_is_today([_daily(today)], today_et=today) is True

@@ -23,6 +23,11 @@ yesterday" mid-day. Audit tag `daily-today-upsample`.
   finest-first; returns the first non-empty cache entry. `None` when
   no intraday cache exists for the symbol — caller should schedule a
   5m prefetch and re-render on arrival.
+- `daily_last_bar_is_today(daily, *, today_et=None)` — `bool`. True when
+  the series' last bar's ET date is `>= today_et` (the provider already
+  emitted today's daily bar, so no synth / intraday prefetch is needed).
+  Empty series → `False`. Used by `ChartApp._maybe_upsample_today_daily`
+  to gate the self-heal prefetch (audit `daily-today-upsample`).
 - `upsample_daily_with_today(daily_candles, *, intraday_candles, today_et=None)`
   — `list[Candle]`. Append-or-overwrite: when the daily series' last
   bar's ET date matches today's, overwrites with the freshly
