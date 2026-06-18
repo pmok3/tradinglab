@@ -1,22 +1,40 @@
 # data/ratio_source.py — Spec
 
 ## Purpose
-Synthetic **ratio pseudo-symbols** — a typed ticker that charts the per-bar
-quotient of two real symbols. The canonical (and currently only registered)
-example is **RSPSPY** = `RSP / SPY`: the equal-weight S&P 500 ETF divided by
-the cap-weight ETF, a standard macro / breadth gauge (rising ⇒ broad
-participation; falling ⇒ mega-cap concentration).
+**Ratio pseudo-symbols** — a typed ticker that charts the per-bar quotient of
+two real symbols. The user types the general **`NUM/DEN`** form straight into
+the ticker box — e.g. `AMD/NVDA` (intra-semiconductor leadership), `XLF/SPY`
+(financials sector RS), `RSP/SPY` (equal-weight-vs-cap-weight breadth) — and it
+charts like any other symbol everywhere (main chart, compare, watchlist).
 
-The user types `RSPSPY` in the ticker box and it charts like any other symbol.
+A handful of named **aliases** (`RATIO_SYMBOLS`, e.g. `RSPSPY` → `RSP/SPY`) are
+also recognised as memorable shorthand; the general `NUM/DEN` form is the
+primary path and needs no registry entry.
 
 ## Public API
-- `RATIO_SYMBOLS: dict[str, tuple[str, str]]` — registry mapping an UPPERCASE,
-  separator-free pseudo-symbol → `(numerator, denominator)`. Adding a gauge is
-  a one-line edit (e.g. `"QQQSPY": ("QQQ", "SPY")`). No other wiring needed.
+- `RATIO_DELIMITER = "/"` — the single delimiter that denotes a ratio in a
+  typed ticker. `/` is chosen because (a) `disk_cache` already sanitises it
+  out of cache filenames, and (b) it doesn't collide with real symbols that
+  use `-`/`.` (`BRK-B`, `BRK.B`, `BTC-USD`) or `:` (Windows-illegal / exchange
+  prefix).
+- `RATIO_SYMBOLS: dict[str, tuple[str, str]]` — named aliases →
+  `(numerator, denominator)`. UPPERCASE, separator-free. Optional convenience.
+- `RATIO_PRESETS: tuple[tuple[str, str, str], ...]` — curated
+  `(num, den, description)` gauges surfaced in the New Ratio Chart dialog
+  (breadth / sector-RS / pairs for the market→sector→stock workflow).
 - `parse_ratio_symbol(ticker) -> tuple[str, str] | None` — case-insensitive,
-  whitespace-tolerant lookup. Returns `None` for any non-ratio ticker (the
-  common case) and for `None`/empty input, so callers can cheaply gate on it.
+  whitespace-tolerant. Resolves an alias first, then the general `NUM/DEN`
+  form: exactly one `/` splitting into two non-empty legs, **neither leg
+  itself a ratio** (rejects nested `A/B/C`, `RSPSPY/SPY`). Returns `None` for
+  any non-ratio / empty / `None` input.
 - `is_ratio_symbol(ticker) -> bool` — convenience predicate.
+- `canonical_ratio_symbol(ticker) -> str` — canonical storage/key form:
+  ratios normalise to uppercase space-free `NUM/DEN` (so `amd / nvda` and
+  `AMD/NVDA` share one cache key / watchlist entry); aliases preserved
+  verbatim; non-ratios uppercased + stripped.
+- `ratio_display_label(ticker) -> str` — human label `"AMD / NVDA"` for chart
+  title / watermark / window title / watchlist rows; aliases expand to their
+  legs (`RSPSPY` → `"RSP / SPY"`); non-ratios returned unchanged.
 - `compute_ratio_candles(numerator, denominator) -> list[Candle]` — per-bar
   component-wise quotient of two candle series (pure function, no I/O).
 - `fetch_ratio(ticker, interval, *, leg_fetcher) -> list[Candle] | None` —
@@ -29,14 +47,25 @@ The user types `RSPSPY` in the ticker box and it charts like any other symbol.
   returns, so it is source-agnostic.
 
 ## Design Decisions
+- **`/` delimiter, strict 2-leg parse, nested rejected.** See `RATIO_DELIMITER`
+  above. The parser rejects `A/B/C` (split ≠ 2 parts) and ratio/alias legs so
+  the leg-fetch recursion is bounded (a leg can never re-parse as a ratio).
+- **Never persisted to disk.** A ratio is derived from its two legs (which DO
+  cache individually). `disk_cache.save`/`load` short-circuit for ratio tickers
+  (`disk_cache._is_ratio_ticker`) — see `disk_cache.spec.md`. This avoids the
+  filename-illegal `/`, keeps `list_entries`/cache-export clean, and prevents a
+  cached ratio going stale vs its legs. The in-memory `_full_cache` (keyed by
+  the raw `(source, ticker, interval)` tuple — a `/` in a dict key is fine)
+  still gives session-level responsiveness.
 - **Resolution lives at the fetcher, not a new `DATA_SOURCES` entry.** The hook
   is at the top of `yfinance_source.fetch_live_data`: if `parse_ratio_symbol`
   matches, it calls `fetch_ratio(..., leg_fetcher=fetch_live_data)` and recurses
   on the two legs. Because every fetch surface (main chart, compare panel,
   companion prefetch, watchlist, and the daily synthetic today-bar via its 5m
   legs) routes through `DATA_SOURCES["yfinance"]`, resolving here covers them
-  all with one edit. No infinite recursion: the legs (`RSP`, `SPY`) are not
-  themselves ratio symbols.
+  all with one edit. Ratios therefore resolve on the yfinance source (the
+  default + only fully-wired live source); extending to other sources is a
+  follow-up.
 - **Component-wise OHLC quotient + widened envelope.** For each shared bar:
   `O = numO/denO`, `H = numH/denH`, `L = numL/denL`, `C = numC/denC`, then
   `H ← max(O,H,L,C)` and `L ← min(O,H,L,C)` so the result is always a valid

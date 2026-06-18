@@ -134,7 +134,7 @@ Most data providers lag today's daily bar until after the close, so a mid-sessio
 `_refresh_tab_labels` updates Primary / Compare titles to reflect `ticker_var` after successful load and bad-ticker revert (`_tab_label_for_primary` / `_tab_label_for_compare`).
 
 ### Bad-ticker handling
-Revert StringVar to `_confirmed_*_ticker`. Status: `Ticker '{raw}' not found. Check the spelling or try a different data source.` Vendor name omitted intentionally.
+Revert StringVar to `_confirmed_*_ticker`. Status: `Ticker '{raw}' not found. Check the spelling or try a different data source.` Vendor name omitted intentionally. **For a ratio pseudo-symbol** (`is_ratio_symbol(raw)`, e.g. `AMD/NVDA`) the message instead reads `Ratio '{AMD / NVDA}' could not be loaded. Check that both legs are valid tickers`. The centered chart **watermark** (`_paint_slot_watermark`) and the **window title** render ratios via `ratio_display_label` (`AMD / NVDA`).
 
 ### Status messages avoid `repr()`
 `_status.info/warn/error` use `{exc}`, not `{exc!r}` (`!r` renders like a crash dump). Short symbolic identifiers (`{scan.name!r}` etc.) keep `!r` for disambiguation. Locked by `tests/unit/test_status_bar_repr_leak.py`.

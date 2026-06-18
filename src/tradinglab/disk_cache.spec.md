@@ -29,7 +29,10 @@ Durable cache of fetched candle data, keyed by `(source, ticker, interval)`. Act
   in ticker replaced by `_`.
 - `load(source, ticker, interval) -> Optional[List[Candle]]` — streams
   the JSONL file line by line; one corrupt line is skipped, an
-  all-corrupt file returns `None`. Legacy `.pkl` files are
+  all-corrupt file returns `None`. **Returns `None` immediately for
+  ratio pseudo-symbols** (`_is_ratio_ticker` — `AMD/NVDA`, `RSPSPY`
+  alias, etc.) and for `mark_no_persist` sources, before touching the
+  filesystem. Legacy `.pkl` files are
   intentionally NEVER opened. Bars whose OHLC is not all-finite are
   dropped on read (`_drop_nonfinite_ohlc`) so a stale poison bar can
   never reach the cache or render. **Heal-on-load persistence:** when
@@ -46,7 +49,18 @@ Durable cache of fetched candle data, keyed by `(source, ticker, interval)`. Act
   raises.
 - `save(source, ticker, interval, candles)` — atomic write
   (`tempfile.mkstemp` in the same directory + `os.replace`). Writes
-  one JSON object per line via `_candle_to_dict`.
+  one JSON object per line via `_candle_to_dict`. **No-op for ratio
+  pseudo-symbols** (`_is_ratio_ticker`) and `mark_no_persist` sources.
+- `_is_ratio_ticker(ticker) -> bool` — true for a ratio pseudo-symbol
+  (`AMD/NVDA` slash form or a `RATIO_SYMBOLS` alias). Lazy-imports
+  `data.ratio_source.is_ratio_symbol` to avoid a module-load import
+  cycle (`data` imports `disk_cache`); falls back to a `"/" in ticker`
+  check if the import fails. **Why ratios are never persisted:** a
+  ratio is *derived* from its two legs (which DO cache individually);
+  persisting it would force slugging the filename-illegal `/` (lossy →
+  `list_entries`/cache-export pollution) and risk the cached ratio
+  going stale vs its legs. The in-memory `_full_cache` still gives
+  session-level responsiveness. See `data/ratio_source.spec.md`.
 - `list_entries() -> List[Tuple[source, ticker, interval]]` — walks
   the cache dir and reverse-parses every
   `<source>__<ticker>__<interval>.jsonl` filename. Returns a sorted

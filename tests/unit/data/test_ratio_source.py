@@ -8,11 +8,15 @@ from datetime import datetime, timedelta
 import pytest
 
 from tradinglab.data.ratio_source import (
+    RATIO_DELIMITER,
+    RATIO_PRESETS,
     RATIO_SYMBOLS,
+    canonical_ratio_symbol,
     compute_ratio_candles,
     fetch_ratio,
     is_ratio_symbol,
     parse_ratio_symbol,
+    ratio_display_label,
 )
 from tradinglab.models import Candle
 
@@ -63,6 +67,92 @@ def test_registry_keys_are_upper_and_separator_free():
     for key, legs in RATIO_SYMBOLS.items():
         assert key == key.upper() and key.isalnum()
         assert isinstance(legs, tuple) and len(legs) == 2
+
+
+# ------------------------------------------------------------- general A/B form
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("AMD/NVDA", ("AMD", "NVDA")),
+        ("amd/nvda", ("AMD", "NVDA")),
+        ("  amd / nvda  ", ("AMD", "NVDA")),
+        ("XLF/SPY", ("XLF", "SPY")),
+        ("RSP/SPY", ("RSP", "SPY")),
+        # back-compat: alias still resolves
+        ("RSPSPY", ("RSP", "SPY")),
+        # rejects
+        ("A/B/C", None),       # nested
+        ("RSPSPY/SPY", None),  # alias leg (nested via alias)
+        ("RSP/RSPSPY", None),  # alias leg on denominator
+        ("AMD/", None),        # empty denominator
+        ("/NVDA", None),       # empty numerator
+        ("/", None),
+        ("AMD//NVDA", None),   # double delimiter -> 3 parts
+        # real symbols with - / . must NOT be treated as ratios
+        ("BRK-B", None),
+        ("BRK.B", None),
+        ("BTC-USD", None),
+        ("AAPL", None),
+    ],
+)
+def test_parse_general_ratio_form(raw, expected):
+    assert parse_ratio_symbol(raw) == expected
+
+
+def test_is_ratio_symbol_general():
+    assert is_ratio_symbol("AMD/NVDA")
+    assert is_ratio_symbol("amd / nvda")
+    assert not is_ratio_symbol("BRK-B")
+    assert not is_ratio_symbol("A/B/C")
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("amd / nvda", "AMD/NVDA"),   # normalised: upper, no spaces
+        ("AMD/NVDA", "AMD/NVDA"),
+        ("RSPSPY", "RSPSPY"),         # alias preserved verbatim
+        ("aapl", "AAPL"),             # non-ratio: upper+strip
+        ("  msft ", "MSFT"),
+    ],
+)
+def test_canonical_ratio_symbol(raw, expected):
+    assert canonical_ratio_symbol(raw) == expected
+
+
+def test_canonical_ratio_symbol_empty_safe():
+    assert canonical_ratio_symbol("") == ""
+    assert canonical_ratio_symbol(None) is None  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("AMD/NVDA", "AMD / NVDA"),
+        ("amd/nvda", "AMD / NVDA"),
+        ("RSPSPY", "RSP / SPY"),   # alias expands to its legs
+        ("AAPL", "AAPL"),          # non-ratio unchanged
+    ],
+)
+def test_ratio_display_label(raw, expected):
+    assert ratio_display_label(raw) == expected
+
+
+def test_ratio_delimiter_is_slash():
+    assert RATIO_DELIMITER == "/"
+
+
+def test_presets_are_valid_ratios():
+    assert len(RATIO_PRESETS) >= 5
+    seen = set()
+    for num, den, desc in RATIO_PRESETS:
+        sym = f"{num}/{den}"
+        assert is_ratio_symbol(sym), f"{sym} should parse as a ratio"
+        assert parse_ratio_symbol(sym) == (num, den)
+        assert num == num.upper() and den == den.upper()
+        assert desc and isinstance(desc, str)
+        assert sym not in seen, f"duplicate preset {sym}"
+        seen.add(sym)
 
 
 # ------------------------------------------------------------------------- compute

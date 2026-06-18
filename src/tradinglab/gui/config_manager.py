@@ -13,6 +13,7 @@ from .. import defaults as _defaults
 from .. import recent_files as _recent_files
 from .. import settings as _settings
 from ..constants import BUILTIN_STARTUP_DEFAULTS, resolve_startup_defaults
+from ..data import ratio_display_label
 
 
 class ConfigManager:
@@ -510,7 +511,7 @@ class ConfigManager:
             interval = ""
             try:
                 if ticker_var is not None:
-                    ticker = (ticker_var.get() or "").strip().upper()
+                    ticker = ratio_display_label((ticker_var.get() or "").strip().upper())
             except Exception:  # noqa: BLE001
                 pass
             try:

@@ -513,10 +513,11 @@ class InteractionMixin:
         if self._typing_target is None:
             # Starting typing with no chart clicked defaults to primary.
             # Tickers are letters (plus dot/dash for class shares like
-            # BRK.B). Digits are intentionally ignored so a stray
-            # numeric keypress doesn't start a phantom "1" / "23" symbol
-            # buffer over the chart.
-            if ch and (ch.isalpha() or ch in "._-"):
+            # BRK.B, and slash for ratio symbols like AMD/NVDA). Digits
+            # are intentionally ignored so a stray numeric keypress
+            # doesn't start a phantom "1" / "23" symbol buffer over the
+            # chart.
+            if ch and (ch.isalpha() or ch in "._-/"):
                 self._typing_target = self._last_clicked_slot or "primary"
                 self._typing_buffer = ""
             else:
@@ -528,7 +529,7 @@ class InteractionMixin:
         elif keysym == "BackSpace":
             self._typing_buffer = self._typing_buffer[:-1]
             self._refresh_typing_preview()
-        elif ch and (ch.isalpha() or ch in "._-"):
+        elif ch and (ch.isalpha() or ch in "._-/"):
             self._typing_buffer += ch.upper()
             self._refresh_typing_preview()
     # ---- pan + zoom (spec §6.4) ---------------------------------------

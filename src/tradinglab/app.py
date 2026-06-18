@@ -62,7 +62,14 @@ from .core.viewport import (
 from .core.viewport import (
     remap_window_by_time as _remap_window_by_time,
 )
-from .data import DATA_SOURCES, DataController, FetchService, user_visible_sources
+from .data import (
+    DATA_SOURCES,
+    DataController,
+    FetchService,
+    is_ratio_symbol,
+    ratio_display_label,
+    user_visible_sources,
+)
 from .data.stream_controller import StreamController
 from .data.today_upsample import (
     SUPPORTED_INTERVALS as _DAILY_UPSAMPLE_INTERVALS,
@@ -2986,10 +2993,16 @@ class ChartApp(
         if primary_failed and raw_primary:
             try:
                 self.ticker_var.set(self._confirmed_primary_ticker)
-                self._status.error(
-                    f"Ticker '{raw_primary}' not found. Check the "
-                    f"spelling or try a different data source"
-                )
+                if is_ratio_symbol(raw_primary):
+                    self._status.error(
+                        f"Ratio '{ratio_display_label(raw_primary)}' could not be "
+                        f"loaded. Check that both legs are valid tickers"
+                    )
+                else:
+                    self._status.error(
+                        f"Ticker '{raw_primary}' not found. Check the "
+                        f"spelling or try a different data source"
+                    )
             except Exception:  # noqa: BLE001
                 pass
             try:
@@ -3000,10 +3013,16 @@ class ChartApp(
         if compare_failed and raw_compare:
             try:
                 self.compare_ticker_var.set(self._confirmed_compare_ticker)
-                self._status.error(
-                    f"Ticker '{raw_compare}' not found. Check the "
-                    f"spelling or try a different data source"
-                )
+                if is_ratio_symbol(raw_compare):
+                    self._status.error(
+                        f"Ratio '{ratio_display_label(raw_compare)}' could not be "
+                        f"loaded. Check that both legs are valid tickers"
+                    )
+                else:
+                    self._status.error(
+                        f"Ticker '{raw_compare}' not found. Check the "
+                        f"spelling or try a different data source"
+                    )
             except Exception:  # noqa: BLE001
                 pass
             try:
@@ -4177,6 +4196,7 @@ class ChartApp(
                        or self.compare_ticker_var.get().strip().upper() or "")
         if not wm_text:
             return None
+        wm_text = ratio_display_label(wm_text)
         try:
             return ax_p.text(
                 0.5, 0.5, wm_text, transform=ax_p.transAxes,

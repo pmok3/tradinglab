@@ -4,7 +4,7 @@
 
 `InteractionMixin` — the entire interactive chart subsystem: pan,
 zoom (rubber-band + scroll-wheel), hover tooltip, crosshair,
-click-to-type ticker entry, and the drawings hit-test bridge.
+click-to-type ticker entry (accepts letters plus `. _ - /`; `/` enables ratio symbols like `AMD/NVDA`), and the drawings hit-test bridge.
 Kept as one mixin because all features share `_blit_bg`, the
 animated-artist list, the pixel cache, and the mpl event wiring.
 

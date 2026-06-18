@@ -202,6 +202,28 @@ def is_no_persist(source: str) -> bool:
     return source in _NO_PERSIST
 
 
+def _is_ratio_ticker(ticker: str) -> bool:
+    """True if ``ticker`` is a ratio pseudo-symbol (alias or ``NUM/DEN``).
+
+    Ratio series are **derived** from their two legs (which DO cache
+    individually) and are never persisted to disk: a ratio ticker like
+    ``AMD/NVDA`` contains ``/`` (filename-illegal on Windows; would be
+    lossily slugged to ``AMD_NVDA`` and pollute ``list_entries`` /
+    cache-export labelling), and a cached ratio would also go stale
+    relative to its legs. Skipping persistence keeps the on-disk cache
+    clean while the in-memory ``_full_cache`` still gives session-level
+    responsiveness. Lazy import avoids a module-load import cycle
+    (the ``data`` package imports ``disk_cache``).
+    """
+    if not ticker:
+        return False
+    try:
+        from .data.ratio_source import is_ratio_symbol
+    except Exception:  # noqa: BLE001
+        return "/" in ticker  # conservative fallback: slash form only
+    return is_ratio_symbol(ticker)
+
+
 def load(source: str, ticker: str, interval: str) -> list[Candle] | None:
     """Return cached candles or ``None`` if the file is missing/corrupt.
 
@@ -216,6 +238,8 @@ def load(source: str, ticker: str, interval: str) -> list[Candle] | None:
     """
     if source in _NO_PERSIST:
         return None
+    if _is_ratio_ticker(ticker):
+        return None  # ratios are derived — never persisted (see _is_ratio_ticker)
     path = _path_for(source, ticker, interval)
     if not path.exists():
         return None
@@ -277,6 +301,8 @@ def save(source: str, ticker: str, interval: str, candles: list[Candle]) -> None
     """
     if source in _NO_PERSIST:
         return
+    if _is_ratio_ticker(ticker):
+        return  # ratios are derived — never persisted (see _is_ratio_ticker)
     try:
         path = _path_for(source, ticker, interval)
         path.parent.mkdir(parents=True, exist_ok=True)

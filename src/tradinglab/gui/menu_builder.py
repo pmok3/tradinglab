@@ -330,6 +330,11 @@ class MenuBuilder:
 
         tools_menu = tk.Menu(menubar, tearoff=0)
         tools_menu.add_command(
+            label="New Ratio Chart…",
+            command=self._cb._on_tools_new_ratio_chart,
+        )
+        tools_menu.add_separator()
+        tools_menu.add_command(
             label="Configure Credentials…",
             command=self._cb._on_help_configure_credentials,
         )

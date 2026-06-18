@@ -12,7 +12,7 @@ Owns configuration-file I/O, startup-default resolution, recent-files dropdown m
 - `load_startup_defaults(intervals=None, sources=None) -> dict[str, str]` / `save_startup_defaults()` / `set_startup_default(key, value)` / `clear_startup_defaults()` / `replace_startup_defaults(defaults)` — startup-default lifecycle.
 - `push_recent(kind, path)` / `refresh_recent_menu(menu, kind, callback, *, clear_label=...)` / `clear_recent_kind(kind)` — Recent-files dropdown maintenance.
 - `on_recent_config_pick(parent_widget, path)` / `on_recent_watchlist_pick(parent_widget, path)` — invoked when the user clicks a Recent menu entry; auto-removes the entry from the dropdown if the file is gone.
-- `refresh_title(...)` / `refresh_title_for(...)` (static) — recomputes the window title from ticker / interval / loaded-config / loaded-watchlists / dirty state and applies via `title_setter`.
+- `refresh_title(...)` / `refresh_title_for(...)` (static) — recomputes the window title from ticker / interval / loaded-config / loaded-watchlists / dirty state and applies via `title_setter`. Ratio tickers are rendered via `ratio_display_label` (e.g. `AMD / NVDA`).
 - `confirm_close_when_dirty(...)` / `confirm_close_when_dirty_for(...)` (static) — Yes/No/Cancel prompt; honors `PYTEST_CURRENT_TEST` + `TRADINGLAB_NO_QUIT_PROMPT=1` to never block CI.
 
 ## Design notes

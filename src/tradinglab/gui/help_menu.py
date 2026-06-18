@@ -724,6 +724,38 @@ class HelpMenuMixin:
                 parent=self,
             )
 
+    # ---- New ratio chart -----------------------------------------------
+
+    def _submit_ratio_chart(self, symbol: str) -> None:
+        try:
+            self.ticker_var.set(symbol)
+            self._schedule_reload(delay_ms=0)
+        except Exception as e:  # noqa: BLE001
+            messagebox.showerror(
+                "New Ratio Chart",
+                f"Could not chart ratio {symbol}: {e}",
+                parent=self,
+            )
+
+    def _on_tools_new_ratio_chart(self) -> None:
+        try:
+            from .ratio_chart_dialog import open_ratio_chart_dialog
+        except ImportError as e:
+            messagebox.showerror(
+                "New Ratio Chart",
+                f"Ratio Chart dialog is unavailable: {e}",
+                parent=self,
+            )
+            return
+        try:
+            open_ratio_chart_dialog(self, on_submit=self._submit_ratio_chart)
+        except Exception as e:  # noqa: BLE001
+            messagebox.showerror(
+                "New Ratio Chart",
+                f"Could not open the Ratio Chart dialog: {e}",
+                parent=self,
+            )
+
     # ---- Configure local data (BYOD) ---------------------------------
 
     def _on_help_configure_local_data(self) -> None:
