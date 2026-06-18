@@ -532,6 +532,15 @@ class ChartApp(
         self._highlight_ha_flat_var = self._state.highlight_ha_flat
         self._volume_tod_var = self._state.volume_tod
         self._chartstack_visible_var = self._state.chartstack_visible
+        # Ratio-symbol render modes (AMD/NVDA etc.): consulted ONLY when the
+        # slot's symbol is a ratio (is_ratio_symbol); non-ratio charts are
+        # completely unaffected. Default: close-line + hidden volume + raw
+        # quotient. ``ratio_candles`` flips to OHLC candles + volume;
+        # ``ratio_rebase`` rebases the series to 100 at the first loaded bar.
+        self._ratio_candles_var = tk.BooleanVar(value=bool(
+            _settings.get("ratio_candles", False)))
+        self._ratio_rebase_var = tk.BooleanVar(value=bool(
+            _settings.get("ratio_rebase", False)))
         self._theme_ctrl = ThemeController(self)
         self._theme = self._theme_ctrl.theme
         self._theme_overrides = self._theme_ctrl.overrides
@@ -3499,7 +3508,15 @@ class ChartApp(
         main_sig = _pane_signature("main")
         compare_sig = _pane_signature("compare") if compare_on else ()
         drill_day = getattr(self, "_drilldown_day", None)
-        return (compare_on, interval, drill_day, main_sig, compare_sig)
+        # Whether each slot hides its volume pane (ratio-line render) is a
+        # STRUCTURAL difference — switching a normal ticker (volume shown) to a
+        # ratio (volume hidden) at the same interval/indicator count must force
+        # a full rebuild, not a topology-preserving fast render.
+        hide_vol_sig = (
+            self._slot_hides_volume("primary"),
+            self._slot_hides_volume("compare") if compare_on else False,
+        )
+        return (compare_on, interval, drill_day, main_sig, compare_sig, hide_vol_sig)
 
     def _render(self) -> None:
         """Re-draw the price + volume panels for the current candles.
@@ -3616,6 +3633,15 @@ class ChartApp(
             fig_h_in = float(self._figure.get_figheight())
             ratios1, _ = _ind_render.compute_layout(1 + prim_n_ind, fig_h_in)
             ratios2, _ = _ind_render.compute_layout(1 + comp_n_ind, fig_h_in)
+            # Collapse the volume row to ~0 height for a ratio-line slot
+            # (the axis is still created + hidden in the slot loop so every
+            # ax_v consumer keeps working; only the allocated height changes).
+            if self._slot_hides_volume("primary"):
+                ratios1 = list(ratios1)
+                ratios1[1] = 1e-3
+            if self._slot_hides_volume("compare"):
+                ratios2 = list(ratios2)
+                ratios2[1] = 1e-3
             inner1 = outer[0, 0].subgridspec(1 + 1 + prim_n_ind, 1,
                                              height_ratios=ratios1, hspace=0)
             inner2 = outer[1, 0].subgridspec(1 + 1 + comp_n_ind, 1,
@@ -3642,6 +3668,9 @@ class ChartApp(
                 self._indicator_manager, "main", interval))
             fig_h_in = float(self._figure.get_figheight())
             ratios, _ = _ind_render.compute_layout(1 + prim_n_ind, fig_h_in)
+            if self._slot_hides_volume("primary"):
+                ratios = list(ratios)
+                ratios[1] = 1e-3  # collapse volume row for a ratio-line chart
             gs = self._figure.add_gridspec(
                 1 + 1 + prim_n_ind, 1,
                 height_ratios=ratios, hspace=0,
@@ -3666,10 +3695,20 @@ class ChartApp(
         # back-ref to ``self`` for live access to ``_panel_state``.
         _AdaptiveXLocator = _adaptive_x_locator_class()
         for slot_key, candles, ax_p, ax_v, ind_axes, scope in slots:
+            hide_vol = self._slot_hides_volume(slot_key)
+            candles = self._maybe_rebase_candles(slot_key, candles)
             setup_price_axes(ax_p)
             setup_volume_axes(ax_v)
             style_axes(ax_p, theme)
             style_axes(ax_v, theme)
+            if hide_vol:
+                # Ratio-line slot: collapse + hide the (zero-height) volume
+                # axis. It still exists in _panel_state so every ax_v consumer
+                # (autoscale, ax map, formatter) keeps working unchanged.
+                try:
+                    ax_v.set_visible(False)
+                except Exception:  # noqa: BLE001
+                    pass
             # Style indicator panes the same way as a generic numeric
             # axis (grid, plain ticks). They're shared-x so the
             # adaptive locator drives them too.
@@ -3692,11 +3731,12 @@ class ChartApp(
                     _AdaptiveXLocator(slot_key, self, interval),
                 )
             # Decide which axis owns the bottom tick labels: the last
-            # axis in the stack (indicator pane if any, else volume).
-            stack = [ax_p, ax_v, *ind_axes]
-            for ax in stack:
+            # VISIBLE axis in the stack (indicator pane if any, else volume —
+            # but never a hidden volume axis, else x labels vanish).
+            label_stack = [ax_p] + ([] if hide_vol else [ax_v]) + list(ind_axes)
+            for ax in (ax_p, ax_v, *ind_axes):
                 ax.tick_params(axis="x", labelbottom=False)
-            stack[-1].tick_params(axis="x", labelbottom=True, labelsize=9)
+            label_stack[-1].tick_params(axis="x", labelbottom=True, labelsize=9)
 
             # Ticker watermark, centered in the price axes — tracked in
             # _panel_state so the fast path can detach + replace it.
@@ -3791,6 +3831,7 @@ class ChartApp(
             ind_axes = list(ps.get("ind_axes", []))
 
             # Re-point candles + the axes→candles map (axes identity kept).
+            candles = self._maybe_rebase_candles(slot_key, candles)
             ps["candles"] = candles
             self._ax_candle_map[ax_p] = (candles, "price", 0)
             self._ax_candle_map[ax_v] = (candles, "volume", 0)
@@ -4040,6 +4081,52 @@ class ChartApp(
         except Exception:  # noqa: BLE001
             pass
 
+    def _on_menu_toggle_ratio_candles(self) -> None:
+        """View menu: ratio line vs candlesticks (+ volume). Persist + rebuild.
+
+        Flips the volume pane (hidden in line mode), which is part of the
+        topology key, so ``_render`` does a full topology rebuild. No visible
+        effect unless the active symbol is a ratio (AMD/NVDA, ...).
+        """
+        try:
+            _settings.set("ratio_candles", bool(self._ratio_candles_var.get()))
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            self._render()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            self._autoscale_y_to_visible()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            self._canvas.draw_idle()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _on_menu_toggle_ratio_rebase(self) -> None:
+        """View menu: rebase a ratio series to 100 at its first bar. Persist +
+        re-render + re-fit Y (the rebased range differs from the raw quotient).
+        No visible effect unless the active symbol is a ratio.
+        """
+        try:
+            _settings.set("ratio_rebase", bool(self._ratio_rebase_var.get()))
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            self._render()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            self._autoscale_y_to_visible()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            self._canvas.draw_idle()
+        except Exception:  # noqa: BLE001
+            pass
+
     def _sync_highlight_ha_flat_menu_state(self) -> None:
         """Keep the *Highlight Flat Bars* menu entry enabled.
 
@@ -4269,6 +4356,56 @@ class ChartApp(
             lo, hi = max(0, n - default_win), n
         return lo, hi, time_remap_applied
 
+    def _active_symbol_for_slot(self, slot: str) -> str:
+        """Return the confirmed (else live-typed) ticker symbol for a slot."""
+        if slot == "compare":
+            return (self._confirmed_compare_ticker
+                    or self.compare_ticker_var.get().strip().upper() or "")
+        return (self._confirmed_primary_ticker
+                or self.ticker_var.get().strip().upper() or "")
+
+    def _slot_hides_volume(self, slot: str) -> bool:
+        """True if ``slot`` renders as a ratio line (no meaningful volume).
+
+        Ratio pseudo-symbols (AMD/NVDA, ...) have volume 0; their pane is
+        collapsed unless the user opts into candle mode (``ratio_candles``).
+        """
+        try:
+            return (is_ratio_symbol(self._active_symbol_for_slot(slot))
+                    and not bool(self._ratio_candles_var.get()))
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _maybe_rebase_candles(self, slot: str, candles):
+        """Rebase a ratio slot's series to 100 at its first bar, else passthrough.
+
+        Applies only when the slot's symbol is a ratio AND the ratio-rebase
+        toggle is on. Returns a NEW ``Candle`` list — the canonical
+        ``self._primary`` / ``self._compare`` stay raw, but every per-slot
+        consumer (line/candle glyphs, ``_autoscale_slot_y``, hover hit-test via
+        ``_ax_candle_map`` / ``display_candles``) reads the rebased copy, so the
+        rebased view is internally coherent. Anchor is the first loaded bar's
+        close (fixed, not visible-edge) so pan/zoom never re-anchor.
+        """
+        try:
+            if not candles:
+                return candles
+            if not (is_ratio_symbol(self._active_symbol_for_slot(slot))
+                    and bool(self._ratio_rebase_var.get())):
+                return candles
+            anchor = float(candles[0].close)
+            if not (anchor > 0):
+                return candles
+            f = 100.0 / anchor
+            return [
+                Candle(date=c.date, open=c.open * f, high=c.high * f,
+                       low=c.low * f, close=c.close * f, volume=c.volume,
+                       session=getattr(c, "session", "regular"))
+                for c in candles
+            ]
+        except Exception:  # noqa: BLE001
+            return candles
+
     def _draw_slice(self, slot: str, new_start: int, new_end: int) -> None:
         """Redraw the ``candles[new_start:new_end]`` slice into ``slot``.
 
@@ -4293,58 +4430,79 @@ class ChartApp(
         new_end = max(new_start, min(n, int(new_end)))
         self._reset_slot_artists(slot)
         if new_end > new_start:
-            display_candles = self._display_candles_for(candles)
-            hollow_indices = self._key_bar_hollow_indices_for(candles)
-            flat_overlay = self._ha_flat_overlay_for(display_candles)
-            # Dynamic candle body width: at extreme zoom-out the
-            # default 0.6-data-units body overlaps its neighbours
-            # below ≈ 3 px/bar. Clamp the body half via the visible
-            # window size so bodies thin out gracefully instead of
-            # bleeding into each other. Wicks (1 px) are unaffected
-            # and stay readable at every density.
-            try:
-                lo_f, hi_f = ax_p.get_xlim()
-                n_visible = max(1, int(hi_f - lo_f))
-            except Exception:  # noqa: BLE001
-                n_visible = max(1, new_end - new_start)
-            body_half = dynamic_body_half(ax_p, n_visible)
-            wicks, bodies = draw_candlesticks(
-                ax_p, display_candles, start=new_start, end=new_end,
-                hollow_indices=hollow_indices,
-                flat_overlay=flat_overlay,
-                body_half=body_half,
+            slot_sym = self._active_symbol_for_slot(slot)
+            ratio_line = (
+                is_ratio_symbol(slot_sym)
+                and not bool(self._ratio_candles_var.get())
             )
-            vol_bars = draw_volume(
-                ax_v, candles, start=new_start, end=new_end,
-                body_half=body_half,
-            )
-            intraday = is_intraday(self.interval_var.get())
-            theme = self._theme
-            shades = draw_session_shading(
-                ax_p, candles, start=new_start, end=new_end,
-                pre_color=theme["pre_shade"],
-                post_color=theme["post_shade"],
-                intraday=intraday,
-            )
-            ps["price_wicks"] = wicks
-            ps["price_bodies"] = bodies
-            ps["vol_bars"] = vol_bars
-            ps["price_shades"] = list(shades)
-            # Stash the dynamic body width so the H1 tick fastpath
-            # (``_apply_tick_to_artists``) can keep the rightmost bar's
-            # body consistent with the rest of the slice. Without this
-            # an extreme-zoom-out slice (body_half ≈ 0.05) would suddenly
-            # acquire a default-width (0.3) rightmost bar on the next tick.
-            ps["body_half"] = body_half
-            # Stash the (possibly-substituted) glyph-drawing list so
-            # hover can hit-test against what the user actually sees on
-            # screen. In HA mode the HA bar's [low, high] is a strict
-            # superset of the real bar's range (HA_high = max(high,
-            # HA_open, HA_close), HA_low symmetric), so without this
-            # the cursor falls "outside" the real bar in the HA-only
-            # tail/wick region and the readout pop-up never appears.
-            # When HA is off this is identical to ``candles``.
-            ps["display_candles"] = display_candles
+            if ratio_line:
+                # Ratio symbols (AMD/NVDA, ...) render as a clean close-line:
+                # synthetic OHLC wicks aren't real traded highs/lows and a
+                # ratio has no meaningful volume (the pane is hidden in
+                # _render). Leave the candle/volume artist handles None so the
+                # live-tick fast path (chart_renderer.apply_tick_to_artists)
+                # safely bails to a full render; indicators still layer on top.
+                xs = list(range(new_start, new_end))
+                ys = [candles[i].close for i in range(new_start, new_end)]
+                try:
+                    (line,) = ax_p.plot(
+                        xs, ys, color=self._theme.get("text", "#1f77b4"),
+                        linewidth=1.4, zorder=3, solid_joinstyle="round",
+                    )
+                except Exception:  # noqa: BLE001
+                    line = None
+                ps["price_wicks"] = None
+                ps["price_bodies"] = None
+                ps["price_line"] = line
+                ps["vol_bars"] = None
+                ps["price_shades"] = []
+                ps["body_half"] = 0.5
+                ps["display_candles"] = candles
+            else:
+                display_candles = self._display_candles_for(candles)
+                hollow_indices = self._key_bar_hollow_indices_for(candles)
+                flat_overlay = self._ha_flat_overlay_for(display_candles)
+                # Dynamic candle body width: at extreme zoom-out the
+                # default 0.6-data-units body overlaps its neighbours
+                # below ≈ 3 px/bar. Clamp the body half via the visible
+                # window size so bodies thin out gracefully instead of
+                # bleeding into each other. Wicks (1 px) are unaffected
+                # and stay readable at every density.
+                try:
+                    lo_f, hi_f = ax_p.get_xlim()
+                    n_visible = max(1, int(hi_f - lo_f))
+                except Exception:  # noqa: BLE001
+                    n_visible = max(1, new_end - new_start)
+                body_half = dynamic_body_half(ax_p, n_visible)
+                wicks, bodies = draw_candlesticks(
+                    ax_p, display_candles, start=new_start, end=new_end,
+                    hollow_indices=hollow_indices,
+                    flat_overlay=flat_overlay,
+                    body_half=body_half,
+                )
+                vol_bars = draw_volume(
+                    ax_v, candles, start=new_start, end=new_end,
+                    body_half=body_half,
+                )
+                intraday = is_intraday(self.interval_var.get())
+                theme = self._theme
+                shades = draw_session_shading(
+                    ax_p, candles, start=new_start, end=new_end,
+                    pre_color=theme["pre_shade"],
+                    post_color=theme["post_shade"],
+                    intraday=intraday,
+                )
+                ps["price_wicks"] = wicks
+                ps["price_bodies"] = bodies
+                ps["vol_bars"] = vol_bars
+                ps["price_shades"] = list(shades)
+                # Stash the dynamic body width so the H1 tick fastpath
+                # (``_apply_tick_to_artists``) keeps the rightmost bar's
+                # body consistent with the rest of the slice.
+                ps["body_half"] = body_half
+                # Stash the glyph-drawing list so hover hit-tests against
+                # what the user sees (HA bars are a superset of real range).
+                ps["display_candles"] = display_candles
         ps["render_start"] = new_start
         ps["render_end"] = new_end
         # Spec §6.3 / §11.2: always invalidate blit bg after a slice refill.
@@ -5261,6 +5419,7 @@ class ChartApp(
         ps = self._panel_state.get(slot)
         if not ps:
             return
+        candles = self._maybe_rebase_candles(slot, candles)
         ps["candles"] = candles
         for ax in (ps.get("price_ax"), ps.get("vol_ax")):
             if ax is None:
@@ -6125,6 +6284,8 @@ class ChartApp(
             ("_ha_display_var", "heikin_ashi"),
             ("_highlight_key_bars_var", "highlight_key_bars"),
             ("_highlight_ha_flat_var", "highlight_ha_flat"),
+            ("_ratio_candles_var", "ratio_candles"),
+            ("_ratio_rebase_var", "ratio_rebase"),
         ):
             try:
                 var = getattr(self, var_name, None)

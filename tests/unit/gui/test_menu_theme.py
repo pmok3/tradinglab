@@ -38,6 +38,8 @@ class _MenuBuilderCallbacks:
         self._highlight_key_bars_var = tk.BooleanVar(root, value=False)
         self._volume_tod_var = tk.BooleanVar(root, value=False)
         self._chartstack_visible_var = tk.BooleanVar(root, value=False)
+        self._ratio_candles_var = tk.BooleanVar(root, value=False)
+        self._ratio_rebase_var = tk.BooleanVar(root, value=False)
 
     def __getattr__(self, name: str):
         if name.startswith("_on_") or name.startswith("on_"):

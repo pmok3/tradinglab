@@ -45,7 +45,7 @@ class ChartRenderer:
         if bodies is not None:
             for art in list(getattr(bodies, "_sc_flat_hatch_collections", []) or []):
                 _safe_remove(art)
-        for key in ("price_wicks", "price_bodies", "vol_bars"):
+        for key in ("price_wicks", "price_bodies", "price_line", "vol_bars"):
             _safe_remove(ps.get(key))
             ps[key] = None
         for art in list(ps.get("price_shades", [])):

@@ -295,6 +295,23 @@ class MenuBuilder:
             variable=self._cb._volume_tod_var,
             command=self._cb._on_menu_toggle_volume_tod,
         )
+        # Ratio-chart render modes (only affect ratio symbols like AMD/NVDA).
+        ratio_menu = tk.Menu(view_menu, tearoff=0)
+        ratio_menu.add_checkbutton(
+            label="Show as candlesticks (+ volume)",
+            onvalue=True,
+            offvalue=False,
+            variable=self._cb._ratio_candles_var,
+            command=self._cb._on_menu_toggle_ratio_candles,
+        )
+        ratio_menu.add_checkbutton(
+            label="Rebase to 100",
+            onvalue=True,
+            offvalue=False,
+            variable=self._cb._ratio_rebase_var,
+            command=self._cb._on_menu_toggle_ratio_rebase,
+        )
+        view_menu.add_cascade(label="Ratio charts (A/B)", menu=ratio_menu)
         view_menu.add_separator()
         # ChartStack cascade (audit ``chartstack-menu-cascade``) —
         # groups the show/hide toggle with the per-slot Settings popup,
@@ -375,6 +392,7 @@ class MenuBuilder:
         self._view_menu = view_menu
         self._ha_menu = ha_menu
         self._chartstack_menu = cs_menu
+        self._ratio_menu = ratio_menu
         self._recent_config_menu = recent_config_menu
         self._recent_watchlist_menu = recent_watchlist_menu
         self._submenus = [
@@ -384,6 +402,7 @@ class MenuBuilder:
             view_menu,
             ha_menu,
             cs_menu,
+            ratio_menu,
             tools_menu,
             exits_menu,
             load_preset_menu,

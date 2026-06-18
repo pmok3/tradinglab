@@ -47,6 +47,8 @@ ROUNDTRIP_KEYS: frozenset[str] = frozenset({
     "chartstack.enabled",
     "ui_scale",
     "worker_count",
+    "ratio_candles",
+    "ratio_rebase",
 })
 
 # The behavioral smoke check exercises exactly these (the live view/behavior
@@ -63,6 +65,8 @@ ROUNDTRIP_BEHAVIORAL_KEYS: frozenset[str] = frozenset({
     "chartstack.enabled",
     "ui_scale",
     "worker_count",
+    "ratio_candles",
+    "ratio_rebase",
 })
 
 # Persisted keys intentionally NOT restored live on config load, each with a
