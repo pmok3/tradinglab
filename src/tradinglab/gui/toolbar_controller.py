@@ -53,6 +53,21 @@ class ToolbarController:
         self._bind_label(self.ticker_label, self._state.ticker)
 
         ttk.Label(self._frame, text="Compare:").pack(side=tk.LEFT, padx=(8, 2))
+        # Compare on/off as a fixed-width toggle BUTTON (themed TButton) rather
+        # than a checkbox — compact + an unambiguous On/Off state. It sits
+        # right after the "Compare:" label and before the compare-ticker
+        # display. The button flips the same ``compare`` BooleanVar (still the
+        # source of truth everywhere) and calls the same ``on_compare_toggle``
+        # callback; a trace keeps its On/Off text in sync when compare is
+        # toggled in code (failed-compare revert, sandbox replay).
+        self.compare_check = ttk.Button(
+            self._frame,
+            width=5,
+            command=self._on_compare_button,
+        )
+        self.compare_check.pack(side=tk.LEFT, padx=(0, 4))
+        self._bind_compare_button(self._state.compare)
+
         self.compare_label = ttk.Label(
             self._frame,
             width=14,
@@ -62,19 +77,6 @@ class ToolbarController:
         )
         self.compare_label.pack(side=tk.LEFT)
         self._bind_label(self.compare_label, self._state.compare_label)
-
-        # Compare on/off as a fixed-width toggle BUTTON (themed TButton) rather
-        # than a checkbox — more compact + an unambiguous on/off label. The
-        # button flips the same ``compare`` BooleanVar (still the source of
-        # truth everywhere) and calls the same ``on_compare_toggle`` callback;
-        # a trace keeps the label in sync when compare is toggled in code.
-        self.compare_check = ttk.Button(
-            self._frame,
-            width=12,
-            command=self._on_compare_button,
-        )
-        self.compare_check.pack(side=tk.LEFT)
-        self._bind_compare_button(self._state.compare)
 
         ttk.Label(self._frame, text="Source:").pack(side=tk.LEFT, padx=(8, 2))
         self.source_combo = ttk.Combobox(
@@ -189,16 +191,15 @@ class ToolbarController:
     def _bind_compare_button(self, variable: tk.Variable) -> None:
         """Keep the compare toggle button's label in sync with ``variable``.
 
-        Mirrors a checkbox's automatic indicator: the text reads
-        ``Compare: On`` / ``Compare: Off`` and updates whether compare is
-        toggled by the button or set programmatically (e.g. a failed compare
-        ticker reverting, sandbox replay).
+        The "Compare:" prefix is a separate static label to the button's left,
+        so the button text is just the state — ``On`` / ``Off`` — and updates
+        whether compare is toggled by the button or set programmatically (e.g.
+        a failed compare ticker reverting, sandbox replay).
         """
         def _sync(*_args: object) -> None:
             try:
                 on = bool(variable.get())
-                self.compare_check.configure(
-                    text="Compare: On" if on else "Compare: Off")
+                self.compare_check.configure(text="On" if on else "Off")
             except tk.TclError:
                 pass
 
