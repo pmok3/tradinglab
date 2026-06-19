@@ -3507,14 +3507,18 @@ class ChartApp(
         main_sig = _pane_signature("main")
         compare_sig = _pane_signature("compare") if compare_on else ()
         drill_day = getattr(self, "_drilldown_day", None)
-        # Whether each slot hides its volume pane (ratio-line render) is a
+        # Whether each slot hides its volume pane (ratio render) is a
         # STRUCTURAL difference — switching a normal ticker (volume shown) to a
         # ratio (volume hidden) at the same interval/indicator count must force
-        # a full rebuild, not a topology-preserving fast render.
-        hide_vol_sig = (
-            self._slot_hides_volume("primary"),
-            self._slot_hides_volume("compare") if compare_on else False,
-        )
+        # a full rebuild, not a topology-preserving fast render. Defensive
+        # (the whole method must never raise): degrade to (False, False).
+        try:
+            hide_vol_sig = (
+                self._slot_hides_volume("primary"),
+                self._slot_hides_volume("compare") if compare_on else False,
+            )
+        except Exception:  # noqa: BLE001
+            hide_vol_sig = (False, False)
         return (compare_on, interval, drill_day, main_sig, compare_sig, hide_vol_sig)
 
     def _render(self) -> None:

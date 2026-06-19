@@ -25,7 +25,7 @@ def _var(value):
     return SimpleNamespace(get=lambda: value)
 
 
-def _stub(*, compare_on=False, interval="1d", drill=None, configs=()):
+def _stub(*, compare_on=False, interval="1d", drill=None, configs=(), hide_vol=False):
     mgr = IndicatorManager()
     for c in configs:
         mgr.add(c)
@@ -35,6 +35,7 @@ def _stub(*, compare_on=False, interval="1d", drill=None, configs=()):
         interval_var=_var(interval),
         _indicator_manager=mgr,
         _drilldown_day=drill,
+        _slot_hides_volume=lambda slot: hide_vol,
     )
 
 
@@ -81,6 +82,12 @@ def test_indicator_reorder_changes_key():
 def test_drilldown_enter_exit_changes_key():
     day = _dt.date(2024, 6, 3)
     assert _key(_stub(drill=None)) != _key(_stub(drill=day))
+
+
+def test_ratio_hide_volume_changes_key():
+    # A ratio (volume pane hidden) vs a normal ticker (volume shown) at the
+    # same interval/indicator count is a STRUCTURAL change → different key.
+    assert _key(_stub(hide_vol=False)) != _key(_stub(hide_vol=True))
 
 
 def test_axis_mode_change_is_same_topology():
