@@ -47,7 +47,6 @@ ROUNDTRIP_KEYS: frozenset[str] = frozenset({
     "chartstack.enabled",
     "ui_scale",
     "worker_count",
-    "ratio_candles",
     "ratio_rebase",
 })
 
@@ -65,7 +64,6 @@ ROUNDTRIP_BEHAVIORAL_KEYS: frozenset[str] = frozenset({
     "chartstack.enabled",
     "ui_scale",
     "worker_count",
-    "ratio_candles",
     "ratio_rebase",
 })
 

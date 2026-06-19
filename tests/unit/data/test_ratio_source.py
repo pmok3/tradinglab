@@ -9,7 +9,6 @@ import pytest
 
 from tradinglab.data.ratio_source import (
     RATIO_DELIMITER,
-    RATIO_PRESETS,
     RATIO_SYMBOLS,
     canonical_ratio_symbol,
     compute_ratio_candles,
@@ -140,19 +139,6 @@ def test_ratio_display_label(raw, expected):
 
 def test_ratio_delimiter_is_slash():
     assert RATIO_DELIMITER == "/"
-
-
-def test_presets_are_valid_ratios():
-    assert len(RATIO_PRESETS) >= 5
-    seen = set()
-    for num, den, desc in RATIO_PRESETS:
-        sym = f"{num}/{den}"
-        assert is_ratio_symbol(sym), f"{sym} should parse as a ratio"
-        assert parse_ratio_symbol(sym) == (num, den)
-        assert num == num.upper() and den == den.upper()
-        assert desc and isinstance(desc, str)
-        assert sym not in seen, f"duplicate preset {sym}"
-        seen.add(sym)
 
 
 # ------------------------------------------------------------------------- compute

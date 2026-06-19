@@ -19,9 +19,6 @@ primary path and needs no registry entry.
   prefix).
 - `RATIO_SYMBOLS: dict[str, tuple[str, str]]` — named aliases →
   `(numerator, denominator)`. UPPERCASE, separator-free. Optional convenience.
-- `RATIO_PRESETS: tuple[tuple[str, str, str], ...]` — curated
-  `(num, den, description)` gauges surfaced in the New Ratio Chart dialog
-  (breadth / sector-RS / pairs for the market→sector→stock workflow).
 - `parse_ratio_symbol(ticker) -> tuple[str, str] | None` — case-insensitive,
   whitespace-tolerant. Resolves an alias first, then the general `NUM/DEN`
   form: exactly one `/` splitting into two non-empty legs, **neither leg

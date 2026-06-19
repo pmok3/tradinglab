@@ -24,7 +24,7 @@ Aggregates the data-source plugins (yfinance, synthetic, synthetic-stream bootst
   in the Configure Local Data dialog.
 - `make_local_fetcher`, `discover_subsources` — re-exported from
   `.local_source` (see `data/local_source.spec.md`).
-- `RATIO_SYMBOLS`, `RATIO_PRESETS`, `RATIO_DELIMITER`, `parse_ratio_symbol`, `is_ratio_symbol`, `canonical_ratio_symbol`, `ratio_display_label`, `compute_ratio_candles`, `fetch_ratio` — re-exported from `.ratio_source` (see `data/ratio_source.spec.md`). Ratio pseudo-symbols: the general `NUM/DEN` form (e.g. `AMD/NVDA`) plus named aliases (`RSPSPY` = RSP/SPY). NOT a `DATA_SOURCES` entry — resolution is hooked into `fetch_live_data`, so a ratio symbol is a typed *ticker*, not a selectable *source*. Never persisted to disk (see `disk_cache.spec.md`).
+- `RATIO_SYMBOLS`, `RATIO_DELIMITER`, `parse_ratio_symbol`, `is_ratio_symbol`, `canonical_ratio_symbol`, `ratio_display_label`, `compute_ratio_candles`, `fetch_ratio` — re-exported from `.ratio_source` (see `data/ratio_source.spec.md`). Ratio pseudo-symbols: the general `NUM/DEN` form (e.g. `AMD/NVDA`) plus named aliases (`RSPSPY` = RSP/SPY). NOT a `DATA_SOURCES` entry — resolution is hooked into `fetch_live_data`, so a ratio symbol is a typed *ticker*, not a selectable *source*. Never persisted to disk (see `disk_cache.spec.md`).
 
 ## Dependencies
 - Internal: all data submodules.

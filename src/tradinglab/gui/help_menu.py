@@ -131,6 +131,8 @@ class HelpMenuMixin:
                       command=self._on_help_entries_exits_guide)
         m.add_command(label="Strategy Tester Guide…",
                       command=self._on_help_strategy_tester_guide)
+        m.add_command(label="Ratio Charts Guide…",
+                      command=self._on_help_ratio_charts_guide)
         m.add_command(label="Documentation Library…",
                       command=self._on_help_documentation_library)
         m.add_command(label="View Online Docs",
@@ -542,6 +544,31 @@ class HelpMenuMixin:
             parent=self,
         )
 
+    def _on_help_ratio_charts_guide(self) -> None:
+        """Open the Ratio Charts guide in the doc viewer."""
+        try:
+            from .. import _resources
+            target = _resources.resource_path("docs", "RATIO_CHARTS.md")
+        except Exception:  # noqa: BLE001
+            target = None
+        if target and os.path.exists(target):
+            try:
+                from .doc_viewer import open_doc_viewer
+                dlg = open_doc_viewer(self, target)
+            except Exception:  # noqa: BLE001
+                dlg = None
+            if dlg is not None:
+                return
+            if _open_in_default_app(target):
+                return
+        messagebox.showinfo(
+            "Ratio Charts",
+            "Type two tickers separated by a slash (e.g. AMD/NVDA) into the "
+            "ticker box to chart their ratio as candlesticks.\n\nSee the full "
+            "guide in the Documentation Library.",
+            parent=self,
+        )
+
     # ---- Documentation Library ----------------------------------------
 
     def _on_help_documentation_library(self) -> None:
@@ -721,38 +748,6 @@ class HelpMenuMixin:
             messagebox.showerror(
                 "Connect to Schwab",
                 f"Could not open the Schwab Connect dialog: {e}",
-                parent=self,
-            )
-
-    # ---- New ratio chart -----------------------------------------------
-
-    def _submit_ratio_chart(self, symbol: str) -> None:
-        try:
-            self.ticker_var.set(symbol)
-            self._schedule_reload(delay_ms=0)
-        except Exception as e:  # noqa: BLE001
-            messagebox.showerror(
-                "New Ratio Chart",
-                f"Could not chart ratio {symbol}: {e}",
-                parent=self,
-            )
-
-    def _on_tools_new_ratio_chart(self) -> None:
-        try:
-            from .ratio_chart_dialog import open_ratio_chart_dialog
-        except ImportError as e:
-            messagebox.showerror(
-                "New Ratio Chart",
-                f"Ratio Chart dialog is unavailable: {e}",
-                parent=self,
-            )
-            return
-        try:
-            open_ratio_chart_dialog(self, on_submit=self._submit_ratio_chart)
-        except Exception as e:  # noqa: BLE001
-            messagebox.showerror(
-                "New Ratio Chart",
-                f"Could not open the Ratio Chart dialog: {e}",
                 parent=self,
             )
 

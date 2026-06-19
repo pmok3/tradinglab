@@ -96,7 +96,6 @@ _DIALOG_COVERAGE_EXEMPTIONS: dict[str, str] = {
         "Pure ttk dialog (Labels + Entry + Buttons + Separator) — no "
         "classic Tk widgets; chrome themed by the global ttk ThemeController."
     ),
-    "RatioChartDialog": "Pure-ttk dialog, no classic Tk widgets.",
     "DrawingDialog": (
         "Pure ttk form — sliders / spinboxes / combobox styled via "
         "ttk.Style."

@@ -11,11 +11,10 @@ from tradinglab.app import ChartApp
 from tradinglab.models import Candle
 
 
-def _stub(symbol, *, rebase=False, candles=False):
+def _stub(symbol, *, rebase=False):
     s = SimpleNamespace()
     s._active_symbol_for_slot = lambda _slot: symbol
     s._ratio_rebase_var = SimpleNamespace(get=lambda: rebase)
-    s._ratio_candles_var = SimpleNamespace(get=lambda: candles)
     return s
 
 
@@ -62,18 +61,12 @@ def test_rebase_empty_and_nonpositive_anchor_safe():
 
 
 # ---------------------------------------------------------------- hide volume
-def test_hides_volume_for_ratio_line():
-    assert ChartApp._slot_hides_volume(
-        _stub("AMD/NVDA", candles=False), "primary") is True
-
-
-def test_shows_volume_for_ratio_candles():
-    assert ChartApp._slot_hides_volume(
-        _stub("AMD/NVDA", candles=True), "primary") is False
+def test_hides_volume_for_ratio():
+    # Ratios always hide the volume pane (always candlesticks, no volume).
+    assert ChartApp._slot_hides_volume(_stub("AMD/NVDA"), "primary") is True
+    assert ChartApp._slot_hides_volume(_stub("RSP/SPY"), "primary") is True
 
 
 def test_shows_volume_for_non_ratio():
-    assert ChartApp._slot_hides_volume(
-        _stub("AMD", candles=False), "primary") is False
-    assert ChartApp._slot_hides_volume(
-        _stub("RSP/SPY", candles=False), "primary") is True
+    assert ChartApp._slot_hides_volume(_stub("AMD"), "primary") is False
+    assert ChartApp._slot_hides_volume(_stub("SPY"), "primary") is False

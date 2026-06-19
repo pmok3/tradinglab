@@ -17,7 +17,7 @@ Own TradingLab's panel rendering state and the helper methods that mutate candle
 ## Public API
 - `class ChartRenderer`
   - `ChartRenderer()` — initializes empty render state.
-  - `reset_slot_artists(slot)` — tear down cached artists for one slot (`price_wicks`, `price_bodies`, `price_line` (ratio close-line), `vol_bars`, shading).
+  - `reset_slot_artists(slot)` — tear down cached artists for one slot (`price_wicks`, `price_bodies`, `vol_bars`, shading).
   - `display_candles_for(candles, *, ha_on)` — optional HA projection for glyph drawing.
   - `key_bar_hollow_indices_for(candles, *, highlight_key_bars_on)` — derive hollow-bar indices.
   - `ha_flat_overlay_for(candles, *, highlight_ha_flat_on, ha_on, dark_mode)` — derive HA-flat hatch metadata only when HA mode and the flat-highlight toggle are both on. Hatch colours derive from the **live** `constants.BULL_COLOR` / `BEAR_COLOR` (module imports `from .. import constants as _constants` and reads `_constants.BULL_COLOR` at call time, NOT a value-binding `from ..constants import BULL_COLOR`) so the Okabe-Ito palette toggle re-colours the hatch without a relaunch. Audit `color-blind-palette`.

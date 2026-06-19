@@ -40,20 +40,6 @@ RATIO_SYMBOLS: dict[str, tuple[str, str]] = {
 #: The single delimiter that denotes a ratio in a typed ticker string.
 RATIO_DELIMITER = "/"
 
-#: Curated high-value ratio presets surfaced in the "New Ratio Chart" dialog,
-#: as ``(numerator, denominator, description)``. Chosen for the market →
-#: sector → stock relative-strength workflow (breadth, sector RS, pairs).
-RATIO_PRESETS: tuple[tuple[str, str, str], ...] = (
-    ("RSP", "SPY", "Breadth — equal-weight vs cap-weight S&P 500"),
-    ("QQQ", "SPY", "Risk appetite — Nasdaq-100 vs S&P 500"),
-    ("IWM", "SPY", "Small-cap risk appetite — Russell 2000 vs S&P 500"),
-    ("SMH", "SPY", "Semis vs market"),
-    ("XLF", "SPY", "Financials sector relative strength"),
-    ("AMD", "SMH", "Stock vs sector — AMD vs semiconductors"),
-    ("AMD", "NVDA", "Pairs — AMD vs NVDA leadership"),
-    ("HYG", "IEF", "Risk-on / risk-off — high-yield vs Treasuries"),
-)
-
 
 def parse_ratio_symbol(ticker: str) -> tuple[str, str] | None:
     """Return ``(numerator, denominator)`` for a ratio symbol, else ``None``.
@@ -203,7 +189,6 @@ def fetch_ratio(
 
 __all__ = [
     "RATIO_DELIMITER",
-    "RATIO_PRESETS",
     "RATIO_SYMBOLS",
     "canonical_ratio_symbol",
     "compute_ratio_candles",

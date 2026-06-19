@@ -4539,10 +4539,6 @@ def check_d35b_view_settings_round_trip(app) -> None:
         "worker_count": (
             lambda v: app._apply_worker_count(int(v)),
             lambda: int(app._worker_count), 3, 2),
-        "ratio_candles": (
-            lambda v: _set_toggle("_ratio_candles_var",
-                                  app._on_menu_toggle_ratio_candles, v),
-            lambda: bool(app._ratio_candles_var.get()), True, False),
         "ratio_rebase": (
             lambda v: _set_toggle("_ratio_rebase_var",
                                   app._on_menu_toggle_ratio_rebase, v),

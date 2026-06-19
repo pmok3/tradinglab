@@ -46,6 +46,9 @@ check, onboarding banner, credentials, and reset / purge.
   `docs/STRATEGY_TESTER.md` in the in-app doc viewer. Same
   fallback chain (last resort: messagebox pointing at the
   Strategy tab).
+- `_on_help_ratio_charts_guide` — opens `docs/RATIO_CHARTS.md`
+  in the in-app doc viewer. Same fallback chain (last resort:
+  messagebox explaining the `NUM/DEN` ticker syntax).
 - `_on_help_keyboard_shortcuts` — modeless Toplevel listing
   hotkeys grouped by feature in a `ttk.Treeview`. Singleton-per-app
   (re-invoke lifts existing). ESC and Close teardown + destroy.

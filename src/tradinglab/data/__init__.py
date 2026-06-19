@@ -50,7 +50,6 @@ from .parallel import fetch_chunks_parallel
 from .polygon_source import candles_from_polygon_response, fetch_polygon_data
 from .ratio_source import (
     RATIO_DELIMITER,
-    RATIO_PRESETS,
     RATIO_SYMBOLS,
     canonical_ratio_symbol,
     compute_ratio_candles,
@@ -177,7 +176,6 @@ __all__ = [
     "stash_arrays",
     "fetch_chunks_parallel",
     "RATIO_DELIMITER",
-    "RATIO_PRESETS",
     "RATIO_SYMBOLS",
     "canonical_ratio_symbol",
     "compute_ratio_candles",

@@ -175,7 +175,8 @@ blend into the light-mode white background. They are tracked in
 `tradinglab._resources.resource_path("docs")` (`<repo>/docs/` in
 dev, `<bundle>/_internal/docs/` frozen). Ordered by `_DOC_ORDER`
 (`ONBOARDING.md`, `WATCHLISTS.md`, `CUSTOM_INDICATORS.md`,
-`ENTRIES_EXITS.md`, `STRATEGY_TESTER.md`, `chartstack.md`) then
+`ENTRIES_EXITS.md`, `STRATEGY_TESTER.md`, `RATIO_CHARTS.md`,
+`chartstack.md`) then
 unknown files alphabetically (new bundled `.md` appears without a
 code change).
 

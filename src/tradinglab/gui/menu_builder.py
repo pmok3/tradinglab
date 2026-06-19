@@ -295,15 +295,9 @@ class MenuBuilder:
             variable=self._cb._volume_tod_var,
             command=self._cb._on_menu_toggle_volume_tod,
         )
-        # Ratio-chart render modes (only affect ratio symbols like AMD/NVDA).
+        # Ratio-chart option (only affects ratio symbols like AMD/NVDA, which
+        # always render as candlesticks with the volume pane hidden).
         ratio_menu = tk.Menu(view_menu, tearoff=0)
-        ratio_menu.add_checkbutton(
-            label="Show as candlesticks (+ volume)",
-            onvalue=True,
-            offvalue=False,
-            variable=self._cb._ratio_candles_var,
-            command=self._cb._on_menu_toggle_ratio_candles,
-        )
         ratio_menu.add_checkbutton(
             label="Rebase to 100",
             onvalue=True,
@@ -346,11 +340,6 @@ class MenuBuilder:
         menubar.add_cascade(label="View", menu=view_menu)
 
         tools_menu = tk.Menu(menubar, tearoff=0)
-        tools_menu.add_command(
-            label="New Ratio Chart…",
-            command=self._cb._on_tools_new_ratio_chart,
-        )
-        tools_menu.add_separator()
         tools_menu.add_command(
             label="Configure Credentials…",
             command=self._cb._on_help_configure_credentials,
