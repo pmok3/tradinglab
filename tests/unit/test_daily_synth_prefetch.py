@@ -15,9 +15,17 @@ import datetime as dt
 from types import SimpleNamespace
 
 import tradinglab.app as app_mod
+from tradinglab.data.today_upsample import _today_et
 from tradinglab.models import Candle
 
-_TODAY = dt.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+# Anchor "today" to the SAME US-Eastern calendar date the production upsample
+# code uses (``today_upsample._today_et``), NOT a naive ``datetime.now()``.
+# On a UTC CI runner late in the ET day (e.g. 00:15 UTC = 20:15 ET the prior
+# day) naive-now and ET-today disagree, so the synth/prefetch decision under
+# test — which is made in ET — would mismatch the test's fixtures. Building
+# tz-naive bars on the ET date keeps both sides aligned on every runner (and
+# in the missing-tzdata fallback, both sides degrade identically).
+_TODAY = dt.datetime.combine(_today_et(), dt.time(0, 0))
 
 
 def _prev_weekday(d: dt.datetime) -> dt.datetime:
