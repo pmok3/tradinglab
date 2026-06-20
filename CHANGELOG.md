@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.4.0] - 2026-06-19
+
+### Added
+
+- **Ratio charts — type two tickers to chart their ratio.** Type a symbol
+  followed by a slash and a second symbol — for example `AMD/NVDA`, `RSP/SPY`,
+  `XLF/SPY`, or `SMH/SPY` — and the chart shows the first divided by the second,
+  bar for bar. It's the fastest way to read *relative* strength: the chart rises
+  when the numerator is outperforming and falls when it's lagging. Ratios work
+  anywhere a normal symbol does (main chart, the compare overlay, watchlists),
+  and are drawn as ordinary candlesticks. The volume pane is hidden for a ratio
+  (a quotient has no meaningful volume). An optional **View → Ratio charts (A/B)
+  → Rebase to 100** rescales the line so it reads as relative *performance* from
+  the left edge. See the new **Help → Ratio Charts Guide** for the full list of
+  useful ratios and the details. A few memorable shorthands are also recognised
+  (for example `RSPSPY` is the same as `RSP/SPY`).
+- **Connect to Schwab from inside the app.** A new **Tools → Connect to
+  Schwab…** dialog walks you through signing in to Schwab in your system browser
+  and pasting the redirect URL back — the standard, secure OAuth flow (no
+  embedded login window). This replaces the old terminal-only sign-in step.
+
+### Changed
+
+- **Roomier ticker boxes and a compact Compare toggle.** The Ticker and Compare
+  display boxes in the toolbar are wider so a ratio symbol like `AMD/NVDA` shows
+  in full. The old "Compare mode" checkbox is now a small **`Compare:` `[On/Off]`**
+  toggle button sitting just before the compare ticker, which is clearer and
+  saves toolbar space.
+
+### Fixed
+
+- **SPY (and other always-loaded symbols) no longer get stuck on yesterday's
+  daily bar.** Mid-session, the daily chart builds a synthetic "today" bar from
+  intraday data. Symbols that were already warm in memory — SPY being the prime
+  example, since it's the default compare ticker — never triggered the intraday
+  fetch that feeds it, so their 1-day chart could sit on yesterday while freshly
+  opened stocks showed today. The app now fetches the needed intraday data for
+  those symbols too, so today's bar appears for everything.
+
 ## [0.3.11] - 2026-06-16
 
 ### Fixed
