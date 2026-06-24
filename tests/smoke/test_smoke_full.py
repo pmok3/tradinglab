@@ -7142,6 +7142,93 @@ def check_d55_indicator_preset_menu(app) -> None:
           "/ delete / empty-state placeholder")
 
 
+def check_d55b_indicator_preset_autopersist(app) -> None:
+    """Named presets auto-persist to disk and would reload on launch.
+
+    Unlike File → Save Configuration (which only captures presets when the
+    user explicitly exports a config), *Indicators → Save Preset…* must
+    persist immediately so a saved preset survives an app restart. ChartApp
+    wires this via the ``_on_indicator_preset_persist`` subscriber (writes
+    the standalone ``indicators.preset_store`` file) plus a startup
+    ``install_presets`` restore. The in-memory ``settings`` store can't do
+    this — it only reaches disk via File → Save Configuration.
+
+    Verifies, against the LIVE app manager (so the real __init__ wiring is
+    exercised):
+      A. ``save_preset`` writes ``indicator_presets.json`` synchronously.
+      B. The file round-trips via ``preset_store.load_presets`` (preset +
+         active pointer).
+      C. A simulated restart (fresh manager → ``install_presets`` from the
+         file) restores the preset so ``set_preset`` rebuilds the configs.
+      D. ``delete_preset`` re-persists the removal.
+    Manager state AND the on-disk preset file are restored in ``finally``.
+    """
+    from tradinglab.indicators import preset_store
+    from tradinglab.indicators.config import IndicatorConfig, IndicatorManager
+
+    mgr = app._indicator_manager
+    saved = list(mgr.list())
+    saved_presets = dict(getattr(mgr, "_presets", {}))
+    saved_active = mgr.active_preset()
+    pfile = preset_store.presets_path()
+    pre_existing = pfile.read_bytes() if pfile.exists() else None
+    try:
+        mgr.clear()
+        mgr._presets.clear()
+        mgr._active_preset = None
+        mgr.add(IndicatorConfig(kind_id="ema", kind_version=1,
+                                display_name="EMA-9-d55b", params={"length": 9}))
+        mgr.add(IndicatorConfig(kind_id="ema", kind_version=1,
+                                display_name="EMA-21-d55b", params={"length": 21}))
+
+        # A. save_preset auto-persists (the subscriber fires synchronously).
+        mgr.save_preset("d55b-preset")
+        assert pfile.exists(), (
+            "Save Preset must auto-persist indicator_presets.json to disk")
+
+        # B. the file round-trips through the store.
+        presets, active = preset_store.load_presets()
+        assert "d55b-preset" in presets, (
+            f"preset missing from persisted file; got {sorted(presets)!r}")
+        assert active == "d55b-preset", f"active pointer not persisted: {active!r}"
+        assert len(presets["d55b-preset"]) == 2
+
+        # C. simulated restart: a fresh manager restores from disk.
+        fresh = IndicatorManager(scheduler=lambda cb=None: None)
+        assert fresh.list_presets() == []
+        fresh.install_presets(presets, active)
+        assert fresh.list_presets() == ["d55b-preset"]
+        assert fresh.set_preset("d55b-preset") is True
+        assert sorted(
+            int(c.params.get("length", 0)) for c in fresh.list()) == [9, 21]
+
+        # D. delete re-persists the removal.
+        mgr.delete_preset("d55b-preset")
+        presets2, _ = preset_store.load_presets()
+        assert "d55b-preset" not in presets2, (
+            "delete_preset must re-persist the removal to disk")
+        print("  [OK] §d55b indicator preset auto-persist: "
+              "save→disk→restart→restore→delete")
+    finally:
+        try:
+            mgr.clear()
+            for c in saved:
+                mgr.add(c)
+            mgr._presets.clear()
+            mgr._presets.update(saved_presets)
+            mgr._active_preset = saved_active
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if pre_existing is None:
+                if pfile.exists():
+                    pfile.unlink()
+            else:
+                pfile.write_bytes(pre_existing)
+        except OSError:
+            pass
+
+
 def check_d56_ema_seeding_alignment(app) -> None:
     """EMA seeds with the SMA of the first ``length`` closes, published
     at index ``length - 1``; indices ``0..length-2`` are NaN. Matches
@@ -20007,6 +20094,7 @@ def _run_all_checks(app) -> None:
     check_d54_indicator_reorder(app)
     check_d50_indicators_menu_wiring(app)
     check_d55_indicator_preset_menu(app)
+    check_d55b_indicator_preset_autopersist(app)
     check_d56_ema_seeding_alignment(app)
     check_d57_performance_view_equity_csv_export(app)
     check_d58_anchored_vwap(app)
@@ -20320,6 +20408,8 @@ def _build_check_sequence():
         ("check_d54_indicator_reorder", check_d54_indicator_reorder),
         ("check_d50_indicators_menu_wiring", check_d50_indicators_menu_wiring),
         ("check_d55_indicator_preset_menu", check_d55_indicator_preset_menu),
+        ("check_d55b_indicator_preset_autopersist",
+         check_d55b_indicator_preset_autopersist),
         ("check_d56_ema_seeding_alignment", check_d56_ema_seeding_alignment),
         ("check_d57_performance_view_equity_csv_export",
          check_d57_performance_view_equity_csv_export),

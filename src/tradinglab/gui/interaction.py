@@ -1080,6 +1080,14 @@ class InteractionMixin:
         very different price level, and including it in the autoscale
         slice distorts the visible day's range.
         """
+        # Dynamic ratio rebase-to-100: re-anchor the 100-index to the
+        # leftmost visible bar before re-fitting Y, so the index follows the
+        # left edge live on zoom / pan-end / drill-down (skipped mid pan-drag
+        # inside the helper). No-op for non-ratio / rebase-off slots.
+        try:
+            self._apply_dynamic_ratio_rebase()
+        except Exception:  # noqa: BLE001
+            pass
         eps = 1e-6
         for ax, entry in self._ax_candle_map.items():
             candles, kind, offset = entry

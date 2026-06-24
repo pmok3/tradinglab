@@ -35,8 +35,16 @@ def brighter_shade(rgba: tuple[float, float, float, float], *, dark_mode: bool) 
     2. Set saturation to ``1.0`` (vivid hue).
     3. Adjust lightness for legibility against the active background:
 
-       * **Dark mode** — lightness is clamped *up* to at least ``0.55``
-         so the accent reads against a dark axes background.
+       * **Dark mode** — lightness is lifted to at least ``0.55`` so the
+         accent reads against a dark axes background, AND pushed at least
+         ``0.18`` above the source lightness so the accent stays visibly
+         lighter than the *body it is hatched on top of* (capped at
+         ``0.92`` to avoid blowing out to pure white). A plain
+         ``max(0.55, l)`` is a no-op when the body is already brighter
+         than ``0.55`` — e.g. the coral ``BEAR_COLOR`` (l ≈ 0.625) — so
+         the hatch collapsed into the body colour and the flat-bar
+         highlight was invisible on **bear** bars. The ``l + 0.18`` term
+         restores a guaranteed contrast for any body hue.
        * **Light mode** — lightness is clamped to ``[0.40, 0.55]`` so
          the accent is vivid but not so light it blends into the
          near-white axes background.
@@ -46,7 +54,7 @@ def brighter_shade(rgba: tuple[float, float, float, float], *, dark_mode: bool) 
     h, l, s = colorsys.rgb_to_hls(r, g, b)
     s_new = 1.0
     if dark_mode:
-        l_new = max(0.55, l)
+        l_new = min(0.92, max(0.55, l + 0.18))
     else:
         l_new = min(0.55, max(0.40, l))
     r2, g2, b2 = colorsys.hls_to_rgb(h, l_new, s_new)

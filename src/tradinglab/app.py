@@ -642,6 +642,22 @@ class ChartApp(
         self._indicator_cache = IndicatorCache()
         self._indicator_manager = IndicatorManager(scheduler=self._sched_indicator_redraw)
         self._indicator_manager.subscribe(self._on_indicator_event)
+        # Named indicator presets auto-persist to their own JSON file
+        # (``indicators.preset_store``), separate from the in-memory
+        # ``settings`` store (which only reaches disk via File → Save
+        # Configuration and is never read back on launch). Restore presets
+        # saved in a prior session, THEN subscribe the persistence handler
+        # — ``install_presets`` fires no event, so seeding never triggers a
+        # write. Thereafter every save/delete/load mutation re-writes the
+        # file so a saved preset survives an app restart.
+        try:
+            from .indicators import preset_store as _preset_store
+            _saved_presets, _active_preset = _preset_store.load_presets()
+            if _saved_presets:
+                self._indicator_manager.install_presets(_saved_presets, _active_preset)
+        except Exception:  # noqa: BLE001
+            pass
+        self._indicator_manager.subscribe(self._on_indicator_preset_persist)
         # --- drawings subsystem (Feature C: TradingView-style hlines) ---
         # Per-ticker horizontal-line store. Mounted alongside the
         # indicator manager because their lifecycles are identical:
@@ -2497,6 +2513,38 @@ class ChartApp(
                     if tabs:
                         self._notebook.select(tabs[0])
 
+    def _ratio_rebase_y_scale(self, ps, ax_p) -> float:
+        """Live y-tick-label scale so the leftmost VISIBLE bar reads 100.
+
+        Returns ``100 / leftmost_visible_close`` (in the slot's current
+        candle units) or ``1.0`` when not applicable. Read at *format
+        time* by the ratio-rebase y-axis formatter: because the y-axis is
+        an animated pan artist (``interaction._pan_setup_blit`` marks
+        ``ax.yaxis`` animated, redrawn every blit frame), the leftmost
+        on-screen bar reads 100 **live as the user pans**, with no snap
+        when the mouse is released. At rest it is a no-op (≈1.0) because
+        ``_apply_dynamic_ratio_rebase`` has already baked the visible left
+        edge to 100; the divisor cancels the baking anchor either way, so
+        the result is correct regardless of what anchor the data carries.
+        """
+        try:
+            candles = ps.get("candles") or []
+            n = len(candles)
+            if n == 0:
+                return 1.0
+            entry = self._ax_candle_map.get(ax_p)
+            offset = entry[2] if entry is not None else int(ps.get("offset", 0))
+            lo_f, _hi = ax_p.get_xlim()
+            lo = max(0, min(int(np.ceil(lo_f - offset - 1e-6)), n - 1))
+            while lo < n - 1 and getattr(candles[lo], "is_gap", False):
+                lo += 1
+            c = float(candles[lo].close)
+            if c > 0:
+                return 100.0 / c
+        except Exception:  # noqa: BLE001
+            pass
+        return 1.0
+
     def _apply_price_scale(self) -> None:
         """Apply the linear/log price Y-scale to every live price axis.
 
@@ -2517,16 +2565,25 @@ class ChartApp(
         want_log = bool(self.log_price_var.get())
         scale = "log" if want_log else "linear"
         changed = False
-        for ps in getattr(self, "_panel_state", {}).values():
+        for slot, ps in getattr(self, "_panel_state", {}).items():
             ax_p = ps.get("price_ax")
             if ax_p is None:
                 continue
+            try:
+                rebase_on = (
+                    is_ratio_symbol(self._active_symbol_for_slot(slot))
+                    and bool(self._ratio_rebase_var.get())
+                )
+            except Exception:  # noqa: BLE001
+                rebase_on = False
             try:
                 if ax_p.get_yscale() != scale:
                     ax_p.set_yscale(scale)
                     changed = True
                 if want_log:
-                    def _fmt_price(v, _pos):
+                    def _fmt_price(v, _pos, _ps=ps, _ax=ax_p, _rb=rebase_on):
+                        if _rb:
+                            v = v * self._ratio_rebase_y_scale(_ps, _ax)
                         if v <= 0:
                             return ""
                         if v >= 100:
@@ -2581,10 +2638,25 @@ class ChartApp(
                             ax_p.callbacks.disconnect(prev_cid)
                         except Exception:  # noqa: BLE001
                             pass
-                    ax_p.yaxis.set_major_formatter(ScalarFormatter())
-                    ax_p.yaxis.set_minor_formatter(ScalarFormatter())
-                    ax_p.yaxis.set_major_locator(MaxNLocator(prune="lower"))
-                    ax_p.yaxis.set_minor_locator(NullLocator())
+                    if rebase_on:
+                        # Ratio rebase-to-100: scale each tick label so the
+                        # leftmost VISIBLE bar reads 100, recomputed live at
+                        # format time. The y-axis is an animated pan artist
+                        # (interaction._pan_setup_blit), so this relabels on
+                        # every blit frame — the left edge tracks 100 live as
+                        # the user pans, with no snap on mouse release.
+                        def _fmt_rebased(v, _pos, _ps=ps, _ax=ax_p):
+                            return f"{v * self._ratio_rebase_y_scale(_ps, _ax):,.2f}"
+
+                        ax_p.yaxis.set_major_formatter(FuncFormatter(_fmt_rebased))
+                        ax_p.yaxis.set_minor_formatter(FuncFormatter(lambda *_: ""))
+                        ax_p.yaxis.set_major_locator(MaxNLocator(prune="lower"))
+                        ax_p.yaxis.set_minor_locator(NullLocator())
+                    else:
+                        ax_p.yaxis.set_major_formatter(ScalarFormatter())
+                        ax_p.yaxis.set_minor_formatter(ScalarFormatter())
+                        ax_p.yaxis.set_major_locator(MaxNLocator(prune="lower"))
+                        ax_p.yaxis.set_minor_locator(NullLocator())
             except Exception:  # noqa: BLE001
                 pass
         if changed:
@@ -3910,6 +3982,17 @@ class ChartApp(
         self._pan_animated = []
         self._pan_anim_fingerprint = None
 
+        # Dynamic ratio rebase-to-100: re-anchor the 100-index to the
+        # leftmost VISIBLE bar now that the per-slot xlim is set (the candle
+        # bake in ``_maybe_rebase_candles`` anchored at bar 0). Gated so
+        # non-ratio / rebase-off charts pay nothing, and placed before the
+        # overlay rebuilds below so they layer onto the final rescaled candles.
+        try:
+            if bool(self._ratio_rebase_var.get()):
+                self._apply_dynamic_ratio_rebase()
+        except Exception:  # noqa: BLE001
+            pass
+
         # Apply linear/log price y-scale + plain-number tick formatter
         # to every freshly-built price axes (spec §Settings log-axis).
         self._apply_price_scale()
@@ -4085,9 +4168,11 @@ class ChartApp(
             pass
 
     def _on_menu_toggle_ratio_rebase(self) -> None:
-        """View menu: rebase a ratio series to 100 at its first bar. Persist +
-        re-render + re-fit Y (the rebased range differs from the raw quotient).
-        No visible effect unless the active symbol is a ratio.
+        """View menu: rebase a ratio series to 100 at the leftmost visible bar.
+        Persist + re-render + re-fit Y (the rebased range differs from the raw
+        quotient). The 100-index re-anchors live as the user pans / zooms (see
+        ``_apply_dynamic_ratio_rebase``). No visible effect unless the active
+        symbol is a ratio.
         """
         try:
             _settings.set("ratio_rebase", bool(self._ratio_rebase_var.get()))
@@ -4362,8 +4447,13 @@ class ChartApp(
         ``self._primary`` / ``self._compare`` stay raw, but every per-slot
         consumer (candle glyphs, ``_autoscale_slot_y``, hover hit-test via
         ``_ax_candle_map`` / ``display_candles``) reads the rebased copy, so the
-        rebased view is internally coherent. Anchor is the first loaded bar's
-        close (fixed, not visible-edge) so pan/zoom never re-anchor.
+        rebased view is internally coherent.
+
+        This is the **initial** bake, anchored at bar 0 because the view's
+        xlim isn't known yet at candle-build time.
+        :meth:`_apply_dynamic_ratio_rebase` then re-anchors the 100-index to
+        the leftmost VISIBLE bar once xlim is set, and re-anchors live on
+        every pan / zoom.
         """
         try:
             if not candles:
@@ -4383,6 +4473,109 @@ class ChartApp(
             ]
         except Exception:  # noqa: BLE001
             return candles
+
+    @staticmethod
+    def _rebased_to_anchor(candles, anchor_idx):
+        """Return ``candles`` rescaled so ``candles[anchor_idx].close`` == 100.
+
+        Pure helper shared by the dynamic leftmost-visible re-anchor. A ratio
+        rebase is a single constant multiply (``100 / anchor_close``), so the
+        chart SHAPE is unchanged — only the y-axis labels (and which bar reads
+        exactly 100) move. Returns ``None`` (caller keeps its current list)
+        when the input is empty, the anchor close is non-positive, or the
+        scale factor is within ``1e-6`` of 1.0 — i.e. the anchor bar already
+        reads ~100, so re-baking would be a no-op. The ``1e-6`` band also lets
+        the re-anchor settle after one pass instead of chasing float dust on
+        every view tick.
+        """
+        if not candles:
+            return None
+        i = max(0, min(int(anchor_idx), len(candles) - 1))
+        anchor = float(candles[i].close)
+        if not (anchor > 0):
+            return None
+        f = 100.0 / anchor
+        if abs(f - 1.0) <= 1e-6:
+            return None
+        return [
+            Candle(date=c.date, open=c.open * f, high=c.high * f,
+                   low=c.low * f, close=c.close * f, volume=c.volume,
+                   session=getattr(c, "session", "regular"))
+            for c in candles
+        ]
+
+    def _apply_dynamic_ratio_rebase(self) -> None:
+        """Re-anchor every ratio rebase-to-100 slot to its leftmost VISIBLE bar.
+
+        ``_maybe_rebase_candles`` bakes the initial 100-index at bar 0 (xlim
+        isn't known at candle-build time). This re-scales each ratio +
+        ``ratio_rebase`` slot so the leftmost bar currently on screen reads
+        exactly 100, repaints the slice, and re-fits Y — so the "100" follows
+        the left edge live as the user pans / zooms.
+
+        Called at the top of ``_autoscale_y_to_visible`` (the universal
+        view-change choke point: pan-end, both zooms, drill-down, view
+        toggles) and once near the tail of ``_finalize_render`` (so a plain
+        ``_render`` from an interval / ticker switch / rebase toggle
+        re-anchors after xlim is set). Skipped mid pan-drag (``_pan_state``
+        active) so it can't fight the blit fast path; during a drag the
+        live y-axis tracking is instead handled by the
+        ``_ratio_rebase_y_scale`` tick formatter (the y-axis is an animated
+        pan artist), and this data re-bake lands once on release to realign
+        the hover/crosshair readouts. No-op for non-ratio / rebase-off
+        slots and when the left edge already reads ~100
+        (``_rebased_to_anchor`` -> ``None``).
+        """
+        if getattr(self, "_pan_state", None) is not None:
+            return
+        try:
+            if not bool(self._ratio_rebase_var.get()):
+                return
+        except Exception:  # noqa: BLE001
+            return
+        eps = 1e-6
+        for slot, ps in list(self._panel_state.items()):
+            try:
+                if not is_ratio_symbol(self._active_symbol_for_slot(slot)):
+                    continue
+                candles = ps.get("candles") or []
+                n = len(candles)
+                if n == 0:
+                    continue
+                ax_p = ps.get("price_ax")
+                if ax_p is None:
+                    continue
+                entry = self._ax_candle_map.get(ax_p)
+                offset = entry[2] if entry is not None else int(ps.get("offset", 0))
+                lo_f, hi_f = ax_p.get_xlim()
+                lo = max(0, min(int(np.ceil(lo_f - offset - eps)), n - 1))
+                # Anchor on the first real (non-gap) bar at/after the left edge.
+                while lo < n - 1 and getattr(candles[lo], "is_gap", False):
+                    lo += 1
+                rebased = ChartApp._rebased_to_anchor(candles, lo)
+                if rebased is None:
+                    continue
+                ps["candles"] = rebased
+                # Drop the superseded list's id-keyed series cache entry so
+                # repeated pan/zoom re-anchors can't slowly leak (mirrors the
+                # `_series_cache.pop(id(candles))` idiom used on cache evict).
+                try:
+                    self._series_cache.pop(id(candles), None)
+                except Exception:  # noqa: BLE001
+                    pass
+                for ax in (ps.get("price_ax"), ps.get("vol_ax"), *ps.get("ind_axes", [])):
+                    if ax is None:
+                        continue
+                    ent = self._ax_candle_map.get(ax)
+                    if ent is not None:
+                        self._ax_candle_map[ax] = (rebased, ent[1], ent[2])
+                rs = int(ps.get("render_start", 0))
+                re_ = min(n, int(ps.get("render_end", n)))
+                self._draw_slice(slot, rs, re_)
+                hi = max(lo + 1, min(n, int(np.floor(hi_f - offset + eps)) + 1))
+                self._autoscale_slot_y(slot, lo, hi)
+            except Exception:  # noqa: BLE001
+                continue
 
     def _draw_slice(self, slot: str, new_start: int, new_end: int) -> None:
         """Redraw the ``candles[new_start:new_end]`` slice into ``slot``.
@@ -4411,7 +4604,12 @@ class ChartApp(
             hide_vol = self._slot_hides_volume(slot)
             display_candles = self._display_candles_for(candles)
             hollow_indices = self._key_bar_hollow_indices_for(candles)
-            flat_overlay = self._ha_flat_overlay_for(display_candles)
+            # Flat-bar detection runs on RAW OHLC — ``_ha_flat_overlay_for``
+            # applies the Heikin-Ashi transform internally. Passing the
+            # already-HA ``display_candles`` would double-apply HA and shift
+            # the detected indices (dropping the first flat bar of each run).
+            # Mirrors ``hollow_indices`` above, which also takes raw candles.
+            flat_overlay = self._ha_flat_overlay_for(candles)
             # Dynamic candle body width: at extreme zoom-out the
             # default 0.6-data-units body overlaps its neighbours
             # below ≈ 3 px/bar. Clamp the body half via the visible
@@ -4635,6 +4833,33 @@ class ChartApp(
                 self._render()
             except Exception:  # noqa: BLE001
                 pass
+
+    def _on_indicator_preset_persist(self, event_kind: str, _cfg: Any) -> None:
+        """Auto-persist named indicator presets on every preset mutation.
+
+        A dedicated ``IndicatorManager`` subscriber (separate from
+        ``_on_indicator_event``, which only handles chart repaints). Writes
+        the standalone ``indicators.preset_store`` file on the events that
+        change the saved-preset table or the active-preset pointer —
+        ``preset_saved`` / ``preset_deleted`` / ``preset_loaded`` — and on
+        ``loaded`` (File → Load Configuration swaps the whole manager state,
+        presets included). Render-only events (``add`` / ``remove`` /
+        ``update`` / ``clear`` / ``reorder`` / ``redraw``) are ignored; the
+        live active-indicator list is intentionally NOT auto-persisted (it
+        survives only via File → Save Configuration). Persistence failures
+        are swallowed so a disk error never blocks the originating action.
+        """
+        if event_kind not in {
+            "preset_saved", "preset_deleted", "preset_loaded", "loaded",
+        }:
+            return
+        try:
+            from .indicators import preset_store as _preset_store
+            mgr = self._indicator_manager
+            _preset_store.save_presets(
+                mgr.presets_to_dict(), mgr.active_preset())
+        except Exception:  # noqa: BLE001
+            pass
 
     def _begin_defer_indicator_render(self) -> None:
         """Suspend chart renders driven by indicator-manager mutations.

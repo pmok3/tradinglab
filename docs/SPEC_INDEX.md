@@ -52,6 +52,7 @@ A one-spec-per-`.py` documentation set. Each spec follows a fixed 9-section layo
 | `indicators/__init__.spec.md` | Registry. |
 | `indicators/base.spec.md` | Indicator protocol. |
 | `indicators/config.spec.md` | `IndicatorConfig` + `ParamDef` schema; per-pair config storage. |
+| `indicators/preset_store.spec.md` | Auto-persisted named-preset JSON store (`indicator_presets.json`); survives app restart. |
 | `indicators/loader.spec.md` | Built-in indicator registration on package import. |
 | `indicators/cache.spec.md` | `IndicatorCache` — identity-keyed LRU (cap 64), key `(id(candles), config_hash)`. |
 | `indicators/moving_averages.spec.md` | Unified `MovingAverage` indicator (SMA / EMA / WMA / RMA × Close / Open / High / Low / HL2 / HLC3 / OHLC4); legacy `SMA`/`EMA` kept as hidden back-compat shims. |

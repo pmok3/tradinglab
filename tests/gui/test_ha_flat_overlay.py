@@ -63,6 +63,43 @@ def _uptrend_candles(n: int = 6) -> list[Candle]:
     return out
 
 
+def _downtrend_candles(n: int = 8) -> list[Candle]:
+    """Strong downtrend → most bars qualify as bear-flat-top under HA."""
+    out: list[Candle] = []
+    t0 = _dt.datetime(2024, 1, 2, 9, 30)
+    px = 200.0
+    for i in range(n):
+        o = px
+        c = o - 1.0
+        out.append(_candle(o, o + 0.2, c - 0.5, c,
+                           t=t0 + _dt.timedelta(minutes=i)))
+        px = c
+    return out
+
+
+def _marubozu_uptrend(n: int = 8) -> list[Candle]:
+    """Up-trend whose HA-flat detection differs between single- and
+    double-HA transforms (the double transform drops the first flat bar
+    of the run). Used to pin that the overlay is computed from RAW OHLC.
+    """
+    out: list[Candle] = []
+    t0 = _dt.datetime(2024, 1, 2, 9, 30)
+    px = 100.0
+    for i in range(n):
+        o = px
+        c = o + 1.0
+        out.append(_candle(o, c + 0.5, o - 0.2, c,
+                           t=t0 + _dt.timedelta(minutes=i)))
+        px = c
+    return out
+
+
+def _rel_luminance(rgb) -> float:
+    """sRGB relative luminance (approx) for hatch-vs-body contrast asserts."""
+    r, g, b = rgb[0], rgb[1], rgb[2]
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
 def _make_app_mock(
     *, ha_on: bool, flat_on: bool, dark_mode: bool,
 ):
@@ -146,6 +183,43 @@ def test_darker_shade_bull_bear_distinct_per_theme():
         b = darker_shade(bull, dark_mode=dark)
         r = darker_shade(bear, dark_mode=dark)
         assert b != r
+
+
+def test_brighter_shade_dark_mode_contrasts_with_bright_body():
+    """Regression (bear-flat-invisible): a body already brighter than 0.55
+    — the coral ``BEAR_COLOR`` (l≈0.625) — must still get a hatch accent
+    meaningfully lighter than the body. The old ``max(0.55, l)`` was a
+    no-op for such colours, so the dark-mode bear hatch collapsed into the
+    bear body and flat bear bars were indistinguishable from normal ones.
+    """
+    bear = to_rgba(BEAR_COLOR)
+    accent = brighter_shade(bear, dark_mode=True)
+    delta = _rel_luminance(accent) - _rel_luminance(bear)
+    assert delta > 0.12, (
+        f"bear hatch must be >0.12 brighter than the bear body; got "
+        f"{delta:.3f} (body={_rel_luminance(bear):.3f} "
+        f"accent={_rel_luminance(accent):.3f}) — hatch collapses into body")
+
+
+def test_brighter_shade_dark_mode_bull_and_bear_both_contrast():
+    """Both bull and bear accents stand out from their own body in dark
+    mode — the visible symmetry the fix restores (bull already worked)."""
+    for hexc in (BULL_COLOR, BEAR_COLOR):
+        body = to_rgba(hexc)
+        accent = brighter_shade(body, dark_mode=True)
+        delta = _rel_luminance(accent) - _rel_luminance(body)
+        assert delta > 0.12, (
+            f"{hexc}: accent must be >0.12 brighter than body; got {delta:.3f}")
+
+
+def test_brighter_shade_dark_mode_lifts_dark_body_to_floor_and_caps():
+    """A low-lightness body keeps the >=0.55 floor; the cap stops the
+    accent blowing out past 0.92 toward pure white (unchanged contract)."""
+    import colorsys
+    base = to_rgba("#1a3a36")  # dark teal, l≈0.16
+    out = brighter_shade(base, dark_mode=True)
+    _h, l_out, _s = colorsys.rgb_to_hls(out[0], out[1], out[2])
+    assert 0.55 - 1e-6 <= l_out <= 0.92 + 1e-6
 
 
 # ---------------------------------------------------------------------------
@@ -409,6 +483,56 @@ def test_helper_empty_candles_returns_none():
     """Defensive: an empty candle list short-circuits to None."""
     app = _make_app_mock(ha_on=True, flat_on=True, dark_mode=False)
     assert app._ha_flat_overlay_for([]) is None
+
+
+def test_helper_marks_bear_flat_bars_on_downtrend():
+    """A strong downtrend yields bear-flat-top bars — the side the user
+    reported as 'not distinguished'. The overlay must populate
+    ``bear_indices`` (and not mislabel them as bull)."""
+    app = _make_app_mock(ha_on=True, flat_on=True, dark_mode=True)
+    out = app._ha_flat_overlay_for(_downtrend_candles(8))
+    assert out is not None
+    assert len(out["bear_indices"]) >= 1, "bear flat-top bars must be detected"
+    assert len(out["bull_indices"]) == 0
+
+
+def test_helper_bear_hatch_distinct_from_body_dark_mode():
+    """The dark-mode bear hatch colour must be visibly lighter than the
+    coral BEAR_COLOR body it overlays — otherwise the highlight is
+    invisible on bear bars (the reported bug)."""
+    app = _make_app_mock(ha_on=True, flat_on=True, dark_mode=True)
+    out = app._ha_flat_overlay_for(_downtrend_candles(8))
+    assert out is not None
+    body_lum = _rel_luminance(to_rgba(BEAR_COLOR))
+    hatch_lum = _rel_luminance(out["bear_color"])
+    assert hatch_lum - body_lum > 0.12, (
+        f"bear hatch ({hatch_lum:.3f}) not distinct from bear body "
+        f"({body_lum:.3f}) in dark mode")
+
+
+def test_helper_computes_flat_from_raw_ohlc_not_double_ha():
+    """The overlay must be computed from RAW candles. ``_draw_slice`` now
+    passes raw OHLC (not the already-HA ``display_candles``) because
+    ``compute_ha_flat_arrays`` applies the HA transform internally —
+    feeding it HA candles double-applies HA and drops the first flat bar
+    of each run. This pins that contract at the helper level.
+    """
+    from tradinglab.core.heikin_ashi import heikin_ashi_candles
+
+    app = _make_app_mock(ha_on=True, flat_on=True, dark_mode=False)
+    raw = _marubozu_uptrend(8)
+    out_raw = app._ha_flat_overlay_for(raw)
+    out_double = app._ha_flat_overlay_for(heikin_ashi_candles(raw))
+    assert out_raw is not None and out_double is not None
+    raw_bull = set(out_raw["bull_indices"])
+    double_bull = set(out_double["bull_indices"])
+    # Single-HA (raw input) catches the earliest qualifying bar; the
+    # double transform drops it, so raw is a strict superset.
+    assert double_bull < raw_bull, (
+        f"raw-candle detection must strictly include the double-HA set "
+        f"(double drops the first flat bar): raw={sorted(raw_bull)} "
+        f"double={sorted(double_bull)}")
+    assert min(raw_bull) < min(double_bull)
 
 
 # ---------------------------------------------------------------------------

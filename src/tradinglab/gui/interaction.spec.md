@@ -268,6 +268,16 @@ during drag.
 - **Compare-toggle ylim safety net**: `_on_compare_toggle` calls
   `self._autoscale_y_to_visible()` after `_render()` in all three
   branches (defense-in-depth against stale ylim).
+- **Dynamic ratio rebase-to-100 re-anchor**: `_autoscale_y_to_visible`
+  first calls `self._apply_dynamic_ratio_rebase()` (the universal
+  view-change hook) so a ratio chart's 100-index re-anchors to the
+  leftmost visible bar on every zoom / pan-end / drill-down. Skipped
+  while `_pan_state` is active (re-bakes once on release). **Live
+  during a pan drag** the y-axis instead relabels via the
+  `_ratio_rebase_y_scale` tick formatter — `_pan_setup_blit` marks
+  `ax.yaxis` an animated artist, so it's redrawn every blit frame and
+  the left edge reads 100 with no snap on release. No-op for non-ratio
+  / rebase-off charts. See `app.spec.md` → ratio rebase.
 - **Click-to-type detection**: `< 3 px` (squared distance, no sqrt) +
   same axes. Target = clicked axes's slot; keystrokes with nothing
   clicked default to `_last_clicked_slot or "primary"`.

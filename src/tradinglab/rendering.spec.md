@@ -61,8 +61,13 @@ Collections without rebuilding formatters/locators.
     `wicks._sc_colors[-1]` only — prior behaviour preserved exactly).
 
 - `brighter_shade(rgba, *, dark_mode) -> rgba` — RGB→HLS, saturation=1.0,
-  lightness clamped: dark `max(0.55, l)`; light `min(0.55, max(0.40, l))`.
-  Alpha passthrough. Used by `ChartApp._ha_flat_overlay_for` in dark mode.
+  lightness clamped: dark `min(0.92, max(0.55, l + 0.18))`; light
+  `min(0.55, max(0.40, l))`. The dark-mode `l + 0.18` term guarantees the
+  accent stays visibly lighter than the source body it is hatched on top of
+  — a plain `max(0.55, l)` was a no-op for bodies already brighter than 0.55
+  (the coral `BEAR_COLOR`, l≈0.625), collapsing the hatch into the body so
+  bear flat bars were invisible in dark mode. Alpha passthrough. Used by
+  `ChartApp._ha_flat_overlay_for` in dark mode.
 - `darker_shade(rgba, *, dark_mode) -> rgba` — lightness drops 0.18 light
   (floor 0.18) / 0.10 dark (floor 0.10); saturation `+0.15` (clamped to 1.0).
   Alpha passthrough. Used by `gui/volume_tod_overlay` and by

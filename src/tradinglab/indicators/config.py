@@ -552,6 +552,53 @@ class IndicatorManager:
             "active_preset": self._active_preset,
         }
 
+    def presets_to_dict(self) -> dict[str, builtins.list[dict]]:
+        """Serialize ONLY the named presets (no active-config list).
+
+        Feeds the auto-persist preset store
+        (:mod:`indicators.preset_store`). Mirrors the ``presets`` portion
+        of :meth:`to_dict` so the on-disk preset envelope round-trips
+        through :meth:`install_presets`.
+        """
+        return {
+            name: [c.to_dict() for c in configs]
+            for name, configs in self._presets.items()
+        }
+
+    @require_tk_thread
+    def install_presets(
+        self,
+        presets: Mapping[str, Iterable[Mapping[str, Any]]],
+        active: str | None = None,
+    ) -> None:
+        """Seed the named-preset table from a persisted snapshot.
+
+        Used at startup to restore presets saved in a prior session via
+        :mod:`indicators.preset_store`. Replaces ONLY the preset table and
+        the active-preset pointer; the live active-config list is left
+        untouched. Deliberately does **not** fire ``preset_saved`` /
+        ``preset_loaded`` (so it never re-triggers the auto-persist write)
+        and does **not** schedule a redraw — presets are inert until the
+        user applies one via :meth:`set_preset`.
+
+        Malformed individual entries are skipped defensively; unknown
+        ``kind_id`` payloads hydrate as disabled placeholders (mirroring
+        :meth:`load_dict`).
+        """
+        new_presets: dict[str, list[IndicatorConfig]] = {}
+        for name, items in presets.items():
+            configs: list[IndicatorConfig] = []
+            for item in items:
+                try:
+                    configs.append(IndicatorConfig.from_dict(item))
+                except Exception:  # noqa: BLE001
+                    continue
+            new_presets[str(name)] = configs
+        self._presets = new_presets
+        self._active_preset = (
+            str(active) if active and str(active) in new_presets else None
+        )
+
     @require_tk_thread
     def load_dict(self, d: Mapping[str, Any]) -> builtins.list[str]:
         """Replace state from a previously-serialized dict.

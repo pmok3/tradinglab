@@ -26,6 +26,14 @@ mutates `self._indicator_manager`, and reports outcome via `self._status`.
   - `_on_menu_save_indicator_preset()`
   - `_on_menu_load_indicator_preset(name)`
   - `_on_menu_delete_indicator_preset(name)`
+  - **Auto-persist side effect:** these call `IndicatorManager.save_preset`
+    / `set_preset` / `delete_preset`, which fire `preset_saved` /
+    `preset_loaded` / `preset_deleted`. `ChartApp._on_indicator_preset_persist`
+    (a separate manager subscriber) writes those changes to the standalone
+    `indicators.preset_store` file, so a saved preset survives an app restart
+    (restored on launch via `install_presets`) WITHOUT a File → Save
+    Configuration. The menu handlers themselves do no I/O — persistence is
+    purely a manager-event side effect.
   - `_on_custom_indicator_builder()` — opens the
     `gui.custom_indicator_dialog.CustomIndicatorDialog` via
     `open_custom_indicator_dialog(self)`. The dialog itself is

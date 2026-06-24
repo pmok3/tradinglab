@@ -34,9 +34,10 @@ same chart. The chart title and watermark show it as **`AMD / NVDA`**.
 
 ## Options (View → Ratio charts (A/B))
 
-- **Rebase to 100** — rescales the series so the first bar equals 100. The chart
-  then reads as *relative performance* ("AMD has gained 12% on NVDA since the
-  left edge") instead of an absolute quotient like `1.17`. Off by default.
+- **Rebase to 100** — rescales the series so the **leftmost bar currently on
+  screen** equals 100, re-anchoring live as you pan and zoom. The chart then
+  reads as *relative performance* ("AMD has gained 12% on NVDA since the left
+  edge") instead of an absolute quotient like `1.17`. Off by default.
 
 You can also use the normal **log price scale** toggle on a ratio chart.
 

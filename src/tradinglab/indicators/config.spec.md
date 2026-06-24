@@ -42,7 +42,19 @@ observer callbacks on every mutation.
 - `IndicatorManager(scheduler=None)` — `add / remove / update / list /
   get / clear / reorder(config_id, new_index) / applicable(scope,
   interval) / save_preset / set_preset / delete_preset / list_presets
-  / active_preset / to_dict / load_dict`.
+  / active_preset / to_dict / load_dict / presets_to_dict /
+  install_presets`.
+  - `presets_to_dict() -> dict[name, list[config_dict]]` — serialize ONLY
+    the named presets (no active-config list), feeding the auto-persist
+    preset store (`indicators.preset_store`). Mirrors the `presets`
+    portion of `to_dict`.
+  - `install_presets(presets, active=None)` — startup seed of the named
+    presets from a persisted snapshot. Replaces ONLY the preset table +
+    active-preset pointer (the live active-config list is untouched),
+    fires **no** observer event (so the app's auto-persist subscriber
+    isn't re-triggered on launch) and schedules no redraw. Malformed
+    entries are skipped; unknown `kind_id` payloads hydrate as
+    placeholders.
   - `subscribe(callback) -> unsubscribe_handle`. Callback signature:
     `(event_kind, config_or_None)` where event_kind ∈ `add`,
     `remove`, `update`, `clear`, `reorder`, `redraw`, `preset_saved`,
@@ -77,6 +89,13 @@ observer callbacks on every mutation.
   `applies_to` always False, `make_indicator()` returns None.
 - **`id` re-issued on preset load** so observers can correlate the
   new instances.
+- **`install_presets` fires no event + no redraw.** It is the startup
+  restore counterpart to the auto-persist preset store: replacing the
+  preset table on launch must NOT notify, or the app's
+  `_on_indicator_preset_persist` subscriber would immediately re-write
+  the file (and a needless render would be scheduled). The active-config
+  list is left untouched — only `set_preset` (user action) applies a
+  preset to the live chart.
 - **`config_hash` lives in `cache.py`**, not here — only compute-
   affecting fields matter for the cache key.
 - **`reorder` clamping is on the post-removal list**
