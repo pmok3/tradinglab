@@ -4842,8 +4842,10 @@ class ChartApp(
         the standalone ``indicators.preset_store`` file on the events that
         change the saved-preset table or the active-preset pointer —
         ``preset_saved`` / ``preset_deleted`` / ``preset_loaded`` — and on
-        ``loaded`` (File → Load Configuration swaps the whole manager state,
-        presets included). Render-only events (``add`` / ``remove`` /
+        ``loaded`` (the Manage Indicators dialog's cancel/revert swaps the
+        whole manager state via ``load_dict``, presets included; File → Load
+        Configuration is decoupled from indicators and never fires this).
+        Render-only events (``add`` / ``remove`` /
         ``update`` / ``clear`` / ``reorder`` / ``redraw``) are ignored; the
         live active-indicator list is intentionally NOT auto-persisted (it
         survives only via File → Save Configuration). Persistence failures
@@ -6356,32 +6358,6 @@ class ChartApp(
             return
         try:
             self.set_startup_default("theme", "dark" if dark else "light")
-        except Exception:  # noqa: BLE001
-            pass
-
-    def _capture_indicators_setting(self) -> None:
-        """Snapshot the live indicator manager state into
-        ``settings['indicators']``.
-
-        Captures the active indicator list, the named presets, and the
-        active-preset pointer (``IndicatorManager.to_dict()``). Called by
-        :class:`gui.config_manager.ConfigManager` right before
-        ``File → Save Configuration`` exports the settings store, so the
-        user's chart indicators + saved presets are persisted in the saved
-        config and restored by ``File → Load Configuration`` (audit
-        ``config-indicators-roundtrip``).
-
-        Without this the manager's state lived only in memory: nothing ever
-        wrote ``settings['indicators']``, so Save Configuration dropped every
-        indicator + preset and the next Load restored nothing. The load side
-        is handled by ``apply_loaded_config`` → ``_indicator_manager.load_dict``.
-        """
-        try:
-            mgr = getattr(self, "_indicator_manager", None)
-            if mgr is None:
-                return
-            from . import settings as _settings
-            _settings.set("indicators", mgr.to_dict())
         except Exception:  # noqa: BLE001
             pass
 

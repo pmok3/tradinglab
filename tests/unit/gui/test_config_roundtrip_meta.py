@@ -26,11 +26,9 @@ from tests._config_roundtrip_spec import (
 )
 
 # Round-trip keys persisted through a path the ``settings.set("KEY", …)``
-# scan can't see (none today — ``indicators`` is now captured via
-# ``ChartApp._capture_indicators_setting`` → ``settings.set``). Kept as an
-# escape hatch: list any future round-trip key whose write goes through a
-# non-``settings.set`` mechanism so the stale-classification check tolerates
-# its absence from the scanned set.
+# scan can't see (none today). Kept as an escape hatch: list any future
+# round-trip key whose write goes through a non-``settings.set`` mechanism so
+# the stale-classification check tolerates its absence from the scanned set.
 _TUNABLE_BACKED = frozenset()
 
 
@@ -95,8 +93,7 @@ def test_scan_finds_known_keys() -> None:
     silently-broken scan (returning ``set()``) can't make the drift guard
     vacuously pass."""
     scanned = persisted_settings_keys()
-    for sentinel in ("display_tz", "heikin_ashi", "ui_scale", "worker_count",
-                     "indicators"):
+    for sentinel in ("display_tz", "heikin_ashi", "ui_scale", "worker_count"):
         assert sentinel in scanned, (
             f"scanner failed to find {sentinel!r}; the settings.set AST scan "
             "is probably broken"

@@ -191,10 +191,11 @@ the snapshot, or removes the scope-split clone and restores the
 original's scopes if a split occurred. **Save and Close** accepts
 the current live manager state for the session (discards the revert
 snapshot) and closes — it does NOT itself write `settings.json`.
-Persistence to a config file happens through File → Save
-Configuration, which captures the manager state via
-`ChartApp._capture_indicators_setting()` (audit
-`config-indicators-roundtrip`). Dirty tracking + `•` title indicator
+Indicator state is decoupled from configuration files (audit
+`config-indicators-decoupled`): File → Save / Load Configuration does
+NOT capture or restore the manager. Named presets persist on their own
+via `indicators.preset_store`; the active list is session-only. Dirty
+tracking + `•` title indicator
 inherited from base; `_refresh_title` overridden to include `•`
 when dirty.
 

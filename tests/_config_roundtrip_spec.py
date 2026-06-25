@@ -25,10 +25,11 @@ _SRC_ROOT = Path(__file__).resolve().parents[1] / "src" / "tradinglab"
 
 # Keys persisted via a direct ``settings.set("KEY", …)`` that ARE restored
 # live by ``ConfigManager.apply_loaded_config`` (directly or via
-# ``ChartApp._apply_persisted_view_settings`` / ``_apply_theme`` /
-# ``_indicator_manager.load_dict``). ``indicators`` is captured on save by
-# ``ChartApp._capture_indicators_setting`` (manager active list + named
-# presets + active preset) and restored on load by ``load_dict``.
+# ``ChartApp._apply_persisted_view_settings`` / ``_apply_theme``). Indicator
+# state is intentionally NOT a config key: configuration files are decoupled
+# from the indicator manager (audit ``config-indicators-decoupled``), so
+# ``indicators`` is no longer persisted here — named presets persist on their
+# own via ``indicators.preset_store`` and the active list is session-only.
 ROUNDTRIP_KEYS: frozenset[str] = frozenset({
     # Pre-existing (covered by check_d35a / d14 / notebook-width tests):
     "display_tz",
@@ -36,7 +37,6 @@ ROUNDTRIP_KEYS: frozenset[str] = frozenset({
     "theme_overrides",
     "startup_defaults",          # composite; theme sub-key applied live too
     "layout.notebook_width_px",
-    "indicators",                # active configs + presets + active_preset (check_d35c)
     # Wired into _apply_persisted_view_settings (audit config-roundtrip-meta):
     "heikin_ashi",
     "highlight_key_bars",

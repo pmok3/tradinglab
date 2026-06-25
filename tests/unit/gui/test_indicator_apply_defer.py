@@ -349,7 +349,6 @@ _CLASSIFIED_MUTATORS: dict[str, str] = {
     "indicator_dialog.py": "deferred-dialog (Apply button)",
     "per_indicator_dialog.py": "live-dialog (single-overlay quick edit)",
     "indicator_menu.py": "menu action (immediate, not a window)",
-    "config_manager.py": "config load (immediate, programmatic)",
     "overlay_legend.py": "legend visibility toggle (immediate, single click)",
 }
 

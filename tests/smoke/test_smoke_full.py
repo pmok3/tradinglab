@@ -4787,23 +4787,30 @@ def check_d35b_view_settings_round_trip(app) -> None:
             pass
 
 
-def check_d35c_indicator_presets_round_trip(app) -> None:
-    """Active indicators + named presets survive Save/Load Configuration.
+def check_d35c_config_indicator_decoupling(app) -> None:
+    """Configuration files are DECOUPLED from the indicator manager.
 
-    Audit ``config-indicators-roundtrip``. The IndicatorManager state (active
-    list, named presets, active preset) lives only in memory; File → Save
-    Configuration must capture it via ``ChartApp._capture_indicators_setting``
-    so File → Load Configuration restores it (the load side was already wired
-    via ``apply_loaded_config`` → ``_indicator_manager.load_dict`` — only the
-    save-capture was missing, so indicators + presets were silently lost on
-    save). Builds 2 indicators + a named preset, saves, wipes the manager,
-    loads, and asserts full restoration. The manager + settings store are
-    restored to their session-entry state in ``finally``.
+    Audit ``config-indicators-decoupled``. A config is a layout / theme / view
+    snapshot — it must never read or write indicator state. This pins the fix
+    for the "Load Configuration wiped my indicator presets" bug:
+
+      * **Save** omits indicators — the exported config has no ``indicators``
+        key (``_capture_layout_into_settings`` no longer captures the manager).
+      * **Load** ignores indicators — loading a *legacy* config that still
+        carries an ``indicators`` dict with EMPTY presets (the exact
+        destructive payload) leaves the live active list + named presets
+        intact, and does NOT clobber the standalone ``indicator_presets.json``.
+
+    Named presets persist independently (``check_d55b``); the active list is
+    session-only. Manager state, settings store, and the on-disk preset file
+    are restored in ``finally``.
     """
+    import json
     import tempfile
     from pathlib import Path
 
     from tradinglab import settings as _settings
+    from tradinglab.indicators import preset_store
     from tradinglab.indicators.config import IndicatorConfig
 
     cm = app._config_manager
@@ -4811,56 +4818,64 @@ def check_d35c_indicator_presets_round_trip(app) -> None:
     orig_store = _settings.load()
     orig_dirty = _settings.is_dirty()
     orig_ind = mgr.to_dict()
+    pfile = preset_store.presets_path()
+    pre_existing = pfile.read_bytes() if pfile.exists() else None
 
     def _wipe_manager():
         mgr.clear()
         for nm in list(mgr.list_presets()):
             mgr.delete_preset(nm)
 
-    tmp_dir = Path(tempfile.mkdtemp(prefix="tradinglab_indrt_"))
-    cfg = tmp_dir / "ind.json"
+    tmp_dir = Path(tempfile.mkdtemp(prefix="tradinglab_inddec_"))
+    cfg = tmp_dir / "saved.json"
+    legacy = tmp_dir / "legacy.json"
     try:
         _settings.clear()
         _wipe_manager()
         mgr.add(IndicatorConfig(kind_id="ema", params={"length": 9}))
         mgr.add(IndicatorConfig(kind_id="ema", params={"length": 21}))
-        mgr.save_preset("_d35c_ema")
-        # Capture content as the manager actually stores it (kind_id may be
-        # normalized internally; the round-trip just has to be faithful).
-        before_lengths = sorted(int(c.params.get("length", 0)) for c in mgr.list())
-        assert before_lengths == [9, 21], (
-            f"test-data sanity: {before_lengths}")
-        assert "_d35c_ema" in mgr.list_presets()
+        mgr.save_preset("_d35c_dec")
+        assert "_d35c_dec" in mgr.list_presets(), "test-data sanity"
+        assert len(mgr.list()) == 2, "test-data sanity"
 
-        # SAVE — the manager state must land in the exported config.
+        # --- SAVE omits indicators ---------------------------------------
         cm._capture_layout_into_settings(app)
         assert _settings.export_to_file(cfg) is True
-        saved_ind = _settings.load().get("indicators")
-        assert isinstance(saved_ind, dict), "save did not capture indicators"
-        assert len(saved_ind.get("active_configs", [])) == 2, (
-            "active indicators not captured on save")
-        assert "_d35c_ema" in saved_ind.get("presets", {}), (
-            "named preset not captured on save")
+        on_disk = json.loads(cfg.read_text(encoding="utf-8"))
+        assert "indicators" not in on_disk, (
+            "Save Configuration must NOT write indicator state into the config")
 
-        # WIPE then LOAD — manager must be fully restored.
-        _wipe_manager()
-        assert len(mgr.list()) == 0 and mgr.list_presets() == []
-        assert _settings.import_from_file(cfg) is True
+        # --- LOAD ignores a legacy indicators key (the destructive case) -
+        # A pre-decoupling config carried active indicators + an EMPTY presets
+        # dict. Loading it previously wiped the live preset table AND clobbered
+        # indicator_presets.json. It must now be ignored entirely.
+        legacy.write_text(json.dumps({
+            "display_tz": "",
+            "indicators": {
+                "active_configs": [{"kind_id": "ema", "params": {"length": 5}}],
+                "presets": {},
+                "active_preset": None,
+            },
+        }), encoding="utf-8")
+        assert _settings.import_from_file(legacy) is True
         cm.apply_loaded_config(app)
         _pump(app, 0.05)
-        assert len(mgr.list()) == 2, "active indicators not restored on load"
+
+        assert "_d35c_dec" in mgr.list_presets(), (
+            "Load Configuration WIPED the named-preset library — regression!")
+        assert len(mgr.list()) == 2, (
+            "Load Configuration mutated the active indicator list — it must be "
+            "decoupled from config")
         after_lengths = sorted(int(c.params.get("length", 0)) for c in mgr.list())
-        assert after_lengths == before_lengths, (
-            f"indicator params not restored: {after_lengths} != {before_lengths}")
-        assert "_d35c_ema" in mgr.list_presets(), "preset not restored on load"
-        # Exercise the restored preset: applying it must rebuild the 2 configs.
-        assert mgr.set_preset("_d35c_ema") is True, "restored preset not loadable"
-        preset_lengths = sorted(int(c.params.get("length", 0)) for c in mgr.list())
-        assert preset_lengths == [9, 21], (
-            f"preset content not restored: {preset_lengths}")
-        assert _settings.is_dirty() is False, "settings left dirty after load"
-        print("  [OK] config-indicators-roundtrip: indicators + presets "
-              "survive save+load")
+        assert after_lengths == [9, 21], (
+            f"active list changed on load: {after_lengths}")
+
+        # The standalone auto-persist file must be untouched by a config load.
+        persisted, _active = preset_store.load_presets()
+        assert "_d35c_dec" in persisted, (
+            "config load clobbered indicator_presets.json — regression!")
+        print("  [OK] config-indicators-decoupled: save omits indicators; "
+              "load preserves live presets + active list + preset file")
     finally:
         try:
             mgr.load_dict(orig_ind)
@@ -4872,6 +4887,14 @@ def check_d35c_indicator_presets_round_trip(app) -> None:
         try:
             _settings._dirty = orig_dirty  # noqa: SLF001
         except Exception:  # noqa: BLE001
+            pass
+        try:
+            if pre_existing is None:
+                if pfile.exists():
+                    pfile.unlink()
+            else:
+                pfile.write_bytes(pre_existing)
+        except OSError:
             pass
         try:
             for f in tmp_dir.iterdir():
@@ -20256,7 +20279,7 @@ def _run_all_checks(app) -> None:
     check_d35_config_import_export_round_trip(app)
     check_d35a_config_theme_round_trip(app)
     check_d35b_view_settings_round_trip(app)
-    check_d35c_indicator_presets_round_trip(app)
+    check_d35c_config_indicator_decoupling(app)
     check_d36_watchlist_explicit_save(app)
     check_d37_status_bar(app)
     check_d38_drilldown_race_and_coverage(app)
@@ -20563,8 +20586,8 @@ def _build_check_sequence():
          check_d35a_config_theme_round_trip),
         ("check_d35b_view_settings_round_trip",
          check_d35b_view_settings_round_trip),
-        ("check_d35c_indicator_presets_round_trip",
-         check_d35c_indicator_presets_round_trip),
+        ("check_d35c_config_indicator_decoupling",
+         check_d35c_config_indicator_decoupling),
         ("check_d36_watchlist_explicit_save", check_d36_watchlist_explicit_save),
         ("check_d37_status_bar", check_d37_status_bar),
         ("check_d38_drilldown_race_and_coverage",

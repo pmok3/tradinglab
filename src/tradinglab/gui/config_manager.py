@@ -82,17 +82,14 @@ class ConfigManager:
                     apply_theme()
         except Exception:  # noqa: BLE001
             pass
-        try:
-            ind_data = _settings.get("indicators")
-            if isinstance(ind_data, dict):
-                warns = parent_widget._indicator_manager.load_dict(ind_data)
-                for warning in warns:
-                    try:
-                        parent_widget._status(warning)
-                    except Exception:  # noqa: BLE001
-                        pass
-        except Exception:  # noqa: BLE001
-            pass
+        # Indicator state (active list + named presets + active preset) is
+        # intentionally DECOUPLED from configuration files: a config is a
+        # layout / theme / view snapshot and must never mutate the indicator
+        # manager. Active indicators are session-only (clean chart each
+        # launch); named presets persist independently via
+        # ``indicators.preset_store``. A legacy config that still carries an
+        # ``indicators`` key is ignored here so loading it can't wipe the
+        # user's durable preset library (audit ``config-indicators-decoupled``).
         # Apply the saved watchlist (notebook) width to the live sash
         # (audit ``watchlist-width-setting``). No-op when the loaded
         # config doesn't carry ``layout.notebook_width_px``.
@@ -165,11 +162,11 @@ class ConfigManager:
         File → Save Configuration persists it. Captures the user's
         dragged watchlist (notebook) divider position (audit
         ``watchlist-width-setting``), the active light/dark theme (audit
-        ``config-theme-roundtrip``), and the indicator manager state —
-        active indicators + named presets + active preset (audit
-        ``config-indicators-roundtrip``). Duck-typed + guarded — a
-        parent missing a given hook (or a headless test stub) is a
-        silent no-op for that capture.
+        ``config-theme-roundtrip``). Indicator state is intentionally NOT
+        captured — configuration files are decoupled from the indicator
+        manager (audit ``config-indicators-decoupled``). Duck-typed +
+        guarded — a parent missing a given hook (or a headless test stub)
+        is a silent no-op for that capture.
         """
         try:
             capture = getattr(
@@ -185,13 +182,10 @@ class ConfigManager:
                 capture_theme()
         except Exception:  # noqa: BLE001
             pass
-        try:
-            capture_indicators = getattr(
-                parent_widget, "_capture_indicators_setting", None)
-            if callable(capture_indicators):
-                capture_indicators()
-        except Exception:  # noqa: BLE001
-            pass
+        # NOTE: indicator state is intentionally NOT captured here — config
+        # files are decoupled from the indicator manager (see
+        # ``apply_loaded_config`` and audit ``config-indicators-decoupled``).
+        # Named presets persist on their own via ``indicators.preset_store``.
 
     def save_config(self, parent_widget: Any) -> None:
         target = _settings.loaded_path()
