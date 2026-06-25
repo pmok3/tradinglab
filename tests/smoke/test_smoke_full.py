@@ -4101,6 +4101,172 @@ def check_d34_compare_toggle_after_drilldown_ylim(app) -> None:
         _pump(app, 0.3)
 
 
+def check_d34b_compare_toggle_today_drilldown_keeps_primary(app) -> None:
+    """Regression: drill into TODAY on 5m, then toggle Compare whose intraday
+    data still ends YESTERDAY — the PRIMARY candles must NOT vanish.
+
+    Bug (``compare-today-drilldown-clip``): ``core.pairing.align_pair`` clipped
+    the aligned pair to the *intersection* of the two day-ranges
+    (``hi_day = min(...)``). When the compare ticker's 5m cache lags a
+    calendar day behind the primary (common mid-session — compare wasn't
+    streamed/polled for today), the primary's TODAY bars were dropped from the
+    aligned list. Under the drill-down's preserved index-based xlim, the
+    window then pointed past the now-shorter primary list and EVERY candle
+    disappeared. Fix: align out to the UNION end-day so the primary's today
+    bars survive (compare side shows gaps for today until its fetch catches
+    up). This test seeds primary 5m through a last day the compare 5m lacks,
+    drills into that day, toggles compare, and asserts the primary panel's
+    drilled window still contains real (non-gap) candles.
+    """
+    from datetime import timedelta
+
+    import numpy as np
+
+    from tradinglab.models import Candle
+
+    src = app.source_var.get()
+    primary_t = "ZDR2A"
+    compare_t = "ZDR2B"
+
+    saved_ticker = app.ticker_var.get()
+    saved_compare_ticker = app.compare_ticker_var.get()
+    saved_compare_on = bool(app.compare_var.get())
+    saved_interval = app.interval_var.get()
+    saved_preserve = app._preserve_xlim_on_render
+    saved_drill = getattr(app, "_drilldown_day", None)
+    saved_stale = app._cache_is_stale
+    saved_cache = {
+        k: app._full_cache.pop(k, None)
+        for k in [(src, primary_t, "1d"), (src, primary_t, "5m"),
+                  (src, compare_t, "1d"), (src, compare_t, "5m")]
+    }
+
+    def make_1d(seed, n_days):
+        out, base = [], datetime(2026, 2, 2, 16, 0)
+        for d in range(n_days):
+            lo = 50 + d * 2 + seed
+            out.append(Candle(date=base + timedelta(days=d),
+                              open=lo, high=lo + 5, low=lo - 1,
+                              close=lo + 2, volume=80000, session="regular"))
+        return out
+
+    def make_5m(seed, n_days):
+        out, base = [], datetime(2026, 2, 2, 9, 30)
+        for d in range(n_days):
+            lo = 50 + d * 2 + seed
+            for i in range(78):
+                p = lo + i * 0.05
+                out.append(Candle(date=base + timedelta(days=d, minutes=5 * i),
+                                  open=p, high=p + 0.3, low=p - 0.3,
+                                  close=p + 0.1, volume=1000 + i,
+                                  session="regular"))
+        return out
+
+    # Primary 5m runs one calendar day FURTHER than compare 5m — the
+    # "today" the compare ticker hasn't been fetched for yet.
+    PRIM_DAYS = 20
+    CMP_DAYS = 19  # missing the primary's last 5m day
+    today = (datetime(2026, 2, 2) + timedelta(days=PRIM_DAYS - 1)).date()
+
+    def _reseed():
+        app._full_cache[(src, primary_t, "1d")] = make_1d(0, 60)
+        app._full_cache[(src, primary_t, "5m")] = make_5m(0, PRIM_DAYS)
+        app._full_cache[(src, compare_t, "1d")] = make_1d(100, 60)
+        app._full_cache[(src, compare_t, "5m")] = make_5m(100, CMP_DAYS)
+
+    try:
+        app._cache_is_stale = lambda *a, **k: False  # type: ignore[assignment]
+        _reseed()
+        if app.compare_var.get():
+            app.compare_var.set(False)
+        app.interval_var.set("1d")
+        app.ticker_var.set(primary_t)
+        app.compare_ticker_var.set(compare_t)
+        app._preserve_xlim_on_render = False
+        app._drilldown_day = None
+        app._load_data()
+        _pump_until(app,
+            lambda: getattr(app, "_primary", None) and len(app._primary) > 0,
+            timeout=0.6)
+        _reseed()  # companion-prefetch may overwrite our deterministic seeds
+
+        # Drill into the primary's LAST 5m day (the compare lacks it).
+        ok = app._zoom_5m_for_date(today)
+        if not ok:
+            raise AssertionError(f"d34b: drill-down to {today} failed")
+        _pump_until(app, lambda: app.interval_var.get() == "5m", timeout=0.6)
+        assert app.interval_var.get() == "5m", "drill-down must switch to 5m"
+
+        # Sanity: before compare, the primary panel shows that day's candles.
+        ps_p = app._panel_state.get("primary") or {}
+        ax_p = ps_p.get("price_ax")
+        assert ax_p is not None, "d34b: primary price axis missing pre-compare"
+
+        # Enable compare whose 5m data ends the day BEFORE `today`.
+        app.compare_var.set(True)
+        app._on_compare_toggle()
+        _pump(app, 0.2)
+
+        # The PRIMARY drilled window MUST still contain real candles.
+        ps_p = app._panel_state.get("primary") or {}
+        ax_p = ps_p.get("price_ax")
+        candles = ps_p.get("candles") or []
+        assert ax_p is not None and candles, "d34b: primary panel lost its data"
+        xlim = ax_p.get_xlim()
+        eps = 1e-6
+        lo = max(0, int(np.ceil(xlim[0] - eps)))
+        hi = min(len(candles), int(np.floor(xlim[1] + eps)) + 1)
+        assert hi > lo, (
+            f"d34b: primary visible-window slice empty after compare toggle "
+            f"(candles vanished): lo={lo} hi={hi} xlim={xlim} n={len(candles)}")
+        visible_real = [c for c in candles[lo:hi]
+                        if not getattr(c, "is_gap", False)]
+        assert visible_real, (
+            "d34b: NO real primary candles visible in the drilled window after "
+            "enabling compare — the today-clip bug regressed")
+        # The visible bars should be on the drilled day.
+        assert any(c.date.date() == today for c in visible_real), (
+            f"d34b: drilled window doesn't show {today}'s primary bars")
+        print("  [OK] §d34b compare-today-drilldown-clip: primary candles "
+              "survive compare toggle when compare lags a day")
+    finally:
+        try:
+            del app._cache_is_stale
+        except AttributeError:
+            app._cache_is_stale = saved_stale  # type: ignore[assignment]
+        for k, v in saved_cache.items():
+            app._full_cache.pop(k, None)
+            if v is not None:
+                app._full_cache[k] = v
+        try:
+            import os
+            from pathlib import Path
+            base = os.environ.get("LOCALAPPDATA", "")
+            if base:
+                p = Path(base) / "tradinglab"
+                for t in (primary_t, compare_t):
+                    for iv in ("1d", "5m"):
+                        for f in p.glob(f"{src}__{t}__{iv}.jsonl"):
+                            try:
+                                f.unlink()
+                            except Exception:  # noqa: BLE001
+                                pass
+        except Exception:  # noqa: BLE001
+            pass
+        if app.compare_var.get() != saved_compare_on:
+            app.compare_var.set(saved_compare_on)
+        app.interval_var.set(saved_interval)
+        app.ticker_var.set(saved_ticker)
+        app.compare_ticker_var.set(saved_compare_ticker)
+        app._preserve_xlim_on_render = saved_preserve
+        app._drilldown_day = saved_drill
+        try:
+            app._load_data()
+        except Exception:  # noqa: BLE001
+            pass
+        _pump(app, 0.3)
+
+
 def check_d53_compare_off_during_drilldown_ylim(app) -> None:
     """Regression: toggling compare OFF while drilled-in must Y-fit primary.
 
@@ -20072,6 +20238,7 @@ def _run_all_checks(app) -> None:
     check_d32_interaction_sequence_matrix(app)
     check_d33_blit_overlays_invariant(app)
     check_d34_compare_toggle_after_drilldown_ylim(app)
+    check_d34b_compare_toggle_today_drilldown_keeps_primary(app)
     check_d53_compare_off_during_drilldown_ylim(app)
     check_d35_config_import_export_round_trip(app)
     check_d35a_config_theme_round_trip(app)
@@ -20373,6 +20540,8 @@ def _build_check_sequence():
         ("check_d33_blit_overlays_invariant", check_d33_blit_overlays_invariant),
         ("check_d34_compare_toggle_after_drilldown_ylim",
          check_d34_compare_toggle_after_drilldown_ylim),
+        ("check_d34b_compare_toggle_today_drilldown_keeps_primary",
+         check_d34b_compare_toggle_today_drilldown_keeps_primary),
         ("check_d53_compare_off_during_drilldown_ylim",
          check_d53_compare_off_during_drilldown_ylim),
         ("check_d35_config_import_export_round_trip",

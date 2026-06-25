@@ -109,9 +109,21 @@ def align_pair(
         return list(primary or []), list(compare or [])
 
     lo_day = max(primary[0].date.date(), compare[0].date.date())
-    hi_day = min(primary[-1].date.date(), compare[-1].date.date())
-    if lo_day > hi_day:
+    # Overlap guard: if the two series share no calendar day at all, leave
+    # them unaligned (legacy behaviour).
+    overlap_hi = min(primary[-1].date.date(), compare[-1].date.date())
+    if lo_day > overlap_hi:
         return list(primary), list(compare)
+    # Align out to the UNION end-day, NOT the intersection. Clipping the top
+    # end to ``min`` dropped the side that extends further — most importantly
+    # the primary's TODAY bars when the compare ticker's intraday data still
+    # lags a calendar day behind (stale cache / provider lag). Under a
+    # drill-down-to-today the preserved index-based xlim then pointed past the
+    # now-shorter primary list and EVERY candle vanished. Keeping
+    # ``hi_day = max`` retains those trailing bars; the lagging side gets gap
+    # placeholders for the days it doesn't cover. Audit
+    # ``compare-today-drilldown-clip``.
+    hi_day = max(primary[-1].date.date(), compare[-1].date.date())
 
     # Daily and coarser bars align by calendar day, not exact timestamp.
     if interval is not None and not is_intraday(interval):

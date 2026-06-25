@@ -125,8 +125,96 @@ def test_daily_aligned_real_bars_preserve_identity():
 
 
 # ---------------------------------------------------------------------------
-# Intraday must keep exact-timestamp keying (no behaviour change).
+# Compare-mode "today drop" regression: a lagging side must NOT clip the
+# other side's trailing bars (audit ``compare-today-drilldown-clip``).
 # ---------------------------------------------------------------------------
+
+
+def _intraday_session(day: dt.date, *, n: int = 6, px0: float = 100.0,
+                      start: dt.time = dt.time(9, 30)) -> list[Candle]:
+    out: list[Candle] = []
+    t = dt.datetime(day.year, day.month, day.day, start.hour, start.minute, tzinfo=ET)
+    px = px0
+    for _ in range(n):
+        out.append(Candle(date=t, open=px, high=px + 0.5, low=px - 0.5,
+                          close=px + 0.2, volume=500))
+        t += dt.timedelta(minutes=5)
+        px += 0.1
+    return out
+
+
+def test_intraday_keeps_primary_today_when_compare_lags_a_day():
+    """The reported bug: drilled into TODAY on 5m, toggle compare whose
+    intraday cache still ends YESTERDAY. The aligned primary MUST keep
+    today's bars — otherwise the index-based drill-down xlim points past the
+    end of the now-shorter primary list and every candle vanishes. The
+    compare side gets gap placeholders for today."""
+    yest = _TODAY - dt.timedelta(days=1)
+    primary = _intraday_session(yest, px0=100.0) + _intraday_session(_TODAY, px0=110.0)
+    compare = _intraday_session(yest, px0=200.0)  # stale: no today bars
+
+    out_p, out_c = align_pair(primary, compare, interval="5m")
+
+    assert len(out_p) == len(out_c)
+    # Every primary real bar survives (none clipped by the lagging compare).
+    p_reals = [c for c in out_p if not c.is_gap]
+    assert len(p_reals) == len(primary)
+    today_p = [c for c in out_p if not c.is_gap and c.date.date() == _TODAY]
+    assert len(today_p) == 6, "primary's today bars must survive alignment"
+    # Today's slots are gaps on the (lagging) compare side.
+    today_c = [c for c in out_c if c.date.date() == _TODAY]
+    assert today_c and all(c.is_gap for c in today_c)
+    # Real bars keep identity.
+    assert today_p[0] is primary[6]
+
+
+def test_intraday_keeps_compare_when_it_extends_past_primary():
+    """Symmetric: a compare that extends FURTHER than primary keeps its
+    trailing bars too (primary gets the gaps)."""
+    yest = _TODAY - dt.timedelta(days=1)
+    primary = _intraday_session(yest, px0=100.0)  # primary stale
+    compare = _intraday_session(yest, px0=200.0) + _intraday_session(_TODAY, px0=210.0)
+
+    out_p, out_c = align_pair(primary, compare, interval="5m")
+    c_reals = [c for c in out_c if not c.is_gap]
+    assert len(c_reals) == len(compare)
+    today_c = [c for c in out_c if not c.is_gap and c.date.date() == _TODAY]
+    assert len(today_c) == 6
+
+
+def test_daily_keeps_primary_today_when_compare_lacks_today():
+    """Daily analogue: the compare daily series lacks today; the primary's
+    today daily bar must not be clipped (a gap fills the compare slot)."""
+    primary = [_daily(d, 100 + i) for i, d in enumerate(_DAYS)]
+    primary.append(_daily(_TODAY, 105.0, hour=9, minute=30))
+    compare = [_daily(d, 200 + i) for i, d in enumerate(_DAYS)]  # no today
+
+    out_p, out_c = align_pair(primary, compare, interval="1d")
+    assert out_p[-1].date.date() == _TODAY
+    assert not out_p[-1].is_gap
+    assert out_c[-1].is_gap  # compare has no today bar → gap
+
+
+def test_low_end_still_intersects_to_avoid_long_leading_gaps():
+    """The LOW end keeps the intersection (lo_day = max of the two starts) so
+    a short-history side doesn't force a long leading gap-run on the other —
+    only the trailing (today) clip was relaxed."""
+    primary = [_daily(d, 100 + i) for i, d in enumerate(_DAYS)]       # 4 days
+    compare = [_daily(d, 200 + i) for i, d in enumerate(_DAYS[2:])]   # last 2 days
+    out_p, out_c = align_pair(primary, compare, interval="1d")
+    assert len(out_p) == len(out_c) == 2
+    assert not any(c.is_gap for c in out_p + out_c)
+
+
+def test_no_shared_day_returns_unaligned():
+    """Overlap guard preserved: two series with no common calendar day are
+    left unaligned (no giant all-gap lists)."""
+    a = [_daily(_DAYS[0], 100.0)]
+    b = [_daily(_TODAY + dt.timedelta(days=10), 200.0)]
+    out_p, out_c = align_pair(a, b, interval="1d")
+    assert len(out_p) == 1 and len(out_c) == 1
+    assert not out_p[0].is_gap and not out_c[0].is_gap
+
 
 def test_intraday_keys_on_exact_timestamp():
     # Same calendar day, different minute stamps must NOT collapse.
