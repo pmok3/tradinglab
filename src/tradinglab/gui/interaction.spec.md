@@ -271,7 +271,7 @@ during drag.
 - **Dynamic ratio rebase-to-100 re-anchor**: `_autoscale_y_to_visible`
   first calls `self._apply_dynamic_ratio_rebase()` (the universal
   view-change hook) so a ratio chart's 100-index re-anchors to the
-  leftmost visible bar on every zoom / pan-end / drill-down. Skipped
+  leftmost visible bar on every zoom / pan-end / drilldown. Skipped
   while `_pan_state` is active (re-bakes once on release). **Live
   during a pan drag** the y-axis instead relabels via the
   `_ratio_rebase_y_scale` tick formatter — `_pan_setup_blit` marks

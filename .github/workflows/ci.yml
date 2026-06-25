@@ -17,6 +17,54 @@ jobs:
       - run: pip install -e .[dev]
       - run: ruff check src tests
 
+  unit:
+    # The release workflow (.github/workflows/release.yml) runs
+    # ``pytest tests/unit`` as a gate BEFORE building the redistributable,
+    # but CI historically did NOT — so a broken unit test sailed through a
+    # green CI and only surfaced when the ``vX.Y.Z`` tag was pushed, failing
+    # the Release run at "Run unit tests (clean env)" (v0.4.0 / v0.3.11 /
+    # v0.3.8 all hit this). Running the unit suite here closes that gap so
+    # unit breakage is caught on the merge that introduces it.
+    #
+    # Scoped to {ubuntu, windows} — the two platform families the release
+    # gate cares about (the release builds + unit-tests on Windows x64 +
+    # ARM64; ubuntu adds cheap, fast coverage). macOS is intentionally
+    # excluded: the release never runs unit on macOS, and headless
+    # ``macos-latest`` deadlocks on Tk ``transient()`` modals (CLAUDE.md
+    # §7.1) which the unit/gui dialog tests are not all guarded against.
+    #
+    # ``tests/unit`` runs as its OWN pytest invocation (not merged with
+    # smoke/scanner) to mirror the release workflow's isolation — mixing
+    # them in one process hit a Tcl_AsyncDelete teardown crash on CI
+    # runners (see release.yml). The env is otherwise clean (no
+    # TRADINGLAB_* vars) so the per-test ``tmp_path`` redirection isn't
+    # shadowed (release.yml documents the same constraint).
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.12"]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      MPLBACKEND: Agg
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install Tk (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y python3-tk xvfb
+      - run: pip install -e .[dev]
+      - name: Run unit tests
+        if: runner.os != 'Linux'
+        run: pytest tests/unit -q
+      - name: Run unit tests (Linux, under xvfb)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a pytest tests/unit -q
+
   smoke:
     strategy:
       fail-fast: false
