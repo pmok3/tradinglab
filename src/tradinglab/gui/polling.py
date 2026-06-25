@@ -264,8 +264,28 @@ class PollingMixin:
     def _drain_worker_inbox(self) -> None:
         refresh_pending = False
         reference_pending = False
+        # Process only the items already queued when this drain STARTS.
+        # A handler may synchronously enqueue MORE work: most importantly
+        # the prefetch-arrival branch below calls
+        # ``_refresh_daily_synth_for_active_view`` →
+        # ``_maybe_upsample_today_daily``, which — during RTH, when the
+        # daily-today synth can't be satisfied — re-submits a companion
+        # prefetch (audit ``daily-today-upsample``). With a stub / fast
+        # fetcher that completion re-arrives on ``_worker_inbox`` before an
+        # unbounded ``while True`` drains it empty, so a single Tk
+        # ``update()`` never returns: ``_pump`` livelocks and the smoke
+        # suite times out (120s) on fast CI runners that happen to run
+        # during US market hours. Bounding the drain to the entry snapshot
+        # defers freshly-enqueued items to the next 80ms tick (imperceptible)
+        # and makes the loop provably terminate regardless of the feedback.
+        # Audit ``inbox-drain-livelock``.
         try:
-            while True:
+            budget = self._worker_inbox.qsize()
+        except Exception:  # noqa: BLE001
+            budget = 0
+        try:
+            while budget > 0:
+                budget -= 1
                 kind, payload = self._worker_inbox.get_nowait()
                 if kind == "stash":
                     try:

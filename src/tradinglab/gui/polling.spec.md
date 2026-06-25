@@ -65,6 +65,15 @@ Also hosts the pure scheduler helpers (only caller is here).
   picks up the freshly-warmed intraday data without a round-trip
   (audit `daily-today-upsample`) and `_refresh_volume_tod_for_prefetch`
   so volume time-of-day shading repaints after a cold 5m cache warms.
+  **Bounded drain (audit `inbox-drain-livelock`):** each call processes
+  only the items queued at entry (`qsize()` snapshot), not `while True`
+  until empty. A `prefetch` handler can re-enqueue work — during RTH
+  `_refresh_daily_synth_for_active_view` re-submits a companion prefetch
+  when the daily-today synth can't be satisfied — and with a fast/stub
+  fetcher that completion re-arrives before an unbounded loop drains,
+  livelocking a single Tk `update()` (smoke 120s timeout on fast CI
+  runners during market hours). Bounding defers freshly-enqueued items to
+  the next 80ms tick.
 - `_drain_stream_queue()` — pop streaming events. Routes
   `"card:N"`-slot events to `self._chartstack.apply_stream_event`;
   routes `tick`/`rollover` for main chart through

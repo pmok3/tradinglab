@@ -544,6 +544,50 @@ class TestDrainWorkerInbox:
         # Must not raise.
         h._drain_worker_inbox()
 
+    def test_drain_is_bounded_to_entry_snapshot(self):
+        """A handler that re-enqueues work cannot livelock the drain.
+
+        Regression for ``inbox-drain-livelock``. The prefetch-arrival path
+        can synchronously re-submit a companion prefetch (during RTH, when
+        the daily-today synth can't be satisfied — see
+        ``_refresh_daily_synth_for_active_view`` →
+        ``_maybe_upsample_today_daily``) whose stub / fast completion
+        re-arrives on ``_worker_inbox``. The old unbounded ``while True``
+        drain processed those re-enqueued items in the SAME call and never
+        returned on a fast runner, livelocking ``_pump`` into the 120s smoke
+        timeout (observed on windows/ubuntu CI runners that ran during US
+        market hours). The drain must process only the items queued when it
+        STARTED and defer re-enqueued ones to the next 80ms tick.
+        """
+        class _Reentrant(_InboxHarness):
+            def _stash_full_cache(self, key, bars):
+                super()._stash_full_cache(key, bars)
+                # Each first-round item re-enqueues exactly one follow-up,
+                # mimicking the prefetch->synth->re-prefetch feedback. Bounded
+                # to one round so a REGRESSION (unbounded while-True) finishes
+                # (it drains the extra round too) and the COUNT exposes the
+                # bug rather than hanging the suite.
+                _sym, _round = key
+                if _round == 0:
+                    self._worker_inbox.put(("stash", ((_sym, 1), bars)))
+
+        h = _Reentrant()
+        for i in range(3):
+            h._worker_inbox.put(("stash", ((i, 0), [])))
+        h._drain_worker_inbox()
+        # Bounded: exactly the 3 entry-snapshot items ran; their 3
+        # re-enqueued follow-ups wait for the next tick. (An unbounded
+        # while-True would have drained all 6 here, leaving the inbox empty.)
+        assert len(h.stash_calls) == 3, (
+            f"drain must be bounded to the entry snapshot; ran "
+            f"{len(h.stash_calls)} (unbounded while-True would run 6)")
+        assert h._worker_inbox.qsize() == 3, (
+            "re-enqueued items must defer to the next drain tick")
+        # The next tick drains the deferred round (which re-enqueues nothing).
+        h._drain_worker_inbox()
+        assert len(h.stash_calls) == 6
+        assert h._worker_inbox.qsize() == 0
+
 
 # ---------------------------------------------------------------------------
 # 7. PollingMixin — _schedule_drain + _schedule_worker_inbox_drain
