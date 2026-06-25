@@ -2320,6 +2320,7 @@ class ChartApp(
         source: str,
         symbol: str,
         interval: str,
+        allow_prefetch: bool = True,
     ) -> list[Candle]:
         """Append a synthetic today's-bar to ``candles`` when on a daily view.
 
@@ -2343,6 +2344,16 @@ class ChartApp(
         so the truthful ``_full_cache`` entry stays unmodified — a
         subsequent provider fetch that finally contains today's daily
         bar replaces the synth bar at the next render boundary.
+
+        ``allow_prefetch`` (default ``True``) gates the missing-intraday
+        self-heal companion prefetch. The prefetch-arrival refresh path
+        (:meth:`_refresh_daily_synth_for_active_view`) passes ``False``: it
+        runs BECAUSE a companion prefetch just landed, so re-issuing one
+        when the (stub / still-incomplete) intraday can't yet satisfy
+        "today" would feed an endless prefetch -> refresh -> prefetch loop
+        (the ``inbox-drain-livelock`` / d61 smoke hang seen on fast CI
+        runners during market hours). The normal load path keeps the
+        default so a warm-served daily still self-heals.
         """
         if not symbol or interval not in _DAILY_UPSAMPLE_INTERVALS:
             return candles
@@ -2365,7 +2376,8 @@ class ChartApp(
             # ``_ensure_prefetched`` dedups via staleness + in-flight, so a
             # repeat call is cheap. Audit ``daily-today-upsample``.
             try:
-                if (self._intraday_session_open(time.time())
+                if (allow_prefetch
+                        and self._intraday_session_open(time.time())
                         and not _daily_last_bar_is_today(candles)):
                     self._prefetch_companion_intervals([symbol])
             except Exception:  # noqa: BLE001
@@ -2415,6 +2427,7 @@ class ChartApp(
             return
         primary_raw = self._maybe_upsample_today_daily(
             primary_clean, source=src, symbol=raw_primary, interval=interval,
+            allow_prefetch=False,
         )
         compare_raw: list[Candle] = []
         if compare_on and raw_compare:
@@ -2423,7 +2436,7 @@ class ChartApp(
             )
             compare_raw = self._maybe_upsample_today_daily(
                 compare_clean, source=src, symbol=raw_compare,
-                interval=interval,
+                interval=interval, allow_prefetch=False,
             )
         if compare_on and compare_raw:
             primary, compare = self._apply_pair_filter_and_align(

@@ -116,3 +116,69 @@ def test_synth_applied_and_no_prefetch_when_intraday_present():
     assert calls == [], "no prefetch needed when intraday already cached"
     assert out[-1].date.date() == _TODAY.date(), "synth today-bar must be appended"
     assert len(out) == len(daily) + 1
+
+
+def test_no_prefetch_when_allow_prefetch_false():
+    """``allow_prefetch=False`` suppresses the self-heal companion prefetch.
+
+    Regression for ``inbox-drain-livelock`` (d61 smoke hang). The
+    prefetch-arrival refresh path passes ``allow_prefetch=False`` so that a
+    synth which STILL can't form today's bar (stub / incomplete intraday
+    during market hours) does NOT re-issue a companion prefetch — otherwise
+    the arrival re-fires the refresh which re-prefetches, ad infinitum.
+    """
+    stub, calls = _stub(session_open=True)
+    daily = [_daily(_prev_weekday(_YESTERDAY)), _daily(_YESTERDAY)]
+    out = stub._maybe_upsample_today_daily(
+        daily, source="yfinance", symbol="SPY", interval="1d",
+        allow_prefetch=False)
+    assert calls == [], "allow_prefetch=False must NOT kick a companion prefetch"
+    assert out is daily or out == daily  # unchanged (no intraday yet)
+
+
+def _refresh_stub(*, session_open=True, symbol="SPY"):
+    """Stub exposing just what ``_refresh_daily_synth_for_active_view`` reads,
+    with the REAL ``_maybe_upsample_today_daily`` bound so the call-site's
+    ``allow_prefetch`` argument is exercised end-to-end."""
+    calls: list[list[str]] = []
+    daily = [_daily(_prev_weekday(_YESTERDAY)), _daily(_YESTERDAY)]
+    stub = SimpleNamespace(
+        interval_var=SimpleNamespace(get=lambda: "1d"),
+        source_var=SimpleNamespace(get=lambda: "yfinance"),
+        ticker_var=SimpleNamespace(get=lambda: symbol),
+        compare_var=SimpleNamespace(get=lambda: False),
+        compare_ticker_var=SimpleNamespace(get=lambda: ""),
+        _full_cache={("yfinance", symbol, "1d"): list(daily)},
+        _intraday_session_open=lambda _s: session_open,
+        _prefetch_companion_intervals=lambda syms: calls.append(list(syms)),
+        _apply_pair_filter_and_align=lambda p, c: (p, c or []),
+        _set_data_state=lambda **k: None,
+        _invalidate_focused_panels=lambda c: None,
+        _render=lambda: None,
+    )
+    stub._maybe_upsample_today_daily = (
+        app_mod.ChartApp._maybe_upsample_today_daily.__get__(stub)
+    )
+    stub._refresh_daily_synth_for_active_view = (
+        app_mod.ChartApp._refresh_daily_synth_for_active_view.__get__(stub)
+    )
+    return stub, calls
+
+
+def test_refresh_active_view_does_not_reprefetch():
+    """The prefetch-arrival refresh path must NOT re-issue a prefetch.
+
+    Pins the d61 ``inbox-drain-livelock`` root fix end-to-end:
+    ``_refresh_daily_synth_for_active_view`` runs because a companion
+    prefetch just landed; if its synth still can't form today's bar (market
+    hours, incomplete intraday) it must NOT kick ANOTHER companion prefetch
+    — that re-arrival would re-fire this refresh forever, livelocking
+    ``app.update()`` (120s smoke timeout on fast CI runners). Without the
+    ``allow_prefetch=False`` at the call site this would record a prefetch.
+    """
+    stub, calls = _refresh_stub(session_open=True)
+    stub._refresh_daily_synth_for_active_view(prefetched_symbol="SPY")
+    assert calls == [], (
+        "refresh-on-arrival must not re-prefetch (would feed the "
+        "prefetch->refresh->prefetch livelock)")
+
