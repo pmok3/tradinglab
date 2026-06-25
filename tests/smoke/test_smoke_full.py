@@ -4202,7 +4202,16 @@ def check_d34b_compare_toggle_today_drilldown_keeps_primary(app) -> None:
         ax_p = ps_p.get("price_ax")
         assert ax_p is not None, "d34b: primary price axis missing pre-compare"
 
-        # Enable compare whose 5m data ends the day BEFORE `today`.
+        # Enable compare whose 5m data ends the day BEFORE `today`. Stub the
+        # background compare prefetch first: its async fetch would otherwise
+        # overwrite our seeded (deterministic, today-lacking) compare cache
+        # mid-pump with the smoke stub's generic 150-bar data, re-aligning the
+        # chart and shifting the drilled window (§7.2 / §7.26 — exactly why
+        # this passed in isolation but flaked in the full CI sequence). Re-seed
+        # right before the toggle so the cache-hit path reads exactly our
+        # compare.
+        app._ensure_compare_prefetched = lambda *a, **k: None  # type: ignore[assignment]
+        _reseed()
         app.compare_var.set(True)
         app._on_compare_toggle()
         _pump(app, 0.2)
@@ -4230,6 +4239,10 @@ def check_d34b_compare_toggle_today_drilldown_keeps_primary(app) -> None:
         print("  [OK] §d34b compare-today-drilldown-clip: primary candles "
               "survive compare toggle when compare lags a day")
     finally:
+        try:
+            del app._ensure_compare_prefetched
+        except AttributeError:
+            pass
         try:
             del app._cache_is_stale
         except AttributeError:
