@@ -84,7 +84,16 @@ jobs:
         run: pytest tests/smoke tests/scanner -v --tb=short
       - name: Run smoke + scanner tests (Linux, under xvfb)
         if: runner.os == 'Linux'
-        run: xvfb-run -a pytest tests/smoke tests/scanner -v --tb=short
+        # Pin a large 24-bit virtual screen. ``xvfb-run -a`` uses a small
+        # default screen (1280x1024); ChartApp sizes its window to a percent
+        # of the screen with a 1200x780 floor (compute_screen_percent_geometry),
+        # so on the small default the FigureCanvasTkAgg raster is clamped near
+        # the minimum and the candle-pixel count read by
+        # ``_assert_canvas_has_candles`` drops below the 3000 "not blank" floor
+        # (check_d31 / d32 saw ~1-2k vs the ~5k a full-size window yields). A
+        # 1920x1080 screen lets the window open at full size. Headless-only —
+        # the same checks pass at native window size on windows / macOS.
+        run: xvfb-run -a --server-args="-screen 0 1920x1080x24" pytest tests/smoke tests/scanner -v --tb=short
 
   perf-gate:
     # Indicator perf-budget regression gate (see docs/PERFORMANCE.md +
