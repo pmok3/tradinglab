@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.4.1] - 2026-06-25
+
+### Changed
+
+- **Your indicator presets are now independent of configuration files.** Saving
+  or loading a configuration no longer touches your chart indicators or your
+  named presets at all — a configuration is purely a layout / theme / view
+  snapshot. Named presets save themselves automatically to their own file and
+  survive an app restart, while the active indicators on the chart start clean
+  each launch. (Previously indicators were bundled into the config file, which
+  is what made the preset-wipe bug below possible.)
+- **"Rebase to 100" now follows your view.** The ratio rebase line re-anchors
+  its 100 mark to the *leftmost visible bar* and keeps it there as you zoom,
+  pan, or drill down — so the chart always reads as relative performance from
+  the left edge of what you're actually looking at, not a fixed historical
+  point. During a pan the y-axis relabels live (with no snap when you let go).
+
+### Fixed
+
+- **Loading a configuration no longer wipes your saved indicator presets.** A
+  configuration saved before this release could carry an (empty) indicator
+  section, and loading it used to clear your named-preset library. Configurations
+  are now fully decoupled from indicators, and any indicator data in an older
+  config file is ignored on load — so your presets are safe.
+- **Indicator presets now survive an app restart.** Presets you save via
+  Indicators → Save Preset… are written to their own file and restored on the
+  next launch, with no need to explicitly Save Configuration.
+- **The compare overlay no longer blanks the chart when you drill into today.**
+  Drilling into today's session and then turning on Compare could make every
+  candle vanish when the compare ticker's intraday data lagged a calendar day
+  behind. The chart now keeps today's bars on both sides, so the candles stay
+  put.
+- **Heikin-Ashi "flat bar" highlights are now visible on bearish candles in
+  dark mode.** The flat-bar accent was collapsing into the red candle body,
+  making bearish flat bars look like ordinary bars; the highlight is now clearly
+  lighter than the body, and the first bar of each flat run is no longer dropped.
+
 ## [0.4.0] - 2026-06-19
 
 ### Added
