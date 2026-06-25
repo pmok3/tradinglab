@@ -160,7 +160,7 @@ def _count_candle_pixels(app) -> int:
     return int(g.sum() + r.sum())
 
 
-def _assert_canvas_has_candles(app, msg: str, min_pixels: int = 3000) -> None:
+def _assert_canvas_has_candles(app, msg: str, min_pixels: int = 400) -> None:
     """Assert the visible canvas still shows candles (i.e. is not blank).
 
     ``min_pixels`` is a deliberately loose "not blank" floor, not a pixel-exact
@@ -169,10 +169,18 @@ def _assert_canvas_has_candles(app, msg: str, min_pixels: int = 3000) -> None:
     legacy ``figure.clear()`` rebuild draw bit-identical candles on a real
     canvas (verified: both paths report the same count locally), but on the tiny
     xvfb canvas the fast path's reused-axes repaint lands a few percent lower
-    than the fresh-axes rebuild (~4.8k vs ~5k) — a sub-pixel anti-aliasing /
-    layout difference, NOT missing candles. A genuinely blank canvas is ~0
-    candle pixels, so 3000 keeps a large margin for blank-detection while
-    tolerating that cross-platform / cross-render-path variance.
+    than the fresh-axes rebuild — a sub-pixel anti-aliasing / layout difference,
+    NOT missing candles.
+
+    The headless canvas SIZE is not fixed: it tracks how large the Tk window
+    realizes under the runner's (window-manager-less) X server, which varies
+    across GitHub-runner images. A healthy headless render has been seen at
+    ~5k AND, on a later runner image, at ~900 candle pixels for the same chart
+    — both clearly non-blank, vs a genuinely blank canvas at ~0. So the floor
+    is kept LOW (a blank-detector, not a size assertion): it must sit far below
+    the smallest healthy headless render yet far above ~0. ``check_d31`` /
+    ``check_d32`` previously hard-coded ~3000 and went red when a runner image
+    shrank the headless window — an environment change, not a regression.
     """
     n = _count_candle_pixels(app)
     if n < min_pixels:

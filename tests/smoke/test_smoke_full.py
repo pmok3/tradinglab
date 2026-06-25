@@ -3746,7 +3746,7 @@ def check_d32_interaction_sequence_matrix(app) -> None:
         # Drilled 5m view has the fewest candles of any sequence; after the
         # golden-ratio pane split the rendered candle area is smaller, so use
         # a lower (but still blank-detecting) floor than the 1d sequences.
-        _assert_canvas_has_candles(app, "seq3 drill+hover", min_pixels=2500)
+        _assert_canvas_has_candles(app, "seq3 drill+hover", min_pixels=200)
 
         # ---- Sequence 4: drill → click → release → hover (caught d31) ----
         reset_to_1d()
@@ -3758,7 +3758,7 @@ def check_d32_interaction_sequence_matrix(app) -> None:
         _press(app, ax, cx, cy)
         _release(app, ax, cx, cy)
         _hover(app, ax, cx + 0.1, cy)
-        _assert_canvas_has_candles(app, "seq4 drill+click+hover", min_pixels=2500)
+        _assert_canvas_has_candles(app, "seq4 drill+click+hover", min_pixels=200)
 
         # ---- Sequence 5: load → scroll-zoom → hover ----
         reset_to_1d()
