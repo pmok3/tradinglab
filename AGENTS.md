@@ -268,13 +268,32 @@ The canonical end-to-end gate is `test_smoke_full.py`.
 
 ## 6. CI / GitHub Actions
 
-`.github/workflows/ci.yml` defines two jobs:
+`.github/workflows/ci.yml` defines four jobs:
 
 | Job | OS × Python | Step |
 |---|---|---|
 | `lint` | ubuntu-latest × 3.12 | `ruff check src tests` |
+| `unit` (matrix) | windows-latest × {3.11, 3.12} | `pytest tests/unit` |
 | `smoke` (matrix) | {ubuntu, windows, macos}-latest × {3.11, 3.12} | `pytest tests/smoke tests/scanner -v --tb=short` (Linux via `xvfb-run`) |
+| `perf-gate` | ubuntu-latest × 3.12 | `pytest tests/perf -m perf` |
 
+- **`unit` mirrors the release gate (Windows-only).** `release.yml` runs
+  `pytest tests/unit` on Windows BEFORE building the redistributable, but CI
+  historically did NOT — so a broken unit test passed a green CI and only
+  surfaced on the `vX.Y.Z` tag push, failing the Release at "Run unit tests"
+  (v0.4.0 / v0.3.11 / v0.3.8 all hit this). The `unit` job closes that gap.
+  It is Windows-only on purpose: `tests/unit` has font/pixel-calibrated
+  GUI-geometry tests (§7.19) that read false failures under headless Linux
+  xvfb, and the release never unit-tests off Windows.
+- **smoke is environment-sensitive** (two headless gotchas surfaced in the
+  v0.4.1 sprint): (1) the worker-inbox / daily-synth **RTH livelock** —
+  `check_d61` hung the smoke run only when CI ran during US market hours
+  (`_intraday_session_open` is True), via a self-feeding prefetch → refresh →
+  prefetch loop; fixed with `allow_prefetch` + a bounded inbox drain (see
+  `app.spec.md` / `gui/polling.spec.md`). (2) the headless ChartApp canvas
+  **size varies across runner images**, so `_assert_canvas_has_candles` uses a
+  low blank-detector floor (~400), NOT a size assertion (see
+  `tests/smoke/_helpers.py`).
 - **`timeout-minutes: 30`** on the smoke job (hard ceiling — previously
   macOS hung for 6 hours under default).
 - **macOS quirks:** Tk `transient()` deadlocks on the headless
