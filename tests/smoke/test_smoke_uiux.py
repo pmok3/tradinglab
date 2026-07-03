@@ -364,7 +364,7 @@ def test_uiux_indicator_manager_search_commit_and_validation(app):
 
 
 @_skip_modal_on_darwin
-def test_uiux_custom_indicator_expression_preview_save(app, tmp_path):
+def test_uiux_custom_indicator_expression_preview_save(app, tmp_path, monkeypatch):
     """Custom Indicator Builder previews and hot-registers an expression file."""
     from tradinglab.gui import custom_indicator_dialog as mod
     from tradinglab.indicators import base as ind_base
@@ -373,6 +373,14 @@ def test_uiux_custom_indicator_expression_preview_save(app, tmp_path):
     name = "smoke_custom_expr"
     saved_primary = list(getattr(app, "_primary", []) or [])
     app._primary = saved_primary or _fake_primary_for_custom_indicator()
+    # ``_on_save`` prompts a native ``asksaveasfilename`` for the target
+    # location (audit ``indicator-save-location``); that modal deadlocks a
+    # headless runner. Stub it to the working directory so the save path is
+    # deterministic + non-blocking (mirrors the unit-test fixture).
+    monkeypatch.setattr(
+        mod.filedialog, "asksaveasfilename",
+        lambda **kw: str(tmp_path / f"{name}.py"),
+    )
     dlg = mod.CustomIndicatorDialog(app, directory=tmp_path)
     try:
         dlg.geometry("980x720+110+110")
