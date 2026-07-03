@@ -2591,6 +2591,19 @@ class IndicatorDialog(BaseModalDialog):
         default_style = self._default_style_for_kind(kind_id)
         if not default_style:
             return
+        # Resolve the factory once so verbose canonical output keys can be
+        # shown with their compact display label (e.g. ``prior_day_high`` →
+        # ``pd_high``) — matching the in-chart readout legend. The swatch is
+        # still keyed by the canonical key for persistence.
+        _label_for_key = None
+        try:
+            _entry = factory_by_kind_id(kind_id)
+            _factory = _entry[1] if isinstance(_entry, tuple) else _entry
+            _hook = getattr(_factory, "output_key_label", None)
+            if callable(_hook):
+                _label_for_key = _hook
+        except Exception:  # noqa: BLE001
+            _label_for_key = None
         try:
             tk.Label(sf, text="Colors:").pack(side="left", padx=(0, 4))
         except tk.TclError:
@@ -2613,7 +2626,15 @@ class IndicatorDialog(BaseModalDialog):
                 "<Button-1>",
                 lambda _e, r=row, k=str(key): self._on_pick_color_for_output(r, k),
             )
-            tk.Label(cell, text=str(key)).pack(side="left")
+            _disp = str(key)
+            if _label_for_key is not None:
+                try:
+                    _cand = _label_for_key(str(key))
+                    if isinstance(_cand, str) and _cand:
+                        _disp = _cand
+                except Exception:  # noqa: BLE001
+                    pass
+            tk.Label(cell, text=_disp).pack(side="left")
             row.color_buttons[str(key)] = swatch
         # Theme freshly-built frames so light/dark mode matches.
         try:

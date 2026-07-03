@@ -35,6 +35,8 @@ class MenuBuilderCallbacks(Protocol):
     def _on_close(self) -> None: ...
     def _populate_indicator_preset_menu(self, menu: tk.Menu, action: str) -> None: ...
     def _on_menu_save_indicator_preset(self) -> None: ...
+    def _on_menu_save_indicator_preset_to_file(self) -> None: ...
+    def _on_menu_load_indicator_preset_from_file(self) -> None: ...
     def _on_menu_clear_indicators(self) -> None: ...
     def _on_custom_indicator_builder(self) -> None: ...
     def _on_menu_sandbox_start(self) -> None: ...
@@ -189,6 +191,15 @@ class MenuBuilder:
         ind_menu.add_cascade(label="Delete Preset", menu=delete_preset_menu)
         ind_menu.add_separator()
         ind_menu.add_command(
+            label="Save Preset to File…",
+            command=self._cb._on_menu_save_indicator_preset_to_file,
+        )
+        ind_menu.add_command(
+            label="Load Preset from File…",
+            command=self._cb._on_menu_load_indicator_preset_from_file,
+        )
+        ind_menu.add_separator()
+        ind_menu.add_command(
             label="Clear All",
             command=self._cb._on_menu_clear_indicators,
         )
@@ -202,6 +213,15 @@ class MenuBuilder:
         sb_menu.add_command(
             label="End Session",
             command=self._cb._on_menu_sandbox_end,
+        )
+        # Download Replay Data prepares the offline universe a strict-offline
+        # sandbox session replays. It lives here (not Tools) so it sits with
+        # Start/End Session — and matches the in-app hint
+        # "Run Sandbox → Download Replay Data… first" (backtest/sandbox_app.py).
+        # Audit ``download-replay-data-sandbox``.
+        sb_menu.add_command(
+            label="Download Replay Data…",
+            command=self._cb._on_menu_sandbox_prepare_universe,
         )
         sb_menu.add_separator()
         sb_menu.add_command(
@@ -223,40 +243,38 @@ class MenuBuilder:
         )
         menubar.add_cascade(label="Sandbox", menu=sb_menu)
 
-        entries_menu = tk.Menu(menubar, tearoff=0)
-        entries_menu.add_command(
-            label="New Strategy…",
+        # Consolidated **Strategies** menu (audit
+        # ``strategies-menu-consolidation``). Entries, Exits, and the Strategy
+        # Tester share ONE top-level cascade instead of three — Exits and
+        # Strategy previously held a single item each, so three menus for one
+        # trade-lifecycle workflow was menubar clutter. Labels are qualified
+        # ("Entry" / "Exit") now that they share a menu. The Entries / Exits
+        # notebook *tabs* and their dialogs are unchanged; only the menubar
+        # grouping moved. Menubar order: … Sandbox / Strategies / View …
+        strategies_menu = tk.Menu(menubar, tearoff=0)
+        strategies_menu.add_command(
+            label="New Entry Strategy…",
             command=self._cb._on_open_entries_new_dialog,
         )
-        entries_menu.add_command(
-            label="Manage Strategies…",
+        strategies_menu.add_command(
+            label="Manage Entry Strategies…",
             command=self._cb._on_open_entries_dialog,
         )
-        entries_menu.add_separator()
-        entries_menu.add_command(
-            label="Disarm All",
+        strategies_menu.add_command(
+            label="Disarm All Entries",
             command=self._cb._on_entries_disarm_all,
         )
-        menubar.add_cascade(label="Entries", menu=entries_menu)
-
-        exits_menu = tk.Menu(menubar, tearoff=0)
-        exits_menu.add_command(
-            label="Edit Strategies…",
+        strategies_menu.add_separator()
+        strategies_menu.add_command(
+            label="Edit Exit Strategies…",
             command=self._cb._on_open_exits_dialog,
         )
-        menubar.add_cascade(label="Exits", menu=exits_menu)
-
-        # Strategy Tester — opens a Toplevel popup with the full
-        # Configure → Run → Result UX. Wedged between **Exits** and
-        # **View** so the menubar reads
-        # ``File / Watchlists / Indicators / Sandbox / Entries /
-        # Exits / Strategy / View / Tools / Help``.
-        strategy_menu = tk.Menu(menubar, tearoff=0)
-        strategy_menu.add_command(
-            label="Open Strategy Tester…",
+        strategies_menu.add_separator()
+        strategies_menu.add_command(
+            label="Strategy Tester…",
             command=self._cb._on_open_strategy_dialog,
         )
-        menubar.add_cascade(label="Strategy", menu=strategy_menu)
+        menubar.add_cascade(label="Strategies", menu=strategies_menu)
 
         view_menu = tk.Menu(menubar, tearoff=0)
         # Heikin-Ashi cascade — groups the candle-style toggle with the
@@ -354,10 +372,6 @@ class MenuBuilder:
         )
         tools_menu.add_separator()
         tools_menu.add_command(
-            label="Download Replay Data…",
-            command=self._cb._on_menu_sandbox_prepare_universe,
-        )
-        tools_menu.add_command(
             label="Export Bars to CSV…",
             command=self._cb._on_tools_export_bars_to_csv,
         )
@@ -388,12 +402,12 @@ class MenuBuilder:
             file_menu,
             ind_menu,
             sb_menu,
+            strategies_menu,
             view_menu,
             ha_menu,
             cs_menu,
             ratio_menu,
             tools_menu,
-            exits_menu,
             load_preset_menu,
             delete_preset_menu,
         ]

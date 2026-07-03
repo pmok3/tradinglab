@@ -66,6 +66,14 @@ _TEMPLATE_KINDS: tuple[tuple[str, str], ...] = (
     ("scanner_templates", "scans"),
 )
 
+#: Indicator presets are handled out-of-band from ``_TEMPLATE_KINDS``
+#: because they persist in a single JSON *envelope*
+#: (``indicators.preset_store``), not one file per record like the
+#: strategy / scan libraries. Same bundled-``data/`` + ledger machinery,
+#: different merge target. ``_INDICATOR_PRESETS_KIND`` is the ledger key.
+_INDICATOR_PRESETS_SUBDIR = "indicator_presets"
+_INDICATOR_PRESETS_KIND = "indicator_presets"
+
 
 def bundled_templates_dir(kind_subdir: str) -> Path:
     """Return the bundled-templates directory under ``data/`` for ``kind_subdir``.
@@ -238,6 +246,14 @@ def seed_default_templates(
         by_kind[kind] = (copied, skipped)
         total_copied += copied
         total_skipped += skipped
+    # Indicator presets (single-envelope store). With ``force`` this
+    # overwrites same-named presets; otherwise it skips them.
+    ip_copied, ip_skipped, _ = _seed_indicator_presets_additive(
+        set(), force=force, on_seed=on_seed,
+    )
+    by_kind[_INDICATOR_PRESETS_KIND] = (ip_copied, ip_skipped)
+    total_copied += ip_copied
+    total_skipped += ip_skipped
     return {
         "copied": total_copied,
         "skipped": total_skipped,
@@ -360,6 +376,78 @@ def _seed_one_additive(
     return (copied, skipped, considered)
 
 
+def _seed_indicator_presets_additive(
+    seeded_names: set[str],
+    *,
+    force: bool,
+    on_seed: Callable[[str, Path], None] | None,
+) -> tuple[int, int, set[str]]:
+    """Offer bundled indicator presets that haven't been offered yet.
+
+    Indicator presets don't use the per-file storage the strategy / scan
+    libraries do — they live in a single JSON *envelope* owned by
+    :mod:`indicators.preset_store`. So instead of copying files we parse
+    each bundled ``data/indicator_presets/<slug>.json`` (translating the
+    compact starter schema to canonical config dicts via
+    :func:`preset_store.read_bundled_preset`) and merge it into the user's
+    preset table, keyed by the preset's display name.
+
+    Ledger + skip-if-exists semantics mirror :func:`_seed_one_additive`:
+    a preset already offered (its *filename* is in ``seeded_names``) is
+    never re-offered — so a preset the user later deleted stays deleted —
+    and a preset *name* the user already has is not clobbered unless
+    ``force``. Returns ``(copied, skipped, considered)`` where
+    ``considered`` is every bundled filename seen this run (folded into
+    the ledger so each is offered exactly once).
+    """
+    from ..indicators import preset_store
+    src_dir = bundled_templates_dir(_INDICATOR_PRESETS_SUBDIR)
+    if not src_dir.exists() or not src_dir.is_dir():
+        LOG.debug("templates.seed: bundled dir missing %s; skipping", src_dir)
+        return (0, 0, set())
+    try:
+        presets, active = preset_store.load_presets()
+    except Exception:  # noqa: BLE001
+        presets, active = {}, None
+
+    copied = 0
+    skipped = 0
+    considered: set[str] = set()
+    for src in sorted(src_dir.glob("*.json")):
+        considered.add(src.name)
+        if not force and src.name in seeded_names:
+            # Already offered before — respect prior state (incl. a
+            # deletion). Never re-offer.
+            continue
+        parsed = preset_store.read_bundled_preset(src)
+        if parsed is None:
+            skipped += 1
+            continue
+        name, config_dicts = parsed
+        if not name or not config_dicts:
+            skipped += 1
+            continue
+        if name in presets and not force:
+            # User already has a preset by this name (seeded earlier or
+            # hand-saved). Don't clobber; just record it as offered.
+            skipped += 1
+            continue
+        presets[name] = config_dicts
+        copied += 1
+        if on_seed is not None:
+            try:
+                on_seed(_INDICATOR_PRESETS_KIND, src)
+            except Exception:  # noqa: BLE001
+                pass
+    if copied:
+        try:
+            preset_store.save_presets(presets, active)
+        except Exception:  # noqa: BLE001
+            LOG.warning("templates.seed: failed to persist seeded presets",
+                        exc_info=True)
+    return (copied, skipped, considered)
+
+
 def seed_default_templates_if_empty(
     *,
     on_seed: Callable[[str, Path], None] | None = None,
@@ -398,6 +486,20 @@ def seed_default_templates_if_empty(
         by_kind[kind] = (copied, skipped)
         total_copied += copied
         total_skipped += skipped
+
+    # Indicator presets: single-envelope store, dedicated additive seeder
+    # (same ledger semantics keyed by ``_INDICATOR_PRESETS_KIND``).
+    ip_seeded = ledger.get(_INDICATOR_PRESETS_KIND, set())
+    ip_copied, ip_skipped, ip_considered = _seed_indicator_presets_additive(
+        ip_seeded, force=False, on_seed=on_seed,
+    )
+    ip_new = ip_seeded | ip_considered
+    if ip_copied or ip_new != ip_seeded:
+        changed = True
+    ledger[_INDICATOR_PRESETS_KIND] = ip_new
+    by_kind[_INDICATOR_PRESETS_KIND] = (ip_copied, ip_skipped)
+    total_copied += ip_copied
+    total_skipped += ip_skipped
 
     # Persist the ledger when it changed, or when the file doesn't exist
     # yet / is still in the legacy plain-text format (so we migrate it to

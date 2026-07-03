@@ -225,7 +225,6 @@ def test_config_manager_apply_loaded_applies_width() -> None:
         _scroll_zoom_invert=False,
         _indicator_manager=SimpleNamespace(load_dict=lambda d: []),
         _render=lambda: None,
-        _refill_table=lambda: None,
         replace_theme_overrides=lambda o: None,
         title=lambda *_a: None,
         ticker_var=None,

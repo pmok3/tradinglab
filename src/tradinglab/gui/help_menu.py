@@ -121,22 +121,32 @@ class HelpMenuMixin:
                       command=self._on_help_getting_started)
         m.add_command(label="Keyboard Shortcuts…",
                       command=self._on_help_keyboard_shortcuts)
-        m.add_command(label="ChartStack Guide…",
-                      command=self._on_help_chartstack_guide)
-        m.add_command(label="Watchlists Guide…",
-                      command=self._on_help_watchlists_guide)
-        m.add_command(label="Custom Indicators Guide…",
-                      command=self._on_help_custom_indicators_guide)
-        m.add_command(label="Entries and Exits Guide…",
-                      command=self._on_help_entries_exits_guide)
-        m.add_command(label="Strategy Tester Guide…",
-                      command=self._on_help_strategy_tester_guide)
-        m.add_command(label="Ratio Charts Guide…",
-                      command=self._on_help_ratio_charts_guide)
-        m.add_command(label="Documentation Library…",
-                      command=self._on_help_documentation_library)
-        m.add_command(label="View Online Docs",
-                      command=self._on_help_view_online_docs)
+        # Per-topic guides + the doc library live in a "Guides" submenu
+        # (audit ``help-guides-submenu``) so the Help top level stays short
+        # (About / Getting Started / Keyboard Shortcuts / Guides / … instead
+        # of a flat wall of ~16 entries). Labels + ellipses are unchanged so
+        # ``tests/unit/gui/test_ellipsis_semantics.py`` still finds them, and
+        # the nested cascade is themed automatically by ``apply_menu_theme``'s
+        # recursion over the menubar.
+        guides_menu = tk.Menu(m, tearoff=0)
+        guides_menu.add_command(label="ChartStack Guide…",
+                                command=self._on_help_chartstack_guide)
+        guides_menu.add_command(label="Watchlists Guide…",
+                                command=self._on_help_watchlists_guide)
+        guides_menu.add_command(label="Custom Indicators Guide…",
+                                command=self._on_help_custom_indicators_guide)
+        guides_menu.add_command(label="Entries and Exits Guide…",
+                                command=self._on_help_entries_exits_guide)
+        guides_menu.add_command(label="Strategy Tester Guide…",
+                                command=self._on_help_strategy_tester_guide)
+        guides_menu.add_command(label="Ratio Charts Guide…",
+                                command=self._on_help_ratio_charts_guide)
+        guides_menu.add_separator()
+        guides_menu.add_command(label="Documentation Library…",
+                                command=self._on_help_documentation_library)
+        guides_menu.add_command(label="View Online Docs",
+                                command=self._on_help_view_online_docs)
+        m.add_cascade(label="Guides", menu=guides_menu)
         m.add_separator()
         # Reveal Data Folder: README documents this as a Help-menu
         # entry; the dead handler at ``_on_help_reveal_data_folder``

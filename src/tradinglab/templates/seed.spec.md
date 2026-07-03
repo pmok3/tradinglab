@@ -32,10 +32,20 @@ The return dict shape is
 | `entry_strategy_templates/` | `<cache_dir>/entry_strategies/` | 20+ entries |
 | `exit_strategy_templates/` | `<cache_dir>/exit_strategies/` | 20+ exits |
 | `scanner_templates/` | `<cache_dir>/scans/` | 5 scanners |
+| `indicator_presets/` | `<cache_dir>/indicator_presets.json` (envelope) | 20 presets |
 
-Indicator presets in `data/indicator_presets/` are bundled but NOT
-auto-seeded; they're consumed by a future Indicators → Load preset
-from file… affordance. Strategy-combination templates in
+Indicator presets in `data/indicator_presets/` are seeded via a
+**dedicated envelope merge** (`_seed_indicator_presets_additive`) rather
+than per-file copy, because they persist in the single
+`indicators.preset_store` envelope, not one file per record. Each bundled
+`preset-*.json` (compact `{id, kind, panel, params}` starter schema) is
+translated to canonical config dicts by `preset_store.read_bundled_preset`
+and merged under its display `name`; ledger key `indicator_presets`, same
+additive / deletion-respecting / no-clobber semantics as the per-file
+kinds. After a deferred first-run seed, `ChartApp._seed_templates_idle`
+calls `_reload_indicator_presets_from_disk()` so the freshly-seeded
+presets appear in Indicators → Load Preset on the same launch.
+Strategy-combination templates in
 `data/strategy_combination_templates/` are also bundled but not
 auto-seeded because strategy-tester runs do not yet have a user-local
 template library.

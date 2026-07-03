@@ -461,6 +461,10 @@ class InteractionMixin:
         # data-less tick-blit snapshot is now stale. Drop it; the next
         # eligible tick re-seeds it lazily.
         self._tick_blit_bg = None
+        # The cached crosshair overlay layer (base + static-per-bar readout)
+        # is likewise stale after a full redraw — force _blit_overlays to
+        # rebuild it. Audit ``crosshair-readout-cache``.
+        self._overlay_bg = None
         # Composite always-on overlays (data readout, plus any revived
         # crosshair / hover) on top of the freshly-captured background
         # so they don't disappear after a full redraw. Safe: blit() does
@@ -1192,6 +1196,8 @@ class InteractionMixin:
             _rm(art)
         for art in getattr(self, "_readout_artists", {}).values():
             _rm(art)
+        for art in getattr(self, "_pane_value_labels", {}).values():
+            _rm(art)
         _rm(getattr(self, "_hover_ann", None))
 
     def _ensure_overlay_artists(self) -> None:
@@ -1319,6 +1325,7 @@ class InteractionMixin:
             VPacker,
         )
         self._readout_artists = {}
+        self._pane_value_labels = {}
         for ax, entry in self._ax_candle_map.items():
             kind = entry[1] if entry else None
             if kind != "price":
@@ -1364,6 +1371,34 @@ class InteractionMixin:
                 box._pct_text = pct_text
                 box._ind_rows = ind_meta
                 self._readout_artists[ax] = box
+            except Exception:  # noqa: BLE001
+                pass
+        # Per-pane hover value readouts (audit ``pane-value-readout``).
+        # Volume pane: a top-left ``Volume <value>`` badge. Lower
+        # indicator panes (RVOL/RSI/…): a top-RIGHT value badge showing
+        # the pane indicator's value(s) at the hovered bar — the existing
+        # clickable name label stays at the top-left, so name (left) +
+        # value (right) read together across the pane top, mirroring how
+        # the price pane surfaces overlay-indicator values on hover.
+        # Animated Text artists so each hover is a cheap blit, not a full
+        # redraw; refreshed by ``_update_readout``.
+        for ax, entry in self._ax_candle_map.items():
+            kind = entry[1] if entry else None
+            if kind == "volume":
+                x, ha = 0.005, "left"
+            elif kind == "indicator":
+                x, ha = 0.995, "right"
+            else:
+                continue
+            try:
+                label = ax.text(
+                    x, 0.97, "", transform=ax.transAxes,
+                    ha=ha, va="top", fontsize=9, family="monospace",
+                    color=theme["text"], zorder=11, animated=True,
+                    visible=False, clip_on=False,
+                )
+                label._sc_pane_value_kind = kind
+                self._pane_value_labels[ax] = label
             except Exception:  # noqa: BLE001
                 pass
         # Populate readout with latest bar so it's visible immediately —
@@ -2206,6 +2241,122 @@ class InteractionMixin:
                     box.set_visible(False)
                 except Exception:  # noqa: BLE001
                     pass
+        # Per-pane hover value readouts (audit ``pane-value-readout``) —
+        # volume pane ``Volume <value>`` + lower indicator panes' value(s)
+        # at the same cursor bar. Mirrors the price-pane readout's
+        # latest-bar fallback so a pane badge is never blank.
+        for ax, label in (getattr(self, "_pane_value_labels", None) or {}).items():
+            try:
+                idx = self._readout_bar_idx(ax, xdata)
+                if idx is None:
+                    label.set_visible(False)
+                    continue
+                kind = getattr(label, "_sc_pane_value_kind", "")
+                if kind == "volume":
+                    entry = self._ax_candle_map.get(ax)
+                    candles = entry[0] if entry else None
+                    if not candles or idx >= len(candles):
+                        label.set_visible(False)
+                        continue
+                    label.set_text(f"Volume {fmt_volume(candles[idx].volume)}")
+                    label.set_color(self._theme["text"])
+                    label.set_visible(True)
+                else:  # indicator pane
+                    text, color = self._pane_indicator_readout(ax, idx)
+                    if not text:
+                        label.set_visible(False)
+                        continue
+                    label.set_text(text)
+                    label.set_color(color)
+                    label.set_visible(True)
+            except Exception:  # noqa: BLE001
+                try:
+                    label.set_visible(False)
+                except Exception:  # noqa: BLE001
+                    pass
+
+    def _readout_bar_idx(self, ax, xdata):
+        """Resolve the bar index to read out for ``ax`` at cursor ``xdata``.
+
+        Returns the in-render-window, non-gap bar index under the cursor;
+        failing that the latest non-gap bar in the window (so a readout is
+        never blank); ``None`` only when the axes has no candles. Shared by
+        the per-pane value readouts (volume + indicator panes).
+        """
+        entry = self._ax_candle_map.get(ax)
+        if entry is None:
+            return None
+        candles, _kind, offset = entry
+        if not candles:
+            return None
+        rs, re_ = 0, len(candles)
+        for _sk, st in (getattr(self, "_panel_state", None) or {}).items():
+            if (st.get("price_ax") is ax or st.get("vol_ax") is ax
+                    or ax in (st.get("ind_axes") or ())):
+                rs = st.get("render_start", 0)
+                re_ = st.get("render_end", len(candles))
+                break
+        idx = None
+        if xdata is not None:
+            i = int(round(float(xdata) - offset))
+            if (rs <= i < re_ and 0 <= i < len(candles)
+                    and not candles[i].is_gap):
+                idx = i
+        if idx is None:
+            end = min(re_, len(candles))
+            start = max(0, rs)
+            for j in range(end - 1, start - 1, -1):
+                if 0 <= j < len(candles) and not candles[j].is_gap:
+                    idx = j
+                    break
+        return idx
+
+    def _pane_indicator_readout(self, ax, idx):
+        """Return ``(text, color)`` for a lower indicator pane's value badge.
+
+        Reads the already-rendered ``Line2D`` values (``state.pane_lines``)
+        for every visible config whose pane is ``ax`` — in render order, so
+        the values line up left-to-right with the pane's name labels. A
+        single value is coloured by its line (matches the pane's curve);
+        multiple values share the neutral text colour. Multi-output configs
+        prefix each value with its output key. Empty string when nothing is
+        defined at ``idx`` (early warmup bars) → caller hides the badge.
+        """
+        neutral = self._theme["text"]
+        ps_match, kind = self._find_indicator_panel_for_axes(ax)
+        if ps_match is None or kind != "ind":
+            return "", neutral
+        state = ps_match.get("ind_state")
+        mgr = getattr(self, "_indicator_manager", None)
+        if state is None or mgr is None:
+            return "", neutral
+        parts: list[str] = []
+        last_color = None
+        n_vals = 0
+        for cid, pa in getattr(state, "panes", {}).items():
+            if pa is not ax:
+                continue
+            cfg = mgr.get(cid)
+            if cfg is None or not getattr(cfg, "visible", True):
+                continue
+            lines = state.pane_lines.get(cid, {})
+            if not lines:
+                continue
+            multi_out = len(lines) > 1
+            for key, ln in lines.items():
+                val = self._line_value_at(ln, idx)
+                if val is None:
+                    continue
+                parts.append(f"{key} {val:,.2f}" if multi_out else f"{val:,.2f}")
+                n_vals += 1
+                try:
+                    last_color = ln.get_color()
+                except Exception:  # noqa: BLE001
+                    last_color = None
+        if not parts:
+            return "", neutral
+        color = last_color if (n_vals == 1 and last_color) else neutral
+        return "  ".join(parts), color
 
     def _update_crosshair_pixels(self, current_ax=None, px=None, py=None) -> None:
         """Revive the crosshair after a re-render using cached pixel coords."""
@@ -2220,7 +2371,31 @@ class InteractionMixin:
         self._blit_overlays()
 
     def _blit_overlays(self) -> None:
-        """Compose hover annotation + crosshair lines on top of ``_blit_bg``."""
+        """Compose the moving hover overlays on top of a cached background.
+
+        Two-layer blit (audit ``crosshair-readout-cache``):
+
+        * **Layer 1 — ``_overlay_bg``**: ``_blit_bg`` with the *static-per-bar*
+          top-left OHLCV / indicator-legend readout box(es) baked in. The
+          readout is the expensive artist to rasterise — its cost scales with
+          the number of indicators (the daily-levels preset added ~5.5 ms per
+          frame) — yet its content only changes when the hovered *bar* changes,
+          not when the crosshair moves within a bar. So it is drawn ONCE and
+          cached, keyed by a fingerprint of ``(_last_readout_key, readout
+          visibility)``. Any full redraw or live tick nulls ``_overlay_bg``
+          at the ``_blit_bg`` recapture sites; a bar change or readout
+          hide/show flips the fingerprint here. No other invalidation needed.
+        * **Layer 2 — moving overlays**: crosshair lines + price/time badges +
+          hover tooltip + click-to-type preview, redrawn every frame on top of
+          the cached layer. These are cheap.
+
+        Net effect: on the common hover cases (reading a level, sweeping the
+        crosshair within/across a bar without the readout content changing)
+        the expensive readout redraw is skipped, dropping a ~11 ms/frame
+        crosshair to ~3-4 ms with the daily preset loaded. Z-order note: the
+        crosshair now renders over the readout box (it used to render under);
+        acceptable and standard for trading crosshairs.
+        """
         canvas = getattr(self, "_canvas", None)
         if canvas is None:
             return
@@ -2233,7 +2408,50 @@ class InteractionMixin:
                 pass
             return
         try:
-            canvas.restore_region(self._blit_bg)
+            # ---- Layer 1: base + static-per-bar readout (cached) ----------
+            readout_items = tuple(self._readout_artists.items())
+            readout_vis = tuple(
+                bool(box.get_visible()) for _ax, box in readout_items
+            )
+            # Per-pane value badges (volume + indicator panes) are also
+            # static-per-bar, so they live in the cached layer with the
+            # readout box (audit ``pane-value-readout``). Their text +
+            # visibility only change when the hovered bar changes, which the
+            # ``_last_readout_key`` fingerprint already captures; the
+            # visibility tuple guards the hide/show edges.
+            pane_val_items = tuple(
+                (getattr(self, "_pane_value_labels", None) or {}).items()
+            )
+            pane_val_vis = tuple(
+                bool(a.get_visible()) for _ax, a in pane_val_items
+            )
+            fp = (
+                getattr(self, "_last_readout_key", None),
+                readout_vis,
+                pane_val_vis,
+            )
+            if (
+                getattr(self, "_overlay_bg", None) is None
+                or getattr(self, "_overlay_bg_fp", None) != fp
+            ):
+                # Rebuild the cached layer: base background + the always-on
+                # top-left OHLCV / pct readout (spec §11.6). Drawn before the
+                # hover tooltip so a hover bbox over the corner still wins
+                # z-order.
+                canvas.restore_region(self._blit_bg)
+                for ax, box in readout_items:
+                    if box.get_visible():
+                        ax.draw_artist(box)
+                for ax, art in pane_val_items:
+                    if art.get_visible():
+                        ax.draw_artist(art)
+                self._overlay_bg = canvas.copy_from_bbox(self._figure.bbox)
+                self._overlay_bg_fp = fp
+                # The canvas buffer already holds base + readout; fall through
+                # and draw the moving overlays on top without a 2nd restore.
+            else:
+                canvas.restore_region(self._overlay_bg)
+            # ---- Layer 2: moving overlays (redrawn every frame) -----------
             for ax, (vline, hline) in self._crosshair_artists.items():
                 if vline.get_visible():
                     ax.draw_artist(vline)
@@ -2254,16 +2472,20 @@ class InteractionMixin:
                     ann_ax = time_label.axes
                     if ann_ax is not None:
                         ann_ax.draw_artist(time_label)
-            # Top-left OHLCV / pct readout (spec §11.6) — always-on per
-            # price axes. Drawn before the hover tooltip so a hover bbox
-            # over the corner still wins z-order.
-            for ax, box in self._readout_artists.items():
-                if box.get_visible():
-                    ax.draw_artist(box)
             if self._hover_ann is not None and self._hover_ann.get_visible():
                 ann_ax = self._hover_ann.axes
                 if ann_ax is not None:
                     ann_ax.draw_artist(self._hover_ann)
+            # Click-to-type preview letters (big grey ticker text). Composited
+            # here so each keystroke is a cheap blit instead of a full figure
+            # re-raster via ``draw_idle``. Audit ``typing-preview-blit``.
+            for art in (
+                getattr(self, "_typing_preview_artists", None) or {}
+            ).values():
+                if art is not None and art.get_visible():
+                    pa = art.axes
+                    if pa is not None:
+                        pa.draw_artist(art)
             canvas.blit(self._figure.bbox)
         except Exception:  # noqa: BLE001
             pass
@@ -2291,6 +2513,7 @@ class InteractionMixin:
             getattr(self, "_price_label_artists", None),
             getattr(self, "_time_label_artists", None),
             getattr(self, "_readout_artists", None),
+            getattr(self, "_pane_value_labels", None),
         ):
             for a in (src or {}).values():
                 if a is not None:
@@ -2298,6 +2521,13 @@ class InteractionMixin:
         ha = getattr(self, "_hover_ann", None)
         if ha is not None:
             ids.add(id(ha))
+        # Click-to-type preview letters are composited by ``_blit_overlays``
+        # too (audit ``typing-preview-blit``), so exclude them from the
+        # tick-blit data set — otherwise a stream tick during typing would
+        # bake the big grey letters into ``_blit_bg`` and they'd stick.
+        for a in (getattr(self, "_typing_preview_artists", None) or {}).values():
+            if a is not None:
+                ids.add(id(a))
         return ids
 
     def _collect_tick_blit_artists(self) -> list[tuple[Any, Any]]:
@@ -2409,6 +2639,10 @@ class InteractionMixin:
             # it as the fresh hover/pan background, then let _blit_overlays
             # composite the always-on readout / crosshair on top and blit.
             self._blit_bg = canvas.copy_from_bbox(figure.bbox)
+            # The forming bar's readout changed with this tick, so the cached
+            # overlay layer is stale — force a rebuild. Audit
+            # ``crosshair-readout-cache``.
+            self._overlay_bg = None
             self._blit_overlays()
             self._tick_blit_fires = getattr(self, "_tick_blit_fires", 0) + 1
             return True
@@ -2444,7 +2678,18 @@ class InteractionMixin:
         self._refresh_typing_preview()
 
     def _refresh_typing_preview(self) -> None:
-        """Render the grey in-chart preview text for the current typing buffer."""
+        """Render the grey in-chart preview text for the current typing buffer.
+
+        Each keystroke composites via the blit fast-path (``_blit_overlays``:
+        restore ``_blit_bg`` → ``draw_artist`` → ``blit``, ~1-2 ms) instead of
+        a full figure re-raster (``draw_idle`` — tens of ms on a daily chart
+        and much worse on a heavy intraday chart with several indicator panes).
+        This is what made typing a ticker feel laggy after a complex chart
+        (e.g. a ratio + the daily-levels preset). The preview text is
+        ``animated=True`` so it is never baked into the captured ``_blit_bg``
+        and is excluded from the tick-blit data set via ``_overlay_artist_ids``.
+        Audit ``typing-preview-blit``.
+        """
         # Tear down previous preview artists.
         for art in list(self._typing_preview_artists.values()):
             try:
@@ -2453,8 +2698,11 @@ class InteractionMixin:
                 pass
         self._typing_preview_artists = {}
         if self._typing_target is None:
+            # Leaving typing mode: composite a clean frame. ``_blit_bg`` was
+            # captured without the (animated) preview, so restoring it drops
+            # the letters cleanly — no full redraw needed.
             try:
-                self._canvas.draw_idle()
+                self._blit_overlays()
             except Exception:  # noqa: BLE001
                 pass
             return
@@ -2468,11 +2716,19 @@ class InteractionMixin:
                 transform=ax.transAxes, ha="center", va="center",
                 fontsize=56, fontweight="bold",
                 color=self._theme["text"], alpha=0.55, zorder=6,
+                animated=True,
             )
             self._typing_preview_artists[self._typing_target] = art
-            self._canvas.draw_idle()
+            # Blit the overlay. ``_blit_overlays`` falls back to a single
+            # ``draw_idle`` when ``_blit_bg`` hasn't been captured yet; the
+            # subsequent ``_on_draw_event`` re-composites the preview, so the
+            # letters still appear (one frame later) on that cold-start path.
+            self._blit_overlays()
         except Exception:  # noqa: BLE001
-            pass
+            try:
+                self._canvas.draw_idle()
+            except Exception:  # noqa: BLE001
+                pass
 
     def _commit_click_to_type(self) -> None:
         """Commit the typing buffer: set the slot's ticker StringVar + reload."""

@@ -250,3 +250,95 @@ class TestPriorDayHLC:
         assert np.isnan(pdh[7]), "Last bar of day 2 should be NaN (line break)"
         # Day 3 (8-11): first bar (idx 8) should be finite (starts new level)
         assert np.isfinite(pdh[8]), "First bar of day 3 should have a value"
+
+
+class TestLegendLabels:
+    """Chart-legend prefix + per-output band labels (surgical-fix sprint)."""
+
+    def test_legend_label_has_no_params_suffix(self):
+        """The legend prefix is the clean display name — no boolean
+        toggle suffix like ``(True, show_low=True, show_close=True)``."""
+        out = PriorDayHLC.legend_label("Prior Day H/L/C", {
+            "show_high": True, "show_low": True, "show_close": True,
+        })
+        assert out == "Prior Day H/L/C"
+        assert "(" not in out
+
+    def test_legend_label_passthrough_partial_name(self):
+        """A partial display name (e.g. close disabled) is preserved."""
+        assert PriorDayHLC.legend_label("Prior Day H/L", {}) == "Prior Day H/L"
+
+    def test_legend_label_blank_falls_back(self):
+        assert PriorDayHLC.legend_label("", {}) == "Prior Day H/L/C"
+
+    def test_output_key_label_abbreviates(self):
+        assert PriorDayHLC.output_key_label("prior_day_high") == "pd_high"
+        assert PriorDayHLC.output_key_label("prior_day_low") == "pd_low"
+        assert PriorDayHLC.output_key_label("prior_day_close") == "pd_close"
+
+    def test_output_key_label_unknown_passthrough(self):
+        assert PriorDayHLC.output_key_label("foo") == "foo"
+
+    def test_format_indicator_label_integration(self):
+        """End-to-end through the readout-legend formatter: no params."""
+        from tradinglab.gui.readout_legend import (
+            _key_label_for,
+            format_indicator_label,
+        )
+        from tradinglab.indicators.config import IndicatorConfig
+
+        cfg = IndicatorConfig(
+            kind_id="prior_day_hlc",
+            display_name="Prior Day H/L/C",
+            params={"show_high": True, "show_low": True, "show_close": True},
+        )
+        assert format_indicator_label(cfg) == "Prior Day H/L/C"
+        assert _key_label_for(cfg, "prior_day_high") == "pd_high"
+        assert _key_label_for(cfg, "prior_day_close") == "pd_close"
+
+
+class TestEffectiveOutputKeys:
+    """A deselected level must drop out of the visible output set so it
+    does not appear on the chart (legend / per-output bookkeeping)."""
+
+    def test_all_enabled_returns_all_three(self):
+        keys = PriorDayHLC.effective_output_keys(
+            {"show_high": True, "show_low": True, "show_close": True})
+        assert keys == ("prior_day_high", "prior_day_low", "prior_day_close")
+
+    def test_close_disabled_drops_pd_close(self):
+        keys = PriorDayHLC.effective_output_keys(
+            {"show_high": True, "show_low": True, "show_close": False})
+        assert "prior_day_close" not in keys
+        assert keys == ("prior_day_high", "prior_day_low")
+
+    def test_only_close_enabled(self):
+        keys = PriorDayHLC.effective_output_keys(
+            {"show_high": False, "show_low": False, "show_close": True})
+        assert keys == ("prior_day_close",)
+
+    def test_all_disabled_returns_empty(self):
+        keys = PriorDayHLC.effective_output_keys(
+            {"show_high": False, "show_low": False, "show_close": False})
+        assert keys == ()
+
+    def test_missing_params_default_to_enabled(self):
+        # Back-compat: a persisted config without the show_* keys keeps
+        # all three levels (the schema defaults are True).
+        assert PriorDayHLC.effective_output_keys({}) == (
+            "prior_day_high", "prior_day_low", "prior_day_close")
+
+    def test_legend_excludes_deselected_close(self):
+        """End-to-end: the readout legend must not surface pd_close when
+        show_close is off (the reported bug)."""
+        from tradinglab.gui.readout_legend import _effective_output_keys_for
+        from tradinglab.indicators.config import IndicatorConfig
+
+        cfg = IndicatorConfig(
+            kind_id="prior_day_hlc",
+            display_name="Prior Day H/L",
+            params={"show_high": True, "show_low": True, "show_close": False},
+        )
+        keys = _effective_output_keys_for(cfg)
+        assert "prior_day_close" not in keys
+        assert set(keys) == {"prior_day_high", "prior_day_low"}

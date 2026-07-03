@@ -83,6 +83,36 @@ class _FakeTransData:
 
 
 @dataclass(eq=False)
+class _FakeText:
+    """Minimal Text stand-in for the click-to-type preview artist."""
+
+    s: str = ""
+    axes: Any = None
+    animated: bool = False
+    _visible: bool = True
+
+    def get_text(self) -> str:
+        return self.s
+
+    def get_visible(self) -> bool:
+        return self._visible
+
+    def set_visible(self, v: bool) -> None:
+        self._visible = bool(v)
+
+    def get_animated(self) -> bool:
+        return self.animated
+
+    def remove(self) -> None:
+        ax = self.axes
+        try:
+            if ax is not None and self in ax.texts:
+                ax.texts.remove(self)
+        except Exception:
+            pass
+
+
+@dataclass(eq=False)
 class _FakeAxes:
     id_: int = 1
     bbox: _FakeBBox = field(default_factory=_FakeBBox)
@@ -90,6 +120,9 @@ class _FakeAxes:
     _xlim: tuple = (0.0, 100.0)
     _ylim: tuple = (90.0, 110.0)
     patches: list = field(default_factory=list)
+    texts: list = field(default_factory=list)
+    transAxes: Any = None
+    draw_artist_calls: list = field(default_factory=list)
 
     def get_xlim(self):
         return self._xlim
@@ -107,6 +140,14 @@ class _FakeAxes:
         except Exception:
             pass
         return patch
+
+    def text(self, _x, _y, s, *, animated=False, **_kwargs):
+        t = _FakeText(s=s, axes=self, animated=animated)
+        self.texts.append(t)
+        return t
+
+    def draw_artist(self, art):
+        self.draw_artist_calls.append(art)
 
 
 @dataclass(eq=False)
@@ -374,6 +415,12 @@ for _name in (
     "_commit_click_to_type",
     "_cancel_click_to_type",
     "_refresh_typing_preview",
+    "_blit_overlays",
+    "_overlay_artist_ids",
+    "_on_draw_event",
+    "_readout_bar_idx",
+    "_pane_indicator_readout",
+    "_find_indicator_panel_for_axes",
     "_maybe_handle_dblclick_drilldown",
     "_maybe_begin_drawing_drag",
     "_drawing_drag_motion",
@@ -383,6 +430,12 @@ for _name in (
     "_format_time_for_label",
 ):
     setattr(_InteractionHarness, _name, getattr(InteractionMixin, _name))
+
+# ``_line_value_at`` is a @staticmethod — preserve that so
+# ``self._line_value_at(line, idx)`` doesn't bind ``self`` as ``line2d``.
+_InteractionHarness._line_value_at = staticmethod(  # type: ignore[assignment]
+    InteractionMixin.__dict__["_line_value_at"].__func__
+)
 
 # Class attributes (tunable thresholds) read by ``_on_scroll_zoom``.
 # These live on ``InteractionMixin`` itself, not on instances, so the
@@ -546,6 +599,318 @@ class TestClickToType:
         assert h._typing_target is None
         assert h._typing_buffer == ""
         assert h.ticker_var.get() == "AAPL"
+
+
+class TestTypingPreviewBlit:
+    """The click-to-type preview composites via the blit fast path (audit
+    ``typing-preview-blit``). A full ``draw_idle`` re-raster per keystroke
+    made typing a ticker laggy after a heavy chart (ratio + daily preset,
+    or an intraday chart with several indicator panes)."""
+
+    @staticmethod
+    def _blit_ready(h) -> None:
+        # Enable the blit fast path: a captured background plus the overlay
+        # dicts ``_blit_overlays`` composites on top of it.
+        h._blit_bg = object()
+        h._crosshair_artists = {}
+        h._price_label_artists = {}
+        h._time_label_artists = {}
+        h._readout_artists = {}
+        h._hover_ann = None
+
+    def test_keystroke_blits_no_full_redraw(self):
+        h = _InteractionHarness()
+        self._blit_ready(h)
+        h._begin_click_to_type(h._price_ax)
+        h._canvas.draw_idle_calls = 0
+        h._canvas.blit_calls = 0
+        for ch in "TSLA":
+            h._typing_buffer += ch
+            h._refresh_typing_preview()
+        assert h._canvas.draw_idle_calls == 0, (
+            "typing must blit, not force a full-figure draw_idle per keystroke"
+        )
+        assert h._canvas.blit_calls >= 4, "each keystroke should blit once"
+        art = list(h._typing_preview_artists.values())[0]
+        assert art.get_text() == "TSLA"
+        assert art.get_animated() is True, (
+            "preview must be animated so it is never baked into _blit_bg"
+        )
+
+    def test_preview_registered_as_overlay(self):
+        # The preview must be excluded from the tick-blit data set, else a
+        # stream tick during typing would bake the letters into _blit_bg.
+        h = _InteractionHarness()
+        self._blit_ready(h)
+        h._begin_click_to_type(h._price_ax)
+        h._typing_buffer = "TS"
+        h._refresh_typing_preview()
+        art = list(h._typing_preview_artists.values())[0]
+        assert id(art) in h._overlay_artist_ids()
+
+    def test_leaving_typing_mode_clears_via_blit(self):
+        h = _InteractionHarness()
+        self._blit_ready(h)
+        h._begin_click_to_type(h._price_ax)
+        h._typing_buffer = "TS"
+        h._refresh_typing_preview()
+        h._canvas.draw_idle_calls = 0
+        h._cancel_click_to_type()
+        assert h._typing_preview_artists == {}
+        assert h._canvas.draw_idle_calls == 0, (
+            "clearing the preview must blit a clean frame, not a full redraw"
+        )
+
+    def test_cold_start_falls_back_to_draw_idle(self):
+        # No captured background yet → a single draw_idle; the subsequent
+        # draw_event re-composites the preview (self-heals one frame later).
+        h = _InteractionHarness()
+        h._blit_bg = None
+        h._begin_click_to_type(h._price_ax)
+        h._canvas.draw_idle_calls = 0
+        h._typing_buffer = "T"
+        h._refresh_typing_preview()
+        assert h._canvas.draw_idle_calls == 1
+
+
+class TestCrosshairOverlayCache:
+    """The crosshair blit caches the expensive base+readout layer in
+    ``_overlay_bg`` (audit ``crosshair-readout-cache``). A moving crosshair
+    over the SAME bar must reuse it — the readout box (whose cost scales
+    with the number of indicators) is re-rasterised only when the hovered
+    bar / its visibility changes, not once per mouse-move frame. This is
+    what made the crosshair feel heavier with the daily-levels preset
+    loaded."""
+
+    @staticmethod
+    def _setup(h) -> _FakeText:
+        """Wire the blit fast path with one visible readout box + a visible
+        crosshair on the price axes. Returns the readout box."""
+        box = _FakeText(s="OHLCV", axes=h._price_ax)
+        vline = _FakeText(s="|", axes=h._price_ax)
+        hline = _FakeText(s="-", axes=h._price_ax)
+        h._blit_bg = object()
+        h._overlay_bg = None
+        h._overlay_bg_fp = None
+        h._readout_artists = {h._price_ax: box}
+        h._crosshair_artists = {h._price_ax: (vline, hline)}
+        h._price_label_artists = {}
+        h._time_label_artists = {}
+        h._hover_ann = None
+        h._typing_preview_artists = {}
+        h._last_readout_key = ("bars", 5)
+        return box
+
+    def test_readout_cached_when_bar_unchanged(self):
+        h = _InteractionHarness()
+        box = self._setup(h)
+        for _ in range(3):
+            h._blit_overlays()  # same _last_readout_key each frame
+        # The costly base+readout layer is captured exactly ONCE across the
+        # three frames; every frame still blits.
+        assert h._canvas.copy_from_bbox_calls == 1, (
+            "readout must be rasterised once, not once per hover frame"
+        )
+        assert h._canvas.blit_calls == 3
+        # Readout drawn once (baked into the cache); crosshair drawn every
+        # frame (the moving layer).
+        drawn = h._price_ax.draw_artist_calls
+        assert drawn.count(box) == 1, "readout box baked into cache once"
+        vline = h._crosshair_artists[h._price_ax][0]
+        assert drawn.count(vline) == 3, "crosshair redrawn every frame"
+        assert h._overlay_bg is not None
+
+    def test_cache_rebuilt_when_readout_key_changes(self):
+        h = _InteractionHarness()
+        self._setup(h)
+        h._blit_overlays()
+        assert h._canvas.copy_from_bbox_calls == 1
+        h._last_readout_key = ("bars", 6)  # cursor moved to a new bar
+        h._blit_overlays()
+        assert h._canvas.copy_from_bbox_calls == 2
+        h._last_readout_key = ("bars", 7)
+        h._blit_overlays()
+        assert h._canvas.copy_from_bbox_calls == 3
+
+    def test_cache_rebuilt_when_readout_visibility_changes(self):
+        h = _InteractionHarness()
+        box = self._setup(h)
+        h._blit_overlays()
+        assert h._canvas.copy_from_bbox_calls == 1
+        box.set_visible(False)  # readout hidden (cursor left / revival)
+        h._blit_overlays()
+        assert h._canvas.copy_from_bbox_calls == 2, (
+            "visibility flip must invalidate the cached layer"
+        )
+        # In the invisible-rebuild frame the box is NOT drawn.
+        assert box not in h._price_ax.draw_artist_calls[-3:]
+
+    def test_overlay_bg_none_forces_rebuild(self):
+        # The recapture sites (_on_draw_event / _paint_tick_frame) null
+        # _overlay_bg to force a rebuild after a full redraw or tick.
+        h = _InteractionHarness()
+        self._setup(h)
+        h._blit_overlays()
+        assert h._canvas.copy_from_bbox_calls == 1
+        first = h._overlay_bg
+        h._overlay_bg = None  # simulate a _blit_bg recapture-site invalidation
+        h._blit_overlays()
+        assert h._canvas.copy_from_bbox_calls == 2
+        assert h._overlay_bg is not None and h._overlay_bg is not first
+
+    def test_on_draw_event_invalidates_overlay_cache(self):
+        h = _InteractionHarness()
+        self._setup(h)
+        h._blit_overlays()
+        cached = h._overlay_bg
+        assert cached is not None
+        # A full redraw recaptures _blit_bg and must drop the stale
+        # base+readout cache so decorations/indicators repaint.
+        h._on_draw_event(None)
+        assert h._overlay_bg is not None and h._overlay_bg is not cached, (
+            "_on_draw_event must invalidate + rebuild the overlay cache"
+        )
+
+    def test_no_blit_bg_short_circuits_to_draw_idle(self):
+        h = _InteractionHarness()
+        self._setup(h)
+        h._blit_bg = None
+        h._blit_overlays()
+        assert h._canvas.draw_idle_calls == 1
+        assert h._canvas.copy_from_bbox_calls == 0
+        assert h._canvas.blit_calls == 0
+
+
+class _FakeLine:
+    """Minimal Line2D stand-in for ``_line_value_at`` / pane readout."""
+
+    def __init__(self, ydata, color="#abcabc") -> None:
+        self._y = list(ydata)
+        self._c = color
+
+    def get_ydata(self):
+        return self._y
+
+    def get_color(self):
+        return self._c
+
+
+class _FakeIndState:
+    def __init__(self, panes, pane_lines) -> None:
+        self.panes = panes
+        self.pane_lines = pane_lines
+
+
+class _FakeCfg:
+    def __init__(self, id_, *, visible=True, display_name="RVOL(20)",
+                 kind_id="rvol") -> None:
+        self.id = id_
+        self.visible = visible
+        self.display_name = display_name
+        self.kind_id = kind_id
+
+
+class _FakeMgr:
+    def __init__(self, cfgs) -> None:
+        self._c = {c.id: c for c in cfgs}
+
+    def get(self, cid):
+        return self._c.get(cid)
+
+    def list(self):
+        return list(self._c.values())
+
+
+class TestPaneValueReadout:
+    """The per-pane hover value badges (audit ``pane-value-readout``):
+    ``_readout_bar_idx`` resolves the hovered/latest bar, and
+    ``_pane_indicator_readout`` formats a lower pane's value(s)."""
+
+    # ---- _readout_bar_idx -------------------------------------------
+    def _idx_harness(self, kind="indicator", n=10, rs=0, re_=None):
+        h = _InteractionHarness()
+        ax = _FakeAxes(id_=99)
+        candles = _make_daily_candles(n)
+        h._ax_candle_map[ax] = (candles, kind, 0)
+        h._panel_state["primary"]["ind_axes"] = [ax]
+        h._panel_state["primary"]["render_start"] = rs
+        h._panel_state["primary"]["render_end"] = n if re_ is None else re_
+        return h, ax, candles
+
+    def test_idx_under_cursor(self):
+        h, ax, _ = self._idx_harness()
+        assert h._readout_bar_idx(ax, 5.0) == 5
+        assert h._readout_bar_idx(ax, 0.0) == 0
+
+    def test_idx_fallback_latest_when_off_bar(self):
+        h, ax, _ = self._idx_harness(n=10)
+        # xdata=None → latest non-gap bar in the render window.
+        assert h._readout_bar_idx(ax, None) == 9
+
+    def test_idx_out_of_window_falls_back(self):
+        h, ax, _ = self._idx_harness(n=10, rs=0, re_=6)
+        # Cursor past the render window → latest in-window bar (5).
+        assert h._readout_bar_idx(ax, 8.0) == 5
+
+    def test_idx_none_when_no_candles(self):
+        h = _InteractionHarness()
+        ax = _FakeAxes(id_=1)
+        h._ax_candle_map[ax] = ([], "volume", 0)
+        assert h._readout_bar_idx(ax, 3.0) is None
+
+    # ---- _pane_indicator_readout ------------------------------------
+    def _pane_harness(self, ydata, *, visible=True, color="#f80f0f"):
+        h = _InteractionHarness()
+        h._theme = {"text": "#eeeeee"}
+        ind_ax = _FakeAxes(id_=42)
+        h._panel_state["primary"]["ind_axes"] = [ind_ax]
+        line = _FakeLine(ydata, color=color)
+        h._panel_state["primary"]["ind_state"] = _FakeIndState(
+            panes={7: ind_ax}, pane_lines={7: {"rvol": line}})
+        h._indicator_manager = _FakeMgr([_FakeCfg(7, visible=visible)])
+        return h, ind_ax, line
+
+    def test_single_value_formatted_and_colored_by_line(self):
+        h, ax, _ = self._pane_harness(
+            [float("nan"), 1.5, 2.5, 3.5], color="#f80f0f")
+        text, color = h._pane_indicator_readout(ax, 2)
+        assert text == "2.50", f"got {text!r}"
+        # A single unambiguous value is coloured by its line.
+        assert color == "#f80f0f"
+
+    def test_nan_bar_yields_empty(self):
+        h, ax, _ = self._pane_harness([float("nan"), 1.5, 2.5], color="#f80f0f")
+        text, color = h._pane_indicator_readout(ax, 0)  # NaN warmup bar
+        assert text == ""
+        assert color == "#eeeeee"  # neutral theme text
+
+    def test_hidden_config_excluded(self):
+        h, ax, _ = self._pane_harness([1.0, 2.0, 3.0], visible=False)
+        text, _ = h._pane_indicator_readout(ax, 1)
+        assert text == ""
+
+    def test_non_indicator_axes_yields_empty(self):
+        h, ax, _ = self._pane_harness([1.0, 2.0, 3.0])
+        # A price axes (not in ind_axes) is not an indicator pane.
+        price_ax = h._panel_state["primary"]["price_ax"]
+        text, _ = h._pane_indicator_readout(price_ax, 1)
+        assert text == ""
+
+    def test_shared_pane_two_values_neutral_color(self):
+        h = _InteractionHarness()
+        h._theme = {"text": "#eeeeee"}
+        ind_ax = _FakeAxes(id_=42)
+        h._panel_state["primary"]["ind_axes"] = [ind_ax]
+        l1 = _FakeLine([1.0, 2.0, 3.0], color="#aa0000")
+        l2 = _FakeLine([0.5, 0.6, 0.7], color="#0000aa")
+        h._panel_state["primary"]["ind_state"] = _FakeIndState(
+            panes={7: ind_ax, 8: ind_ax},
+            pane_lines={7: {"rvol": l1}, 8: {"rvol": l2}})
+        h._indicator_manager = _FakeMgr([_FakeCfg(7), _FakeCfg(8)])
+        text, color = h._pane_indicator_readout(ind_ax, 1)
+        assert text == "2.00  0.60", f"got {text!r}"
+        # Multiple values → neutral colour (a single Text can't multi-colour).
+        assert color == "#eeeeee"
 
 
 # ---------------------------------------------------------------------------

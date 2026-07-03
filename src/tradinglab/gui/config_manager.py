@@ -114,7 +114,6 @@ class ConfigManager:
             pass
         try:
             parent_widget._render()
-            parent_widget._refill_table()
         except Exception:  # noqa: BLE001
             pass
         # The re-applies above call value setters that re-write identical

@@ -231,6 +231,99 @@ class TestFormatIndicatorLabel:
         assert "Mystery" in out
 
 
+class TestMovingAverageLegendValues:
+    """Unified ``MovingAverage`` (kind_id ``ma``) shows its params as bare
+    VALUES — ``MA(EMA, 9, close)`` — not ``MA(EMA, length=9, source=Close)``.
+
+    Audit ``ma-legend-values``. The condensed form is produced by the
+    ``MovingAverage.legend_label`` hook, which ``format_indicator_label``
+    consults before its "display already parenthesised" shortcut so it
+    overrides the factory's auto ``self.name`` (``EMA(9)``) too — while
+    still preserving a genuine user rename.
+    """
+
+    @staticmethod
+    def _ma(display_name="", **params):
+        from tradinglab.indicators.config import IndicatorConfig
+
+        p = {"ma_type": "EMA", "length": 9, "source": "Close"}
+        p.update(params)
+        return IndicatorConfig(
+            id=1, kind_id="ma", kind_version=1,
+            display_name=display_name, params=p, style={},
+        )
+
+    def test_empty_display_name_condenses_to_values(self):
+        from tradinglab.gui.readout_legend import format_indicator_label
+        # The reported bug: a config with no display_name rendered the
+        # verbose schema walk. Now: bare values, source lowercased.
+        assert format_indicator_label(self._ma()) == "MA(EMA, 9, close)"
+
+    def test_auto_name_display_is_also_condensed(self):
+        from tradinglab.gui.readout_legend import format_indicator_label
+        # The add flows set display_name = ind.name (e.g. "EMA(9)"). The
+        # hook overrides that auto name so every MA reads the same way.
+        assert (
+            format_indicator_label(self._ma(display_name="EMA(9)"))
+            == "MA(EMA, 9, close)"
+        )
+
+    def test_sma_default(self):
+        from tradinglab.gui.readout_legend import format_indicator_label
+        assert (
+            format_indicator_label(self._ma(ma_type="SMA", length=20))
+            == "MA(SMA, 20, close)"
+        )
+
+    def test_non_close_source_shown_lowercased(self):
+        from tradinglab.gui.readout_legend import format_indicator_label
+        assert (
+            format_indicator_label(
+                self._ma(ma_type="WMA", length=50, source="HLC3"))
+            == "MA(WMA, 50, hlc3)"
+        )
+
+    def test_source_always_shown_even_when_close(self):
+        from tradinglab.gui.readout_legend import format_indicator_label
+        # Unlike the compact ``self.name`` (which drops ",Close"), the
+        # legend shows the source explicitly per the user's request.
+        assert "close" in format_indicator_label(self._ma()).lower()
+
+    def test_no_param_names_or_capitalised_source(self):
+        from tradinglab.gui.readout_legend import format_indicator_label
+        out = format_indicator_label(self._ma())
+        assert "length=" not in out and "source=" not in out
+        assert "Close" not in out  # lowercased
+
+    def test_genuine_rename_is_preserved(self):
+        from tradinglab.gui.readout_legend import format_indicator_label
+        # A user-chosen name (not the auto "EMA(9)", not the bare kind
+        # "MA") passes through untouched.
+        assert (
+            format_indicator_label(self._ma(display_name="9 EMA fast"))
+            == "9 EMA fast"
+        )
+        assert (
+            format_indicator_label(self._ma(display_name="Fast(x)"))
+            == "Fast(x)"
+        )
+
+    def test_auto_name_with_source_tag_is_condensed(self):
+        from tradinglab.gui.readout_legend import format_indicator_label
+        from tradinglab.indicators.moving_averages import MovingAverage
+        # self.name for a non-Close source carries a ",SRC" tag
+        # ("WMA(50,HLC3)"); the hook must recognise it as auto, not a
+        # rename, and still condense.
+        auto = MovingAverage(50, "WMA", "HLC3").name
+        assert auto == "WMA(50,HLC3)"
+        assert (
+            format_indicator_label(
+                self._ma(display_name=auto, ma_type="WMA", length=50,
+                         source="HLC3"))
+            == "MA(WMA, 50, hlc3)"
+        )
+
+
 class TestBuildOverlayLegendRowsConsolidation:
     """`build_overlay_legend_rows` emits ONE row per indicator config."""
 

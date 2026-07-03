@@ -574,7 +574,7 @@ def check_c5_notebook(app) -> None:
     nb = getattr(app, "_notebook", None)
     assert isinstance(nb, ttk.Notebook), "§18.4 _notebook must be a ttk.Notebook"
     tabs = [nb.tab(i, "text") for i in range(nb.index("end"))]
-    assert len(tabs) == 7, f"§1.2 expected 7 notebook tabs, got {tabs}"
+    assert len(tabs) == 5, f"§1.2 expected 5 notebook tabs, got {tabs}"
     assert "Watchlist" in tabs, f"§18.4 missing 'Watchlist' tab: {tabs}"
     assert "Sandbox" in tabs, f"§1.2 missing 'Sandbox' tab: {tabs}"
     assert "Scanner" in tabs, f"§1.2 missing 'Scanner' tab: {tabs}"
@@ -585,8 +585,15 @@ def check_c5_notebook(app) -> None:
         f"the notebook: {tabs}")
     assert tabs.index("Entries") < tabs.index("Exits"), (
         f"Entries tab must precede Exits in notebook order: {tabs}")
-    assert hasattr(app, "_primary_table") and hasattr(app, "_compare_table"), (
-        "§1.2 separate Primary + Compare OHLC tables expected")
+    # OHLC price tables removed (user cleanup — the chart makes the
+    # tabular price list redundant real estate). Neither the Primary nor
+    # Compare OHLC tab/table should exist any more.
+    assert not hasattr(app, "_primary_table"), (
+        "Primary OHLC table was removed; _primary_table should not exist")
+    assert not hasattr(app, "_compare_table"), (
+        "Compare OHLC table was removed; _compare_table should not exist")
+    assert not any(t in ("Primary", "Compare") for t in tabs), (
+        f"Primary/Compare OHLC tabs should be gone: {tabs}")
     assert hasattr(app, "_status_label"), "§13 missing bottom _status_label widget"
 
     # Sandbox tab must start hidden when no session is active.
@@ -597,25 +604,7 @@ def check_c5_notebook(app) -> None:
         assert sb_state == "hidden", (
             f"Sandbox tab must be hidden when no session; got {sb_state!r}")
 
-    # Compare tab is hidden when compare mode is off (user complaint).
-    cmp_frame = getattr(app, "_compare_tab_frame", None)
-    assert cmp_frame is not None, "missing _compare_tab_frame handle"
-    prev = bool(app.compare_var.get())
-    try:
-        app.compare_var.set(False)
-        app._sync_compare_tab_visibility()
-        state_off = nb.tab(cmp_frame, "state")
-        assert state_off == "hidden", (
-            f"Compare tab must be hidden when compare mode is off; got {state_off!r}")
-        app.compare_var.set(True)
-        app._sync_compare_tab_visibility()
-        state_on = nb.tab(cmp_frame, "state")
-        assert state_on == "normal", (
-            f"Compare tab must be visible when compare mode is on; got {state_on!r}")
-    finally:
-        app.compare_var.set(prev)
-        app._sync_compare_tab_visibility()
-    print(f"  [OK] §18.4 notebook tabs: {tabs} (Compare hide/show verified)")
+    print(f"  [OK] §18.4 notebook tabs: {tabs} (Primary/Compare OHLC removed)")
 
 
 def check_c6_bad_ticker(app) -> None:
@@ -995,54 +984,6 @@ def check_d10_poll_tick_offloads_fetch_to_executor(app) -> None:
     print("  [OK] poll tick offloads fetcher to executor "
           f"(main thread <{main_thread_ms:.0f}ms vs "
           f"{FETCH_SLEEP_S*1000:.0f}ms sleep)")
-
-
-def check_d11_tab_labels_show_tickers(app) -> None:
-    """Primary/Compare notebook tabs must display the active ticker
-    symbols (e.g. "AMD"/"SPY") instead of the generic "Primary"/
-    "Compare" labels. Labels update live as the ticker var changes
-    and after _refresh_tab_labels is invoked.
-    """
-    prev_primary = app.ticker_var.get()
-    prev_compare = app.compare_ticker_var.get()
-    try:
-        # Set fresh tickers and trigger a label refresh.
-        app.ticker_var.set("AMD")
-        app.compare_ticker_var.set("SPY")
-        app._refresh_tab_labels()
-        nb = app._notebook
-        prim_label = nb.tab(app._primary_tab_frame, "text")
-        cmp_label = nb.tab(app._compare_tab_frame, "text")
-        assert prim_label == "AMD", f"primary tab={prim_label!r} expected 'AMD'"
-        assert cmp_label == "SPY", f"compare tab={cmp_label!r} expected 'SPY'"
-
-        # Lowercase/whitespace gets normalized to uppercase-trimmed.
-        app.ticker_var.set("  nvda  ")
-        app._refresh_tab_labels()
-        prim_label = nb.tab(app._primary_tab_frame, "text")
-        assert prim_label == "NVDA", f"primary tab={prim_label!r} expected 'NVDA'"
-
-        # Empty ticker → fall back to confirmed, or "Primary"/"Compare".
-        app.ticker_var.set("")
-        app._confirmed_primary_ticker = "AAPL"
-        app._refresh_tab_labels()
-        prim_label = nb.tab(app._primary_tab_frame, "text")
-        assert prim_label == "AAPL", (
-            f"empty ticker_var should fallback to confirmed; got {prim_label!r}")
-
-        app.ticker_var.set("")
-        app._confirmed_primary_ticker = ""
-        app._refresh_tab_labels()
-        prim_label = nb.tab(app._primary_tab_frame, "text")
-        assert prim_label == "Primary", (
-            f"empty both → 'Primary' default; got {prim_label!r}")
-    finally:
-        app.ticker_var.set(prev_primary)
-        app.compare_ticker_var.set(prev_compare)
-        app._confirmed_primary_ticker = prev_primary
-        app._confirmed_compare_ticker = prev_compare
-        app._refresh_tab_labels()
-    print("  [OK] tab labels display tickers (AMD/SPY) + empty fallback")
 
 
 def check_d12_companion_prefetch_warms_cache(app) -> None:
@@ -2798,9 +2739,12 @@ def check_d21_space_cycles_watchlist(app) -> None:
         except Exception:  # noqa: BLE001
             pass
         # Ensure outer notebook is on a non-Watchlist tab so we can
-        # verify Space surfaces it.
+        # verify Space surfaces it. The Watchlist tab is now index 0, so
+        # select the last tab (Exits) — always present and never Watchlist.
         try:
-            app._notebook.select(app._primary_tab_frame)
+            _tabs = app._notebook.tabs()
+            if _tabs:
+                app._notebook.select(_tabs[-1])
         except Exception:  # noqa: BLE001
             pass
         app._last_clicked_slot = "primary"
@@ -3304,21 +3248,21 @@ def check_d19_reset_view_snaps_to_1d(app) -> None:
     print("  [OK] reset view snaps to 1d at right edge")
 
 
-def check_d23_perf_h3_h6_m2_m4(app) -> None:
-    """H3/H6/M2/M4 perf optimizations stay wired and don't regress.
+def check_d23_perf_h3_m2_m4(app) -> None:
+    """H3/M2/M4 perf optimizations stay wired and don't regress.
 
     H3: ``_pan_setup_blit`` reuses bg + animated set when the artist
         topology fingerprint is unchanged across consecutive calls.
-    H6: ``_refill_table`` mutates rows in place via the diff fastpath
-        when only the last bar's price changes (one-iid delta, no full
-        rebuild).
     M2: ``_request_deferred_render`` collapses repeated requests via
         ``_pending_idle_render`` and fires exactly once on idle.
     M4: ``_trim_full_cache`` evicts non-pinned tickers first; pinned
         tickers survive even when older.
+
+    (H6 was the ``_refill_table`` OHLC-table diff fastpath; the Primary/
+    Compare OHLC tables were removed in the side-panel cleanup, so that
+    sub-check is retired.)
     """
     import time as _time
-    from datetime import timedelta
 
     from tradinglab.models import Candle
 
@@ -3340,50 +3284,6 @@ def check_d23_perf_h3_h6_m2_m4(app) -> None:
             assert anim1 == anim2, "H3 should reuse animated artist list"
         except Exception as exc:  # noqa: BLE001
             raise AssertionError(f"H3 pan-setup fingerprint failed: {exc}")
-
-    # ---- H6: _refill_table tick-fastpath ----
-    tree = getattr(app, "_primary_table", None)
-    if tree is not None and hasattr(app, "_refill_table"):
-        base_dt = datetime(2024, 4, 24, 9, 30)
-        rows = [
-            Candle(date=base_dt + timedelta(minutes=i),
-                   open=100 + i, high=101 + i, low=99 + i,
-                   close=100.5 + i, volume=1000 + i)
-            for i in range(5)
-        ]
-        saved_primary = app._primary
-        saved_cache = dict(getattr(app, "_table_cache", {}) or {})
-        try:
-            # Reset cache so the first refill builds fresh (full rebuild).
-            app._table_cache = {}
-            app._primary = list(rows)
-            app._refill_table()
-            iids_before = list(tree.get_children(""))
-            sigs_before = list(app._table_cache[id(tree)]["sigs"])
-
-            # Tweak only the last bar's close — newest row in display
-            # order. Tick fastpath should mutate one iid in place.
-            rows2 = list(rows)
-            last = rows2[-1]
-            rows2[-1] = Candle(date=last.date, open=last.open,
-                               high=last.high, low=last.low,
-                               close=last.close + 0.25, volume=last.volume)
-            app._primary = rows2
-            app._refill_table()
-            iids_after = list(tree.get_children(""))
-            sigs_after = list(app._table_cache[id(tree)]["sigs"])
-            assert iids_after == iids_before, (
-                "H6 tick fastpath should preserve all iids "
-                f"({iids_before} -> {iids_after})")
-            assert sigs_after != sigs_before, (
-                "H6 sigs should reflect the close mutation")
-        finally:
-            app._primary = saved_primary
-            app._table_cache = saved_cache
-            try:
-                app._refill_table()
-            except Exception:  # noqa: BLE001
-                pass
 
     # ---- M2: deferred render collapses duplicates ----
     if hasattr(app, "_request_deferred_render"):
@@ -7431,6 +7331,74 @@ def check_d55b_indicator_preset_autopersist(app) -> None:
             pass
 
 
+def check_d55c_starter_presets_available(app) -> None:
+    """Bundled starter indicator presets (e.g. "Daily Levels") must be
+    reachable in Indicators → Load Preset.
+
+    Regression guard for the 'my indicator presets went missing' bug:
+    the ~20 bundled ``data/indicator_presets/preset-*.json`` starter
+    presets ship in a compact ``{id, kind, panel, params}`` schema and
+    were never wired to any seed/loader — so they never appeared in the
+    Load Preset menu. They are now seeded into the auto-persist envelope
+    (translated to canonical configs) by ``templates.seed`` and installed
+    live via ``ChartApp._reload_indicator_presets_from_disk``.
+
+    Self-contained (doesn't rely on boot-time seeding order under the
+    shared fixture): force-seed the starter pack into the temp envelope,
+    reload it into the live manager, and assert the user's "Daily Levels"
+    preset is present AND hydrates cleanly (no unknown placeholders).
+    Manager + on-disk envelope are restored in ``finally``.
+    """
+    from tradinglab.indicators import preset_store
+
+    mgr = app._indicator_manager
+    assert hasattr(app, "_reload_indicator_presets_from_disk"), (
+        "ChartApp must expose _reload_indicator_presets_from_disk")
+    saved_presets = dict(getattr(mgr, "_presets", {}))
+    saved_active = mgr.active_preset()
+    pfile = preset_store.presets_path()
+    pre_existing = pfile.read_bytes() if pfile.exists() else None
+    try:
+        from tradinglab.templates import seed_default_templates
+        result = seed_default_templates(force=True)
+        ip_copied = result["by_kind"].get("indicator_presets", (0, 0))[0]
+        assert ip_copied >= 1, (
+            "force-seed must offer the bundled starter presets; "
+            f"by_kind={result['by_kind']!r}")
+
+        # Install the freshly-seeded envelope into the LIVE manager (the
+        # exact call ChartApp makes after first-run seeding).
+        app._reload_indicator_presets_from_disk()
+        names = mgr.list_presets()
+        assert "Daily Levels" in names, (
+            f"'Daily Levels' starter preset should be loadable; got {names!r}")
+
+        # It applies cleanly (prior-day H/L/C + VWAP + AVWAP, all valid).
+        assert mgr.set_preset("Daily Levels") is True
+        cfgs = mgr.list()
+        assert cfgs, "Daily Levels should populate the active indicator list"
+        assert all(not getattr(c, "unknown", False) for c in cfgs), (
+            "seeded preset configs must hydrate cleanly (no unknown kinds)")
+        print("  [OK] §d55c starter presets seeded + reachable "
+              f"({len(names)} presets incl. 'Daily Levels')")
+    finally:
+        try:
+            mgr.clear()
+            mgr._presets.clear()
+            mgr._presets.update(saved_presets)
+            mgr._active_preset = saved_active
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if pre_existing is None:
+                if pfile.exists():
+                    pfile.unlink()
+            else:
+                pfile.write_bytes(pre_existing)
+        except OSError:
+            pass
+
+
 def check_d56_ema_seeding_alignment(app) -> None:
     """EMA seeds with the SMA of the first ``length`` closes, published
     at index ``length - 1``; indices ``0..length-2`` are NaN. Matches
@@ -8876,6 +8844,142 @@ def check_d51_hover_indicator_readout(app) -> None:
     print("  [OK] §d51 hover indicator readout "
           "(overlay+pane scoping, multi-output qualifiers, NaN guard, "
           "visibility flag)")
+
+
+def check_d51b_pane_value_readouts(app) -> None:
+    """Volume + lower-indicator panes show a value readout at the hovered
+    bar (audit ``pane-value-readout``).
+
+    Mirrors how the price pane surfaces overlay-indicator values on hover:
+
+      * The **volume** pane shows a top-left ``Volume <value>`` badge.
+      * Each **lower indicator** pane (here RVOL) shows a top-right badge
+        with the pane indicator's value at the cursor's bar.
+
+    Both are animated Text artists in ``app._pane_value_labels`` (keyed by
+    pane axes), refreshed by ``_update_readout`` and composited via the
+    cached blit layer. Verifies creation, per-bar value at a cursor
+    ``xdata``, and the never-blank latest-bar fallback (``xdata=None``).
+    Manager + injected primary bars restored in ``finally``.
+    """
+    from datetime import timedelta
+
+    from tradinglab.indicators.config import IndicatorConfig
+    from tradinglab.models import Candle
+
+    mgr = app._indicator_manager
+    saved = list(mgr.list())
+    saved_primary = list(app._primary)
+    saved_primary_raw = list(app._primary_raw)
+    _src = app.source_var.get()
+    _ticker_key = (app.ticker_var.get() or "AMD").strip().upper() or "AMD"
+    _interval = app.interval_var.get()
+    saved_cache_entry = app._full_cache.get((_src, _ticker_key, _interval))
+    _ps0 = app._panel_state.get("primary") or {}
+    saved_ps_candles = list(_ps0.get("candles") or [])
+    try:
+        mgr.clear()
+        # Rising synthetic bars with distinct volumes so both the volume
+        # magnitude and the RVOL ratio are well-defined past warmup.
+        bars = []
+        t0 = datetime(2026, 1, 5, 9, 30)
+        price = 100.0
+        for i in range(80):
+            price += 0.05
+            bars.append(Candle(
+                date=t0 + timedelta(minutes=5 * i),
+                open=price, high=price + 0.4, low=price - 0.4,
+                close=price + 0.1, volume=1_000_000 + i * 1000,
+                session="regular"))
+        app._primary = list(bars)
+        app._primary_raw = list(bars)
+        app._full_cache[(_src, _ticker_key, _interval)] = list(bars)
+        ps = app._panel_state.get("primary")
+        if ps is not None:
+            ps["candles"] = list(bars)
+
+        rvol_cfg = IndicatorConfig(
+            kind_id="rvol", kind_version=1, display_name="RVOL(20)",
+            params={"length": 20}, scopes=frozenset({"main"}))
+        mgr.add(rvol_cfg)
+        _pump_until(
+            app,
+            lambda: bool((app._panel_state.get("primary") or {}).get("ind_axes")),
+            timeout=1.0)
+        try:
+            app._draw_slice("primary")
+        except Exception:  # noqa: BLE001
+            pass
+        _pump(app, 0.2)
+
+        ps = app._panel_state.get("primary") or {}
+        ind_axes = list(ps.get("ind_axes") or [])
+        assert ind_axes, "adding RVOL must create a lower indicator pane"
+        vol_ax = ps.get("vol_ax")
+        ind_ax = ind_axes[0]
+
+        labels = app._pane_value_labels
+        assert vol_ax in labels, "volume pane must have a value badge"
+        assert ind_ax in labels, "RVOL pane must have a value badge"
+        assert getattr(labels[vol_ax], "_sc_pane_value_kind", "") == "volume"
+        assert getattr(labels[ind_ax], "_sc_pane_value_kind", "") == "indicator"
+        # Placement: volume badge left-aligned, indicator badge right.
+        assert labels[vol_ax].get_ha() == "left"
+        assert labels[ind_ax].get_ha() == "right"
+
+        # Hover over a specific bar (idx 60) — value must reflect THAT bar.
+        idx = 60
+        app._update_readout(float(idx))
+        vtext = labels[vol_ax].get_text()
+        assert vtext.startswith("Volume "), (
+            f"volume badge must read 'Volume <value>'; got {vtext!r}")
+        # 1_000_000 + 60*1000 = 1_060_000 → "1.06M".
+        assert "1.06M" in vtext, f"volume badge value wrong: {vtext!r}"
+        assert labels[vol_ax].get_visible() is True
+
+        itext = labels[ind_ax].get_text()
+        assert itext.strip(), "RVOL badge must show a value at a defined bar"
+        # Must parse as a number (RVOL ratio), not the indicator name.
+        try:
+            float(itext.replace(",", "").split()[-1])
+        except ValueError:
+            raise AssertionError(f"RVOL badge should be numeric; got {itext!r}")
+        assert labels[ind_ax].get_visible() is True
+
+        # Never-blank fallback: xdata=None → latest non-gap bar (idx 79).
+        app._update_readout(None)
+        vtext_fallback = labels[vol_ax].get_text()
+        assert "1.079M" in vtext_fallback or "1.08M" in vtext_fallback, (
+            f"volume fallback should read the latest bar; got {vtext_fallback!r}")
+        assert labels[vol_ax].get_visible() is True
+
+        print("  [OK] §pane-value-readout volume + RVOL pane hover values "
+              "(per-bar + latest-bar fallback)")
+    finally:
+        try:
+            mgr.clear()
+            for c in saved:
+                mgr.add(c)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            app._primary = saved_primary
+            app._primary_raw = saved_primary_raw
+            if saved_cache_entry is None:
+                app._full_cache.pop((_src, _ticker_key, _interval), None)
+            else:
+                app._full_cache[(_src, _ticker_key, _interval)] = (
+                    saved_cache_entry)
+            # Restore the panel-state candle list to EXACTLY what this
+            # check inherited so the (order-dependent, cumulative-state)
+            # neighbours downstream see no change from our synthetic bars
+            # (state pollution, §7.2). No re-render — matches the sibling
+            # readout checks, which likewise leave panel_state as-is.
+            ps_restore = app._panel_state.get("primary")
+            if ps_restore is not None:
+                ps_restore["candles"] = saved_ps_candles
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def check_d52_manual_zoom_pan_arms_preserve_xlim(app) -> None:
@@ -17060,6 +17164,127 @@ def check_b50_lrsi_laguerre_rsi(app) -> None:
           "tear-down on edit + toggle-off")
 
 
+def check_b50b_rsi_reference_bands(app) -> None:
+    """RSI oversold / overbought reference bands (default 30 / 70), drawn
+    as DOTTED axhlines and user-configurable.
+
+    Sub-checks:
+      A. Schema: length default 14; render-only band params
+         oversold(30) / overbought(70) / show_reference_lines(True);
+         TRIGGER_RELEVANT_PARAMS == ("length",).
+      B. Per-instance reference_levels: default (30, 70); custom levels
+         propagate; show=False → ().
+      C. reference_line_style == ":" (dotted).
+      D. Render integration: adding RSI draws axhlines at exactly
+         {30, 70} with a DOTTED linestyle; toggling show_reference_lines
+         off tears them down.
+    """
+    import datetime as _dt
+
+    from tradinglab.indicators import INDICATORS, RSI
+    from tradinglab.indicators.config import IndicatorConfig
+    from tradinglab.models import Candle
+
+    # --- A: schema --------------------------------------------------------
+    assert INDICATORS.get("RSI") is RSI
+    schema = {p.name: p for p in RSI.params_schema}
+    assert set(schema) == {
+        "length", "oversold", "overbought", "show_reference_lines",
+    }, f"unexpected RSI schema: {set(schema)}"
+    assert schema["length"].default == 14
+    assert schema["oversold"].default == 30
+    assert schema["overbought"].default == 70
+    assert schema["show_reference_lines"].default is True
+    assert RSI.TRIGGER_RELEVANT_PARAMS == ("length",)
+
+    # --- B: per-instance reference_levels --------------------------------
+    assert tuple(RSI().reference_levels) == (30.0, 70.0)
+    assert tuple(RSI(oversold=25, overbought=75).reference_levels) == (25.0, 75.0)
+    assert tuple(RSI(show_reference_lines=False).reference_levels) == ()
+
+    # --- C: dotted style --------------------------------------------------
+    assert RSI.reference_line_style == ":"
+
+    # --- D: render integration -------------------------------------------
+    t0 = _dt.datetime(2024, 3, 4, 9, 30)
+    bars_up = [
+        Candle(date=t0 + _dt.timedelta(minutes=i), open=100.0 + i,
+               high=100.5 + i, low=99.5 + i, close=100.0 + i,
+               volume=1000, session="regular")
+        for i in range(80)
+    ]
+    mgr = app._indicator_manager
+    snapshot = list(mgr.list())
+    try:
+        for c in list(mgr.list()):
+            mgr.remove(c.id)
+
+        ps_main = app._panel_state.get("primary")
+        assert ps_main is not None
+        ps_main["candles"] = list(bars_up)
+        try:
+            app._draw_slice("primary")
+        except Exception:  # noqa: BLE001
+            pass
+        _pump(app, 0.1)
+
+        cfg = IndicatorConfig(
+            kind_id="rsi", kind_version=1, display_name="RSI(14)",
+            params={"length": 14, "oversold": 30, "overbought": 70,
+                    "show_reference_lines": True},
+            scopes=frozenset({"main"}),
+        )
+        mgr.add(cfg)
+        _pump_until(app,
+            lambda: bool(
+                (app._panel_state.get("primary") or {}).get("ind_state")
+                and cfg.id in app._panel_state["primary"]["ind_state"].panes
+            ),
+            timeout=1.0)
+        state = app._panel_state["primary"]["ind_state"]
+        ax_pane = state.panes.get(cfg.id)
+        assert ax_pane is not None, "RSI pane must be created"
+
+        ref_lines = getattr(ax_pane, "_sc_ref_level_lines", []) or []
+        levels_drawn = sorted(
+            float(ln.get_ydata()[0]) for ln in ref_lines if len(ln.get_ydata())
+        )
+        assert levels_drawn == [30.0, 70.0], (
+            f"RSI pane must draw axhlines at 30 and 70; got {levels_drawn}"
+        )
+        # The genuinely new behaviour: RSI bands are DOTTED (":"), unlike
+        # every other oscillator's dashed reference lines.
+        styles = {ln.get_linestyle() for ln in ref_lines}
+        assert styles == {":"}, (
+            f"RSI reference bands must be dotted (':'); got {styles}"
+        )
+
+        # Toggle off → tear-down.
+        mgr.update(cfg.id, params={
+            "length": 14, "oversold": 30, "overbought": 70,
+            "show_reference_lines": False,
+        })
+        _pump_until(app,
+            lambda: tuple(getattr(
+                app._panel_state["primary"]["ind_state"].panes.get(cfg.id),
+                "_sc_ref_levels_drawn", ()) or ()) == (),
+            timeout=1.5)
+        ax_pane2 = app._panel_state["primary"]["ind_state"].panes.get(cfg.id)
+        off_lines = getattr(ax_pane2, "_sc_ref_level_lines", []) or []
+        assert off_lines == [], (
+            f"toggle-off must tear down RSI reference bands; got {off_lines}"
+        )
+    finally:
+        for c in list(mgr.list()):
+            mgr.remove(c.id)
+        for c in snapshot:
+            mgr.add(c)
+        _pump(app, 0.05)
+
+    print("  [OK] b50b RSI - default 14 length, 30/70 bands, dotted style, "
+          "render draw + toggle-off tear-down")
+
+
 def check_b60_events_protocol_registry(app) -> None:
     """Events fetcher protocol + registry idempotency + bundle shape.
 
@@ -20243,7 +20468,6 @@ def _run_all_checks(app) -> None:
     check_d8_scheduler_aligns_to_bar_close(app)
     check_d9_poll_retry_when_bar_not_ready(app)
     check_d10_poll_tick_offloads_fetch_to_executor(app)
-    check_d11_tab_labels_show_tickers(app)
     check_d12_companion_prefetch_warms_cache(app)
     check_d13_watchlist_pinned_subtabs(app)
     check_d14_theme_overrides(app)
@@ -20257,7 +20481,7 @@ def _run_all_checks(app) -> None:
     check_d72_chartstack_promote_preserves_view(app)
     check_d21_space_cycles_watchlist(app)
     check_d22_plus_button_adds_watchlist(app)
-    check_d23_perf_h3_h6_m2_m4(app)
+    check_d23_perf_h3_m2_m4(app)
     check_d24_n7_async_load_offloads_to_executor(app)
     check_d25_scroll_wheel_zoom_anchored_on_cursor(app)
     check_d26_scroll_zoom_invert_setting(app)
@@ -20298,11 +20522,13 @@ def _run_all_checks(app) -> None:
     check_d50_indicators_menu_wiring(app)
     check_d55_indicator_preset_menu(app)
     check_d55b_indicator_preset_autopersist(app)
+    check_d55c_starter_presets_available(app)
     check_d56_ema_seeding_alignment(app)
     check_d57_performance_view_equity_csv_export(app)
     check_d58_anchored_vwap(app)
     check_d59_relative_volume(app)
     check_d51_hover_indicator_readout(app)
+    check_d51b_pane_value_readouts(app)
     check_d52_manual_zoom_pan_arms_preserve_xlim(app)
     check_f0_backtest_kernel(app)
     check_f1_session_reproducibility(app)
@@ -20356,6 +20582,7 @@ def _run_all_checks(app) -> None:
     check_b48_adx_average_directional_index(app)
     check_b49_atr_average_true_range(app)
     check_b50_lrsi_laguerre_rsi(app)
+    check_b50b_rsi_reference_bands(app)
     check_b60_events_protocol_registry(app)
     check_b61_engine_corporate_action_phase(app)
     check_b62_events_blind_redaction(app)
@@ -20529,7 +20756,6 @@ def _build_check_sequence():
          check_d9_poll_retry_when_bar_not_ready),
         ("check_d10_poll_tick_offloads_fetch_to_executor",
          check_d10_poll_tick_offloads_fetch_to_executor),
-        ("check_d11_tab_labels_show_tickers", check_d11_tab_labels_show_tickers),
         ("check_d12_companion_prefetch_warms_cache",
          check_d12_companion_prefetch_warms_cache),
         ("check_d13_watchlist_pinned_subtabs", check_d13_watchlist_pinned_subtabs),
@@ -20549,7 +20775,7 @@ def _build_check_sequence():
         ("check_d21_space_cycles_watchlist", check_d21_space_cycles_watchlist),
         ("check_d22_plus_button_adds_watchlist",
          check_d22_plus_button_adds_watchlist),
-        ("check_d23_perf_h3_h6_m2_m4", check_d23_perf_h3_h6_m2_m4),
+        ("check_d23_perf_h3_m2_m4", check_d23_perf_h3_m2_m4),
         ("check_d24_n7_async_load_offloads_to_executor",
          check_d24_n7_async_load_offloads_to_executor),
         ("check_d25_scroll_wheel_zoom_anchored_on_cursor",
@@ -20615,12 +20841,15 @@ def _build_check_sequence():
         ("check_d55_indicator_preset_menu", check_d55_indicator_preset_menu),
         ("check_d55b_indicator_preset_autopersist",
          check_d55b_indicator_preset_autopersist),
+        ("check_d55c_starter_presets_available",
+         check_d55c_starter_presets_available),
         ("check_d56_ema_seeding_alignment", check_d56_ema_seeding_alignment),
         ("check_d57_performance_view_equity_csv_export",
          check_d57_performance_view_equity_csv_export),
         ("check_d58_anchored_vwap", check_d58_anchored_vwap),
         ("check_d59_relative_volume", check_d59_relative_volume),
         ("check_d51_hover_indicator_readout", check_d51_hover_indicator_readout),
+        ("check_d51b_pane_value_readouts", check_d51b_pane_value_readouts),
         ("check_d52_manual_zoom_pan_arms_preserve_xlim",
          check_d52_manual_zoom_pan_arms_preserve_xlim),
         ("check_f0_backtest_kernel", check_f0_backtest_kernel),
@@ -20710,6 +20939,7 @@ def _build_check_sequence():
          check_b48_adx_average_directional_index),
         ("check_b49_atr_average_true_range", check_b49_atr_average_true_range),
         ("check_b50_lrsi_laguerre_rsi", check_b50_lrsi_laguerre_rsi),
+        ("check_b50b_rsi_reference_bands", check_b50b_rsi_reference_bands),
         ("check_b60_events_protocol_registry",
          check_b60_events_protocol_registry),
         ("check_b61_engine_corporate_action_phase",

@@ -12,7 +12,7 @@ Coverage:
 - ``_refresh_exits_for_sandbox`` no-ops when no sandbox session.
 - Open a position + attach a strategy → overlay renders horizontal
   lines → close position → overlay clears.
-- Menu: "Exits" cascade exposes "Edit Strategies…".
+- Menu: "Strategies" cascade exposes "Edit Exit Strategies…".
 """
 from __future__ import annotations
 
@@ -121,20 +121,31 @@ def test_overlay_renders_for_attached_strategy(app):
 
 
 def test_exits_menu_cascade_present(app):
-    """The Exits cascade menu item exists and 'Edit Strategies…' is callable."""
+    """The consolidated 'Strategies' cascade exposes 'Edit Exit Strategies…'."""
     menubar = app._menubar
-    # Walk the menubar's cascade entries to find "Exits".
+    # Entries / Exits / Strategy were merged into one 'Strategies' cascade
+    # (audit ``strategies-menu-consolidation``); the Exits editor now lives
+    # inside it as 'Edit Exit Strategies…'.
     end_index = menubar.index("end")
-    found = False
+    strat_menu = None
     for i in range(0 if end_index is None else end_index + 1):
         try:
-            label = menubar.entrycget(i, "label")
+            if menubar.entrycget(i, "label") == "Strategies":
+                strat_menu = app.nametowidget(menubar.entrycget(i, "menu"))
+                break
         except Exception:  # noqa: BLE001
             continue
-        if label == "Exits":
-            found = True
-            break
-    assert found, "menubar missing 'Exits' cascade"
+    assert strat_menu is not None, "menubar missing 'Strategies' cascade"
+    end2 = strat_menu.index("end")
+    items = []
+    for i in range(0 if end2 is None else end2 + 1):
+        try:
+            items.append(str(strat_menu.entrycget(i, "label")))
+        except Exception:  # noqa: BLE001
+            continue
+    assert "Edit Exit Strategies…" in items, (
+        f"'Strategies' cascade missing 'Edit Exit Strategies…'; got {items}"
+    )
 
 
 # ---------------------------------------------------------------------------

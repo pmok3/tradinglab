@@ -926,9 +926,10 @@ def test_strategy_failed_status_surfaces_error(app) -> None:
 
 
 def test_strategy_menu_present_in_chartapp(app) -> None:
-    """The **Strategy** menu cascade must be wired into ChartApp's
-    menubar between **Exits** and **View**, and invoking its only
-    item opens a Toplevel containing a :class:`StrategyTab`.
+    """The **Strategy Tester…** item lives in the consolidated **Strategies**
+    cascade (audit ``strategies-menu-consolidation``), which sits between
+    **Sandbox** and **View**; invoking it opens a Toplevel containing a
+    :class:`StrategyTab`.
     """
     import sys
     import tkinter as tk
@@ -940,16 +941,27 @@ def test_strategy_menu_present_in_chartapp(app) -> None:
             labels.append(menubar.entrycget(idx, "label"))
         except tk.TclError:
             labels.append("")
-    assert "Strategy" in labels, (
-        f"Strategy menu missing from menubar (got {labels})"
+    assert "Strategies" in labels, (
+        f"Strategies menu missing from menubar (got {labels})"
     )
-    # Strategy must sit between Exits and View.
-    s_idx = labels.index("Strategy")
-    assert "Exits" in labels and labels.index("Exits") < s_idx, (
-        f"Strategy must come AFTER Exits; got order {labels}"
+    # Strategies must sit between Sandbox and View.
+    s_idx = labels.index("Strategies")
+    assert "Sandbox" in labels and labels.index("Sandbox") < s_idx, (
+        f"Strategies must come AFTER Sandbox; got order {labels}"
     )
     assert "View" in labels and s_idx < labels.index("View"), (
-        f"Strategy must come BEFORE View; got order {labels}"
+        f"Strategies must come BEFORE View; got order {labels}"
+    )
+    # The consolidated cascade exposes the Strategy Tester item.
+    strat_menu = app.nametowidget(menubar.entrycget(s_idx, "menu"))
+    sub_labels: list[str] = []
+    for idx in range(strat_menu.index("end") + 1):
+        try:
+            sub_labels.append(strat_menu.entrycget(idx, "label"))
+        except tk.TclError:
+            sub_labels.append("")
+    assert "Strategy Tester…" in sub_labels, (
+        f"Strategies cascade missing 'Strategy Tester…'; got {sub_labels}"
     )
 
     # The Strategy popup is built lazily — until the user opens it,

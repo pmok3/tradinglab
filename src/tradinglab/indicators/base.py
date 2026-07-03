@@ -257,6 +257,21 @@ class BaseIndicator:
         """
         return None
 
+    @classmethod
+    def output_key_label(cls, key: str) -> str:
+        """Return the display label for one output ``key`` (default: the key).
+
+        Multi-output overlay indicators surface one labelled value per
+        output in the in-chart readout legend (see
+        ``gui/readout_legend.py``). By default the raw output key is shown
+        verbatim (e.g. ``"upper"`` / ``"lower"`` for Bollinger). Indicators
+        whose canonical output keys are verbose (e.g. Prior Day H/L/C's
+        ``prior_day_high``) override this to return a compact label
+        (``pd_high``) for display WITHOUT renaming the persisted
+        style / per-output-visibility key.
+        """
+        return str(key)
+
 
 # ---------------------------------------------------------------------------
 # compute_arr dispatch

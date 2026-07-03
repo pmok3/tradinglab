@@ -59,17 +59,20 @@ theme — no Tk, no matplotlib — so it is unit-testable headless.
 
 - `format_indicator_label(cfg: IndicatorConfig) -> str`:
   - Builds the `"DisplayName(param1, name2=val2, ...)"` prefix.
-  - If `display_name` already contains a parenthesised suffix (the
-    factory convention `self.name = "SMA(20)"`), returns it as-is so
-    we don't double up.
-  - **Indicator-class override hook (audit `avwap-anchor-only-label`).**
-    Before the generic walker, calls `factory.legend_label(display,
-    cfg.params)` on the factory class. If that returns a non-empty
-    string, it is used verbatim as the row prefix. Lets indicators
-    (currently only AVWAP) suppress noisy rendering-knob params
-    (`price_source`, `bands`) and surface only what actually matters
-    for the reader — for AVWAP, the anchor point.
-  - Otherwise walks the indicator factory's `params_schema` in
+    Resolution order (audit `ma-legend-values`):
+  - **1. Indicator-class override hook (audit `avwap-anchor-only-label`
+    / `ma-legend-values`).** FIRST, calls `factory.legend_label(display,
+    cfg.params)` on the factory class. If it returns a non-empty string,
+    that is used verbatim as the row prefix. Checked BEFORE the
+    parenthesised-display shortcut so a hook can also condense the
+    factory's auto `self.name` (e.g. `MovingAverage` rewrites its
+    `EMA(9)` name to the values-only `MA(EMA, 9, close)`). Hooks that
+    exist (AVWAP → anchor only; prior-day → clean name; MovingAverage →
+    values-only) each preserve a genuine user rename themselves.
+  - **2.** If `display_name` already contains a parenthesised suffix
+    (the factory convention `self.name = "SMA(20)"` / `"RSI(14)"`),
+    returns it as-is so we don't double up.
+  - **3.** Otherwise walks the indicator factory's `params_schema` in
     declaration order: first non-empty param positional
     (`typical`), remaining params `name=value` (`bands=off`).
     Empty / missing params are skipped.
@@ -87,6 +90,12 @@ theme — no Tk, no matplotlib — so it is unit-testable headless.
   - filtered by config per-key `style[key].visible` (user toggle).
 - **Colour** (`_color_for_key`): config per-key `style[key].color`
   → factory `default_style[key].color` → `theme_text` (neutral).
+- **Per-output band label** (`_key_label_for`): routes through the
+  indicator factory's `output_key_label(key)` hook so verbose canonical
+  keys (e.g. `prior_day_high`) surface as a compact label (`pd_high`)
+  without renaming the persisted style/visibility key. Falls back to the
+  raw key. Only applied for multi-output rows (`key_label` is `""` for
+  single-output indicators, where the row prefix already disambiguates).
 - **Label**: `format_indicator_label(cfg)`. The per-output band name
   is on the `OverlaySegment.key_label`; the renderer concatenates
   them with the row label.

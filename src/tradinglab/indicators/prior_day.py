@@ -94,10 +94,68 @@ class PriorDayHLC(BaseIndicator):
             parts.append("C")
         self.name = f"Prior Day {'/'.join(parts)}" if parts else "Prior Day (none)"
 
+    # Compact per-output labels for the in-chart readout legend. The
+    # canonical output keys (``prior_day_high`` / ``prior_day_low`` /
+    # ``prior_day_close``) stay stable on disk (style + per-output
+    # visibility persistence); only the displayed band label is shortened.
+    _OUTPUT_KEY_LABELS: ClassVar[dict[str, str]] = {
+        "prior_day_high": "pd_high",
+        "prior_day_low": "pd_low",
+        "prior_day_close": "pd_close",
+    }
+
     @staticmethod
     def is_available_for(interval: str) -> Availability:
         """Only available on intraday intervals."""
         return intraday_only(interval)
+
+    @classmethod
+    def effective_output_keys(cls, params: dict) -> tuple[str, ...]:
+        """Only the *enabled* levels are visible outputs.
+
+        When a level's ``show_*`` param is off, its output key (e.g.
+        ``prior_day_close`` when ``show_close=False``) is dropped from the
+        rendered / legend output set so a deselected level does NOT appear
+        on the chart — not as a line and not as a readout-legend entry.
+
+        ``compute_arr`` still returns the full three-key dict (disabled
+        levels all-NaN) for back-compat with the persisted ``style`` /
+        per-output-visibility keys and the existing output-key tests; this
+        method is the single source of truth for *which* of those outputs
+        are actually shown.
+        """
+        p = params or {}
+        keys: list[str] = []
+        if p.get("show_high", True):
+            keys.append("prior_day_high")
+        if p.get("show_low", True):
+            keys.append("prior_day_low")
+        if p.get("show_close", True):
+            keys.append("prior_day_close")
+        return tuple(keys)
+
+    @classmethod
+    def legend_label(cls, display_name: str, params: dict) -> str | None:
+        """Show the clean name only — suppress the noisy params suffix.
+
+        The generic ``format_indicator_label`` walker would render the
+        boolean ``show_high`` / ``show_low`` / ``show_close`` toggles as a
+        ``(True, show_low=True, show_close=True)`` suffix on the chart
+        legend. Which levels are active is already conveyed by the display
+        name ("Prior Day H/L/C" → "Prior Day H/L") and the per-output band
+        labels (``pd_high`` / ``pd_low`` / ``pd_close``), so the params add
+        only clutter. Return the display name verbatim. Mirrors AVWAP's
+        override (audit ``avwap-anchor-only-label``).
+        """
+        return (display_name or "Prior Day H/L/C").strip() or "Prior Day H/L/C"
+
+    @classmethod
+    def output_key_label(cls, key: str) -> str:
+        """Abbreviate the per-output band label for the readout legend.
+
+        ``prior_day_high`` → ``pd_high`` etc. Unknown keys pass through.
+        """
+        return cls._OUTPUT_KEY_LABELS.get(key, key)
 
     def compute_arr(self, bars: Bars) -> dict[str, np.ndarray]:
         n = len(bars)

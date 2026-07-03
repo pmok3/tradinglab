@@ -126,8 +126,9 @@ by `ChartApp._build_ui`.
   `YYYY-MM-DD HH:MM` (via `formatting.format_dt` with display tz);
   daily/weekly/monthly → `YYYY-MM-DD`. Empty when xdata out of
   candle range (caller hides).
-- `_blit_overlays` — composes hover + crosshair + value label on
-  top of `_blit_bg`.
+- `_blit_overlays` — composes hover + crosshair + value labels + typing
+  preview on top of a cached background, using the two-layer overlay
+  cache (see **Crosshair overlay cache** below).
 - `_hide_overlays` — universal hide.
 
 ### Live-tick blit fast path (cluster 1)
@@ -158,9 +159,9 @@ by `ChartApp._build_ui`.
   live-price overlay's `(line, label)` are also added explicitly.
 - `_overlay_artist_ids() -> set[int]` — `id()`s of the always-on / hover
   overlays (`_crosshair_artists`, `_price_label_artists`,
-  `_time_label_artists`, `_readout_artists`, `_hover_ann`). Excluded from
-  the tick data set so they are not baked into `_blit_bg` (which would
-  make a crosshair "stick").
+  `_time_label_artists`, `_readout_artists`, `_pane_value_labels`,
+  `_hover_ann`, typing preview). Excluded from the tick data set so they
+  are not baked into `_blit_bg` (which would make a crosshair "stick").
 - The live-price overlay is slid to the fresh price by
   `ChartApp._refresh_view_after_tick` **before** the renderer repaints, so
   the blit paints it at the new price (it would otherwise lag one tick).
@@ -169,6 +170,94 @@ by `ChartApp._build_ui`.
 
 `_begin_click_to_type(ax)`, `_refresh_typing_preview`,
 `_commit_click_to_type`, `_cancel_click_to_type`.
+
+**`_refresh_typing_preview` composites via the blit fast path** (audit
+`typing-preview-blit`). The grey preview letters are a big `Text` artist
+created with `animated=True` and rendered through `_blit_overlays`
+(restore `_blit_bg` → `draw_artist` → `blit`, ~1-2 ms) — NOT a full
+`canvas.draw_idle` re-raster (tens of ms, and worse the heavier the
+chart). This is what made typing a ticker feel laggy after a complex
+chart (e.g. a ratio + the daily-levels preset, or an intraday chart with
+several indicator panes): the per-keystroke cost is now O(overlay), flat
+across chart complexity, instead of O(figure). The preview artist is:
+- registered in `_overlay_artist_ids()` so a stream tick during typing
+  cannot bake it into `_blit_bg` (it would otherwise "stick"), and
+- drawn inside `_blit_overlays` alongside the crosshair / readout / hover
+  overlays.
+`animated=True` keeps it out of the captured `_blit_bg`, so leaving
+typing mode (`_typing_target = None`) just re-runs `_blit_overlays` to
+composite a clean, preview-free frame (no full redraw). Cold start
+(`_blit_bg` not yet captured) falls back to a single `draw_idle`; the
+subsequent `_on_draw_event` re-composites the preview one frame later.
+
+### Crosshair overlay cache (`crosshair-readout-cache`)
+
+`_blit_overlays` composes in **two layers** so a moving crosshair does not
+pay to re-rasterise the (expensive, indicator-heavy) top-left readout box
+every frame:
+
+- **Layer 1 — `_overlay_bg`** (cached): `_blit_bg` with the always-on
+  top-left OHLCV / indicator-legend readout box(es) **plus the per-pane
+  value badges** (`_pane_value_labels`, see below) baked in. The readout
+  is the costly artist — its `draw_artist` cost scales with the number of
+  indicators (the daily-levels preset added ~5.5 ms/frame) — yet its
+  content only changes when the hovered *bar* changes, not when the
+  crosshair moves within a bar. So it is drawn once and captured via
+  `copy_from_bbox` → `_overlay_bg`, keyed by a fingerprint
+  `_overlay_bg_fp = (_last_readout_key, <readout box visibilities>,
+  <pane value-badge visibilities>)`.
+- **Layer 2 — moving overlays** (per frame): crosshair v/h lines, price /
+  time badges, hover tooltip, and the click-to-type preview, drawn on top
+  of the restored `_overlay_bg` every frame. Cheap.
+
+**Cache validity / invalidation.** The cache is rebuilt when
+`_overlay_bg is None` or the fingerprint changes:
+- A different hovered bar changes `_last_readout_key` (set in
+  `_dispatch_hover` via the qw-hover-cache gate) → fingerprint flip.
+- Readout hide/show (cursor-leave, revival) flips a visibility bool in the
+  fingerprint.
+- Any full redraw (`_on_draw_event`) or live tick (`_paint_tick_frame`)
+  recaptures `_blit_bg` and **explicitly nulls `_overlay_bg`** at that
+  site, so content changes that don't move the readout key (theme, resize,
+  indicator add, streaming forming-bar) still rebuild.
+
+Because the readout is bar-indexed (identical content for any cursor-x
+within one bar), reusing `_overlay_bg` while the crosshair sweeps *within*
+a bar or moves *vertically* is bit-identical to redrawing it. Measured:
+in-bar hover with the daily-levels preset dropped from ~11.7 ms to
+~5.2 ms/frame (−55 %), now flat regardless of indicator count; the
+`copy_from_bbox` fires once per bar instead of once per frame. Z-order
+note: the crosshair now draws **over** the readout box (it used to draw
+under) where they overlap at the far-left edge — acceptable and standard
+for trading crosshairs.
+
+### Per-pane hover value badges (`pane-value-readout`)
+
+Mirrors how the price pane's readout surfaces overlay-indicator values on
+hover, but for the **volume pane** and the **lower indicator panes**
+(RVOL / RSI / …). `_pane_value_labels` is a `dict[axes, Text]` of animated
+`Text` artists built in `_ensure_overlay_artists` (one per volume /
+indicator axes in `_ax_candle_map`) and refreshed by `_update_readout`:
+
+- **Volume pane** → a top-**left** (`ha="left"`) badge reading
+  `Volume <value>` (`fmt_volume`), neutral text colour.
+- **Indicator pane** → a top-**right** (`ha="right"`) badge showing the
+  pane indicator's value(s) at the hovered bar. The existing clickable
+  name label (`_render_pane_labels`, top-left) is untouched, so name
+  (left) + value (right) read together across the pane top. A single
+  value is coloured by its line (matches the pane's curve); multiple
+  values (shared pane) share the neutral colour. Built by
+  `_pane_indicator_readout(ax, idx)` from `state.pane_lines` in render
+  order, `_line_value_at` for each line; multi-output configs prefix each
+  value with its output key. Empty at NaN/warmup bars → badge hidden.
+
+Shared bar resolution: `_readout_bar_idx(ax, xdata)` returns the in-render-
+window non-gap bar under the cursor, else the latest non-gap bar (so a
+badge is never blank), else `None`. The badges are **static-per-bar**, so
+they live in the `_blit_overlays` **cached layer** alongside the readout
+box (their visibilities join the `_overlay_bg` fingerprint) and are in
+`_overlay_artist_ids` (excluded from the tick-blit data set). Rebuilt every
+render; recoloured on theme swap by `theme_controller._apply_overlay_artists`.
 
 ### Drawings bridge (Feature C)
 
@@ -376,10 +465,16 @@ during drag.
 
 - `_blit_bg` invalidated by `_render` and `_draw_slice` (set
   `None`); next `draw_event` re-captures.
+- `_overlay_bg` (the cached base+readout layer) is nulled at every
+  `_blit_bg` recapture site (`_on_draw_event`, `_paint_tick_frame`) and
+  otherwise rebuilt lazily when its fingerprint
+  `(_last_readout_key, readout visibilities)` changes. It is never stale:
+  a content change either flips the fingerprint or nulls the cache.
 - Pan: before drag, all data artists `animated=True`; after
   `_pan_end`, all `animated=False`.
 - Hover and crosshair never render on top of a stale background;
-  `_blit_overlays` always `restore_region(_blit_bg)` first.
+  `_blit_overlays` always `restore_region` first (of `_overlay_bg` on the
+  fast path, or `_blit_bg` when (re)building the cache).
 - Crosshair vline on every axes when any cursor position is
   known; hline only on `_crosshair_current_ax`.
 - Clicking on chart gives canvas widget keyboard focus.

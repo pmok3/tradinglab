@@ -90,7 +90,7 @@ from .drawings import (
     DrawingStore,
     read_drawings,
 )
-from .formatting import fmt_volume, format_dt
+from .formatting import format_dt
 from .gui.app_state import AppState
 from .gui.banner import FirstRunBannerMixin
 from .gui.chart_renderer import ChartRenderer
@@ -182,7 +182,6 @@ from .watchlists import (
 _MAX_RENDER_CANDLES = 60000
 _RENDER_BUFFER_MULTIPLIER = 3
 _MIN_RENDER_CANDLES = 500
-_MAX_TABLE_ROWS = 300
 from . import defaults as _defaults  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -470,7 +469,16 @@ class ChartApp(
         def _seed_templates_idle() -> None:
             try:
                 from .templates import seed_default_templates_if_empty
-                seed_default_templates_if_empty()
+                result = seed_default_templates_if_empty()
+                # Indicator presets seed into a single envelope the manager
+                # already loaded (empty) back in __init__; if any were newly
+                # offered, reload + install so the starter presets (e.g.
+                # "Daily Levels") appear in Indicators → Load Preset on THIS
+                # launch, not just the next one.
+                ip = (result or {}).get("by_kind", {}).get(
+                    "indicator_presets", (0, 0))
+                if ip and ip[0]:
+                    self._reload_indicator_presets_from_disk()
             except Exception:  # noqa: BLE001 - first-run seeding is best-effort
                 pass
         try:
@@ -733,6 +741,11 @@ class ChartApp(
         self._ax_candle_map: OrderedDict[Any, tuple[list[Candle], str, int]] = self._renderer.ax_candle_map
         # Blit / overlay state (spec §11)
         self._blit_bg = self._renderer.blit_bg
+        # Cached crosshair overlay layer (base + static-per-bar readout box).
+        # Rebuilt lazily by _blit_overlays when its fingerprint changes;
+        # nulled at every _blit_bg recapture. Audit ``crosshair-readout-cache``.
+        self._overlay_bg = None
+        self._overlay_bg_fp: tuple | None = None
         # Live-tick blit fast path (gui/interaction.py:_paint_tick_frame).
         # When True, ``_on_draw_event`` skips its capture/composite so the
         # data-less background draw used to seed ``_tick_blit_bg`` doesn't
@@ -758,6 +771,15 @@ class ChartApp(
         # OHLCV + Vol + bull/bear-coloured %change of the bar at the
         # cursor's x position (latest bar when off-chart).
         self._readout_artists: dict[Any, Any] = {}
+        # Per-pane hover value readouts (audit ``pane-value-readout``):
+        # the volume pane shows ``Volume <value>`` (top-left) and each
+        # lower indicator pane (RVOL/RSI/…) shows its indicator value(s)
+        # at the hovered bar (top-right) — mirroring how the price pane's
+        # readout surfaces overlay-indicator values. Animated Text
+        # artists keyed by their pane axes, rebuilt every render by
+        # ``_ensure_overlay_artists`` and refreshed on hover by
+        # ``_update_readout``.
+        self._pane_value_labels: dict[Any, Any] = {}
         # Click-to-type state (spec §12)
         self._typing_target: str | None = None
         self._typing_buffer: str = ""
@@ -1021,7 +1043,6 @@ class ChartApp(
             pass
         self._theme_ctrl.bind_plot(figure=self._figure, canvas=self._canvas)
         self._apply_theme()
-        self._sync_compare_tab_visibility()
 
         # First-run onboarding banner. Sits above all other widgets;
         # auto-suppressed on every launch after the user dismisses it
@@ -1415,23 +1436,7 @@ class ChartApp(
         self._notebook.pack(fill=tk.BOTH, expand=True)
         self._main_paned.add(side, weight=1)
 
-        # Tab 1: Primary OHLC — title reflects the current primary ticker
-        # (e.g. "AMD") for quick orientation; falls back to "Primary" when
-        # no ticker is set. Updated by ``_refresh_tab_labels``.
-        prim_frame = ttk.Frame(self._notebook)
-        self._primary_table = self._make_ohlc_tree(prim_frame)
-        self._table = self._primary_table  # back-compat alias
-        self._primary_tab_frame = prim_frame
-        self._notebook.add(prim_frame, text=self._tab_label_for_primary())
-
-        # Tab 2: Compare OHLC (only shown when compare mode is enabled).
-        # Title tracks the compare ticker analogously.
-        cmp_frame = ttk.Frame(self._notebook)
-        self._compare_table = self._make_ohlc_tree(cmp_frame)
-        self._notebook.add(cmp_frame, text=self._tab_label_for_compare())
-        self._compare_tab_frame = cmp_frame
-
-        # Tab 3: Watchlist — nested ttk.Notebook hosts one sub-tab per
+        # Tab 1: Watchlist — nested ttk.Notebook hosts one sub-tab per
         # pinned watchlist (up to WatchlistManager.MAX_PINNED). All of the
         # per-sub-tab wiring (tree creation, sort state, empty-state
         # placeholder, context menu) lives in WatchlistTabMixin; we just
@@ -1442,7 +1447,7 @@ class ChartApp(
         # the Watchlist tab into view alongside the sub-tab switch.
         self._watchlist_outer_frame = wl_frame
 
-        # Tab 4: Sandbox — hosts the SandboxPanel while a replay session
+        # Tab 2: Sandbox — hosts the SandboxPanel while a replay session
         # is active. The frame is added once at startup so notebook tab
         # indices stay stable, then hidden via ``state="hidden"`` until
         # ``_show_sandbox_panel`` populates and reveals it. Mounting in
@@ -1452,18 +1457,18 @@ class ChartApp(
         self._notebook.add(sb_frame, text="Sandbox", state="hidden")
         self._sandbox_tab_frame = sb_frame
 
-        # Tab 5: Scanner — sandbox-driven block-tree screener. The library
+        # Tab 3: Scanner — sandbox-driven block-tree screener. The library
         # auto-loads from <cache>/scans/ at startup; runner state lives on
         # the app so per-tick history (edge detection) survives sub-tab
         # re-builds. See gui/scanner_tab.py + scanner/runner.py.
         self._build_scanner_tab()
 
-        # Tab 6: Exits — bracket / OCO / trailing-stop / indicator exits.
+        # Tab 4: Exits — bracket / OCO / trailing-stop / indicator exits.
         # Owns AuditLog + PositionTracker + PaperBrokerEngine +
         # ExitEvaluator + chart overlay. See gui/exits_app.py.
         self._build_exits_stack()
 
-        # Tab 7: Entries — manual / scanner-fed / indicator entry triggers.
+        # Tab 5: Entries — manual / scanner-fed / indicator entry triggers.
         # Reuses tracker + paper_engine from the exits stack and inserts
         # the "Entries" tab BEFORE "Exits" in the right notebook so the
         # display ordering reads "fire-first → manage-after". See
@@ -1529,19 +1534,6 @@ class ChartApp(
                     )
             except Exception:  # noqa: BLE001 - best-effort startup paint
                 pass
-
-    def _make_ohlc_tree(self, parent: tk.Misc) -> ttk.Treeview:
-        """Helper: build a 6-column OHLC Treeview inside ``parent``."""
-        tree = ttk.Treeview(
-            parent, columns=("date", "open", "high", "low", "close", "volume"),
-            show="headings", height=20,
-        )
-        for col, w in (("date", 130), ("open", 70), ("high", 70),
-                       ("low", 70), ("close", 70), ("volume", 80)):
-            tree.heading(col, text=col.capitalize())
-            tree.column(col, width=w, anchor="center")
-        tree.pack(fill=tk.BOTH, expand=True)
-        return tree
 
     def _apply_forced_sash(
         self,
@@ -1721,14 +1713,14 @@ class ChartApp(
         except Exception:  # noqa: BLE001
             pass
         try:
-            # Tooltip cache + table rows are keyed off _format_candle_date,
-            # which now reads self._display_tz — invalidate + refill.
+            # Tooltip cache is keyed off _format_candle_date, which now
+            # reads self._display_tz — invalidate so hover tooltips pick
+            # up the new tz.
             for sa in self._series_cache.values():
                 try:
                     sa._tooltip_cache.clear()
                 except Exception:  # noqa: BLE001
                     pass
-            self._refill_table()
         except Exception:  # noqa: BLE001
             pass
         # Sandbox clock readout reads ``_display_tz`` too — re-render
@@ -2074,7 +2066,6 @@ class ChartApp(
         compare slot picks up the engine's identity-stable visible
         list for the toggled ticker.
         """
-        self._sync_compare_tab_visibility()
         compare_on = bool(self.compare_var.get())
 
         # Sandbox branch must precede the regular path's _primary_raw
@@ -2461,70 +2452,6 @@ class ChartApp(
             self._render()
         except Exception:  # noqa: BLE001
             pass
-
-    def _tab_label_for_primary(self) -> str:
-        """Return the notebook label for the primary tab.
-
-        Prefers the currently-typed ticker (so the label updates
-        immediately on edit), falls back to the last successfully-loaded
-        ticker, then to ``"Primary"`` if both are empty.
-        """
-        try:
-            live = (self.ticker_var.get() or "").strip().upper()
-        except Exception:  # noqa: BLE001
-            live = ""
-        return live or (self._confirmed_primary_ticker or "Primary")
-
-    def _tab_label_for_compare(self) -> str:
-        """Return the notebook label for the compare tab.
-
-        Same priority as :meth:`_tab_label_for_primary` but for the
-        compare side. Falls back to ``"Compare"`` so the hidden-tab
-        state still has a sensible label if the user never set one.
-        """
-        try:
-            live = (self.compare_ticker_var.get() or "").strip().upper()
-        except Exception:  # noqa: BLE001
-            live = ""
-        return live or (self._confirmed_compare_ticker or "Compare")
-
-    def _refresh_tab_labels(self) -> None:
-        """Update the Primary/Compare notebook tabs to show the active
-        tickers (e.g. ``AMD`` / ``SPY`` instead of the generic labels).
-
-        Safe to call repeatedly — Tk silently no-ops when the label
-        hasn't changed. Guarded so teardown paths (frames destroyed)
-        don't raise.
-        """
-        prim = getattr(self, "_primary_tab_frame", None)
-        if prim is not None:
-            with _silent_tcl():
-                self._notebook.tab(prim, text=self._tab_label_for_primary())
-        cmp_ = getattr(self, "_compare_tab_frame", None)
-        if cmp_ is not None:
-            with _silent_tcl():
-                self._notebook.tab(cmp_, text=self._tab_label_for_compare())
-
-    def _sync_compare_tab_visibility(self) -> None:
-        """Add/hide the Compare tab based on :attr:`compare_var`.
-
-        Uses ``ttk.Notebook.tab(..., state=...)`` so the frame itself
-        stays alive (preserves any populated rows) while it's off the
-        tab bar. If the hidden tab happens to be selected, we fall
-        back to the Primary tab to avoid a blank notebook pane.
-        """
-        frame = getattr(self, "_compare_tab_frame", None)
-        if frame is None:
-            return
-        with _silent_tcl():
-            want_visible = bool(self.compare_var.get())
-            self._notebook.tab(frame,
-                               state=("normal" if want_visible else "hidden"))
-            if not want_visible:
-                if str(self._notebook.select()) == str(frame):
-                    tabs = self._notebook.tabs()
-                    if tabs:
-                        self._notebook.select(tabs[0])
 
     def _ratio_rebase_y_scale(self, ps, ax_p) -> float:
         """Live y-tick-label scale so the leftmost VISIBLE bar reads 100.
@@ -3098,10 +3025,6 @@ class ChartApp(
                     )
             except Exception:  # noqa: BLE001
                 pass
-            try:
-                self._refresh_tab_labels()
-            except Exception:  # noqa: BLE001
-                pass
             return
         if compare_failed and raw_compare:
             try:
@@ -3116,10 +3039,6 @@ class ChartApp(
                         f"Ticker '{raw_compare}' not found. Check the "
                         f"spelling or try a different data source"
                     )
-            except Exception:  # noqa: BLE001
-                pass
-            try:
-                self._refresh_tab_labels()
             except Exception:  # noqa: BLE001
                 pass
             # keep going with primary-only
@@ -3282,11 +3201,6 @@ class ChartApp(
             # Fall back to synchronous submission if after_idle is
             # unavailable (headless tests without a running mainloop).
             _kick_events()
-        # Update notebook tabs to reflect the actually-loaded tickers.
-        try:
-            self._refresh_tab_labels()
-        except Exception:  # noqa: BLE001
-            pass
         try:
             n = len(primary)
             self._status.info(f"{raw_primary} {interval}: {n} bars")
@@ -4068,7 +3982,6 @@ class ChartApp(
         except Exception:  # noqa: BLE001
             pass
 
-        self._refill_table()
         try:
             self._canvas.draw_idle()
         except Exception:  # noqa: BLE001
@@ -4876,6 +4789,23 @@ class ChartApp(
         except Exception:  # noqa: BLE001
             pass
 
+    def _reload_indicator_presets_from_disk(self) -> None:
+        """Re-read the persisted preset envelope and install it live.
+
+        Used after first-run / upgrade seeding, which writes the envelope
+        AFTER ``__init__`` already installed the (empty) preset table, so
+        freshly-seeded starter presets appear in Indicators → Load Preset
+        without a relaunch. ``install_presets`` fires no event, so this
+        never re-triggers the auto-persist write. Best-effort / guarded.
+        """
+        try:
+            from .indicators import preset_store as _preset_store
+            presets, active = _preset_store.load_presets()
+            if presets:
+                self._indicator_manager.install_presets(presets, active)
+        except Exception:  # noqa: BLE001
+            pass
+
     def _begin_defer_indicator_render(self) -> None:
         """Suspend chart renders driven by indicator-manager mutations.
 
@@ -5670,126 +5600,6 @@ class ChartApp(
         # not instants — never tz-shift, or "Apr 24 ET" would relabel
         # to "Apr 25" in Tokyo.
         return c.date.strftime("%Y-%m-%d")
-
-    def _refill_table(self) -> None:
-        """Populate Primary + Compare OHLC tables (newest first, capped).
-
-        H6: diff-aware. Caches per-tree ``(sigs, iids)`` so the common
-        cases — streaming tick (only the newest row's OHLCV changes) and
-        rollover (one row prepended) — only touch one row instead of
-        deleting + reinserting all ``_MAX_TABLE_ROWS``. Falls back to a
-        full rebuild on any structural change. Signature per row is
-        ``(date, open, high, low, close, volume)`` — sufficient to detect
-        OHLCV mutation without referencing the Candle objects directly.
-        """
-        if not hasattr(self, "_table_cache"):
-            self._table_cache = {}
-
-        def _row_values(c):
-            return (
-                self._format_candle_date(c),
-                f"{c.open:,.2f}", f"{c.high:,.2f}",
-                f"{c.low:,.2f}", f"{c.close:,.2f}",
-                fmt_volume(c.volume),
-            )
-
-        for tree, rows in (
-            (self._primary_table, self._primary),
-            (getattr(self, "_compare_table", None), self._compare),
-        ):
-            if tree is None:
-                continue
-            # Build (sig, candle) list in display order (newest first,
-            # gaps skipped, capped at _MAX_TABLE_ROWS).
-            new: list[tuple[tuple, Candle]] = []
-            for c in reversed(rows[-_MAX_TABLE_ROWS:] if rows else []):
-                if c.is_gap:
-                    continue
-                new.append((
-                    (c.date, c.open, c.high, c.low, c.close, c.volume),
-                    c,
-                ))
-            new_sigs = [s for s, _ in new]
-
-            cache_key = id(tree)
-            cache = self._table_cache.get(
-                cache_key, {"sigs": [], "iids": []})
-            old_sigs: list[tuple] = cache["sigs"]
-            old_iids: list[str] = cache["iids"]
-
-            # Identical → no-op.
-            if old_sigs == new_sigs and len(old_iids) == len(old_sigs):
-                continue
-
-            # Tick fastpath: same length, only the top row's sig changed.
-            if (len(old_sigs) == len(new_sigs) > 0
-                    and old_sigs[1:] == new_sigs[1:]
-                    and old_iids
-                    and old_sigs[0] != new_sigs[0]):
-                _, c0 = new[0]
-                tag = "bull" if c0.close >= c0.open else "bear"
-                try:
-                    tree.item(old_iids[0], tags=(tag,),
-                              values=_row_values(c0))
-                    cache["sigs"] = new_sigs
-                    self._table_cache[cache_key] = cache
-                    continue
-                except Exception:  # noqa: BLE001
-                    pass  # fall through to full rebuild
-
-            # Rollover fastpath: one row prepended, tail unchanged.
-            if (len(new_sigs) == len(old_sigs) + 1
-                    and new_sigs[1:] == old_sigs):
-                _, c0 = new[0]
-                tag = "bull" if c0.close >= c0.open else "bear"
-                try:
-                    new_iid = tree.insert("", 0, tags=(tag,),
-                                          values=_row_values(c0))
-                    cache["sigs"] = new_sigs
-                    cache["iids"] = [new_iid] + old_iids
-                    self._table_cache[cache_key] = cache
-                    continue
-                except Exception:  # noqa: BLE001
-                    pass
-
-            # Rollover-at-cap fastpath: same length, top is new, bottom
-            # row was dropped because the prepend would have exceeded
-            # _MAX_TABLE_ROWS.
-            if (len(new_sigs) == len(old_sigs) > 0
-                    and new_sigs[1:] == old_sigs[:-1]
-                    and old_iids):
-                _, c0 = new[0]
-                tag = "bull" if c0.close >= c0.open else "bear"
-                try:
-                    tree.delete(old_iids[-1])
-                    new_iid = tree.insert("", 0, tags=(tag,),
-                                          values=_row_values(c0))
-                    cache["sigs"] = new_sigs
-                    cache["iids"] = [new_iid] + old_iids[:-1]
-                    self._table_cache[cache_key] = cache
-                    continue
-                except Exception:  # noqa: BLE001
-                    pass
-
-            # Full rebuild fallback.
-            try:
-                for iid in tree.get_children():
-                    tree.delete(iid)
-            except Exception:  # noqa: BLE001
-                self._table_cache.pop(cache_key, None)
-                continue
-            new_iids: list[str] = []
-            for _, c in new:
-                tag = "bull" if c.close >= c.open else "bear"
-                try:
-                    iid = tree.insert("", "end", tags=(tag,),
-                                      values=_row_values(c))
-                    new_iids.append(iid)
-                except Exception:  # noqa: BLE001
-                    pass
-            cache["sigs"] = new_sigs
-            cache["iids"] = new_iids
-            self._table_cache[cache_key] = cache
 
     # ------------------------------------------------------------------
     # Watchlists
@@ -7294,9 +7104,10 @@ class ChartApp(
                 title="Restore Default Templates",
                 message=(
                     "Copy all bundled starter-pack templates "
-                    "(entries / exits / scanners) into your library?\n\n"
-                    "Existing strategies of the same id will be "
-                    "overwritten; your other strategies will be "
+                    "(entries / exits / scanners / indicator presets) "
+                    "into your library?\n\n"
+                    "Existing strategies / presets of the same name will "
+                    "be overwritten; your other strategies will be "
                     "untouched."
                 ),
                 parent=self,
@@ -7305,6 +7116,9 @@ class ChartApp(
                 return
             from .templates import seed_default_templates
             result = seed_default_templates(force=True)
+            # Force-seeding rewrites the preset envelope on disk; install
+            # it live so restored starter presets appear immediately.
+            self._reload_indicator_presets_from_disk()
             self._status.info(
                 f"Restored {result['copied']} starter templates"
             )

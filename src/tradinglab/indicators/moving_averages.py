@@ -363,6 +363,49 @@ class MovingAverage(BaseIndicator):
             f"source must be one of {SOURCE_TYPES}; got {source!r}",
         )
 
+    @classmethod
+    def legend_label(cls, display_name: str, params: dict) -> str | None:
+        """Condensed price-pane legend prefix: ``MA(EMA, 9, close)``.
+
+        The generic schema walker renders
+        ``MA(EMA, length=9, source=Close)`` — param *names* plus a
+        capitalised source. This override shows the moving-average
+        **type, length and source as bare VALUES** (source lowercased)
+        so a glance reads ``MA(EMA, 9, close)``.
+
+        A genuine user rename is preserved: only an empty display name
+        OR the factory's auto-generated instance name (``EMA(9)`` /
+        ``SMA(20,HLC3)`` — see :meth:`__init__`) is replaced with the
+        condensed form; any other custom ``display_name`` passes through
+        unchanged. Audit ``ma-legend-values``.
+        """
+        p = params or {}
+        ma_type = str(p.get("ma_type") or "SMA").upper()
+        raw_len = p.get("length")
+        try:
+            length: int | None = int(raw_len)
+        except (TypeError, ValueError):
+            length = None
+        try:
+            source_norm = cls._normalize_source(p.get("source"))
+        except ValueError:
+            source_norm = "Close"
+        # Reconstruct the auto instance name (``self.name``) so we can
+        # tell it apart from a genuine user rename and override only it.
+        src_tag = "" if source_norm == "Close" else f",{source_norm}"
+        auto_name = (
+            f"{ma_type}({length}{src_tag})" if length is not None else ""
+        )
+        name = (display_name or "").strip()
+        kind_label = str(getattr(cls, "kind_id", "") or "").upper()  # "MA"
+        if name and name != auto_name and name.upper() != kind_label:
+            return name
+        parts = [ma_type]
+        if length is not None:
+            parts.append(str(length))
+        parts.append(source_norm.lower())
+        return f"MA({', '.join(parts)})"
+
     def compute_arr(self, bars: Bars) -> dict[str, np.ndarray]:
         arr = _source_array(bars, self.source)
         out = apply_ma(self.ma_type, arr, self.length)

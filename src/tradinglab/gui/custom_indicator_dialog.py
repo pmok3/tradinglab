@@ -1173,20 +1173,9 @@ class CustomIndicatorDialog(BaseModalDialog):
         except ExpressionError as exc:
             self._set_status(str(exc), level="error")
             return
-        target = self._directory / filename
 
-        # Overwrite confirmation.
-        if target.exists() and (
-            self._current_path is None or self._current_path != target
-        ):
-            if not messagebox.askyesno(
-                "Overwrite custom indicator",
-                f"{filename} already exists. Overwrite?",
-                parent=self,
-            ):
-                return
-
-        # Python-mode security gate.
+        # Python-mode security gate (before prompting for a location so the
+        # user isn't asked where to save an indicator they then decline).
         if self._mode_var.get() == _PYTHON_MODE:
             if not messagebox.askokcancel(
                 "Save Python indicator",
@@ -1196,6 +1185,28 @@ class CustomIndicatorDialog(BaseModalDialog):
                 parent=self, icon="warning",
             ):
                 return
+
+        # Selectable save location — prompt every save, defaulting to the
+        # current indicators directory (audit ``indicator-save-location``).
+        # Picking a durable / synced folder makes the authored indicator
+        # survive machine migration; the chosen folder becomes the working
+        # directory for the session (saved list + discovery follow it).
+        # ``asksaveasfilename`` confirms overwrite natively, so no separate
+        # overwrite prompt is needed.
+        dest_str = filedialog.asksaveasfilename(
+            parent=self,
+            title="Save custom indicator",
+            defaultextension=".py",
+            initialdir=str(self._directory),
+            initialfile=filename,
+            filetypes=[("Python indicator", "*.py"), ("All files", "*.*")],
+        )
+        if not dest_str:
+            return
+        target = Path(dest_str)
+        # Track the chosen location so the next save defaults there and the
+        # saved-indicator list reflects the folder the user is working in.
+        self._directory = target.parent
 
         # Dry-compute against synthetic bars to surface broken
         # compositions before they land on disk.

@@ -106,7 +106,6 @@ def _install_load_data_harness(app, *, primary, compare) -> None:
     app._request_deferred_render = lambda: None
     app._render = lambda: None
     app._load_events_async = lambda _symbol: None
-    app._refresh_tab_labels = lambda: None
     app._schedule_next_bar_fetch = lambda: None
     app._start_stream_if_applicable = lambda: None
     app._ensure_compare_prefetched = lambda: None

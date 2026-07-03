@@ -173,46 +173,76 @@ def _color_for_key(cfg: IndicatorConfig, key: str, theme_text: str) -> str:
     return theme_text
 
 
+def _key_label_for(cfg: IndicatorConfig, key: str) -> str:
+    """Resolve the display label for one output ``key`` of ``cfg``.
+
+    Routes through the indicator factory's ``output_key_label`` hook so
+    verbose canonical keys (e.g. ``prior_day_high``) surface as a compact
+    label (``pd_high``) in the legend WITHOUT renaming the persisted
+    style / per-output-visibility key. Falls back to the raw key for any
+    indicator that doesn't override the hook.
+    """
+    factory = _factory_for_kind_id(cfg.kind_id)
+    if factory is not None:
+        hook = getattr(factory, "output_key_label", None)
+        if callable(hook):
+            try:
+                label = hook(key)
+                if isinstance(label, str) and label:
+                    return label
+            except Exception:  # noqa: BLE001
+                pass
+    return key
+
+
 def format_indicator_label(cfg: IndicatorConfig) -> str:
     """Build the ``"DisplayName(p1, name2=v2, ...)"`` prefix for a row.
 
-    If the config's ``display_name`` already contains a parenthesised
-    suffix (e.g. ``"SMA(20)"`` — the convention the factories set on
-    ``self.name``), it is returned as-is so we don't end up with
-    ``"SMA(20)(20)"``. Otherwise we walk the indicator factory's
-    ``params_schema`` (declaration order). The FIRST schema-listed
-    param with a non-empty value is rendered positionally
-    (``"typical"``); every subsequent non-empty param is rendered
-    ``name=value`` (``"bands=off"``). Empty / missing params are
-    skipped so a default ``anchor_ts=""`` doesn't bloat the label.
-    Unknown kind_id → bare ``display_name``.
+    Resolution order:
 
-    When ``display_name`` is empty AND we're falling back to the
-    bare ``kind_id``, the kind_id is uppercased for presentation
-    (``"sma"`` → ``"SMA"``) — matches the registry's display labels
-    and the historical pill-strip presentation.
+    1. **``legend_label`` hook.** If the indicator factory defines a
+       ``legend_label(display_name, params)`` returning a non-empty
+       string, it is authoritative (AVWAP shows only the anchor;
+       ``MovingAverage`` condenses to ``MA(EMA, 9, close)``). Checked
+       first so a hook can also override the factory's auto ``self.name``;
+       each hook preserves a genuine user rename itself.
+    2. **Pre-formatted display_name.** If ``display_name`` already
+       contains a parenthesised suffix (e.g. ``"RSI(14)"`` — the
+       convention factories set on ``self.name``), it is returned as-is so
+       we don't end up with ``"RSI(14)(14)"``.
+    3. **Schema walk.** Otherwise we walk the factory's ``params_schema``
+       (declaration order). The FIRST schema-listed param with a non-empty
+       value is rendered positionally (``"typical"``); every subsequent
+       non-empty param is rendered ``name=value`` (``"bands=off"``). Empty
+       / missing params are skipped so a default ``anchor_ts=""`` doesn't
+       bloat the label.
 
-    Audit ``legend-condensation``.
+    Unknown kind_id → bare ``display_name``. When ``display_name`` is empty
+    the kind_id is uppercased for presentation (``"sma"`` → ``"SMA"``).
+
+    Audit ``legend-condensation`` / ``ma-legend-values``.
     """
     raw_display = (cfg.display_name or "").strip()
     if raw_display:
         display = raw_display
     else:
         display = (cfg.kind_id or "").strip().upper() or "indicator"
-    # If the indicator's display_name is already a formatted
-    # "Name(...)" string, trust it — re-formatting would double up.
-    if "(" in display and display.endswith(")"):
-        return display
 
     factory = _factory_for_kind_id(cfg.kind_id)
     if factory is None:
+        # Unknown kind: honour a pre-formatted "Name(...)" display, else
+        # the bare display.
         return display
 
-    # Indicator-class override hook — if the factory defines a
-    # ``legend_label(display_name, params)`` returning a non-None
-    # string, use it verbatim. Lets indicators (e.g. AVWAP) hide
-    # rendering knobs that aren't "important details" for the
-    # legend reader. Audit ``avwap-anchor-only-label``.
+    # Indicator-class override hook FIRST — an indicator that defines
+    # ``legend_label`` is authoritative for its own legend prefix. Checked
+    # BEFORE the "display already has a (...) suffix" shortcut so the hook
+    # can also condense the factory's auto-generated ``self.name`` (e.g.
+    # ``MovingAverage`` rewrites its ``EMA(9)`` name to the values-only
+    # ``MA(EMA, 9, close)``). The hooks that exist (AVWAP / prior-day / MA)
+    # each preserve a genuine user rename themselves, so an unconditional
+    # override here is safe. Audit ``avwap-anchor-only-label`` /
+    # ``ma-legend-values``.
     try:
         hook = getattr(factory, "legend_label", None)
         if callable(hook):
@@ -221,6 +251,12 @@ def format_indicator_label(cfg: IndicatorConfig) -> str:
                 return custom
     except Exception:  # noqa: BLE001
         pass
+
+    # If the indicator's display_name is already a formatted "Name(...)"
+    # string (a factory ``self.name`` like ``RSI(14)`` or a user rename),
+    # trust it — re-formatting would double up.
+    if "(" in display and display.endswith(")"):
+        return display
 
     schema = getattr(factory, "params_schema", None) or ()
 
@@ -289,7 +325,7 @@ def build_overlay_legend_rows(
         segments: list[OverlaySegment] = [
             OverlaySegment(
                 output_key=k,
-                key_label=k if multi else "",
+                key_label=_key_label_for(cfg, k) if multi else "",
                 color=_color_for_key(cfg, k, theme_text),
             )
             for k in keys

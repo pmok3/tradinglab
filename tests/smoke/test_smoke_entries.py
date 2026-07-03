@@ -105,19 +105,31 @@ def test_refresh_entries_for_sandbox_no_session_noop(app):
 
 
 def test_entries_menu_cascade_present(app):
-    """The Entries cascade menu item exists alongside Exits."""
+    """The consolidated 'Strategies' cascade exposes the entry-strategy items."""
     menubar = app._menubar
+    # Entries / Exits / Strategy were merged into one 'Strategies' cascade
+    # (audit ``strategies-menu-consolidation``); the entry-strategy editors
+    # now live inside it.
     end_index = menubar.index("end")
-    found = False
+    strat_menu = None
     for i in range(0 if end_index is None else end_index + 1):
         try:
-            label = menubar.entrycget(i, "label")
+            if menubar.entrycget(i, "label") == "Strategies":
+                strat_menu = app.nametowidget(menubar.entrycget(i, "menu"))
+                break
         except Exception:  # noqa: BLE001
             continue
-        if label == "Entries":
-            found = True
-            break
-    assert found, "menubar missing 'Entries' cascade"
+    assert strat_menu is not None, "menubar missing 'Strategies' cascade"
+    end2 = strat_menu.index("end")
+    items = []
+    for i in range(0 if end2 is None else end2 + 1):
+        try:
+            items.append(str(strat_menu.entrycget(i, "label")))
+        except Exception:  # noqa: BLE001
+            continue
+    assert "New Entry Strategy…" in items and "Manage Entry Strategies…" in items, (
+        f"'Strategies' cascade missing the entry-strategy items; got {items}"
+    )
 
 
 def test_load_prepackaged_templates(app):

@@ -71,6 +71,23 @@ check, onboarding banner, credentials, and reset / purge.
 - `_on_help_reset_install` — confirm-then-`shutil.rmtree` the data
   folder, then exit via `self._on_close()`.
 
+## Menu layout
+
+Top level: `About TradingLab…`, `Getting Started…`, `Keyboard Shortcuts…`,
+a **`Guides` submenu**, then `Reveal Data Folder`, `Check for Updates…`,
+`Export Diagnostic Bundle…`, and `Reset & Quit (purge data folder)…`.
+
+The **`Guides` cascade** (audit `help-guides-submenu`) groups the six
+per-topic doc-viewer entries — `ChartStack Guide…`, `Watchlists Guide…`,
+`Custom Indicators Guide…`, `Entries and Exits Guide…`,
+`Strategy Tester Guide…`, `Ratio Charts Guide…` — plus
+`Documentation Library…` and `View Online Docs`, so the Help top level
+stays short (was a flat ~16-entry wall). Labels + ellipses are unchanged
+(so `tests/unit/gui/test_ellipsis_semantics.py`, which scans the source
+labels, is unaffected); the nested cascade is themed automatically by
+`apply_menu_theme`'s recursion over the menubar (no explicit `submenus`
+registration needed).
+
 ## Wiring
 
 1. `ChartApp` class bases include `HelpMenuMixin`.

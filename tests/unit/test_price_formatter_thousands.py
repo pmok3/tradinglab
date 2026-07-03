@@ -38,7 +38,6 @@ REQUIRED_COMMA_SITES = [
     ("gui/interaction.py", r"f\"O \{c\.open:,\.2f\}\s*H \{c\.high:,\.2f\}"),
     ("core/series.py", r"f\"O: \{c\.open:,\.2f\}\\n\""),
     ("core/series.py", r"f\"H: \{c\.high:,\.2f\}\\n\""),
-    ("app.py", r"f\"\{c\.open:,\.2f\}\""),
     ("gui/exits_overlay.py", r"@ \{price:,\.2f\}"),
     ("gui/entries_overlay.py", r"ARMED LIMIT.*:,\.2f"),
     ("gui/entries_overlay.py", r"ARMED STOP \{s\.name\} @ \{s\.trigger\.stop_price:,\.2f\}"),

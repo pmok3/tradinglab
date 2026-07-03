@@ -788,8 +788,8 @@ GOLDEN_RATIO_INVERSE: float = 0.6180339887498949
 #
 # Fraction of the main window the *chart* pane should occupy at every
 # launch. The remainder ``(1 - CHART_PANE_STARTUP_RATIO)`` goes to the
-# right-side notebook (Primary OHLC / Compare / Watchlist / Sandbox /
-# Scanner / Entries / Exits). When the ChartStack panel is enabled and
+# right-side notebook (Watchlist / Sandbox / Scanner / Entries / Exits).
+# When the ChartStack panel is enabled and
 # becomes the third (leftmost) pane, ``CHARTSTACK_PANE_STARTUP_WIDTH_PX``
 # is carved off the left of the window first, and the remaining width
 # is split between chart and notebook in the same chart:notebook ratio.

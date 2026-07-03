@@ -168,10 +168,15 @@ def test_first_run_offers_all_bundled_and_writes_json_ledger(
     isolated_cache_dir: Path,
 ) -> None:
     result = seed_default_templates_if_empty()
+    # Indicator presets seed into the single-envelope store (not per-file);
+    # fold their offered count into the expected total.
+    ip_copied = result["by_kind"]["indicator_presets"][0]
+    assert ip_copied >= 1, "bundled indicator presets should be offered too"
     expected = (
         len(_bundled_names("entry_strategy_templates"))
         + len(_bundled_names("exit_strategy_templates"))
         + len(_bundled_names("scanner_templates"))
+        + ip_copied
     )
     assert result["copied"] == expected
     # The entries library now holds every bundled entry template.
@@ -290,4 +295,94 @@ def test_on_seed_callback_is_invoked(isolated_cache_dir: Path) -> None:
 
     result = seed_default_templates_if_empty(on_seed=cb)
     assert len(seen) == result["copied"]
-    assert {k for k, _ in seen} == {"entries", "exits", "scans"}
+    assert {k for k, _ in seen} == {
+        "entries", "exits", "scans", "indicator_presets",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Indicator presets — envelope-based seeding (bug: starter presets were
+# bundled but never reachable; the "daily levels" preset went missing)
+# ---------------------------------------------------------------------------
+
+
+def test_indicator_presets_seeded_into_envelope(
+    isolated_cache_dir: Path,
+) -> None:
+    """First run seeds the bundled starter presets into the single
+    ``indicator_presets.json`` envelope, translated so they hydrate."""
+    from tradinglab.indicators import preset_store
+
+    result = seed_default_templates_if_empty()
+    copied, _skipped = result["by_kind"]["indicator_presets"]
+    assert copied >= 1, "bundled indicator presets should be seeded"
+
+    presets, _active = preset_store.load_presets()
+    assert presets, "envelope should hold the seeded presets"
+    # The user's 'daily levels' preset specifically must be present.
+    assert "Daily Levels" in presets, sorted(presets)
+    # And it must hydrate cleanly (no unknown placeholders).
+    from tradinglab.indicators.config import IndicatorConfig
+    for item in presets["Daily Levels"]:
+        assert not IndicatorConfig.from_dict(item).unknown
+
+
+def test_indicator_presets_seed_is_idempotent(isolated_cache_dir: Path) -> None:
+    from tradinglab.indicators import preset_store
+
+    seed_default_templates_if_empty()
+    first, _ = preset_store.load_presets()
+    second = seed_default_templates_if_empty()
+    assert second["by_kind"]["indicator_presets"][0] == 0, "no re-offer"
+    after, _ = preset_store.load_presets()
+    assert set(after) == set(first)
+
+
+def test_indicator_preset_deletion_is_respected(
+    isolated_cache_dir: Path,
+) -> None:
+    """A seeded preset the user deletes is NOT resurrected on next launch."""
+    from tradinglab.indicators import preset_store
+
+    seed_default_templates_if_empty()
+    presets, active = preset_store.load_presets()
+    victim = "Daily Levels"
+    assert victim in presets
+    del presets[victim]
+    preset_store.save_presets(presets, active)
+
+    seed_default_templates_if_empty()
+    after, _ = preset_store.load_presets()
+    assert victim not in after, "deleted preset stays deleted (ledger)"
+
+
+def test_indicator_presets_not_clobbered_when_user_owns_the_name(
+    isolated_cache_dir: Path,
+) -> None:
+    """A user preset sharing a bundled name is preserved, not overwritten."""
+    from tradinglab.indicators import preset_store
+    from tradinglab.indicators.config import IndicatorConfig
+
+    mine = [IndicatorConfig(kind_id="ema", params={"length": 3}).to_dict()]
+    preset_store.save_presets({"Daily Levels": mine}, "Daily Levels")
+
+    seed_default_templates_if_empty()
+    after, _ = preset_store.load_presets()
+    assert after["Daily Levels"] == mine, "user's preset must not be clobbered"
+
+
+def test_indicator_presets_force_restore_overwrites(
+    isolated_cache_dir: Path,
+) -> None:
+    from tradinglab.indicators import preset_store
+    from tradinglab.indicators.config import IndicatorConfig
+
+    mine = [IndicatorConfig(kind_id="ema", params={"length": 3}).to_dict()]
+    preset_store.save_presets({"Daily Levels": mine}, "Daily Levels")
+
+    result = seed_default_templates(force=True)
+    assert result["by_kind"]["indicator_presets"][0] >= 1
+    after, _ = preset_store.load_presets()
+    # Force restore rewrote 'Daily Levels' to the bundled definition.
+    assert after["Daily Levels"] != mine
+    assert any(it["kind_id"] == "prior_day_hlc" for it in after["Daily Levels"])

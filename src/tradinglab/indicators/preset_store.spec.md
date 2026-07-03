@@ -40,6 +40,33 @@ active list (the user opted into preset-only auto-persistence).
   envelope (`io_helpers.atomic_write_json`). `active` is written as `null`
   unless it names an entry in `presets`. Returns `False` (logged once,
   non-fatal) on `OSError`.
+- `export_preset_to_file(path, indicators, *, name=None) -> bool` — write ONE
+  preset (a list of `IndicatorConfig.to_dict()` payloads — typically the live
+  active set) to a **user-chosen** path. Envelope
+  `{"version", "kind": "tradinglab-indicator-preset", "name", "indicators"}`.
+  Distinct from the auto-persist `presets_path()` envelope: this is the
+  Save-As / portable-copy path so an indicator layout survives machine
+  migration or can be shared (audit `indicator-save-location`). `False`
+  (logged once) on `OSError`.
+- `import_preset_from_file(path) -> list[dict] | None` — inverse of
+  `export_preset_to_file`. Returns the list of config-dict payloads, or
+  `None` on missing / unreadable / malformed / wrong-shape. Tolerant of three
+  shapes: the export envelope (`{"indicators": [...]}`), a full
+  `IndicatorManager.to_dict()` export (`{"active_configs": [...]}`), and a
+  bare top-level JSON list.
+- `read_bundled_preset(path) -> (name, list[dict]) | None` — read a bundled
+  *starter-pack* preset (`data/indicator_presets/preset-*.json`). These use a
+  compact hand-authored schema `{id, kind, panel, params}` that predates (and
+  does not match) the canonical `IndicatorConfig.to_dict()` shape — loaded
+  verbatim, every entry hydrates as an `unknown` placeholder (`kind` is not
+  `kind_id`), which is why they were historically unreachable. This reader
+  **translates** each entry (`kind`→`kind_id`, default `scopes=["main"]`;
+  files already carrying `kind_id` pass through) and returns
+  `(name, canonical_config_dicts)`, dropping unregistered kinds. `name` falls
+  back to a title-cased filename minus a leading `preset-`
+  (`preset-mean-reversion.json` → `Mean Reversion`). `None` on missing /
+  malformed / empty (or all-unknown) files. Consumed by `templates.seed`
+  (`_seed_indicator_presets_additive`).
 
 ## Wiring (in `ChartApp`)
 - `__init__` restores presets via `IndicatorManager.install_presets(*load_presets())`
@@ -47,6 +74,12 @@ active list (the user opted into preset-only auto-persistence).
 - `_on_indicator_preset_persist` calls `save_presets(mgr.presets_to_dict(),
   mgr.active_preset())` on `preset_saved` / `preset_deleted` / `preset_loaded`
   / `loaded`.
+- **First-run/upgrade seeding** merges the bundled starter presets into the
+  envelope (`templates.seed`); because that runs AFTER `__init__` already
+  installed the (empty) table, `_seed_templates_idle` then calls
+  `_reload_indicator_presets_from_disk()` to install the freshly-seeded set
+  live — so the starter presets (e.g. "Daily Levels") show in Indicators →
+  Load Preset without a relaunch.
 
 ## Failure policy
 Mirrors the other JSON stores: reads degrade to an empty table rather than
@@ -60,7 +93,11 @@ old or new file, never a torn one.
 
 ## Tests
 `tests/unit/indicators/test_preset_store.py` (round-trip, missing/corrupt/
-non-dict degradation, active-pointer normalisation, manager
-`presets_to_dict` / `install_presets`, end-to-end persistence subscriber).
+non-dict degradation, active-pointer normalisation, `read_bundled_preset`
+compact-schema translation + real starter-pack validity, manager
+`presets_to_dict` / `install_presets`, end-to-end persistence subscriber);
+`tests/unit/test_templates_seed.py` (bundled starter presets seed into the
+envelope, idempotence, deletion respected, user-name not clobbered, force
+restore).
 `tests/smoke/test_smoke_full.py::check_d55b_indicator_preset_autopersist`
 (live ChartApp wiring: save → disk → simulated restart → restore → delete).

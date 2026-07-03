@@ -223,3 +223,88 @@ class IndicatorMenuMixin:
                 self._status.warn(f"Indicator preset not found: {name}")
         except Exception:  # noqa: BLE001
             pass
+
+    def _on_menu_save_indicator_preset_to_file(self) -> None:
+        """Export the live active indicator set to a user-chosen file.
+
+        Mirrors File → Save Configuration As… (a Save-As file dialog) so a
+        preset can live in a durable / portable location of the user's
+        choosing rather than only the hidden auto-persist envelope. The
+        name-based *Save Preset…* path is unaffected. Audit
+        ``indicator-save-location``.
+        """
+        from tkinter import filedialog, messagebox
+
+        from ..indicators import preset_store
+        mgr = self._indicator_manager
+        snapshot = mgr.to_dict().get("active_configs", [])
+        if not snapshot:
+            try:
+                self._status.warn("No indicators to save")
+            except Exception:  # noqa: BLE001
+                pass
+            return
+        active = mgr.active_preset()
+        path = filedialog.asksaveasfilename(
+            parent=self,
+            title="Save Indicator Preset",
+            defaultextension=".json",
+            initialfile=f"{active or 'indicator_preset'}.json",
+            filetypes=[("JSON preset", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        ok = preset_store.export_preset_to_file(path, snapshot, name=active)
+        if not ok:
+            messagebox.showerror(
+                "Save Indicator Preset",
+                f"Could not write:\n{path}",
+                parent=self,
+            )
+            return
+        try:
+            self._status.info(f"Saved indicator preset to file: {path}")
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _on_menu_load_indicator_preset_from_file(self) -> None:
+        """Load an indicator preset from a user-chosen file.
+
+        The live active indicator set is REPLACED with the loaded configs
+        (mirrors applying a named preset). Independent of the name-based
+        preset envelope. Audit ``indicator-save-location``.
+        """
+        from tkinter import filedialog, messagebox
+
+        from ..indicators import preset_store
+        path = filedialog.askopenfilename(
+            parent=self,
+            title="Load Indicator Preset",
+            filetypes=[("JSON preset", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        items = preset_store.import_preset_from_file(path)
+        if items is None:
+            messagebox.showerror(
+                "Load Indicator Preset",
+                f"Could not load:\n{path}\n\nThe file is missing, not valid "
+                "JSON, or not a recognised indicator preset.",
+                parent=self,
+            )
+            return
+        mgr = self._indicator_manager
+        mgr.clear()
+        loaded = 0
+        for d in items:
+            try:
+                cfg = IndicatorConfig.from_dict(d)
+            except Exception:  # noqa: BLE001
+                continue
+            mgr.add(cfg)
+            loaded += 1
+        try:
+            self._status.info(
+                f"Loaded {loaded} indicator(s) from file: {path}")
+        except Exception:  # noqa: BLE001
+            pass

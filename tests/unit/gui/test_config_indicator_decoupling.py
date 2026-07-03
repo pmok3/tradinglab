@@ -39,7 +39,6 @@ def _loaded_config_parent(manager, *, calls=None):
         _display_tz="",
         _scroll_zoom_invert=False,
         _render=lambda: (calls.append("render") if calls is not None else None),
-        _refill_table=lambda: None,
         replace_theme_overrides=lambda o: None,
         _apply_notebook_width_setting=lambda: None,
         _apply_persisted_view_settings=lambda: None,

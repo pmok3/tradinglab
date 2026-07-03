@@ -151,18 +151,31 @@ template that already defines a class and calls `register_indicator`.
   which re-collapses it. `_set_preview_expanded(expanded)` re-packs the
   preview frame with `fill="both", expand=True` when expanded and
   `fill="x", expand=False` when collapsed, and is idempotent.
-- **Save** validates → runs a **dry compute** against a synthetic
-  200-bar Bars view (reuses `strategy_tester.warmup._synthetic_bars`)
-  → atomic-writes the generated source via `tempfile` + `os.replace`
-  → unregisters any prior in-process factory under this name → calls
-  `indicators.loader.register_user_indicator_file(target)` to
-  hot-load the new file.
-- **Save overwrite confirmation** when the target already exists AND
-  it's not the currently-loaded file (re-saving the file you're
-  editing is silent).
+- **Save** validates → (Python-mode trust gate, see below) → **prompts
+  for a save location** via `filedialog.asksaveasfilename` (audit
+  `indicator-save-location`) defaulting `initialdir` to the dialog's
+  current directory and `initialfile` to the safe filename, `.py`
+  extension → runs a **dry compute** against a synthetic 200-bar Bars
+  view (reuses `strategy_tester.warmup._synthetic_bars`) → atomic-writes
+  the generated source to the chosen `target` via `tempfile` +
+  `os.replace` → unregisters any prior in-process factory under this
+  name → calls `indicators.loader.register_user_indicator_file(target)`
+  to hot-load the new file. A cancelled (empty) dialog is a silent no-op.
+- **Selectable save location (durability).** The save location is
+  user-chosen on every save, so an authored indicator can be written to
+  a durable / synced folder (e.g. OneDrive) rather than only the hidden
+  `%LOCALAPPDATA%\TradingLab\indicators`. The chosen folder becomes the
+  dialog's working directory for the rest of the session: `self._directory`
+  is updated to `target.parent`, so the next save defaults there and the
+  saved-indicator list + discovery follow the chosen folder.
+- **Overwrite confirmation is delegated to the native Save-As dialog**
+  (`asksaveasfilename`'s default `confirmoverwrite=True`) — there is no
+  separate `askyesno` overwrite prompt, so re-saving the file you're
+  editing (or any file) prompts at most once, via the OS dialog.
 - **Python-mode save** triggers an `askokcancel` "this is arbitrary
-  code; only save indicators you trust. Continue?" gate before the
-  write.
+  code; only save indicators you trust. Continue?" gate **before** the
+  location prompt (so the user isn't asked where to save an indicator
+  they then decline).
 - **Delete** prompts for confirmation, `unlink`s the file, drops the
   in-process registration via `indicators.loader.unregister_indicator`,
   and resets the editor to "new" if the deleted file was loaded.

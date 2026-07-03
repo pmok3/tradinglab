@@ -193,8 +193,6 @@ class ThemeController:
             if "bear_row_fg" in theme else theme["text"])
         trees: list = []
         trees.extend(getattr(root, "_watchlist_trees", {}).values())
-        trees.append(getattr(root, "_primary_table", None))
-        trees.append(getattr(root, "_compare_table", None))
         # Entries / Exits strategy trees expose ``_tree`` on the tab
         # widget. Forward-looking: today the rows aren't bull/bear-tagged,
         # but registering the palette now keeps every Treeview reachable
@@ -274,6 +272,15 @@ class ThemeController:
                 except Exception:  # noqa: BLE001
                     pass
         for art in getattr(root, "_typing_preview_artists", {}).values():
+            try:
+                art.set_color(theme["text"])
+            except Exception:  # noqa: BLE001
+                pass
+        # Per-pane hover value badges (volume + indicator panes). Their
+        # colour is baked at build time / re-set on hover; recolor here so a
+        # live theme swap updates any currently-visible badge. Single-value
+        # indicator badges are re-coloured by their line on the next hover.
+        for art in getattr(root, "_pane_value_labels", {}).values():
             try:
                 art.set_color(theme["text"])
             except Exception:  # noqa: BLE001

@@ -59,6 +59,28 @@ def cleanup_registry():
         ind_base._BY_KIND_ID.pop(k, None)
 
 
+@pytest.fixture(autouse=True)
+def _default_save_dialog(monkeypatch):
+    """Default the Save-As dialog to its prefilled target.
+
+    ``_on_save`` now prompts for a location via
+    ``filedialog.asksaveasfilename`` (audit ``indicator-save-location``).
+    By default we return the dialog's own prefilled
+    ``<initialdir>/<initialfile>`` so existing ``_on_save()`` tests keep
+    writing to the dialog's directory exactly like the pre-file-dialog
+    behaviour. Tests that exercise location selection / cancel override
+    this with their own ``monkeypatch.setattr`` (which wins, being later).
+    """
+    import os as _os
+
+    def _prefilled(*_a, **k):
+        return _os.path.join(
+            k.get("initialdir", "") or "", k.get("initialfile", "") or "",
+        )
+
+    monkeypatch.setattr(mod.filedialog, "asksaveasfilename", _prefilled)
+
+
 def _mk(root, tmp_dir) -> mod.CustomIndicatorDialog:
     return mod.CustomIndicatorDialog(root, directory=tmp_dir)
 
@@ -148,6 +170,45 @@ def test_save_writes_file_and_registers(root, tmp_dir, monkeypatch) -> None:
     assert "test_save" in ind_base.INDICATORS
     # Listbox refreshed.
     assert dlg._listbox.get(0) == "test_save"
+    dlg.destroy()
+
+
+def test_save_to_chosen_location(root, tmp_dir, tmp_path, monkeypatch) -> None:
+    """Saving prompts for a location; the file lands where the user picks
+    and that folder becomes the dialog's working directory (audit
+    ``indicator-save-location``)."""
+    dlg = _mk(root, tmp_dir)
+    dlg._name_var.set("portable_ind")
+    dlg._mode_var.set(mod._EXPRESSION_MODE)
+    dlg._render_compose_for_mode()
+    dlg._expr_text.insert("1.0", "close")
+    chosen_dir = tmp_path / "durable"
+    chosen_dir.mkdir()
+    dest = chosen_dir / "portable_ind.py"
+    monkeypatch.setattr(
+        mod.filedialog, "asksaveasfilename", lambda *a, **k: str(dest),
+    )
+    dlg._on_save()
+    assert dest.exists(), "indicator should land in the chosen folder"
+    assert not (tmp_dir / "portable_ind.py").exists()
+    assert "portable_ind" in ind_base.INDICATORS
+    # The chosen folder becomes the working directory for the session.
+    assert dlg._directory == chosen_dir
+    assert dlg._current_path == dest
+    dlg.destroy()
+
+
+def test_save_cancelled_is_noop(root, tmp_dir, monkeypatch) -> None:
+    """Cancelling the Save-As dialog writes nothing and registers nothing."""
+    dlg = _mk(root, tmp_dir)
+    dlg._name_var.set("cancel_me")
+    dlg._mode_var.set(mod._EXPRESSION_MODE)
+    dlg._render_compose_for_mode()
+    dlg._expr_text.insert("1.0", "close")
+    monkeypatch.setattr(mod.filedialog, "asksaveasfilename", lambda *a, **k: "")
+    dlg._on_save()
+    assert not (tmp_dir / "cancel_me.py").exists()
+    assert "cancel_me" not in ind_base.INDICATORS
     dlg.destroy()
 
 

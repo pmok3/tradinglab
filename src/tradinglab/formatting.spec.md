@@ -4,7 +4,7 @@
 Tiny module of display-formatting helpers shared across the GUI tables, tooltips, and volume axis formatter. Exists so `rendering.py`, `core/series.py`, and `app.py` don't each re-implement (or import inconsistent) volume humanizers.
 
 ## Public API
-- `fmt_volume(v: float) -> str` — returns `"1.23B"`, `"45.67M"`, `"789.0K"`, or `f"{v:.0f}"` (rounded integer). Thresholds: ≥1e9 → B, ≥1e6 → M, ≥1e3 → K, else rounded integer. Callers: `rendering.setup_volume_axes` (y-tick formatter), `rendering.py` hover strings, `core/series.tooltip_text`, `app._refill_table`, `gui/interaction._show_hover`.
+- `fmt_volume(v: float) -> str` — returns `"1.23B"`, `"45.67M"`, `"789.0K"`, or `f"{v:.0f}"` (rounded integer). Thresholds: ≥1e9 → B, ≥1e6 → M, ≥1e3 → K, else rounded integer. Callers: `rendering.setup_volume_axes` (y-tick formatter), `rendering.py` hover strings, `core/series.tooltip_text`, `gui/interaction._show_hover`.
 - `format_dt(dt, fmt: str, tz_name: str = "") -> str` — `dt.strftime(fmt)` with optional IANA-tz conversion in front. Empty `tz_name` (default), naive `dt`, or a missing/typo IANA name all silently fall through to a plain `strftime` so the helper can never break the render path. Used at intraday clock-text sites only — daily/weekly/monthly bar dates stay raw because a daily bar is a trading-date label, not an instant. Callers: `app.py` x-axis fine-label formatter (`%H:%M` branch) + `_format_candle_date` (intraday branch — drives hover tooltip cache and OHLC table rows).
 
 ## Dependencies

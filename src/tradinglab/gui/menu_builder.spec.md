@@ -5,13 +5,11 @@
   1. **File** — Load / Save / Save As Configuration, Recent Configurations, Theme…, Exit.
   2. **Watchlists** — Open Watchlists Manager (Ctrl+L), Load / Save / Save As Watchlists, Recent Watchlists.
   3. **Indicators** — Manage Indicators, presets.
-  4. **Sandbox** — Start / End Session, Performance, Save / Load Session, Tags.
-  5. **Entries** — sits left of **Exits** (entries logically precede exits in the trade lifecycle).
-  6. **Exits** — Edit Strategies.
-  7. **Strategy** — Open Strategy Tester.
-  8. **View** — Heikin-Ashi (cascade: Show Heikin-Ashi Candles + Highlight Flat Bars), Highlight Key Bars, Volume time-of-day shading, ChartStack (cascade: Show ChartStack + Settings…), Heatmap.
-  9. **Tools** — Credentials, Connect to Schwab, Local Data, Download Replay Data, Export CSV, Status History, Reveal Data Folder, Restore Templates.
-  10. **Help** — built by `HelpMenuMixin._build_help_menu`.
+  4. **Sandbox** — Start / End Session, Download Replay Data…, Performance, Save / Load Session, Tags.
+  5. **Strategies** — one consolidated cascade (audit `strategies-menu-consolidation`): Entries (New Entry Strategy… / Manage Entry Strategies… / Disarm All Entries), Exits (Edit Exit Strategies…), and Strategy Tester….
+  6. **View** — Heikin-Ashi (cascade: Show Heikin-Ashi Candles + Highlight Flat Bars), Highlight Key Bars, Volume time-of-day shading, ChartStack (cascade: Show ChartStack + Settings…), Heatmap.
+  7. **Tools** — Credentials, Connect to Schwab, Local Data, Export CSV, Status History, Reveal Data Folder, Restore Templates.
+  8. **Help** — built by `HelpMenuMixin._build_help_menu`.
 - Keep menu commands routed back into `ChartApp` through a narrow callback protocol so the builder owns widget construction, not app business logic.
 
 ## Public API
@@ -39,7 +37,8 @@
 
 ## Design decisions
 - **Watchlists is a top-level cascade.** Previously the load / save / recent items were nested under File. They were promoted to a dedicated top-level menu so the most-used watchlist actions (and the manager dialog) sit one click away rather than two — matching the toolbar's `Watchlists (Ctrl+L)` button affordance.
-- **Entries appears left of Exits.** Entries logically precede Exits in the trade lifecycle, so the menubar mirrors that order rather than alphabetical.
+- **Entries + Exits + Strategy are one consolidated "Strategies" cascade.** Audit `strategies-menu-consolidation` (2026) merged the three separate top-level menus (Exits and Strategy each held a single item) into one `Strategies` cascade, dropping the menubar from 10 → 8 top-level cascades. Items are flat and qualified now that they share a menu: `New Entry Strategy…` / `Manage Entry Strategies…` / `Disarm All Entries` (entries block) — separator — `Edit Exit Strategies…` (exits block) — separator — `Strategy Tester…`. The Entries / Exits notebook **tabs** and their dialogs are unchanged; only the menubar grouping moved. `strategies_menu` is registered in `submenus` for theme repaint.
+- **Download Replay Data… lives under Sandbox, not Tools.** Audit `download-replay-data-sandbox`. It prepares the offline universe a strict-offline sandbox session replays, so it sits with Start / End Session — and matches the in-app hint `"Run Sandbox → Download Replay Data… first"` emitted by `backtest/sandbox_app.py` (which previously pointed at a Tools entry). Same callback (`_on_menu_sandbox_prepare_universe`).
 - **Theme lives under File, not View.** Theme selection is a one-time/per-session preference (similar to "Load Configuration") rather than a transient view toggle like Heikin-Ashi or ChartStack — the placement matches that mental model. The accelerator on the View menu is removed; users open the theme editor via File → Theme… or via Settings → Open Theme Editor….
 - **Heikin-Ashi is a cascade, not three top-level entries.** Audit `ha-menu-cascade` (2026) grouped the "Show Heikin-Ashi Candles" toggle and the "Highlight Flat Bars" overlay into a single `Heikin-Ashi` cascade inside View. The flat-bar entry is always enabled/clickable even while HA is off; its BooleanVar persists independently, and rendering is gated downstream by HA mode AND the flat-highlight toggle. Top-level "Highlight Key Bars" stays a sibling because it's not HA-specific. The cascade submenu is registered in `submenus` so `ThemeController._apply_menubar_theme` repaints it on theme toggle.
 - **Volume TOD shading is in View and Settings.** The overlay remains default-off and still appears in Settings, but the View menu also exposes a checkbutton so chart-only users can discover and flip the visual layer without opening the full settings dialog. Both surfaces drive `ChartApp.set_volume_tod_enabled`, keeping persistence, prefetch warmup, and redraw behavior identical.
@@ -56,3 +55,4 @@
 - `MenuBuilder` intentionally preserves the existing submenu list shape used by `ThemeController._apply_menubar_theme`.
 - The Indicators → `Manage Indicators…` entry still opens `gui.indicator_dialog.open_indicator_dialog(self)`; only the widget assembly moved.
 - The Indicators → `Custom Indicator Builder…` entry (added directly under `Manage Indicators…`) dispatches via `self._cb._on_custom_indicator_builder()` to `IndicatorMenuMixin._on_custom_indicator_builder`, which opens `gui.custom_indicator_dialog.open_custom_indicator_dialog(self)`. See `gui/custom_indicator_dialog.spec.md`.
+- The Indicators cascade also carries **`Save Preset to File…`** and **`Load Preset from File…`** (below the name-based `Save Preset…` / `Load Preset` / `Delete Preset` block, separated by a rule). These dispatch to `IndicatorMenuMixin._on_menu_save_indicator_preset_to_file` / `_on_menu_load_indicator_preset_from_file` — a Save-As / open file-dialog path for portable, user-located preset files, independent of the auto-persist envelope (audit `indicator-save-location`). Both callbacks are declared on the `MenuBuilderCallbacks` protocol.

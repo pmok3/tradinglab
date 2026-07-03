@@ -37,6 +37,10 @@ settings popup via `restricted_to_config_id`.
 ### Per-output color overrides (b42)
 Each row has a Colors row with one swatch button per output key (e.g. `sma`;
 `middle`/`upper`/`lower` for Bollinger; `macd`/`signal`/`hist` for MACD).
+The swatch's text label routes through the factory's `output_key_label(key)`
+hook so verbose canonical keys display compactly (e.g. Prior Day H/L/C's
+`prior_day_high` → `pd_high`) — matching the in-chart readout legend; the
+swatch + `row.color_buttons` are still keyed by the canonical output key.
 Swatch opens the themed `ThemedColorChooser` via `pick_color` (audit
 `themed-color-chooser`; a Win32-ChooseColor look-alike that follows the
 app's light/dark theme). Chosen hex lands on row's `style_overrides`,

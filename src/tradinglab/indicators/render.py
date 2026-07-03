@@ -536,6 +536,21 @@ def _resolve_reference_levels(
     return tuple(out)
 
 
+def _resolve_reference_line_style(factory: Any) -> str:
+    """Resolve the matplotlib linestyle for an indicator's reference axhlines.
+
+    Reads the factory's optional ``reference_line_style`` class attribute
+    (e.g. RSI's dotted ``":"``) and falls back to dashed ``"--"`` — the
+    style every other oscillator (SMI / ADX / MACD / LRSI / RVOL …) uses.
+    Param-independent, so the class attribute is read directly (no
+    per-instance build needed).
+    """
+    style = getattr(factory, "reference_line_style", None)
+    if isinstance(style, str) and style:
+        return style
+    return "--"
+
+
 def _compute_for_config(
     cfg: IndicatorConfig,
     candles: Sequence[Candle],
@@ -936,11 +951,19 @@ def render_for_slot(
         # config in this group, so a shared pane gets one set of
         # dashes covering the strictest thresholds requested.
         ref_levels: tuple[float, ...] = ()
+        ref_style = "--"
         seen: set = set()
         merged: list[float] = []
+        _style_captured = False
         for cfg in group:
             factory = factory_by_kind_id(cfg.kind_id)
-            for lvl in _resolve_reference_levels(cfg, factory) or ():
+            levels = _resolve_reference_levels(cfg, factory) or ()
+            if levels and not _style_captured:
+                # First config contributing levels owns the pane's line
+                # style (RSI → dotted; everything else → dashed).
+                ref_style = _resolve_reference_line_style(factory)
+                _style_captured = True
+            for lvl in levels:
                 key = round(float(lvl), 6)
                 if key in seen:
                     continue
@@ -949,8 +972,9 @@ def render_for_slot(
         ref_levels = tuple(merged)
 
         prev = getattr(ax_lower, "_sc_ref_levels_drawn", None)
+        prev_style = getattr(ax_lower, "_sc_ref_style_drawn", None)
         if ref_levels:
-            if tuple(prev or ()) != ref_levels:
+            if tuple(prev or ()) != ref_levels or prev_style != ref_style:
                 for ln in getattr(ax_lower, "_sc_ref_level_lines", []) or []:
                     _safe_remove_line(ln)
                 new_lines = []
@@ -960,7 +984,7 @@ def render_for_slot(
                             float(lvl),
                             color=FALLBACK_GRAY,
                             linewidth=0.7,
-                            linestyle="--",
+                            linestyle=ref_style,
                             alpha=0.6,
                             zorder=1,
                         ))
@@ -968,12 +992,14 @@ def render_for_slot(
                         pass
                 ax_lower._sc_ref_level_lines = new_lines
                 ax_lower._sc_ref_levels_drawn = ref_levels
+                ax_lower._sc_ref_style_drawn = ref_style
         else:
             if prev:
                 for ln in getattr(ax_lower, "_sc_ref_level_lines", []) or []:
                     _safe_remove_line(ln)
                 ax_lower._sc_ref_level_lines = []
                 ax_lower._sc_ref_levels_drawn = ()
+                ax_lower._sc_ref_style_drawn = None
 
         # Render each config's lines onto the shared axes.
         for cfg in group:

@@ -186,6 +186,26 @@ class TestLegendLabel:
         assert MovingAverage(20, "SMA", "HLC3").name == "SMA(20,HLC3)"
         assert MovingAverage(50, "WMA", "OHLC4").name == "WMA(50,OHLC4)"
 
+    def test_legend_label_condenses_to_values(self):
+        # Price-pane legend prefix: bare VALUES, source lowercased
+        # (audit ``ma-legend-values``). Empty display + the auto
+        # ``self.name`` + the bare kind label all condense.
+        for disp in ("", "EMA(9)", "MA"):
+            assert MovingAverage.legend_label(
+                disp, {"ma_type": "EMA", "length": 9, "source": "Close"},
+            ) == "MA(EMA, 9, close)"
+        assert MovingAverage.legend_label(
+            "", {"ma_type": "WMA", "length": 50, "source": "HLC3"},
+        ) == "MA(WMA, 50, hlc3)"
+
+    def test_legend_label_preserves_user_rename(self):
+        # A genuine rename (not the auto name / bare kind) is returned
+        # verbatim so the hook never clobbers a user's custom label.
+        assert MovingAverage.legend_label(
+            "9 EMA fast",
+            {"ma_type": "EMA", "length": 9, "source": "Close"},
+        ) == "9 EMA fast"
+
 
 # ---------------------------------------------------------------------------
 # Default colors

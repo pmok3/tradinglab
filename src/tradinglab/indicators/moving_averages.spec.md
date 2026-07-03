@@ -23,6 +23,17 @@ dispatcher:
 - `kind_id="ma"`, `kind_version=1`, `overlay=True`,
   `name = f"{ma_type}({length})"` (Close source — implicit) or
   `f"{ma_type}({length},{source})"` (non-Close source).
+- `legend_label(cls, display_name, params) -> str` — classmethod hook
+  read by `gui/readout_legend.format_indicator_label`. Returns the
+  condensed **values-only** price-pane prefix `MA(EMA, 9, close)`
+  (type, length, source as bare values; source lowercased; source
+  always shown, unlike the compact `name` which drops `,Close`). It
+  replaces the generic schema walk's `MA(EMA, length=9, source=Close)`.
+  Overrides an empty `display_name`, the bare kind label `"MA"`, AND
+  the factory's auto `self.name` (`EMA(9)` / `SMA(20,HLC3)`, which it
+  reconstructs to distinguish) — but returns any other `display_name`
+  verbatim so a genuine user rename is preserved. Audit
+  `ma-legend-values`.
 - `compute(candles) -> {"ma": ndarray}` — single output line. NaN
   warmup at the start of the array matches each kernel's convention
   (SMA / WMA: first `length-1` NaN; EMA / RMA: kernel-specific).
@@ -82,9 +93,12 @@ dispatcher:
   RMA share enough mental model that picking from a dropdown is
   faster than scanning four near-identical entries in the Add
   Indicator submenu.
-- **Type-prefixed legend label.** `SMA(20)` / `EMA(9)` — never
-  `MA(20, SMA)`. The type IS the identity for traders; the legend
-  should reflect that.
+- **Type-prefixed legend label.** The compact instance `name` is
+  `SMA(20)` / `EMA(9)` — never `MA(20, SMA)`. The type IS the identity
+  for traders. The **price-pane readout legend** shows the fuller
+  values-only form `MA(EMA, 9, close)` via `legend_label` (audit
+  `ma-legend-values`) — type, length, AND source at a glance, without
+  the noisy `length=` / `source=` param names the generic walker adds.
 - **Source dropdown but no anchor / offset.** The trader agent
   argued for keeping the surface small; HL2 / HLC3 / OHLC4 are the
   high-value additions, and `Close` is the universal default. No

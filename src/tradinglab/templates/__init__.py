@@ -15,9 +15,12 @@ catalog templates to EXISTING users on upgrade — not just fresh installs
 ledger re-offers every bundled template; ``Tools → Restore Default
 Templates`` force-copies them all (overwriting same-named files).
 
-Indicator presets in ``data/indicator_presets/`` are bundled but NOT
-auto-loaded — they're consumed by a future Indicators → Load preset
-from file… UI affordance.
+Indicator presets in ``data/indicator_presets/`` are ALSO seeded, but
+into the single ``indicators.preset_store`` envelope (not per-file):
+each bundled ``preset-*.json`` is translated from its compact starter
+schema to canonical configs and merged under its display name, tracked
+by the same ledger (kind ``indicator_presets``). They then appear in
+Indicators → Load Preset.
 """
 
 from .seed import (

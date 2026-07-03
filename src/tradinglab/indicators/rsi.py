@@ -18,13 +18,32 @@ class RSI(BaseIndicator):
     ``compute`` returns ``{"rsi": ndarray}`` in ``[0, 100]``. The first
     ``length`` entries are ``NaN`` (need at least ``length`` deltas to
     seed the average gain/loss).
+
+    Two horizontal reference bands (default oversold 30 / overbought 70)
+    are drawn as **dotted** axhlines in the RSI pane, user-configurable
+    via the ``oversold`` / ``overbought`` params and toggleable via
+    ``show_reference_lines``. These are render-only — they do not affect
+    the RSI output value the scanner / entries / exits evaluate against.
     """
 
     kind_id: ClassVar[str] = "rsi"
     kind_version: ClassVar[int] = 1
+    #: Only ``length`` affects the RSI output value. The band params
+    #: (``oversold`` / ``overbought`` / ``show_reference_lines``) are
+    #: consumed only by ``__init__`` to build :attr:`reference_levels`
+    #: (drawn as axhlines by the render layer); they never enter the
+    #: compute path, so the entries / exits / scanner trigger form hides
+    #: them. Mirrors :class:`tradinglab.indicators.lrsi.LRSI`.
+    TRIGGER_RELEVANT_PARAMS: ClassVar[tuple[str, ...]] = ("length",)
     params_schema: ClassVar[tuple[ParamDef, ...]] = (
         ParamDef("length", "int", default=14, min=2, max=2000, step=1,
                  description="Length"),
+        ParamDef("oversold", "int", default=30, min=0, max=100, step=1,
+                 description="Oversold (lower band)"),
+        ParamDef("overbought", "int", default=70, min=0, max=100, step=1,
+                 description="Overbought (upper band)"),
+        ParamDef("show_reference_lines", "bool", default=True,
+                 description="Reference bands"),
     )
     default_style: ClassVar[dict[str, LineStyle]] = {
         "rsi": LineStyle(color=QUATERNARY, width=1.4),
@@ -35,10 +54,41 @@ class RSI(BaseIndicator):
 
     overlay = False
 
-    def __init__(self, length: int = 14) -> None:
+    # Instance attribute ``reference_levels`` is populated in __init__
+    # from ``oversold`` / ``overbought`` / ``show_reference_lines``; the
+    # render layer reads from the instance in preference to the class.
+    # Class-level default is empty so static introspection of RSI without
+    # instantiation correctly reports "no levels".
+    reference_levels: ClassVar[tuple[float, ...]] = ()
+    #: RSI reference bands render as *dotted* axhlines. The render layer
+    #: reads this optional attribute (``render._resolve_reference_line_style``);
+    #: every other oscillator falls back to the default dashed ``"--"``.
+    reference_line_style: ClassVar[str] = ":"
+
+    def __init__(
+        self,
+        length: int = 14,
+        oversold: int = 30,
+        overbought: int = 70,
+        show_reference_lines: bool = True,
+    ) -> None:
         if length < 2:
             raise ValueError("length must be >= 2")
+        if not (0 <= int(oversold) <= 100):
+            raise ValueError("oversold must be in [0, 100]")
+        if not (0 <= int(overbought) <= 100):
+            raise ValueError("overbought must be in [0, 100]")
+        if int(oversold) >= int(overbought):
+            raise ValueError("oversold must be strictly less than overbought")
         self.length = length
+        self.oversold = int(oversold)
+        self.overbought = int(overbought)
+        self.show_reference_lines = bool(show_reference_lines)
+        self.reference_levels: tuple[float, ...] = (
+            (float(self.oversold), float(self.overbought))
+            if self.show_reference_lines
+            else ()
+        )
         self.name = f"RSI({length})"
 
     @property
