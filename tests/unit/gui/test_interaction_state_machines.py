@@ -896,7 +896,29 @@ class TestPaneValueReadout:
         text, _ = h._pane_indicator_readout(price_ax, 1)
         assert text == ""
 
-    def test_shared_pane_two_values_neutral_color(self):
+    def test_shared_pane_two_configs_labeled_by_kind(self):
+        # RVOL + RRVOL on one pane → each value prefixed with its kind_id so
+        # the reader can tell them apart (the user-reported gap).
+        h = _InteractionHarness()
+        h._theme = {"text": "#eeeeee"}
+        ind_ax = _FakeAxes(id_=42)
+        h._panel_state["primary"]["ind_axes"] = [ind_ax]
+        l1 = _FakeLine([1.0, 2.0, 3.0], color="#aa0000")
+        l2 = _FakeLine([0.5, 0.6, 0.7], color="#0000aa")
+        h._panel_state["primary"]["ind_state"] = _FakeIndState(
+            panes={7: ind_ax, 8: ind_ax},
+            pane_lines={7: {"rvol": l1}, 8: {"rrvol": l2}})
+        h._indicator_manager = _FakeMgr([
+            _FakeCfg(7, kind_id="rvol", display_name="RVOL(20)"),
+            _FakeCfg(8, kind_id="rrvol", display_name="RRVOL(20)")])
+        text, color = h._pane_indicator_readout(ind_ax, 1)
+        assert text == "rvol 2.00  rrvol 0.60", f"got {text!r}"
+        # Multiple values → neutral colour (a single Text can't multi-colour).
+        assert color == "#eeeeee"
+
+    def test_shared_pane_same_kind_falls_back_to_display_name(self):
+        # Two RVOLs of different length share a kind_id → the (unique)
+        # display_name disambiguates instead.
         h = _InteractionHarness()
         h._theme = {"text": "#eeeeee"}
         ind_ax = _FakeAxes(id_=42)
@@ -906,11 +928,52 @@ class TestPaneValueReadout:
         h._panel_state["primary"]["ind_state"] = _FakeIndState(
             panes={7: ind_ax, 8: ind_ax},
             pane_lines={7: {"rvol": l1}, 8: {"rvol": l2}})
-        h._indicator_manager = _FakeMgr([_FakeCfg(7), _FakeCfg(8)])
-        text, color = h._pane_indicator_readout(ind_ax, 1)
-        assert text == "2.00  0.60", f"got {text!r}"
-        # Multiple values → neutral colour (a single Text can't multi-colour).
-        assert color == "#eeeeee"
+        h._indicator_manager = _FakeMgr([
+            _FakeCfg(7, kind_id="rvol", display_name="RVOL(20)"),
+            _FakeCfg(8, kind_id="rvol", display_name="RVOL(10)")])
+        text, _ = h._pane_indicator_readout(ind_ax, 1)
+        assert text == "RVOL(20) 2.00  RVOL(10) 0.60", f"got {text!r}"
+
+    def test_lone_config_has_no_indicator_prefix(self):
+        # A single indicator on its pane shows just the value (the pane's
+        # name label already identifies it) — no redundant prefix.
+        h, ax, _ = self._pane_harness([1.0, 2.0, 3.0])
+        text, _ = h._pane_indicator_readout(ax, 1)
+        assert text == "2.00", f"lone config must not be prefixed; got {text!r}"
+
+    def test_lone_multi_output_uses_output_keys(self):
+        # MACD alone → labelled by output key, no indicator prefix.
+        h = _InteractionHarness()
+        h._theme = {"text": "#eeeeee"}
+        ind_ax = _FakeAxes(id_=42)
+        h._panel_state["primary"]["ind_axes"] = [ind_ax]
+        h._panel_state["primary"]["ind_state"] = _FakeIndState(
+            panes={7: ind_ax},
+            pane_lines={7: {
+                "macd": _FakeLine([1.0, 1.5, 2.0]),
+                "signal": _FakeLine([0.8, 1.3, 1.7]),
+                "histogram": _FakeLine([0.2, 0.2, 0.3])}})
+        h._indicator_manager = _FakeMgr([_FakeCfg(7, kind_id="macd")])
+        text, _ = h._pane_indicator_readout(ind_ax, 1)
+        assert text == "macd 1.50  signal 1.30  histogram 0.20", f"got {text!r}"
+
+    def test_multi_config_multi_output_no_duplicate_prefix(self):
+        # RVOL + MACD on one pane: MACD's "macd" output must not become
+        # "macd macd" (kind prefix == output key is deduped).
+        h = _InteractionHarness()
+        h._theme = {"text": "#eeeeee"}
+        ind_ax = _FakeAxes(id_=42)
+        h._panel_state["primary"]["ind_axes"] = [ind_ax]
+        h._panel_state["primary"]["ind_state"] = _FakeIndState(
+            panes={7: ind_ax, 8: ind_ax},
+            pane_lines={
+                7: {"rvol": _FakeLine([1.0, 2.0, 3.0])},
+                8: {"macd": _FakeLine([1.0, 1.5, 2.0]),
+                    "signal": _FakeLine([0.8, 1.3, 1.7])}})
+        h._indicator_manager = _FakeMgr([
+            _FakeCfg(7, kind_id="rvol"), _FakeCfg(8, kind_id="macd")])
+        text, _ = h._pane_indicator_readout(ind_ax, 1)
+        assert text == "rvol 2.00  macd 1.50  macd signal 1.30", f"got {text!r}"
 
     # ---- all pane indicators (not just RVOL) ------------------------
     def test_rsi_pane_config_included_in_readout(self):

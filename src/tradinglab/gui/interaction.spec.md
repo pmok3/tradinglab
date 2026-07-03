@@ -244,11 +244,19 @@ built in `_ensure_overlay_artists` and refreshed by `_update_readout`:
   name label (`_render_pane_labels`, top-left) is untouched, so name
   (left) + value (right) read together across the pane top. A single
   value is coloured by its line (matches the pane's curve); multiple
-  values — e.g. RVOL and RRVOL sharing a pane, or a multi-output config —
-  share the neutral colour. Built by `_pane_indicator_readout(ax, idx)`
-  from `state.pane_lines` in render order, `_line_value_at` for each line;
-  multi-output configs (e.g. MACD's macd/signal/hist) prefix each value
-  with its output key. Empty at NaN/warmup bars → badge hidden.
+  values share the neutral colour. Built by `_pane_indicator_readout(ax,
+  idx)` from `state.pane_lines` in render order, `_line_value_at` per line.
+  **Labelling** (so shared panes are readable):
+  - A **lone** config shows just the value (`"1.23"`) — the pane's name
+    label already identifies it.
+  - **Multiple configs** on one pane (e.g. RVOL + RRVOL) prefix each value
+    with its indicator: `"rvol 1.23  rrvol 1.00"`. The prefix is the short
+    `kind_id`; if two configs share a `kind_id` (two RVOLs of different
+    length) the unique `display_name` is used instead.
+  - **Multi-output** configs (e.g. MACD's macd/signal/hist) prefix each
+    value with its output key; when the output key duplicates the
+    indicator prefix it is dropped (no `"macd macd"`).
+  Empty at NaN/warmup bars → badge hidden.
 - **Volume pane** → **no** badge. Volume is already shown in the price
   pane's OHLCV readout strip, so a volume-pane badge would be redundant.
 

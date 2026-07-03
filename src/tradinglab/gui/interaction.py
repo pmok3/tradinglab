@@ -2304,13 +2304,22 @@ class InteractionMixin:
         Reads the already-rendered ``Line2D`` values (``state.pane_lines``)
         for **every visible config** whose pane is ``ax`` — in render order,
         so the values line up left-to-right with the pane's name labels.
-        Works for any pane indicator (RVOL, RRVOL, RSI, MACD, ADX, …); when
-        several configs share a pane (e.g. RVOL + RRVOL) every value is
-        shown. A single value is coloured by its line (matches the pane's
-        curve); multiple values share the neutral text colour. Multi-output
-        configs (e.g. MACD's macd/signal/hist) prefix each value with its
-        output key. Empty string when nothing is defined at ``idx`` (early
-        warmup bars) → caller hides the badge.
+        Works for any pane indicator (RVOL, RRVOL, RSI, MACD, ADX, …).
+
+        When **several configs share a pane** (e.g. RVOL + RRVOL) each value
+        is prefixed with its indicator so the reader can tell them apart —
+        ``"rvol 1.23  rrvol 1.00"``. The label is the short ``kind_id``;
+        if two configs share a ``kind_id`` (e.g. two RVOLs of different
+        length) the unique ``display_name`` is used instead. A lone config
+        shows no indicator prefix (the pane's name label already says what
+        it is). Multi-output configs (e.g. MACD's macd/signal/hist) prefix
+        each value with its output key; when the output key duplicates the
+        indicator prefix it is dropped to avoid ``"macd macd"``.
+
+        A single value is coloured by its line (matches the pane's curve);
+        multiple values share the neutral text colour. Empty string when
+        nothing is defined at ``idx`` (early warmup bars) → caller hides the
+        badge.
         """
         neutral = self._theme["text"]
         ps_match, kind = self._find_indicator_panel_for_axes(ax)
@@ -2320,9 +2329,8 @@ class InteractionMixin:
         mgr = getattr(self, "_indicator_manager", None)
         if state is None or mgr is None:
             return "", neutral
-        parts: list[str] = []
-        last_color = None
-        n_vals = 0
+        # Pass 1 — gather each visible config's defined value(s) at ``idx``.
+        contribs: list[tuple[Any, list[tuple[str, float, Any]]]] = []
         for cid, pa in getattr(state, "panes", {}).items():
             if pa is not ax:
                 continue
@@ -2332,19 +2340,46 @@ class InteractionMixin:
             lines = state.pane_lines.get(cid, {})
             if not lines:
                 continue
-            multi_out = len(lines) > 1
-            for key, ln in lines.items():
+            vals: list[tuple[str, float, Any]] = []
+            for out_key, ln in lines.items():
                 val = self._line_value_at(ln, idx)
                 if val is None:
                     continue
-                parts.append(f"{key} {val:,.2f}" if multi_out else f"{val:,.2f}")
-                n_vals += 1
                 try:
-                    last_color = ln.get_color()
+                    color = ln.get_color()
                 except Exception:  # noqa: BLE001
-                    last_color = None
-        if not parts:
+                    color = None
+                vals.append((str(out_key), val, color))
+            if vals:
+                contribs.append((cfg, vals))
+        if not contribs:
             return "", neutral
+        # Pass 2 — format. Multiple configs on one pane get an indicator
+        # prefix so they're distinguishable; fall back to display_name only
+        # when two configs share a kind_id.
+        multi_config = len(contribs) > 1
+        kind_ids = [str(getattr(c, "kind_id", "") or "") for c, _ in contribs]
+        collide = len(set(kind_ids)) < len(kind_ids)
+        parts: list[str] = []
+        n_vals = 0
+        last_color = None
+        for cfg, vals in contribs:
+            short = str(getattr(cfg, "kind_id", "") or "")
+            if collide:
+                short = str(getattr(cfg, "display_name", "") or short)
+            multi_out = len(vals) > 1
+            for out_key, val, color in vals:
+                bits: list[str] = []
+                if multi_config and short:
+                    bits.append(short)
+                if multi_out and not (
+                        multi_config and short
+                        and out_key.lower() == short.lower()):
+                    bits.append(out_key)
+                bits.append(f"{val:,.2f}")
+                parts.append(" ".join(bits))
+                n_vals += 1
+                last_color = color
         color = last_color if (n_vals == 1 and last_color) else neutral
         return "  ".join(parts), color
 

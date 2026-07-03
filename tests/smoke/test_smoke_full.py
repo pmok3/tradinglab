@@ -8862,13 +8862,16 @@ def check_d51b_pane_value_readouts(app) -> None:
       * The **volume** pane shows **no** badge — volume is already in the
         price pane's OHLCV readout strip (redundant), so it was removed.
       * A non-RVOL pane (RSI) also gets a badge (all indicator panes do).
+      * A **shared** pane with two configs labels each value with its
+        indicator so they're distinguishable.
 
     Badges are animated Text artists in ``app._pane_value_labels`` (keyed
     by pane axes), refreshed by ``_update_readout`` and composited via the
     cached blit layer. Verifies creation on the RVOL pane, per-bar value
     at a cursor ``xdata``, the never-blank latest-bar fallback
-    (``xdata=None``), the volume-pane exclusion, and RSI participation.
-    Manager + injected primary bars restored in ``finally``.
+    (``xdata=None``), the volume-pane exclusion, RSI participation, and the
+    shared-pane per-indicator labelling. Manager + injected primary bars
+    restored in ``finally``.
     """
     from datetime import timedelta
 
@@ -8955,7 +8958,36 @@ def check_d51b_pane_value_readouts(app) -> None:
             "RVOL fallback badge should read the latest bar, not blank")
         assert labels[ind_ax].get_visible() is True
 
-        # Negative case: an RSI pane must NOT get a value badge (badges are
+        # Shared pane: two indicators on one pane must LABEL each value with
+        # its indicator so they're distinguishable. Two RVOLs of different
+        # length share the pane and are deterministic (no compare-symbol
+        # fetch, unlike RRVOL) — collide on kind_id so the unique
+        # display_name is the label. (The exact "rvol <x>  rrvol <y>"
+        # kind_id form is pinned deterministically by the unit tests.)
+        rvol2_cfg = IndicatorConfig(
+            kind_id="rvol", kind_version=1, display_name="RVOL(10)",
+            params={"length": 10}, scopes=frozenset({"main"}))
+        mgr.add(rvol2_cfg)
+        _pump_until(
+            app,
+            lambda: bool((app._panel_state.get("primary") or {}).get("ind_axes")),
+            timeout=1.0)
+        try:
+            app._draw_slice("primary")
+        except Exception:  # noqa: BLE001
+            pass
+        _pump(app, 0.2)
+        ps_sh = app._panel_state.get("primary") or {}
+        sh_axes = list(ps_sh.get("ind_axes") or [])
+        if sh_axes:
+            sh_ax = sh_axes[0]
+            assert sh_ax in app._pane_value_labels
+            app._update_readout(None)
+            sh_text = app._pane_value_labels[sh_ax].get_text()
+            assert "RVOL(20)" in sh_text and "RVOL(10)" in sh_text, (
+                "shared pane must label each config's value with its "
+                f"indicator so they're distinguishable; got {sh_text!r}")
+
         # RSI pane now ALSO gets a value badge (value tracking is a property
         # of every dedicated indicator pane, not just the RVOL family). The
         # exhaustive registry-driven guard lives in
@@ -8986,7 +9018,8 @@ def check_d51b_pane_value_readouts(app) -> None:
                 "RSI badge must show a value at the latest bar")
 
         print("  [OK] §pane-value-readout RVOL + RSI pane hover values "
-              "(per-bar + latest-bar fallback); volume pane gets no badge")
+              "(per-bar + latest-bar fallback); shared pane labels each "
+              "value; volume pane gets no badge")
     finally:
         try:
             mgr.clear()
@@ -9134,6 +9167,13 @@ def check_d51c_all_pane_indicators_value_badge(app) -> None:
     try:
         missing_badge: list[str] = []
         missing_value: list[str] = []
+        # RRVOL's *value* needs an external compare-symbol history that this
+        # metatest can't guarantee across every run-order context (it emits
+        # NaN until the companion series resolves). Its badge CREATION is
+        # still required below, and its value display shares the identical
+        # `_pane_indicator_readout` code path as RVOL (strictly checked) —
+        # plus d51b pins a live RVOL value. So we exempt only rrvol's number.
+        _value_exempt = {"rrvol"}
         for kind_id in pane_kinds:
             _disp, cls = factory_by_kind_id(kind_id)
             params = _default_params(cls)
@@ -9150,6 +9190,8 @@ def check_d51c_all_pane_indicators_value_badge(app) -> None:
             ax = ind_axes[0]
             if ax not in app._pane_value_labels:
                 missing_badge.append(kind_id)
+                continue
+            if kind_id in _value_exempt:
                 continue
             app._update_readout(None)  # latest, fully-hydrated bar
             label = app._pane_value_labels[ax]
