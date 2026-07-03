@@ -234,22 +234,33 @@ for trading crosshairs.
 ### Per-pane hover value badges (`pane-value-readout`)
 
 Mirrors how the price pane's readout surfaces overlay-indicator values on
-hover, but for the **volume pane** and the **lower indicator panes**
-(RVOL / RSI / …). `_pane_value_labels` is a `dict[axes, Text]` of animated
-`Text` artists built in `_ensure_overlay_artists` (one per volume /
-indicator axes in `_ax_candle_map`) and refreshed by `_update_readout`:
+hover, extended to **every dedicated indicator pane** (`overlay=False`
+indicators: RVOL, RRVOL, RSI, MACD, ADX, ATR, LRSI, SMI, overlap-score, …).
+`_pane_value_labels` is a `dict[axes, Text]` of animated `Text` artists
+built in `_ensure_overlay_artists` and refreshed by `_update_readout`:
 
-- **Volume pane** → a top-**left** (`ha="left"`) badge reading
-  `Volume <value>` (`fmt_volume`), neutral text colour.
 - **Indicator pane** → a top-**right** (`ha="right"`) badge showing the
   pane indicator's value(s) at the hovered bar. The existing clickable
   name label (`_render_pane_labels`, top-left) is untouched, so name
   (left) + value (right) read together across the pane top. A single
   value is coloured by its line (matches the pane's curve); multiple
-  values (shared pane) share the neutral colour. Built by
-  `_pane_indicator_readout(ax, idx)` from `state.pane_lines` in render
-  order, `_line_value_at` for each line; multi-output configs prefix each
-  value with its output key. Empty at NaN/warmup bars → badge hidden.
+  values — e.g. RVOL and RRVOL sharing a pane, or a multi-output config —
+  share the neutral colour. Built by `_pane_indicator_readout(ax, idx)`
+  from `state.pane_lines` in render order, `_line_value_at` for each line;
+  multi-output configs (e.g. MACD's macd/signal/hist) prefix each value
+  with its output key. Empty at NaN/warmup bars → badge hidden.
+- **Volume pane** → **no** badge. Volume is already shown in the price
+  pane's OHLCV readout strip, so a volume-pane badge would be redundant.
+
+The gate is intentionally allowlist-free: a badge is created (in
+`_ensure_overlay_artists`) for every axes whose `_ax_candle_map` kind is
+`"indicator"` — which is set during rendering for any `overlay=False`
+indicator. So a **new pane indicator is covered automatically**, with no
+per-kind table to maintain. `_pane_indicator_readout` reads out every
+visible config on the pane. This universality is pinned by the
+registry-driven meta-test `check_d51c_all_pane_indicators_value_badge`
+(walks every `overlay=False` indicator, asserts a numeric badge; asserts a
+price-overlay indicator gets none).
 
 Shared bar resolution: `_readout_bar_idx(ax, xdata)` returns the in-render-
 window non-gap bar under the cursor, else the latest non-gap bar (so a

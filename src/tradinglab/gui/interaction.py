@@ -1373,31 +1373,30 @@ class InteractionMixin:
                 self._readout_artists[ax] = box
             except Exception:  # noqa: BLE001
                 pass
-        # Per-pane hover value readouts (audit ``pane-value-readout``).
-        # Volume pane: a top-left ``Volume <value>`` badge. Lower
-        # indicator panes (RVOL/RSI/…): a top-RIGHT value badge showing
-        # the pane indicator's value(s) at the hovered bar — the existing
-        # clickable name label stays at the top-left, so name (left) +
-        # value (right) read together across the pane top, mirroring how
-        # the price pane surfaces overlay-indicator values on hover.
-        # Animated Text artists so each hover is a cheap blit, not a full
-        # redraw; refreshed by ``_update_readout``.
+        # Per-pane hover value badge (audit ``pane-value-readout``).
+        # Shown on EVERY dedicated indicator pane (RVOL, RRVOL, RSI, MACD,
+        # ADX, ATR, …) — a top-RIGHT value badge (the existing clickable
+        # name label stays top-left, so name + value read together across
+        # the pane top). The gate is purely "is this an indicator pane"
+        # (``kind == "indicator"`` in ``_ax_candle_map``), which is set for
+        # any ``overlay=False`` indicator during rendering — so a NEW pane
+        # indicator gets value tracking automatically, with no per-kind
+        # allowlist to maintain. The **volume** pane is deliberately NOT
+        # badged: its magnitude is already in the price-pane OHLCV strip,
+        # so a volume-pane badge would be redundant. Animated Text so each
+        # hover is a cheap blit; refreshed by ``_update_readout``.
         for ax, entry in self._ax_candle_map.items():
             kind = entry[1] if entry else None
-            if kind == "volume":
-                x, ha = 0.005, "left"
-            elif kind == "indicator":
-                x, ha = 0.995, "right"
-            else:
+            if kind != "indicator":
                 continue
             try:
                 label = ax.text(
-                    x, 0.97, "", transform=ax.transAxes,
-                    ha=ha, va="top", fontsize=9, family="monospace",
+                    0.995, 0.97, "", transform=ax.transAxes,
+                    ha="right", va="top", fontsize=9, family="monospace",
                     color=theme["text"], zorder=11, animated=True,
                     visible=False, clip_on=False,
                 )
-                label._sc_pane_value_kind = kind
+                label._sc_pane_value_kind = "indicator"
                 self._pane_value_labels[ax] = label
             except Exception:  # noqa: BLE001
                 pass
@@ -2241,34 +2240,22 @@ class InteractionMixin:
                     box.set_visible(False)
                 except Exception:  # noqa: BLE001
                     pass
-        # Per-pane hover value readouts (audit ``pane-value-readout``) —
-        # volume pane ``Volume <value>`` + lower indicator panes' value(s)
-        # at the same cursor bar. Mirrors the price-pane readout's
-        # latest-bar fallback so a pane badge is never blank.
+        # Per-pane hover value badges (audit ``pane-value-readout``) — the
+        # RVOL / RRVOL value(s) at the same cursor bar. Mirrors the
+        # price-pane readout's latest-bar fallback so a badge is never blank.
         for ax, label in (getattr(self, "_pane_value_labels", None) or {}).items():
             try:
                 idx = self._readout_bar_idx(ax, xdata)
                 if idx is None:
                     label.set_visible(False)
                     continue
-                kind = getattr(label, "_sc_pane_value_kind", "")
-                if kind == "volume":
-                    entry = self._ax_candle_map.get(ax)
-                    candles = entry[0] if entry else None
-                    if not candles or idx >= len(candles):
-                        label.set_visible(False)
-                        continue
-                    label.set_text(f"Volume {fmt_volume(candles[idx].volume)}")
-                    label.set_color(self._theme["text"])
-                    label.set_visible(True)
-                else:  # indicator pane
-                    text, color = self._pane_indicator_readout(ax, idx)
-                    if not text:
-                        label.set_visible(False)
-                        continue
-                    label.set_text(text)
-                    label.set_color(color)
-                    label.set_visible(True)
+                text, color = self._pane_indicator_readout(ax, idx)
+                if not text:
+                    label.set_visible(False)
+                    continue
+                label.set_text(text)
+                label.set_color(color)
+                label.set_visible(True)
             except Exception:  # noqa: BLE001
                 try:
                     label.set_visible(False)
@@ -2280,8 +2267,8 @@ class InteractionMixin:
 
         Returns the in-render-window, non-gap bar index under the cursor;
         failing that the latest non-gap bar in the window (so a readout is
-        never blank); ``None`` only when the axes has no candles. Shared by
-        the per-pane value readouts (volume + indicator panes).
+        never blank); ``None`` only when the axes has no candles. Used by
+        the per-pane RVOL/RRVOL value badges.
         """
         entry = self._ax_candle_map.get(ax)
         if entry is None:
@@ -2312,15 +2299,18 @@ class InteractionMixin:
         return idx
 
     def _pane_indicator_readout(self, ax, idx):
-        """Return ``(text, color)`` for a lower indicator pane's value badge.
+        """Return ``(text, color)`` for a dedicated indicator pane's badge.
 
         Reads the already-rendered ``Line2D`` values (``state.pane_lines``)
-        for every visible config whose pane is ``ax`` — in render order, so
-        the values line up left-to-right with the pane's name labels. A
-        single value is coloured by its line (matches the pane's curve);
-        multiple values share the neutral text colour. Multi-output configs
-        prefix each value with its output key. Empty string when nothing is
-        defined at ``idx`` (early warmup bars) → caller hides the badge.
+        for **every visible config** whose pane is ``ax`` — in render order,
+        so the values line up left-to-right with the pane's name labels.
+        Works for any pane indicator (RVOL, RRVOL, RSI, MACD, ADX, …); when
+        several configs share a pane (e.g. RVOL + RRVOL) every value is
+        shown. A single value is coloured by its line (matches the pane's
+        curve); multiple values share the neutral text colour. Multi-output
+        configs (e.g. MACD's macd/signal/hist) prefix each value with its
+        output key. Empty string when nothing is defined at ``idx`` (early
+        warmup bars) → caller hides the badge.
         """
         neutral = self._theme["text"]
         ps_match, kind = self._find_indicator_panel_for_axes(ax)

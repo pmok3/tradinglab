@@ -8847,19 +8847,27 @@ def check_d51_hover_indicator_readout(app) -> None:
 
 
 def check_d51b_pane_value_readouts(app) -> None:
-    """Volume + lower-indicator panes show a value readout at the hovered
-    bar (audit ``pane-value-readout``).
+    """RVOL / RRVOL panes show a value readout at the hovered bar (audit
+    ``pane-value-readout``).
 
-    Mirrors how the price pane surfaces overlay-indicator values on hover:
+    Mirrors how the price pane surfaces overlay-indicator values on hover.
+    The value badge is shown on **every dedicated indicator pane**; the
+    exhaustive registry-driven guard is
+    ``check_d51c_all_pane_indicators_value_badge``. This check focuses on
+    the RVOL-family specifics plus the volume-pane exclusion:
 
-      * The **volume** pane shows a top-left ``Volume <value>`` badge.
-      * Each **lower indicator** pane (here RVOL) shows a top-right badge
-        with the pane indicator's value at the cursor's bar.
+      * Each **RVOL / RRVOL** pane shows a top-right badge with the pane
+        indicator's value at the cursor's bar (both values when several
+        RVOL-family configs share the pane).
+      * The **volume** pane shows **no** badge — volume is already in the
+        price pane's OHLCV readout strip (redundant), so it was removed.
+      * A non-RVOL pane (RSI) also gets a badge (all indicator panes do).
 
-    Both are animated Text artists in ``app._pane_value_labels`` (keyed by
-    pane axes), refreshed by ``_update_readout`` and composited via the
-    cached blit layer. Verifies creation, per-bar value at a cursor
-    ``xdata``, and the never-blank latest-bar fallback (``xdata=None``).
+    Badges are animated Text artists in ``app._pane_value_labels`` (keyed
+    by pane axes), refreshed by ``_update_readout`` and composited via the
+    cached blit layer. Verifies creation on the RVOL pane, per-bar value
+    at a cursor ``xdata``, the never-blank latest-bar fallback
+    (``xdata=None``), the volume-pane exclusion, and RSI participation.
     Manager + injected primary bars restored in ``finally``.
     """
     from datetime import timedelta
@@ -8919,23 +8927,18 @@ def check_d51b_pane_value_readouts(app) -> None:
         ind_ax = ind_axes[0]
 
         labels = app._pane_value_labels
-        assert vol_ax in labels, "volume pane must have a value badge"
+        assert vol_ax not in labels, (
+            "volume pane must NOT have a value badge (redundant with "
+            "the price pane OHLCV readout)")
         assert ind_ax in labels, "RVOL pane must have a value badge"
-        assert getattr(labels[vol_ax], "_sc_pane_value_kind", "") == "volume"
         assert getattr(labels[ind_ax], "_sc_pane_value_kind", "") == "indicator"
-        # Placement: volume badge left-aligned, indicator badge right.
-        assert labels[vol_ax].get_ha() == "left"
+        # Placement: indicator badge right-aligned.
         assert labels[ind_ax].get_ha() == "right"
 
         # Hover over a specific bar (idx 60) — value must reflect THAT bar.
         idx = 60
         app._update_readout(float(idx))
-        vtext = labels[vol_ax].get_text()
-        assert vtext.startswith("Volume "), (
-            f"volume badge must read 'Volume <value>'; got {vtext!r}")
-        # 1_000_000 + 60*1000 = 1_060_000 → "1.06M".
-        assert "1.06M" in vtext, f"volume badge value wrong: {vtext!r}"
-        assert labels[vol_ax].get_visible() is True
+        assert vol_ax not in labels, "volume badge must never be created"
 
         itext = labels[ind_ax].get_text()
         assert itext.strip(), "RVOL badge must show a value at a defined bar"
@@ -8946,15 +8949,44 @@ def check_d51b_pane_value_readouts(app) -> None:
             raise AssertionError(f"RVOL badge should be numeric; got {itext!r}")
         assert labels[ind_ax].get_visible() is True
 
-        # Never-blank fallback: xdata=None → latest non-gap bar (idx 79).
+        # Never-blank fallback: xdata=None → latest non-gap bar.
         app._update_readout(None)
-        vtext_fallback = labels[vol_ax].get_text()
-        assert "1.079M" in vtext_fallback or "1.08M" in vtext_fallback, (
-            f"volume fallback should read the latest bar; got {vtext_fallback!r}")
-        assert labels[vol_ax].get_visible() is True
+        assert labels[ind_ax].get_text().strip(), (
+            "RVOL fallback badge should read the latest bar, not blank")
+        assert labels[ind_ax].get_visible() is True
 
-        print("  [OK] §pane-value-readout volume + RVOL pane hover values "
-              "(per-bar + latest-bar fallback)")
+        # Negative case: an RSI pane must NOT get a value badge (badges are
+        # RSI pane now ALSO gets a value badge (value tracking is a property
+        # of every dedicated indicator pane, not just the RVOL family). The
+        # exhaustive registry-driven guard lives in
+        # ``check_d51c_all_pane_indicators_value_badge``; here we just pin
+        # that a second, non-RVOL pane indicator participates.
+        mgr.clear()
+        _pump(app, 0.1)
+        rsi_cfg = IndicatorConfig(
+            kind_id="rsi", kind_version=1, display_name="RSI(14)",
+            params={"length": 14}, scopes=frozenset({"main"}))
+        mgr.add(rsi_cfg)
+        _pump_until(
+            app,
+            lambda: bool((app._panel_state.get("primary") or {}).get("ind_axes")),
+            timeout=1.0)
+        try:
+            app._draw_slice("primary")
+        except Exception:  # noqa: BLE001
+            pass
+        _pump(app, 0.2)
+        ps_rsi = app._panel_state.get("primary") or {}
+        rsi_axes = list(ps_rsi.get("ind_axes") or [])
+        if rsi_axes:
+            assert rsi_axes[0] in app._pane_value_labels, (
+                "RSI pane must get a value badge (all indicator panes do)")
+            app._update_readout(None)
+            assert app._pane_value_labels[rsi_axes[0]].get_text().strip(), (
+                "RSI badge must show a value at the latest bar")
+
+        print("  [OK] §pane-value-readout RVOL + RSI pane hover values "
+              "(per-bar + latest-bar fallback); volume pane gets no badge")
     finally:
         try:
             mgr.clear()
@@ -8975,6 +9007,186 @@ def check_d51b_pane_value_readouts(app) -> None:
             # neighbours downstream see no change from our synthetic bars
             # (state pollution, §7.2). No re-render — matches the sibling
             # readout checks, which likewise leave panel_state as-is.
+            ps_restore = app._panel_state.get("primary")
+            if ps_restore is not None:
+                ps_restore["candles"] = saved_ps_candles
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def check_d51c_all_pane_indicators_value_badge(app) -> None:
+    """META-TEST — every dedicated-pane indicator gets a hover value badge
+    (audit ``pane-value-readout``).
+
+    Registry-driven guard against the "a pane indicator has no value
+    tracking" class of bug. Walks EVERY registered indicator whose default
+    instance is ``overlay=False`` (renders on its own lower pane: RVOL,
+    RRVOL, RSI, MACD, ADX, ATR, LRSI, SMI, overlap-score) and asserts that
+    adding it to the chart:
+
+      * creates a value badge on its pane (``ind_ax in _pane_value_labels``),
+      * the badge shows a numeric value at the latest (hydrated) bar.
+
+    Also asserts the negative: a pure price-**overlay** indicator (SMA)
+    creates NO pane badge. Because the badge gate is purely "is this an
+    indicator pane" (``kind == "indicator"``, never a per-kind allowlist),
+    a NEW pane indicator is covered automatically — this test fails if that
+    invariant ever regresses. Manager + injected primary bars restored in
+    ``finally``.
+    """
+    import math
+    from datetime import timedelta
+    from zoneinfo import ZoneInfo
+
+    from tradinglab.indicators.base import _BY_KIND_ID, factory_by_kind_id
+    from tradinglab.indicators.config import IndicatorConfig
+    from tradinglab.models import Candle
+
+    _ET = ZoneInfo("America/New_York")
+
+    def _default_params(cls):
+        return {p.name: p.default
+                for p in (getattr(cls, "params_schema", ()) or ())}
+
+    # Classify the live registry: pane (overlay=False) vs price-overlay.
+    pane_kinds: list[str] = []
+    for kind_id in sorted(_BY_KIND_ID):
+        pair = factory_by_kind_id(kind_id)
+        if pair is None:
+            continue
+        _disp, cls = pair
+        try:
+            inst = cls(**_default_params(cls))
+        except Exception:  # noqa: BLE001
+            continue
+        if not getattr(inst, "overlay", True):
+            pane_kinds.append(kind_id)
+    assert pane_kinds, "expected ≥1 dedicated-pane indicator in the registry"
+    # Sanity: the RVOL family must classify as pane indicators.
+    assert {"rvol", "rrvol"} <= set(pane_kinds), (
+        f"RVOL family must be pane indicators; pane_kinds={pane_kinds}")
+
+    mgr = app._indicator_manager
+    saved = list(mgr.list())
+    saved_primary = list(app._primary)
+    saved_primary_raw = list(app._primary_raw)
+    _src = app.source_var.get()
+    _ticker_key = (app.ticker_var.get() or "AMD").strip().upper() or "AMD"
+    _interval = app.interval_var.get()
+    saved_cache_entry = app._full_cache.get((_src, _ticker_key, _interval))
+    _ps0 = app._panel_state.get("primary") or {}
+    saved_ps_candles = list(_ps0.get("candles") or [])
+
+    # RTH-aligned intraday bars so session/daily-reset indicators hydrate.
+    bars = []
+    day = datetime(2024, 6, 3, 9, 30, tzinfo=_ET)  # Monday
+    price = 100.0
+    n = 0
+    for d in range(4):
+        start = day + timedelta(days=d)
+        while start.weekday() >= 5:
+            start = start + timedelta(days=1)
+        t = start
+        for _ in range(78):
+            price += math.sin(n / 9.0) * 0.4 + 0.03
+            n += 1
+            bars.append(Candle(
+                date=t, open=price, high=price + 0.5, low=price - 0.5,
+                close=price + 0.1, volume=1_000_000 + (n % 17) * 40000,
+                session="regular"))
+            t = t + timedelta(minutes=5)
+
+    def _install(kind_id, cls, params):
+        mgr.clear()
+        app._primary = list(bars)
+        app._primary_raw = list(bars)
+        app._full_cache[(_src, _ticker_key, _interval)] = list(bars)
+        ps = app._panel_state.get("primary")
+        if ps is not None:
+            ps["candles"] = list(bars)
+        try:
+            disp = getattr(cls(**params), "name", kind_id)
+        except Exception:  # noqa: BLE001
+            disp = kind_id
+        mgr.add(IndicatorConfig(
+            kind_id=kind_id, kind_version=int(getattr(cls, "kind_version", 1)),
+            display_name=str(disp), params=dict(params),
+            scopes=frozenset({"main"})))
+        _pump_until(
+            app,
+            lambda: bool((app._panel_state.get("primary") or {}).get("ind_axes")),
+            timeout=1.5)
+        try:
+            app._draw_slice("primary")
+        except Exception:  # noqa: BLE001
+            pass
+        _pump(app, 0.2)
+
+    def _has_number(text):
+        for tok in str(text).replace(",", "").split():
+            try:
+                float(tok)
+                return True
+            except ValueError:
+                continue
+        return False
+
+    try:
+        missing_badge: list[str] = []
+        missing_value: list[str] = []
+        for kind_id in pane_kinds:
+            _disp, cls = factory_by_kind_id(kind_id)
+            params = _default_params(cls)
+            # RRVOL denominator: point compare at the active ticker so
+            # primary==compare → ratio 1.0 (finite) without a companion fetch.
+            if "compare_symbol" in params:
+                params["compare_symbol"] = _ticker_key
+            _install(kind_id, cls, params)
+            ps = app._panel_state.get("primary") or {}
+            ind_axes = list(ps.get("ind_axes") or [])
+            if not ind_axes:
+                missing_badge.append(f"{kind_id} (no pane rendered)")
+                continue
+            ax = ind_axes[0]
+            if ax not in app._pane_value_labels:
+                missing_badge.append(kind_id)
+                continue
+            app._update_readout(None)  # latest, fully-hydrated bar
+            label = app._pane_value_labels[ax]
+            if not (label.get_visible() and _has_number(label.get_text())):
+                missing_value.append(f"{kind_id}→{label.get_text()!r}")
+        assert not missing_badge, (
+            "pane indicators missing a value badge (value-tracking "
+            f"regression): {missing_badge}")
+        assert not missing_value, (
+            "pane indicators whose value badge showed no number at the "
+            f"latest bar: {missing_value}")
+
+        # Negative: a pure price-overlay indicator creates NO pane badge.
+        sma_cls = factory_by_kind_id("sma")[1]
+        _install("sma", sma_cls, _default_params(sma_cls))
+        assert not app._pane_value_labels, (
+            "a price-overlay indicator (SMA) must not create any pane value "
+            f"badge; got {list(app._pane_value_labels)}")
+
+        print(f"  [OK] §pane-value-readout META — all {len(pane_kinds)} "
+              "dedicated-pane indicators show a value badge "
+              f"({', '.join(pane_kinds)}); overlay SMA shows none")
+    finally:
+        try:
+            mgr.clear()
+            for c in saved:
+                mgr.add(c)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            app._primary = saved_primary
+            app._primary_raw = saved_primary_raw
+            if saved_cache_entry is None:
+                app._full_cache.pop((_src, _ticker_key, _interval), None)
+            else:
+                app._full_cache[(_src, _ticker_key, _interval)] = (
+                    saved_cache_entry)
             ps_restore = app._panel_state.get("primary")
             if ps_restore is not None:
                 ps_restore["candles"] = saved_ps_candles
@@ -20529,6 +20741,7 @@ def _run_all_checks(app) -> None:
     check_d59_relative_volume(app)
     check_d51_hover_indicator_readout(app)
     check_d51b_pane_value_readouts(app)
+    check_d51c_all_pane_indicators_value_badge(app)
     check_d52_manual_zoom_pan_arms_preserve_xlim(app)
     check_f0_backtest_kernel(app)
     check_f1_session_reproducibility(app)
@@ -20850,6 +21063,8 @@ def _build_check_sequence():
         ("check_d59_relative_volume", check_d59_relative_volume),
         ("check_d51_hover_indicator_readout", check_d51_hover_indicator_readout),
         ("check_d51b_pane_value_readouts", check_d51b_pane_value_readouts),
+        ("check_d51c_all_pane_indicators_value_badge",
+         check_d51c_all_pane_indicators_value_badge),
         ("check_d52_manual_zoom_pan_arms_preserve_xlim",
          check_d52_manual_zoom_pan_arms_preserve_xlim),
         ("check_f0_backtest_kernel", check_f0_backtest_kernel),

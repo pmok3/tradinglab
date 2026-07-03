@@ -912,6 +912,28 @@ class TestPaneValueReadout:
         # Multiple values → neutral colour (a single Text can't multi-colour).
         assert color == "#eeeeee"
 
+    # ---- all pane indicators (not just RVOL) ------------------------
+    def test_rsi_pane_config_included_in_readout(self):
+        # Every dedicated-pane indicator surfaces its value — NOT just the
+        # RVOL family. A per-kind allowlist would regress this.
+        h, ax, _ = self._pane_harness([1.0, 2.0, 3.0])
+        h._indicator_manager = _FakeMgr([_FakeCfg(7, kind_id="rsi")])
+        text, _ = h._pane_indicator_readout(ax, 1)
+        assert text == "2.00", f"RSI value must be read out; got {text!r}"
+
+    def test_rrvol_config_included_in_readout(self):
+        h, ax, _ = self._pane_harness([1.0, 2.0, 3.0])
+        h._indicator_manager = _FakeMgr([_FakeCfg(7, kind_id="rrvol")])
+        text, _ = h._pane_indicator_readout(ax, 1)
+        assert text == "2.00", f"RRVOL must produce a badge; got {text!r}"
+
+    def test_arbitrary_pane_kind_included_in_readout(self):
+        # A hypothetical future pane indicator is covered automatically.
+        h, ax, _ = self._pane_harness([1.0, 2.0, 3.0])
+        h._indicator_manager = _FakeMgr([_FakeCfg(7, kind_id="futuristic_osc")])
+        text, _ = h._pane_indicator_readout(ax, 1)
+        assert text == "2.00", f"any pane kind must read out; got {text!r}"
+
 
 # ---------------------------------------------------------------------------
 # 3. Double-click drilldown gate
