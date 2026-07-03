@@ -1,5 +1,53 @@
 # Changelog
 
+## [0.4.2] - 2026-07-03
+
+### Added
+
+- **Hover values on the volume and indicator panes.** Just like the price
+  pane, moving the crosshair over a bar now shows that bar's values on the
+  lower panes: the volume pane reads `Volume <value>` (top-left), and each
+  indicator pane (RVOL, RSI, …) shows its value for the bar (top-right, in the
+  line's colour). The value never goes blank — off a bar it shows the latest
+  bar.
+- **Starter indicator presets ship with the app.** A library of ready-made
+  presets (Daily Levels, Momentum, Mean Reversion, VWAP + anchor, and more) is
+  now installed on first launch and appears under **Indicators → Load Preset**.
+  Your own saved presets are never touched, and a deleted starter preset stays
+  deleted. **Tools → Restore Default Templates** also restores them.
+- **RSI oversold / overbought bands.** RSI now draws dotted reference lines at
+  user-configurable levels (default 30 / 70), so overbought and oversold zones
+  are visible at a glance. Length defaults to 14.
+- **Choose where indicator presets are saved.** The Custom Indicator Builder
+  and the indicator-preset menu now let you save to (and load from) a file
+  location you pick — so a preset can live in a durable, portable, shareable
+  place instead of only the app's internal store.
+
+### Changed
+
+- **Cleaner indicator names on the chart.** Moving-average labels now read
+  `MA (EMA, 9, close)` instead of the verbose `MA (EMA, length = 0, source =
+  Close)`. Prior-day levels read **Prior Day H/L/C** with abbreviated
+  `pd_high` / `pd_low` / `pd_close` values, and a de-selected close no longer
+  draws on the chart.
+- **Tidier side panel and menus.** The Primary / Compare OHLC price tables were
+  removed from the right-side panel (the chart already shows the prices — the
+  tables were wasted space). The menu bar was consolidated: Entries / Exits /
+  Strategy Tester now live under a single **Strategies** menu, **Download Replay
+  Data…** moved to the Sandbox menu, and the Help topic guides are grouped under
+  a **Guides** submenu.
+
+### Fixed
+
+- **Typing a ticker is snappy again on a busy chart.** Each keystroke of a
+  ticker now composites through the fast blit path instead of re-rendering the
+  whole figure, so typing (e.g. `TSLA` after a ratio + a heavy indicator preset)
+  no longer lags per letter.
+- **The crosshair stays light when indicator readouts are loaded.** The always-
+  on top-left readout is now cached per bar instead of being re-rasterised on
+  every mouse move, roughly halving the per-frame cost of the crosshair with the
+  daily-levels preset loaded.
+
 ## [0.4.1] - 2026-06-25
 
 ### Changed
