@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.3] - 2026-07-03
+
+### Changed
+
+- **Cleaner lower-pane hover values.** The volume pane no longer shows a
+  `Volume <value>` badge — the volume for the hovered bar is already in the
+  price pane's OHLCV readout, so the extra badge was redundant. Hover values
+  now appear on **every** dedicated indicator pane (RVOL, RRVOL, RSI, MACD,
+  ADX, ATR, Laguerre RSI, SMI, …), showing each output for the bar under the
+  crosshair.
+- **Distinguishable values when indicators share a pane.** When more than one
+  indicator lives on the same pane (e.g. RVOL and RRVOL together), each value
+  is now labelled with its indicator — `rvol 1.23  rrvol 1.00` — so you can
+  tell them apart at a glance. A lone indicator still shows just its value.
+
 ## [0.4.2] - 2026-07-03
 
 ### Added
