@@ -191,3 +191,34 @@ def test_loader_raises_filenotfound_for_missing_csv(tmp_path: Path,
     missing = tmp_path / "ghost.csv"
     with pytest.raises(FileNotFoundError):
         baskets._load_symbols_csv(missing, label="ghost")
+
+
+# ---------------------------------------------------------------------------
+# Frozen-build bundling guard
+# ---------------------------------------------------------------------------
+#
+# Every CSV-backed basket loader resolves its file via
+# ``resource_path("tools", "<name>.csv")``, which in the frozen build
+# points at ``_internal/tools/``. If ``TradingLab.spec`` does not bundle
+# the CSV, the loader raises FileNotFoundError in the .exe and the
+# "Prepare Universe Data" dialog shows **0 symbols** for that basket —
+# exactly the NYSE/NASDAQ-empty bug (sp500 was bundled, nyse/nasdaq were
+# not). QQQ is a hardcoded list (no CSV) so it is exempt.
+
+def test_tradinglab_spec_bundles_every_csv_backed_basket() -> None:
+    spec = REPO_ROOT / "TradingLab.spec"
+    assert spec.is_file(), f"missing PyInstaller spec: {spec}"
+    spec_src = spec.read_text(encoding="utf-8")
+    # CSV-backed baskets = every built-in except the hardcoded QQQ list.
+    csv_backed = {
+        key for key in baskets.BUILTIN_BASKETS if key != "qqq"
+    }
+    assert csv_backed, "expected at least one CSV-backed basket"
+    for key in csv_backed:
+        csv_name = f"{key}.csv"
+        assert csv_name in spec_src, (
+            f"TradingLab.spec does not bundle {csv_name!r} — the {key!r} "
+            f"basket would show 0 symbols in the frozen .exe. Add it to the "
+            f"basket-CSV bundling loop in TradingLab.spec."
+        )
+

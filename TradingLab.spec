@@ -67,14 +67,17 @@ _env_example = _REPO_ROOT / ".env.example"
 if _env_example.exists():
     datas.append((str(_env_example), "."))
 
-# S&P 500 constituent list, consumed by ``tradinglab.baskets``.
-# Bundled at ``_internal/tools/sp500.csv`` so
-# :func:`tradinglab._resources.resource_path("tools", "sp500.csv")`
-# resolves it in the frozen build. Without this entry the "Prepare
-# Universe" dialog's S&P 500 basket would be empty in the redistributable.
-_sp500_csv = _REPO_ROOT / "tools" / "sp500.csv"
-if _sp500_csv.exists():
-    datas.append((str(_sp500_csv), "tools"))
+# Exchange / index constituent lists consumed by ``tradinglab.baskets``.
+# Bundled at ``_internal/tools/<name>.csv`` so
+# :func:`tradinglab._resources.resource_path("tools", "<name>.csv")`
+# resolves them in the frozen build. Without these entries the "Prepare
+# Universe" dialog's S&P 500 / NYSE / NASDAQ baskets would be empty in
+# the redistributable (each loader raises FileNotFoundError -> 0 symbols).
+# QQQ needs no CSV -- it is a hardcoded list in ``baskets``.
+for _basket_csv_name in ("sp500.csv", "nyse.csv", "nasdaq.csv"):
+    _basket_csv = _REPO_ROOT / "tools" / _basket_csv_name
+    if _basket_csv.exists():
+        datas.append((str(_basket_csv), "tools"))
 
 # Bundle the docs/ directory so the Help \u2192 ChartStack Guide menu
 # entry resolves docs/chartstack.md inside the frozen build. The same
