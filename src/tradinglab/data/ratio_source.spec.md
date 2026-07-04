@@ -7,9 +7,9 @@ the ticker box — e.g. `AMD/NVDA` (intra-semiconductor leadership), `XLF/SPY`
 (financials sector RS), `RSP/SPY` (equal-weight-vs-cap-weight breadth) — and it
 charts like any other symbol everywhere (main chart, compare, watchlist).
 
-A handful of named **aliases** (`RATIO_SYMBOLS`, e.g. `RSPSPY` → `RSP/SPY`) are
-also recognised as memorable shorthand; the general `NUM/DEN` form is the
-primary path and needs no registry entry.
+**`NUM/DEN` is the only supported form.** There is no shorthand / alias
+registry — a separator-free string like `RSPSPY` is treated as an ordinary
+(and, for that example, non-existent) ticker, not a ratio.
 
 ## Public API
 - `RATIO_DELIMITER = "/"` — the single delimiter that denotes a ratio in a
@@ -17,21 +17,18 @@ primary path and needs no registry entry.
   out of cache filenames, and (b) it doesn't collide with real symbols that
   use `-`/`.` (`BRK-B`, `BRK.B`, `BTC-USD`) or `:` (Windows-illegal / exchange
   prefix).
-- `RATIO_SYMBOLS: dict[str, tuple[str, str]]` — named aliases →
-  `(numerator, denominator)`. UPPERCASE, separator-free. Optional convenience.
 - `parse_ratio_symbol(ticker) -> tuple[str, str] | None` — case-insensitive,
-  whitespace-tolerant. Resolves an alias first, then the general `NUM/DEN`
-  form: exactly one `/` splitting into two non-empty legs, **neither leg
-  itself a ratio** (rejects nested `A/B/C`, `RSPSPY/SPY`). Returns `None` for
-  any non-ratio / empty / `None` input.
+  whitespace-tolerant. Parses the general `NUM/DEN` form: exactly one `/`
+  splitting into two non-empty legs (rejects nested `A/B/C`). Returns `None`
+  for any non-ratio / empty / `None` input.
 - `is_ratio_symbol(ticker) -> bool` — convenience predicate.
 - `canonical_ratio_symbol(ticker) -> str` — canonical storage/key form:
   ratios normalise to uppercase space-free `NUM/DEN` (so `amd / nvda` and
-  `AMD/NVDA` share one cache key / watchlist entry); aliases preserved
-  verbatim; non-ratios uppercased + stripped.
+  `AMD/NVDA` share one cache key / watchlist entry); non-ratios uppercased +
+  stripped.
 - `ratio_display_label(ticker) -> str` — human label `"AMD / NVDA"` for chart
-  title / watermark / window title / watchlist rows; aliases expand to their
-  legs (`RSPSPY` → `"RSP / SPY"`); non-ratios returned unchanged.
+  title / watermark / window title / watchlist rows; non-ratios returned
+  unchanged.
 - `compute_ratio_candles(numerator, denominator) -> list[Candle]` — per-bar
   component-wise quotient of two candle series (pure function, no I/O).
 - `fetch_ratio(ticker, interval, *, leg_fetcher) -> list[Candle] | None` —
@@ -45,8 +42,9 @@ primary path and needs no registry entry.
 
 ## Design Decisions
 - **`/` delimiter, strict 2-leg parse, nested rejected.** See `RATIO_DELIMITER`
-  above. The parser rejects `A/B/C` (split ≠ 2 parts) and ratio/alias legs so
-  the leg-fetch recursion is bounded (a leg can never re-parse as a ratio).
+  above. The parser rejects `A/B/C` (split ≠ 2 parts) so the leg-fetch
+  recursion is bounded (a single leg has no `/` and can never re-parse as a
+  ratio).
 - **Never persisted to disk.** A ratio is derived from its two legs (which DO
   cache individually). `disk_cache.save`/`load` short-circuit for ratio tickers
   (`disk_cache._is_ratio_ticker`) — see `disk_cache.spec.md`. This avoids the

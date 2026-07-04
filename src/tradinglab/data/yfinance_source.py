@@ -16,7 +16,7 @@ def fetch_live_data(ticker: str = "AMD", interval: str = "1d") -> list[Candle] |
     :func:`candles_from_dataframe` which classifies each bar's
     hour/minute against US Eastern exchange hours.
 
-    Ratio pseudo-symbols (e.g. ``RSPSPY`` = RSP / SPY — see
+    Ratio pseudo-symbols (e.g. ``AMD/NVDA`` — see
     :mod:`tradinglab.data.ratio_source`) are resolved FIRST by recursing
     on the two legs through this same fetcher, so they work as a primary /
     compare / watchlist ticker anywhere a real symbol does.

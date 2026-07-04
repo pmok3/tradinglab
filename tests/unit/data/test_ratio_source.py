@@ -1,4 +1,4 @@
-"""Tests for synthetic ratio pseudo-symbols (``RSPSPY`` = RSP / SPY)."""
+"""Tests for synthetic ratio pseudo-symbols (``AMD/NVDA`` = AMD / NVDA)."""
 from __future__ import annotations
 
 import sys
@@ -9,7 +9,6 @@ import pytest
 
 from tradinglab.data.ratio_source import (
     RATIO_DELIMITER,
-    RATIO_SYMBOLS,
     canonical_ratio_symbol,
     compute_ratio_candles,
     fetch_ratio,
@@ -38,12 +37,15 @@ def _series(prices, start=_T0, step=timedelta(days=1)):
 @pytest.mark.parametrize(
     "raw,expected",
     [
-        ("RSPSPY", ("RSP", "SPY")),
-        ("rspspy", ("RSP", "SPY")),
-        ("  RsPsPy  ", ("RSP", "SPY")),
+        ("AMD/NVDA", ("AMD", "NVDA")),
+        ("amd/nvda", ("AMD", "NVDA")),
+        ("  AmD / nVdA  ", ("AMD", "NVDA")),
         ("AAPL", None),
         ("", None),
         ("RSP", None),
+        # Separator-free strings are ordinary tickers, NOT ratios — the
+        # legacy ``RSPSPY`` shorthand is no longer recognised.
+        ("RSPSPY", None),
         ("SPYRSP", None),
     ],
 )
@@ -56,16 +58,12 @@ def test_parse_ratio_symbol_none_safe():
 
 
 def test_is_ratio_symbol():
-    assert is_ratio_symbol("RSPSPY")
-    assert is_ratio_symbol("  rspspy ")
+    assert is_ratio_symbol("RSP/SPY")
+    assert is_ratio_symbol("  rsp / spy ")
     assert not is_ratio_symbol("AAPL")
     assert not is_ratio_symbol("")
-
-
-def test_registry_keys_are_upper_and_separator_free():
-    for key, legs in RATIO_SYMBOLS.items():
-        assert key == key.upper() and key.isalnum()
-        assert isinstance(legs, tuple) and len(legs) == 2
+    # Legacy shorthand is no longer a ratio.
+    assert not is_ratio_symbol("RSPSPY")
 
 
 # ------------------------------------------------------------- general A/B form
@@ -77,12 +75,13 @@ def test_registry_keys_are_upper_and_separator_free():
         ("  amd / nvda  ", ("AMD", "NVDA")),
         ("XLF/SPY", ("XLF", "SPY")),
         ("RSP/SPY", ("RSP", "SPY")),
-        # back-compat: alias still resolves
-        ("RSPSPY", ("RSP", "SPY")),
+        # A separator-free token is just an ordinary leg name now (no
+        # alias expansion), so these are plain 2-leg ratios:
+        ("RSPSPY/SPY", ("RSPSPY", "SPY")),
+        ("RSP/RSPSPY", ("RSP", "RSPSPY")),
         # rejects
         ("A/B/C", None),       # nested
-        ("RSPSPY/SPY", None),  # alias leg (nested via alias)
-        ("RSP/RSPSPY", None),  # alias leg on denominator
+        ("RSPSPY", None),      # separator-free -> not a ratio
         ("AMD/", None),        # empty denominator
         ("/NVDA", None),       # empty numerator
         ("/", None),
@@ -110,7 +109,7 @@ def test_is_ratio_symbol_general():
     [
         ("amd / nvda", "AMD/NVDA"),   # normalised: upper, no spaces
         ("AMD/NVDA", "AMD/NVDA"),
-        ("RSPSPY", "RSPSPY"),         # alias preserved verbatim
+        ("RSPSPY", "RSPSPY"),         # non-ratio: upper+strip (no expansion)
         ("aapl", "AAPL"),             # non-ratio: upper+strip
         ("  msft ", "MSFT"),
     ],
@@ -129,7 +128,7 @@ def test_canonical_ratio_symbol_empty_safe():
     [
         ("AMD/NVDA", "AMD / NVDA"),
         ("amd/nvda", "AMD / NVDA"),
-        ("RSPSPY", "RSP / SPY"),   # alias expands to its legs
+        ("RSPSPY", "RSPSPY"),      # non-ratio unchanged (no expansion)
         ("AAPL", "AAPL"),          # non-ratio unchanged
     ],
 )
@@ -202,7 +201,7 @@ def test_fetch_ratio_happy_path():
     def leg(t, _interval):
         return num if t == "RSP" else den
 
-    out = fetch_ratio("RSPSPY", "1d", leg_fetcher=leg)
+    out = fetch_ratio("RSP/SPY", "1d", leg_fetcher=leg)
     assert out is not None and len(out) == 2
     assert out[0].close == pytest.approx(160.5 / 600.5)
 
@@ -223,7 +222,7 @@ def test_fetch_ratio_either_leg_none(bad_leg):
     def leg(t, _i):
         return None if t == bad_leg else _series([100, 101])
 
-    assert fetch_ratio("RSPSPY", "1d", leg_fetcher=leg) is None
+    assert fetch_ratio("RSP/SPY", "1d", leg_fetcher=leg) is None
 
 
 @pytest.mark.parametrize("bad_leg", ["RSP", "SPY"])
@@ -231,7 +230,7 @@ def test_fetch_ratio_either_leg_empty(bad_leg):
     def leg(t, _i):
         return [] if t == bad_leg else _series([100, 101])
 
-    assert fetch_ratio("RSPSPY", "1d", leg_fetcher=leg) is None
+    assert fetch_ratio("RSP/SPY", "1d", leg_fetcher=leg) is None
 
 
 def test_fetch_ratio_passes_interval_through():
@@ -241,7 +240,7 @@ def test_fetch_ratio_passes_interval_through():
         seen.append((t, interval))
         return _series([100, 101])
 
-    fetch_ratio("RSPSPY", "5m", leg_fetcher=leg)
+    fetch_ratio("RSP/SPY", "5m", leg_fetcher=leg)
     assert seen == [("RSP", "5m"), ("SPY", "5m")]
 
 
@@ -256,9 +255,9 @@ def test_fetch_live_data_routes_ratio_to_fetch_ratio(monkeypatch):
         return ["sentinel"]
 
     monkeypatch.setattr(yfs, "fetch_ratio", fake_fetch_ratio)
-    out = yfs.fetch_live_data("rspspy", "1d")
+    out = yfs.fetch_live_data("rsp/spy", "1d")
     assert out == ["sentinel"]
-    assert captured["ticker"] == "rspspy"
+    assert captured["ticker"] == "rsp/spy"
     assert captured["interval"] == "1d"
     # leg fetcher is the same function (recursion) so legs use the same source
     assert captured["leg_fetcher"] is yfs.fetch_live_data

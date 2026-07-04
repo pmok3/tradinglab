@@ -30,8 +30,8 @@ Durable cache of fetched candle data, keyed by `(source, ticker, interval)`. Act
 - `load(source, ticker, interval) -> Optional[List[Candle]]` — streams
   the JSONL file line by line; one corrupt line is skipped, an
   all-corrupt file returns `None`. **Returns `None` immediately for
-  ratio pseudo-symbols** (`_is_ratio_ticker` — `AMD/NVDA`, `RSPSPY`
-  alias, etc.) and for `mark_no_persist` sources, before touching the
+  ratio pseudo-symbols** (`_is_ratio_ticker` — `AMD/NVDA`, etc.) and
+  for `mark_no_persist` sources, before touching the
   filesystem. Legacy `.pkl` files are
   intentionally NEVER opened. Bars whose OHLC is not all-finite are
   dropped on read (`_drop_nonfinite_ohlc`) so a stale poison bar can
@@ -52,7 +52,7 @@ Durable cache of fetched candle data, keyed by `(source, ticker, interval)`. Act
   one JSON object per line via `_candle_to_dict`. **No-op for ratio
   pseudo-symbols** (`_is_ratio_ticker`) and `mark_no_persist` sources.
 - `_is_ratio_ticker(ticker) -> bool` — true for a ratio pseudo-symbol
-  (`AMD/NVDA` slash form or a `RATIO_SYMBOLS` alias). Lazy-imports
+  (`AMD/NVDA` slash form). Lazy-imports
   `data.ratio_source.is_ratio_symbol` to avoid a module-load import
   cycle (`data` imports `disk_cache`); falls back to a `"/" in ticker`
   check if the import fails. **Why ratios are never persisted:** a

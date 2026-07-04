@@ -54,9 +54,6 @@ You can also use the normal **log price scale** toggle on a ratio chart.
 | `AMD/NVDA` | Two peers — who's leading? |
 | `HYG/IEF` | Risk-on / risk-off — high-yield vs Treasuries |
 
-A handful of memorable shorthands are also recognised — for example `RSPSPY`
-is the same as `RSP/SPY`.
-
 ## Notes & limitations
 
 - **Both legs come from the same data source at the same interval.** A ratio of

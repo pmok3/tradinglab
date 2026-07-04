@@ -203,7 +203,7 @@ def is_no_persist(source: str) -> bool:
 
 
 def _is_ratio_ticker(ticker: str) -> bool:
-    """True if ``ticker`` is a ratio pseudo-symbol (alias or ``NUM/DEN``).
+    """True if ``ticker`` is a ratio pseudo-symbol (``NUM/DEN``).
 
     Ratio series are **derived** from their two legs (which DO cache
     individually) and are never persisted to disk: a ratio ticker like

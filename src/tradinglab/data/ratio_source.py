@@ -5,10 +5,6 @@ A *ratio symbol* is typed straight into the ticker box as ``NUM/DEN``
 financials-vs-market sector RS, ``RSP/SPY`` for equal-weight-vs-cap-weight
 breadth). The chart shows ``NUM`` divided by ``DEN`` bar-for-bar.
 
-A handful of named **aliases** are also recognised for convenience — e.g.
-``RSPSPY`` expands to ``RSP/SPY`` — see :data:`RATIO_SYMBOLS`. Aliases keep
-the old shorthand working; the general ``NUM/DEN`` form is the primary path.
-
 Resolution is **source-agnostic**: :func:`fetch_ratio` is handed the active
 source's leg fetcher and recurses on the two legs, so a ratio symbol works
 anywhere a normal ticker does — main chart, compare panel, companion
@@ -29,14 +25,6 @@ from collections.abc import Callable, Sequence
 
 from ..models import Candle
 
-#: Named ratio aliases → ``(numerator, denominator)``. Keys are UPPERCASE and
-#: separator-free shorthand the user can type instead of the full ``NUM/DEN``
-#: form. The general ``NUM/DEN`` path needs no entry here; aliases exist only
-#: for memorable gauges. Extend as desired, e.g. ``"QQQSPY": ("QQQ", "SPY")``.
-RATIO_SYMBOLS: dict[str, tuple[str, str]] = {
-    "RSPSPY": ("RSP", "SPY"),
-}
-
 #: The single delimiter that denotes a ratio in a typed ticker string.
 RATIO_DELIMITER = "/"
 
@@ -44,23 +32,16 @@ RATIO_DELIMITER = "/"
 def parse_ratio_symbol(ticker: str) -> tuple[str, str] | None:
     """Return ``(numerator, denominator)`` for a ratio symbol, else ``None``.
 
-    Accepts two forms (case-insensitive, whitespace-tolerant):
-
-    1. A registered **alias** from :data:`RATIO_SYMBOLS` (e.g. ``RSPSPY``).
-    2. The general **``NUM/DEN``** form (e.g. ``AMD/NVDA``, ``amd / nvda``).
-
-    Rules for the general form: exactly one ``/`` splitting into two
-    non-empty legs, and **neither leg may itself be a ratio** (nested
-    ``A/B/C`` or ``RSPSPY/SPY`` is rejected — this bounds the leg-fetch
-    recursion). Returns ``None`` for any non-ratio ticker (the common case)
-    so callers can cheaply gate on it before doing any work.
+    Accepts the **``NUM/DEN``** form only (e.g. ``AMD/NVDA``, ``amd / nvda``),
+    case-insensitive and whitespace-tolerant: exactly one ``/`` splitting
+    into two non-empty legs. Nested forms (``A/B/C``) are rejected — this
+    bounds the leg-fetch recursion. Returns ``None`` for any non-ratio
+    ticker (the common case) so callers can cheaply gate on it before doing
+    any work.
     """
     if not ticker:
         return None
     s = ticker.strip().upper()
-    alias = RATIO_SYMBOLS.get(s)
-    if alias is not None:
-        return alias
     if RATIO_DELIMITER not in s:
         return None
     parts = s.split(RATIO_DELIMITER)
@@ -69,14 +50,11 @@ def parse_ratio_symbol(ticker: str) -> tuple[str, str] | None:
     num, den = parts[0].strip(), parts[1].strip()
     if not num or not den:
         return None
-    # Legs must be plain symbols, not themselves ratios (e.g. an alias leg).
-    if RATIO_SYMBOLS.get(num) is not None or RATIO_SYMBOLS.get(den) is not None:
-        return None
     return (num, den)
 
 
 def is_ratio_symbol(ticker: str) -> bool:
-    """True iff ``ticker`` names a ratio pseudo-symbol (alias or ``NUM/DEN``)."""
+    """True iff ``ticker`` names a ratio pseudo-symbol (``NUM/DEN``)."""
     return parse_ratio_symbol(ticker) is not None
 
 
@@ -84,8 +62,7 @@ def canonical_ratio_symbol(ticker: str) -> str:
     """Return the canonical storage/key form of a typed ticker.
 
     Ratios normalise to uppercase, space-free ``NUM/DEN`` (so ``amd / nvda``
-    and ``AMD/NVDA`` share one cache key / watchlist entry). Recognised
-    aliases are preserved verbatim (``RSPSPY`` stays ``RSPSPY``). Non-ratio
+    and ``AMD/NVDA`` share one cache key / watchlist entry). Non-ratio
     tickers are uppercased + stripped. Empty/``None`` input is returned
     unchanged.
     """
@@ -95,8 +72,6 @@ def canonical_ratio_symbol(ticker: str) -> str:
     legs = parse_ratio_symbol(s)
     if legs is None:
         return s
-    if s in RATIO_SYMBOLS:
-        return s
     return f"{legs[0]}{RATIO_DELIMITER}{legs[1]}"
 
 
@@ -104,8 +79,7 @@ def ratio_display_label(ticker: str) -> str:
     """Return a human label for a ratio (``"AMD / NVDA"``), else the input.
 
     Used for chart titles, watermarks, the window title and watchlist rows
-    so a ratio reads unambiguously. Aliases expand to their legs
-    (``RSPSPY`` → ``"RSP / SPY"``).
+    so a ratio reads unambiguously.
     """
     legs = parse_ratio_symbol(ticker)
     if legs is None:
@@ -189,7 +163,6 @@ def fetch_ratio(
 
 __all__ = [
     "RATIO_DELIMITER",
-    "RATIO_SYMBOLS",
     "canonical_ratio_symbol",
     "compute_ratio_candles",
     "fetch_ratio",
