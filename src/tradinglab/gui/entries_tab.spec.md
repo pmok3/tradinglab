@@ -58,19 +58,27 @@ class EntriesTab(ttk.Frame):
 - **Treeview, not Listbox.** Multiple sortable columns (Name / Dir /
   Kind / Universe / Enabled / Armed / Fires). Column widths tuned for
   ~6-character symbol lists. Selection state is single-row.
-- **Mine | Templates | All filter** (audit `template-filter`). A radio
-  segment above the Treeview filters the library *view*; it **defaults
-  to "Mine" on every construction** (session-only `tk.StringVar`, NOT
-  persisted) so the working list opens decluttered rather than buried
-  under the ~21 bundled starter templates seeded into the library on
-  first run. A strategy is a *bundled template* iff its `id` starts with
-  `tmpl-` (`_is_template`) — NOT `created_with.template`, because a copy
-  made via "Load template…" / Duplicate gets a fresh UUID id and belongs
-  under "Mine" even though it is template-derived. `_refresh_tree`
-  filters rows by the active view; the segment labels carry live counts
-  (`Mine (n)` / `Templates (n)` / `All (n)`); an empty filtered view
-  shows a muted hint. The filter is **display-only** — `refresh()` still
-  feeds the FULL library to `evaluator.set_strategies`.
+- **Mine | Active | Templates | All filter** (audit `template-filter`). A
+  radio segment above the Treeview filters the library *view*; it
+  **defaults to "All" on every construction** (session-only
+  `tk.StringVar`, NOT persisted) so the ~21 bundled starter templates
+  seeded into the library on first run are visible alongside the user's
+  own strategies (switch to "Mine" to declutter). A strategy is a
+  *bundled template* iff its `id` starts with `tmpl-` (`_is_template`) —
+  NOT `created_with.template`, because a copy made via "Load template…" /
+  Duplicate gets a fresh UUID id and belongs under "Mine" even though it
+  is template-derived. **"Active"** shows only strategies that are BOTH
+  `enabled` AND armed (`id in evaluator.armed_strategies()`) — the live
+  alerts, a decluttered slice of what's actually watching the market.
+  `_refresh_tree` filters rows by the active view; the segment labels
+  carry live counts (`Mine (n)` / `Active (n)` / `Templates (n)` /
+  `All (n)`); an empty filtered view shows a muted hint (the "Active"
+  hint points the user to arm a strategy). Because the "Active" set
+  depends on live arm state, `_on_tick` does a full `_refresh_tree` (not
+  just an in-place Armed-column patch) while that view is selected, so a
+  strategy arming/disarming adds or removes its row within one tick. The
+  filter is **display-only** — `refresh()` still feeds the FULL library to
+  `evaluator.set_strategies`.
 - **Toolbar Arm/Disarm guards.** Disabled when no row selected or
   the selected row is already in the requested state.
 - **Intraday-interval arm guard.** `_on_arm` calls

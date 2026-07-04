@@ -24,10 +24,11 @@ root in smoke tests). The popup wrapper + menubar wiring live in
 ## UX
 ### Configure pane (left)
 - **Show: Mine | Templates | All** — a radio segment at the top of the
-  pane that filters BOTH strategy dropdowns below. Defaults to **"Mine"**
+  pane that filters BOTH strategy dropdowns below. Defaults to **"All"**
   on every construction (session-only `tk.StringVar`, NOT persisted) so
-  the pickers aren't buried under the ~21/22 bundled starter templates
-  seeded on first run. A strategy is a *bundled template* iff its `id`
+  the ~21/22 bundled starter templates seeded on first run are visible
+  alongside the user's own strategies (switch to "Mine" to declutter). A
+  strategy is a *bundled template* iff its `id`
   starts with `tmpl-` (`_is_template` / `_filter_ok`) — NOT
   `created_with.template` (a loaded/duplicated copy keeps a UUID id and
   stays "Mine"). The filter is **display-only**: `_populate_pickers`

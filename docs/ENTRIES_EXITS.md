@@ -87,12 +87,13 @@ Saved strategies sit in the library. They only become active when you click
 **Arm** in the Entries tab. Arm state is per-session — it resets when you
 close the app.
 
-The Entries tab has a **Show: Mine | Templates | All** filter above the
-strategy table. It opens on **Mine** each session — your own strategies
-only — so the bundled starter templates don't clutter your working list.
-Switch to **Templates** to browse the starters, or **All** to see
-everything. A template you **Load** or **Duplicate** becomes your own
-strategy and shows under **Mine**.
+The Entries tab has a **Show: Mine | Active | Templates | All** filter above
+the strategy table. It opens on **All** each session — your own strategies
+and the bundled starter templates together. Switch to **Mine** to hide the
+templates, **Active** to see only enabled **and** armed alerts (the ones
+actually watching the market right now), or **Templates** to browse just the
+starters. A template you **Load** or **Duplicate** becomes your own strategy
+and shows under **Mine**.
 
 ---
 
@@ -106,9 +107,8 @@ directly — the entry's **on-fill exits** list is what creates the link.
 
 In the **Exits** tab, click **Edit Strategies** to open the exit library.
 Click **New** (or **Bracket Template** for a pre-built stop + target, or
-**Load Template** for other presets). The exit library has the same
-**Show: Mine | Templates | All** filter as the Entries tab, defaulting to
-**Mine**.
+**Load Template** for other presets). The exit library has a
+**Show: Mine | Templates | All** filter, defaulting to **All**.
 
 ### Trigger types — when to exit
 
@@ -384,9 +384,10 @@ Group [OR]
 ## Templates
 
 TradingLab ships with built-in templates to get you started. On first run
-they're seeded into your entry/exit libraries, but the **Show** filter
-defaults to **Mine**, so they stay out of the way until you switch it to
-**Templates** or **All**:
+they're seeded into your entry/exit libraries and are shown by default: the
+**Show** filter defaults to **All**, so your own strategies and the bundled
+templates appear together. Switch it to **Mine** to hide the templates, or
+**Templates** to see only them:
 
 ### Entry templates
 - **EMA 3/8 Cross Long** — enter long on fast/slow EMA crossover

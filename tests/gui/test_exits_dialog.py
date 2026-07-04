@@ -520,17 +520,18 @@ def _save_template(name: str, tmpl_id: str) -> ExitStrategy:
     return s
 
 
-def test_exits_filter_defaults_to_mine(root: tk.Toplevel) -> None:
+def test_exits_filter_defaults_to_all(root: tk.Toplevel) -> None:
     _clear_storage()
     user = _save_strategy("My Exit")
-    _save_template("Starter Trail", "tmpl-exit-trail")
+    tmpl = _save_template("Starter Trail", "tmpl-exit-trail")
     dlg = _make_dialog(root)
     try:
-        assert dlg._filter_var.get() == "mine"
-        assert [s.id for s in dlg._visible_library] == [user.id]
+        assert dlg._filter_var.get() == "all"
+        # Default "All" shows the user's exits AND bundled templates.
+        assert {s.id for s in dlg._visible_library} == {user.id, tmpl.id}
         labels = list(dlg._library_lb.get(0, "end"))
         assert "My Exit" in labels
-        assert "Starter Trail" not in labels
+        assert "Starter Trail" in labels
     finally:
         dlg.destroy()
 

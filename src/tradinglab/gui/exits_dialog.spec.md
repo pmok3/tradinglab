@@ -104,9 +104,10 @@ harmless.
   message box; doesn't dismiss on failure.
 - **Mine | Templates | All filter** (audit `template-filter`). A radio
   segment above the library `Listbox` filters the saved-strategy *view*;
-  it **defaults to "Mine" every time the dialog opens** (session-only
-  `tk.StringVar`, NOT persisted) so the list isn't buried under the ~22
-  bundled starter templates seeded on first run. A strategy is a
+  it **defaults to "All" every time the dialog opens** (session-only
+  `tk.StringVar`, NOT persisted) so the ~22 bundled starter templates
+  seeded on first run are visible alongside the user's own exit
+  strategies (switch to "Mine" to declutter). A strategy is a
   *bundled template* iff its `id` starts with `tmpl-` (`_is_template`) —
   NOT `created_with.template` (a copy keeps a UUID id and stays "Mine").
   `_populate_library_listbox` rebuilds the listbox from the filtered

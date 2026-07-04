@@ -308,14 +308,14 @@ class ExitsDialog(BaseModalDialog):
         outer.add(lib, weight=1)
 
         ttk.Label(lib, text="Strategies", font=("", 10, "bold")).pack(anchor="w")
-        # Mine | Templates | All filter — defaults to "Mine" each time the
-        # dialog opens (session-only) so the working list isn't buried
-        # under the ~22 bundled starter templates (id prefix ``tmpl-``).
-        # Audit ``template-filter``.
+        # Mine | Templates | All filter — defaults to "All" each time the
+        # dialog opens (session-only) so the ~22 bundled starter templates
+        # (id prefix ``tmpl-``) are visible alongside the user's own exit
+        # strategies; switch to "Mine" to declutter. Audit ``template-filter``.
         filt_row = ttk.Frame(lib)
         filt_row.pack(fill="x", pady=(2, 0))
         ttk.Label(filt_row, text="Show:").pack(side="left")
-        self._filter_var = tk.StringVar(value="mine")
+        self._filter_var = tk.StringVar(value="all")
         self._filter_buttons: dict[str, ttk.Radiobutton] = {}
         for _value, _label in (("mine", "Mine"), ("templates", "Templates"),
                                ("all", "All")):

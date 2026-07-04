@@ -143,10 +143,11 @@ class StrategyTab(ttk.Frame):
         self._var_entry_id = tk.StringVar(value="")
         self._var_exit_id = tk.StringVar(value="")
         # Mine | Templates | All filter governing BOTH strategy dropdowns;
-        # defaults to "Mine" each time the tab is built (session-only, NOT
-        # persisted) so the pickers aren't buried under the ~21/22 bundled
-        # starter templates (id prefix ``tmpl-``). Audit ``template-filter``.
-        self._strategy_filter_var = tk.StringVar(value="mine")
+        # defaults to "All" each time the tab is built (session-only, NOT
+        # persisted) so the ~21/22 bundled starter templates (id prefix
+        # ``tmpl-``) are visible alongside the user's own strategies; switch
+        # to "Mine" to declutter. Audit ``template-filter``.
+        self._strategy_filter_var = tk.StringVar(value="all")
         self._var_universe_kind = tk.StringVar(value=UniverseKind.SYMBOLS.value)
         self._var_universe_symbols = tk.StringVar(value="AAPL, MSFT, NVDA")
         self._var_universe_watchlist = tk.StringVar(value="")
@@ -220,9 +221,10 @@ class StrategyTab(ttk.Frame):
     def _build_configure(self, parent: ttk.Frame) -> None:
         row = 0
         # Mine | Templates | All filter governing BOTH strategy dropdowns
-        # below. Defaults to "Mine" (session-only) so the pickers open
-        # decluttered instead of buried under the bundled starter
-        # templates (id prefix ``tmpl-``). Audit ``template-filter``.
+        # below. Defaults to "All" (session-only) so the bundled starter
+        # templates (id prefix ``tmpl-``) are visible alongside the user's
+        # own strategies; switch to "Mine" to declutter. Audit
+        # ``template-filter``.
         filt = ttk.Frame(parent)
         filt.grid(row=row, column=0, columnspan=2, sticky="w", pady=(0, 2))
         ttk.Label(filt, text="Show:").pack(side="left")

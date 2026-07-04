@@ -492,7 +492,7 @@ def _template_strategy(name: str, tmpl_id: str) -> EntryStrategy:
     return s
 
 
-def test_filter_defaults_to_mine_and_hides_templates(root):
+def test_filter_defaults_to_all_and_shows_templates(root):
     user1 = _strategy("My Long")
     user2 = _strategy("My Short", direction=Direction.SHORT)
     tmpl1 = _template_strategy("Starter A", "tmpl-starter-a")
@@ -501,8 +501,10 @@ def test_filter_defaults_to_mine_and_hides_templates(root):
         _entries_storage.save(s)
     tab = _make_tab(root)
     try:
-        assert tab._filter_var.get() == "mine"
-        assert set(tab._tree.get_children("")) == {user1.id, user2.id}
+        assert tab._filter_var.get() == "all"
+        # Default "All" shows the user's strategies AND bundled templates.
+        assert set(tab._tree.get_children("")) == {
+            user1.id, user2.id, "tmpl-starter-a", "tmpl-starter-b"}
     finally:
         tab.destroy()
 
@@ -543,7 +545,9 @@ def test_loaded_template_copy_counts_as_mine(root):
     _entries_storage.save(seed)
     tab = _make_tab(root)
     try:
-        children = set(tab._tree.get_children(""))  # default "mine"
+        tab._filter_var.set("mine")
+        tab._on_filter_change()
+        children = set(tab._tree.get_children(""))  # "mine" filter
         assert copy.id in children
         assert "tmpl-seed" not in children
     finally:
@@ -559,6 +563,46 @@ def test_filter_labels_show_counts(root):
         assert tab._filter_buttons["mine"].cget("text") == "Mine (1)"
         assert tab._filter_buttons["templates"].cget("text") == "Templates (2)"
         assert tab._filter_buttons["all"].cget("text") == "All (3)"
+        # Nothing armed here → Active (0).
+        assert tab._filter_buttons["active"].cget("text") == "Active (0)"
+    finally:
+        tab.destroy()
+
+
+def test_active_filter_shows_only_enabled_and_armed(root):
+    """The "Active" view shows only strategies that are BOTH enabled AND
+    armed (the live alerts) — a decluttered slice of the library."""
+    s_active = _strategy("Active One")          # enabled (default) + armed
+    s_unarmed = _strategy("Enabled Unarmed")    # enabled + NOT armed
+    s_disabled = _strategy("Disabled Armed")    # armed but DISABLED
+    s_disabled.enabled = False
+    for s in (s_active, s_unarmed, s_disabled):
+        _entries_storage.save(s)
+    tab = _make_tab(root)
+    try:
+        # Both s_active and s_disabled are "armed", but only s_active is
+        # also enabled → Active shows only s_active.
+        tab._evaluator.armed_strategies = lambda: {s_active.id, s_disabled.id}
+        tab._filter_var.set("active")
+        tab._on_filter_change()
+        assert set(tab._tree.get_children("")) == {s_active.id}
+        # Count reflects enabled AND armed = 1 (over the whole library).
+        assert tab._filter_buttons["active"].cget("text") == "Active (1)"
+    finally:
+        tab.destroy()
+
+
+def test_active_filter_empty_shows_hint(root):
+    """No enabled+armed strategy → Active view is empty with a helpful hint."""
+    s = _strategy("Enabled Unarmed")  # enabled but not armed
+    _entries_storage.save(s)
+    tab = _make_tab(root)
+    try:
+        tab._evaluator.armed_strategies = lambda: set()
+        tab._filter_var.set("active")
+        tab._on_filter_change()
+        assert set(tab._tree.get_children("")) == set()
+        assert "No enabled + armed" in tab._filter_empty_hint.cget("text")
     finally:
         tab.destroy()
 

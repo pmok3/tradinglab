@@ -4,7 +4,8 @@ The Strategy Tester picks entry/exit strategies via two readonly
 Comboboxes populated from the same ``load_all()`` as the Entries/Exits
 lists, so they were equally cluttered with the ~21/22 bundled starter
 templates. A shared ``Mine | Templates | All`` segment governs both
-dropdowns and defaults to "Mine" (session-only). A strategy is a bundled
+dropdowns and defaults to "All" (session-only) so the starter templates
+are visible alongside the user's own strategies. A strategy is a bundled
 template iff its ``id`` starts with ``tmpl-``. Audit ``template-filter``.
 """
 from __future__ import annotations
@@ -87,13 +88,14 @@ def _exit_vals(tab) -> list[str]:
     return list(tab._cb_exit["values"])
 
 
-def test_strategy_filter_defaults_to_mine(tk_root) -> None:
+def test_strategy_filter_defaults_to_all(tk_root) -> None:
     tab = _make_tab(tk_root, _entries(), _exits())
-    assert tab._strategy_filter_var.get() == "mine"
+    assert tab._strategy_filter_var.get() == "all"
+    # Default "All" shows the user's strategies AND bundled templates.
     assert any("My Entry" in v for v in _entry_vals(tab))
-    assert not any("9/21 EMA cross" in v for v in _entry_vals(tab))
+    assert any("9/21 EMA cross" in v for v in _entry_vals(tab))
     assert any("My Exit" in v for v in _exit_vals(tab))
-    assert not any("Trailing 2%" in v for v in _exit_vals(tab))
+    assert any("Trailing 2%" in v for v in _exit_vals(tab))
 
 
 def test_strategy_filter_templates_then_all(tk_root) -> None:
@@ -139,14 +141,15 @@ def test_selection_preserved_across_filter_change(tk_root) -> None:
 
 
 def test_empty_mine_view_shows_hint(tk_root) -> None:
-    # Fresh user: only bundled templates exist → "Mine" view is empty →
+    # Fresh user: only bundled templates exist. Switching to "Mine" →
     # both dropdowns empty and a hint points to Templates/All.
     tab = _make_tab(
         tk_root,
         [_Strat("tmpl-a", "Starter A")],
         [_Strat("tmpl-b", "Starter B")],
     )
-    assert tab._strategy_filter_var.get() == "mine"
+    tab._strategy_filter_var.set("mine")
+    tab._on_strategy_filter_change()
     assert _entry_vals(tab) == []
     assert _exit_vals(tab) == []
     assert "Templates or All" in tab._strategy_filter_hint.cget("text")
@@ -154,5 +157,5 @@ def test_empty_mine_view_shows_hint(tk_root) -> None:
 
 def test_hint_clears_when_view_non_empty(tk_root) -> None:
     tab = _make_tab(tk_root, _entries(), _exits())
-    # Default "mine" has one of each → no hint.
+    # Default "all" shows strategies + templates → non-empty → no hint.
     assert tab._strategy_filter_hint.cget("text") == ""

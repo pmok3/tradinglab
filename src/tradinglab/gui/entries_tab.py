@@ -270,17 +270,18 @@ class EntriesTab(ttk.Frame):
         tree_lf = ttk.LabelFrame(paned, text="Strategies")
         paned.add(tree_lf, weight=2)
 
-        # Mine | Templates | All filter row. Defaults to "Mine" on every
-        # launch (session-only, NOT persisted) so the working list opens
-        # decluttered; bundled starter templates (id prefix ``tmpl-``) are
-        # hidden until explicitly requested. Audit ``template-filter``.
+        # Mine | Active | Templates | All filter row. Defaults to "All" on
+        # every launch (session-only, NOT persisted) so the bundled starter
+        # templates (id prefix ``tmpl-``) are visible alongside the user's
+        # own strategies; switch to "Mine" to declutter, or "Active" to see
+        # only enabled + armed alerts. Audit ``template-filter``.
         filt_row = ttk.Frame(tree_lf)
         filt_row.pack(fill="x", padx=2, pady=(2, 0))
         ttk.Label(filt_row, text="Show:").pack(side="left")
-        self._filter_var = tk.StringVar(value="mine")
+        self._filter_var = tk.StringVar(value="all")
         self._filter_buttons: dict[str, ttk.Radiobutton] = {}
-        for _value, _label in (("mine", "Mine"), ("templates", "Templates"),
-                               ("all", "All")):
+        for _value, _label in (("mine", "Mine"), ("active", "Active"),
+                               ("templates", "Templates"), ("all", "All")):
             rb = ttk.Radiobutton(
                 filt_row, text=_label, value=_value,
                 variable=self._filter_var, command=self._on_filter_change,
@@ -377,11 +378,16 @@ class EntriesTab(ttk.Frame):
         except Exception:  # noqa: BLE001
             pass
 
-        # Mine | Templates | All filter (audit ``template-filter``). Counts
-        # are over the WHOLE library so the segment labels stay accurate
-        # regardless of which view is active.
+        # Mine | Active | Templates | All filter (audit ``template-filter``).
+        # Counts are over the WHOLE library so the segment labels stay
+        # accurate regardless of which view is active. "Active" = enabled
+        # AND armed (the live alerts), a decluttered view of what's actually
+        # watching the market right now.
         flt = self._filter_var.get() if hasattr(self, "_filter_var") else "all"
         n_tmpl = sum(1 for s in self._library if self._is_template(s))
+        n_active = sum(
+            1 for s in self._library
+            if getattr(s, "enabled", False) and s.id in armed)
         total = len(self._library)
         shown = 0
         for s in self._library:
@@ -389,6 +395,9 @@ class EntriesTab(ttk.Frame):
             if flt == "mine" and is_tmpl:
                 continue
             if flt == "templates" and not is_tmpl:
+                continue
+            if flt == "active" and not (
+                    getattr(s, "enabled", False) and s.id in armed):
                 continue
             iid = s.id
             armed_str = "yes" if iid in armed else "no"
@@ -413,7 +422,7 @@ class EntriesTab(ttk.Frame):
                 pass
 
         self._update_filter_labels(n_mine=total - n_tmpl, n_tmpl=n_tmpl,
-                                   total=total)
+                                   n_active=n_active, total=total)
         self._update_empty_hint(flt, shown)
 
         # Restore selection if still present.
@@ -436,14 +445,15 @@ class EntriesTab(ttk.Frame):
         return str(getattr(strategy, "id", "")).startswith("tmpl-")
 
     def _on_filter_change(self) -> None:
-        """Re-render the tree for the newly selected Mine/Templates/All
-        view. Lightweight — re-filters the in-memory library, no reload."""
+        """Re-render the tree for the newly selected Mine/Active/Templates/
+        All view. Lightweight — re-filters the in-memory library, no reload."""
         self._refresh_tree()
 
     def _update_filter_labels(self, *, n_mine: int, n_tmpl: int,
-                              total: int) -> None:
+                              n_active: int, total: int) -> None:
         labels = {
             "mine": f"Mine ({n_mine})",
+            "active": f"Active ({n_active})",
             "templates": f"Templates ({n_tmpl})",
             "all": f"All ({total})",
         }
@@ -458,6 +468,8 @@ class EntriesTab(ttk.Frame):
             msg = ""
         elif flt == "templates":
             msg = "No bundled templates found."
+        elif flt == "active":
+            msg = "No enabled + armed alerts — arm a strategy to see it here."
         else:
             msg = "No strategies yet — click “+ New”, or pick Templates."
         try:
@@ -521,16 +533,25 @@ class EntriesTab(ttk.Frame):
         try:
             self._refresh_audit_tail()
             self._refresh_stats()
-            # Refresh the Armed/Fires columns without rebuilding the
-            # whole tree (cheap + non-disruptive).
-            armed = set(self._evaluator.armed_strategies())
-            for iid in self._tree.get_children(""):
-                vals = list(self._tree.item(iid, "values"))
-                if len(vals) >= 7:
-                    vals[4] = "yes" if iid in armed else "no"
-                    fires = self._evaluator._fires_per_strategy_today.get(iid, 0)  # type: ignore[attr-defined]
-                    vals[5] = str(fires)
-                    self._tree.item(iid, values=vals)
+            flt = self._filter_var.get() if hasattr(self, "_filter_var") else "all"
+            if flt == "active":
+                # The "Active" view's membership depends on live arm state,
+                # so a strategy arming / disarming must add or remove its
+                # row — rebuild the filtered tree rather than only patching
+                # the Armed column in place.
+                self._refresh_tree()
+            else:
+                # Other views have static membership (arm state doesn't
+                # change which rows belong). Refresh the Armed/Fires columns
+                # without rebuilding the whole tree (cheap + non-disruptive).
+                armed = set(self._evaluator.armed_strategies())
+                for iid in self._tree.get_children(""):
+                    vals = list(self._tree.item(iid, "values"))
+                    if len(vals) >= 7:
+                        vals[4] = "yes" if iid in armed else "no"
+                        fires = self._evaluator._fires_per_strategy_today.get(iid, 0)  # type: ignore[attr-defined]
+                        vals[5] = str(fires)
+                        self._tree.item(iid, values=vals)
         except (tk.TclError, RuntimeError, AttributeError):
             return
         self._schedule_tick()
