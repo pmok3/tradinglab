@@ -37,7 +37,7 @@ from ..preload.fundamental_filter import (
     is_filter_active,
     passes_fundamental_filter,
 )
-from ._modal_base import BaseModalDialog, protect_combobox_wheel
+from ._modal_base import BaseModalDialog, make_scrollable_form, protect_combobox_wheel
 from .colors import MUTED_GREY
 
 # ---------------------------------------------------------------------------
@@ -188,13 +188,15 @@ class UniversePrepareDialog(BaseModalDialog):
         # plus the now-larger universe selector (3 LabelFrames + amber
         # survivorship banner + reactive ETA line).
         #
-        # Geometry persistence key suffixed ``_v2`` so users who already
-        # have the old 560x620 cached do NOT inherit the too-short
-        # window after upgrading.
+        # Geometry persistence key suffixed ``_v3`` so users who had the
+        # old (oversized) cached geometry — a side effect of the size-only
+        # ``default_geometry`` silently falling back to the large module
+        # default before the geometry-store fix — do NOT inherit a stale
+        # too-wide/short window that clipped the Start button.
         super().__init__(
             app,
             title="Prepare Universe Data",
-            geometry_key="dlg.universe_prepare_v2",
+            geometry_key="dlg.universe_prepare_v3",
             default_geometry="560x780",
             resizable=(False, True),
         )
@@ -250,7 +252,7 @@ class UniversePrepareDialog(BaseModalDialog):
         self._refresh_kind_specific_state()
         self._center_on_parent()
 
-        protect_combobox_wheel(self)
+        protect_combobox_wheel(self, scroll_target=getattr(self, "_form_canvas", None))
         self._finalize_modal(
             primary=self._on_start,
             cancel=self._on_close_request,
@@ -268,8 +270,40 @@ class UniversePrepareDialog(BaseModalDialog):
     # -----------------------------------------------------------------
 
     def _build_ui(self) -> None:
-        outer = ttk.Frame(self, padding=12)
-        outer.grid(row=0, column=0, sticky="nsew")
+        # Paint the Toplevel background with the active window color so any
+        # region the themed ttk content does not cover matches the app in
+        # dark mode (ttk.Style does not reach the Toplevel's classic bg).
+        try:
+            from .native_theme import apply_toplevel_theme, current_theme
+            apply_toplevel_theme(self, current_theme(self))
+        except Exception:  # noqa: BLE001
+            pass
+
+        # Cap the dialog height to the monitor so it can never open taller
+        # than the screen; the scrollable body below handles any overflow.
+        # Small-screen safety (see test_dialog_scrollable_meta): the whole
+        # form — including the bottom Start/Close row — lives inside a
+        # Canvas+Scrollbar, so every control stays reachable at any monitor
+        # size / resolution.
+        try:
+            screen_h = int(self.winfo_screenheight() or 768)
+            self.maxsize(900, max(400, screen_h - 120))
+        except tk.TclError:
+            pass
+
+        container = ttk.Frame(self)
+        container.grid(row=0, column=0, sticky="nsew")
+        # Let the scrollable body fill the whole Toplevel so no unthemed
+        # (bright, in dark mode) window background shows through on the
+        # right/bottom when the window is wider/taller than the form.
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+
+        # ``outer`` is the scrollable inner frame — all form content
+        # (including the button row) grids into it, so tall content scrolls
+        # rather than pushing the Start button off a small screen.
+        outer, self._form_canvas = make_scrollable_form(container)
+        outer.configure(padding=12)
 
         # --- Universe selector ----------------------------------------
         # 3 grouped LabelFrames per UX agent guidance:

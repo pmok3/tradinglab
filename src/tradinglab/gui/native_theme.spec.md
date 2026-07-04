@@ -10,6 +10,7 @@ Centralizes dark/light theming for classic Tk widgets that are not reached by th
 - `apply_listbox_theme(widget, theme)` paints `tk.Listbox` with `tree_bg`, `tree_fg`, `spine`, removes the native border, and sets a one-pixel themed focus ring.
 - `apply_text_theme(widget, theme)` paints `tk.Text` with `ax_bg`, `text`, `spine`, themed insertion/selection colors, no native border, and a one-pixel themed focus ring.
 - `apply_canvas_theme(widget, theme)` paints `tk.Canvas` backgrounds with `win_bg`; canvas contents keep their own item colors.
+- `apply_toplevel_theme(widget, theme)` paints a `tk.Toplevel` / `tk.Tk` `bg` with `win_bg` so any region a themed ttk frame does not cover (a form narrower/shorter than the window) matches the app in dark mode instead of showing the bright system default. Best-effort (`TclError` swallowed).
 
 ## Design Decisions
 

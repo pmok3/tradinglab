@@ -87,6 +87,37 @@ def test_clamp_to_screen_rejects_off_screen() -> None:
     assert gs._clamp_to_screen("not-a-geometry", 1920, 1080, default=default) == default
 
 
+def test_fallback_geometry_honors_size_only_default() -> None:
+    # Every dialog passes ``default_geometry`` as a size-only ``WxH`` (no
+    # ``+X+Y``). A synthesized position must be appended so the intended
+    # SIZE is honored — NOT silently replaced by the large module default.
+    assert gs._fallback_geometry("560x780") == "560x780+100+100"
+    assert gs._fallback_geometry("340x260") == "340x260+100+100"
+    # A full geometry is returned unchanged.
+    assert gs._fallback_geometry("900x500+12+34") == "900x500+12+34"
+    # Only a string with no parseable WxH degrades to the module default.
+    assert gs._fallback_geometry("garbage") == gs._DEFAULT_GEOMETRY
+    assert gs._fallback_geometry("") == gs._DEFAULT_GEOMETRY
+
+
+def test_clamp_to_screen_honors_size_only_default() -> None:
+    # A size-only default passed through _clamp_to_screen (the restore path
+    # for a fresh geometry key) keeps the intended size, not 1280x800.
+    assert gs._clamp_to_screen("560x780", 1920, 1080, default="560x780") == "560x780+100+100"
+
+
+def test_restore_window_uses_size_only_default_when_store_empty(tmp_path: Path) -> None:
+    # Regression: a dialog with a size-only default and no persisted value
+    # must open at that size — previously it fell back to 1280x800, which
+    # oversized narrow dialogs and clipped bottom buttons off small screens.
+    store = gs.GeometryStore(path=tmp_path / "geometry.json")
+    store.load()
+    top = _FakeTopLevel(screen_w=1920, screen_h=1080)
+    applied = store.restore_window(top, "dlg.some_narrow_dialog", default="560x780")
+    assert applied == "560x780+100+100"
+    assert top.applied == ["560x780+100+100"]
+
+
 def test_restore_window_rejects_too_small_saved_main_geometry(tmp_path: Path) -> None:
     default = "1728x972+96+36"
     store = gs.GeometryStore(path=tmp_path / "geometry.json")

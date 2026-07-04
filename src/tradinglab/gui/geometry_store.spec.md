@@ -51,6 +51,11 @@ Exposes `GeometryStore` class + process-wide `store()` singleton.
 - `_clamp_to_screen(geometry, screen_w, screen_h, *, default, min_size=None)` —
   reject any geometry whose top-left is < -100 px, bottom-right is
   > screen + 100 px, or width/height are below `min_size` when supplied.
+- `_fallback_geometry(default) -> str` — normalize a caller `default` to a
+  full `WxH+X+Y`. Dialogs pass a **size-only** `WxH` default (e.g.
+  `"560x780"`); a synthesized `+100+100` position is appended so the
+  intended size is honored. Only a string with no parseable `WxH` at all
+  degrades to the module `_DEFAULT_GEOMETRY` (`1280x800+100+100`).
 
 ## Schema
 
@@ -83,6 +88,12 @@ Future-version files are treated as **missing**, not as errors.
 - **Future-schema = missing** (next save reverts to current schema).
 - **`_clamp_to_screen` rejects rather than scales** — scaled tiny
   rectangle is useless; sensible default is better.
+- **Size-only defaults are honored** — every dialog passes
+  `default_geometry` as `WxH` (no position). `_fallback_geometry`
+  synthesizes a position rather than discarding the size, so a fresh
+  geometry key opens at the dialog's intended size instead of the large
+  `_DEFAULT_GEOMETRY`. (Previously the missing `+X+Y` caused a silent
+  fall-through to `1280x800`, which oversized narrow dialogs.)
 - **Singleton** — one `geometry.json` per process; multiple
   instances would race on save. Tests use ad-hoc instances with
   explicit `path=`.

@@ -198,6 +198,40 @@ def test_color_palette_canvas_uses_dark_theme(dark_root: tk.Toplevel) -> None:
         dlg.destroy()
 
 
+def test_apply_toplevel_theme_paints_window_bg(root: tk.Toplevel) -> None:
+    """The ``apply_toplevel_theme`` helper paints a Toplevel's classic
+    ``bg`` with the theme's ``win_bg`` (ttk.Style does not reach it)."""
+    from tradinglab.gui.native_theme import apply_toplevel_theme
+    top = tk.Toplevel(root)
+    try:
+        apply_toplevel_theme(top, DARK_THEME)
+        assert str(top.cget("background")) == DARK_THEME["win_bg"]
+    finally:
+        top.destroy()
+
+
+def test_universe_prepare_dialog_toplevel_uses_dark_theme(dark_root: tk.Toplevel) -> None:
+    """The Download Replay Data (Prepare Universe) dialog must paint its
+    Toplevel background with the dark window colour AND let its themed
+    ttk content frame fill the whole window (grid weights) — so no bright
+    system-default background shows on the right/bottom in dark mode (the
+    reported "right half is all white" bug). The dialog has no classic Tk
+    widgets, so it is tested here rather than on the meta-test roster.
+    """
+    from tradinglab.gui.universe_prepare_dialog import UniversePrepareDialog
+    dlg = UniversePrepareDialog(
+        dark_root, source_name="yfinance",
+        fetcher=lambda _sym, _interval: None,
+    )
+    try:
+        assert str(dlg.cget("background")) == DARK_THEME["win_bg"]
+        # Themed content frame fills the Toplevel (no unthemed gap right/bottom).
+        assert int(dlg.grid_columnconfigure(0).get("weight", 0)) == 1
+        assert int(dlg.grid_rowconfigure(0).get("weight", 0)) == 1
+    finally:
+        dlg.destroy()
+
+
 # ===========================================================================
 # Meta-test: every window's classic Tk widgets are linked to the dark theme.
 #

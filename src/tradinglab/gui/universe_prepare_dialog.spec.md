@@ -48,6 +48,40 @@ chosen basket / watchlist and writing the resulting
 
 8. Buttons: `Start` and `Close`. Close morphs into `Stop (safe to resume)` while a run is in-flight; clicking it sets `cancel_event` and updates the status line to "Stopping after current symbol — bars already on disk are safe; press Start again to resume from where this stopped." On worker exit, the button reverts to `Close`.
 
+## Window geometry & theming
+
+- `geometry_key="dlg.universe_prepare_v3"`, `default_geometry="560x780"`,
+  `resizable=(False, True)` (fixed width, growable height),
+  `minsize(540, 720)`. The natural content is ≈543×605, so 560×780 shows
+  the whole form incl. the bottom Start/Close row.
+- The `_v3` key suffix intentionally discards any older persisted geometry.
+  Before the geometry-store fix, the size-only `default_geometry` fell
+  through to the large module default (`1280x800`), so the dialog opened
+  ~1280 px wide with the Start button clipped and — because width is
+  non-resizable — the user could not narrow it. `_v3` resets affected
+  users to the honored 560×780. (Root cause fixed in
+  `geometry_store._fallback_geometry`; see its spec.)
+- **Dark-mode fill.** `_build_ui` sets `grid_rowconfigure(0, weight=1)` +
+  `grid_columnconfigure(0, weight=1)` so the themed `outer` `ttk.Frame`
+  fills the whole Toplevel — no unthemed (bright, in dark mode) window
+  background shows on the right/bottom. As a belt-and-suspenders it also
+  paints the Toplevel's own classic `bg` via
+  `native_theme.apply_toplevel_theme(self, current_theme(self))` (ttk.Style
+  does not reach a Toplevel's `bg`). Applied once at build time — the
+  dialog is modal, so live theme toggling while open is not possible.
+- **Scrollable body (small-screen safety).** `_build_ui` wraps the entire
+  form — including the bottom Start/Close row — in
+  `_modal_base.make_scrollable_form` (Canvas + Scrollbar + inner frame,
+  stashed as `self._form_canvas`), and caps the window height via
+  `maxsize(900, screen_h − 120)`. So on a small monitor the dialog never
+  opens taller than the screen and every control (notably the Start
+  button) stays reachable by scrolling — the fix for the reported
+  "Start button obscured" bug. `protect_combobox_wheel(self,
+  scroll_target=self._form_canvas)` forwards wheel-over-combobox scrolls
+  into the canvas (CLAUDE.md §7.11). This contract — "any dialog taller
+  than a 1366×768 laptop must scroll" — is pinned tree-wide by
+  `tests/unit/gui/test_dialog_scrollable_meta.py`.
+
 ## Threading model
 
 - `_event_queue: queue.Queue[ProgressEvent | _PreloadDone]`.

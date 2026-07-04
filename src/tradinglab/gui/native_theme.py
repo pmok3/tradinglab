@@ -113,3 +113,19 @@ def apply_canvas_theme(widget: tk.Canvas, theme: dict) -> None:
     """Apply the window background to a classic Tk Canvas."""
     win_bg = theme.get("win_bg", LIGHT_THEME["win_bg"])
     widget.configure(background=win_bg)
+
+
+def apply_toplevel_theme(widget: tk.Misc, theme: dict) -> None:
+    """Paint a ``tk.Toplevel`` / ``tk.Tk`` background with the window color.
+
+    ``ttk.Style`` themes ttk child widgets, but the Toplevel's own classic
+    ``bg`` is not reached — so any area a themed ttk frame does not cover
+    (e.g. a form narrower/shorter than the window) shows the bright system
+    default in dark mode. Set the Toplevel ``bg`` to ``win_bg`` so those
+    uncovered regions match the rest of the app. Best-effort.
+    """
+    win_bg = theme.get("win_bg", LIGHT_THEME["win_bg"])
+    try:
+        widget.configure(background=win_bg)
+    except tk.TclError:
+        pass

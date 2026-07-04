@@ -50,6 +50,13 @@ _DEBOUNCE_MS = 500
 _DEFAULT_GEOMETRY = "1280x800+100+100"
 
 _GEOMETRY_RE = re.compile(r"^(\d+)x(\d+)([+-]\d+)([+-]\d+)$")
+#: Size-only ``WxH`` form (no ``+X+Y`` position). Every dialog passes its
+#: ``default_geometry`` in this form (e.g. ``"560x780"``); ``_fallback_geometry``
+#: synthesizes a position so the intended size is honored instead of silently
+#: falling back to the much larger ``_DEFAULT_GEOMETRY``.
+_SIZE_ONLY_RE = re.compile(r"^(\d+)x(\d+)$")
+#: Default position appended to a size-only default.
+_DEFAULT_POSITION = "+100+100"
 
 
 def _resolve_default_path() -> Path:
@@ -79,7 +86,23 @@ def _parse_geometry(geometry: str) -> tuple[int, int, int, int] | None:
 
 
 def _fallback_geometry(default: str) -> str:
-    return default if _parse_geometry(default) else _DEFAULT_GEOMETRY
+    """Normalize a caller ``default`` to a full ``WxH+X+Y`` geometry.
+
+    Dialogs pass their ``default_geometry`` as a size-only ``WxH`` string
+    (e.g. ``"560x780"``). ``_parse_geometry`` requires a position, so a
+    size-only default would previously be rejected and replaced by the
+    much larger module ``_DEFAULT_GEOMETRY`` — making every dialog open at
+    1280x800 on a fresh geometry key. Honor the intended size by
+    synthesizing a default position for size-only defaults. Only a string
+    with no parseable ``WxH`` at all falls back to ``_DEFAULT_GEOMETRY``.
+    """
+    if _parse_geometry(default):
+        return default
+    if isinstance(default, str):
+        m = _SIZE_ONLY_RE.match(default.strip())
+        if m:
+            return f"{int(m.group(1))}x{int(m.group(2))}{_DEFAULT_POSITION}"
+    return _DEFAULT_GEOMETRY
 
 
 def compute_screen_percent_geometry(
