@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.4.4] - 2026-07-04
+
+### Added
+
+- **"Active" filter in the Entries tab.** The **Show** segment now has a
+  fourth option — **Mine · Active · Templates · All**. **Active** shows only
+  the strategies that are both *enabled* and *armed* (the alerts actually
+  watching the market right now), so a large library collapses to just
+  what's live. The view updates as you arm/disarm.
+
+### Changed
+
+- **Templates are visible by default again.** The **Show** filter in the
+  Entries tab, the Exits editor, and the Strategy Tester pickers now defaults
+  to **All** (instead of "Mine"), so the bundled starter templates appear
+  alongside your own strategies. Switch to **Mine** to hide them, or
+  **Templates** to see only the starters.
+- **Ratio charts accept the `A/B` form only.** The undocumented
+  separator-free shorthand (e.g. `RSPSPY`) has been removed to avoid
+  ambiguity — type ratios as `NUM/DEN` (e.g. `RSP/SPY`, `AMD/NVDA`).
+
+### Fixed
+
+- **NYSE and NASDAQ universes now populate in the packaged app.** In the
+  distributed `.exe` the NYSE / NASDAQ baskets in **Sandbox → Download
+  Replay Data** showed **0 symbols** because their constituent lists weren't
+  bundled. Both are now included (~2,000 / ~2,900 symbols).
+- **Download Replay Data window in dark mode + on small screens.** The
+  dialog no longer shows a bright white right-half in dark mode, no longer
+  opens oversized with the **Start** button clipped, and its form now
+  scrolls so every control is reachable at any monitor size. The underlying
+  geometry-store fix (size-only dialog defaults were silently upsized) also
+  right-sizes other dialogs on first open.
+
 ## [0.4.3] - 2026-07-03
 
 ### Changed
