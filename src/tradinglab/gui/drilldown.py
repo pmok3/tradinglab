@@ -33,16 +33,32 @@ Methods delegated back to ChartApp (called via ``self.``):
 
 from __future__ import annotations
 
+import time
 from concurrent.futures import Future
 from dataclasses import dataclass
 from datetime import date as _date_t
+from datetime import datetime as _datetime_t
 from datetime import timedelta
+from datetime import timezone as _timezone
 from typing import Any
 
 from .. import disk_cache
-from ..constants import provider_lookback_days
-from ..data import DATA_SOURCES
+from ..constants import provider_lookback_days, targeted_window
+from ..data import DATA_SOURCES, coverage, fetch_range, source_supports_range
 from ..models import Candle
+
+
+def _day_to_ts(day) -> int:
+    """Midnight-UTC epoch seconds for a ``datetime.date`` centering anchor.
+
+    Used only to *center* the targeted page-span window on the clicked day;
+    the exact wall-clock reference is unimportant (the window spans ~one
+    API page around it), so UTC midnight is a stable, tz-library-free
+    choice that never raises on a headless / missing-tzdata host.
+    """
+    return int(
+        _datetime_t(day.year, day.month, day.day, tzinfo=_timezone.utc).timestamp()
+    )
 
 # --- drill-down request tracking ----------------------------------------
 
@@ -81,6 +97,7 @@ class _DrilldownRequest:
     ui_timeout_job: str | None = None     # _track_after handle for 5s UI deadline
     future: Future | None = None          # the in-flight fetch future, if any
     cursor_set: bool = False              # whether we set the wait cursor
+    compare_ticker: str = ""              # active compare symbol (targeted fetch)
 
 
 class DrilldownMixin:
@@ -235,23 +252,28 @@ class DrilldownMixin:
     ) -> bool:
         """True if a fresh ``interval`` fetch could plausibly include ``day``.
 
-        The reachable window is provider-aware
-        (:func:`tradinglab.constants.provider_lookback_days` for the active
-        ``source_var``): yfinance is capped to its ~60-day intraday window,
-        while deep-history vendors (Alpaca / Polygon) reach years back. A
-        day inside that window is fetchable on demand even when the current
-        cache doesn't contain it — the cache may be stale or only partially
-        companion-prefetched while the user sits on the 1d chart (this is
-        the bug: drilling into *today* or a recent day used to error "only
-        available from … onward" instead of fetching, even though a manual
-        5m toggle loads it fine). A day that predates the window is
-        genuinely beyond the provider's reach.
+        Two regimes, by provider capability:
 
-        Deliberately generous: a one-week buffer is added so boundary days
-        / provider jitter never produce a false "unavailable". A day that
-        turns out to be just out of reach simply triggers a fetch that
-        returns no coverage, after which :meth:`_on_drilldown_fetch_done`
-        warns with the accurate range.
+        * **Range-capable providers** (Alpaca — see
+          :func:`tradinglab.data.source_supports_range`) fetch any historical
+          day on demand via a targeted page-span window, so the reachable set
+          is "any day at or after the provider's data start". That floor is
+          the learned coverage watermark
+          (:func:`tradinglab.data.coverage.data_start`); when unknown we
+          assume reachable and let the first fetch discover the true floor.
+        * **Trailing-window providers** (yfinance) are capped to
+          :func:`tradinglab.constants.provider_lookback_days` for the active
+          ``source_var`` (~60-day intraday); a day inside that window is
+          fetchable even when the current cache doesn't contain it — the
+          cache may be stale or only partially companion-prefetched while the
+          user sits on the 1d chart. A day that predates the window is
+          genuinely beyond the provider's reach.
+
+        Deliberately generous: a one-week buffer is added (both regimes) so
+        boundary days / provider jitter never produce a false "unavailable".
+        A day that turns out to be just out of reach simply triggers a fetch
+        that returns no coverage, after which
+        :meth:`_on_drilldown_fetch_done` warns with the accurate range.
         """
         if not isinstance(day, _date_t):
             return False
@@ -259,6 +281,30 @@ class DrilldownMixin:
             src = self.source_var.get()
         except Exception:  # noqa: BLE001
             src = ""
+        # Range-capable providers (Alpaca) fetch any historical day on
+        # demand — the reachable set is not a trailing window but "any day
+        # at or after the provider's data start". Use the learned coverage
+        # watermark when we have one; otherwise assume reachable and let the
+        # fetch itself discover the true floor (record_fetch then learns it).
+        try:
+            range_capable = source_supports_range(src)
+        except Exception:  # noqa: BLE001
+            range_capable = False
+        if range_capable:
+            try:
+                sym = self.ticker_var.get().strip().upper()
+                cov = coverage.load(src, sym, interval)
+                ds = coverage.data_start(cov)
+            except Exception:  # noqa: BLE001
+                ds = None
+            if ds is None:
+                return True
+            try:
+                day_ts = _day_to_ts(day)
+            except Exception:  # noqa: BLE001
+                return True
+            # One-week buffer mirrors the trailing-window generosity below.
+            return day_ts >= ds - 7 * 86400
         window_days = provider_lookback_days(src, interval)
         cutoff = _date_t.today() - timedelta(days=window_days + 7)
         return day >= cutoff
@@ -366,7 +412,15 @@ class DrilldownMixin:
             self._finish_drilldown_request(req)
             return
         key = (req.src, req.ticker, "5m")
-        existing_fut = self._prefetch_futures.get(key)
+        # Range-capable providers (Alpaca) drill into arbitrarily old days,
+        # so a trailing-window companion prefetch won't contain the target
+        # day — do NOT attach to one. Instead fetch a targeted page-span
+        # window centered on req.day.
+        try:
+            range_capable = source_supports_range(req.src)
+        except Exception:  # noqa: BLE001
+            range_capable = False
+        existing_fut = None if range_capable else self._prefetch_futures.get(key)
         if existing_fut is not None and not existing_fut.done():
             req.future = existing_fut
             try:
@@ -377,7 +431,7 @@ class DrilldownMixin:
                 pass
         else:
             fetcher = DATA_SOURCES.get(req.src)
-            if fetcher is None:
+            if fetcher is None and not range_capable:
                 try:
                     self._status.error(
                         "Drill-down sync fetch failed: data source "
@@ -392,11 +446,43 @@ class DrilldownMixin:
             except Exception:  # noqa: BLE001
                 pass
 
-            def _work(t=req.ticker):
+            if range_capable:
+                # Capture the active compare symbol on the Tk thread — a
+                # worker must never read a Tk variable. The compare range is
+                # fetched + merged to disk inside the worker so the drill's
+                # re-render shows an aligned RS line.
+                compare = ""
                 try:
-                    return fetcher(t, "5m") or []
+                    if bool(self.compare_var.get()):
+                        compare = (
+                            self.compare_ticker_var.get() or ""
+                        ).strip().upper()
                 except Exception:  # noqa: BLE001
-                    return []
+                    compare = ""
+                req.compare_ticker = compare
+                now_ts = int(time.time())
+
+                def _work(
+                    src=req.src, t=req.ticker, cmp=compare,
+                    day=req.day, now=now_ts,
+                ):
+                    primary = self._targeted_range_fetch(
+                        src, t, "5m", day, now, merge_to_disk=False,
+                    )
+                    if cmp and cmp != t:
+                        try:
+                            self._targeted_range_fetch(
+                                src, cmp, "5m", day, now, merge_to_disk=True,
+                            )
+                        except Exception:  # noqa: BLE001
+                            pass
+                    return primary
+            else:
+                def _work(t=req.ticker):
+                    try:
+                        return fetcher(t, "5m") or []
+                    except Exception:  # noqa: BLE001
+                        return []
 
             try:
                 req.future = self._executor.submit(_work)
@@ -436,6 +522,103 @@ class DrilldownMixin:
                 _rid, result,
             ),
         )
+
+    def _targeted_range_fetch(
+        self, src: str, sym: str, interval: str, day, now_ts: int,
+        *, merge_to_disk: bool,
+    ) -> list[Candle]:
+        """Worker-thread: fetch ~1 API page around ``day`` for ``sym``.
+
+        Computes a page-span window centered on ``day``
+        (:func:`tradinglab.constants.targeted_window`, clamped to ``now_ts``
+        and the learned provider data-start), records the attempt in the
+        coverage sidecar, and returns the fetched bars. When the window is
+        already covered, returns the on-disk series so the caller's merge
+        still finds the requested day without a network round-trip.
+
+        ``merge_to_disk`` persists the fetched bars into the JSONL cache
+        here — used for the **compare** symbol, whose result is not
+        otherwise written by :meth:`_on_drilldown_fetch_done` (that handler
+        only merges the primary ``result``).
+
+        Never raises and never touches Tk state — safe on ``self._executor``.
+        On an unsupported / error status it degrades to the plain
+        trailing-window fetcher so the drill still lands with recent bars
+        (matching non-range provider behavior).
+        """
+        try:
+            cov = coverage.load(src, sym, interval)
+            if not cov.segments:
+                cov = coverage.bootstrap_from_cache(src, sym, interval)
+            data_start = coverage.data_start(cov)
+            day_ts = _day_to_ts(day)
+            start_ts, end_ts = targeted_window(
+                interval, day_ts, now_ts=now_ts, data_start_ts=data_start,
+            )
+        except Exception:  # noqa: BLE001
+            return self._trailing_fetch(src, sym, interval)
+        try:
+            already = coverage.covered(cov, start_ts, end_ts)
+        except Exception:  # noqa: BLE001
+            already = False
+        if already:
+            try:
+                return disk_cache.load(src, sym, interval) or []
+            except Exception:  # noqa: BLE001
+                return []
+        try:
+            bars, status = fetch_range(src, sym, interval, start_ts, end_ts)
+        except Exception:  # noqa: BLE001
+            bars, status = None, "error"
+        if status == "ok" and bars:
+            try:
+                returned_start = int(bars[0].date.timestamp())
+                returned_end = int(bars[-1].date.timestamp()) + 1
+                coverage.record_fetch(
+                    src, sym, interval, start_ts, end_ts,
+                    returned_start, returned_end,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            if merge_to_disk:
+                try:
+                    existing = disk_cache.load(src, sym, interval) or []
+                    merged = (
+                        disk_cache.merge_candles(existing, bars)
+                        if existing else list(bars)
+                    )
+                    disk_cache.save(src, sym, interval, merged)
+                except Exception:  # noqa: BLE001
+                    pass
+            return list(bars)
+        if status == "empty":
+            # Provider genuinely has no bars in this window — remember the
+            # attempt so we don't refetch it on the next drill.
+            try:
+                coverage.record_fetch(
+                    src, sym, interval, start_ts, end_ts, None, None,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            return []
+        # "unsupported" / "error" → trailing-window fallback.
+        return self._trailing_fetch(src, sym, interval)
+
+    def _trailing_fetch(
+        self, src: str, sym: str, interval: str,
+    ) -> list[Candle]:
+        """Worker-thread: plain trailing-window fetch via the source fetcher.
+
+        The graceful-degradation path for :meth:`_targeted_range_fetch` when
+        a range fetch is unsupported or errors. Never raises.
+        """
+        fetcher = DATA_SOURCES.get(src)
+        if fetcher is None:
+            return []
+        try:
+            return fetcher(sym, interval) or []
+        except Exception:  # noqa: BLE001
+            return []
 
     def _on_drilldown_sync_ui_timeout(self, request_id: int) -> None:
         """5s UI deadline fired: restore cursor + status, but keep waiting."""
@@ -513,6 +696,26 @@ class DrilldownMixin:
             merged = bars
             try:
                 self._full_cache[key] = bars
+            except Exception:  # noqa: BLE001
+                pass
+        # Targeted-fetch compare alignment: the worker fetched + merged the
+        # compare symbol's matching range into the on-disk cache, but the
+        # in-memory _full_cache still holds the old (short) series. Reload it
+        # from disk here (Tk thread) so the drill's re-render draws an
+        # aligned RS/compare line over the same window.
+        cmp_sym = getattr(req, "compare_ticker", "") or ""
+        if cmp_sym and cmp_sym != req.ticker:
+            cmp_key = (req.src, cmp_sym, "5m")
+            try:
+                cmp_disk = self._disk_load(cmp_key) or []
+                if cmp_disk:
+                    cmp_cur = self._full_cache.get(cmp_key)
+                    cmp_merged = (
+                        disk_cache.merge_candles(cmp_cur, cmp_disk)
+                        if cmp_cur else cmp_disk
+                    )
+                    self._full_cache[cmp_key] = cmp_merged
+                    self._trim_full_cache()
             except Exception:  # noqa: BLE001
                 pass
         # Re-check coverage of the latest pending day (which may have

@@ -20914,6 +20914,252 @@ def check_d83_entries_scanner_alert_renders_scanner_id_entry(app) -> None:
                 pass
 
 
+def check_d84_targeted_intraday_fetch(app) -> None:
+    """Targeted (on-demand) intraday fetch for range-capable providers.
+
+    Drilling into an arbitrarily old day on a range-capable source
+    (Alpaca-like) must pull just that day's page-span window via
+    ``data.fetch_range`` — a window *centered on the clicked day*, not a
+    trailing-from-now window — record coverage, land the day, and NOT
+    refetch a covered day on a second drill. The active compare symbol's
+    matching range is fetched too. See ``docs/TARGETED_FETCH.md`` and
+    ``gui/drilldown.spec.md`` → "Targeted intraday fetch".
+
+    Stub design: the fake source returns a *recent* day for trailing
+    (2-arg) calls — so the companion-prefetch / ``_load_data`` trailing
+    path can never reach the 2-year-old target day — but returns the
+    *target* day for explicit start/end range calls. Only range calls
+    bump the counters, so "targeted path taken" is unambiguous.
+    """
+    import time as _time
+    from datetime import date as _date_t
+    from datetime import timedelta
+    from datetime import timezone as _timezone
+
+    from tradinglab import data as _data_pkg
+    from tradinglab import disk_cache
+    from tradinglab.data import base as _data_base
+    from tradinglab.data import coverage as _coverage
+    from tradinglab.models import Candle
+
+    src = app.source_var.get()
+    original = _data_pkg.DATA_SOURCES[src]
+    range_was_capable = src in _data_base._RANGE_CAPABLE
+
+    TICKER = "TGTFETCH"
+    CMP = "TGTCMP"
+    target_day = _date_t(2024, 6, 3)      # Monday, ~2y before "now"
+    recent_day = _date_t(2026, 4, 27)     # what a trailing fetch "reaches"
+
+    def _5m_day(day: _date_t) -> list:
+        out = []
+        price = 100.0
+        for k in range(78):  # ~one RTH session of 5m bars
+            t = datetime(day.year, day.month, day.day, 9, 30) + \
+                timedelta(minutes=5 * k)
+            out.append(Candle(date=t, open=price, high=price + 0.5,
+                              low=price - 0.5, close=price + 0.1,
+                              volume=1000 + k, session="regular"))
+            price += 0.02
+        return out
+
+    def _5m_window(start_dt, end_dt) -> list:
+        """A few 5m bars per weekday across ``[start_dt, end_dt)``.
+
+        Simulates a real provider returning the *whole* requested window
+        (so ``record_fetch`` sees ``returned_start ≈ req_start`` and does
+        NOT spuriously learn a ``data_start`` that would forward-shift a
+        re-drill's window). ``start_dt`` / ``end_dt`` are aware-UTC.
+        """
+        out = []
+        price = 100.0
+        d = start_dt.date()
+        last = end_dt.date()
+        while d <= last:
+            if d.weekday() < 5:  # Mon-Fri only
+                for hh, mm in ((9, 30), (10, 30), (11, 30), (12, 30),
+                               (13, 30), (14, 30), (15, 30)):
+                    t = datetime(d.year, d.month, d.day, hh, mm)
+                    out.append(Candle(date=t, open=price, high=price + 0.5,
+                                      low=price - 0.5, close=price + 0.1,
+                                      volume=1000, session="regular"))
+                    price += 0.01
+            d = d + timedelta(days=1)
+        return out
+
+    def _1d_bars(n_days: int) -> list:
+        out = []
+        end = datetime(2026, 4, 29, 16, 0)
+        price = 100.0
+        for d in range(n_days):
+            t = end - timedelta(days=n_days - 1 - d)
+            out.append(Candle(date=t, open=price, high=price + 1,
+                              low=price - 1, close=price + 0.2,
+                              volume=10000, session="regular"))
+            price += 0.3
+        return out
+
+    # Only explicit start/end (range) calls are counted; trailing 2-arg
+    # calls (companion prefetch, _load_data re-fetch) return the recent
+    # day and are deliberately NOT counted.
+    calls = {"range_5m": {}, "windows": []}
+
+    def range_fetch(ticker, interval, *, start=None, end=None):
+        if interval == "1d":
+            return _1d_bars(900)
+        # 5m
+        if start is None or end is None:
+            # Trailing companion-prefetch / reload — cannot reach the old day.
+            return _5m_day(recent_day)
+        calls["range_5m"][ticker] = calls["range_5m"].get(ticker, 0) + 1
+        calls["windows"].append(
+            (ticker, int(start.timestamp()), int(end.timestamp())))
+        return _5m_window(start, end)
+
+    def _wipe(sym: str) -> None:
+        for iv in ("1d", "5m"):
+            key = (src, sym, iv)
+            app._full_cache.pop(key, None)
+            try:
+                disk_cache._path_for(*key).unlink(missing_ok=True)
+            except Exception:
+                pass
+            try:
+                _coverage._coverage_path(src, sym, iv).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    def _has_day(candles, day) -> bool:
+        for c in candles or []:
+            try:
+                if not getattr(c, "is_gap", False) and c.date.date() == day:
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def _drill_and_wait(day, timeout: float = 6.0) -> None:
+        app._zoom_5m_for_date(day)
+        _pump_until(
+            app,
+            lambda: app._drilldown_request is None
+            and app.interval_var.get() == "5m",
+            timeout=timeout,
+        )
+
+    saved_grace = app._DRILLDOWN_PREFETCH_GRACE_MS
+    saved_ui = app._DRILLDOWN_SYNC_UI_TIMEOUT_MS
+    saved_ticker = app.ticker_var.get()
+    saved_interval = app.interval_var.get()
+    saved_compare = bool(app.compare_var.get())
+    saved_cmp_ticker = app.compare_ticker_var.get()
+
+    _data_pkg.DATA_SOURCES[src] = range_fetch
+    _data_base._RANGE_CAPABLE.add(src)
+    app._DRILLDOWN_PREFETCH_GRACE_MS = 100
+    app._DRILLDOWN_SYNC_UI_TIMEOUT_MS = 5000
+    app._prefetch_inflight.clear()
+    app._prefetch_futures.clear()
+
+    try:
+        # ---- A. Old-day drill takes the targeted path + day lands ----
+        _wipe(TICKER)
+        _wipe(CMP)
+        app.compare_var.set(False)
+        app.interval_var.set("1d")
+        app.ticker_var.set(TICKER)
+        app._schedule_reload(delay_ms=0)
+        _pump_until(
+            app,
+            lambda: bool(app._full_cache.get((src, TICKER, "1d"))),
+            timeout=5.0,
+        )
+        _pump(app, 0.05)
+
+        now_ts = int(_time.time())
+        _drill_and_wait(target_day)
+
+        assert calls["range_5m"].get(TICKER, 0) >= 1, \
+            "old-day drill on a range source must call fetch_range (targeted)"
+        assert calls["windows"], "fetch_range should record a start/end window"
+        w_ticker, w_start, w_end = calls["windows"][0]
+        assert w_ticker == TICKER
+        day_ts = int(datetime(
+            target_day.year, target_day.month, target_day.day,
+        ).replace(tzinfo=_timezone.utc).timestamp())
+        # Window is CENTERED on the clicked day, not trailing-from-now:
+        assert w_start <= day_ts < w_end, \
+            "clicked day must fall inside the targeted window"
+        span_days = (w_end - w_start) / 86400.0
+        assert span_days > 90, \
+            f"targeted 5m window should be a page-span (>90d); got {span_days:.0f}d"
+        assert (now_ts - w_end) > 300 * 86400, \
+            "targeted window must end ~2y ago (centered on the day), not near now"
+        # The 2-year-old day actually landed.
+        assert _has_day(app._full_cache.get((src, TICKER, "5m")), target_day), \
+            "target day should be present in the 5m cache after drill"
+        assert app.interval_var.get() == "5m"
+        cov = _coverage.load(src, TICKER, "5m")
+        assert _coverage.covered(cov, w_start, w_end), \
+            "coverage sidecar should mark the fetched window covered"
+
+        # ---- B. Re-drilling a covered day does NOT refetch ----
+        calls_before = calls["range_5m"].get(TICKER, 0)
+        app._full_cache.pop((src, TICKER, "5m"), None)  # force disk/coverage path
+        app.interval_var.set("1d")
+        _drill_and_wait(target_day)
+        assert calls["range_5m"].get(TICKER, 0) == calls_before, \
+            "a covered day must not trigger a second range fetch"
+        assert _has_day(app._full_cache.get((src, TICKER, "5m")), target_day), \
+            "covered re-drill should still land the day (from disk)"
+
+        # ---- C. Active compare symbol's range is fetched too ----
+        _wipe(TICKER)
+        _wipe(CMP)
+        calls["range_5m"].clear()
+        app.compare_var.set(True)
+        app.compare_ticker_var.set(CMP)
+        app.interval_var.set("1d")
+        app.ticker_var.set(TICKER)
+        app._schedule_reload(delay_ms=0)
+        _pump_until(
+            app,
+            lambda: bool(app._full_cache.get((src, TICKER, "1d"))),
+            timeout=5.0,
+        )
+        _pump(app, 0.05)
+        app._full_cache.pop((src, TICKER, "5m"), None)
+        _drill_and_wait(target_day)
+        assert calls["range_5m"].get(CMP, 0) >= 1, \
+            "active compare symbol's matching range should be fetched on drill"
+        assert _has_day(disk_cache.load(src, CMP, "5m"), target_day), \
+            "compare 5m disk cache should include the target day after drill"
+
+        print("  [OK] d84: targeted intraday fetch — old-day drill uses "
+              "fetch_range (page-span window centered on the day), coverage "
+              "honored (no dup fetch), compare symbol range fetched")
+    finally:
+        _data_pkg.DATA_SOURCES[src] = original
+        if not range_was_capable:
+            _data_base._RANGE_CAPABLE.discard(src)
+        app._DRILLDOWN_PREFETCH_GRACE_MS = saved_grace
+        app._DRILLDOWN_SYNC_UI_TIMEOUT_MS = saved_ui
+        if app._drilldown_request is not None:
+            try:
+                app._finish_drilldown_request(app._drilldown_request)
+            except Exception:
+                pass
+        _wipe(TICKER)
+        _wipe(CMP)
+        app.compare_var.set(saved_compare)
+        app.compare_ticker_var.set(saved_cmp_ticker)
+        app.interval_var.set(saved_interval)
+        app.ticker_var.set(saved_ticker)
+        app._prefetch_inflight.clear()
+        app._prefetch_futures.clear()
+        _pump(app, 0.1)
+
+
 # ---------------------------------------------------------------------- Main
 
 
@@ -21090,6 +21336,7 @@ def _run_all_checks(app) -> None:
     check_d81_rvol_rhs_reachable(app)
     check_d82_modeless_dialogs_preserve_grab(app)
     check_d83_entries_scanner_alert_renders_scanner_id_entry(app)
+    check_d84_targeted_intraday_fetch(app)
     check_e0_disk_cache_persist(app)
 
 
@@ -21460,6 +21707,8 @@ def _build_check_sequence():
          check_d82_modeless_dialogs_preserve_grab),
         ("check_d83_entries_scanner_alert_renders_scanner_id_entry",
          check_d83_entries_scanner_alert_renders_scanner_id_entry),
+        ("check_d84_targeted_intraday_fetch",
+         check_d84_targeted_intraday_fetch),
         ("check_e0_disk_cache_persist", check_e0_disk_cache_persist),
     ]
     return seq

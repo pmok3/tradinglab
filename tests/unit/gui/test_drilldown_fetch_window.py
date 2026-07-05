@@ -5,19 +5,24 @@ day missing from a stale / partially-prefetched 5m cache) wrongly emitted
 "5m data only available from … onward" instead of fetching the bars on
 demand — even though a manual 5m toggle loads them fine.
 
-``DrilldownMixin._day_within_intraday_fetch_window`` reads the reachable
-window from ``constants.provider_lookback_days(source, interval)`` for the
-active ``source_var`` (plus ``date.today()``). Called with ``self=None``
-the ``source_var`` read raises and is caught → ``src=""`` → the yfinance
-(``INTERVAL_PERIODS``) windows, which is what the default-path tests
-below exercise. A ``_self(src)`` helper drives the deep-history vendors.
+``DrilldownMixin._day_within_intraday_fetch_window`` has two regimes:
+
+* **Range-capable providers** (Alpaca) fetch any historical day on demand,
+  so reachability is gated on the learned coverage ``data_start`` watermark
+  (unknown → always reachable), not a trailing window.
+* **Trailing-window providers** (yfinance) read the reachable window from
+  ``constants.provider_lookback_days(source, interval)`` (plus
+  ``date.today()``). Called with ``self=None`` the ``source_var`` read
+  raises and is caught → ``src=""`` → the yfinance (``INTERVAL_PERIODS``)
+  windows, which is what the default-path tests below exercise. A
+  ``_self(src)`` helper drives the named vendors.
 """
 from __future__ import annotations
 
 from datetime import date, timedelta
 from types import SimpleNamespace
 
-from tradinglab.gui.drilldown import DrilldownMixin
+from tradinglab.gui.drilldown import DrilldownMixin, _day_to_ts
 
 _f = DrilldownMixin._day_within_intraday_fetch_window
 
@@ -77,28 +82,53 @@ def test_non_date_returns_false() -> None:
     assert _f(None, None, "5m") is False
 
 
-# --- provider-aware windows (deep-history vendors) -------------------------
+# --- provider-aware windows -------------------------------------------------
+#
+# Range-capable providers (Alpaca — ``source_supports_range``) fetch any
+# historical day on demand via a targeted page-span window, so the reachable
+# set is no longer a trailing window. It is "any day at or after the learned
+# provider data-start". With no coverage sidecar yet (data_start unknown),
+# EVERY day is reachable; once a fetch has learned the real data-start,
+# days older than it (minus a 7-day buffer) become unreachable.
 
 
-def test_deep_history_source_extends_5m_window() -> None:
-    # Alpaca 5m reaches ~4 months (120d) back — well beyond yfinance's 60d,
-    # but bounded so the up-front fetch stays ~1 page / ≲3s (< the 5s
-    # drill-down deadline).
-    assert _f(_self("alpaca"), date.today() - timedelta(days=60), "5m") is True
-    assert _f(_self("alpaca"), date.today() - timedelta(days=110), "5m") is True
-    # Beyond the ~120d + 7-day buffer → out of reach.
-    assert _f(_self("alpaca"), date.today() - timedelta(days=200), "5m") is False
+def test_range_capable_source_reaches_any_day_without_coverage() -> None:
+    # Alpaca (range-capable) with no learned data-start → any day is
+    # fetchable on demand, including ones far beyond yfinance's 60d cap.
+    for n in (60, 110, 200, 2000):
+        assert _f(_self("alpaca"), date.today() - timedelta(days=n), "5m") is True, n
 
 
 def test_deep_history_source_daily_reaches_years_back() -> None:
-    # Alpaca daily window is ~15y; any sane drill target is reachable.
+    # Alpaca daily: any sane drill target is reachable.
     assert _f(_self("alpaca"), date.today() - timedelta(days=2000), "1d") is True
 
 
-def test_deep_history_source_one_minute_is_bounded() -> None:
-    # 1m is bar-dense → bounded at 20d even for a deep-history vendor.
-    assert _f(_self("alpaca"), date.today() - timedelta(days=10), "1m") is True
-    assert _f(_self("alpaca"), date.today() - timedelta(days=60), "1m") is False
+def test_range_capable_one_minute_also_on_demand() -> None:
+    # 1m is bar-dense but still on-demand for a range-capable vendor — no
+    # trailing-window cap applies (the targeted fetch pulls just the day's
+    # page rather than the whole trailing history).
+    for n in (10, 60, 400):
+        assert _f(_self("alpaca"), date.today() - timedelta(days=n), "1m") is True, n
+
+
+def test_range_capable_source_gates_on_learned_data_start(monkeypatch) -> None:
+    # Once coverage has learned the provider's data-start, a day well after
+    # it is reachable but a day well before it (past the 7-day buffer) is not.
+    from tradinglab.data import coverage as _cov
+    from tradinglab.gui import drilldown as _dd
+
+    ds_ts = _day_to_ts(date.today() - timedelta(days=100))
+    rec = _cov.CoverageRecord(data_start_ts=ds_ts)
+    monkeypatch.setattr(_dd.coverage, "load", lambda *a, **k: rec)
+    slf = SimpleNamespace(
+        source_var=SimpleNamespace(get=lambda: "alpaca"),
+        ticker_var=SimpleNamespace(get=lambda: "AAPL"),
+    )
+    # 50 days ago → after data_start → reachable.
+    assert _f(slf, date.today() - timedelta(days=50), "5m") is True
+    # 200 days ago → before data_start − 7d buffer → unreachable.
+    assert _f(slf, date.today() - timedelta(days=200), "5m") is False
 
 
 def test_yfinance_source_keeps_sixty_day_5m_window() -> None:

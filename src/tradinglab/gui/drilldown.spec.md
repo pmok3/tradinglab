@@ -60,12 +60,17 @@ user sits on the 1d chart, so a recent day — including **today** — may
 be missing even though a manual 5m toggle would load it. The fix:
 
 - `_day_within_intraday_fetch_window(day, interval="5m")` returns True
-  when `day` is within the **provider-aware** intraday window for the
-  interval — `constants.provider_lookback_days(source_var.get(), interval)`
-  (yfinance capped at ~60d for 5m; deep-history vendors Alpaca/Polygon
-  reach years back), measured against `date.today()` with a generous
-  7-day buffer. Called with `self=None` the `source_var` read is caught
-  → the yfinance windows.
+  when `day` is reachable for the active source. **Two regimes:**
+  - **Range-capable providers** (Alpaca — `data.source_supports_range`)
+    fetch any historical day on demand, so reachability is gated on the
+    learned coverage `data_start` watermark
+    (`data.coverage.data_start`): unknown → always reachable; known →
+    `day >= data_start − 7d`. No trailing-window cap applies.
+  - **Trailing-window providers** (yfinance) use the provider-aware
+    intraday window `constants.provider_lookback_days(source_var.get(),
+    interval)` (yfinance capped at ~60d for 5m), measured against
+    `date.today()` with a generous 7-day buffer. Called with `self=None`
+    the `source_var` read is caught → the yfinance windows.
 - **Day inside the window** → fall through to the fetch path (branch 3 /
   `_drilldown_sync_fetch`), identical to a cold cache miss. The fetch
   uses the same `DATA_SOURCES` fetcher a manual toggle uses;
@@ -82,6 +87,54 @@ though the day was well within yfinance's reach. Pinned by
 `tests/unit/gui/test_drilldown_fetch_window.py` (window logic) and
 `test_smoke_full.py::check_d38…` sub-tests B (out-of-window → WARN) and
 B2 (in-window-but-uncovered → fetch).
+
+## Targeted intraday fetch (range-capable providers)
+
+For providers where `data.source_supports_range(src)` is True (Alpaca),
+`_drilldown_sync_fetch` no longer bulk-loads a trailing window. Instead it
+pulls **just the clicked day's ~1-API-page window** on demand, so drilling
+into an arbitrarily old day is fast and stays within the sync-UI deadline.
+See `docs/TARGETED_FETCH.md` for the locked design.
+
+Flow (all worker steps run on `self._executor`, never touching Tk):
+
+1. **Skip prefetch reuse.** A trailing companion-prefetch cannot contain an
+   old day, so `existing_fut` is forced to `None` for range-capable sources;
+   a fresh targeted `_work` is always submitted.
+2. **Capture compare on the Tk thread.** The active compare symbol
+   (`compare_var` on + `compare_ticker_var`) is read in
+   `_drilldown_sync_fetch` (Tk thread) and stored on `req.compare_ticker`;
+   the worker must never read a Tk variable.
+3. **Worker: `_targeted_range_fetch(src, sym, interval, day, now_ts, *,
+   merge_to_disk)`** —
+   - loads/bootstraps the `coverage` sidecar, reads `data_start`, and
+     computes `constants.targeted_window(interval, day_ts, now_ts=…,
+     data_start_ts=…)` centered on the clicked day (clamped to now / the
+     provider data-start);
+   - if the window is already `coverage.covered(…)`, returns the on-disk
+     series (no network) so the caller's merge still finds the day;
+   - else `data.fetch_range(…)` → on `ok` records coverage
+     (`record_fetch`, learning `data_start` when bars start materially
+     later than requested) and returns the bars; on `empty` records the
+     attempt and returns `[]`; on `unsupported`/`error` degrades to the
+     plain trailing-window `_trailing_fetch`.
+   - `merge_to_disk=False` for the **primary** (whose result
+     `_on_drilldown_fetch_done` merges into `_full_cache` + disk itself);
+     `merge_to_disk=True` for the **compare** symbol (persisted here since
+     the primary-only done-handler won't).
+4. **Tk: `_on_drilldown_fetch_done`** merges the primary result as before,
+   then — when `req.compare_ticker` is set — reloads the compare symbol's
+   `_full_cache` entry from disk (the worker extended it) so the drill's
+   re-render draws an aligned RS/compare line over the same window, and
+   drills.
+
+Non-range providers (yfinance) keep the original single-fetcher path
+unchanged. `_targeted_range_fetch` / `_trailing_fetch` never raise.
+
+Pinned by `tests/unit/gui/test_drilldown_fetch_window.py` (range-source
+reachability + `data_start` gating) and
+`tests/smoke/test_smoke_full.py::check_d84…` (targeted drilldown end-to-end
+with a stubbed range-capable source).
 
 ## app.py impact
 7516 → 6193 lines (−1323 / −17.6%) across all three Phase 2-3 extractions.
