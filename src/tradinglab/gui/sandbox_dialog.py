@@ -76,8 +76,8 @@ class SandboxStartDialog(BaseModalDialog):
             app,
             title="Start Sandbox Session",
             geometry_key="dlg.sandbox_start",
-            default_geometry="480x520",
-            resizable=(False, False),
+            default_geometry="700x580",
+            resizable=(True, True),
         )
         self.app = app
         self.reference_symbol = reference_symbol
@@ -133,6 +133,21 @@ class SandboxStartDialog(BaseModalDialog):
 
         self.focus_set()
         protect_combobox_wheel(self)
+        # Guarantee the window can never open smaller than its content.
+        # The dialog grew over time (universe picker + 6 interval
+        # checkboxes + economics fields) past the old fixed 480x520, and
+        # being non-resizable it clipped the right/bottom with no way to
+        # enlarge. Deriving minsize from the *actual* laid-out request
+        # size makes it self-correcting under any font / DPI scaling
+        # (Windows-on-ARM display scaling in particular), not just the
+        # dev machine's metrics. A small margin absorbs border/rounding.
+        try:
+            self.update_idletasks()
+            req_w = self.winfo_reqwidth()
+            req_h = self.winfo_reqheight()
+            self.minsize(max(480, req_w + 16), max(520, req_h + 16))
+        except tk.TclError:
+            pass
         self._finalize_modal(primary=self._on_start, cancel=self._on_cancel)
 
     @staticmethod
