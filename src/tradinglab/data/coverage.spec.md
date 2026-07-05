@@ -1,8 +1,8 @@
 # data/coverage.py — Spec
 
-> **Status: API skeleton (implementation pending).** Behavioral functions
-> raise `NotImplementedError`; the dataclass + constants define the shape.
 > Design contract: [`docs/TARGETED_FETCH.md`](../../../docs/TARGETED_FETCH.md).
+> The module is implemented + unit-tested; it is **not yet consumed** by the
+> drilldown fetch path (Phase-1 wiring pending).
 
 ## Purpose
 Per-`(source, ticker, interval)` **fetch-coverage record** — a small sidecar
@@ -50,17 +50,23 @@ vs *provider-exhausted* in the UI.
 - **Never raises on I/O.** A corrupt/absent sidecar degrades to an empty record
   — a coverage bug must never break a fetch.
 
-## Invariants (target — pinned once implemented)
+## Invariants (pinned by tests)
 - `segments` is always merged + sorted, non-overlapping, half-open.
 - `covered(rec, s, e)` ⟺ `missing_ranges(rec, s, e) == []`.
 - `record_fetch` is idempotent for an already-covered range (no duplicate/growth).
 - `load` / `save` round-trip a record unchanged.
+- A returned-start ≥ `_DATA_START_MARGIN_S` (7d) later than requested learns
+  `data_start_ts` + sets `exhausted_start`; a weekend-sized gap does not.
 
-## Testing (planned)
-- `tests/unit/data/test_coverage.py` — segment merge, `missing_ranges`,
-  `covered`, `data_start` watermark learning, `record_fetch` idempotency,
-  load/save round-trip + corrupt-sidecar → empty, bootstrap from a JSONL.
+## Testing
+- `tests/unit/data/test_coverage.py` (14 tests) — segment merge, `missing_ranges`,
+  `covered`, `data_start` watermark learning (+ the 7-day margin), `record_fetch`
+  idempotency, load/save round-trip + corrupt-sidecar → empty, path sanitization,
+  bootstrap from a JSONL.
 
 ## Recent history
-- **API skeleton** — dataclass + constants + entry points defined; bodies raise
-  `NotImplementedError`. Encodes the v1 decisions in `docs/TARGETED_FETCH.md`.
+- **Implemented** — segment merge, `missing_ranges`/`covered`, watermark
+  learning in `record_fetch`, atomic load/save, JSONL bootstrap. 14 unit tests.
+  Not yet consumed by the drilldown path (Phase-1 wiring pending).
+- **API skeleton** — dataclass + constants + entry points defined; encoded the
+  v1 decisions in `docs/TARGETED_FETCH.md`.

@@ -4,7 +4,7 @@ A one-spec-per-`.py` documentation set. Each spec follows a fixed 9-section layo
 
 **Style guide:** see [`SPEC_STYLE.md`](SPEC_STYLE.md) for the canonical layout every spec follows.
 
-**Count: 273 specs (one per `.py` module; incl. 1 API skeleton pending implementation — `data/coverage` for the targeted intraday fetch, see [`TARGETED_FETCH.md`](TARGETED_FETCH.md). The watchlist columns / signals / dialog skeletons are now implemented. The count here is the canonical authority; this index table is a curated subset listing the most-accessed specs, not an exhaustive enumeration).**
+**Count: 273 specs (one per `.py` module; all skeletons now implemented — `data/coverage` (targeted intraday fetch, see [`TARGETED_FETCH.md`](TARGETED_FETCH.md)) and the watchlist columns / signals / dialog. The count here is the canonical authority; this index table is a curated subset listing the most-accessed specs, not an exhaustive enumeration).**
 
 ## Top-level (`tradinglab/`)
 | Spec | Covers |
@@ -39,7 +39,7 @@ A one-spec-per-`.py` documentation set. Each spec follows a fixed 9-section layo
 | `data/__init__.spec.md` | `DATA_SOURCES` registry. |
 | `data/_http.spec.md` | Shared credential-safe HTTP opener — `credentialed_opener()` strips auth on cross-host 30x; `MAX_RESPONSE_BYTES = 8 MB`. |
 | `data/base.spec.md` | `DataFetcher` protocol. |
-| `data/coverage.spec.md` | **(skeleton)** Per-`(source,ticker,interval)` fetch-coverage sidecar — fetched range segments + data-start watermark; underpins the targeted intraday fetch. See [`TARGETED_FETCH.md`](TARGETED_FETCH.md). |
+| `data/coverage.spec.md` | Per-`(source,ticker,interval)` fetch-coverage sidecar — merged fetched range segments + data-start watermark; underpins the targeted intraday fetch. See [`TARGETED_FETCH.md`](TARGETED_FETCH.md). |
 | `data/normalize.spec.md` | `candles_from_dataframe` + `_PREBUILT_ARRAYS` side-channel (identity-paired). |
 | `data/parallel.spec.md` | Parallel multi-ticker fetch helper. |
 | `data/synthetic_source.spec.md` | Deterministic pseudo-random candles. |

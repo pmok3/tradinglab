@@ -835,6 +835,66 @@ def provider_lookback_days(source: str, interval: str) -> int:
     return _period_to_days(INTERVAL_PERIODS.get(interval, "60d"))
 
 
+#: Alpaca's per-request bar cap (one page). Targeted intraday fetches size
+#: their window to ~1 page so a single request stays fast (~3-4s). Providers
+#: with a different cap can pass their own value to :func:`targeted_window`.
+DEFAULT_BARS_PER_PAGE = 10_000
+
+#: Regular-session minutes (09:30-16:00 ET) — bars/day = _RTH_MINUTES / interval.
+_RTH_MINUTES = 390
+
+
+def page_span_days(interval: str, *, bars_per_page: int = DEFAULT_BARS_PER_PAGE) -> int:
+    """Calendar-day span that ~1 API page of ``interval`` bars covers.
+
+    Sized for the targeted intraday fetch (``docs/TARGETED_FETCH.md`` §4.2):
+    RTH bars/day = 390 / ``interval_minutes``, trading-days = ``bars_per_page`` /
+    that, × 7/5 for weekend slack. **Intraday only** — daily+ raises via
+    ``interval_minutes`` (a page window is meaningless there; those use the
+    full-history :func:`provider_lookback_days`).
+    """
+    mins = interval_minutes(interval)  # ValueError on daily+
+    bars_per_rth_day = max(1, round(_RTH_MINUTES / mins))
+    trading_days = bars_per_page / bars_per_rth_day
+    return max(1, int(trading_days * 7 / 5))
+
+
+def targeted_window(
+    interval: str,
+    day_ts: int,
+    *,
+    now_ts: int,
+    data_start_ts: int | None = None,
+    bars_per_page: int = DEFAULT_BARS_PER_PAGE,
+) -> tuple[int, int]:
+    """Half-open ``[start, end)`` epoch-second window (~1 page) around ``day_ts``.
+
+    Centered on the clicked day, then boundary-aware (``docs/TARGETED_FETCH.md``
+    §4.2): clamp ``end`` to ``now_ts`` (refilling backward) and, when known,
+    clamp ``start`` to ``data_start_ts`` (refilling forward), so the page fills
+    with real bars rather than wasting half on an empty side.
+    """
+    span_s = page_span_days(interval, bars_per_page=bars_per_page) * 86_400
+    day = int(day_ts)
+    now = int(now_ts)
+    half = span_s // 2
+    start = day - half
+    end = day + half
+    # Clamp the forward edge to now; refill the page backward.
+    if end > now:
+        end = now
+        start = end - span_s
+    # Clamp the backward edge to the known data start; refill forward.
+    if data_start_ts is not None and start < int(data_start_ts):
+        start = int(data_start_ts)
+        end = min(now, start + span_s)
+    if start < 0:
+        start = 0
+    if end <= start:
+        end = start + span_s
+    return (start, end)
+
+
 # --- main-window pane layout -----------------------------------------------
 #
 # The golden ratio φ ≈ 1.618 and its inverse 1/φ ≈ 0.618. The defining

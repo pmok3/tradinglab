@@ -18,8 +18,10 @@ from tradinglab.constants import (
     classify_session,
     floor_to_interval,
     interval_minutes,
+    page_span_days,
     provider_lookback_days,
     resolve_startup_defaults,
+    targeted_window,
 )
 
 # ---------------------------------------------------------------------------
@@ -51,6 +53,55 @@ def test_provider_lookback_yfinance_matches_interval_periods():
 def test_provider_lookback_unknown_interval_defaults_sixty():
     assert provider_lookback_days("yfinance", "bogus") == 60
     assert provider_lookback_days("", "bogus") == 60
+
+
+# ---------------------------------------------------------------------------
+# page_span_days / targeted_window (targeted intraday fetch)
+# ---------------------------------------------------------------------------
+
+
+def test_page_span_days_intraday_progression():
+    d1 = page_span_days("1m")
+    d5 = page_span_days("5m")
+    d15 = page_span_days("15m")
+    d1h = page_span_days("1h")
+    # A coarser interval packs fewer bars/day → one page spans deeper history.
+    assert d1 < d5 < d15 < d1h
+    assert 150 <= d5 <= 210  # ~6 months for 5m
+
+
+def test_page_span_days_daily_raises():
+    with pytest.raises(ValueError):
+        page_span_days("1d")
+
+
+def test_targeted_window_centered_when_unconstrained():
+    span = page_span_days("5m") * 86_400
+    day = 2_000_000_000
+    now = day + span  # room on both sides
+    start, end = targeted_window("5m", day, now_ts=now)
+    assert start < day < end
+    assert end - start == span
+    assert abs((day - start) - (end - day)) <= 86_400  # centered
+
+
+def test_targeted_window_clamps_end_to_now():
+    span = page_span_days("5m") * 86_400
+    now = 2_000_000_000
+    day = now - 100  # "today"
+    start, end = targeted_window("5m", day, now_ts=now)
+    assert end == now
+    assert start == now - span  # refilled backward
+
+
+def test_targeted_window_clamps_start_to_data_start():
+    span = page_span_days("5m") * 86_400
+    data_start = 1_000_000_000
+    day = data_start + 100  # near the start of available data
+    now = data_start + 10 * span
+    start, end = targeted_window("5m", day, now_ts=now, data_start_ts=data_start)
+    assert start == data_start
+    assert end == data_start + span  # refilled forward
 
 # ---------------------------------------------------------------------------
 # classify_session

@@ -78,13 +78,19 @@ _ALPACA_BASE = "https://data.alpaca.markets"
 def fetch_alpaca_data(
     ticker: str = "AAPL", interval: str = "1d",
     *, lookback_days: int | None = None,
+    start: datetime | None = None, end: datetime | None = None,
 ) -> list[Candle] | None:
     """``DataFetcher``-compatible Alpaca fetcher.
 
-    Returns ``None`` on any error. Default lookback windows come from
+    Returns ``None`` on any error. Without ``start``/``end`` it fetches a
+    trailing window whose depth comes from
     :func:`constants.provider_lookback_days` — Alpaca has no yfinance-style
     60-day intraday cap, so intraday reaches years back and daily reaches
     Alpaca's full IEX history (~2016; the server caps to plan availability).
+
+    Passing kw-only ``start`` / ``end`` (aware datetimes) fetches that
+    **explicit range** instead — the targeted intraday fetch path (see
+    ``docs/TARGETED_FETCH.md``). This is what marks Alpaca ``supports_range``.
     """
     creds = get_credentials().alpaca
     if not creds.is_configured():
@@ -94,13 +100,19 @@ def fetch_alpaca_data(
     if timeframe is None:
         LOG.warning("alpaca: unsupported interval %r", interval)
         return None
-    if lookback_days is None:
-        lookback_days = provider_lookback_days("alpaca", interval)
-    end = datetime.now(timezone.utc)
-    start = end - timedelta(days=lookback_days)
+    if start is not None or end is not None:
+        end_dt = end or datetime.now(timezone.utc)
+        start_dt = start or (
+            end_dt - timedelta(days=provider_lookback_days("alpaca", interval))
+        )
+    else:
+        if lookback_days is None:
+            lookback_days = provider_lookback_days("alpaca", interval)
+        end_dt = datetime.now(timezone.utc)
+        start_dt = end_dt - timedelta(days=lookback_days)
     try:
         payload = _accumulate_bars(
-            lambda token: _http_get_page(ticker, timeframe, start, end, creds, token)
+            lambda token: _http_get_page(ticker, timeframe, start_dt, end_dt, creds, token)
         )
     except Exception as exc:  # pragma: no cover - network path
         LOG.warning("alpaca: fetch failed for %s %s: %s", ticker, interval, exc)

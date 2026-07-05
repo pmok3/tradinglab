@@ -23,8 +23,12 @@ from ..models import Candle
 
 # A source fetcher takes (ticker, interval) and returns candles or None
 # on failure (import error, network error, empty result — all treated
-# equivalently by the app).
-DataFetcher = Callable[[str, str], list[Candle] | None]
+# equivalently by the app). Range-capable sources ALSO accept optional
+# kw-only ``start`` / ``end`` datetimes (see :func:`fetch_range` + the
+# ``supports_range`` registration flag) to fetch an explicit window instead
+# of their default trailing one; ``Callable[...]`` keeps the alias
+# back-compatible with the ``(ticker, interval)`` call sites.
+DataFetcher = Callable[..., list[Candle] | None]
 
 
 # Global registry. Populated by submodules at import time. The dict
@@ -40,9 +44,15 @@ DATA_SOURCES: dict[str, DataFetcher] = {}
 # sees an option they aren't meant to pick.
 _INTERNAL_SOURCES: set[str] = set()
 
+# Sources whose fetcher honours optional kw-only ``start`` / ``end`` datetimes
+# — i.e. can fetch an explicit range on demand (targeted intraday fetch, see
+# :func:`fetch_range`). Alpaca / Polygon; not yfinance/local/synthetic.
+_RANGE_CAPABLE: set[str] = set()
+
 
 def register_source(
     name: str, fetcher: DataFetcher, *, internal: bool = False,
+    supports_range: bool = False,
 ) -> None:
     """Register a new data source under ``name``.
 
@@ -69,6 +79,45 @@ def register_source(
         _INTERNAL_SOURCES.add(name)
     else:
         _INTERNAL_SOURCES.discard(name)
+    if supports_range:
+        _RANGE_CAPABLE.add(name)
+    else:
+        _RANGE_CAPABLE.discard(name)
+
+
+def source_supports_range(name: str) -> bool:
+    """True if ``name``'s fetcher accepts kw-only ``start`` / ``end`` datetimes."""
+    return name in _RANGE_CAPABLE
+
+
+def fetch_range(
+    source: str, ticker: str, interval: str, start_ts: int, end_ts: int,
+) -> tuple[list[Candle] | None, str]:
+    """Targeted range fetch of ``[start_ts, end_ts)`` (epoch seconds).
+
+    Returns ``(candles, status)`` where ``status`` is ``"ok"`` (bars returned),
+    ``"empty"`` (fetch succeeded, no bars in range — halt/holiday/edge),
+    ``"unsupported"`` (source can't range-fetch — caller uses the trailing
+    window instead), or ``"error"`` (missing source / fetch raised). Never
+    raises. Timestamps are passed to the fetcher as aware-UTC datetimes.
+    """
+    fetcher = DATA_SOURCES.get(source)
+    if fetcher is None:
+        return None, "error"
+    if source not in _RANGE_CAPABLE:
+        return None, "unsupported"
+    from datetime import datetime, timezone
+    start = datetime.fromtimestamp(int(start_ts), timezone.utc)
+    end = datetime.fromtimestamp(int(end_ts), timezone.utc)
+    try:
+        bars = fetcher(ticker, interval, start=start, end=end)
+    except TypeError:  # fetcher didn't actually accept start/end — be safe
+        return None, "unsupported"
+    except Exception:  # noqa: BLE001 — network/parse; treat all as a soft error
+        return None, "error"
+    if not bars:
+        return [], "empty"
+    return bars, "ok"
 
 
 def is_internal_source(name: str) -> bool:
