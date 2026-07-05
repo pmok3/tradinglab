@@ -4,7 +4,7 @@
 Charles Schwab Market Data API (`/pricehistory`) → `List[Candle]`. Two-layer module: a pure response-mapper that is fully testable offline, plus an OAuth-gated HTTP fetcher.
 
 ## Public API
-- `candles_from_schwab_response(payload: dict, *, interval: str) -> List[Candle]` — pure mapper. Tolerates both the standard `{"candles": [...]}` envelope and a bare list (some streaming-adjacent endpoints). Honors `empty: true` (returns `[]`). Uses `candles_from_json_rows` with `ts_unit="ms"`.
+- `candles_from_schwab_response(payload: dict, *, interval: str) -> List[Candle]` — pure mapper. Tolerates both the standard `{"candles": [...]}` envelope and a bare list (some streaming-adjacent endpoints). Honors `empty: true` (returns `[]`). Uses `candles_from_json_rows` with `ts_unit="ms"` **and `tz=core.timezones.ET`** (ms-epoch UTC → US-Eastern wall-clock, matching yfinance / Alpaca; else the intraday session is shifted +5h).
 - `fetch_schwab_data(ticker="AAPL", interval="1d") -> Optional[List[Candle]]` — `DataFetcher`-compatible. Returns `None` on missing credentials, missing/expired refresh token, network error, or unsupported interval. **Never raises.**
 - `SCHWAB_REGISTRATION_ENABLED: bool = False` — registry/UI gate kept false until `_http_get_pricehistory` is implemented and the `"schwab"` source is actually registered.
 

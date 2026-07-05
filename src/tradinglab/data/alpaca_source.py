@@ -32,6 +32,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from ..constants import provider_lookback_days
+from ..core.timezones import ET
 from ..models import Candle
 from ._http import MAX_RESPONSE_BYTES, credentialed_opener
 from .credentials import AlpacaCredentials, get_credentials
@@ -50,13 +51,22 @@ _ALPACA_KEYMAP = {
 def candles_from_alpaca_response(
     payload: dict[str, Any], *, interval: str,
 ) -> list[Candle]:
-    """Map a parsed Alpaca ``/bars`` response to candles."""
+    """Map a parsed Alpaca ``/bars`` response to candles.
+
+    Alpaca returns UTC ISO-8601 timestamps (``"…T14:30:00Z"``). We convert
+    them to **US Eastern** (``core.timezones.ET``) so ``classify_session``
+    and the chart x-axis read the correct exchange wall-clock — matching
+    yfinance's exchange-localized index. Without this a 09:30 ET open bar
+    (14:30Z) is mis-classified and the intraday session is shifted +5h (the
+    "5m data only shows 14:30–16:00" bug). If ``ET`` is unavailable
+    (missing ``tzdata``) we fall back to UTC rather than crash.
+    """
     if isinstance(payload, list):
         rows = payload
     else:
         rows = payload.get("bars") or []
     return candles_from_json_rows(
-        rows, interval=interval, keymap=_ALPACA_KEYMAP, ts_unit="iso",
+        rows, interval=interval, keymap=_ALPACA_KEYMAP, ts_unit="iso", tz=ET,
     )
 
 

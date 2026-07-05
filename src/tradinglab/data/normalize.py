@@ -242,8 +242,8 @@ def candles_from_dataframe(
 _LOGICAL_FIELDS = ("ts", "open", "high", "low", "close", "volume")
 
 
-def _coerce_timestamp(raw: Any, ts_unit: str) -> datetime:
-    """Convert a vendor timestamp to a tz-aware UTC ``datetime``.
+def _coerce_timestamp(raw: Any, ts_unit: str, tz: Any = None) -> datetime:
+    """Convert a vendor timestamp to a tz-aware ``datetime``.
 
     Supported ``ts_unit`` values:
 
@@ -252,17 +252,27 @@ def _coerce_timestamp(raw: Any, ts_unit: str) -> datetime:
     * ``"ns"``    — epoch nanoseconds (rare; some Polygon endpoints)
     * ``"iso"``   — ISO-8601 string (Alpaca: ``"2024-03-07T14:30:00Z"``)
 
+    The timestamp is first resolved to tz-aware **UTC**. When ``tz`` is
+    provided (an exchange ``tzinfo`` such as ``America/New_York``) the
+    result is converted into that zone — this is REQUIRED for vendors that
+    return UTC (Alpaca, Schwab) because :func:`classify_session` and the
+    chart x-axis interpret ``hour``/``minute`` as **US Eastern** wall-clock,
+    exactly like yfinance's exchange-localized index. Without it a 09:30 ET
+    open bar (``14:30Z``) is mis-read as 14:30 and mis-classified, shifting
+    the whole intraday session +5h. When ``tz`` is ``None`` the tz-aware UTC
+    value is returned unchanged (back-compat for callers that want UTC).
+
     Any unrecognized unit raises ``ValueError`` — fail-fast on a typo
     in the calling vendor adapter rather than silently producing the
     epoch.
     """
     if ts_unit == "ms":
-        return datetime.fromtimestamp(int(raw) / 1000.0, tz=timezone.utc)
-    if ts_unit == "s":
-        return datetime.fromtimestamp(int(raw), tz=timezone.utc)
-    if ts_unit == "ns":
-        return datetime.fromtimestamp(int(raw) / 1_000_000_000.0, tz=timezone.utc)
-    if ts_unit == "iso":
+        dt = datetime.fromtimestamp(int(raw) / 1000.0, tz=timezone.utc)
+    elif ts_unit == "s":
+        dt = datetime.fromtimestamp(int(raw), tz=timezone.utc)
+    elif ts_unit == "ns":
+        dt = datetime.fromtimestamp(int(raw) / 1_000_000_000.0, tz=timezone.utc)
+    elif ts_unit == "iso":
         s = str(raw)
         # Python <3.11 fromisoformat doesn't accept "Z"; normalize.
         if s.endswith("Z"):
@@ -270,8 +280,12 @@ def _coerce_timestamp(raw: Any, ts_unit: str) -> datetime:
         dt = datetime.fromisoformat(s)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(timezone.utc)
-    raise ValueError(f"unsupported ts_unit: {ts_unit!r}")
+        dt = dt.astimezone(timezone.utc)
+    else:
+        raise ValueError(f"unsupported ts_unit: {ts_unit!r}")
+    if tz is not None:
+        dt = dt.astimezone(tz)
+    return dt
 
 
 def candles_from_json_rows(
@@ -280,6 +294,7 @@ def candles_from_json_rows(
     interval: str,
     keymap: Mapping[str, str],
     ts_unit: str,
+    tz: Any = None,
 ) -> list[Candle]:
     """Generic vendor-JSON → ``List[Candle]`` mapper.
 
@@ -311,11 +326,14 @@ def candles_from_json_rows(
     :func:`candles_from_dataframe`.
 
     Notes:
-    * Output is naive datetime in UTC if the source is UTC, or whatever
-      tz Python's ``fromisoformat`` returns. ``classify_session`` only
-      consumes ``hour`` / ``minute`` so it works either way — but the
-      caller is responsible for telling the vendor which timezone they
-      want bars expressed in (most APIs offer a parameter).
+    * ``tz`` (an exchange ``tzinfo`` like ``America/New_York``) converts
+      every parsed timestamp into that zone before session tagging /
+      Candle construction. Vendors that return **UTC** (Alpaca, Schwab)
+      MUST pass the exchange tz so ``hour``/``minute`` are US-Eastern —
+      the same contract yfinance satisfies via its exchange-localized
+      index. Omitting it leaves bars in UTC and shifts the intraday
+      session +5h (the "5m data only 14:30–16:00" bug). ``None`` keeps
+      the tz-aware UTC value (back-compat).
     * Volume is coerced to ``int`` via ``int(float(v))`` so vendors that
       return e.g. ``"1234.0"`` strings still work.
     """
@@ -354,7 +372,7 @@ def candles_from_json_rows(
     # ``j`` at the end so the stash stays length-aligned with ``candles``.
     j = 0
     for row in rows:
-        dt = _coerce_timestamp(row[k_ts], ts_unit)
+        dt = _coerce_timestamp(row[k_ts], ts_unit, tz)
         o = float(row[k_o]); h = float(row[k_h])
         lo = float(row[k_l]); c = float(row[k_c])
         if not (math.isfinite(o) and math.isfinite(h)

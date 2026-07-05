@@ -52,6 +52,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from ..core.timezones import ET
 from ..models import Candle
 from .credentials import SchwabCredentials, get_credentials
 from .normalize import candles_from_json_rows
@@ -75,6 +76,11 @@ def candles_from_schwab_response(
     Tolerates both the standard envelope (``{"candles": [...]}``) and a
     bare list of bars (some streaming-flavored endpoints). Returns an
     empty list when ``empty: true`` or no candles present — never None.
+
+    Schwab's ``datetime`` field is epoch **milliseconds (UTC)**; we convert
+    to **US Eastern** (``core.timezones.ET``) so ``classify_session`` and
+    the chart read the correct exchange wall-clock, matching yfinance /
+    Alpaca. Omitting the conversion would shift the intraday session +5h.
     """
     if isinstance(payload, list):
         rows = payload
@@ -83,7 +89,7 @@ def candles_from_schwab_response(
             return []
         rows = payload.get("candles") or []
     return candles_from_json_rows(
-        rows, interval=interval, keymap=_SCHWAB_KEYMAP, ts_unit="ms",
+        rows, interval=interval, keymap=_SCHWAB_KEYMAP, ts_unit="ms", tz=ET,
     )
 
 

@@ -4,7 +4,7 @@
 Polygon.io Aggregates v2 → `List[Candle]`. Two-layer module: a pure response-mapper for offline tests and an HTTP fetcher gated on credentials.
 
 ## Public API
-- `candles_from_polygon_response(payload: dict, *, interval: str) -> List[Candle]` — pure mapper. Accepts either the standard envelope `{"results": [...]}` or a bare list. Delegates to `candles_from_json_rows` with `ts_unit="ms"`; non-finite OHLC rows are skipped by that shared normalizer.
+- `candles_from_polygon_response(payload: dict, *, interval: str) -> List[Candle]` — pure mapper. Accepts either the standard envelope `{"results": [...]}` or a bare list. Delegates to `candles_from_json_rows` with `ts_unit="ms"` **and `tz=core.timezones.ET`** (ms-epoch UTC → US-Eastern wall-clock, matching yfinance); non-finite OHLC rows are skipped by that shared normalizer.
 - `fetch_polygon_data(ticker="AAPL", interval="1d", *, lookback_days=None) -> Optional[List[Candle]]` — `DataFetcher`-compatible. Returns `None` whenever credentials are missing, the interval is unsupported, or the HTTP call fails. Registered as `"polygon"` in `DATA_SOURCES` when `PolygonCredentials.is_configured()` is True.
 
 ## Dependencies
@@ -34,7 +34,7 @@ Polygon.io Aggregates v2 → `List[Candle]`. Two-layer module: a pure response-m
 
 ## Invariants
 - `fetch_polygon_data` returns either `None` or a (possibly empty) list of `Candle`. Never raises.
-- Timestamps come back as ms-epoch UTC (normalizer converts to `datetime`).
+- Timestamps come back as ms-epoch UTC; the mapper converts them to **US Eastern** (`core.timezones.ET`) so session labels + intraday times are correct exchange wall-clock (else the session is shifted +5h). Falls back to UTC if `tzdata`/`ET` is unavailable.
 - The interval keyspace matches `_INTERVAL_TO_POLYGON`; other intervals are rejected before HTTP.
 
 ## Testing

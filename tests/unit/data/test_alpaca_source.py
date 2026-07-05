@@ -6,6 +6,7 @@ accumulator are exercised with injected payloads.
 
 from __future__ import annotations
 
+from tradinglab.core.timezones import ET
 from tradinglab.data.alpaca_source import (
     _accumulate_bars,
     candles_from_alpaca_response,
@@ -48,11 +49,54 @@ def test_mapper_drops_non_finite_rows():
     assert len(out) == 1  # the NaN-open row is dropped by the shared normalizer
 
 
-def test_mapper_timestamps_are_utc():
+def test_mapper_timestamps_are_eastern():
+    # Alpaca returns UTC; the mapper converts to US Eastern so the chart /
+    # session logic read the correct exchange wall-clock (matching yfinance).
+    # 14:30Z on 2024-03-07 (EST, before DST) == 09:30 ET (the RTH open).
     payload = {"bars": [_bar("2024-03-07T14:30:00Z", 1.0, 1.0, 1.0, 1.0, 1)]}
     out = candles_from_alpaca_response(payload, interval="5m")
-    assert out[0].date.tzinfo is not None
-    assert out[0].date.utcoffset().total_seconds() == 0
+    d = out[0].date
+    assert d.tzinfo is not None
+    if ET is None:
+        # Missing tzdata → graceful fallback to UTC (documented). Skip the
+        # Eastern-specific assertions the exe/dev environment exercises.
+        import pytest
+        pytest.skip("tzdata unavailable; ET conversion falls back to UTC")
+    assert str(d.tzinfo) == "America/New_York"
+    assert (d.hour, d.minute) == (9, 30)
+    assert d.utcoffset().total_seconds() == -5 * 3600  # EST
+    assert out[0].session == "regular"
+
+
+def test_mapper_intraday_sessions_use_eastern():
+    # Regression for the "5m data only shows 14:30–16:00" bug: a full UTC
+    # session must map to the correct ET pre / regular / post labels, not a
+    # +5h-shifted band. 2024-03-07 is EST (UTC-5).
+    if ET is None:
+        import pytest
+        pytest.skip("tzdata unavailable; ET conversion falls back to UTC")
+    payload = {"bars": [
+        _bar("2024-03-07T13:00:00Z", 1, 1, 1, 1, 1),  # 08:00 ET → pre
+        _bar("2024-03-07T14:30:00Z", 1, 1, 1, 1, 1),  # 09:30 ET → regular (open)
+        _bar("2024-03-07T20:55:00Z", 1, 1, 1, 1, 1),  # 15:55 ET → regular (close)
+        _bar("2024-03-07T21:30:00Z", 1, 1, 1, 1, 1),  # 16:30 ET → post
+    ]}
+    out = candles_from_alpaca_response(payload, interval="5m")
+    assert [c.session for c in out] == ["pre", "regular", "regular", "post"]
+    assert [(c.date.hour, c.date.minute) for c in out] == [
+        (8, 0), (9, 30), (15, 55), (16, 30),
+    ]
+
+
+def test_mapper_daily_timestamp_keeps_session_date():
+    # Alpaca daily bars are stamped at 05:00Z (midnight ET). Converting to ET
+    # must NOT roll the calendar date back a day.
+    if ET is None:
+        import pytest
+        pytest.skip("tzdata unavailable; ET conversion falls back to UTC")
+    payload = {"bars": [_bar("2025-02-25T05:00:00Z", 1, 1, 1, 1, 1)]}
+    out = candles_from_alpaca_response(payload, interval="1d")
+    assert out[0].date.date().isoformat() == "2025-02-25"
 
 
 # ---------------------------------------------------------------------------

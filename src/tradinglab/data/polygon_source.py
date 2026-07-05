@@ -35,6 +35,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from ..constants import provider_lookback_days
+from ..core.timezones import ET
 from ..models import Candle
 from ._http import MAX_RESPONSE_BYTES, credentialed_opener
 from .credentials import PolygonCredentials, get_credentials
@@ -53,13 +54,19 @@ _POLYGON_KEYMAP = {
 def candles_from_polygon_response(
     payload: dict[str, Any], *, interval: str,
 ) -> list[Candle]:
-    """Map a parsed Polygon ``/aggs`` response to candles."""
+    """Map a parsed Polygon ``/aggs`` response to candles.
+
+    Polygon's ``t`` is epoch **milliseconds (UTC)**; we convert to
+    **US Eastern** (``core.timezones.ET``) so ``classify_session`` and the
+    chart read the correct exchange wall-clock, matching yfinance / Alpaca /
+    Schwab (otherwise the intraday session is shifted +5h).
+    """
     if isinstance(payload, list):
         rows = payload
     else:
         rows = payload.get("results") or []
     return candles_from_json_rows(
-        rows, interval=interval, keymap=_POLYGON_KEYMAP, ts_unit="ms",
+        rows, interval=interval, keymap=_POLYGON_KEYMAP, ts_unit="ms", tz=ET,
     )
 
 
