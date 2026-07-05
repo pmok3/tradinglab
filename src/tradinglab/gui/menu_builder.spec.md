@@ -4,10 +4,10 @@
 - Move the large menubar-construction block out of `app.py` while preserving TradingLab's existing menubar surface across these top-level cascades, **in display order**:
   1. **File** — Load / Save / Save As Configuration, Recent Configurations, Theme…, Exit.
   2. **Watchlists** — Open Watchlists Manager (Ctrl+L), Load / Save / Save As Watchlists, Recent Watchlists.
-  3. **Indicators** — Manage Indicators, presets.
-  4. **Sandbox** — Start / End Session, Download Replay Data…, Performance, Save / Load Session, Tags.
+  3. **Indicators** — Manage Indicators, Custom Indicator Builder, presets, Clear All.
+  4. **Sandbox** — Start / End Session, Download Replay Data…, Performance, Market Heatmap, Save / Load Session, Tags.
   5. **Strategies** — one consolidated cascade (audit `strategies-menu-consolidation`): Entries (New Entry Strategy… / Manage Entry Strategies… / Disarm All Entries), Exits (Edit Exit Strategies…), and Strategy Tester….
-  6. **View** — Heikin-Ashi (cascade: Show Heikin-Ashi Candles + Highlight Flat Bars), Highlight Key Bars, Volume time-of-day shading, ChartStack (cascade: Show ChartStack + Settings…), Heatmap.
+  6. **View** — Heikin-Ashi (cascade: Show Heikin-Ashi Candles + Highlight Flat Bars), Highlight Key Bars, Volume time-of-day shading, Ratio charts (A/B), ChartStack (cascade: Show ChartStack + Settings…), Heatmap.
   7. **Tools** — Credentials, Connect to Schwab, Local Data, Export CSV, Status History, Reveal Data Folder, Restore Templates.
   8. **Help** — built by `HelpMenuMixin._build_help_menu`.
 - Keep menu commands routed back into `ChartApp` through a narrow callback protocol so the builder owns widget construction, not app business logic.
@@ -46,10 +46,9 @@
 - **Heatmap is a direct browser launch, not a dialog.** Audit `view-heatmap-launcher` (2026). The `View → Heatmap` entry hands off to `webbrowser.open("https://finviz.com/map.ashx?t=sec", new=2, autoraise=True)` — the Finviz S&P 500 sector treemap (1D performance). No intermediate popup; per `tests/unit/gui/test_ellipsis_semantics.py` the label has no ellipsis since it doesn't open a dialog. Fallback when the OS browser hand-off fails is a `messagebox.showinfo` containing the URL so the user can copy-paste it manually. Callback lives on `ChartApp._on_view_heatmap` and is declared on the `MenuBuilderCallbacks` protocol next to `_on_view_toggle_chartstack`.
 - **ChartStack Settings popup opens from the View menu.** Audit `chartstack-fixed-preset` (2026). The `View → ChartStack → Settings…` entry (with ellipsis since it opens a dialog) opens `gui.chartstack_settings_dialog.ChartStackSettingsDialog`, a small modal with one `ttk.Entry` per ChartStack card slot. Saving writes the entries' upper-cased contents to `chartstack.fixed_preset_symbols`, flips `chartstack.binding.mode` to `"FIXED_PRESET"`, and (if the live `_chartstack` panel is mounted on the parent) calls `panel.refresh()` so the cards re-bind immediately. Callback `ChartApp._on_view_chartstack_settings` is declared on the `MenuBuilderCallbacks` protocol next to `_on_view_heatmap`.
 - **ChartStack is a cascade, not two flat entries.** Audit `chartstack-menu-cascade` (2026) grouped the show/hide toggle and the per-slot Settings popup into a single `ChartStack` cascade inside View — mirroring the Heikin-Ashi cascade. The cascade child `Show ChartStack` is the checkbutton (keeps the `Ctrl+`` accelerator, binds `_chartstack_visible_var` / `_on_view_toggle_chartstack`); `Settings…` is the command opening the dialog. The submenu is built as `cs_menu`, exposed via the `chartstack_menu` property + mirrored onto `ChartApp._chartstack_menu`, and registered in `submenus` so `ThemeController._apply_menubar_theme` repaints it on theme toggle. The previous flat layout (top-level `ChartStack` checkbutton + top-level `ChartStack Settings…` command) is retired.
-- **Strategy Tester is its own top-level cascade.** The single
-  `Open Strategy Tester…` command sits between Exits and View so
-  strategy-testing workflow is discoverable without overloading the
-  Sandbox menu.
+- **Strategy Tester is inside Strategies.** The single
+  `Strategy Tester…` command is the final item in the consolidated
+  `Strategies` cascade, after the Entries and Exits actions.
 
 ## Notes
 - `MenuBuilder` intentionally preserves the existing submenu list shape used by `ThemeController._apply_menubar_theme`.

@@ -503,6 +503,27 @@ class SandboxMenuMixin:
         except tk.TclError:
             pass
 
+    def _on_menu_sandbox_heatmap(self) -> None:
+        """Open the Sandbox Market Heatmap pop-out for the active session."""
+        ctl = getattr(self, "_sandbox", None)
+        if ctl is None or not ctl.is_active():
+            try:
+                self._status.warn(
+                    "Sandbox: start a session first to open the heatmap")
+            except Exception:  # noqa: BLE001
+                pass
+            return
+        from ..gui.sandbox_heatmap import open_sandbox_heatmap
+        try:
+            win = open_sandbox_heatmap(self, ctl)
+            if win is not None:
+                win.lift()
+        except Exception as exc:  # noqa: BLE001
+            try:
+                self._status.warn(f"Sandbox: heatmap failed to open: {exc}")
+            except Exception:  # noqa: BLE001
+                pass
+
     def _on_menu_sandbox_save(self) -> None:
         """Save the current/last SessionResult to a JSON file."""
         from tkinter import filedialog

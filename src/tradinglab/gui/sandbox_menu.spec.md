@@ -3,8 +3,8 @@
 ## Purpose
 
 Menu-callback handlers for the **Sandbox** cascade — Start, End,
-Performance, Save, Load, Tags — plus the Tools-menu Prepare Universe
-Data command. Extracted
+Performance, Market Heatmap, Save, Load, Tags, and Download Replay
+Data. Extracted
 from `app.py` so menu wiring is decoupled from sandbox lifecycle
 helpers (those remain on ChartApp because they're also called from
 non-menu paths: ticker entry, watchlist, drilldown).
@@ -26,6 +26,8 @@ non-menu paths: ticker entry, watchlist, drilldown).
   indicator dialog's interval set.
 - `_on_menu_sandbox_perf()` — open `PerformanceView` on the
   current/last `SessionResult`.
+- `_on_menu_sandbox_heatmap()` — open the Sandbox Market Heatmap
+  pop-out for the active session. Warns when no session is active.
 - `_on_menu_sandbox_save()` — write current/last result to JSON
   via `backtest.persistence.save_session`.
 - `_on_menu_sandbox_load()` — read saved `SessionResult` + open
@@ -95,3 +97,6 @@ non-menu paths: ticker entry, watchlist, drilldown).
   `is_active()==False`; panel self-detaches via
   `_on_sandbox_tick` → `detach_sandbox`. Wrapped in swallowing
   try/except — chartstack failure must never block sandbox start.
+- **Download Replay Data placement**: `_on_menu_sandbox_prepare_universe`
+  is wired under the Sandbox cascade because it prepares the offline
+  universe that strict-offline sessions replay.

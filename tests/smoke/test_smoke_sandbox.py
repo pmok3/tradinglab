@@ -41,12 +41,14 @@ from tests.smoke.test_smoke_full import (
     check_g0_sandbox_replay_integration,
     check_g1_sandbox_phase1c,
     check_g2_sandbox_open_universe,
+    check_g3_sandbox_heatmap,
 )
 
 _CHECKS = [
     check_g0_sandbox_replay_integration,
     check_g1_sandbox_phase1c,
     check_g2_sandbox_open_universe,
+    check_g3_sandbox_heatmap,
     check_b5_sandbox_save_load,
     check_b6_sandbox_auto_cycle,
     check_b7_sandbox_multitf_context,
