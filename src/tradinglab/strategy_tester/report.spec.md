@@ -8,6 +8,8 @@ to `manifest.json`. The Strategy tab's Report view reads this file
 (or accepts an in-memory `RunAggregate` from `compute_aggregate`).
 
 ## Public API
+- `AGGREGATE_FILENAME = "aggregate.json"` — canonical aggregate artifact name in a Run directory.
+- `BOOTSTRAP_SAMPLES_DEFAULT = 10_000` — default resample count for expectancy / profit-factor confidence intervals.
 - `RunAggregate` — frozen dataclass holding the whole-Run rollup
   (trade counts, headline metrics + CIs, risk metrics, equity curve,
   per-symbol / per-year breakouts, banners).
@@ -102,6 +104,8 @@ to `manifest.json`. The Strategy tab's Report view reads this file
   "fingerprint": "deadbeefcafe1234"
 }
 ```
+`equity_curve` timestamps are UTC epoch seconds, matching
+`PostTradeReview.entry_ts` / `exit_ts` and `SessionResult.equity_curve`.
 
 ## Disk loading / finalization performance
 - `aggregate_run` and `write_run_csv(rows=None)` share a single

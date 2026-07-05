@@ -27,7 +27,7 @@ clone. The earlier honeycomb layout was retired; this picker
 mirrors the Win32 ChooseColor layout for muscle-memory continuity.
 
 ## Public API
-- `pick_color(parent, initial="#888888", title="Pick a colour") -> Optional[str]`
+- `pick_color(parent, initial="#888888", title="Pick a color") -> Optional[str]`
   — blocks on `wait_window`, returns the normalised lower-case
   `"#rrggbb"` on OK, or `None` if the user cancels / closes the
   dialog / the underlying Tk call fails.

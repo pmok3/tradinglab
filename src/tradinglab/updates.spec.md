@@ -21,10 +21,13 @@ Blank across all three returns `UpdateResult(status="disabled")`. Only
 The poll never makes an outbound HTTPS call during US regular trading hours
 (Monday–Friday, 09:30–16:00 America/New_York). A fresh cache entry may be
 returned during RTH because it is local-only; otherwise the check returns
-`status="rth_suppressed"` before network setup. `force=True` does not bypass
-RTH policy.
+`status="rth_suppressed"` before network setup. If the ET timezone cannot be
+resolved, the helper fails closed and treats the moment as RTH. `force=True`
+does not bypass RTH policy.
 
 ## Public API
+- Constants exported for tests/configuration: `ENV_URL`, `DEFAULT_RELEASES_URL`,
+  `RELEASES_URL`, `CACHE_TTL_SECONDS`, `HTTP_TIMEOUT_SECONDS`.
 - `UpdateResult` (frozen dataclass): `status`, `current`, `latest`, `url`,
   `error`. Status is one of `"disabled"`, `"rth_suppressed"`, `"up_to_date"`,
   `"available"`, `"error"`.

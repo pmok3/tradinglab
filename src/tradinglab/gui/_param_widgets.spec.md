@@ -24,6 +24,7 @@ future kinds and label conventions land once.
 build_param_widget(
     parent, pdef, seed, *,
     on_change=None,
+    on_commit_eager=None,
     commit_policy="eager",
     debounce_ms=250,
     choices_override=None,
@@ -62,15 +63,16 @@ fractional decimal such as `"1.5"`. Float params reject non-finite input
 
 `param_group_for(pdef) -> "Basic" | "Advanced"` returns the simple UI
 group used by builder controls. Known advanced fields such as
-`session_filter`, `denominator_includes_current`, `z_score`, and
-`compare_symbol` are Advanced; all other fields default to Basic.
+`session_filter`, `denominator_includes_current`, `z_score`,
+`compare_symbol`, and `anchor_ts` are Advanced; all other fields
+default to Basic.
 
 ### `CommitPolicy` values
 
 | Policy          | When `on_change` fires                                                         | Use case                                                              |
 |-----------------|--------------------------------------------------------------------------------|-----------------------------------------------------------------------|
 | `"eager"`       | Every `trace_add('write')` event (typing, arrow, combobox pick, checkbox flip) | `scanner_block_editor._FieldRefPicker._build_param_widget`            |
-| `"debounced"`   | Coalesced — fires `debounce_ms` after the last var write                       | `indicator_dialog._build_one_param_widget` (250 ms typing debounce)   |
+| `"debounced"`   | Coalesced after `debounce_ms`; discrete Checkbutton / Combobox / Spinbox commits can fire `on_commit_eager` immediately | `indicator_dialog._build_one_param_widget` (250 ms typing debounce)   |
 | `"on_focus_out"`| Only on `<FocusOut>` or `<Return>`                                             | Free-text fields where every keystroke shouldn't fire downstream work |
 | `"manual"`      | Never — caller consumes `var.get()` itself                                     | `_ConditionFrame._build_params_row` scalar branch                     |
 

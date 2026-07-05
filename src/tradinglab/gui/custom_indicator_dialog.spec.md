@@ -45,11 +45,13 @@ State of all three bodies is preserved across mode switches inside the
 dialog — switching Conditions → Expression and back keeps the Group
 tree intact, and vice versa for the expression text.
 
-## Public Surface
+## Public API
 
-- `CustomIndicatorDialog(app, *, directory=None)` — Toplevel that
-  takes an optional `directory` override (used by tests to point at a
-  `tmp_path`). Default directory is `indicators.loader.default_user_dir()`.
+- `class CustomIndicatorDialog(BaseModalDialog)` —
+  `CustomIndicatorDialog(app, *, directory=None)` creates the modeless
+  builder and takes an optional `directory` override (used by tests to
+  point at a `tmp_path`). Default directory is
+  `indicators.loader.default_user_dir()`.
 - `open_custom_indicator_dialog(app) -> CustomIndicatorDialog` —
   singleton-style opener; stashes the instance on
   `app._custom_indicator_dialog` so re-opening focuses the live dialog.

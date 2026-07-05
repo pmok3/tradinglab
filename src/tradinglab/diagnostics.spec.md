@@ -43,7 +43,7 @@ requests. Credentials / tokens / API keys are redacted before write.
 ## Dependencies
 
 - Internal: `paths.app_data_dir`, `paths.logs_dir`, `_version.version_string`.
-- External: stdlib only (`json`, `zipfile`, `datetime`, `pathlib`, `platform`).
+- External: stdlib only (`json`, `zipfile`, `datetime`, `pathlib`, `platform`, `re`, `sys`).
 
 ## Design decisions
 
@@ -64,8 +64,9 @@ requests. Credentials / tokens / API keys are redacted before write.
   - `_BASIC_RE`  — case-insensitive `Basic\s+\S+`.
   - `_SECRET_URL_RE` — `[?&](apikey|api_key|access[_-]?token|refresh[_-]?token|token|client[_-]?secret|password|passwd|pwd|secret|sig|signature)=…` until next `&` / whitespace / quote.
   - `redact_log_line(line: str) -> str` — applies all three; idempotent.
-  - `_read_and_redact(path: Path) -> str` — reads UTF-8 text and
-    pipes every line through `redact_log_line`.
+  - `_read_and_redact(path: Path) -> bytes` — reads UTF-8 text with replacement
+      for bad bytes, pipes every line through `redact_log_line`, and returns
+      UTF-8 bytes ready for `ZipFile.writestr`.
   The bundle build loop calls `zf.writestr(f"logs/{p.name}",
   _read_and_redact(p))` and `zf.writestr(f"crashes/{p.name}",
   _read_and_redact(p))` instead of the legacy `zf.write(path,

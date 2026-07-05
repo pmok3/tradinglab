@@ -73,9 +73,10 @@ sandbox writes to `tmp_path` without monkey-patching the
   JSON → `ValueError` (wrapping `json.JSONDecodeError`). Validation
   is NOT re-run on per-id loads (callers can re-validate if needed).
 - **`load_all`** is lenient: every file that fails to read / parse /
-  validate becomes a `BrokenRecord` with raw text preserved when
-  available. The bulk read never crashes the caller. Sorted by
-  filename (= id) for deterministic ordering.
+  validate becomes a `BrokenRecord`. Raw text is preserved for
+  object-parser and validation failures; unreadable files and malformed
+  JSON report `raw_json=None`. The bulk read never crashes the caller.
+  Sorted by filename (= id) for deterministic ordering.
 - **`delete`** is idempotent: returns `True` only when a file was
   actually removed, but always prunes the index entry.
 - **`refresh_index`** swallows per-file errors (logged at WARNING)
@@ -104,9 +105,11 @@ from a crash) — they are not ERROR.
 ## Migration status
 
 - `entries/storage.py` — migrated (pilot).
-- `exits/storage.py`, `scanner/storage.py`, `watchlists/storage.py`,
-  `strategy_tester/storage.py`, `positions/storage.py` — still
-  hand-rolled; queued for follow-up commits.
+- `exits/storage.py`, `scanner/storage.py` — partially migrated; custom
+  `save` / `load_all` behaviour remains hand-rolled.
+- `watchlists/storage.py`, `strategy_tester/storage.py` — still
+  hand-rolled; incompatible envelope / directory layouts are deferred.
+- `positions/storage.py` — uses `JsonListStore`, not this per-id store.
 
 ## Tests
 

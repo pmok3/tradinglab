@@ -10,8 +10,10 @@ correctness against the registry.
 ## Public types
 
 - `FieldRef(kind: "builtin"|"indicator"|"literal", id, params, output_key, value, interval, symbol)` — single value reference.
-- `Condition(left, op, params, interval, enabled, id, comment)` — leaf comparison.
-- `Group(combinator: "and"|"or", children, enabled, id)` — internal node.
+- `Condition(left, op, params, interval, enabled, id, comment,
+  within_last_bars, within_last_mode)` — leaf comparison.
+- `Group(combinator: "and"|"or", children, enabled, id,
+  within_last_bars, within_last_mode)` — internal node.
 - `UniverseFilter(kind: "all"|"watchlist"|"symbols", name, symbols)` — symbol-set restriction.
 - `OutputColumn(kind: "condition_value"|"field", ...)` — Treeview column descriptor.
 - `ScanOptions(show_insufficient_data_rows, default_view: "new"|"active", new_view_capacity, extra)`.
@@ -54,11 +56,13 @@ ids, and reorder/duplicate doesn't break references.
 deleting the underlying condition causes the runner to emit the
 column with `None` (engine returns `None` for unknown `condition_id`).
 
-## FieldRef.interval — forward-compat
+## FieldRef.interval — cross-interval
 
-v1 scans always set `FieldRef.interval = None`. Engine raises
-`NotImplementedError` on non-null override. Saving preserves the
-slot; v2 will lift the restriction without re-migrating.
+`FieldRef.interval` is persisted and supported when the caller provides
+an `EvaluationContext.bars_registry`. The engine resolves the field via
+that registry and returns `None` when the requested view is missing.
+Without a registry, non-null overrides still hit the historical
+`NotImplementedError` gate.
 
 ## FieldRef.symbol — cross-ticker pin
 
@@ -81,6 +85,14 @@ every pre-Phase-1 scan / entry / exit JSON ever written.
 `abs(target) < 1e-12`, return `None`. `tolerance_pct` is a plain
 `float` named param (not a FieldRef literal) — operator-only scalars
 use plain numerics.
+
+## Within-last-N-bars modifier
+
+`Condition` and `Group` both persist `within_last_bars` (default `0`)
+and `within_last_mode` (`"any"`, `"all"`, `"exactly"`). Non-defaults
+make the engine walk the look-back window and emit `MatchEvidence`
+when a node fires in the past. Defaults are omitted from JSON so legacy
+scans round-trip unchanged.
 
 ## ScanOptions.extra
 

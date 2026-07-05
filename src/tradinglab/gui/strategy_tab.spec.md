@@ -14,10 +14,10 @@ root in smoke tests). The popup wrapper + menubar wiring live in
 ``app._strategy_tab`` only while the popup is open.
 
 ## Public surface
-- `StrategyTab(master, *, entries_storage=None, exits_storage=None,
+- `StrategyTab(master, *, app=None, entries_storage=None, exits_storage=None,
   watchlists_storage=None, run_fn=None, candles_fetcher=None)` —
   Toplevel-mountable widget. Optional kwargs are dependency-injection
-  hooks used by smoke tests; production wiring passes nothing.
+  hooks used by smoke tests; production wiring passes `app=self`.
 - `refresh()` — reloads the entry / exit / watchlist library snapshots
   used to populate the pickers.
 
@@ -229,9 +229,7 @@ root in smoke tests). The popup wrapper + menubar wiring live in
   and disposes the pending ``after()`` callback. The worker thread is
   a daemon so it dies with the app.
 
-## Known gaps (deferred to PR 5+)
-- No Recent Runs sidebar (browse / delete / open prior runs).
-- No HTML / PDF export buttons (`Export CSV…` only).
+## Known gaps / Future work
 - No equity-curve chart in the Report pane (line + DD shading).
 - No screenshot gallery viewer.
 - Custom date entries are unvalidated free text; bad dates surface

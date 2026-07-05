@@ -28,8 +28,18 @@ NOT bound to open positions (universe-driven).
 
 ```python
 class EntriesTab(ttk.Frame):
-    def __init__(self, master, *, app: "ChartApp") -> None
+    def __init__(self, master, *, evaluator: EntryEvaluator,
+                 storage: Any = None, exit_storage: Any = None,
+                 on_chart_focus: Callable[[str], None] | None = None,
+                 templates_dir: Path | None = None,
+                 sandbox_intervals_provider: Callable[[], frozenset[str] | None] | None = None) -> None
+    @property
+    def library(self) -> tuple[EntryStrategy, ...]
+    @property
+    def selected_strategy_id(self) -> str | None
     def refresh(self) -> None  # full library + stats redraw
+    def load_template_from_path(path: Path) -> EntryStrategy
+    def _refresh_tree(self) -> None
     def _refresh_audit_tail(self) -> None
     def _refresh_stats(self) -> None
     def _on_new(self) -> None
@@ -46,15 +56,18 @@ class EntriesTab(ttk.Frame):
 
 ## Dependencies
 
-- `..entries.{model, storage, evaluator}` via `self._app`.
+- `..entries.{model, storage, evaluator}` via injected evaluator/storage objects.
 - `.entries_dialog.EntriesDialog` for New/Edit/Duplicate.
+- `..strategy_tester.interval_compat` for the intraday arming guard.
 - `..core.thread_guard` — all mutators require Tk thread.
 
 ## Design Decisions
 
-- **1-second `after()` refresh.** Cheap; the library + audit-tail
-  read are O(N strategies + 20 audit lines). Heavy work
-  (`load_all`) happens only on explicit toolbar actions.
+- **1-second `after()` tick.** The tick refreshes audit/stats and
+  patches the Armed/Fires columns in place for static views. It rebuilds
+  the Treeview only while the Active filter is selected, because that
+  view's membership depends on live arm state; full `load_all()` happens
+  in `refresh()` and explicit library actions.
 - **Treeview, not Listbox.** Multiple sortable columns (Name / Dir /
   Kind / Universe / Enabled / Armed / Fires). Column widths tuned for
   ~6-character symbol lists. Selection state is single-row.

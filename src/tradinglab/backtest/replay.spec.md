@@ -21,6 +21,7 @@ pre-sandbox app-state snapshot restored on `end_session`.
 - `set_focus(symbol)` — swap primary chart; honours `display_interval`.
 - `set_display_interval(interval) -> bool` — toggle between primary, any other entry in `display_intervals`, or `"1d"`. Other values rejected.
 - `aggregated_visible_for(symbol, target_interval) -> List[Candle]` — re-aggregate the per-symbol primary visible list.
+- `full_display_length_for(symbol) -> int` — total x-axis length the app should reserve for the current display interval, including not-yet-visible session bars.
 - `submit_order(*, symbol, side, quantity, pre_trade_data) -> str` — mints `ord-NNNN`, files `PreTradeEntry`, queues the engine order, captures `<order_id>_pre.png`.
 - `cycle_to_next() -> bool` — auto-flatten, archive engine, build fresh engine for the next eligible date with cash carried forward, re-register every previously-known ticker, tick once, fast-forward.
 - `end_session() -> Optional[SessionResult]` — restore from memento, return merged result.

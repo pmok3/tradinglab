@@ -9,17 +9,19 @@ across scans, and tracks edge-triggered "new" matches via
 
 ## Public types
 
-- `MatchRow(symbol, matched, values, rank_value, is_new, error)` — one
-  row in a scan's result table for the current tick. `matched` is
-  `Optional[bool]` (tri-valued); `is_new` is `True` when this row
-  flipped from not-True on the prior tick to True; `error` is the
-  repr of a symbol-level exception.
+- `MatchRow(symbol, matched, values, rank_value, is_new, error,
+  is_forming, evidence)` — one row in a scan's result table for the
+  current tick. `matched` is `Optional[bool]` (tri-valued); `is_new`
+  is `True` when this row flipped from not-True on the prior tick to
+  True; `error` is the repr of a symbol-level exception;
+  `is_forming` marks provisional rows; `evidence` carries
+  within-last-N-bars match evidence.
 - `ScanResult(scan_id, tick_id, timestamp, interval, rows, new_rows)`
   — aggregated rows for one scan at one tick. `new_rows` is the
   edge-filtered subset.
 - `MatchHistory` — per-scan record. `last_matched: Dict[str, bool]` +
   `last_matched_tick: Dict[str, int]`. `update(symbol, tick_id,
-  matched) -> is_new: bool`.
+  matched, *, forming=False) -> is_new: bool`.
 
 ## Public API
 
@@ -33,17 +35,23 @@ across scans, and tracks edge-triggered "new" matches via
     With `bars_registry`, the runner pulls `(bars, memo)` from the
     registry instead of building local state.
   - `run(scans, candles_by_symbol, *, interval, tick_id,
-    timestamp=None) -> Dict[scan_id, ScanResult]`. Caller passes only
-    the scans they want evaluated — the runner consults no library.
-    The Scanner tab passes `get_active_scan_definitions()` (open
-    sub-tabs); closed library scans cost zero per tick.
+    timestamp=None, last_bar_forming=False) -> Dict[scan_id, ScanResult]`.
+    Caller passes only the scans they want evaluated — the runner
+    consults no library. The Scanner tab passes
+    `get_active_scan_definitions()` (open sub-tabs); closed library
+    scans cost zero per tick.
   - `history_for(scan_id) -> MatchHistory` — lazy-create.
   - `reset_history(scan_id=None) -> None` — clear one or all.
+  - `subscribe(callback) -> unsubscribe` — notify on caller thread for
+    scans that produced `new_rows`.
+  - `invalidate(symbol)`, `invalidate_all()`, `clear_memos()` — drop
+    local per-symbol caches.
+  - `stats()`, `stats_text()` — expose reconcile counters.
   - `shutdown() -> None`.
 
 ## MatchHistory edge detection
 
-`update(symbol, tick_id, matched: Optional[bool]) -> bool`:
+`update(symbol, tick_id, matched: Optional[bool], *, forming=False) -> bool`:
 
 | prior `last_matched[symbol]` | incoming `matched` | resulting state | `is_new` |
 | ---------------------------- | ------------------ | --------------- | -------- |
@@ -55,6 +63,8 @@ across scans, and tracks edge-triggered "new" matches via
 **`None` preserves prior state.** Insufficient data on a transient
 tick must not reset the edge — a one-bar gap in the indicator window
 would otherwise re-fire the new-row sound on the next valid tick.
+**Forming ticks are provisional.** When `forming=True`, `update`
+always returns `False` and does not mutate committed history.
 
 ## Threading model
 
@@ -68,6 +78,9 @@ would otherwise re-fire the new-row sound on the next valid tick.
 - **Per-symbol `IndicatorMemo` shared across scans on the same tick**
   via `memos: Dict[symbol, IndicatorMemo]` allocated fresh per
   `run()`. 6 scans referencing `SMA(50)` on AAPL → 1 compute per tick.
+- **Forming-bar updates never promote `new_rows`.** `last_bar_forming`
+  marks every emitted row `is_forming=True`; history is not committed
+  until a closed-bar run confirms the match.
 - Drains in submission order on the calling thread (`as_completed`
   is *not* used — predictable order matters for `MatchHistory`).
   `MatchHistory.update` is therefore single-threaded.

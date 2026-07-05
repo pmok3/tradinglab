@@ -38,7 +38,7 @@ mixin is purely the wiring.
 
 ## Dependencies
 
-- Internal (lazy import inside both methods): `..gui.live_price_overlay
+- Internal (lazy import inside both methods): `.gui.live_price_overlay
   .resolve_price` — kept lazy to avoid pulling matplotlib into the
   mixin's module-level import graph.
 - External: `logging` (module-level `logger`).

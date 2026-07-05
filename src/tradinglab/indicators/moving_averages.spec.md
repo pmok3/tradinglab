@@ -34,9 +34,11 @@ dispatcher:
   reconstructs to distinguish) — but returns any other `display_name`
   verbatim so a genuine user rename is preserved. Audit
   `ma-legend-values`.
-- `compute(candles) -> {"ma": ndarray}` — single output line. NaN
-  warmup at the start of the array matches each kernel's convention
-  (SMA / WMA: first `length-1` NaN; EMA / RMA: kernel-specific).
+- `compute(candles) -> {"ma": ndarray}` — inherited from
+  `BaseIndicator`; builds `Bars` and forwards to `compute_arr(bars)`.
+  Single output line. NaN warmup at the start of the array matches each
+  kernel's convention (SMA / WMA: first `length-1` NaN; EMA / RMA:
+  kernel-specific).
 - `params_schema`:
   - `ma_type: choice` — `SMA / EMA / WMA / RMA`, default `"SMA"`,
     label `"Type"`.
@@ -83,9 +85,9 @@ dispatcher:
 - **Scanner opt-in:** `SMA.scannable_outputs = (("sma","numeric"),)` and `EMA.scannable_outputs = (("ema","numeric"),)`. The unified `MovingAverage` (kind_id `"ma"`) deliberately does NOT declare `scannable_outputs` — the scanner keeps SMA/EMA as separate field ids (`_CHART_ONLY_MIGRATION_KIND_IDS = {"sma","ema"}` in `indicators/base.py` preserves the asymmetry: chart configs migrate `sma`/`ema` → `ma`, scanner FieldRefs stay at `sma`/`ema`).
 
 ## Dependencies
-- Internal: `..models.Candle`, `..core.bars.Bars`,
-  `.ma_kernels.apply_ma` (the dispatcher), `.base.LineStyle` /
-  `.base.ParamDef`.
+- Internal: `..core.bars.Bars`, `._iir.ema_sma_seeded`, `._palette`,
+  `.base.BaseIndicator`, `.base.LineStyle`, `.base.ParamDef`,
+  `.ma_kernels.apply_ma` (the dispatcher).
 - External: `numpy`.
 
 ## Design Decisions
@@ -132,4 +134,3 @@ dispatcher:
 - The legacy `SMA` / `EMA` classes are NOT in `INDICATORS` (the
   registry); only `MovingAverage` (display name `"Moving Average"`)
   is.
-

@@ -92,7 +92,7 @@ class EntriesOverlay:
 ## Invariants
 
 - `OverlayLine` is hashable + frozen — safe to dedupe via `set()`.
-- `clear()` and `close()` are idempotent reference drops.
+- `clear()` and `close()` are idempotent artist detach + reference drops.
 - `redraw` returns `[]` when disabled, `primary_ax is None`, or no
   primary symbol is supplied.
 - `compute_overlay_lines(primary_symbol=X)` returns armed lines only

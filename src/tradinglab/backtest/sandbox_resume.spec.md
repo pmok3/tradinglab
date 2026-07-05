@@ -66,27 +66,15 @@ resume state).
 - Engine-version mismatch → returns `None`; file preserved on disk.
 - `clear_resume_metadata()` is idempotent.
 
-## Wiring (in `app.py`)
+## Wiring
 
 ```python
-# ChartApp._on_close, BEFORE self.destroy():
-if self._sandbox is not None and self._sandbox.active:
-    try:
-        from .backtest.sandbox_resume import (
-            build_metadata_from_session, write_resume_metadata,
-        )
-        spec = self._sandbox.engine.spec
-        meta = build_metadata_from_session(
-            session_id=self._sandbox.session_id or "",
-            ticker=(spec.tickers[0] if spec.tickers else ""),
-            interval=getattr(self._sandbox, "interval", ""),
-            bars_processed=int(getattr(
-                self._sandbox.engine, "bars_processed", 0) or 0),
-            spec_dict=spec.to_dict(),
-        )
-        write_resume_metadata(meta)
-    except Exception:  # noqa: BLE001
-        pass
+# ChartApp._on_close delegates through SandboxAliasMixin:
+self._maybe_write_sandbox_resume_metadata()
+
+# SandboxAppController.maybe_write_resume_metadata then reads the
+# active SandboxController / SandboxEngine, derives bars_processed
+# from engine.clock.index (floored at zero), and writes metadata.
 
 # ChartApp.__init__, AFTER _load_data:
 self.after_idle(self._maybe_prompt_sandbox_resume)

@@ -27,9 +27,9 @@ Not re-exported (callers import directly):
 - **No Tk, no matplotlib** at the kernel layer — these only appear under `replay`, and only the Tk-coupled subset of `gui/` reaches into `replay`.
 
 ## Design Decisions
-- **Per-field ndarrays, not list-of-Candle**: see `bars.spec.md`. Locks the data layout for the future Phase 2 batch runner.
+- **Per-field ndarrays, not list-of-Candle**: see `bars.spec.md`. Locks the data layout shared by sandbox replay and the Strategy Tester evaluator.
 - **Deterministic round-trip is the contract**: every output observable from the engine is captured in `SessionResult.to_dict()`. Reproducibility check (`check_f1`) compares two replays byte-for-byte.
-- **No Tk imports at the kernel layer**: keeps the engine importable from headless smoke checks and lets a Phase 2 batch runner instantiate it from a worker pool.
+- **No Tk imports at the kernel layer**: keeps the engine importable from headless smoke checks and lets the Strategy Tester instantiate it from worker threads.
 - **`replay` / `tags` / `persistence` / `performance` not auto-imported** — they pull `dataclasses`, `pathlib`, `tkinter`, etc. that the pure-kernel consumer doesn't need. Callers import explicitly.
 
 ## Invariants
@@ -44,4 +44,3 @@ Not re-exported (callers import directly):
 ## Known limitations
 - No stops / limits / bracket orders (Phase 2). No automated `on_bar` strategy hook (Phase 2).
 - Shorts ARE supported via negative quantity. Borrow / locate fees are not modelled (Phase 2). Multi-currency, options pricing not supported.
-

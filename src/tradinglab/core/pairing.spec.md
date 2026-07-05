@@ -22,7 +22,7 @@ Internal: `..constants.is_intraday`, `..models.Candle`. External: none.
 
 ## Invariants
 - After `apply_pair_filter(raw, None, ...)`, primary is filtered correctly regardless of `compare_raw=None` (single-chart mode still honors Pre/Post).
-- After `align_pair(p, c, interval)`: `len(p_out) == len(c_out)`. For **intraday**, `p_out[i].date == c_out[i].date` for all i. For **daily+**, `p_out[i].date.date() == c_out[i].date.date()` (same calendar day) — the time-of-day may differ when one side is a synth-today bar (09:30) and the other a midnight provider bar; gap placeholders borrow a real bar's `.date` for the slot.
+- After `align_pair(p, c, interval)`: `len(p_out) == len(c_out)`. For **intraday**, each pair shares the same normalized timestamp key; real bars retain their original `.date` (including tz-awareness), while a gap placeholder uses the normalized key for the missing slot. For **daily+**, `p_out[i].date.date() == c_out[i].date.date()` (same calendar day) — the time-of-day may differ when one side is a synth-today bar (09:30) and the other a midnight provider bar; gap placeholders borrow a real bar's `.date` for the slot.
 - Real (non-gap) output bars share `id()` with input bars.
 - `apply_pair_filter` returns the input list object unchanged when no filtering needed.
 

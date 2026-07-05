@@ -59,11 +59,12 @@ file is resolved as `root / path().name`.
 
 ## Contract
 
-- **`load`** is lenient: returns `[]` on every failure mode (missing
-  file, unreadable, non-object root, missing/invalid `schema_version`,
-  refused future version, migration failure). Individual records that
-  fail `from_dict` are skipped + logged at WARNING; the rest of the
-  list still loads.
+- **`load`** is lenient: returns `[]` on failure modes (missing file,
+  unreadable, non-object root, invalid `schema_version`, refused
+  future version, migration failure). A missing `schema_version`
+  defaults to version 1 for backward compatibility. Individual records
+  that fail `from_dict` are skipped + logged at WARNING; the rest of
+  the list still loads.
 - **Envelope-version refuse:** an on-disk `schema_version` STRICTLY
   GREATER than `self.schema_version` returns `[]` + WARNING. A
   lower-or-equal version is accepted; lower values trigger the

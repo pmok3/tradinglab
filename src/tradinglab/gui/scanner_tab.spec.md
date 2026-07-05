@@ -104,8 +104,10 @@ non-empty, re-applies the most-recent-1 auto-open rule.
    open, default 900×600, min 640×360) hosting the `BlockEditor`.
    Close hides via `withdraw` rather than destroys so widget state
    + `self._editor` refs remain valid; `destroy()` tears it down
-   explicitly. Summary refreshes via `_refresh_cond_summary` on
-   every editor `on_change`.
+   explicitly. Geometry persists through `geometry_store` under
+   `dlg.scanner_conditions`, with `900×600` as the first-run default.
+   Summary refreshes via `_refresh_cond_summary` on every editor
+   `on_change`.
 3. **View row**: `New` / `Active` radios + status label.
 4. **Treeview**: `Symbol | Match | Rank | Tick | Time`. `iid =
    symbol` so selection persists across diff-update ticks.
@@ -137,6 +139,10 @@ The preset list is the union of:
    preset per `(indicator, output_key)` pair. Indicator params come
    from each `ParamDef.default`. Items already represented in the
    curated head are skipped so the picker has no duplicates.
+
+The module snapshots `_RANK_PRESETS = _build_rank_presets()` at import
+time. Tests that monkey-patch the field registry call
+`_build_rank_presets()` directly to observe the patched registry.
 
 A `FieldRef` not matching any preset shows as `"custom"` and is
 left untouched (editable via JSON export/import). Multi-output

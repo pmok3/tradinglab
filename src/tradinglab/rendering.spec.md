@@ -10,7 +10,7 @@ Collections without rebuilding formatters/locators.
 
 ## Public API
 
-- `BULL_COLOR`, `BEAR_COLOR` — resolved **live** at paint time via
+- Directional colours are resolved **live** at paint time via
   `constants.BULL_COLOR` / `constants.BEAR_COLOR` attribute lookup (the module
   imports `from . import constants as _constants`, NOT a value-binding
   `from .constants import BULL_COLOR` — that froze the colour at import and
@@ -72,7 +72,7 @@ Collections without rebuilding formatters/locators.
   (floor 0.18) / 0.10 dark (floor 0.10); saturation `+0.15` (clamped to 1.0).
   Alpha passthrough. Used by `gui/volume_tod_overlay` and by
   `ChartApp._ha_flat_overlay_for` in light mode.
-- `draw_volume(ax, candles, x_offset=0, start=0, end=None) -> bars`
+- `draw_volume(ax, candles, x_offset=0, start=0, end=None, body_half=None) -> bars`
   `PolyCollection`. RTH bars at 0.7 alpha, extended-hours at
   `0.7 * _EXTENDED_ALPHA` (≈0.315). Geometry + colours built vectorized
   via `_vectorized_vol_geometry` (bit-for-bit identical to looping
@@ -126,9 +126,9 @@ Collections without rebuilding formatters/locators.
 - Internal: `constants` (`BULL_COLOR`, `BEAR_COLOR` via live `_constants.*`
   attribute lookup — see Public API note; `classify_session` for
   gap-shading), `formatting.fmt_volume`, `models.Candle`.
-- External: matplotlib (`LineCollection`, `PolyCollection`, `Rectangle`,
-  `blended_transform_factory`, `FuncFormatter`, `MaxNLocator`, `to_rgba`).
-  Imported lazily inside each draw fn; module import stays cheap.
+- External: `numpy`; matplotlib `to_rgba` at module import and
+  `LineCollection`, `PolyCollection`, `Rectangle`, `blended_transform_factory`,
+  `FuncFormatter`, `MaxNLocator` inside the draw/setup functions.
 
 ## Design notes
 

@@ -58,8 +58,8 @@ auto-registers the indicator via the existing loader.
     `scanner.engine.evaluate_group_vec(group, ctx)` — one all-bars numpy
     evaluation. On a non-`None` result it applies the warmup gate
     (`np.arange(n) >= warmup`) and the `is_true`/`is_false` masks directly,
-    skipping the per-bar loop entirely (~3 orders of magnitude faster on a
-    25k-bar series). `evaluate_group_vec` returns `None` for any tree
+    skipping the per-bar loop entirely (about 6× faster in the generated
+    code's benchmark note). `evaluate_group_vec` returns `None` for any tree
     outside its supported subset (within-last / cross-interval /
     cross-symbol / unsupported op or field), in which case the generated
     code falls back to the proven per-bar `evaluate_group` loop. The two
@@ -88,7 +88,7 @@ auto-registers the indicator via the existing loader.
 
 ## Whitelist
 
-Allowed AST node types: `BinOp`, `UnaryOp`, `BoolOp`, `Compare`,
+Allowed AST node types: `Expression`, `BinOp`, `UnaryOp`, `BoolOp`, `Compare`,
 `Call`, `Name`, `Constant` (numeric / bool only), `Load`, plus the
 whitelisted operator nodes for `+ - * / // ** %`, unary `+ - not`,
 `and` / `or`, and single comparisons. Every other node
@@ -175,3 +175,7 @@ walks `INDICATORS`.
   classes inherit the `BaseIndicator` compute shim, `compute_arr` on
   synthetic bars returns a finite `value` array, and `warmup_bars`
   reports the expected max.
+- `tests/unit/indicators/test_conditions_codegen.py` — generated
+  Conditions-mode modules compile, evaluate visual condition trees,
+  use the vectorized fast path when supported, and preserve scanner
+  opt-in metadata.

@@ -12,7 +12,7 @@ file suppresses the banner on every subsequent launch after dismissal with
   absent. Returns `False` on permission errors (don't show a
   perpetual nag if the FS is misbehaving).
 - `clear_dismissal_sentinel()` — remove the sentinel so the banner
-  reappears next launch. Wired to Help → "Getting Started…".
+  reappears next launch. Used by the Help-menu force-show path.
 - `write_dismissal_sentinel()` — write the sentinel. Idempotent.
 - `FirstRunBannerMixin`:
   - `_maybe_show_first_run_banner(parent=None)` — call from
@@ -54,5 +54,6 @@ name (`.first_run_dismissed_v2`).
 2. `ChartApp.__init__` calls `self._maybe_show_first_run_banner()`
    after `self._apply_theme()` so the banner adopts the current
    theme on first paint.
-3. Help → "Getting Started…" calls
-   `self._force_show_first_run_banner()`.
+3. Help → "Getting Started…" can call
+   `self._force_show_first_run_banner()` as its fallback if the
+   onboarding document cannot be opened.

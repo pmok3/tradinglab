@@ -109,8 +109,9 @@ never mutates owner state.
 - **Per-slot `CardSeriesCache`** (not symbol-keyed) — rebinding invalidates
   via `set_binding`; slot-keying ties cache lifetime to visual card
   lifecycle. Capped at `chartstack.sparkline_bar_count` (default 60).
-- Placeholder symbols `["AAPL", "MSFT", "NVDA", "GOOGL", "AMZN"][:N]` for
-  the wireframe-out-of-the-box experience.
+- Placeholder symbols `["SPY", "QQQ", "VXX"][:N]` mirror the fixed-preset
+  default for bare-owner/test construction; production FIXED_PRESET bypasses
+  them.
 - **Click-to-promote**: `mpl_connect("button_press_event", ...)` with
   axes-level hit-test (`event.inaxes is card.ax`). Left button only;
   right-click reserved for the context menu.
@@ -121,7 +122,7 @@ never mutates owner state.
   snapshots each card's bbox after every full draw; `apply_stream_event`
   mutates the per-slot cache + schedules `after_idle` flush;
   `_flush_dirty_cards()` for each dirty slot restores bbox bg, redraws
-  sparkline artists, `canvas.blit(ax.bbox)` (falls back to `draw_idle()`
+  card artists, `canvas.blit(ax.bbox)` (falls back to `draw_idle()`
   if no bg is cached, e.g. right after a binding swap). The bbox cache is
   invalidated on binding change, theme change, card stash, demote, destroy.
 - `_resolve()` threads `tuple(self._manual_pins)` into `resolve_bindings`

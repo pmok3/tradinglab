@@ -1,11 +1,11 @@
 # strategy_tester/acceptance.py — Spec
 
 ## Purpose
-`AcceptanceToken` — a cancellation primitive shared between the GUI Stop button and worker threads driving the strategy tester's per-symbol engine fan-out. Thin wrapper over `threading.Event` so workers can poll a single bit cheaply between symbols without touching Tk.
+`AcceptanceToken` — a cancellation primitive shared between the GUI Stop button and worker threads driving the strategy tester's per-symbol engine fan-out. Thin wrapper over `threading.Event` so workers can poll a single bit cheaply without touching Tk.
 
 ## Public API
 - `class AcceptanceToken` — `cancel()`, `is_cancelled() -> bool`, `raise_if_cancelled()` (raises `RunCancelled`).
-- `class RunCancelled(RuntimeError)` — raised by `raise_if_cancelled()`; runner catches at symbol boundary.
+- `class RunCancelled(RuntimeError)` — raised by `raise_if_cancelled()` for callers that want exception-style cancellation.
 
 ## Dependencies
 - `threading` (stdlib only).
@@ -13,7 +13,7 @@
 ## Design Decisions
 - **One-way flip** — once cancelled a token cannot be re-armed. A new Run mints a fresh token. Mirrors the Stop-button-is-final UX.
 - **Default = not cancelled** — newly-constructed tokens are accepting (the name "acceptance" reads positively).
-- **Poll between symbols, not inside `SandboxEngine.run_to_completion`** — per-symbol replays are bounded (~50ms-2s) and uninterruptible. Polling inside the engine loop would couple the kernel to cancellation semantics it doesn't need.
+- **Duck-typed poll contract** — callers pass the token to runner, evaluator, screenshot, and export paths as any object exposing `is_cancelled() -> bool`. The Strategy Tester evaluator polls between batches of bars; the `SandboxEngine` itself remains cancellation-free.
 
 ## Invariants
 - `cancel()` is idempotent.

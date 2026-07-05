@@ -3,8 +3,9 @@
 ## Purpose
 
 `RecentMenusMixin` extracted from `ChartApp`. Thin pass-through to
-`self._config_manager` for the File → Recent Configurations / Recent
-Watchlists cascades. The extraction is purely organisational — keeps
+`self._config_manager` for the File → Recent Configurations and
+Watchlists → Recent Watchlists cascades. The extraction is purely
+organisational — keeps
 the recent-menu plumbing out of the ChartApp god-class so it can
 grow (recent strategies, recent sandbox sessions, etc.) without
 adding lines to `app.py`.
@@ -14,7 +15,7 @@ adding lines to `app.py`.
 ### `RecentMenusMixin` methods (bound on `ChartApp`)
 
 - `_push_recent(kind, path)` — record `path` in the recent list
-  for `kind` (e.g. `"config"`, `"watchlist"`).
+  for `kind` (e.g. `"configs"`, `"watchlists"`).
 - `_refresh_recent_menu(menu, kind, *, on_pick)` — rebuild a Tk
   cascade `menu` from the persisted recent list for `kind`, using
   `on_pick` as the per-entry command. Always appends a "Clear

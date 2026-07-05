@@ -17,8 +17,9 @@ helpers.
     call at the **end** of `__init__` after widgets exist. Wires
     `WM_DELETE_WINDOW` to `cancel`, binds `<Escape>`/`<Return>`
     via `bind_modal_keys`, restores + binds geometry via
-    `geometry_store`, optionally `grab_set`s, propagates parent's
-    dark theme via `parent.apply_dark_theme_to(top)` when present.
+    `    geometry_store`, optionally `grab_set`s, propagates the
+    parent or parent-master dark theme via
+    `apply_dark_theme_to(top)` when present.
   - `_on_cancel()` — default ESC / [Cancel] (destroys).
   - `_on_primary()` — default Enter / primary handler (destroys);
     subclasses override to commit + close.
@@ -88,7 +89,8 @@ helpers.
 - Internal: `._modal_keys.bind_modal_keys`,
   `.geometry_store.store`, `.colors.ERROR_RED` /
   `.colors.MUTED_GREY` / `.colors.SUCCESS_GREEN` (last with
-  `ImportError` fallback).
+  `ImportError` fallback), `.native_theme.apply_canvas_theme`,
+  `.native_theme.current_theme`.
 - External: `tkinter`, `tkinter.ttk`, `typing.Any`.
 
 ## Design Decisions
@@ -102,8 +104,9 @@ helpers.
   confirm dialogs skip; complex editors pass `"dlg.entries"` etc.
 - **`grab=True` default**; non-modal viewers / editors (Doc Viewer,
   Drawing, Indicator) override to `grab=False`.
-- **Dark-theme propagation opt-in via parent hook**: silently
-  no-ops if `parent.apply_dark_theme_to(top)` is absent.
+- **Dark-theme propagation opt-in via parent hook**: checks the
+  parent and its `master`, then silently no-ops if no
+  `apply_dark_theme_to(top)` hook is present.
 - **Footer pack-from-right**: `side="right"` reverses visual
   order; packing `Cancel` first yields the canonical
   `[Validate] [Apply] [Save & Close] [Cancel]`.

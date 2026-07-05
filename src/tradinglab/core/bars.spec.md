@@ -5,10 +5,10 @@ Canonical OHLCV columnar view. The single source of truth for "candle list as Nu
 
 ## Public API
 - `@dataclass(frozen=True) Bars` — frozen columnar view of a time series.
-  - Fields: `open / high / low / close` (`float64`, shape `(n,)`), `volume` (`float64`), `timestamps` (`datetime64[ns]`, naive UTC), `session` (`object`, tags `"regular" | "pre" | "post" | "gap"`), `candles: Optional[List[Candle]]` (optional back-reference; not in `repr` or equality).
+  - Fields: `open / high / low / close` (expected `float64`, shape `(n,)`), `volume` (`float64`), `timestamps` (`datetime64[ns]`, naive UTC), `session` (`object`, tags `"regular" | "pre" | "post" | "gap"`), `candles: Optional[List[Candle]]` (optional back-reference; not in `repr` or equality).
   - `__len__()` returns the number of bars.
   - `from_candles(candles: Sequence[Candle]) -> Bars` — **single-pass** OHLCV + timestamp + session extraction (one Python loop fills six pre-allocated numpy arrays + the object session array). The canonical OHLCV builder. Empty input is supported.
-  - `from_arrays(*, open, high, low, close, volume, timestamps=None, session=None, candles=None) -> Bars` — construct from pre-extracted arrays. Missing `timestamps`/`session` are derived from `candles` if provided (timestamps via the same fast `_epoch_ns` path), else filled with dtype-correct sentinels (`""` for session is *not* used — defaults to `"regular"`).
+  - `from_arrays(*, open, high, low, close, volume, timestamps=None, session=None, candles=None) -> Bars` — construct from pre-extracted arrays. Missing `timestamps`/`session` are derived from `candles` if provided (timestamps via the same fast `_epoch_ns` path), else allocated/filled with dtype-correct placeholders (`timestamps` is an uninitialized `datetime64[ns]` array; `session` defaults to `"regular"`, not `""`). `volume` is coerced to `float64`; OHLC arrays are accepted as supplied by the prebuilt pipeline (normally already `float64`).
   - `typical_price() -> np.ndarray` — `(high + low + close) / 3`. VWAP / classic-pivot input.
 
 ## Module helpers
@@ -30,10 +30,9 @@ Canonical OHLCV columnar view. The single source of truth for "candle list as Nu
 ## Invariants
 - `len(bars.open) == len(bars.high) == ... == len(bars.timestamps) == len(bars.session) == n`.
 - `bars.timestamps` is naive UTC (no tzinfo).
-- `bars.volume.dtype == float64` even if constructed from int64 input (`from_arrays` coerces).
+- `bars.volume.dtype == float64` even if constructed from int64 input (`from_arrays` coerces). `from_candles` emits `float64` OHLC arrays; `from_arrays` expects callers to supply the desired OHLC dtype and does not coerce them.
 - `bars.session[i]` is one of `{"regular", "pre", "post", "gap"}`.
 - If `candles is not None`, `len(candles) == n`.
 
 ## Testing
 - Covered indirectly via integration smoke tests; the scanner, chart, and indicator pipelines all consume `Bars`.
-

@@ -6,7 +6,7 @@ Schwab WebSocket streaming source. Implements the `streaming.base.StreamSource` 
 ## Public API
 - `class SchwabStreamSource(*, seed_lookup=None)` — main entry point.
   - `subscribe(ticker: str, interval: str, on_event: StreamCallback) -> Callable[[], None]` — adds a subscription; returns an unsubscribe callable. Returns a no-op closure (with a debug/warn log) when:
-    - `interval != "1m"` (only 1-minute supported today — matches synthetic source's posture);
+    - `interval != "1m"` (only 1-minute Schwab streaming is supported today; synthetic streaming supports broader intraday intervals);
     - `websocket-client` is not installed;
     - Schwab credentials are not configured;
     - no valid access token (refresh token expired/missing — caller should run `schwab_login`).
@@ -21,7 +21,7 @@ Schwab WebSocket streaming source. Implements the `streaming.base.StreamSource` 
 - External: `websocket-client` (optional — late-imported inside `subscribe`; missing install degrades to a no-op subscriber with a warning).
 
 ## Design Decisions
-- **Singleton connection** lifecycle: dormant until first `subscribe`; immediate shutdown on last `unsubscribe`. The `_Connection` owns two threads — a recv loop and a 1-second clock thread that forces minute rollovers for quiet symbols.
+- **Singleton connection** lifecycle: dormant until first `subscribe`; immediate shutdown on last `unsubscribe`. The `_Connection` owns two daemon threads — a recv loop and a 1-second clock thread that forces minute rollovers for quiet symbols.
 - **LEVELONE drives in-progress bars, CHART_EQUITY corrects sealed bars**: the aggregator builds 1-min bars from sub-minute LEVELONE ticks. Schwab's authoritative CHART_EQUITY arrives 5–30s after the minute closes; we re-emit it as a `("tick", Candle)` so the BarsBuffer's match-by-timestamp overwrites the prior synthesized bar. **No separate "correction" event kind.**
 - **Per-subscriber `_Subscription` instances** — multiple subscribers for the same symbol get their own `MinuteBarBuilder` so late subscribers see a fresh in-progress bar seeded with their own most-recent close.
 - **Reconnect with exponential backoff** (`1,2,4,8,16,30` seconds, capped). Resubscribes all symbols on reconnect; `_request_id` resets to send `SUBS` (not `ADD`) on the fresh socket.
@@ -40,9 +40,8 @@ Schwab WebSocket streaming source. Implements the `streaming.base.StreamSource` 
 - `subscribe(...)` never raises — degraded paths return a no-op closure.
 - The connection's recv thread and clock thread are daemon threads (process exit terminates them).
 - A subscription's `MinuteBarBuilder` is private to its `_Subscription`; no cross-subscriber state-sharing.
-- After `unsubscribe()`, no further callbacks fire for that subscription (`alive=False` is checked on every dispatch).
+- After `unsubscribe()`, `alive=False` is checked on every dispatch. A callback already past the alive check may still complete, matching `streaming/base.py`'s single trailing-callback contract.
 
 ## Testing
-- Pure helpers `build_login_request`, `build_subs_request`, `decode_levelone_content`, and `chart_equity_to_candle` are unit-testable with no I/O.
+- Pure helpers `build_login_request`, `build_subs_request`, `_is_login_ok`, `decode_levelone_content`, and `chart_equity_to_candle` are unit-tested with no I/O in `tests/unit/test_schwab_streaming.py`.
 - WS / network path is `# pragma: no cover` — exercised by manual integration. The `MinuteBarBuilder` state machine is unit-tested via `schwab_aggregator.spec`'s coverage.
-

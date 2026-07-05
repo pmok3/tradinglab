@@ -44,7 +44,7 @@ exits/model.py              ← dataclasses + JSON round-trip
 - **`exits/__init__.py`** does one thing: `from . import model`.
   Import cost stays low; the heavier modules (`evaluator`,
   `paper_engine`) are imported lazily where needed.
-- **`schema_version = 1`** for `ExitStrategy`; `model.migrate` is the
+- **`schema_version = 2`** for `ExitStrategy`; `model.migrate` is the
   single forward-only seam.
 - **Trailing-stop and chandelier state are held by the evaluator**,
   not the strategy. State is wiped on app restart by design (rebuilt

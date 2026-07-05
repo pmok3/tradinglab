@@ -4,14 +4,15 @@
 
 `HelpMenuMixin` adds a `Help` cascade as the last menu in the
 `ChartApp` menubar. Surfaces version (About), data folder, update
-check, onboarding banner, credentials, and reset / purge.
+check, onboarding banner, diagnostic export, docs, and reset / purge.
+It also hosts several Tools-menu handlers, including credentials,
+Schwab connect, local data, and CSV export.
 
 ## Public API
 
 - `HelpMenuMixin._build_help_menu(menubar: tk.Menu) -> tk.Menu` —
   build + attach the cascade. Called from
-  `ChartApp._build_menubar` immediately before
-  `self.config(menu=menubar)`.
+  `MenuBuilder.build()` while constructing the application menubar.
 - `DOCS_URL: str = ""` — when set, `View Online Docs` opens it via
   `webbrowser.open(url, new=2, autoraise=True)`. Empty → falls
   back to `_on_help_getting_started` (never a dead button).
@@ -36,6 +37,8 @@ check, onboarding banner, credentials, and reset / purge.
 - `_on_help_chartstack_guide` — opens `docs/chartstack.md` in the
   in-app doc viewer. Same fallback chain (last resort: messagebox
   naming Settings path + the `Ctrl+\`` toggle).
+- `_on_help_watchlists_guide` — opens `docs/WATCHLISTS.md` in the
+  in-app doc viewer. Same fallback chain.
 - `_on_help_custom_indicators_guide` — opens
   `docs/CUSTOM_INDICATORS.md` in the in-app doc viewer. Same
   fallback chain.
@@ -65,8 +68,13 @@ check, onboarding banner, credentials, and reset / purge.
   `gui.schwab_connect_dialog.open_schwab_connect_dialog(self)` (guarded
   import). Interactive Schwab OAuth sign-in (system browser + paste-back; no
   embedded webview). Wired as **Tools → "Connect to Schwab…"**.
+- `_on_help_configure_local_data` —
+  `gui.local_data_dialog.open_local_data_dialog(self, on_changed=...)`
+  and refreshes the data-source combobox after BYOD roots change.
+- `_on_tools_export_bars_to_csv` —
+  `gui.export_cache_dialog.open_export_cache_dialog(self)`.
 - `_on_help_check_for_updates` — fires
-  `updates.schedule_check_async(self.after, _present, force=True)`
+  `updates.schedule_check_async(self.after, _present, force=False)`
   and presents the `UpdateResult` as a messagebox.
 - `_on_help_reset_install` — confirm-then-`shutil.rmtree` the data
   folder, then exit via `self._on_close()`.
@@ -91,9 +99,9 @@ registration needed).
 ## Wiring
 
 1. `ChartApp` class bases include `HelpMenuMixin`.
-2. `_build_menubar` calls `self._build_help_menu(menubar)` and
-   appends to `self._menubar_submenus` so theme repaint also
-   styles the cascade.
+2. `MenuBuilder.build()` calls `self._cb._build_help_menu(menubar)`
+   and appends the returned submenu to its submenu registry so theme
+   repaint also styles the cascade.
 
 ## Alt+H mnemonic disabled
 

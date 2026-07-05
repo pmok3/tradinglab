@@ -14,7 +14,8 @@ historical fetcher. This module only fills the intraday gap.
 ## Public API
 
 * `BarResampler(target_interval: str, *, session_open_time=(9, 30))`
-  — raises `ValueError` on unsupported targets.
+  — raises `ValueError` on unsupported targets or an out-of-range
+  `session_open_time`.
 * `target_interval` / `target_minutes` — read-only properties exposing
   the configured interval string and minute width.
 * `on_1m_tick(candle, *, forming) -> List[BarEvent]` — main entry.
@@ -35,9 +36,11 @@ Supported targets: `2m, 3m, 5m, 10m, 15m, 30m, 1h, 2h, 4h`.
 Buckets are anchored at the configured session open (default `09:30`)
 and walk forwards / backwards in `target_min` steps. A 5m candle at
 09:25 belongs to the bucket opening at 09:25; at 09:23 it belongs to
-the bucket opening at 09:20. Floor division on `(t − anchor)`
-minutes — Python's `//` floors toward −∞, which gives clean negative
-buckets for pre-market.
+the bucket opening at 09:20. Whole-minute timestamps use floor
+division on `(t − anchor)` minutes; Python's `//` floors toward −∞,
+which gives clean negative buckets for pre-market. If a sub-minute
+timestamp slips through, it is rounded to the nearest minute before
+bucket selection.
 
 ## Aggregation rules
 

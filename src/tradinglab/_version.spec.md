@@ -23,4 +23,4 @@ Single source of truth for the package's PEP-440 semantic version. Five external
 - `_build_info.py` is gitignored. Its absence in dev / source runs is normal and produces a friendly empty-string fallback.
 
 ## Tests
-`tests/unit/test_versioning.py` exercises `__main__ --version` and `--help` via subprocess.
+`tests/unit/test_versioning.py` pins the literal version format and the build-metadata fallback/formatting contract.

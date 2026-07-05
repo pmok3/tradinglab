@@ -8,14 +8,14 @@ The overlay does **not** look up the latest price itself — the caller (`ChartA
 ## Public API
 - `class LivePriceOverlay`
   - `LivePriceOverlay(*, enabled: bool = True)` — single instance owned by `ChartApp`.
-  - `redraw(*, ax_by_slot, price_by_slot, color, label_suffix="", label_bg=None, label_fg=None, label_edge=None)` — rebuild artists for every slot. Drops the previous pass's Python refs (`figure.clear()` already removed the matplotlib artists). When `label_bg` / `label_fg` / `label_edge` are all provided, the right-edge label renders as a TradingView-style boxed badge (round bbox patch); when any is `None`, the legacy unboxed plain-text label is rendered.
+  - `redraw(*, ax_by_slot, price_by_slot, color, label_suffix="", label_bg=None, label_fg=None, label_edge=None)` — rebuild artists for every slot. Detaches the previous pass's artists, then drops Python refs. When `label_bg` / `label_fg` / `label_edge` are all provided, the right-edge label renders as a TradingView-style boxed badge (round bbox patch); when any is `None`, the legacy unboxed plain-text label is rendered.
   - `update_in_place(slot, price, *, label_suffix="") -> bool` — mutate `line.set_ydata` + `label` position/text without re-rendering. Returns `True` if the artist was mutated, `False` if there's nothing to update (no artist for slot, non-finite price, or mutation raised). Handles both `Text` (legacy) and `Annotation` (boxed) labels — boxed labels move via `label.xy = (x, p)`, plain text labels move via `set_position`.
   - `apply_theme(*, line_color, label_bg, label_fg, label_edge)` — recolour every existing artist's line + label bbox + label text without rebuilding. Called by `gui.theme_controller.ThemeController._apply_overlay_artists` when the light/dark mode flips.
   - `set_enabled(enabled)` / `enabled` property — toggle the overlay off when (e.g.) sandbox-blind mode hides current price.
   - `slot_count` / `get_artists(slot)` — testing helpers.
-  - `clear()` / `close()` — drop Python refs.
+  - `clear()` / `close()` — detach artists from axes, then drop Python refs.
 - `format_price(price) -> str` — module-level label formatter. 3 decimals for `|price| < 1`, otherwise 2 decimals with thousands separator. Returns empty string for None / non-finite.
-- `resolve_price(symbol, *, last_stream_price, panel_state_slot) -> Optional[float]` — newest-wins resolver. Stream tick first, then last non-gap candle close. Pure function; takes plain dicts so tests don't need a `ChartApp`.
+- `resolve_price(symbol, *, last_stream_price, panel_state_slot) -> Optional[float]` — newest-wins resolver. Stream tick first, then last non-gap candle close. Pure function; normalises the symbol key and takes plain dicts so tests don't need a `ChartApp`.
 
 ## Dependencies
 - Internal: none. The module is self-contained; `ChartApp` wires it into `_render` / `_refresh_view_after_tick`.
@@ -40,4 +40,3 @@ The overlay does **not** look up the latest price itself — the caller (`ChartA
 - Calling `redraw` with `enabled=False` clears the artist map and draws nothing.
 - The label's x position stays at axes-1.0 across `update_in_place` calls. Only the y (data coord) is updated.
 - `format_price` never raises on weird inputs (None, "", non-numeric strings) — always returns a string (possibly empty).
-

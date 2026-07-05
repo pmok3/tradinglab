@@ -19,7 +19,7 @@ flat-market regimes. Drawn in its own pane.
   - `show_reference_lines: bool` (default `True`) — when False, the
     instance reports an empty `reference_levels`.
 - `default_style.lrsi`: olive `#bcbd22`, width 1.4 (distinct from
-  RSI's purple).
+  RSI's red).
 - `scannable_outputs = (("lrsi","numeric"),)` — opts the indicator into the scanner.
 - Instance `reference_levels`: `(oversold, overbought)` when
   `show_reference_lines` else `()`. Class-level `reference_levels = ()`
@@ -29,8 +29,9 @@ flat-market regimes. Drawn in its own pane.
   (Ehlers' published `[0, 1]` form × 100).
 
 ## Dependencies
-- Internal: `..models.Candle`, `.base.LineStyle`, `.base.ParamDef`,
-  `._iir.iir_tail` (vectorised linear-recurrence kernel).
+- Internal: `..core.bars.Bars`, `._iir.iir_tail` (vectorised
+  linear-recurrence kernel), `._palette.TAB10_OLIVE`,
+  `.base.BaseIndicator`, `.base.LineStyle`, `.base.ParamDef`.
 - External: `numpy`.
 
 ## Design Decisions
@@ -62,7 +63,8 @@ flat-market regimes. Drawn in its own pane.
 
 ## Invariants
 - Output values lie in `[0, 100]` inclusive at every defined index.
-- Indices 0–2 are NaN; finite from index 3.
+- Indices 0–2 are NaN. Later finite input bars publish finite output;
+  non-finite input bars stay NaN while the recurrence skips them.
 - `self.reference_levels` matches the constructor toggle.
 
 ## Data Flow / Algorithm

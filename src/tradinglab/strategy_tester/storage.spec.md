@@ -49,8 +49,8 @@ On-disk persistence for Strategy Tester Runs. Atomic writes only — no in-fligh
 
 ## Known limitations / Future work
 - **Not migrated to `core.json_collection_store.JsonObjectStore[T]`** (the
-  shared generic adopted by entries / exits / scanner / watchlists /
-  positions — see CLAUDE.md §7.22). Each Run is stored as a *directory*
+  shared generic used by one-record-per-file collections such as entries,
+  with partial adoption in exits / scanner — see CLAUDE.md §7.22). Each Run is stored as a *directory*
   containing multiple heterogeneous artifacts (`config.json` +
   `manifest.json` + `per_symbol/<SYMBOL>.json` + `aggregate.json` +
   `trades.csv` + `screenshots/*.png` + `report.html` + `report.pdf`),

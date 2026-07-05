@@ -28,7 +28,7 @@ in CLAUDE.md §7.7–§7.9.
 
 ### Factories
 - `Side.from_str(value)` — parses `"long"|"short"|"buy"|"sell"|"l"|
-  "s"|"+1"|"-1"`, case-insensitive, whitespace-tolerant. Raises
+  "s"|"+1"|"1"|"-1"`, case-insensitive, whitespace-tolerant. Raises
   `ValueError` with a helpful message on anything else (silent
   coercion would defeat the value type).
 - `Side.from_order_side(order_side)` — maps `backtest.orders.Side`

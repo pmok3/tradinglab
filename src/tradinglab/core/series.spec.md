@@ -4,15 +4,16 @@
 Vectorized numpy view of a `List[Candle]` plus a lazy per-candle tooltip-text cache. The OHLCV arrays are built up-front because autoscale slices them on every pan; tooltip strings are built **on demand** because most candles are never hovered. Shared by `core/viewport.y_limits_for_slice`, `ChartApp._series`, `gui/interaction._show_hover`.
 
 ## Public API
-- `class SeriesArrays(__slots__=...)` — holds `opens`, `highs`, `lows`, `closes`, `volumes` (all `np.ndarray`, same length), plus `_candles` (the list it was built from), `_format_date` (callable), `_tooltip_cache: Dict[int, str]`, and `n: int`.
+- `class SeriesArrays(__slots__=...)` — holds `opens`, `highs`, `lows`, `closes`, `volumes` (all `np.ndarray`, same length), plus `_candles` (the list it was built from), `_bars` (optional lazy `Bars` view), `_format_date` (callable), `_tooltip_cache: Dict[int, str]`, and `n: int`.
   - `__init__(candles, format_date)` — legacy path: one Python pass filling five preallocated OHLCV arrays.
   - `@classmethod from_arrays(candles, format_date, arrays)` — fast path when the fetcher already extracted arrays during `candles_from_dataframe`.
   - `@classmethod from_bars(bars, format_date) -> SeriesArrays` — alternate fast path for the scanner / indicator-cache layer when a `Bars` view is already in hand. Requires `bars.candles` for tooltip text, reuses the existing OHLCV arrays in-place (no re-extraction), and stashes the `Bars` under `_bars`.
+  - `bars -> Bars` — property that returns the stashed `Bars` view when present or lazy-builds one from `_candles`.
   - `tooltip_text(idx) -> str` — formats `"[PRE]/[POST] <date>\nO: ...\nH: ...\nL: ...\nC: ...\nVol: ..."` on first call; caches the result so repeated hovers are free.
 - `build_series_safe(candles, format_date) -> Optional[SeriesArrays]` — thread-safe builder used by worker threads. Pops any prebuilt arrays (via `data.pop_prebuilt_arrays`) and takes the fast path; falls back to the legacy path; swallows exceptions.
 
 ## Dependencies
-- Internal: `..data.pop_prebuilt_arrays`, `..formatting.fmt_volume`, `..models.Candle`.
+- Internal: `..data.pop_prebuilt_arrays`, `..formatting.fmt_volume`, `..models.Candle`, `.bars.Bars` (lazy import from the `bars` property / `from_bars` callers).
 - External: `numpy`.
 
 ## Design Decisions
@@ -47,4 +48,3 @@ except Exception:
 
 ## Known limitations / Future work
 - `tooltip_cache` is unbounded; on a 60k-candle series if the user hovered every bar it would retain ~10MB of strings. In practice no user does this.
-

@@ -631,6 +631,98 @@ def check_c6_bad_ticker(app) -> None:
     print("  [OK] §12 bad-ticker rejection reverts + status")
 
 
+def check_c7_watchlist_columns(app) -> None:
+    """Configurable watchlist signal columns (feature ``watchlist-columns``).
+
+    Adds a builtin ``volume`` signal column to the first pinned
+    watchlist, rebuilds the sub-tab, and verifies:
+
+      * the Treeview gains the signal column with its custom header;
+      * the signal evaluator (driven synchronously here for
+        determinism, then also via the async executor path) produces a
+        numeric value that renders as a non-loading cell;
+      * sorting by the new column does not raise.
+
+    macOS-safe: the ``Columns…`` *dialog* is unit-tested
+    (``tests/unit/gui/test_watchlist_columns_dialog.py``); this check
+    drives the tab wiring + evaluator directly, so no ``transient()``
+    modal is opened (see §7.1).
+    """
+    from tradinglab.scanner.model import FieldRef
+    from tradinglab.watchlists.columns import (
+        KIND_SIGNAL,
+        WatchlistColumn,
+        default_columns,
+        signal_column_id,
+        validate_columns,
+    )
+
+    mgr = getattr(app, "_watchlists", None)
+    assert mgr is not None, "watchlists manager missing"
+    pinned = mgr.pinned_names()
+    assert pinned, "expected at least one pinned watchlist"
+    name = pinned[0]
+    saved = mgr.columns_for(name)
+    ref = FieldRef.builtin("volume")
+    cid = signal_column_id(ref)
+    try:
+        col = WatchlistColumn(
+            kind=KIND_SIGNAL, id=cid, ref=ref, label="VolSig", fmt="int")
+        mgr.set_columns(name, validate_columns([*default_columns(), col]))
+        app._watchlist_row_cache.pop(name, None)
+        app._rebuild_watchlist_subtabs()
+        _pump(app, 0.2)
+
+        tree = app._watchlist_trees.get(name)
+        assert tree is not None, "rebuilt watchlist tree missing"
+        tree_cols = list(tree.cget("columns"))
+        assert cid in tree_cols, f"signal column not added to tree: {tree_cols}"
+        assert "VolSig" in tree.heading(cid, "text"), (
+            f"custom header label missing: {tree.heading(cid, 'text')!r}")
+
+        # Deterministic path: compute on the main thread + repaint.
+        src = app.source_var.get()
+        tickers = list(app._pinned_ticker_union())
+        app._compute_watchlist_signals(tuple(tickers), (col,), src)
+        _pump(app, 0.3)
+
+        # The evaluator produced a numeric raw for at least one ticker.
+        evaluated = False
+        for t in tickers:
+            for key in (t, t.upper()):
+                cv = app._watchlist_snapshot.get(key, {}).get("_sig", {}).get(cid)
+                if cv is not None and cv.raw is not None:
+                    evaluated = True
+                    break
+            if evaluated:
+                break
+        assert evaluated, (
+            "signal column produced no numeric value for any pinned ticker")
+
+        # At least one rendered cell is not the loading placeholder.
+        col_index = tree_cols.index(cid)
+        rendered = []
+        for iid in tree.get_children():
+            vals = tree.item(iid, "values")
+            if col_index < len(vals):
+                rendered.append(vals[col_index])
+        assert rendered, "no watchlist rows rendered"
+        assert any(v not in ("", "\u2026") for v in rendered), (
+            f"signal column never rendered a value: {rendered}")
+
+        # Async executor path is wired (fire-and-forget) + sorting is safe.
+        app._preload_watchlist_signals()
+        _pump(app, 0.3)
+        app._sort_watchlist_by(name, cid)
+        _pump(app, 0.2)
+        print("  [OK] c7 watchlist signal column renders + sorts")
+    finally:
+        mgr.set_columns(name, saved)
+        app._watchlist_row_cache.pop(name, None)
+        app._rebuild_watchlist_subtabs()
+        _pump(app, 0.1)
+
+
 def check_d0_dialogs(app) -> None:
     """Settings + Watchlist dialogs open and close cleanly.
 
@@ -10211,6 +10303,147 @@ def check_g2_sandbox_open_universe(app) -> None:
         app._drilldown_day = None
 
     print("  [OK] g2 sandbox open-universe: register/compare/timeline-frozen/drilldown")
+
+
+def check_g3_sandbox_heatmap(app) -> None:
+    """Sandbox Market Heatmap pop-out (v1).
+
+    Exercises the heatmap window against a *real* active replay
+    session + ChartApp:
+
+      * renders the point-in-time S&P membership — a look-ahead name
+        (``Date added`` after the clock) is filtered out;
+      * hit-test resolves the tile under a point;
+      * the 250 ms clock self-poll refreshes as the clock advances,
+        and the non-blind title shows the replay date;
+      * blind mode hides the calendar date in the title
+        ("Replay Bar N");
+      * clicking a tile focuses that symbol on the primary chart.
+
+    A small injected ``provider`` + fake ``price_source`` keep it
+    offline + fast (the real window primes ~500 S&P shares from the
+    network); the controller / window / app wiring is real.
+    """
+    import datetime as dt
+    import tempfile
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from tradinglab.backtest.bars import _clear_cache_for_tests
+    from tradinglab.backtest.heatmap_provider import HeatmapProvider
+    from tradinglab.backtest.replay import SandboxController
+    from tradinglab.backtest.session import ENGINE_VERSION, SessionSpec
+    from tradinglab.gui.sandbox_heatmap import SandboxHeatmapWindow, tile_at
+    from tradinglab.models import Candle
+
+    _clear_cache_for_tests()
+
+    t0 = dt.datetime(2024, 6, 3, 13, 30, tzinfo=dt.timezone.utc)
+
+    def synth(base: float):
+        out = []
+        for i in range(30):
+            o = base + i * 0.10
+            out.append(Candle(
+                date=t0 + dt.timedelta(minutes=5 * i),
+                open=o, high=o + 0.5, low=o - 0.3,
+                close=o + 0.2, volume=1000.0 + i, session="regular"))
+        return out
+
+    def _ep(y, m, d):
+        return int(dt.datetime(y, m, d, tzinfo=dt.timezone.utc).timestamp())
+
+    spy = synth(400.0)
+    bbb_candles = synth(50.0)  # registered so the click-to-focus path works
+
+    meta = {
+        "AAA": {"sector": "Technology", "industry": "Software",
+                "cik": "1", "date_added_ts": _ep(2010, 1, 1)},
+        "BBB": {"sector": "Financials", "industry": "Banks",
+                "cik": "2", "date_added_ts": _ep(2010, 1, 1)},
+        "NEW": {"sector": "Technology", "industry": "Hardware",
+                "cik": "3", "date_added_ts": _ep(2030, 1, 1)},  # look-ahead
+    }
+    provider = HeatmapProvider(
+        meta=meta,
+        shares_fetcher=lambda s: [(_ep(2015, 1, 1), 1000.0)],
+        cache_dir=Path(tempfile.mkdtemp(prefix="tl_heatmap_smoke_")),
+    )
+    provider.prime(["AAA", "BBB"])  # so peek returns real (non-approx) sizes
+
+    def price_source(_sym, _clock):
+        return (110.0, 100.0)  # +10% vs prior close
+
+    spec = SessionSpec(
+        deck_seed=7, tickers=(), start_clock_iso="",
+        slippage_bps=5.0, commission=0.0,
+        engine_version=ENGINE_VERSION, starting_cash=50_000.0,
+    )
+
+    pre_sandbox = getattr(app, "_sandbox", None)
+    ctl = SandboxController(app=app)
+    win = None
+    try:
+        ctl.start_session(
+            spec=spec, session_date=dt.date(2024, 6, 3), interval="5m",
+            reference_symbol="SPY", reference_candles=spy, lookback_days=0,
+        )
+        app._sandbox = ctl
+        ctl.next_bar()  # advance so clock_ts() is defined
+        ctl.register_ticker("BBB", bbb_candles)  # so click can focus it
+
+        win = SandboxHeatmapWindow(
+            app, ctl, provider=provider, price_source=price_source)
+        _pump(app, 0.1)
+
+        # Point-in-time membership: NEW (added 2030) is filtered out at 2024.
+        syms = {t.symbol for t in win._tiles}
+        assert syms == {"AAA", "BBB"}, f"heatmap members: {syms}"
+
+        # Hit-test resolves the tile under a point.
+        aaa = next(t for t in win._tiles if t.symbol == "AAA")
+        hit = tile_at(win._tiles, aaa.x + aaa.w / 2.0, aaa.y + aaa.h / 2.0)
+        assert hit is not None and hit.symbol == "AAA"
+
+        # Clock advances -> the 250ms self-poll refreshes without error; the
+        # non-blind title carries the replay date.
+        for _ in range(3):
+            ctl.next_bar()
+        _pump(app, 0.4)
+        assert win._tiles, "heatmap tiles present after clock advance"
+        assert "2024-06-03" in win._header.cget("text"), \
+            "non-blind title should show the replay date"
+
+        # Blind mode: the title must not leak the calendar date.
+        ctl.blind = True
+        win.on_replay_tick()
+        blind_title = win._header.cget("text")
+        assert "2024-06" not in blind_title, \
+            f"blind title leaked the date: {blind_title!r}"
+        assert "Replay Bar" in blind_title, \
+            f"blind title should show the bar index: {blind_title!r}"
+        ctl.blind = False
+
+        # Click a tile -> focus that symbol on the primary chart.
+        bbb = next(t for t in win._tiles if t.symbol == "BBB")
+        ev = SimpleNamespace(
+            inaxes=win._ax, xdata=bbb.x + bbb.w / 2.0, ydata=bbb.y + bbb.h / 2.0)
+        win._on_click(ev)
+        _pump(app, 0.2)
+        assert ctl.focus_symbol == "BBB", \
+            f"click should focus BBB; got {ctl.focus_symbol!r}"
+    finally:
+        if win is not None:
+            try:
+                win.close()
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            ctl.end_session()
+        except Exception:  # noqa: BLE001
+            pass
+        app._sandbox = pre_sandbox
+        _pump(app, 0.1)
 
 
 def check_b5_sandbox_save_load(app) -> None:
@@ -20711,6 +20944,7 @@ def _run_all_checks(app) -> None:
     check_c0_watchlist_tab(app)
     check_c5_notebook(app)
     check_c6_bad_ticker(app)
+    check_c7_watchlist_columns(app)
     check_d0_dialogs(app)
     check_d1_log_price_scale(app)
     check_d2_preserve_xlim_across_compare_toggle(app)
@@ -20790,6 +21024,7 @@ def _run_all_checks(app) -> None:
     check_g0_sandbox_replay_integration(app)
     check_g1_sandbox_phase1c(app)
     check_g2_sandbox_open_universe(app)
+    check_g3_sandbox_heatmap(app)
     check_b5_sandbox_save_load(app)
     check_b6_sandbox_auto_cycle(app)
     check_b7_sandbox_multitf_context(app)
@@ -20994,6 +21229,7 @@ def _build_check_sequence():
         ("check_c0_watchlist_tab", check_c0_watchlist_tab),
         ("check_c5_notebook", check_c5_notebook),
         ("check_c6_bad_ticker", check_c6_bad_ticker),
+        ("check_c7_watchlist_columns", check_c7_watchlist_columns),
         ("check_d0_dialogs", check_d0_dialogs),
         ("check_d1_log_price_scale", check_d1_log_price_scale),
         ("check_d2_preserve_xlim_across_compare_toggle",
@@ -21115,6 +21351,7 @@ def _build_check_sequence():
          check_g0_sandbox_replay_integration),
         ("check_g1_sandbox_phase1c", check_g1_sandbox_phase1c),
         ("check_g2_sandbox_open_universe", check_g2_sandbox_open_universe),
+        ("check_g3_sandbox_heatmap", check_g3_sandbox_heatmap),
         ("check_b5_sandbox_save_load", check_b5_sandbox_save_load),
         ("check_b6_sandbox_auto_cycle", check_b6_sandbox_auto_cycle),
         ("check_b7_sandbox_multitf_context", check_b7_sandbox_multitf_context),

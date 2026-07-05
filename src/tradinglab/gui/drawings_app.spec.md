@@ -40,16 +40,16 @@ horizontal-line drawing concern:
   opener; lifts an existing dialog instead of opening a second.
 - `_on_alt_h_placement(event)` — Alt+H keyboard placement of a
   new drawing at the snapped cursor price.
-- `_resolve_cursor_px_fallback(x, y)` — pixel-coordinate
+- `_resolve_cursor_px_fallback()` — pixel-coordinate
   fallback when the matplotlib event has no `xdata` / `ydata`.
-- `_compute_snapped_drawing_price(x, slot_key)` — snap the
+- `_compute_snapped_drawing_price(ax, slot_key, y_data, y_pixel)` — snap the
   cursor's data-coord to the nearest visible OHLC level if
   within `_DRAWINGS_SNAP_PIXEL_THRESHOLD` pixels.
 - `_collect_visible_ohlc_for_slot(slot_key)` — gather the
   visible candles' OHLC levels for snap evaluation.
-- `_show_chart_canvas_menu(event)` — right-click menu on the
+- `_show_chart_canvas_menu(slot_key, event, x_root, y_root)` — right-click menu on the
   chart canvas background (snapshot / drawings clear / etc.).
-- `_show_drawing_context_menu(drawing_id, event)` — right-click
+- `_show_drawing_context_menu(drawing_id, x_root, y_root)` — right-click
   menu on a drawing artist (edit / delete / change color).
 
 ### Module-level constants
@@ -62,8 +62,7 @@ horizontal-line drawing concern:
 - Internal: `..drawings.render.render_drawings` (re-exported as
   `_render_drawings`), `..formatting.format_dt`,
   `..status.StatusLog` (type-only).
-- External: `math`, `time`, `tkinter`, `matplotlib.figure.Figure`
-  (type-only parity), `typing.Any`.
+- External: `math`, `time`, `tkinter`, `typing.Any`.
 - `_repaint_drawings_only` imports
   `..drawings.render.clear_drawing_artists` lazily so the
   fast-path doesn't widen this module's top-level import graph.
@@ -74,7 +73,7 @@ horizontal-line drawing concern:
   `ChartApp.__init__`: `_drawings` (DrawingStore),
   `_drawing_redraw_pending`, `_last_drawing_color`,
   `_drawing_save_error_last_ts`, `_panel_state`, `_canvas`,
-  `_figure`, `_status`, `_open_drawing_dialogs`.
+  `_figure`, `_status`, `_drawing_dialogs`, `_dialog_mgr`.
 - **Coalesced repaint.** The store can fire many events per
   drag (~5 Hz from the dialog slider); collapsing into one
   `after_idle` repaint keeps the canvas responsive.

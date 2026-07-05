@@ -36,6 +36,8 @@ class Drawing:
     def replace(self, **changes) -> "Drawing": ...
 
 def normalize_ticker(s) -> str: ...
+def find_nearest_ohlc_snap(target_y_px, candidate_prices_px, *,
+                           threshold_px=8.0) -> Optional[float]: ...
 def make_hline_drawing(ticker, price, *, color, width, style,
                        label, drawing_id, created_at) -> Drawing: ...
 def snap_price_to_grid(price, *, visible_range=None) -> float: ...
@@ -78,6 +80,13 @@ Used by Alt+H / right-click placement in `app.py`. With
 level. Without it: magnitude-based fallback (≥ $1 → cents; sub-dollar
 → ~4 sig figs). Non-finite inputs pass through unchanged (downstream
 `_coerce_price` rejects them).
+
+## `find_nearest_ohlc_snap`
+
+Optional Alt+H snap helper. Operates in display-pixel Y coordinates:
+given `(price_data, price_y_px)` candidates, returns the data price
+whose pixel Y is closest to `target_y_px` within `threshold_px`.
+Non-finite candidates are skipped; ties keep the first candidate.
 
 ## Defaults
 

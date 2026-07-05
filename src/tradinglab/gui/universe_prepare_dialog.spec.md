@@ -7,10 +7,11 @@ chosen basket / watchlist and writing the resulting
 `UniverseManifest`. **Only** entry point for filling the
 `universes/*` sidecars the strict-offline sandbox gate consumes.
 
-## Shape
+## Public API
 
+- `compute_run_estimate(*, symbol_count: int, intervals: tuple[str, ...], daily_interval: str = "1d") -> dict[str, Any]` — pure ETA / size estimator for the reactive run-estimate label. Returns `ops`, `seconds`, `bytes`, and a ready-to-render `label` string; label is blank when no universe is selected.
 - `class UniversePrepareDialog(BaseModalDialog)`.
-- Constructor:
+- `UniversePrepareDialog(app, *, source_name, fetcher, on_finished=None)`:
   - `app` — parent ChartApp. Toplevel parent; read-only access to
     `_full_cache` (mirrored on Tk thread) and `_watchlists`.
   - `source_name: str` — data-source key (`"yfinance"`).
@@ -140,7 +141,9 @@ chosen basket / watchlist and writing the resulting
   `PreloadResult`.
 - `..preload.manifest` — `UniverseManifest`, `load`,
   `build_from_loaded`, `save`.
-- `._modal_base` — `BaseModalDialog`, `protect_combobox_wheel`.
+- `._modal_base` — `BaseModalDialog`, `make_scrollable_form`,
+  `protect_combobox_wheel`.
+- `.native_theme` — `apply_toplevel_theme`, `current_theme`.
 - `.colors.MUTED_GREY`.
 - App attrs touched: `_full_cache` (write),
   `_trim_full_cache` (call if present), `_watchlists` (read).

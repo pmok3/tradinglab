@@ -21,7 +21,7 @@ scanner/runner.py          ← multi-scan orchestration, ThreadPoolExecutor,
 scanner/storage.py         ← UUID-keyed JSON files in <cache>/scans/
 scanner/engine.py          ← pure tri-valued (Kleene) evaluator, all 19 ops
 scanner/fields.py          ← curated builtin + indicator field registry
-scanner/session.py         ← find_session_open_index helper (RTH-anchored)
+scanner/session.py         ← find_session_open_index helper (UTC-date clamp)
 scanner/tick_source.py     ← Tick / TickSource / Polling / Queued
 scanner/model.py           ← pure-data dataclasses + JSON round-trip
 ```
@@ -63,9 +63,9 @@ forward-only migrations. Strict per-file load rejects
 | -------------------------------------- | ---------------------------- |
 | operator names + param schemas         | `model.OPERATOR_PARAM_SCHEMA`|
 | FieldRef / Condition / Group / etc     | `model`                      |
-| which indicators are scannable         | `fields.SCANNABLE_INDICATORS`|
+| which indicators are scannable         | `fields.scannable_indicators()`|
 | tri-valued AND/OR truth tables         | `engine.evaluate_group`      |
-| 19 operator implementations            | `engine.evaluate_condition`  |
+| 19 operator implementations            | `operators.OPERATOR_EVALUATORS`|
 | per-symbol indicator memo              | `engine.IndicatorMemo`       |
 | edge-triggered "new" detection         | `runner.MatchHistory`        |
 | disk persistence + import collisions   | `storage`                    |

@@ -163,8 +163,7 @@ holds.
    "#17becf", "#bcbd22"]`), `linewidth=1.5`, `alpha=0.85`, and a
   legend in the upper-left names each line (e.g. `EMA(3)`,
   `EMA(8)`). When `entry_strategy` and `exit_strategy` are both
-  `None` (the default and current behavior of every caller until
-  PR-N), the rendered PNG is byte-identical to the pre-overlay
+  `None`, the rendered PNG is byte-identical to the pre-overlay
   output — see `test_indicator_overlay_backcompat_when_strategy_none`.
   Strategy-tester batch rendering calls
   `build_indicator_overlay_cache(...)` once per symbol and passes the

@@ -1,9 +1,9 @@
 # streaming/synthetic.py — Spec
 
-> ⚠ `SyntheticStreamSource` is a deterministic offline simulator (seeded log-normal random walk). NOT a real feed. Never use for live trading or signals against real instruments. For smoke tests, UI dev, sandbox replay only.
+> ⚠ `SyntheticStreamSource` is an offline simulator (seeded log-normal random walk). NOT a real feed. Never use for live trading or signals against real instruments. For smoke tests, UI dev, sandbox replay only.
 
 ## Purpose
-Deterministic offline streaming source. One daemon thread per subscription advances a log-normal random walk on the in-progress bar's close; emits ticks at `tick_period` (default 0.5s); rolls over when wall-clock crosses an interval boundary.
+Offline streaming source for intraday intervals. One daemon thread per subscription advances a log-normal random walk on the in-progress bar's close; emits ticks at `tick_period` (default 0.5s); rolls over after wall-clock crosses an interval boundary.
 
 ## Public API
 - `class SyntheticStreamSource(tick_period: float = 0.5)` — implements `StreamSource`.
@@ -15,7 +15,7 @@ Internal: `..constants.classify_session/floor_to_interval/interval_minutes/is_in
 ## Design Decisions
 - **Daemon thread** (`daemon=True`): dies on app exit; `_on_close` also calls unsubscribes for clean teardown.
 - **`threading.Event` + `event.wait(tick_period)`** rather than `time.sleep`: wakes immediately on unsubscribe.
-- **Seeded RNG**: `hash((ticker, interval, "stream")) & 0xFFFFFFFF`. Different from the history seed (includes the literal `"stream"`) so the live walk doesn't mirror history at the seam.
+- **Seeded RNG**: `hash((ticker, interval, "stream")) & 0xFFFFFFFF`. Different from the history seed (includes the literal `"stream"`) so the live walk doesn't mirror history at the seam. Python hash randomization means the seed is process-local, not reproducible across interpreter runs.
 - **Initial "rollover" event** seeds consumer with an in-progress bar at `floor_to_interval(now, step_min)`. Subsequent ticks mutate it.
 - **Rollover detection**: emit rollover whenever `new_start > bar_start`. Previous bar implicitly sealed; no explicit "seal" event.
 - **Open continuity across rollover**: `open_px = close_px` from prior bar — simulates a gapless open.
@@ -29,7 +29,7 @@ Internal: `..constants.classify_session/floor_to_interval/interval_minutes/is_in
 - Non-intraday subscribe: immediate return with no-op unsub, no thread spawned.
 - `unsubscribe()` sets the stop event; thread exits within one `tick_period`.
 - Each emitted Candle has correct `session` via `classify_session(start.hour, start.minute)`.
-- Rollover events fire exactly at interval boundaries.
+- Rollover events carry the floored interval-boundary timestamp and are emitted on the first wake after that boundary is crossed.
 - First emitted event is always `"rollover"`, not `"tick"`.
 
 ## Algorithm

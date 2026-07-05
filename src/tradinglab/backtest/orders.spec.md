@@ -19,7 +19,7 @@ The `Order` and `Fill` dataclasses plus the `Side` enum that flow through the en
 None beyond stdlib.
 
 ## Design Decisions
-- **`order_id` is caller-assigned**, not UUID-generated. The `SandboxController` mints monotonically-increasing `ord-NNNN` ids; a Phase 2 batch runner can choose its own scheme. Deterministic ids feed reproducibility.
+- **`order_id` is caller-assigned**, not UUID-generated. The `SandboxController` mints monotonically-increasing `ord-NNNN` ids; the Strategy Tester evaluator mints `strat-<symbol>-NNNNN` ids. Deterministic ids feed reproducibility.
 - **`Fill.fill_price` already includes slippage** in the worse-fill direction (BUY higher, SELL lower) — the fill model bakes it in so consumers (`Portfolio.apply_fill`) don't re-derive direction.
 - **`commission` is per-fill currency, not bps**: matches how brokerage fees are quoted today and avoids double-converting through bps.
 - **No `stop_price` / `limit_price` field**: keeping the dataclass shape minimal makes it impossible to forget a "fill must respect stop" branch in the engine. Phase 2 will introduce a richer order type rather than adding optional fields here.
@@ -32,4 +32,3 @@ None beyond stdlib.
 ## Testing
 - `check_f0_backtest_kernel` §C — `apply_fills` slippage direction across BUY / SELL.
 - `check_f1_session_reproducibility` — Fills round-trip via SessionResult JSON.
-

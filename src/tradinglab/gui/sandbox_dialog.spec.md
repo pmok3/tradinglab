@@ -1,11 +1,14 @@
 # gui/sandbox_dialog.py — Spec
 
 ## Purpose
-Two modal `BaseModalDialog` dialogs for the sandbox subsystem: `SandboxStartDialog` (open-universe Phase 1c-redux start dialog) and `PreTradeFormDialog` (mandatory pre-trade journal form, re-exported from `gui/pre_trade_dialog.py`).
+Modal `BaseModalDialog` start dialog for the sandbox subsystem:
+`SandboxStartDialog` configures an open-universe Phase 1c-redux
+sandbox session.
 
 ## File structure
-- `gui/sandbox_dialog.py` — owns `SandboxStartDialog` and re-exports `PreTradeFormDialog` so legacy callers (`from .sandbox_dialog import PreTradeFormDialog`, used by `gui/sandbox_panel.py`) keep working unchanged.
-- `gui/pre_trade_dialog.py` — owns `PreTradeFormDialog`. Extracted to its own module because the two dialogs share no helpers and serve unrelated lifecycle steps (start-of-session config vs per-order journal entry).
+- `gui/sandbox_dialog.py` owns `SandboxStartDialog`.
+- `gui/pre_trade_dialog.py` owns `PreTradeFormDialog`; sandbox order
+  journaling imports that module directly.
 
 ## Public API
 - `class SandboxStartDialog(app, *, reference_symbol, intervals, eligible_dates_provider, fetch_provider=None, default_interval=None, default_selected_intervals=None, manifest_provider=None)` — modal, blocks via `wait_window`. `self.result` on close is either `None` (cancel) or a payload dict:
@@ -18,15 +21,9 @@ Two modal `BaseModalDialog` dialogs for the sandbox subsystem: `SandboxStartDial
   `auto_cycle == blind` (Phase 1d UX coupling — blind random implies auto-cycle). `interval` is the *primary* tick interval (= smallest checked entry in `display_intervals`); `display_intervals` is the sorted-ascending list of all checked intraday timeframes (e.g. `["5m", "15m", "1h"]`).
 
   `universe_id` is the manifest id (e.g. `"sp500"`, `"qqq"`, `"watchlist:Mega Caps"`) when the user picked a prepared universe, else `""`. `universe_symbols` is a sorted tuple of upper-case tickers (the strict-offline allow-list); empty tuple when no universe is chosen. `strict_offline` is `True` only when both a universe is chosen *and* the locked-checked checkbox is set (i.e. always `True` with a universe, always `False` without one).
-- `class PreTradeFormDialog(...)` — modal pre-trade journal form. `self.result`:
-  ```
-  {symbol, side, quantity,
-   pre_trade_data: {setup_tag, thesis, conviction, size, target, notes}}
-  ```
-  Refuses Submit if `thesis` is empty or `size` non-positive.
 
 ## Dependencies
-- Internal: `..backtest.deck.draw_one_date` (for the "Random eligible date" button + blind-mode self-draw), `._modal_base.BaseModalDialog`, `._modal_base.protect_combobox_wheel`, `.pre_trade_dialog.PreTradeFormDialog`.
+- Internal: `..backtest.deck.draw_one_date` (for the "Random eligible date" button + blind-mode self-draw), `._modal_base.BaseModalDialog`, `._modal_base.protect_combobox_wheel`.
 - External: `tkinter`, `tkinter.ttk`.
 
 ## Design Decisions
@@ -38,12 +35,11 @@ Two modal `BaseModalDialog` dialogs for the sandbox subsystem: `SandboxStartDial
 - **Blind mode collapses date controls**: when checked, the date entry shows `(hidden)` and is disabled; on Start the dialog draws the date itself (via `draw_one_date`) and sets `auto_cycle=True`. Eligibility is mandatory in blind mode — without a list there's nothing to randomise over.
 - **Blind-mode time-based seed override** (`_on_start`): when `blind=True` and the user-entered seed is the default `0`, the dialog overrides it with `time.time_ns() & 0x7FFFFFFF` so successive blind sessions land on different dates. A non-zero seed is treated as a user-pinned reproducible draw and is honoured as-is. Non-blind sessions never override (the seed entry only feeds the manual Random button + auto-cycle deck), so `seed=0` stays `0` there.
 - **Validation in `_on_start`** writes to `_error_var` (a red label in the dialog) rather than message boxes — keeps the modal compact and the user's input visible.
-- **`PreTradeFormDialog` requires thesis + positive size before Submit**: enforces the locked decision Q4 (mandatory journaling) on the UI side; engine-side validation in `replay.SandboxController.submit_order` is the second line of defence.
 - **Universe / strict-offline group** (sandbox-preload feature): the dialog renders a "Universe (optional)" `LabelFrame` with a readonly combobox, a coverage label, and a strict-offline checkbox. Combobox values: `"(none — legacy unrestricted)"` plus one entry per `manifest_provider()` result, formatted `"<name>  (<id>, <count> symbols)"`. Selecting a real universe **force-checks and disables** the strict-offline checkbox (locked-checked = visually clear that the universe choice implies the seal; can't be turned off from this dialog). Selecting `(none)` un-checks and re-enables it (and it stays un-checked, since strict-offline without a universe has no allow-list to compare against). Coverage label refreshes on universe change *and* on every keystroke in the date entry (`StringVar.trace_add("write")`); calls `manifest.coverage_for_date(...)` against the disk_cache and shows `"<covered> / <total> symbols cover <date> at <interval>"`. When `manifest_provider is None` (legacy callers / tests) only `(none)` is shown and back-compat is preserved end-to-end (result has empty universe_id / universe_symbols / strict_offline=False).
 
 ## Invariants
 - `self.result is None` on cancel / Esc / window-close.
-- Both dialogs finalize with the base modal grab enabled and release it on close — no other window receives input while open.
+- The dialog finalizes with the base modal grab enabled and releases it on close — no other window receives input while open.
 - Start dialog payload `auto_cycle == blind` (Phase 1d coupling).
 
 ## Testing

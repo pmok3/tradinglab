@@ -1,17 +1,19 @@
 # __main__.py — Spec
 
 ## Purpose
-Enables `python -m tradinglab` to launch the GUI. Delegates to `app.main()` after acquiring the Windows single-instance mutex.
+Enables `python -m tradinglab` and the PyInstaller entry point to launch the GUI. Uses absolute imports so the file works both as a package module and as the frozen bootloader's top-level script, calls `multiprocessing.freeze_support()` defensively, then delegates to `app.main()` after acquiring the single-instance guard.
 
 ## Public API
 - No public names exported; guards `main()` with `if __name__ == "__main__":` so importing the module doesn't start the event loop.
 
 ## Dependencies
 - Internal: `.app.main`, `._single_instance.single_instance_guard`, `._single_instance.release_single_instance`.
-- External: none.
+- External: stdlib `multiprocessing`, `sys`.
 
 ## Design Decisions
 - Separate file (rather than `if __name__ == "__main__"` inside `app.py`) so `python -m tradinglab` works without reading the big `app.py` dispatch block.
+- Absolute imports (`tradinglab.app`, `tradinglab._single_instance`) are intentional: PyInstaller runs the entry file as `__main__` without package context, so relative imports would fail in the frozen executable.
+- `multiprocessing.freeze_support()` is called before any GUI work so accidental frozen child-process spawns return through the bootloader instead of relaunching the GUI.
 - **Feature B — single-instance protection:** Before constructing the splash or calling `main()`, the module calls `single_instance_guard()` which tries to acquire a single-instance guard. On **Windows** that's a named kernel mutex (`Local\TradingLab.SingleInstance`); on a double-launch the second process resolves the already-running TradingLab window by `EnumWindows` + title-prefix match (not `FindWindowW("Tk", …)` — every Python+Tk app shares the `"Tk"` class), brings it forward via `SetForegroundWindow`, and `sys.exit(0)`s. On **POSIX (Linux / macOS)** the guard is an exclusive `fcntl.flock` on a lockfile under `app_data_dir()`; the second instance prints a one-line "TradingLab is already running" hint to stderr (no cross-toolkit focus primitive ships with the app) and exits 0. If `fcntl` is unavailable the POSIX path degrades to `(True, None)` so the user always launches *something*. The handle (mutex int on Windows, file object on POSIX) is released in a `finally` block so a `Ctrl+C` / crash doesn't permanently block subsequent launches.
 
 ## Invariants
@@ -24,4 +26,3 @@ Enables `python -m tradinglab` to launch the GUI. Delegates to `app.main()` afte
 
 ## Known limitations / Future work
 - The "bring existing window forward" path uses `SetForegroundWindow`, which Windows can refuse if the calling process isn't the foreground window. In practice the second-launch flash + status-bar toast on the existing window is enough; future work could use `AllowSetForegroundWindow` + a tiny IPC ping to make this 100% reliable.
-

@@ -1,7 +1,7 @@
 # backtest/bars.py — Spec
 
 ## Purpose
-Per-field-ndarray bar container consumed by the engine, plus a memoised `from_candles` adapter from `List[Candle]`. The columnar layout is locked in Phase 1a so the future automated batch runner (Phase 2) doesn't have to re-port the kernel: tight fill/MAE-MFE loops walk `open` / `high` / `low` / `close` arrays directly.
+Per-field-ndarray bar container consumed by the engine, plus a memoised `from_candles` adapter from `List[Candle]`. The columnar layout is locked so both sandbox replay and the Strategy Tester can share the kernel: tight fill/MAE-MFE loops walk `open` / `high` / `low` / `close` arrays directly.
 
 ## Public API
 - `@dataclass(frozen=True) class BarSeries` — `symbol`, `timeframe`, `ts` (int64), `open` / `high` / `low` / `close` / `volume` (all float64). `__len__`, `index_for_ts(ts) -> Optional[int]` (exact-match `searchsorted`).
@@ -28,4 +28,3 @@ Per-field-ndarray bar container consumed by the engine, plus a memoised `from_ca
 ## Testing
 - `check_f0_backtest_kernel` §A: BarSeries construction + `index_for_ts`.
 - `check_f1_session_reproducibility` relies on identical-input idempotency.
-

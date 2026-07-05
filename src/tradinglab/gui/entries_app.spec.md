@@ -77,9 +77,10 @@ subsystem.
 - **Per-tick driver uses sandbox candles** — builds a symbol→`Bar`
   dict from `visible_candles_by_symbol`, runs pending-entry fills via
   the shared paper engine first, then calls `EntryEvaluator.on_tick`.
-- **Evidence overlay shares redraw path**: entry and exit audit evidence
-  markers are created here because this mixin owns the entries audit log
-  and can see the exits audit log + position tracker.
+- **Evidence overlay shares redraw path**: entry audit evidence markers are
+  created here because this mixin owns the entries audit log and can pass the
+  shared position tracker. If the host exposes `_exits_audit_log`, it is
+  passed too; otherwise exit evidence is absent.
 - **Modal request is logged**: filled entries without configured
   `on_fill_exit_ids` call `_on_entries_modal_request`; the current GUI
   logs the request and relies on the evaluator's audit record.

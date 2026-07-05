@@ -17,7 +17,12 @@ observer callbacks on every mutation.
   - `to_dict() / from_dict(d)` round-trip. `id` is NOT persisted —
     re-issued process-monotonically on hydrate. `pane_group` is
     persisted; legacy configs default to "" and the factory-level
-    value applies. **AVWAP anchor migration:** `from_dict` promotes a
+    value applies. `from_dict` applies `migrate_kind_id(...,
+    include_chart_only=True)`, including legacy `lookback_days` →
+    `length` renames, and remaps persisted legacy style keys
+    (`"sma"` / `"ema"` → `"ma"`, RVOL z-score `"z"` → `"rvol"`) so
+    user color / width / visibility survives family consolidation.
+    **AVWAP anchor migration:** `from_dict` promotes a
     legacy symbol-blind `avwap` config (a single `params["anchor_ts"]`
     with none of the new `anchors` / `shared_anchor_ts` /
     `anchor_shared` keys) to shared-anchor mode
@@ -66,10 +71,12 @@ observer callbacks on every mutation.
     (typically `Tk.after_idle`) used to coalesce redraws.
 
 ## Dependencies
-- Internal: `.base` (registry + `LineStyle`, `factory_by_kind_id`,
-  `factory_is_available_for`), `..core.thread_guard`
-  (`require_tk_thread`).
-- External: `dataclasses`, `copy`, `itertools`, `threading`.
+- Internal: `._palette.FALLBACK_GRAY`, `.base` (registry +
+  `LineStyle`, legacy-style remap constants, `factory_by_kind_id`,
+  `factory_is_available_for`, `migrate_kind_id`),
+  `..core.thread_guard` (`require_tk_thread`).
+- External: `builtins`, `dataclasses`, `copy`, `itertools`,
+  `threading`.
 
 ## Design Decisions
 - **Tk-thread ownership, no locks.** Mutations are enforced on the

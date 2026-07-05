@@ -48,18 +48,24 @@ ever auto-created in `%LOCALAPPDATA%`).
 ## Known keys (curated user-facing subset)
 
 See `defaults.spec.md` and `defaults.TUNABLES` for the authoritative list.
-The seven keys exported into `config/example_config.json`:
+User-facing keys exported by `defaults.example_payload()` / `config/example_config.json` include:
 
 - `display_tz` (str)
 - `scroll_zoom_invert` (bool)
 - `theme_overrides` (dict, sparse per-mode palette)
 - `startup_defaults` (dict, sparse ticker/compare/interval/source/theme)
 - `default_window_bars` (int, 10..5000)
+- `startup_width_pct` / `startup_height_pct` (float, 0.5..1.0)
 - `price_top_pad_frac` (float, 0..1)
 - `price_bot_pad_frac` (float, 0..1)
+- `volume_tod_enabled`, `volume_tod_median_lookback_days`
+- event-display knobs (`show_earnings`, `show_dividends`, `show_upcoming_events`, `earnings_window_days`, `events_source`, `pre_earnings_warn_in_journal`)
+- sandbox/startup knobs (`sandbox_reference_symbol`, `sandbox_skip_detailed_journal`, `splash_enabled`, `update_check_on_startup`, `update_check_url`)
+- worker/watchlist knobs (`worker_count`, `watchlist_max_pinned`, `watchlist_poll_interval_sec`, `watchlist_poll_offhours_multiplier`)
 - `local_data` (dict, BYOD config: `{"enabled": bool, "roots": [{"name": str, "path": str}, ...]}` — see `data/local_source.spec.md`)
 
-Internal perf knobs (`full_cache_size`, `hover_throttle_ms`, the
-`scroll_zoom_*` triple) are tagged `is_user_facing=False` and excluded from
-the example config, but advanced users can still set them in a hand-edited
-config file.
+Internal perf/implementation knobs (`full_cache_size`, `hover_throttle_ms`, the
+`scroll_zoom_*` triple, `volume_tod_rth_only`, `volume_tod_intraday_interval`,
+`events_fetch_ttl_seconds`, `events_hover_hit_px`) are tagged
+`is_user_facing=False` and excluded from the example config, but advanced users
+can still set them in a hand-edited config file.

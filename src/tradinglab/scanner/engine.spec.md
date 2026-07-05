@@ -74,8 +74,8 @@ Pure-Python tri-valued (Kleene) scan evaluator. Takes a
 | None     | T    | None  | None |
 
 **Disabled children are skipped, not contributed as None.** Filtered
-at the group level (before reduce), so disabled-everything degenerates
-to the empty-fold (AND→True, OR→False).
+at the group level before reduction. A group with no enabled children
+returns `None` (same as an empty group).
 
 ## Operator dispatch
 

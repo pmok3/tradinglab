@@ -10,9 +10,9 @@ shim become available in the Add menu.
 
 ## Public API
 - `default_user_dir() -> Path`
-  - Windows: `%LOCALAPPDATA%\tradinglab\indicators`
-  - macOS:   `~/Library/Application Support/tradinglab/indicators`
-  - Linux:   `~/.local/share/tradinglab/indicators`
+  - Windows: `%LOCALAPPDATA%\TradingLab\indicators`
+  - macOS:   `~/Library/Application Support/TradingLab/indicators`
+  - Linux:   `~/.local/share/TradingLab/indicators`
 - `discover_user_indicators(directory=None, *, register_globally=True)
   -> DiscoveryResult`
   - `DiscoveryResult(loaded: List[LoadedIndicator], errors:

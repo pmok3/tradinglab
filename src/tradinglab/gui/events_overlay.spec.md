@@ -25,9 +25,9 @@ axes-fraction Y).
 ## Behavior
 
 - For each glyph with `bar_index >= 0`: draw a single bold `Text` artist at `(bar_index + offset, 0.025)` in a blended `(transData, transAxes)` transform.
-- Text letters come from `EventGlyph.marker_glyph`: `A` for earnings AMC, `B` for earnings BMO, `D` for dividend ex-dates (including special/spinoff cash events), and `S` for splits.
+- Text letters come from `EventGlyph.marker_glyph` when present: `A` for earnings AMC, `B` for earnings BMO, `D` for dividend ex-dates (including special/spinoff cash events), and `S` for splits. Missing glyph text falls back to a per-kind marker table.
 - Every in-pane letter has `ha="center"`, `va="center"`, and a small rounded theme-aware bbox to keep it readable against candle bodies/wicks.
-- For each glyph with `bar_index == -1` (right-edge forward badge): draw a small italic `Text` at `(0.985, 0.04)` in axes-fraction with the descriptor's tooltip; only the first such glyph is honored (`build_event_glyphs` already collapses to nearest).
+- For each glyph with `bar_index < 0` (right-edge forward badge): draw a small italic `Text` at `(0.985, 0.04)` in axes-fraction with the descriptor's tooltip; descriptor builders normally collapse this to the nearest forward event, and the returned tooltip reflects the last badge drawn.
 - Visibility gating: a glyph is skipped when its kind's user flag is False.
 - Z-order 4 → above indicator lines (3), below crosshair (5).
 

@@ -21,6 +21,8 @@ class EntryEvaluator:
                  bars_registry: Optional[BarsRegistry] = None,
                  scan_runner: Optional[ScanRunner] = None,
                  exit_evaluator: Optional[ExitEvaluator] = None,
+                 exit_storage: Optional[module] = None,
+                 get_active_symbol: Optional[Callable[[], str]] = None,
                  risk_gate: Optional[RiskGate] = None,
                  session_close_time: time = time(16, 0),
                  clock: Callable[[], datetime] = utc_now,
@@ -49,8 +51,9 @@ class EntryEvaluator:
 
 @dataclass
 class EvaluatorStats:
-    fires: int; blocked: int; cooldowns: int; dedup_skipped: int
-    errors: int; indicator_evaluations: int; bars_processed: int
+    fires: int; blocked: int; cooldowns: int; dedup_skips: int
+    risk_blocks: int; on_fill_binds: int; on_fill_bind_failures: int
+    indicator_evaluations: int; errors: int
 ```
 
 ## Lifecycle gates (cheapest-first)

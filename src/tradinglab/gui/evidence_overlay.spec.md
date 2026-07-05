@@ -32,7 +32,7 @@ Pure-logic helpers are Tk-free and matplotlib-free; the
     only on a real change.
   - `enabled: bool` (property).
   - `marker_count: int` (property).
-  - `clear()` / `close()` — drop artist refs.
+  - `clear()` / `close()` — detach artists from axes, then drop refs.
   - `redraw(primary_ax, primary_symbol, primary_candles) ->
     List[EvidenceMarker]` — recompute + draw. Returns rendered list.
 

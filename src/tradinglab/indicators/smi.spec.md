@@ -71,6 +71,7 @@ signal = EMA(smi, signal_length)
 ```
 
 ## Known limitations
-- HH/LL computed via per-index slice (`O(N·L)`). Trivial at typical
-  N≈500 / L≈14; a deque-based rolling-extreme would be needed for
-  larger windows.
+- HH/LL use NumPy `sliding_window_view` max/min (`O(N·L)` work in
+  vectorized C paths). Trivial at typical N≈500 / L≈14; if much longer
+  extrema windows become hot, prefer a C-level filter over a Python
+  deque.

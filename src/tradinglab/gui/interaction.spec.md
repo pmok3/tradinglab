@@ -42,7 +42,7 @@ by `ChartApp._build_ui`.
   NOT overwrite `_blit_bg`). A genuine redraw also drops `_tick_blit_bg`
   (decorations were repainted, so the data-less snapshot is stale).
 - `_on_key_press(event)` — accumulate keystrokes into
-  `_typing_buffer` (alnum + `._-` only; digits ignored to avoid
+  `_typing_buffer` (letters + `._-/` only; digits ignored to avoid
   phantom buffers). Enter commits, Escape cancels, Backspace
   deletes. **Space (`keysym == "space"`)** returns early — the
   watchlist-cycle hotkey is owned by app-level

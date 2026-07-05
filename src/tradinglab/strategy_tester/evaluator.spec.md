@@ -1,12 +1,13 @@
 # strategy_tester/evaluator.py — Spec
 
 ## Purpose
-Headless trigger-evaluation kernel for the Strategy Tester. The live `EntryEvaluator` / `ExitEvaluator` are Tk-thread-guarded (they touch `PaperBrokerEngine`, journal, indicator-manager, audit log). The mechanical tester ships a **parallel** implementation that consumes the same JSON-compatible `EntryStrategy` / `ExitStrategy` dataclasses and emits `Order`s directly into a fresh per-symbol `SandboxEngine`.
+Headless trigger-evaluation kernel for the Strategy Tester. The live `EntryEvaluator` / `ExitEvaluator` are Tk-thread-guarded (they touch `PaperBrokerEngine`, journal, indicator-manager, audit log). The mechanical tester builds its own worker-safe context, delegates trigger decisions to the shared entry / exit dispatch registries, and emits `Order`s directly into a fresh per-symbol `SandboxEngine`.
 
 ## Public API
 - `evaluate_symbol(*, symbol, candles, interval, entry_strategy, exit_strategy, starting_cash, cost_model, deck_seed=0, cancel_token=None, warmup_until_ts=None, dependency_candles=None) -> SessionResult` — primary entry point. Side-effect-free apart from creating an engine in-process. Returns a standard `SessionResult` that the existing `performance.py` builders + Sandbox post-mortem renderer consume verbatim. When `cancel_token` is supplied the per-bar loop polls `cancel_token.is_cancelled()` every `_CANCEL_POLL_INTERVAL=256` bars (power-of-2 → bitmask AND on the hot path) and exits early on trip — the returned `SessionResult` is well-formed but truncated. A token whose `is_cancelled()` raises is swallowed (duck-typed contract; never gate evaluation on a probe failure). When `warmup_until_ts` is supplied (UTC epoch seconds) the per-bar loop **still ticks the engine** for bars with `ts < warmup_until_ts` (so indicators hydrate + scanner state stays consistent) but **no entry or exit triggers are checked** for those bars; the returned `SessionResult.equity_curve` is trimmed to entries with `ts >= warmup_until_ts`. `None` (the default) keeps the legacy behaviour (no warmup gate). When `dependency_candles` is supplied, it is a same-interval `{symbol: candles}` map used to build a scanner `BarsRegistry` for cross-symbol `FieldRef.symbol` conditions.
 - `EvalContext` — dataclass; mutable per-symbol state. Internal but exposed for test fixtures.
 - `class UnsupportedTriggerKind(NotImplementedError)` — typed signal for trigger kinds the headless path doesn't yet handle. Runner catches and marks the symbol as `error` without aborting the rest of the Run.
+- `collect_dependency_symbols(entry_strategy, exit_strategy) -> set[str]` — returns non-active ticker pins referenced by entry / exit conditions, including scanner-alert scans that can be loaded from disk. The runner uses this to companion-fetch cross-symbol dependencies once per run.
 - `_ENTRY_HANDLERS` — **back-compat alias** for `entries.dispatch._ENTRY_DISPATCH` (literally the same dict object). Audit item #4: the live `EntryEvaluator` and this mechanical evaluator now share a single registry, so adding a new entry-`TriggerKind` lights up both call sites at once and drift is structurally impossible. See `entries/dispatch.spec.md`. Existing tests that pop from `_ENTRY_HANDLERS` to simulate "unsupported kind" still work because the alias is the same object.
 - `_EXIT_HANDLERS` — **back-compat alias** for `exits.dispatch._EXIT_DISPATCH` (literally the same dict object). The live `ExitEvaluator` and this mechanical evaluator share one exit-trigger registry; the mechanical path passes `legacy_signed_offsets=True` in `ExitTriggerContext` so old strategy-tester manifests keep their signed offset semantics.
 
@@ -78,11 +79,12 @@ bar, ts)`:
   position, bar, is_activation=True)` for every enabled CHANDELIER leg.
 
 ### SCANNER_ALERT entries
-`_entry_scanner_alert(...)` loads the saved `ScanDefinition` once via
+`_build_normalized_conditions(...)` loads the saved `ScanDefinition` once via
 `scanner.storage.load(scanner_id)` and normalises its `.root` Group
 intervals to the test's outer interval (same `_normalize_intervals` path as
-INDICATOR triggers; same multi-interval limitation). It then evaluates the
-root group per bar and fires on **edge transitions** (False/None → True):
+INDICATOR triggers; same multi-interval limitation). The shared
+`entries.dispatch` SCANNER_ALERT handler then evaluates the root group per
+bar and fires on **edge transitions** (False/None → True):
 - **Bar 0**: observes the current match state into
   `scanner_alert_prev_match[trigger.id]` and returns no-fire. This avoids
   the backtest trap where every already-matching symbol fires on day 1.
@@ -130,7 +132,7 @@ threaded to the indicator handlers, which look up the rewritten tree
 instead of the original. The input strategy objects are never
 mutated.
 
-Multi-leg OCO is reduced to first-leg-to-fire in PR 1. Proper OCO semantics ship in PR 2.
+Multi-leg OCO is reduced to first-leg-to-fire. Proper OCO semantics are still deferred.
 
 ## Dependencies
 - `backtest.engine.SandboxEngine`, `backtest.session.SessionResult / SessionSpec / ENGINE_VERSION`
@@ -154,7 +156,7 @@ Multi-leg OCO is reduced to first-leg-to-fire in PR 1. Proper OCO semantics ship
 - **Sizing capped at starting_cash for FIXED_NOTIONAL** — opinionated; prevents accidental 10x leverage from a misconfigured strategy. `FIXED_QTY` is honored verbatim.
 - **Exit checks run before entry checks on the same bar** — an open position must clear before re-entry on the same bar. Matches live evaluator.
 - **EOD kill-switch is a final-bar synthetic fill via direct `_apply_fill_with_tracking`** — bypasses the tick loop (the loop is exhausted). Uses the **last RTH bar's open** as the fill price (walk-back via `_find_last_rth_bar_at_or_before(bars, n-1)`), slippage included. If no RTH bar exists in the window the end-of-run kill is silently skipped (position stays "open at end" in `SessionResult`).
-- **Registry-based dispatch** — new trigger kinds register a handler and immediately work end-to-end. Avoids scattered `if kind == X` blocks.
+- **Registry-based dispatch** — new trigger kinds register a handler in `entries.dispatch` or `exits.dispatch` and immediately work in both live and mechanical evaluators. Avoids scattered `if kind == X` blocks.
 - **Worker isolation via `UnsupportedTriggerKind`** — distinct from `ValueError` / `RuntimeError` so the runner can map it specifically to a per-symbol error message without abort.
 - **Shared exit dispatch** — PRICE, INDICATOR, TRAILING_STOP, TIME_OF_DAY, and CHANDELIER exit fire decisions use `exits.dispatch`, the same registry the live evaluator calls. Strategy tester still translates `EvalContext` ↔ `Position` / `Bar` dataclasses and threads `TriggerState` keyed by `trigger.id`.
 - **Position-open transition triggers state reset** — Each new position gets fresh per-trigger state (HWM, chandelier window, ATR). Detection via `prev_position_open` flag. CHANDELIER triggers additionally get an activation-bar seed call so their rolling-extremum window starts from the entry bar.

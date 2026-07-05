@@ -34,33 +34,38 @@ Each tunable has a validator so corrupt `settings.json` can't inject garbage.
 | `default_window_bars` | int | 200 | Right-edge default window size (bars). Note: a per-interval default is a known follow-up — at 5m this currently shows ~1 week of data. |
 | `startup_width_pct` | float | 0.9 | Main-window percent-of-screen fallback width when no reasonable saved geometry exists. |
 | `startup_height_pct` | float | 0.9 | Main-window percent-of-screen fallback height when no reasonable saved geometry exists. |
-| `update_check_on_startup` | bool | true | Check GitHub Releases for a newer version on startup; RTH-suppressed. |
-| `update_check_url` | str | "" | Optional update endpoint override. Empty = env var or built-in GitHub Releases endpoint. |
+| `price_top_pad_frac` | float | 0.12 | Top headroom on price axes (fraction of data span). |
+| `price_bot_pad_frac` | float | 0.05 | Bottom padding on price axes. |
 | `full_cache_size` | int | 16 | LRU memory-cache size for fetched (candles, meta) tuples. |
 | `hover_throttle_ms` | int | 16 | Coalescing window for hover/crosshair updates. |
 | `scroll_zoom_factor_per_step` | float | 1.15 | Per-notch zoom factor. |
 | `scroll_zoom_step_clamp` | float | 2.0 | Max \|event.step\| per wheel event. |
 | `scroll_zoom_min_bars` | float | 3.0 | Floor on visible-bar count when zooming in. |
-| `price_top_pad_frac` | float | 0.12 | Top headroom on price axes (fraction of data span). |
-| `price_bot_pad_frac` | float | 0.05 | Bottom padding on price axes. |
+| `indicators` | dict | {} | Indicator state: presets, active preset, and active configs. |
+| `custom_indicators_enabled` | bool | false | Load user-authored indicator files at startup. |
+| `indicator_last_preset_per_ticker` | dict | {} | Map of ticker symbol to last-used preset name. |
+| `show_earnings` | bool | true | Show historical earnings glyphs on the price pane bottom band. |
+| `show_dividends` | bool | true | Show historical dividend / corporate-action glyphs on the price pane bottom band. |
+| `show_upcoming_events` | bool | true | Render the right-edge forward-earnings badge when a print is within `earnings_window_days`. |
+| `earnings_window_days` | int | 10 | Proximity-window radius (trading days) for journal/event warnings. |
+| `events_source` | str | "yfinance" | Active `EVENT_SOURCES` registry key. |
+| `pre_earnings_warn_in_journal` | bool | true | Inline passive notice in `PreTradeFormDialog` near earnings. |
+| `events_fetch_ttl_seconds` | int | 43200 | Internal — disk-cache TTL for mutable upcoming-event rows (default 12h). |
+| `events_hover_hit_px` | int | 8 | Internal — hover hit-test radius (pixels) for event glyphs. |
 | `volume_tod_enabled` | bool | false | Master toggle for time-of-day volume shading on 1d volume bars. |
 | `volume_tod_median_lookback_days` | int | 20 | Trading-day lookback for the rolling median full-day volume reference tick. |
 | `volume_tod_rth_only` | bool | true | Internal — restrict TOD shading's intraday source to RTH bars (09:30–16:00 ET). |
 | `volume_tod_intraday_interval` | str | "5m" | Internal — intraday interval used as the TOD shading source. |
-| `indicators` | dict | {} | Persisted per-ticker `IndicatorConfig` payloads keyed by ticker/scope. |
-| `custom_indicators_enabled` | bool | false | Allow user-authored indicator factories registered at startup to load. |
-| `indicator_last_preset_per_ticker` | dict | {} | Per-ticker `{preset_id, ts}` map used by the Indicator menu to re-apply the last preset on chart load. |
-| `show_earnings` | bool | true | Show historical earnings glyphs on the price pane bottom band. |
-| `show_dividends` | bool | true | Show historical dividend / corporate-action glyphs on the price pane bottom band. |
-| `show_upcoming_events` | bool | true | Render the right-edge forward-earnings badge when a print is within `earnings_window_days`. |
-| `earnings_window_days` | int | 10 | Proximity-window radius (trading days) for the pre-trade journal warning and Performance View proximity rollup. |
-| `events_source` | str | "yfinance" | Active `EVENT_SOURCES` registry key. Architecture allows future Schwab / Polygon / Alpaca registration; only the registered ones are valid here. |
-| `pre_earnings_warn_in_journal` | bool | true | Inline passive notice at the top of `PreTradeFormDialog` when entering within the earnings_window_days proximity. No extra click. |
-| `events_fetch_ttl_seconds` | int | 43200 | Internal — disk-cache TTL for `EventBundle`s (default 12h). |
-| `events_hover_hit_px` | int | 8 | Internal — hover hit-test radius (pixels) for event glyphs. |
+| `sandbox_reference_symbol` | str | "SPY" | Master-clock anchor ticker for sandbox replay sessions. |
+| `sandbox_skip_detailed_journal` | bool | false | Skip mandatory sandbox pre/post journal modals and stamp placeholder journal fields. |
+| `splash_enabled` | bool | true | Show the PyInstaller splash screen at frozen-executable startup. |
+| `update_check_on_startup` | bool | true | Check GitHub Releases for a newer version on startup; RTH-suppressed. |
+| `update_check_url` | str | "" | Optional update endpoint override. Empty = env var or built-in GitHub Releases endpoint. |
+| `worker_count` | int | 0 | Background worker-thread pool size; `0` = auto-detect via `os.cpu_count()` clamped to `[1, 64]`; positive values persist and live-swap the executor. |
+| `watchlist_max_pinned` | int | 5 | Maximum number of pinned watchlists shown as Watchlist sub-tabs. |
+| `watchlist_poll_interval_sec` | int | 60 | Watchlist background poll interval; `0` disables. |
+| `watchlist_poll_offhours_multiplier` | float | 5.0 | Multiplier applied to watchlist polling outside regular trading hours. |
 | `local_data` | dict | `{"enabled": false, "roots": []}` | BYOD (Bring Your Own Data) configuration: enabled flag + list of `{"name": str, "path": str}` root entries. Each top-level subfolder of each root becomes a registered source named `<root_name>-<subdir>`. Managed via Tools → Configure Local Data…. See `docs/LOCAL_DATA.md`. |
-
-> `worker_count` is now a registered Tunable again (audit `workers-persisted`). Default `0` = auto-detect via `os.cpu_count()` clamped to `[1, 64]`. Any positive value the user picks in the Settings slider persists to `settings.json` and is reapplied on the next launch. See `gui/workers.spec.md` for the resolution order.
 
 ## Consumers
 | Tunable | Consumer |
@@ -80,6 +85,11 @@ Each tunable has a validator so corrupt `settings.json` can't inject garbage.
 | `volume_tod_enabled` / `volume_tod_median_lookback_days` / `volume_tod_rth_only` / `volume_tod_intraday_interval` | `app.py:_render_volume_tod_for_slot` → `gui/volume_tod_overlay.py` |
 | `indicators` / `custom_indicators_enabled` / `indicator_last_preset_per_ticker` | `indicators/store.py`, `gui/indicator_menu.py`, `gui/indicator_dialog.py` |
 | `show_earnings` / `show_dividends` / `show_upcoming_events` / `earnings_window_days` / `events_source` / `pre_earnings_warn_in_journal` / `events_fetch_ttl_seconds` / `events_hover_hit_px` | `app.py:_load_events_async`, `events/render.py`, `gui/events_overlay.py`, `gui/sandbox_dialog.py:PreTradeFormDialog`, `gui/performance_view.py`, `gui/watchlist_tab.py`, `events/cache.py`, `gui/interaction.py:_check_event_glyph_hit` |
+| `sandbox_reference_symbol` | Sandbox replay session construction / master-clock anchor selection. |
+| `sandbox_skip_detailed_journal` | Sandbox order/review dialogs; when true, bypasses mandatory pre/post modals with placeholder journal fields. |
+| `splash_enabled` | Frozen startup splash gating (env var / CLI still win). |
+| `worker_count` | `gui/workers.py` + Settings worker slider; live-swaps the background executor. |
+| `watchlist_max_pinned` | Watchlist manager/tab construction cap for pinned sub-tabs. |
 | `local_data` | `data/__init__.py:register_local_sources`, `gui/local_data_dialog.py` |
 | `watchlist_poll_interval_sec` / `watchlist_poll_offhours_multiplier` | `gui/watchlist_tab.py:_watchlist_poll_effective_delay_ms`, `_start_watchlist_poll_loop`, `_watchlist_poll_tick`. Recurring background poll that re-runs `_preload_watchlist` + `_preload_watchlist_daily` so transient yfinance failures self-heal. Set interval to 0 to disable. Off-hours (outside 09:30–16:00 ET weekdays) multiplies the interval. Floor of 5 seconds in `_watchlist_poll_effective_delay_ms` defends against misconfiguration. |
 

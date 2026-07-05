@@ -264,8 +264,9 @@ New builtin scalar:
 1. Implement `_b_<name>(bars, i, params) -> Optional[float]`.
 2. Append a `FieldSpec` to `_BUILTINS`.
 
-## Forward-compat reservation
+## Cross-interval ownership
 
-`FieldRef.interval` overrides are persisted but rejected by the v1
-engine. `validate_field_ref` does NOT check this — engine concern
-(structural vs behavioral).
+`FieldRef.interval` overrides are persisted and structurally accepted
+here. `validate_field_ref` does NOT require a matching
+`BarsRegistry`; the engine owns that behavioral check and resolves
+alternate intervals only when the caller supplies registry context.

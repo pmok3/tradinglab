@@ -16,7 +16,7 @@ Public re-export surface for the Strategy Tester package. Lets callers `from tra
 
 ## Design Decisions
 - **Single import boundary** — GUI / runner / tests all import from the package root, not from submodules. Makes future refactors cheaper.
-- **Tk-free re-exports only** — the GUI integration layer (`gui/strategy_app.py`, PR 4) is kept separate so headless callers (smoke tests, batch jobs) never touch Tk.
+- **Tk-free re-exports only** — the GUI integration layer (`gui/strategy_tab.py`) is kept separate so headless callers (smoke tests, batch jobs) never touch Tk.
 
 ## Testing
 Covered by submodule tests; this file has no logic beyond imports.

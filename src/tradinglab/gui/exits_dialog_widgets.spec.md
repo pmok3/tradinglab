@@ -10,48 +10,50 @@ orchestration; widgets focus on rendering one schema element.
 ## Widget catalogue
 
 ```python
-# _FieldSpec is now imported from gui._trigger_field_renderer
-# (audit item #8 lift). Its fields:
-#   attr / label / kind / width / choices / separator
+# _FieldSpec is imported from gui._trigger_field_renderer.
 # See _trigger_field_renderer.spec.md for the kind taxonomy.
 
-class _BracketDialog(tk.Toplevel):
-    """One-shot modal: prompts for (target_pct, stop_pct, qty),
-    invokes make_bracket_strategy on OK."""
+class _BracketDialog(BaseModalDialog):
+    """One-shot modal: prompts for target/stop unit+value, qty%,
+    and name; exposes a result dict consumed by make_bracket_strategy."""
 
 class _LegFrame(ttk.LabelFrame):
-    """Renders one ExitLeg: triggers (rows of _TriggerRow),
-    OCO group dropdown (_OCOGroupRow), remove-leg button."""
+    """Renders and mutates one ExitLeg: label, enabled flag,
+    trigger rows, add/delete-trigger controls, and delete-leg button."""
     def __init__(self, master, *, leg: ExitLeg, dialog: "ExitsDialog")
-    def collect(self) -> ExitLeg
-    def validate(self) -> List[str]
+    @property
+    def leg(self) -> ExitLeg
+    def remove_trigger(trigger_id: str) -> None
 
 class _TriggerRow(ttk.Frame):
-    """Single ExitTrigger row: kind dropdown + kind-specific subform
-    (price, stop_price, condition, atr_period, atr_multiple, …).
-    INDICATOR triggers embed a _BlockEditor."""
+    """Single ExitTrigger row: kind dropdown + qty%, enabled, label,
+    kind-specific subform, and delete button. INDICATOR triggers embed
+    a BlockEditor."""
     def __init__(self, master, *, trigger: ExitTrigger, leg_frame: _LegFrame)
-    def collect(self) -> ExitTrigger
-    def validate(self) -> List[str]
+    @property
+    def trigger(self) -> ExitTrigger
+    @property
+    def block_editor(self) -> BlockEditor | None
 
 class _OCOGroupRow(ttk.Frame):
-    """Per-leg OCO-group picker (None / A / B / …). Two legs in
-    the same group cancel each other on fire."""
+    """OCO-group editor row: leg chips, cancel_on dropdown, and
+    delete-group button. Duplicate leg membership is highlighted."""
 ```
 
 ## Dependencies
 
-- `..exits.model.{ExitLeg, ExitTrigger, TriggerKind, …}`.
+- `..exits.model.{ExitLeg, ExitTrigger, TriggerKind, ...}`.
 - `.scanner_block_editor.BlockEditor` for INDICATOR trigger
   condition trees.
+- `._trigger_field_renderer` for `_FieldSpec` and field rendering.
 - `..exits.spec` is **not** imported (widgets stay schema-level).
 
 ## Design Decisions
 
 - **`_FieldSpec` is the declarative seam**: adding a new operator
-  param is a one-line addition to a `_FieldSpec` list; the row's
-  `collect`/`validate` introspect the spec list, keeping
-  layout + parse + format + validate in lockstep.
+  param is a one-line addition to a `_FieldSpec` list. Rendering and
+  parse callbacks flow through `gui._trigger_field_renderer`, keeping
+  layout + parse + format in lockstep.
 - **`_on_kind_changed` is idempotent (flicker fix).** It short-circuits
   when the resolved kind equals `_trigger.kind`, so re-picking the
   current kind — or a spurious combobox event — does NOT tear down +
@@ -76,15 +78,16 @@ class _OCOGroupRow(ttk.Frame):
   underlying dataclasses for backward-compatible JSON loads.
 - **One row, one trigger**. Combining triggers into a leg is the
   dialog's job.
-- **`_LegFrame.collect()`** returns a NEW `ExitLeg`; the dialog
-  swaps the leg list wholesale on Save. No in-place mutation —
-  Cancel stays safe.
+- **Widgets mutate the draft in place.** The dialog owns a cloned
+  `ExitStrategy` draft; leg, trigger, and OCO widgets update that draft
+  directly, and Cancel stays safe because the clone is never written
+  until Save.
 
 ## Invariants
 
 - Widget `__init__` runs only on Tk thread.
-- `collect()` raises only `ValueError` for unparseable input.
-- `validate()` is read-only (no UI mutation).
+- Numeric parse failures are ignored while the user is typing; final validation is dialog-owned.
+- Widgets only mutate the dialog draft, never the saved library directly.
 
 ## See also
 

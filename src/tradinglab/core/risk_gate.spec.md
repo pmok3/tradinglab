@@ -4,13 +4,13 @@
 Pre-submit risk gate consulted by the entry evaluator just before an `EntrySignal` is sent to the paper broker. Returns a structured `RiskBlock` to refuse with auditable metadata, or `None` to allow.
 
 ## Public API
-- `@dataclass(frozen=True) RiskBlock(gate: str, reason: str, meta: Dict[str, Any] = {})` — immutable record of a refusal. `gate` names the rule; `reason` is human-readable for the audit log; `meta` carries structured numbers (current value, limit, etc.) so the UI can render rich messages without reparsing.
+- `@dataclass(frozen=True) RiskBlock(gate: str, reason: str, meta: Dict[str, Any] = field(default_factory=dict))` — immutable record of a refusal. `gate` names the rule; `reason` is human-readable for the audit log; `meta` carries structured numbers (current value, limit, etc.) so the UI can render rich messages without reparsing.
 - `class RiskGate(Protocol)` — `check(signal, *, tracker, clock) -> Optional[RiskBlock]`.
 - `class AllowAllRiskGate` — trivial gate that approves everything. For tests / opt-out.
 - `@dataclass class DefaultRiskGate` — the five v1-essential gates. All limits optional (`None` disables that specific check):
   - `daily_loss_limit: Optional[float]` — refuse when `sum(realized + unrealized) <= limit` (limit is a negative number).
   - `max_concurrent: Optional[int]` — refuse when `len(tracker.list_open()) >= limit`.
-  - `max_position_notional: Optional[float]` — refuse when `qty * ref_price > limit`.
+  - `max_position_notional: Optional[float]` — refuse when `abs(qty) * ref_price > limit`.
   - `no_new_entries_after: Optional[dtime]` — refuse when `clock().time() >= cutoff` (local clock).
   - `per_symbol_max_notional: Optional[float]` — refuse when existing exposure in symbol + new exposure > limit.
 

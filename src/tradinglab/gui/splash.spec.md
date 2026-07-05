@@ -67,7 +67,7 @@ end users never get a permanent black screen on corrupt settings.
 ## Wiring (in `app.py`)
 
 ```python
-# In __main__.py, BEFORE constructing ChartApp:
+# In app.main(), BEFORE constructing ChartApp:
 from .gui.splash import make_splash
 splash = make_splash()
 splash.report(STAGE_SETTINGS)

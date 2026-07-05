@@ -23,7 +23,7 @@ The module owns no threads, sockets, or `time.time()` — consumers feed it pars
 - External: stdlib only (`dataclasses`, `datetime`).
 
 ## Design Decisions
-- **`last_price` drives `close`; falls back to bid/ask mid** when no trade has printed for the symbol since the bar opened.
+- **`last_price` drives `close`; falls back to bid/ask mid** when the current LEVELONE update has no `last_price`.
 - **Per-bar volume from a cumulative day total**: LEVELONE reports `total_volume` cumulatively. We snapshot the cumulative value at first observation in the bar, then `bar.volume = current_cum - snapshot`. Negative deltas are clamped to 0 (defensive against late corrections).
 - **Heartbeat-y ticks are silent**: a LEVELONE update with no `last_price`, no bid/ask, and no `total_volume` produces no `("tick", ...)` event. Avoids spamming consumers on quiet channels.
 - **Boundary rolls seed `open=high=low=close=prev.close`**: matches the synthetic source's semantics. The next tick will move `close` and expand `high`/`low`.
@@ -37,4 +37,4 @@ The module owns no threads, sockets, or `time.time()` — consumers feed it pars
 - `chart_equity_to_candle` returns `None` for partial messages; malformed present fields may raise during numeric/timestamp coercion.
 
 ## Testing
-- Unit-tested directly: build a `MinuteBarBuilder`, feed it decoded dicts, advance `now`, assert the emitted event sequence. Suite lives under `tests/unit/streaming/` (covered indirectly via integration smoke tests where unit coverage hasn't been added).
+- Unit-tested directly in `tests/unit/test_schwab_streaming.py`: build a `MinuteBarBuilder`, feed it decoded dicts, advance `now`, assert the emitted event sequence.

@@ -17,8 +17,11 @@ Exposes `GeometryStore` class + process-wide `store()` singleton.
   yield empty in-memory cache.
 - `save()` — atomic write; logs and swallows `OSError`.
 - `compute_screen_percent_geometry(screen_w, screen_h, *, width_pct=0.9, height_pct=0.9, min_width=1200, min_height=780, taskbar_buffer_px=80) -> str`
-  — return the centered percent-of-screen fallback geometry used by
-  the main window when no reasonable saved geometry exists.
+  — return the percent-of-screen fallback geometry used by the main
+  window when no reasonable saved geometry exists. The result is
+  horizontally centered and placed one-third down the usable screen.
+- `get_window(key)` / `set_window(key, geometry)` — raw geometry
+  helpers for callers that need direct access to `windows`.
 - `restore_window(toplevel, key, default="1280x800+100+100", *, min_size=None) -> str`
   — apply stored geometry (after `_clamp_to_screen`); returns the
   string actually applied. `min_size` rejects stale too-small windows.
@@ -36,18 +39,26 @@ Exposes `GeometryStore` class + process-wide `store()` singleton.
   persisting potentially-stale monitor coordinates; callers can expose
   `clear_window_size` as a reset path.
 - `restore_sash(paned, key, default_positions, *, min_pane_widths=None)`
-  — apply positions via `after_idle` (paned needs a real size first).
-  When `min_pane_widths` is supplied (one per pane, L→R), a saved
-  sash leaving any pane narrower than its min is silently rejected
-  and `default_positions` is used. Guards against pathological
-  persisted layouts (e.g. chart pane at 30 px).
+  — apply positions after `after_idle`, polling up to 1 s until the
+  paned is wide enough for the chosen positions. When `min_pane_widths`
+  is supplied (one per pane, L→R), a saved sash leaving any pane
+  narrower than its min is silently rejected and `default_positions`
+  is used. Guards against pathological persisted layouts (e.g. chart
+  pane at 30 px).
 - `bind_sash(paned, key)` — snapshot on `<ButtonRelease-1>`,
   persist immediately.
+- `get_sash(key)` / `set_sash(key, positions)` — raw sash helpers
+  for callers that need direct access to `sashes`.
 - `get(key, default=None)` / `set(key, value)` — free-form K/V on
   the same backing file (write-through; no debounce). Size-only helpers
   follow the same write-through policy because they do not have a Tk
   widget context for debounce scheduling.
 - `store() -> GeometryStore` — process-wide singleton.
+- `attach_persistent_geometry(toplevel, key, default="1280x800+100+100")`
+  — convenience wrapper that restores and binds window geometry through
+  the singleton, swallowing store failures so dialogs still open.
+- `_reset_singleton_for_tests()` — clear the cached singleton.
+  Test-only seam.
 - `_clamp_to_screen(geometry, screen_w, screen_h, *, default, min_size=None)` —
   reject any geometry whose top-left is < -100 px, bottom-right is
   > screen + 100 px, or width/height are below `min_size` when supplied.

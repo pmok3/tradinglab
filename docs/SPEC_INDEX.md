@@ -4,7 +4,7 @@ A one-spec-per-`.py` documentation set. Each spec follows a fixed 9-section layo
 
 **Style guide:** see [`SPEC_STYLE.md`](SPEC_STYLE.md) for the canonical layout every spec follows.
 
-**Count: 266 specs (one per `.py` module — the count here is the canonical authority; this index table is a curated subset listing the most-accessed specs, not an exhaustive enumeration).**
+**Count: 272 specs (one per `.py` module; incl. 3 API skeletons pending implementation — watchlist columns / signals / dialog, see [`WATCHLIST_COLUMNS.md`](WATCHLIST_COLUMNS.md). The count here is the canonical authority; this index table is a curated subset listing the most-accessed specs, not an exhaustive enumeration).**
 
 ## Top-level (`tradinglab/`)
 | Spec | Covers |
@@ -85,6 +85,8 @@ A one-spec-per-`.py` documentation set. Each spec follows a fixed 9-section layo
 | `backtest/persistence.spec.md` | `save_session` / `load_session` — versioned JSON envelope + mirrored screenshots. |
 | `backtest/performance.spec.md` | `TradeRow` + `SetupAggregate` + `ProximityAggregate` + `build_trade_rows` / `build_setup_aggregates` / `build_proximity_aggregates` — round-trip pairing + per-setup / per-event-proximity rollups. |
 | `backtest/replay.spec.md` | `SandboxController` — open-universe, frozen master timeline, multi-TF daily context, multi-interval intraday display via aggregation, blind / auto-cycle, post-trade memento callback. |
+| `backtest/heatmap.spec.md` | Pure metric + geometry layer for the sandbox Finviz-style heatmap — historically-scaled cap sizing + 1-Day % color, sector → industry squarify, headless. See [`docs/SANDBOX_HEATMAP.md`](../docs/SANDBOX_HEATMAP.md). |
+| `backtest/heatmap_provider.spec.md` | Classification (GICS from `sp500.csv`) + point-in-time `Date added` membership + historical shares (yfinance `get_shares_full`, disk-cached) provider for the heatmap. |
 | `backtest/aggregation.spec.md` | `aggregate` + `divides_evenly` — pure-Python session-anchored higher-TF candle derivation from a single primary tick interval. |
 | `backtest/actions.spec.md` | `CorporateAction` (input) + `CashAdjustment` / `QuantityAdjustment` (engine-output facts) for the corporate-action tick phase. |
 
@@ -127,6 +129,8 @@ A one-spec-per-`.py` documentation set. Each spec follows a fixed 9-section layo
 | `watchlists/__init__.spec.md` | Re-exports. |
 | `watchlists/manager.spec.md` | `WatchlistManager` — CRUD over named lists + pin APIs (`MAX_PINNED=5`, `pinned_names/pin/unpin/reorder_pins`). |
 | `watchlists/storage.spec.md` | JSON persistence (schema v2: `{version, watchlists, pinned}`) + import/export. |
+| `watchlists/columns.spec.md` | **API skeleton.** `WatchlistColumn` model (system vs signal/`FieldRef` columns) + serialization / validation / compact header labels for configurable watchlist columns. See [`docs/WATCHLIST_COLUMNS.md`](../docs/WATCHLIST_COLUMNS.md). |
+| `watchlists/signals.spec.md` | **API skeleton.** `WatchlistSignalEvaluator` — latest-bar batch eval of column `FieldRef`s via `scanner.engine.evaluate_field_at`; headless, cached. |
 
 ## `gui/`
 | Spec | Covers |
@@ -139,12 +143,14 @@ A one-spec-per-`.py` documentation set. Each spec follows a fixed 9-section layo
 | `gui/dialogs.spec.md` | `_SettingsDialog` (live preview, cancel-revert) + `_WatchlistDialog` (CRUD + pin column + import/export). |
 | `gui/interaction.spec.md` | `InteractionMixin` — pan (blit), zoom (rubber band), hover, crosshair, click-to-type, Y-autoscale. |
 | `gui/watchlist_tab.spec.md` | `WatchlistTabMixin` — nested-notebook with one sub-tab per pinned watchlist (cap 5); snapshot-driven Treeview per sub-tab, click-to-sort (per-tab), debounced repaint. |
+| `gui/watchlist_columns_dialog.spec.md` | **API skeleton.** `WatchlistColumnsDialog` — per-watchlist "Columns…" editor (reuses the scanner `_FieldRefPicker`); pick / reorder / format signal columns. |
 | `gui/workers.spec.md` | `WorkerPoolMixin` — `ThreadPoolExecutor` lifecycle + live swap. |
 | `gui/indicator_dialog.spec.md` | Modeless "Manage Indicators…" Toplevel — singleton, manager-subscribed, debounced live commit, scope checkboxes preserve drilldown, unknown-kind rows read-only. Supports `restricted_to_config_id` mode for single-row reuse by `per_indicator_dialog`. Resize-reactive param-grid reflow via the `_widget_metrics` font constants (see CLAUDE.md §7.19 hysteresis pattern). |
 | `gui/per_indicator_dialog.spec.md` | Per-indicator settings popup spawned by double-clicking an overlay-legend row — singleton-per-`config_id`, reuses `IndicatorDialog._build_row` widgets, auto-closes on remove / clear / preset_load. |
 | `gui/sandbox_dialog.spec.md` | `SandboxStartDialog` (open-universe start, eligibility-aware, blind ⇒ auto-cycle) + `PreTradeFormDialog` (mandatory thesis + positive size). |
 | `gui/sandbox_panel.spec.md` | `SandboxPanel` sidebar — clock / cash / positions / focus / Buy-Sell / Next-bar / End-session; dumb panel, smart controller. |
 | `gui/sandbox_review_dialog.spec.md` | `PostTradeReviewDialog` (mandatory non-empty, X-button refused) + `TagsEditorDialog` (wholesale Replace on OK). |
+| `gui/sandbox_heatmap.spec.md` | Non-modal pop-out window rendering the sandbox Finviz-style S&P 500 treemap; recolor-per-bar / relayout-per-session, click-to-chart, blind-mode-safe. See [`docs/SANDBOX_HEATMAP.md`](../docs/SANDBOX_HEATMAP.md). |
 | `gui/performance_view.spec.md` | `PerformanceView` Toplevel — sortable trade table + per-setup aggregates; read-only, UTC timestamps. |
 | `gui/local_data_dialog.spec.md` | BYOD: `Configure Local Data…` Toplevel — enabled toggle + roots list + Save-and-Close paradigm. |
 | `gui/export_cache_dialog.spec.md` | BYOD: `Export Bars to CSV…` Toplevel — Treeview + checkbox column, Select All/None, atomic export. |

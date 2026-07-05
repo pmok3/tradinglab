@@ -43,6 +43,8 @@ bounded oscillators.
 - `compute(candles) -> {"macd", "signal", "histogram"}`. All three
   outputs are length `len(candles)`; warmup is NaN.
 - `compute_arr(bars)` — `Bars`-native entry point used by the cache.
+- `warmup_bars` property returns `max(fast_length, slow_length) +
+  signal_length`, giving the signal line one full window past its seed.
 - `classify_histogram(hist) -> np.ndarray[int8]` — pure helper
   returning `0..3` per the palette order above, `-1` for NaN. The
   first defined bar has no predecessor; it is classified as "rising"

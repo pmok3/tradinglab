@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Top-level modeless editor for one `ExitStrategy`. Two panes:
+Top-level editor for `ExitStrategy` records. Two panes:
 **Library** (saved strategies / templates) and **Editor** (leg +
 trigger form). Edits are committed via Save (atomic JSON write +
 evaluator notify). The dialog is a singleton per-app: re-opening
@@ -11,28 +11,38 @@ focuses the existing window rather than spawning a duplicate.
 ## Public API
 
 ```python
-def open_exits_dialog(app: "ChartApp", *, strategy_id: Optional[str] = None,
-                      attach_to_position: Optional[str] = None) -> None
+def open_exits_dialog(app: tk.Misc, *,
+                      on_library_changed: Callable[[], None] | None = None) -> ExitsDialog
     """Singleton entry-point: open the dialog (focus if already open),
-    optionally pre-loading a strategy and queuing an attach-on-save."""
+    storing the instance on app._exits_dialog."""
 
-def make_bracket_strategy(*, name: str, target_pct: float,
-                          stop_pct: float, qty: float) -> ExitStrategy
-    """Helper used by the 'New Bracket' template button."""
+def make_bracket_strategy(*, target_unit: str, target_value: float,
+                          stop_unit: str, stop_value: float,
+                          qty_pct: float = 100.0,
+                          name: str = "Bracket") -> ExitStrategy
+    """Helper used by the '+ Bracket' template button."""
 
 class ExitsDialog(BaseModalDialog):
-    def __init__(self, master, *, app, strategy: Optional[ExitStrategy],
-                 attach_to_position: Optional[str] = None) -> None
+    def __init__(self, master, *,
+                 on_library_changed: Callable[[], None] | None = None) -> None
+    @property
+    def draft(self) -> ExitStrategy | None
+    @property
+    def library(self) -> tuple[ExitStrategy, ...]
+    @property
+    def broken(self) -> tuple[_exits_storage.BrokenStrategy, ...]
     def refresh_library(self) -> None
-    def load_strategy(self, strategy_id: str) -> None
-    def _on_new_blank(self) -> None
-    def _on_new_bracket(self) -> None
-    def _on_duplicate(self) -> None
+    def load_strategy_into_editor(strategy: ExitStrategy | None) -> None
+    def get_draft(self) -> ExitStrategy | None
+    def _on_new(self) -> None
+    def _on_bracket(self) -> None
     def _on_delete(self) -> None
+    def _on_import(self) -> None
+    def _on_export(self) -> None
+    def _on_validate(self) -> list[str]
     def _on_save(self) -> None
-    def _on_save_as_template(self) -> None
     def _on_cancel(self) -> None       # BaseModalDialog hook
-    def _on_primary(self) -> None      # BaseModalDialog hook → _on_save
+    def _on_primary(self) -> None      # BaseModalDialog hook -> _on_save
 ```
 
 ## Modal plumbing
@@ -70,16 +80,15 @@ harmless.
 ## Layout
 
 ```
-┌─ Library ──────┬─ Editor ─────────────────────────────────────────┐
-│  Name | Kind   │  Identity (name / direction / position-binding) │
-│  ─────────     │  Legs   (one _LegFrame per leg, expandable)     │
-│  [New]         │    [_TriggerRow]+ inside _LegFrame              │
-│  [Bracket]     │    [_OCOGroupRow] for sibling-leg OCO grouping  │
-│  [Duplicate]   │  Lifecycle (cooldown / arm-window / etc.)       │
-│  [Delete]      │                                                  │
-│  [Import]      │                                                  │
-│  [Export]      │  [Save] [Save as Template] [Cancel]              │
-└────────────────┴──────────────────────────────────────────────────┘
++-- Library ------+-- Editor ----------------------------------------+
+| Name | Kind     |  Header: name / EOD kill-switch / offset min     |
+| Show filter     |  Legs: one _LegFrame per leg                    |
+| [+ New]         |    each leg owns _TriggerRow children            |
+| [+ Bracket]     |  OCO Groups: leg chips + cancel_on dropdowns    |
+| [Delete]        |                                                  |
+| [Import]        |                                                  |
+| [Export]        |  [Validate] [Save] [Close]                       |
++-----------------+--------------------------------------------------+
 ```
 
 ## Dependencies
@@ -87,21 +96,21 @@ harmless.
 - `..exits.{model, storage}`.
 - `.exits_dialog_widgets._BracketDialog / _LegFrame / _TriggerRow /
   _OCOGroupRow / _FieldSpec`.
-- `..exits.evaluator.ExitEvaluator` (for live-update notification).
+- Optional `on_library_changed` callback for live tab refresh after
+  save/delete/import.
 
 ## Design Decisions
 
-- **Modeless** — leaves the chart usable while editing. Closing the
-  chart's main window prompts to discard unsaved changes.
-- **Singleton via `_open_dialog` ref on `ChartApp`.** Prevents two
-  concurrent editors writing the same file.
+- **Singleton via `app._exits_dialog`.** Prevents two concurrent editors
+  writing the same file; re-opening focuses the live dialog.
 - **Bracket helper** (`make_bracket_strategy`) is a function so unit
   tests can build a bracket without instantiating Tk.
-- **`attach_to_position`** is a *queued* hint: on successful save the
-  dialog calls `_exit_evaluator.attach_strategy(pos_id, strategy)`
-  — convenience for the "Attach → New strategy" UX in the exits tab.
-- **Save runs `validate_strategy`** and surfaces all errors in a
-  message box; doesn't dismiss on failure.
+- **Save runs `validate_strategy`** and surfaces errors in the status label;
+  doesn't dismiss on failure.
+- **OCO groups are first-class editor rows.** The editor exposes an OCO
+  section where each group is a row of leg chips plus a `cancel_on`
+  dropdown; duplicate leg membership is highlighted and rejected by
+  validation.
 - **Mine | Templates | All filter** (audit `template-filter`). A radio
   segment above the library `Listbox` filters the saved-strategy *view*;
   it **defaults to "All" every time the dialog opens** (session-only
@@ -121,7 +130,7 @@ harmless.
 - One ExitsDialog per `ChartApp` at a time.
 - Library pane is sorted deterministically by `(name.lower(), id)`.
 - Cancel produces no side effects.
-- Save produces exactly one `storage.save(...)` write on success.
+- Save produces exactly one `storage.save(...)` write on success; save/delete/import invoke `on_library_changed`.
 
 ## See also
 

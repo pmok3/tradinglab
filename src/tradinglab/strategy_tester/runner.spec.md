@@ -24,7 +24,7 @@ Top-level orchestrator for a Strategy Tester Run. Fans out per-symbol workers on
 ## Design Decisions
 - **Per-symbol independent capital** is implicit in the design: each worker builds its own `SandboxEngine` via `evaluate_symbol`. Workers never share engine state.
 - **ThreadPoolExecutor cap** — removed the old hard cap of 4. `DEFAULT_MAX_WORKERS` now reads the persisted `worker_count` tunable (if > 0, clamped to 64) or falls back to `max(1, min(cpu_count-1, 64))`. The GUI passes `max_workers=app._worker_count` from `StrategyTab._on_run_clicked` so the user-configured count is always honoured. Override-able via `max_workers` for tests.
-- **Cancellation is checked at submission boundary + on every result integration** — per-symbol evaluation is uninterruptible (bounded), so polling inside is unnecessary.
+- **Cancellation is cooperative across layers** — the orchestrator checks before submission and on result integration, while `_worker` threads the same token into `evaluate_symbol` and screenshot rendering. The engine kernel stays cancellation-free.
 - **`progress` callback runs on the orchestrator thread, not workers** — GUI integrators thread-marshal it via `app.after_idle(...)`. Smoke tests can use it directly.
 - **All exceptions in workers are captured into `_SymbolOutcome.error`** — one bad symbol never aborts the Run. The orchestrator integrates outcomes into a final-status decision.
 - **Final-status rules:**

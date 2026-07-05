@@ -62,13 +62,13 @@ the controller hasn't been constructed yet (early-boot path).
 
 ## Design Decisions
 
-- **Separate file from `backtest/sandbox.py`.** The latter holds
-  the sandbox controller; this file holds the ``ChartApp``-facing
+- **Separate file from `backtest/sandbox_app.py`.** The latter holds
+  the app-level sandbox controller; this file holds the ``ChartApp``-facing
   adapters. Keeping them separate avoids forcing the controller
   to know about ChartApp internals.
 - **No `__init__` on the mixin.** All state is owned by
   ``ChartApp.__init__`` / ``SandboxAppController.__init__``.
-- **No imports from `sandbox.py`.** Adapters only call
+- **No imports from `sandbox_app.py`.** Adapters only call
   ``self._sandbox_ctrl.<attr>`` — no static reference to the
   controller class.
 

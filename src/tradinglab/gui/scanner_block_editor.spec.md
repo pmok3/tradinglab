@@ -14,11 +14,15 @@ the underlying `Group` / `Condition` objects in place so
 - `class BlockEditor(ttk.Frame)`:
   - `__init__(parent, *, root: Optional[Group] = None,
     default_interval: str = "5m",
-    on_change: Optional[Callable[[], None]] = None)`.
+    on_change: Optional[Callable[[], None]] = None,
+    data_status_provider: Optional[Callable[[FieldRef], tuple[bool, str]]] = None)`.
   - `get_root() -> Group` — same object reference passed in.
   - `set_root(group: Group) -> None` — replace tree; rebuild widget.
   - `set_default_interval(interval: str) -> None` — used by newly
     added Conditions; existing conditions keep explicit interval.
+  - `set_view_mode(mode: str) -> None` — switch between `Auto layout`,
+    `Detailed cards`, and `Compact rows`; invalid modes fall back to
+    `Auto layout`.
 
 ## Internal frames
 
@@ -45,7 +49,8 @@ Produces a `FieldRef`. Layout:
   combo — literals are symbol-independent.
 - **Builtin**: Combobox over `fields.all_fields()` filtered to builtins.
   Symbol combo present (last column).
-- **Indicator**: Combobox over `SCANNABLE_INDICATORS.keys()` + one
+- **Indicator**: Combobox over `scanner.fields.all_fields()` filtered
+  to scannable indicator specs + one
   widget per `ParamDef` (Spinbox int/float, Combobox choice,
   Checkbutton bool, Entry fallback) + Output combo over the
   allowlisted output keys (hidden when only one). Kind ids sorted

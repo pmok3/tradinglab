@@ -15,10 +15,14 @@ Move the top toolbar widget construction out of `app.py` while keeping the exist
 - `ToolbarController(parent, state, *, callbacks, intervals, sources)`
   - Builds the packed toolbar widgets.
   - Exposes `frame` for the host to pack.
-  - Exposes compatibility widget handles used elsewhere (`ticker_label`, `compare_label`, `compare_check`, `source_combo`, `interval_combo`, `prepost_tooltip`). The **`ticker_label` / `compare_label`** read-only displays are `width=14` so a ratio symbol like `AMD/NVDA` fits without truncation. **`compare_check` is a toggle `ttk.Button`** (not a `ttk.Checkbutton`) — see Design.
+  - Exposes compatibility widget handles used elsewhere (`ticker_label`, `compare_label`, `compare_check`, `source_combo`, `interval_combo`, `prepost_check`, `prepost_tooltip`). The **`ticker_label` / `compare_label`** read-only displays are `width=14` so a ratio symbol like `AMD/NVDA` fits without truncation. **`compare_check` is a toggle `ttk.Button`** (not a `ttk.Checkbutton`) — see Design.
   - `sources` is the user-visible source list (callers MUST pass `data.user_visible_sources()`, NOT `data.DATA_SOURCES.keys()`, so internal-only sources like `synthetic` / `synthetic-stream` are filtered out of the combobox — see `data/base.spec.md`).
 - `lock_for_sandbox(allowed_intervals)` — temporarily restrict the interval combobox values.
 - `unlock()` — restore the saved full interval list.
+- `set_sources(sources)` — replace the source combobox values after
+  BYOD source registration changes.
+- `interval_saved_values` — read-only snapshot of the interval values
+  saved by the sandbox lock, or `None` when unlocked.
 
 ## Design
 - Reads all mutable UI state from `AppState`; the controller does not own business logic.

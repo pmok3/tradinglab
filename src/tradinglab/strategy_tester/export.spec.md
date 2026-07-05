@@ -102,7 +102,7 @@ Built via `matplotlib.backends.backend_pdf.PdfPages`. Pages in order:
 2. **Breakouts page** — Letter portrait, two `ax.table` widgets:
    per-symbol on the top half, per-year on the bottom half.
 3. **Equity curve page** — Letter landscape, single line plot of
-   `agg.equity_curve` (`(ts_ms, equity)` tuples) with `autofmt_xdate`.
+   `agg.equity_curve` (`(epoch_seconds, equity)` tuples) with `autofmt_xdate`.
    Skipped if the curve is empty. Dense curves are plotted from
    matplotlib numeric day values (`epoch_seconds / 86400`) rather than
    allocating one `datetime` object per equity point.

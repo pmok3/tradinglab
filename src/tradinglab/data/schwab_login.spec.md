@@ -22,7 +22,9 @@ One-time Schwab OAuth-code login CLI. Walks the user through the browser-redirec
 ## Design Decisions
 - **No local HTTP listener for the redirect**: the browser will land on a `"site can't be reached"` page; that's expected. User copies the URL back into the terminal. Keeps this script dependency-free and works behind corporate firewalls.
 - **Module is `python -m`-runnable**: pragma `if __name__ == "__main__"` calls `main()`. The chart app does not invoke this — it's a one-time-per-7-days operator task.
-- **Default redirect_uri is `https://127.0.0.1`** when not in env, matching Schwab's most common dev registration.
+- **Default redirect_uri is `https://127.0.0.1`** when
+  `SchwabCredentials.redirect_uri` is missing, matching Schwab's
+  most common dev registration.
 - **Code is single-use, short-lived (~30s)**: docstring warns the operator to paste promptly.
 - **OAuth `state` CSRF check** (security audit M4). `main()`
   generates a fresh `secrets.token_urlsafe(24)` per login attempt

@@ -18,6 +18,7 @@ DRAWING_LABEL_GID_PREFIX   = "drawing-label:"
 PICK_TOLERANCE_REFERENCE_DPI = 96.0
 
 def render_drawings(ax, drawings) -> List[Line2D]: ...
+def clear_drawing_artists(ax) -> int: ...
 def pick_drawing(drawings, ax, x_disp, y_disp,
                  *, tol_px=5.0) -> Optional[Drawing]: ...
 def drawing_id_from_gid(gid: Optional[str]) -> Optional[str]: ...
@@ -78,6 +79,9 @@ the signature for future `kind="rect"` / `kind="trend"`.
 - **No artist tracking.** `render_drawings` returns the artist list
   but doesn't cache; `app.py` tracks and removes artists on next
   render. Keeps the helper pure and re-entrant.
+- **Drawing-only clearing.** `clear_drawing_artists` removes line and
+  label artists tagged with drawing `gid` prefixes and returns the
+  number removed. Removal errors are swallowed per artist.
 - **Per-drawing error isolation.** A single bad drawing (NaN price,
   invalid color after hand-edit) is skipped rather than blanking the
   rest of the chart.

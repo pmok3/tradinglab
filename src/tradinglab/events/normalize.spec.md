@@ -20,7 +20,7 @@ Internal: `.base`. External: none at import. Pandas-shape duck-typed at call tim
 - **First-match wins** in `_resolve_column`; variant tables ordered most-recent-first.
 - **Missing columns are not errors.** Missing earnings columns → NaN fields; missing dividend columns → empty output.
 - **9am rows classify DMH.** `slot_from_hour` is hour-only, so `09:00–09:59 ET` maps to DMH. `_extract_index_hour_et` still encodes the legacy +1 nudge for `09:30–09:59` rows before calling it.
-- **Single-row both-cols.** `normalize_actions_df` emits a split record AND a cash record from one row when both columns are populated, in that order (stable by emission, not just `ex_ts`).
+- **Single-row both-cols.** `normalize_actions_df` emits a split record, then a cash record, from one row when both columns are populated. The final `ex_ts` sort is stable, so same-day split-before-cash order is preserved.
 - **Output sorted ascending** by `ts` / `ex_ts` for binary-search-friendly order.
 
 ## Invariants

@@ -20,8 +20,9 @@ from tradinglab.indicators.sessions import (
 ### NumPy / `Bars` API
 
 `*_np` variants take a `Bars` snapshot (columnar NumPy arrays) and
-return NumPy arrays. Semantics match the list-based helpers so the two
-surfaces never disagree.
+return NumPy arrays. Semantics match the list-based helpers for the
+app's normal exchange-local naive candle timestamps; `Bars` converts
+tz-aware datetimes to naive UTC before these helpers see them.
 
 - `tod_key_np(bars) -> np.ndarray[int32]` — per-bar `hour*60 + minute`
   in exchange-local wall clock.
@@ -69,6 +70,8 @@ fall back to `"regular_only"`.
 ## Timezone convention
 
 Candle `date` fields are assumed to already be in exchange-local
-wall-clock time (US/Eastern for the equities the app supports).
-Timezone-aware datetimes are accepted; tzinfo is irrelevant once the
-helpers only inspect `hour`/`minute`.
+wall-clock time (US/Eastern for the equities the app supports). The
+candle-list helpers inspect `date.hour` / `date.minute` directly, so
+timezone-aware datetimes keep their stored wall-clock fields there.
+The NumPy helpers inspect `Bars.timestamps`, which follows
+`core/bars.py`'s naive-UTC convention for tz-aware inputs.

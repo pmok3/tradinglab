@@ -9,6 +9,7 @@ ex-event boundaries even if upstream `EarningsRecord` /
 `DividendRecord` data later mutates.
 
 ## Public API
+- `@dataclass(frozen=True) class CorporateAction(ts, kind, amount=0.0, ratio_num=1, ratio_den=1, source_ref="")` — engine-input record registered via `SandboxEngine.register_corporate_actions`; `kind ∈ {"cash_dividend", "special_dividend", "spinoff_cash", "stock_split"}`.
 - `@dataclass(frozen=True) class CashAdjustment(ts, symbol, amount_per_share, quantity, reason, source_ref="")`.
   - `reason ∈ {"cash_dividend", "special_dividend", "spinoff_cash"}`.
 - `@dataclass(frozen=True) class QuantityAdjustment(ts, symbol, ratio_num, ratio_den, pre_quantity, reason="stock_split", source_ref="")`.
@@ -38,7 +39,7 @@ None beyond `dataclasses`.
 ## Invariants
 - `ratio_num >= 1` and `ratio_den >= 1` (both > 0).
 - `quantity != 0` when emitting.
-- `ts` is the ex-event ms-since-epoch UTC, matching engine bar `ts`.
+- `ts` is the engine bar timestamp in UTC epoch seconds. `replay_events.py` converts event-provider millisecond timestamps onto the engine timeline before registration.
 
 ## Data Flow
 1. `SandboxController.start_session` fetches per-symbol `EventBundle`

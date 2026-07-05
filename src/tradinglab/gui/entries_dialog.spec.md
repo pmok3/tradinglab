@@ -2,37 +2,47 @@
 
 ## Purpose
 
-Modal editor for one `EntryStrategy`. Tabbed form so the strategy
-schema's six concerns (identity, universe, trigger, sizing, on-fill
-exits, lifecycle) each get their own surface area. Drafts are
+Modal editor for one `EntryStrategy`. A single scrollable form groups
+the strategy schema's six concerns (identity, universe, trigger,
+sizing, on-fill exits, lifecycle) into LabelFrame sections. Drafts are
 half-validated continuously; final validation runs on Save via
 `validate_strategy`.
 
-## Tabs
+## Sections
 
-| Tab            | Fields                                                                  |
-| -------------- | ----------------------------------------------------------------------- |
-| **Identity**   | Name, Direction (LONG/SHORT), Label                                     |
-| **Universe**   | Mode (symbols / scanner / from-attached-chart); symbol list / scanner-id |
-| **Trigger**    | Kind (six radio buttons) → kind-specific subform; INDICATOR embeds `BlockEditor` |
-| **Sizing**     | Sizing kind (FIXED_QTY / FIXED_NOTIONAL), qty/notional, ShareRounding   |
-| **On-fill exits** | Multi-select list of exit-strategy ids (looked up via `ExitEvaluator.all_strategies`) |
-| **Lifecycle**  | Cooldown, max-fires/symbol, max-fires/total, position-already-open policy, arm-window start/end, require-market-open |
+| Section            | Fields                                                                  |
+| ------------------ | ----------------------------------------------------------------------- |
+| **Identity**       | Name, Direction (LONG/SHORT), Label, Enabled                            |
+| **Universe**       | Mode (symbols / scanner / from-attached-chart); symbol list / scanner-id |
+| **Trigger**        | Kind dropdown -> kind-specific subform; INDICATOR embeds `BlockEditor`   |
+| **Sizing**         | Sizing kind (FIXED_QTY / FIXED_NOTIONAL), qty/notional, ShareRounding    |
+| **On-fill exits**  | Checkbox list from the `exit_strategies` constructor argument            |
+| **Lifecycle**      | Cooldown, max-fires/symbol, max-fires/total, position-already-open policy, arm-window start/end, require-market-open |
 
 ## Public API
 
 ```python
 class EntriesDialog(BaseModalDialog):
-    def __init__(self, master, *, app, strategy: Optional[EntryStrategy],
-                 on_save: Optional[Callable[[EntryStrategy], None]] = None) -> None
-    def _build_tab_identity(self) -> ttk.Frame
-    def _build_tab_universe(self) -> ttk.Frame
-    def _build_tab_trigger(self) -> ttk.Frame
-    def _build_tab_sizing(self) -> ttk.Frame
-    def _build_tab_on_fill_exits(self) -> ttk.Frame
-    def _build_tab_lifecycle(self) -> ttk.Frame
-    def _collect(self) -> EntryStrategy   # raises ValueError on missing fields
-    def _on_save(self) -> None
+    def __init__(self, master, *, strategy: EntryStrategy | None = None,
+                 exit_strategies: Sequence[ExitStrategy] = (),
+                 on_save: Callable[[EntryStrategy], None] | None = None,
+                 on_cancel: Callable[[], None] | None = None) -> None
+    @property
+    def draft(self) -> EntryStrategy
+    @property
+    def block_editor(self) -> BlockEditor | None
+    @property
+    def is_new(self) -> bool
+    @property
+    def exit_strategy_ids_selected(self) -> tuple[str, ...]
+    def _build_identity_tab(self, parent: tk.Misc) -> ttk.Frame
+    def _build_universe_tab(self, parent: tk.Misc) -> ttk.Frame
+    def _build_trigger_tab(self, parent: tk.Misc) -> ttk.Frame
+    def _build_sizing_tab(self, parent: tk.Misc) -> ttk.Frame
+    def _build_exits_tab(self, parent: tk.Misc) -> ttk.Frame
+    def _build_lifecycle_tab(self, parent: tk.Misc) -> ttk.Frame
+    def _on_validate(self) -> list[str]
+    def _on_save_clicked(self, *, close: bool) -> None
     def _on_cancel(self) -> None          # BaseModalDialog ESC / WM_DELETE hook
     def _on_primary(self) -> None         # BaseModalDialog Return hook
 ```
@@ -45,9 +55,8 @@ persistence (``geometry_key="dlg.entries"``, default ``1400x780``) /
 ESC + Return bindings. ``__init__`` calls :meth:`_finalize_modal`
 **at the very end** (after every widget is realized) with
 ``primary=lambda: self._on_save_clicked(close=True)`` and
-``cancel=self._on_cancel_clicked`` so Enter mirrors the rightmost
-footer button and ESC / WM_DELETE invoke the dirty-state-aware
-cancel handler. Overrides of :meth:`_on_cancel` / :meth:`_on_primary`
+``cancel=self._on_cancel_clicked`` so Enter mirrors Save & Close and ESC /
+WM_DELETE invoke the cancel handler. Overrides of :meth:`_on_cancel` / :meth:`_on_primary`
 forward to the same handlers (belt-and-suspenders for any code
 path that bypasses the explicit `_finalize_modal` arguments).
 
@@ -57,16 +66,16 @@ Caller callbacks are stored as ``self._on_save_cb`` /
 
 ## Dependencies
 
-- `..entries.{model, storage}` for schema + persistence.
+- `..entries.model` for schema and validation.
 - `.scanner_block_editor.BlockEditor` (re-used) for INDICATOR triggers.
-- `..exits.storage.load_all` to populate the on-fill exits picker.
+- `exit_strategies` constructor data to populate the on-fill exits picker.
 - `..scanner.storage.load_all` for the SCANNER_ALERT scanner picker.
 
 ## Design Decisions
 
-- **Tab-per-concern, not one tall form.** Six tabs keep each surface
-  small. Save is enabled only when minimal required fields are
-  filled (cheap pre-check; full validate runs on click).
+- **Scrollable sections, not tabs.** Six LabelFrame sections keep the
+  whole draft visible for cross-section validation and avoid tab-hopping.
+  Validate / Apply / Save & Close all run the same validation path.
 - **INDICATOR trigger embeds `BlockEditor`.** Re-uses the
   scanner condition-tree editor to avoid duplicating the
   operator/threshold UX. The dialog binds the editor's
@@ -97,8 +106,8 @@ Caller callbacks are stored as ``self._on_save_cb`` /
 - **SCANNER_ALERT picker** dropdown shows scanner names from
   `scanner.storage.load_all`; the displayed scanner id is the value
   stored in `EntryTrigger.scanner_id`.
-- **Save calls `validate_strategy` and surfaces all errors** in a
-  message box; doesn't dismiss the dialog on validation failure.
+- **Save calls `validate_strategy` and surfaces errors** in the
+  status / inline validation UI; doesn't dismiss the dialog on validation failure.
 - **`on_save` callback** lets the parent `EntriesTab` refresh its
   Treeview without the dialog reaching back into app state.
 
@@ -118,10 +127,8 @@ Caller callbacks are stored as ``self._on_save_cb`` /
   `between(0, 0)` after saving" corruption was caused by exactly
   this. Regression test:
   `tests/unit/gui/test_combobox_wheel_guard.py`.
-- Save produces exactly one `storage.save(...)` write on success.
-- The dialog never directly mutates the live `EntryEvaluator`
-  library — only via `storage.save` → tab refresh → evaluator's
-  next `set_strategies` rebuild.
+- Save invokes the optional `on_save` callback exactly once on success; the parent owns persistence and evaluator refresh.
+- The dialog never directly mutates the live `EntryEvaluator` library.
 
 ## See also
 

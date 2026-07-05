@@ -3,9 +3,10 @@
 ## Purpose
 
 Hosts the menu-callback handlers for the **Indicators** cascade in the
-menubar built by `ChartApp._build_menubar` — Add (per kind/scope),
-Clear, Save Preset, Load Preset cascade, Delete Preset cascade, plus
+menubar built by `MenuBuilder` — Clear, Save Preset, Load Preset
+cascade, Delete Preset cascade, Custom Indicator Builder, plus
 file-based Save/Load Preset to/from File (Save-As / portable copies).
+It also keeps the quick-add helper used by the Add Indicator dialog.
 
 Extracted from `app.py` to keep `ChartApp` focused on chart-state and
 data-pipeline concerns. Pure UI glue: each method validates input,
@@ -14,7 +15,7 @@ mutates `self._indicator_manager`, and reports outcome via `self._status`.
 ## Public Surface
 
 - `class IndicatorMenuMixin`. All methods are private (leading underscore)
-  and called either by menu commands wired in `ChartApp._build_menubar`
+  and called either by menu commands wired in `MenuBuilder`
   or by other ChartApp methods (e.g., the Add Indicator dialog calls
   `_on_menu_add_indicator` after collecting params from the user):
   - `_on_menu_add_indicator(kind_id, params, scopes=None)`

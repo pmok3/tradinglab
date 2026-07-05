@@ -16,7 +16,7 @@ None beyond stdlib.
 - **MAE / MFE formulas (signed, non-strict)** — for a long: `mae$ = (min(low) − entry) × qty` (so `mae ≤ 0`, equals zero when bar lows never breached entry); `mfe$ = (max(high) − entry) × qty` (`mfe ≥ 0`, equals zero analogously). For a short: `mae$ = (entry − max(high)) × |qty|`; `mfe$ = (entry − min(low)) × |qty|`. Adverse excursion is non-positive and favourable is non-negative on both sides. Percent variants normalise by `entry × |qty|`.
 - **Excursion window is fill-bar inclusive on both ends** — the entry bar's full H/L is rolled in (entries fill at that bar's open, so its remaining H/L is reachable) and the exit bar is included up to and including its close.
 - **`ref_pre_trade_id` points back at `PreTradeEntry.order_id`** (the same id the user-submitted order was filed under), letting `performance.build_trade_rows` join the two without a side table.
-- **Engine emits `PostTradeReview` with `user_review=""`**; the `SandboxController` runs the post-trade callback and replaces the record. Headless callers (smoke, future batch runner) leave it empty, which is fine.
+- **Engine emits `PostTradeReview` with `user_review=""`**; the `SandboxController` runs the post-trade callback and replaces the record. Headless callers (smoke, Strategy Tester) leave it empty, which is fine.
 
 ## Invariants
 - `PreTradeEntry.order_id` is unique within a session result.
