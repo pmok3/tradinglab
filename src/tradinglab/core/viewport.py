@@ -64,6 +64,34 @@ def y_limits_for_slice(
     return 0.0, vmax * 1.1
 
 
+def _tz_naive_key(d):
+    """Tz-agnostic ordering key for window remapping.
+
+    :func:`remap_window_by_time` compares timestamps that can arrive from
+    different provenance: a freshly-fetched tz-aware **ET** series (yfinance,
+    and — since the Alpaca/Schwab/Polygon ET-localization fix — every live
+    source) vs. a previously-rendered series that may be tz-naive (or a
+    legacy tz-aware cache). Comparing a tz-aware and a tz-naive ``datetime``
+    raises ``TypeError: can't compare offset-naive and offset-aware
+    datetimes`` which — before this guard — propagated out of ``_render`` and
+    left the chart half-built: switching tickers on a tz-aware source made
+    the **compare panel silently vanish**.
+
+    The whole codebase treats a tz-naive intraday timestamp as ET wall-clock
+    (see ``data.today_upsample``), and every live source now yields ET, so
+    stripping tzinfo produces a consistent, comparable ET wall-clock key.
+    Non-datetime timestamps (``np.datetime64`` etc.) have no ``tzinfo`` and
+    pass through unchanged. Mirrors ``core.pairing._normalize_pairing_key``.
+    """
+    tz = getattr(d, "tzinfo", None)
+    if tz is None:
+        return d
+    try:
+        return d.replace(tzinfo=None)
+    except Exception:  # noqa: BLE001
+        return d
+
+
 def remap_window_by_time(
     prev_dates,
     prev_xlim: tuple[float, float],
@@ -127,19 +155,27 @@ def remap_window_by_time(
     if lo_i <= 0 and hi_i >= n_prev - 1:
         return None
     try:
-        t_lo = prev_dates[lo_i]
-        t_hi = prev_dates[hi_i]
+        t_lo = _tz_naive_key(prev_dates[lo_i])
+        t_hi = _tz_naive_key(prev_dates[hi_i])
     except Exception:  # noqa: BLE001
         return None
     rmap_lo = -1
     rmap_hi = -1
-    for i, d in enumerate(new_dates):
-        if d <= t_lo:
-            rmap_lo = i
-        if d <= t_hi:
-            rmap_hi = i
-        else:
-            break
+    try:
+        for i, d in enumerate(new_dates):
+            dk = _tz_naive_key(d)
+            if dk <= t_lo:
+                rmap_lo = i
+            if dk <= t_hi:
+                rmap_hi = i
+            else:
+                break
+    except TypeError:
+        # Comparable types that survived key-normalization but still can't
+        # be ordered against each other (e.g. datetime vs np.datetime64).
+        # Degrade to the caller's default window rather than letting the
+        # exception escape into _render and tear down the whole chart.
+        return None
     if rmap_lo < 0:
         rmap_lo = 0
     if rmap_hi < 0:

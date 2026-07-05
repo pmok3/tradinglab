@@ -7,7 +7,7 @@ bar-index space. See ``ChartApp._render`` for the integration site.
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -154,6 +154,58 @@ def test_right_clamp_within_subwindow():
 # ---------------------------------------------------------------------------
 # Full-source-coverage intent guard (IPO / very-short-history)
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Tz-mixed inputs — must NOT raise (regression: Alpaca compare panel vanished)
+# ---------------------------------------------------------------------------
+#
+# The two sides can arrive with different tz-awareness: a freshly-fetched
+# tz-aware ET series (yfinance, and — since the vendor ET-localization fix —
+# Alpaca/Schwab/Polygon) vs. a previously-rendered series that may be tz-naive
+# (or vice versa). Comparing offset-aware and offset-naive datetimes raises
+# ``TypeError`` which used to propagate out of ``ChartApp._render`` and leave
+# the chart half-built — the compare panel silently disappeared when switching
+# tickers on a tz-aware source. ``remap_window_by_time`` now normalizes tz
+# before comparing (ET wall-clock), mirroring ``core.pairing``.
+
+_ET = timezone(timedelta(hours=-5))
+
+
+def _aware_series(start: datetime, n: int, step_min: int = 5) -> list[datetime]:
+    return [
+        (start + timedelta(minutes=i * step_min)).replace(tzinfo=_ET)
+        for i in range(n)
+    ]
+
+
+def test_tz_aware_prev_naive_new_does_not_raise():
+    base = datetime(2026, 5, 1, 9, 30)
+    prev = _aware_series(base, 100)           # tz-aware
+    new = _series(base, 100)                  # tz-naive, same wall-clock
+    result = remap_window_by_time(prev, (40.2, 60.7), new)
+    assert result == (40, 62)                 # same as the all-naive case
+
+
+def test_tz_naive_prev_aware_new_does_not_raise():
+    base = datetime(2026, 5, 1, 9, 30)
+    prev = _series(base, 100)                 # tz-naive
+    new = _aware_series(base, 100)            # tz-aware, same wall-clock
+    result = remap_window_by_time(prev, (40.2, 60.7), new)
+    assert result == (40, 62)
+
+
+def test_tz_mixed_within_new_series_does_not_raise():
+    # A single naive bar (e.g. a synthesized/streamed today bar) mixed into an
+    # otherwise tz-aware series must not crash the remap.
+    base = datetime(2026, 5, 1, 9, 30)
+    prev = _aware_series(base, 100)
+    new = _aware_series(base, 99)
+    new.append(base + timedelta(minutes=99 * 5))  # trailing NAIVE bar
+    result = remap_window_by_time(prev, (10.0, 50.0), new)
+    assert result is not None
+    lo, hi = result
+    assert 0 <= lo < hi <= len(new)
 
 
 def test_two_bar_ipo_source_does_not_crush_long_destination():

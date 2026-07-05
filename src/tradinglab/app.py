@@ -4310,8 +4310,15 @@ class ChartApp(
                 and prev_primary_xlim is not None
                 and not (preserve and preserved_xlim is not None)):
             new_dates = [c.date for c in candles]
-            rmap = _remap_window_by_time(
-                prev_primary_dates, prev_primary_xlim, new_dates)
+            try:
+                rmap = _remap_window_by_time(
+                    prev_primary_dates, prev_primary_xlim, new_dates)
+            except Exception:  # noqa: BLE001
+                # Never let window-remap math tear down the whole render
+                # (which silently drops the compare panel). Degrade to the
+                # default window. remap_window_by_time is already tz-robust
+                # internally; this is belt-and-braces.
+                rmap = None
             if rmap is not None:
                 lo, hi = rmap
                 try:
