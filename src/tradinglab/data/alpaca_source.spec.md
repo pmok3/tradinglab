@@ -13,6 +13,7 @@ Alpaca Market Data v2 → `List[Candle]`. Two-layer module: a pure response-mapp
 
 ## Design Decisions
 - **Static API-key auth** (no OAuth). Two headers — `APCA-API-KEY-ID` and `APCA-API-SECRET-KEY` — are set on each request.
+- **Pagination via `next_page_token`**. `_http_get_page(...)` fetches one page (`limit=10000`, optional `page_token`); `_accumulate_bars(fetch_page)` walks pages until the payload has no `next_page_token`, concatenating every page's `bars` into one `{"bars": [...]}` envelope handed to the mapper. `fetch_page` is injected so the pagination loop is offline-testable. A `_MAX_PAGES=200` safety cap prevents an infinite loop if the vendor mis-paginates (never-null token); hitting it logs a WARNING and returns the truncated result. Without this, a 60-day 1-minute request (~23k bars) silently truncated at the first 10k-bar page.
 - **Shared `credentialed_opener()`** (security audit I4 / M5). HTTP
   call routed through `data._http.credentialed_opener` so cross-host
   30x redirects strip both `APCA-API-KEY-ID` and `APCA-API-SECRET-KEY`
@@ -21,7 +22,7 @@ Alpaca Market Data v2 → `List[Candle]`. Two-layer module: a pure response-mapp
   pathological server replies.
 - **`feed` is part of credentials, defaults to `"iex"`**: free-tier feed. Configured via `ALPACA_FEED` env var if a paid SIP subscription is in play.
 - **`adjustment=raw`**: returns un-split-adjusted prices. Different from yfinance, which is `auto_adjust=True`. Documented as a known divergence at the chart layer.
-- **Default lookback**: 60 days for intraday intervals, 730 days for daily+. Matches the other vendor fetchers.
+- **Default lookback** via `constants.provider_lookback_days("alpaca", interval)`: Alpaca has no yfinance 60-day intraday cap, but each intraday window is **fetch-speed-bounded** (the whole series loads up front, so 5m ≈ 4 months / ~120d, 1h ≈ 4y, 1m ≈ 1mo — each ~1 API page / ≲3s to clear the 5s drilldown deadline). Daily requests ~15y (the server caps to the plan's availability — free IEX ≈ 6y for AAPL). Replaces the old 730d/60d yfinance-matched cap that truncated daily history to ~2 years and drilldown to ~60 days.
 - **Interval map**: `{1m,5m,15m,30m,1h,1d,1wk,1mo} → Alpaca's `"1Min" / "1Hour" / "1Day"` etc.`
 - **Non-finite OHLC rows are dropped by the shared normalizer** before `Candle` construction.
 - **Never raises**: HTTP/JSON errors caught broadly; logged at WARNING; returns `None`.
@@ -32,5 +33,5 @@ Alpaca Market Data v2 → `List[Candle]`. Two-layer module: a pure response-mapp
 - The interval keyspace matches `_INTERVAL_TO_ALPACA`; other intervals are rejected before HTTP.
 
 ## Testing
-- Covered indirectly via integration smoke tests. Pure mapper is offline-testable with a sample payload.
+- `tests/unit/data/test_alpaca_source.py` — offline: the pure mapper (envelope + bare-list + empty + non-finite-drop + UTC timestamps) and the `_accumulate_bars` pagination loop (single page, multi-page token walk, non-dict stop, empty-token stop, `max_pages` cap, accumulate→map round-trip). Live fetch (`_http_get_page`) is `# pragma: no cover` (network).
 

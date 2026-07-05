@@ -34,6 +34,7 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from ..constants import provider_lookback_days
 from ..models import Candle
 from ._http import MAX_RESPONSE_BYTES, credentialed_opener
 from .credentials import PolygonCredentials, get_credentials
@@ -96,7 +97,7 @@ def fetch_polygon_data(
         LOG.warning("polygon: unsupported interval %r", interval)
         return None
     if lookback_days is None:
-        lookback_days = 60 if interval.endswith(("m", "h")) else 730
+        lookback_days = provider_lookback_days("polygon", interval)
     end = datetime.now(timezone.utc).date()
     start = end - timedelta(days=lookback_days)
     try:

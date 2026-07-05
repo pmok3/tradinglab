@@ -777,6 +777,64 @@ INTERVAL_PERIODS: dict = {
 }
 
 
+# --- provider-aware fetch windows ------------------------------------------
+#
+# ``INTERVAL_PERIODS`` above encodes *yfinance*'s per-interval history limits
+# (notably the ~60-day intraday cap). Deep-history vendors — Alpaca (IEX data
+# reaches back to ~2016) and Polygon — have **no** such cap, so pinning them
+# to yfinance's windows needlessly truncated both the daily history ("only
+# to 2024") and drill-down reach ("yfinance ~60 day intraday limit" even with
+# Alpaca selected). :func:`provider_lookback_days` is the single source of
+# truth consumed by BOTH the Alpaca/Polygon fetchers (default fetch lookback)
+# AND the drill-down reachability check (``gui/drilldown.py``) so the two can
+# never disagree.
+_DEEP_HISTORY_SOURCES: frozenset = frozenset({"alpaca", "polygon"})
+
+# Trailing calendar-day windows for deep-history vendors, per interval.
+# CRITICAL: these are sized so a single fetch stays ~1 API page (≤10k bars)
+# and completes in ≲3s. The WHOLE intraday series is pulled UP FRONT on
+# every interval switch / drill-down, and the drill-down sync path has a
+# hard 5s UI deadline (gui/drilldown._DRILLDOWN_SYNC_UI_TIMEOUT_MS). A
+# 2-year 5m window (~40k bars / 4 paginated pages / ~15s) blew that deadline
+# and hung the 5m load entirely — do NOT enlarge these without also moving
+# to a targeted per-day intraday fetch. Daily+ requests ~15y (fast: one
+# page, ~0.6s); the vendor caps to whatever the plan holds (Alpaca ≈ 2016).
+_DEEP_HISTORY_INTRADAY_DAYS: dict = {
+    "1m": 20, "2m": 40, "5m": 120, "15m": 365, "30m": 730, "1h": 1460,
+}
+_DEEP_HISTORY_DAILY_DAYS: int = 5490  # ~15 years
+
+
+def _period_to_days(period: str) -> int:
+    """Convert a yfinance period string (``60d`` / ``2y`` / ``max``) to days."""
+    p = str(period).strip().lower()
+    try:
+        if p.endswith("mo"):
+            return int(p[:-2]) * 31
+        if p.endswith("d"):
+            return int(p[:-1])
+        if p.endswith("y"):
+            return int(p[:-1]) * 366
+    except ValueError:
+        pass
+    return 11000  # "max" / unrecognised → a large bound (~30y)
+
+
+def provider_lookback_days(source: str, interval: str) -> int:
+    """Trailing calendar-day window an on-demand fetch of ``(source, interval)`` covers.
+
+    Deep-history vendors (Alpaca / Polygon) return generous per-interval
+    windows — they have no yfinance-style 60-day intraday cap. Every other
+    source derives its window from :data:`INTERVAL_PERIODS` (the yfinance
+    limits) so their behaviour is unchanged.
+    """
+    if source in _DEEP_HISTORY_SOURCES:
+        if is_intraday(interval):
+            return _DEEP_HISTORY_INTRADAY_DAYS.get(interval, 120)
+        return _DEEP_HISTORY_DAILY_DAYS
+    return _period_to_days(INTERVAL_PERIODS.get(interval, "60d"))
+
+
 # --- main-window pane layout -----------------------------------------------
 #
 # The golden ratio φ ≈ 1.618 and its inverse 1/φ ≈ 0.618. The defining

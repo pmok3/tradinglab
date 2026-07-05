@@ -27,9 +27,11 @@ import json
 import logging
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from ..constants import provider_lookback_days
 from ..models import Candle
 from ._http import MAX_RESPONSE_BYTES, credentialed_opener
 from .credentials import AlpacaCredentials, get_credentials
@@ -79,9 +81,10 @@ def fetch_alpaca_data(
 ) -> list[Candle] | None:
     """``DataFetcher``-compatible Alpaca fetcher.
 
-    Returns ``None`` on any error. Default lookback windows match
-    yfinance's defaults (~2y daily, ~60d intraday) so the chart UX is
-    consistent across providers.
+    Returns ``None`` on any error. Default lookback windows come from
+    :func:`constants.provider_lookback_days` — Alpaca has no yfinance-style
+    60-day intraday cap, so intraday reaches years back and daily reaches
+    Alpaca's full IEX history (~2016; the server caps to plan availability).
     """
     creds = get_credentials().alpaca
     if not creds.is_configured():
@@ -92,20 +95,57 @@ def fetch_alpaca_data(
         LOG.warning("alpaca: unsupported interval %r", interval)
         return None
     if lookback_days is None:
-        lookback_days = 60 if interval.endswith(("m", "h")) else 730
+        lookback_days = provider_lookback_days("alpaca", interval)
     end = datetime.now(timezone.utc)
     start = end - timedelta(days=lookback_days)
     try:
-        payload = _http_get_bars(ticker, timeframe, start, end, creds)
+        payload = _accumulate_bars(
+            lambda token: _http_get_page(ticker, timeframe, start, end, creds, token)
+        )
     except Exception as exc:  # pragma: no cover - network path
         LOG.warning("alpaca: fetch failed for %s %s: %s", ticker, interval, exc)
         return None
     return candles_from_alpaca_response(payload, interval=interval)
 
 
-def _http_get_bars(
+#: Hard cap on pages walked per fetch. 200 pages x 10 000 bars = 2 000 000
+#: bars — orders of magnitude beyond any interval/lookback we request, so
+#: hitting it means the vendor is mis-paginating (never-null token) and we
+#: bail rather than loop forever.
+_MAX_PAGES = 200
+
+
+def _accumulate_bars(
+    fetch_page: Callable[[str | None], dict[str, Any]],
+    *,
+    max_pages: int = _MAX_PAGES,
+) -> dict[str, Any]:
+    """Walk Alpaca ``next_page_token`` pagination into one ``{"bars": [...]}``.
+
+    ``fetch_page(page_token) -> payload`` is injected so the pagination
+    loop is unit-testable offline. Stops when the payload has no
+    ``next_page_token`` (last page), a non-dict payload comes back, or
+    ``max_pages`` is exceeded.
+    """
+    all_bars: list[Any] = []
+    token: str | None = None
+    for _ in range(max_pages):
+        payload = fetch_page(token)
+        if not isinstance(payload, dict):
+            break
+        all_bars.extend(payload.get("bars") or [])
+        token = payload.get("next_page_token") or None
+        if not token:
+            break
+    else:  # pragma: no cover - safety cap; real fetches terminate on token
+        LOG.warning("alpaca: pagination hit %d-page cap; result truncated",
+                    max_pages)
+    return {"bars": all_bars}
+
+
+def _http_get_page(
     ticker: str, timeframe: str, start: datetime, end: datetime,
-    creds: AlpacaCredentials,
+    creds: AlpacaCredentials, page_token: str | None,
 ) -> dict[str, Any]:  # pragma: no cover - network path
     params = {
         "timeframe": timeframe,
@@ -115,6 +155,8 @@ def _http_get_bars(
         "adjustment": "raw",
         "feed": creds.feed,
     }
+    if page_token:
+        params["page_token"] = page_token
     url = f"{_ALPACA_BASE}/v2/stocks/{urllib.parse.quote(ticker)}/bars?" + \
         urllib.parse.urlencode(params)
     req = urllib.request.Request(url, headers={

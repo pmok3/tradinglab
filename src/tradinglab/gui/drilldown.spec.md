@@ -28,7 +28,7 @@ dbl-click → 5-minute drilldown flow.
   `self._executor`, plus standard chart state.
 
 ## MRO position
-`ChartApp(InteractionMixin, WatchlistTabMixin, WorkerPoolMixin, IndicatorMenuMixin, SandboxMenuMixin, DrilldownMixin, tk.Tk)`
+`ChartApp(PollingMixin, InteractionMixin, WatchlistTabMixin, WorkerPoolMixin, IndicatorMenuMixin, SandboxMenuMixin, ConfigMenuMixin, DrilldownMixin, EntriesAppMixin, ExitsAppMixin, HelpMenuMixin, FirstRunBannerMixin, DrawingsAppMixin, LivePriceOverlayAppMixin, RecentMenusMixin, SandboxAliasMixin, SandboxAppMixin, ScannerAppMixin, SnapshotMixin, UpdateCheckMixin, tk.Tk)`
 
 ## Validation
 - `tests/smoke/test_smoke_drilldown.py`: 7 checks (d17/d20/d30/d34/d38/d45/d53).
@@ -60,10 +60,12 @@ user sits on the 1d chart, so a recent day — including **today** — may
 be missing even though a manual 5m toggle would load it. The fix:
 
 - `_day_within_intraday_fetch_window(day, interval="5m")` returns True
-  when `day` is within the provider's intraday window for the interval
-  (`constants.INTERVAL_PERIODS` — e.g. `"60d"` for 5m), measured against
-  `date.today()` with a generous 7-day buffer. `"max"`/year-spec periods
-  are treated as effectively unbounded.
+  when `day` is within the **provider-aware** intraday window for the
+  interval — `constants.provider_lookback_days(source_var.get(), interval)`
+  (yfinance capped at ~60d for 5m; deep-history vendors Alpaca/Polygon
+  reach years back), measured against `date.today()` with a generous
+  7-day buffer. Called with `self=None` the `source_var` read is caught
+  → the yfinance windows.
 - **Day inside the window** → fall through to the fetch path (branch 3 /
   `_drilldown_sync_fetch`), identical to a cold cache miss. The fetch
   uses the same `DATA_SOURCES` fetcher a manual toggle uses;

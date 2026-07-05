@@ -18,8 +18,39 @@ from tradinglab.constants import (
     classify_session,
     floor_to_interval,
     interval_minutes,
+    provider_lookback_days,
     resolve_startup_defaults,
 )
+
+# ---------------------------------------------------------------------------
+# provider_lookback_days
+# ---------------------------------------------------------------------------
+
+
+def test_provider_lookback_deep_history_intraday():
+    # Alpaca / Polygon have no 60-day intraday cap, but each window is
+    # bounded so a single up-front fetch stays ~1 API page / ≲3s.
+    assert provider_lookback_days("alpaca", "5m") == 120
+    assert provider_lookback_days("alpaca", "1m") == 20
+    assert provider_lookback_days("polygon", "1h") == 1460
+
+
+def test_provider_lookback_deep_history_daily():
+    assert provider_lookback_days("alpaca", "1d") == 5490
+    assert provider_lookback_days("polygon", "1wk") == 5490
+
+
+def test_provider_lookback_yfinance_matches_interval_periods():
+    # Non-deep sources keep the yfinance windows.
+    assert provider_lookback_days("yfinance", "5m") == 60
+    assert provider_lookback_days("yfinance", "1m") == 7
+    assert provider_lookback_days("yfinance", "1h") == 730
+    assert provider_lookback_days("yfinance", "1d") == 732  # "2y" → 2*366
+
+
+def test_provider_lookback_unknown_interval_defaults_sixty():
+    assert provider_lookback_days("yfinance", "bogus") == 60
+    assert provider_lookback_days("", "bogus") == 60
 
 # ---------------------------------------------------------------------------
 # classify_session

@@ -40,7 +40,7 @@ from datetime import timedelta
 from typing import Any
 
 from .. import disk_cache
-from ..constants import INTERVAL_PERIODS
+from ..constants import provider_lookback_days
 from ..data import DATA_SOURCES
 from ..models import Candle
 
@@ -150,8 +150,7 @@ class DrilldownMixin:
                 try:
                     self._status.warn(
                         f"Drill-down no-op: 5m data only available from "
-                        f"{oldest_5m_day} onward (yfinance ~60 day intraday "
-                        f"limit) — requested {day}")
+                        f"{oldest_5m_day} onward — requested {day}")
                 except Exception:  # noqa: BLE001
                     pass
                 req = self._drilldown_request
@@ -236,15 +235,17 @@ class DrilldownMixin:
     ) -> bool:
         """True if a fresh ``interval`` fetch could plausibly include ``day``.
 
-        yfinance serves intraday bars only for a recent trailing window
-        (:data:`tradinglab.constants.INTERVAL_PERIODS` — e.g. ~60 calendar
-        days for 5m). A day inside that window is fetchable on demand even
-        when the current cache doesn't contain it — the cache may be stale
-        or only partially companion-prefetched while the user sits on the
-        1d chart (this is the bug: drilling into *today* or a recent day
-        used to error "only available from … onward" instead of fetching,
-        even though a manual 5m toggle loads it fine). A day that predates
-        the window is genuinely beyond the provider's reach.
+        The reachable window is provider-aware
+        (:func:`tradinglab.constants.provider_lookback_days` for the active
+        ``source_var``): yfinance is capped to its ~60-day intraday window,
+        while deep-history vendors (Alpaca / Polygon) reach years back. A
+        day inside that window is fetchable on demand even when the current
+        cache doesn't contain it — the cache may be stale or only partially
+        companion-prefetched while the user sits on the 1d chart (this is
+        the bug: drilling into *today* or a recent day used to error "only
+        available from … onward" instead of fetching, even though a manual
+        5m toggle loads it fine). A day that predates the window is
+        genuinely beyond the provider's reach.
 
         Deliberately generous: a one-week buffer is added so boundary days
         / provider jitter never produce a false "unavailable". A day that
@@ -254,16 +255,11 @@ class DrilldownMixin:
         """
         if not isinstance(day, _date_t):
             return False
-        period = str(INTERVAL_PERIODS.get(interval, "60d")).strip().lower()
         try:
-            if period.endswith("d"):
-                window_days = int(period[:-1])
-            elif period.endswith("y"):
-                window_days = int(period[:-1]) * 366
-            else:  # "max" or unrecognised → effectively unbounded
-                return True
-        except ValueError:
-            window_days = 60
+            src = self.source_var.get()
+        except Exception:  # noqa: BLE001
+            src = ""
+        window_days = provider_lookback_days(src, interval)
         cutoff = _date_t.today() - timedelta(days=window_days + 7)
         return day >= cutoff
 
@@ -338,8 +334,7 @@ class DrilldownMixin:
             try:
                 self._status.warn(
                     f"Drill-down no-op: 5m data only available from "
-                    f"{oldest_5m_day} onward (yfinance ~60 day intraday "
-                    f"limit) — requested {req.day}")
+                    f"{oldest_5m_day} onward — requested {req.day}")
             except Exception:  # noqa: BLE001
                 pass
             self._finish_drilldown_request(req)

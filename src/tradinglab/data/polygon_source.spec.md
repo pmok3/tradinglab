@@ -27,7 +27,7 @@ Polygon.io Aggregates v2 → `List[Candle]`. Two-layer module: a pure response-m
   `data/_http`) bounds a malicious or buggy server's ability to OOM
   the chart with an infinite stream. Polygon's largest realistic
   response (`limit=50000` aggregates) is ~3 MB.
-- **Default lookback**: 60 days for intraday intervals, 730 days for daily+. Matches the other vendor fetchers so chart UX is consistent across providers.
+- **Default lookback** via `constants.provider_lookback_days("polygon", interval)`: generous but fetch-speed-bounded per-interval windows with no yfinance 60-day intraday cap (5m ≈ 4mo, daily ≈ 15y) — see `constants.spec.md`.
 - **Interval map**: `1m/5m/15m/30m → (n, minute)`, `1h → (1, hour)`, `1d/1wk/1mo → (1, day|week|month)`. Unsupported intervals return `None` rather than raise.
 - **Never raises**: all HTTP/JSON errors caught in a broad `except Exception` and logged at WARNING. The app-level fallback handles `None`.
 - **`adjusted=true, sort=asc, limit=50000`** baked into the URL — that's what the chart expects (chronological, split-adjusted bars).

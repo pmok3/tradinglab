@@ -16,8 +16,14 @@ from tradinglab.data import credentials as creds_mod
 
 
 @pytest.fixture(autouse=True)
-def _reset_cache():
+def _reset_cache(monkeypatch):
     creds_mod._cache = None
+    # Point the plaintext-credential-file search at nothing so these
+    # hermetic tests never read a real repo-root ``alpaca.txt`` /
+    # ``credentials.txt`` (which would otherwise leak a developer's
+    # configured Alpaca key into the "no creds" assertions). The
+    # txt-loader tests below re-point this at a tmp dir.
+    monkeypatch.setattr(creds_mod, "_candidate_credential_dirs", lambda: [])
     yield
     creds_mod._cache = None
 
@@ -162,3 +168,81 @@ def test_get_credentials_caches(monkeypatch):
     assert calls["n"] == 1
     creds_mod.reload()
     assert calls["n"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Plaintext credential files (alpaca.txt / credentials.txt)
+# ---------------------------------------------------------------------------
+
+
+def test_txt_parses_key_secret_labels():
+    out = creds_mod._parse_credential_txt("Key: PKABC\nSecret: sEcReT\n")
+    assert out["ALPACA_API_KEY_ID"] == "PKABC"
+    assert out["ALPACA_API_SECRET_KEY"] == "sEcReT"
+
+
+def test_txt_parses_feed_and_comments():
+    out = creds_mod._parse_credential_txt("# creds\nKey: K\nSecret: S\nFeed: sip\n")
+    assert out["ALPACA_FEED"] == "sip"
+
+
+def test_txt_alias_variants():
+    out = creds_mod._parse_credential_txt("API Key ID: K\nAPI Secret Key: S\n")
+    assert out == {"ALPACA_API_KEY_ID": "K", "ALPACA_API_SECRET_KEY": "S"}
+
+
+def test_txt_env_passthrough():
+    out = creds_mod._parse_credential_txt(
+        "ALPACA_API_KEY_ID=K\nSCHWAB_APP_KEY=abc\n")
+    assert out["ALPACA_API_KEY_ID"] == "K"
+    assert out["SCHWAB_APP_KEY"] == "abc"
+
+
+def test_txt_strips_quotes():
+    out = creds_mod._parse_credential_txt('Key: "K"\nSecret: \'S\'\n')
+    assert out == {"ALPACA_API_KEY_ID": "K", "ALPACA_API_SECRET_KEY": "S"}
+
+
+def test_txt_bare_two_lines():
+    out = creds_mod._parse_credential_txt("PKBARE\nsecretbare\n")
+    assert out["ALPACA_API_KEY_ID"] == "PKBARE"
+    assert out["ALPACA_API_SECRET_KEY"] == "secretbare"
+
+
+def test_txt_ignores_comments_and_blanks():
+    out = creds_mod._parse_credential_txt("\n# comment\nKey: K\n\nSecret: S\n")
+    assert out == {"ALPACA_API_KEY_ID": "K", "ALPACA_API_SECRET_KEY": "S"}
+
+
+def test_txt_loader_reads_from_dir(monkeypatch, tmp_path):
+    (tmp_path / "alpaca.txt").write_text("Key: KID\nSecret: SEC\n", encoding="utf-8")
+    monkeypatch.setattr(creds_mod, "_candidate_credential_dirs", lambda: [tmp_path])
+    out = creds_mod._load_credential_txt_files()
+    assert out == {"ALPACA_API_KEY_ID": "KID", "ALPACA_API_SECRET_KEY": "SEC"}
+
+
+def test_reload_picks_up_alpaca_txt(monkeypatch, tmp_path):
+    (tmp_path / "alpaca.txt").write_text("Key: KID\nSecret: SEC\n", encoding="utf-8")
+    monkeypatch.setattr(creds_mod, "_candidate_credential_dirs", lambda: [tmp_path])
+    monkeypatch.setattr(creds_mod, "_load_dotenv_files", lambda: {})
+    for v in ("ALPACA_API_KEY_ID", "ALPACA_API_SECRET_KEY", "ALPACA_FEED"):
+        monkeypatch.delenv(v, raising=False)
+    creds = creds_mod.reload()
+    assert creds.alpaca.is_configured()
+    assert creds.alpaca.feed == "iex"
+    assert "alpaca" in creds.configured_vendors()
+
+
+def test_txt_overrides_dotenv_but_env_wins(monkeypatch, tmp_path):
+    (tmp_path / "alpaca.txt").write_text(
+        "Key: FILEK\nSecret: FILES\n", encoding="utf-8")
+    monkeypatch.setattr(creds_mod, "_candidate_credential_dirs", lambda: [tmp_path])
+    monkeypatch.setattr(creds_mod, "_load_dotenv_files",
+                        lambda: {"ALPACA_API_KEY_ID": "DOTENVK"})
+    monkeypatch.delenv("ALPACA_API_KEY_ID", raising=False)
+    monkeypatch.delenv("ALPACA_API_SECRET_KEY", raising=False)
+    # txt beats dotenv.
+    assert creds_mod.reload().alpaca.api_key_id == "FILEK"
+    # os.environ beats txt.
+    monkeypatch.setenv("ALPACA_API_KEY_ID", "ENVK")
+    assert creds_mod.reload().alpaca.api_key_id == "ENVK"

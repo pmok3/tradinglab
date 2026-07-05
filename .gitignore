@@ -61,6 +61,10 @@ src/tradinglab/_build_info.py
 .env
 .env.local
 .env.*.local
+# Plaintext vendor credential files read by data.credentials (user-provided,
+# never committed). Case variants covered for Windows filesystems.
+[Aa]lpaca.txt
+[Cc]redentials.txt
 
 # Token caches written by OAuth-based vendors (Schwab refresh tokens etc.).
 # Path convention: ~/.tradinglab/tokens/<vendor>.json — but we also

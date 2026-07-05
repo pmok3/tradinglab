@@ -5,7 +5,7 @@ Top-level Tk + matplotlib application. Owns all runtime state (Tk widgets, `Figu
 
 ## Public API
 - `class ChartApp(PollingMixin, InteractionMixin, WatchlistTabMixin, WorkerPoolMixin, IndicatorMenuMixin, SandboxMenuMixin, ConfigMenuMixin, DrilldownMixin, EntriesAppMixin, ExitsAppMixin, HelpMenuMixin, FirstRunBannerMixin, DrawingsAppMixin, LivePriceOverlayAppMixin, RecentMenusMixin, SandboxAliasMixin, SandboxAppMixin, ScannerAppMixin, SnapshotMixin, UpdateCheckMixin, tk.Tk)`
-- `ChartApp()` — construct + open the window.
+- `ChartApp(*, splash: SplashController | None = None)` — construct + open the window.
 - `_load_data()` / `_load_data_async()` — synchronous / executor-backed fetch + render.
 - `_render()` — rebuild figure from in-memory series. Sole site of `figure.clear()` (in its slow path; the topology-preserving fast path reuses axes — see Rendering §).
 - `_reset_view()` — switch to `1d`, clear preserve-xlim, snap to right-edge 200-bar window.
@@ -71,18 +71,18 @@ File structure:
 - `gui/x_axis_locator.py` — `_AdaptiveXLocator` + `_make_x_formatter`.
 - `gui/{drilldown,interaction,workers,watchlist_tab,indicator_menu,sandbox_menu,entries_app,exits_app,help_menu,banner,config_menu,drawings_app,live_price_overlay_app,recent_menus,scanner_app,snapshot,update_check}.py` and `backtest/{sandbox_app_aliases,sandbox_app_methods}.py` — other mixins (`ScannerAppMixin` in `gui/scanner_app.py`; `SandboxAppMixin` in `backtest/sandbox_app_methods.py`).
 
-### Two-phase data load (`_load_data`)
-1. Submit worker that calls the source fetcher.
+### Two-phase data load (`_load_data_async` → `_load_data`)
+1. `_load_data_async` probes `_full_cache`; on cold/stale sides it submits a worker that calls the source fetcher, preloads disk-cache rows, and pre-merges/pre-saves fresh bars. Cache-hit-only paths call `_load_data` directly so its deferred-render branch still applies.
 2. On empty/error, fall back to `disk_cache.load`.
 3. Token-gated callback: `_fetch_token` bump on submit; callback drops if mismatched.
-4. `_full_cache[(source,ticker,interval,prepost)]` — OrderedDict, LRU, soft cap `_FULL_CACHE_MAX=16`. Pinned entries (watchlist + currently active chart ticker) never evicted by trim. The active-ticker pin is essential so the 1d view's 5m companion (used by the volume-TOD overlay and the synthetic today-bar in `_maybe_upsample_today_daily`) survives stashes for unrelated tickers landing from background prefetches.
+4. `_full_cache[(source,ticker,interval)]` — OrderedDict, LRU, soft cap `_FULL_CACHE_MAX=16`. Pinned entries (watchlist + currently active chart ticker) never evicted by trim. The active-ticker pin is essential so the 1d view's 5m companion (used by the volume-TOD overlay and the synthetic today-bar in `_maybe_upsample_today_daily`) survives stashes for unrelated tickers landing from background prefetches.
 5. `_series_cache[id(candles)]` — memoizes `_build_series_safe(...)`; verified via `sa._candles is candles` to defend against id-reuse.
-6. `_prefetched_raw` ingests executor-fetched bars without a second
-   provider call. When it supplies fresh primary/compare data,
+6. `_prefetched_raw` ingests executor-fetched bars from `_load_data_async` or the poll tick without a second
+   provider call. Its worker payload may include disk-preloaded and pre-merged/pre-saved primary/compare lists so `_load_data` can skip Tk-thread JSON parsing, `merge_candles`, and `disk_cache.save`. When it supplies fresh primary/compare data,
    `_load_data` invalidates indicator entries for the prior visible
    lists before rendering. This prevents stale fingerprint hits from
    rebinding onto replacement lists.
-7. Compare-mode pre-fetch via `_ensure_compare_prefetched`.
+7. Compare-mode pre-fetch via `_ensure_compare_prefetched` runs after successful non-cache-hit loads; companion-interval prefetches are kicked near the start of cold/stale loads so they can run in parallel with the foreground fetch.
 
 ### Cache staleness (`_cache_is_stale`)
 Interval- and session-aware:
@@ -122,13 +122,13 @@ Active when no stream is registered for the source. Delay computed by pure helpe
 
 **Poll retry on API-not-ready**: when `last_bar_epoch < _poll_retry_expected_min_ts` and `_poll_retry_count < _POLL_RETRY_MAX(=2)`, arm a 5 s retry (bypasses `_MIN_POLL_BACKOFF_MS=30_000`). Up to 3 fetches per bar close. Daily+ never retries.
 
-**Async poll fetch**: `_next_bar_fetch_tick` submits the fetch on `_fetch_executor`; result returned via `self.after(0, _finish)` and consumed by `_load_data` through the one-shot `_prefetched_raw` slot. User-triggered loads stay synchronous.
+**Async poll/user fetch**: `_next_bar_fetch_tick` and user-triggered `_load_data_async` submit fetch work on `_fetch_executor`; results are marshalled back through `_prefetched_raw` and consumed by `_load_data`. Paths that must read freshly-loaded state immediately still call `_load_data` synchronously.
 
 ### Companion-interval prefetch
-End of every successful `_load_data` fires background prefetches for `{"5m", "1d"} − {current_interval}` on primary + compare via `_prefetch_companion_intervals`. Dedup via `_prefetch_inflight`, capped at `_PREFETCH_INFLIGHT_MAX=4`. Each prefetch: fresh-cache early-out → dedup → cap → disk-prime → executor submit → stale-overwrite guard (refuse to stomp newer in-memory) → disk merge + save.
+Cold/stale `_load_data` paths fire background prefetches for `{"5m", "1d"} − {current_interval}` on primary + compare via `_prefetch_companion_intervals` before the foreground fetch blocks, so companion work overlaps the main load. Pure memory-hit revisits skip this to avoid re-hitting background fetchers. Dedup via `_prefetch_inflight`, capped at `_PREFETCH_INFLIGHT_MAX=4`. Each prefetch: fresh-cache early-out → dedup → cap → disk-prime → executor submit → stale-overwrite guard (refuse to stomp newer in-memory) → disk merge + save.
 
 ### Today's-bar upsampling on the daily chart
-Most data providers lag today's daily bar until after the close, so a mid-session user on a 1d chart sees "everything up to yesterday" while the 5m chart shows the live forming bar. `_maybe_upsample_today_daily(candles, source, symbol, interval)` layers a synthetic today-bar onto a daily series by aggregating whatever intraday data is already cached (finest interval wins — see `data/today_upsample.find_best_intraday_source`). Called from `_load_data` AFTER the truthful cache store (so `_full_cache` keeps the provider's raw lagged data, ready to overwrite the synth bar on the next render boundary) and from the compare-on cache-hit branch of `_on_compare_toggle`. When an intraday companion-prefetch lands, `_refresh_daily_synth_for_active_view(prefetched_symbol=...)` re-runs the upsample + pair-filter + render path (no network, no indicator-cache clear — forming-bar invalidation via `_invalidate_focused_panels` covers the right edge). The polling tick on 1d redirects to a 5m prefetch (see `gui/polling.spec.md`). **Self-heal prefetch:** when `_maybe_upsample_today_daily` finds NO cached intraday for the symbol, it kicks the 5m companion prefetch itself — gated to in-session (today's bars exist) and `not daily_last_bar_is_today(candles)` (synth actually needed). This fixes the case where a daily served **warm** from cache never triggered the cold-path companion prefetch in `_load_data_async` (which only fires when a daily side is missing/stale): the canonical victim is **SPY**, preloaded at startup as the default compare + ChartStack reference, whose warm-cached 1d stuck on yesterday while freshly-charted (cold) stocks showed today. `_ensure_prefetched` dedups via staleness + in-flight, so the extra call is cheap. The self-heal prefetch is gated by an `allow_prefetch` flag (default `True`): `_refresh_daily_synth_for_active_view` — which runs BECAUSE a companion prefetch just landed — passes `allow_prefetch=False`, so a synth that still can't form today's bar (incomplete / stub intraday during market hours) does NOT re-issue a prefetch that would re-fire this refresh forever (the `inbox-drain-livelock`: a self-feeding prefetch→refresh→prefetch loop that livelocked `app.update()` and timed out the d61 smoke check on fast CI runners during RTH; the bounded worker-inbox drain in `gui/polling.py` is the defensive backstop). Scope: 1d only; 1wk/1mo deferred (see `data/today_upsample.spec.md`). Audit `daily-today-upsample`.
+Most data providers lag today's daily bar until after the close, so a mid-session user on a 1d chart sees "everything up to yesterday" while the 5m chart shows the live forming bar. `_maybe_upsample_today_daily(candles, source, symbol, interval)` layers a synthetic today-bar onto a daily series by aggregating whatever intraday data is already cached (finest interval wins — see `data/today_upsample.find_best_intraday_source`). Called from `_load_data` AFTER the truthful cache store (so `_full_cache` keeps the provider's raw lagged data, ready to overwrite the synth bar on the next render boundary) and from the compare-on cache-hit branch of `_on_compare_toggle`. When an intraday companion-prefetch lands, `_refresh_daily_synth_for_active_view(prefetched_symbol=...)` re-runs the upsample + pair-filter + render path (no network, no indicator-cache clear — forming-bar invalidation via `_invalidate_focused_panels` covers the right edge). The polling tick on 1d redirects to a 5m prefetch (see `gui/polling.spec.md`). **Self-heal prefetch:** when `_maybe_upsample_today_daily` finds NO cached intraday for the symbol, it kicks the 5m companion prefetch itself — gated to in-session (today's bars exist) and `not daily_last_bar_is_today(candles)` (synth actually needed). This fixes the case where a daily served **warm** from cache never triggered the cold/stale companion prefetch in `_load_data` (which only fires when a daily side is missing/stale): the canonical victim is **SPY**, preloaded at startup as the default compare + ChartStack reference, whose warm-cached 1d stuck on yesterday while freshly-charted (cold) stocks showed today. `_ensure_prefetched` dedups via staleness + in-flight, so the extra call is cheap. The self-heal prefetch is gated by an `allow_prefetch` flag (default `True`): `_refresh_daily_synth_for_active_view` — which runs BECAUSE a companion prefetch just landed — passes `allow_prefetch=False`, so a synth that still can't form today's bar (incomplete / stub intraday during market hours) does NOT re-issue a prefetch that would re-fire this refresh forever (the `inbox-drain-livelock`: a self-feeding prefetch→refresh→prefetch loop that livelocked `app.update()` and timed out the d61 smoke check on fast CI runners during RTH; the bounded worker-inbox drain in `gui/polling.py` is the defensive backstop). Scope: 1d only; 1wk/1mo deferred (see `data/today_upsample.spec.md`). Audit `daily-today-upsample`.
 
 ### Bad-ticker handling
 Revert StringVar to `_confirmed_*_ticker`. Status: `Ticker '{raw}' not found. Check the spelling or try a different data source.` Vendor name omitted intentionally. **For a ratio pseudo-symbol** (`is_ratio_symbol(raw)`, e.g. `AMD/NVDA`) the message instead reads `Ratio '{AMD / NVDA}' could not be loaded. Check that both legs are valid tickers`. The centered chart **watermark** (`_paint_slot_watermark`) and the **window title** render ratios via `ratio_display_label` (`AMD / NVDA`).
@@ -187,7 +187,11 @@ helper-mixin methods on `HelpMenuMixin`:
 `self._toolbar.set_sources(tuple(user_visible_sources()))` — defined on
 `ToolbarController` for this purpose. The helper filters out
 `internal=True` registrations (synthetic / synthetic-stream) so the
-toolbar dropdown never offers a scaffolding-only source. See
+toolbar dropdown never offers a scaffolding-only source. `ChartApp.__init__`
+passes the same filtered list to `ConfigManager`, `_build_ui` passes it to
+`ToolbarController`, and the Settings dialog source combobox uses the same
+helper, so internal sources are not user-selectable through startup defaults
+or live toolbar controls. See
 `data/base.spec.md` for the `register_source(..., internal=False)`
 contract.
 
@@ -227,7 +231,7 @@ Three branches:
 
 **Latest-click-wins retargeting**: at most one request outstanding. Second click on same `(src, ticker)` bumps `request_id`, updates `day`, cancels and reschedules grace from now.
 
-**Sync fetch fallback** (`_drilldown_sync_fetch`): reuses in-flight prefetch future if present, else submits to `_executor`. Wait cursor + INFO log + 5 s UI deadline (`_DRILLDOWN_SYNC_UI_TIMEOUT_MS`). UI deadline restores cursor + ERROR log; request is **not** cleared so an eventual completion can still drill.
+**Sync fetch fallback** (`_drilldown_sync_fetch`): reuses in-flight prefetch future if present, else submits to `_executor`. Wait cursor + INFO log + 8 s UI deadline (`_DRILLDOWN_SYNC_UI_TIMEOUT_MS`; widened from 5 s to clear a ~1-page deep-history intraday fetch, e.g. Alpaca 5m ≈ 3-4s). UI deadline restores cursor + ERROR log; request is **not** cleared so an eventual completion can still drill.
 
 **Validation**: a request is valid iff it `is self._drilldown_request`, `fetch_token == self._fetch_token`, and `(src, ticker)` still matches live vars.
 
@@ -355,7 +359,7 @@ Pinned by `tests/unit/gui/test_avwap_anchor_pick_iconify.py` (6 tests covering p
 11. Bad-ticker path reverts the StringVar to `_confirmed_*_ticker`.
 12. Token bump on `_start_stream_if_applicable` drops stale subscription events.
 13. Compare-mode toggle without fresh data uses pre-fetched cache when available.
-14. `_prefetched_raw` is one-shot: set by poll-tick callback, consumed by `_load_data`, cleared in `finally`.
+14. `_prefetched_raw` is one-shot: set by `_load_data_async` or poll-tick callbacks, consumed by `_load_data`, cleared in `finally`.
 15. `_poll_retry_count` / `_poll_retry_expected_min_ts` reset on bar advance, retry exhaustion, non-intraday, or explicit reload.
 16. Poll retries (5 s × 2) bypass `_MIN_POLL_BACKOFF_MS=30_000`; aligned schedule respects it.
 17. `_ensure_prefetched` never touches UI state — only `_full_cache` + disk.
@@ -364,20 +368,32 @@ Pinned by `tests/unit/gui/test_avwap_anchor_pick_iconify.py` (6 tests covering p
 20. After `_rebuild_watchlist_subtabs`, `set(_watchlist_trees.keys()) == set(_watchlists.pinned_names())` (or empty + placeholder).
 21. Sandbox lifecycle: `_sandbox` is `None` outside a session; `_sandbox_universe = frozenset()` outside; `_sandbox_full_session_xlim` is `None` outside; `_preserve_xlim_on_render` resets `False` on end regardless of teardown path; Sandbox tab is `hidden` outside, `normal` while active.
 22. `_indicator_cache` is Tk-thread-only (plain `OrderedDict`). Workers must never touch it; cross-thread results funnel through `_worker_inbox`.
+23. `_events_cache` is `LRUDict(maxsize=200)` keyed by ticker; `.get()` touches recency so active/watchlist symbols stay warm during long sessions.
 
 ## Data Flow
 
-### User-triggered load (synchronous)
+### User-triggered load (async wrapper + synchronous sink)
 ```
+_load_data_async():
+    if both requested sides are fresh in _full_cache: _load_data(); return
+    token = ++_fetch_token
+    fut = _fetch_executor.submit(fetcher + disk preload + merge/save, ...)
+    callback if token matches:
+        _prefetched_raw = {primary, compare, primary_disk, compare_disk,
+                           primary_merged, compare_merged, ...}
+        try: _load_data()
+        finally: _prefetched_raw = None
+
 _load_data():
     token = ++_fetch_token
     memory probe → if fresh: use cached, skip fetcher
-    if _prefetched_raw matches: consume          # poll-tick hand-off
+    if _prefetched_raw matches: consume          # async/poll hand-off
     else: candles = fetcher(...)                  # blocks main thread
     if empty: revert StringVar; return
-    merge with disk cache; _full_cache[key] = candles
+    merge with disk cache unless worker pre-merged; _full_cache[key] = candles
     apply pair filter + align
-    _render()
+    _render() or _request_deferred_render() for pure memory-hit redraws
+    after_idle(_load_events_async for primary/compare)
     _schedule_next_bar_fetch(); _start_stream_if_applicable()
 ```
 

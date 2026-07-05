@@ -6528,10 +6528,13 @@ class ChartApp(
     # the "wait for in-flight prefetch" grace period after a click; the
     # second is the user-facing UI deadline on the sync fallback fetch.
     # The fetch's underlying HTTP call is NOT cancelled at this deadline
-    # (yfinance is synchronous and uncancellable); we just stop blocking
-    # the user's attention. See plan.md for the full design.
+    # (the vendor HTTP is synchronous and uncancellable); we just stop
+    # blocking the user's attention. See plan.md for the full design.
+    # The 8s UI deadline gives margin over a ~1-page intraday fetch from a
+    # deep-history vendor (Alpaca 5m ≈ 3-4s under network variance); the
+    # old 5s value fired a false "taking >5s" ERROR before the bars landed.
     _DRILLDOWN_PREFETCH_GRACE_MS: int = 1500
-    _DRILLDOWN_SYNC_UI_TIMEOUT_MS: int = 5000
+    _DRILLDOWN_SYNC_UI_TIMEOUT_MS: int = 8000
 
 
 

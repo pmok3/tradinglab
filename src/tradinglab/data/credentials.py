@@ -188,6 +188,162 @@ def _load_dotenv_files() -> dict[str, str]:
     return merged
 
 
+# ---------------------------------------------------------------------------
+# Plaintext credential files (alpaca.txt / credentials.txt)
+# ---------------------------------------------------------------------------
+#
+# A convenience for the single-user desktop workflow: the owner drops an
+# ``alpaca.txt`` next to the app (or in the app-data dir) with their key +
+# secret and the vendor source lights up. Unlike dotenv (§ ``_candidate_
+# dotenv_paths`` which is dev-only and skipped in frozen builds), these
+# files ARE read in the frozen ``.exe`` — that's the whole point, since the
+# packaged user has no repo checkout. The filenames are specific + user-
+# created (low accidental-collision risk vs a generic ``.env``), and the
+# files are git-ignored (``.gitignore`` → ``[Aa]lpaca.txt`` /
+# ``[Cc]redentials.txt``) so a real key never lands in version control.
+# Values NEVER outrank a real ``os.environ`` export or a DPAPI-primed value
+# (see ``_resolve`` — environ wins) but DO outrank a dev ``.env``.
+
+_CRED_TXT_NAMES: tuple[str, ...] = (
+    "alpaca.txt", "Alpaca.txt", "credentials.txt", "Credentials.txt",
+)
+
+# Friendly ``Label: value`` aliases → canonical env-var name. Keys are
+# normalized (lower-cased, non-alphanumerics stripped) before lookup so
+# ``API Key ID`` / ``apca-api-key-id`` / ``key`` all resolve.
+_CRED_LABEL_MAP: dict[str, str] = {
+    "key": "ALPACA_API_KEY_ID",
+    "apikey": "ALPACA_API_KEY_ID",
+    "apikeyid": "ALPACA_API_KEY_ID",
+    "keyid": "ALPACA_API_KEY_ID",
+    "apcaapikeyid": "ALPACA_API_KEY_ID",
+    "alpacaapikeyid": "ALPACA_API_KEY_ID",
+    "alpacakey": "ALPACA_API_KEY_ID",
+    "secret": "ALPACA_API_SECRET_KEY",
+    "apisecret": "ALPACA_API_SECRET_KEY",
+    "apisecretkey": "ALPACA_API_SECRET_KEY",
+    "secretkey": "ALPACA_API_SECRET_KEY",
+    "apcaapisecretkey": "ALPACA_API_SECRET_KEY",
+    "alpacaapisecretkey": "ALPACA_API_SECRET_KEY",
+    "alpacasecret": "ALPACA_API_SECRET_KEY",
+    "feed": "ALPACA_FEED",
+    "alpacafeed": "ALPACA_FEED",
+}
+
+
+def _norm_label(s: str) -> str:
+    return "".join(ch for ch in s.lower() if ch.isalnum())
+
+
+def _parse_credential_txt(text: str) -> dict[str, str]:
+    """Parse an ``alpaca.txt`` / ``credentials.txt`` into ``{ENV_NAME: value}``.
+
+    Accepts three shapes (mixable):
+
+    * ``Label: value`` — friendly labels mapped via :data:`_CRED_LABEL_MAP`
+      (``Key: ...`` / ``Secret: ...`` / ``Feed: ...``).
+    * ``ENV_NAME=value`` — an already-uppercase env var passes through
+      verbatim (so ``credentials.txt`` can carry ``SCHWAB_APP_KEY=...``).
+    * Two bare label-less lines — first is the key id, second the secret
+      (only used when no labelled key was found).
+
+    Surrounding quotes are stripped; ``#`` comment + blank lines ignored.
+    Never raises — a malformed file yields whatever parsed cleanly.
+    """
+    out: dict[str, str] = {}
+    bare: list[str] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        sep = next((c for c in (":", "=") if c in line), None)
+        if sep is None:
+            bare.append(line)
+            continue
+        label, _, value = line.partition(sep)
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        if not value:
+            continue
+        env_name = _CRED_LABEL_MAP.get(_norm_label(label))
+        if env_name is None:
+            # Verbatim ENV_NAME=value passthrough (uppercase names only).
+            up = label.strip()
+            if up and up.replace("_", "").isalnum() and up.upper() == up:
+                env_name = up
+        if env_name:
+            out[env_name] = value
+    if "ALPACA_API_KEY_ID" not in out and len(bare) >= 1:
+        out["ALPACA_API_KEY_ID"] = bare[0]
+    if "ALPACA_API_SECRET_KEY" not in out and len(bare) >= 2:
+        out["ALPACA_API_SECRET_KEY"] = bare[1]
+    return out
+
+
+def _candidate_credential_dirs() -> list[Path]:
+    """Directories searched for the plaintext credential files.
+
+    Order (low → high precedence when the same env name appears twice):
+    app-data dir, frozen-exe dir, repo root (dev checkout), cwd.
+    """
+    import sys as _sys
+    dirs: list[Path] = []
+    try:
+        from .. import paths as _paths
+        dirs.append(_paths.app_data_dir())
+    except Exception:  # noqa: BLE001
+        pass
+    if getattr(_sys, "frozen", False):
+        try:
+            dirs.append(Path(_sys.executable).resolve().parent)
+        except Exception:  # noqa: BLE001
+            pass
+    here = Path(__file__).resolve()
+    for parent in [here, *here.parents][:8]:
+        if (parent / "pyproject.toml").exists():
+            dirs.append(parent)
+            break
+    try:
+        dirs.append(Path.cwd())
+    except Exception:  # noqa: BLE001
+        pass
+    return dirs
+
+
+def _load_credential_txt_files() -> dict[str, str]:
+    """Merge all discoverable ``alpaca.txt`` / ``credentials.txt`` files.
+
+    Later directories override earlier. Only file names + field counts are
+    logged — **never** the secret values.
+    """
+    merged: dict[str, str] = {}
+    seen: set[str] = set()
+    for d in _candidate_credential_dirs():
+        for name in _CRED_TXT_NAMES:
+            path = d / name
+            try:
+                key = str(path.resolve()).lower()
+            except OSError:
+                key = str(path).lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            if not path.is_file():
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError as e:
+                LOG.warning("credential file: cannot read %s: %s", path.name, e)
+                continue
+            parsed = _parse_credential_txt(text)
+            if parsed:
+                merged.update(parsed)
+                LOG.info("credentials: loaded %d field(s) from %s",
+                         len(parsed), path.name)
+    return merged
+
+
 def _resolve(name: str, file_values: dict[str, str]) -> str | None:
     """``os.environ`` wins over the file. Empty strings → None."""
     val = os.environ.get(name)
@@ -224,6 +380,10 @@ def reload() -> Credentials:
 
 def _load_now() -> Credentials:
     f = _load_dotenv_files()
+    # Plaintext credential files (alpaca.txt / credentials.txt) override a
+    # dev ``.env`` but are still beaten by a real ``os.environ`` export /
+    # DPAPI-primed value (``_resolve`` consults ``os.environ`` first).
+    f.update(_load_credential_txt_files())
     schwab = SchwabCredentials(
         app_key=_resolve("SCHWAB_APP_KEY", f),
         app_secret=_resolve("SCHWAB_APP_SECRET", f),
