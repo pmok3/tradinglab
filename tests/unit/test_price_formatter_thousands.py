@@ -42,7 +42,7 @@ REQUIRED_COMMA_SITES = [
     ("gui/entries_overlay.py", r"ARMED LIMIT.*:,\.2f"),
     ("gui/entries_overlay.py", r"ARMED STOP \{s\.name\} @ \{s\.trigger\.stop_price:,\.2f\}"),
     ("gui/entries_overlay.py", r"PENDING LIMIT \{po\.qty:g\} @ \{po\.price:,\.2f\}"),
-    ("gui/watchlist_tab.py", r"last_s = f\"\{last:,\.2f\}\""),
+    ("gui/watchlist_tab.py", r"f\"\{last:,\.2f\}\""),
     ("gui/performance_view.py", r"float\(r\.target\):,\.2f"),
     ("gui/sandbox_review_dialog.py", r"\$\{p\.entry_price:,\.4f\}"),
     ("gui/sandbox_review_dialog.py", r"\$\{p\.pnl:,\.2f\}"),

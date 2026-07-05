@@ -5,16 +5,17 @@ JSON persistence for watchlists. Single file under the user's cache dir (`_cache
 
 ## Public API
 - `@dataclass class Watchlist`: `name: str`, `tickers: List[str] = []`.
-- `_SCHEMA_VERSION = 2`; `_SUPPORTED_VERSIONS = (1, 2)` (v1 is accepted for backward-compat read; writes always use v2).
+- `_SCHEMA_VERSION = 3`; `_SUPPORTED_VERSIONS = (1, 2, 3)` (v1/v2 accepted for backward-compat read; writes use v3, adding an optional `display` block for configurable columns).
 - `normalize_tickers(tickers) -> List[str]` — upper-case, trim, de-dupe, drop None/empty. Preserves insertion order.
-- `_storage_path()`, `load_all() -> Tuple[List[Watchlist], List[str]]`, `save_all(watchlists, pinned)`, `export_to_file(watchlists, path, pinned=None)`, `import_from_file(path) -> Tuple[List[Watchlist], List[str]]`.
+- `_storage_path()`, `load_all() -> Tuple[List[Watchlist], List[str]]`, `save_all(watchlists, pinned, display=None)`, `export_to_file(watchlists, path, pinned=None, display=None)`, `import_from_file(path) -> Tuple[List[Watchlist], List[str]]`.
+- `load_display() -> dict` / `read_display(path) -> dict` — the v3 `display` block `{default_columns, by_watchlist}` (opaque column-dict JSON; empty for v1/v2 files). `save_all(display=None)` **preserves** the existing block so a plain lists/pins save never wipes columns.
 
 ## Dependencies
 - Internal: `..disk_cache._cache_dir` (so watchlists co-locate with disk cache + settings).
 - External: `json`, `pathlib`, `dataclasses`.
 
 ## Design Decisions
-- **Schema envelope** `{"version": 2, "watchlists": [...], "pinned": [...]}` — v1 files (no `pinned` field) are accepted on read and come back with `pinned=[]`; `WatchlistManager.__init__` then seeds a pin from the first list (migration path, see `manager.spec.md`).
+- **Schema envelope** `{"version": 3, "watchlists": [...], "pinned": [...], "display": {...}}` — v1 files (no `pinned` field) and v2 files (no `display` block) are accepted on read. Writes use v3; `display` is omitted when empty.
 - **Atomic save** (temp file + `Path.replace`) — crash-safe. Writes swallow `OSError` with a `print` rather than raising; losing a save is annoying but not fatal.
 - **Corrupt file stays in place** on load failure: `load_all()` returns `([], [])` rather than clobbering user data on a JSON-decode error.
 - **`load_all` validates entry shape**: skips non-dict entries and entries missing `name`/`tickers`. Pinned names coerced to a deduped list of strings (non-string entries dropped).
@@ -24,7 +25,7 @@ JSON persistence for watchlists. Single file under the user's cache dir (`_cache
 - **Tickers coerced to `str` at the storage boundary** — `normalize_tickers` (used by both `save_all` and `import_from_file`) wraps each entry with `str(t)` before stripping/upper-casing (see `storage.py:97`). Callers that pass non-string tickers (numpy strings, `bytes`, `Path`) get safely-stringified output rather than a crash; the on-disk JSON is always pure-ASCII text.
 
 ## Invariants
-- `save_all(*load_all()) == load_all()` — idempotent round-trip (modulo version upgrade from v1 to v2).
+- `save_all(*load_all()) == load_all()` — idempotent round-trip (modulo version upgrade from v1/v2 to v3).
 - `normalize_tickers([" amd ", "AMD", None, ""]) == ["AMD"]`.
 - `load_all()` never raises (corrupt file → `([], [])`).
 - `import_from_file` raises on version mismatch (unsupported version number).
@@ -46,6 +47,5 @@ normalize_tickers(tickers):
 - `check_d13_watchlist_pinned_subtabs` verifies pin-list persistence through the manager.
 
 ## Known limitations / Future work
-- No migration path from a hypothetical v3; `load_all()` would need an explicit version-switch.
-- **`JsonObjectStore[T]` migration deferred.** The watchlists storage uses a single consolidated JSON file (schema v2: `{version, watchlists, pinned}`) which doesn't fit the `core.json_collection_store.JsonObjectStore[T]` generic (which assumes one-record-per-file plus an `_index.json`). The watchlists shape also carries a sibling `pinned` ordered list that has no per-record `id` to key on. Migration deferred until either (a) we split into per-watchlist files (would require moving `pinned` to a separate index file and reworking `WatchlistManager` re-ordering semantics) or (b) we extend the generic to support a consolidated-file mode with a sidecar metadata list. Other JSON-collection subsystems (entries / exits / scanner / strategy_tester / positions) all use one-record-per-file and migrate cleanly — see CLAUDE.md §7.22.
-
+- No migration path from a hypothetical v4; `load_all()` would need an explicit version-switch.
+- **`JsonObjectStore[T]` migration deferred.** The watchlists storage uses a single consolidated JSON file (schema v3: `{version, watchlists, pinned, display}`) which doesn't fit the `core.json_collection_store.JsonObjectStore[T]` generic (which assumes one-record-per-file plus an `_index.json`). The watchlists shape also carries sibling `pinned` and `display` metadata that have no per-record `id` to key on. Migration deferred until either (a) we split into per-watchlist files (would require moving `pinned` / `display` to sidecars and reworking `WatchlistManager` re-ordering semantics) or (b) we extend the generic to support a consolidated-file mode.

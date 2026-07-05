@@ -6,6 +6,7 @@ In-memory watchlist manager with **explicit save** semantics. Mirrors the config
 ## Public API
 - `WatchlistManager()` — start empty (no disk I/O on construction).
 - Reads: `list_names() -> List[str]`, `all() -> List[Watchlist]`, `get(name) -> Optional[Watchlist]`, `pinned_names() -> List[str]`, `is_dirty() -> bool`, `loaded_path() -> Optional[Path]`.
+- Columns (v3): `columns_for(name)`, `set_columns(name, cols)`, `default_columns()`, `set_default_columns(cols)`, `reset_columns(name)` — per-watchlist column overrides + the global default (lists of `columns.WatchlistColumn`), persisted in the v3 `display` block; `delete`/`rename` keep it in sync.
 - Mutators (mark dirty; never touch disk):
   - `create(name, tickers=None) -> Watchlist`
   - `delete(name) -> bool`
@@ -20,7 +21,7 @@ In-memory watchlist manager with **explicit save** semantics. Mirrors the config
 - `clear()` — wipe everything.
 
 ## Dependencies
-Internal: `.storage.Watchlist`, `.storage.export_to_file`, `.storage.import_from_file`, `.storage.normalize_tickers`. **No** dependency on `load_all`/`save_all` (still exist in `storage.py` for back-compat but unused by the manager).
+Internal: `.storage.Watchlist`, `.storage.export_to_file`, `.storage.import_from_file`, `.storage.read_display`, `.storage.normalize_tickers`, `.columns` (lazy, for column (de)serialization). **No** dependency on `load_all`/`save_all` (still exist in `storage.py` for back-compat but unused by the manager).
 
 ## Design Decisions
 - **Not observable** — no `subscribe`/`_notify` channel; callers poll on demand or rebuild on explicit action (e.g. `_rebuild_watchlist_subtabs`). Single-process / single-thread / single-window assumption.
@@ -33,7 +34,7 @@ Internal: `.storage.Watchlist`, `.storage.export_to_file`, `.storage.import_from
 ## Invariants
 - After `__init__()`: `list_names() == []`, `pinned_names() == []`, `is_dirty() is False`, `loaded_path() is None`.
 - After any successful mutator: `is_dirty() is True`. No file in the cache dir touched.
-- After `save_to_file(p)`: file is valid v2 JSON, `is_dirty() is False`, `loaded_path() == p`.
+- After `save_to_file(p)`: file is valid v3 JSON, `is_dirty() is False`, `loaded_path() == p`.
 - After `load_from_file(p)`: state matches file, `is_dirty() is False`, `loaded_path() == p`. `pinned_names() ⊆ list_names()`. `len(pinned_names()) <= MAX_PINNED`.
 - After `clear()`: same as fresh construction.
 

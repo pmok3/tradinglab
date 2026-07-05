@@ -43,6 +43,11 @@ from ..watchlists import (
 from ..watchlists import (
     DEFAULT_WATCHLIST_TICKERS as _DEFAULT_WATCHLIST_TICKERS_CANONICAL,
 )
+from ..watchlists.columns import (
+    KIND_SIGNAL,
+    default_columns,
+    header_label,
+)
 
 # Canonical defaults live in :mod:`tradinglab.watchlists` (single
 # source of truth). Pre-2026-05 each consumer carried its own copy
@@ -58,19 +63,6 @@ _DEFAULT_WATCHLIST_TICKERS = list(_DEFAULT_WATCHLIST_TICKERS_CANONICAL)
 _ADD_TAB_LABEL = "+"
 _EMPTY_TAB_LABEL = "(no pins)"
 _RESERVED_WATCHLIST_NAMES = {_ADD_TAB_LABEL, _EMPTY_TAB_LABEL}
-
-_WL_COLUMNS: tuple[tuple[str, int, str], ...] = (
-    ("ticker", 80, "w"), ("last", 80, "center"),
-    ("change", 80, "center"), ("change_pct", 70, "center"),
-    # "Next Earn" surfaces the nearest forward earnings date from
-    # ``app._events_cache`` as a relative "T-N AMC"-style cue. Missing
-    # bundles render as a blank cell; bundles with no forward earnings
-    # in the lookahead window also render blank. Sort is by ascending
-    # trading-days-until with blanks trailing — the same blanks-at-
-    # bottom convention used by the price columns. See plan.md
-    # decision 16.
-    ("next_earn", 90, "center"),
-)
 
 
 # Trading-day approximation: 5/7 of the calendar-day delta, ceiling.
@@ -228,14 +220,6 @@ _WATCHLIST_SORT_EXTRACTORS = {
 class WatchlistTabMixin:
     """Watchlist tab repaint + preload helpers."""
 
-    _WATCHLIST_COL_LABELS = {
-        "ticker": "Ticker",
-        "last": "Last",
-        "change": "Change",
-        "change_pct": "Change Pct",
-        "next_earn": "Next Earn",
-    }
-
     def _ensure_default_watchlist(self) -> None:
         """Create a starter watchlist on first run, if the store is empty.
 
@@ -386,21 +370,43 @@ class WatchlistTabMixin:
         # the user to click each one.
         self._kick_watchlist_preloads()
 
+    def _watchlist_columns(self, name: str) -> list:
+        """Return the configured columns for pinned watchlist ``name``.
+
+        Falls back to :func:`watchlists.columns.default_columns` (today's
+        Ticker/Last/Change/Change%/Next set) when the manager is missing
+        or has no override — so an un-configured watchlist renders exactly
+        as before this feature.
+        """
+        mgr = getattr(self, "_watchlists", None)
+        if mgr is not None:
+            try:
+                cols = mgr.columns_for(name)
+                if cols:
+                    return list(cols)
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            return default_columns()
+        except Exception:  # noqa: BLE001
+            return []
+
     def _make_watchlist_tree(
         self, parent: tk.Misc, name: str,
     ) -> ttk.Treeview:
         """Build one Treeview for a pinned watchlist sub-tab."""
+        cols = self._watchlist_columns(name)
         tree = ttk.Treeview(
             parent,
-            columns=tuple(c for c, _w, _a in _WL_COLUMNS),
+            columns=tuple(c.id for c in cols),
             show="headings", height=20,
         )
-        for col, w, anchor in _WL_COLUMNS:
+        for col in cols:
             tree.heading(
-                col, text=col.replace("_", " ").title(),
-                command=lambda c=col, n=name: self._sort_watchlist_by(n, c),
+                col.id, text=header_label(col),
+                command=lambda c=col.id, n=name: self._sort_watchlist_by(n, c),
             )
-            tree.column(col, width=w, anchor=anchor)
+            tree.column(col.id, width=col.width, anchor=col.anchor)
         tree.bind("<Double-1>", self._on_watchlist_double)
         # Widget-level Space binding (highest priority — fires before
         # the Treeview class binding which otherwise toggles the
@@ -792,10 +798,22 @@ class WatchlistTabMixin:
             label="Move right",
             state=(tk.NORMAL if idx < len(pinned) - 1 else tk.DISABLED),
             command=lambda n=name: self._move_pinned_watchlist(n, +1))
+        menu.add_separator()
+        menu.add_command(
+            label="Columns…",
+            command=lambda n=name: self._open_watchlist_columns_dialog(n))
         try:
             menu.tk_popup(event.x_root, event.y_root)
         finally:
             menu.grab_release()
+
+    def _open_watchlist_columns_dialog(self, name: str) -> None:
+        """Open the per-watchlist Columns… editor for pinned sub-tab ``name``."""
+        try:
+            from .watchlist_columns_dialog import open_columns_dialog
+            open_columns_dialog(self, name)
+        except Exception:  # noqa: BLE001
+            pass
 
     def _unpin_watchlist(self, name: str) -> None:
         mgr = getattr(self, "_watchlists", None)
@@ -844,6 +862,18 @@ class WatchlistTabMixin:
         extractor = _WATCHLIST_SORT_EXTRACTORS.get(col)
         if extractor is not None:
             return extractor(self, ticker, snap)
+        # Signal columns sort by their evaluated raw value (blanks last).
+        sig = snap.get("_sig")
+        if isinstance(sig, dict):
+            cv = sig.get(col)
+            if cv is not None:
+                raw = getattr(cv, "raw", None)
+                if raw is None:
+                    return (True, 0.0)
+                try:
+                    return (False, float(raw))
+                except (TypeError, ValueError):
+                    return (True, 0.0)
         return (True, 0.0)
 
     # ---- repaint ------------------------------------------------------
@@ -884,12 +914,13 @@ class WatchlistTabMixin:
             non_missing.sort(key=lambda kv: kv[0], reverse=reverse)
             tickers = [t for _v, t in non_missing] + missing
 
+        cols = self._watchlist_columns(name)
         try:
-            for c, label in self._WATCHLIST_COL_LABELS.items():
+            for col in cols:
                 arrow = ""
-                if c == sort_col:
+                if col.id == sort_col:
                     arrow = "  ▼" if reverse else "  ▲"
-                tree.heading(c, text=label + arrow)
+                tree.heading(col.id, text=header_label(col) + arrow)
         except Exception:  # noqa: BLE001
             pass
 
@@ -899,27 +930,49 @@ class WatchlistTabMixin:
         rows: list[tuple[str, tuple, tuple]] = []
         for t in tickers:
             snap = self._watchlist_snapshot.get(t, {})
-            last = snap.get("last")
             chg = snap.get("change_1d", snap.get("chg"))
-            pct = snap.get("pct_1d", snap.get("pct"))
-            last_s = f"{last:,.2f}" if isinstance(last, (int, float)) else ""
-            chg_s = f"{chg:+,.2f}" if isinstance(chg, (int, float)) else ""
-            pct_s = f"{pct:+.2f}%" if isinstance(pct, (int, float)) else ""
-            # Next-earn column: lookup the cached bundle (if any) and
-            # format. The cache is populated by :meth:`_load_events_async`
-            # on every chart load and proactively for watchlist
-            # tickers via :meth:`_preload_watchlist_events`.
-            try:
-                bundle = self._events_cache.get(t.upper())
-            except AttributeError:
-                bundle = None
-            next_earn_s, _td = _format_next_earn(bundle, now_ms=now_ms)
+            values = tuple(
+                self._watchlist_cell_text(col, t, snap, now_ms) for col in cols
+            )
             tag: tuple = ()
             if isinstance(chg, (int, float)):
                 tag = ("bull",) if chg >= 0 else ("bear",)
-            rows.append((t, (t, last_s, chg_s, pct_s, next_earn_s), tag))
+            rows.append((t, values, tag))
 
         self._diff_watchlist_rows(name, tree, rows)
+
+    def _watchlist_cell_text(self, col, ticker: str, snap: dict, now_ms: int) -> str:
+        """Return the display string for one column cell.
+
+        System columns read the shared snapshot (as the fixed columns
+        always have); signal columns read the evaluator result stashed at
+        ``snap["_sig"][col.id]`` (an ellipsis until the first evaluation
+        lands, an en-dash when insufficient data).
+        """
+        if col.kind == KIND_SIGNAL:
+            sig = snap.get("_sig")
+            cv = sig.get(col.id) if isinstance(sig, dict) else None
+            return cv.text if cv is not None else "…"
+        cid = col.id
+        if cid == "ticker":
+            return ticker
+        if cid == "last":
+            last = snap.get("last")
+            return f"{last:,.2f}" if isinstance(last, (int, float)) else ""
+        if cid == "change":
+            chg = snap.get("change_1d", snap.get("chg"))
+            return f"{chg:+,.2f}" if isinstance(chg, (int, float)) else ""
+        if cid == "change_pct":
+            pct = snap.get("pct_1d", snap.get("pct"))
+            return f"{pct:+.2f}%" if isinstance(pct, (int, float)) else ""
+        if cid == "next_earn":
+            try:
+                bundle = self._events_cache.get(ticker.upper())
+            except AttributeError:
+                bundle = None
+            s, _td = _format_next_earn(bundle, now_ms=now_ms)
+            return s
+        return ""
 
     def _diff_watchlist_rows(
         self,
@@ -1381,6 +1434,10 @@ class WatchlistTabMixin:
                     executor.submit(self._preload_one_daily, t, src)
             except Exception:  # noqa: BLE001
                 pass
+        try:
+            self._preload_watchlist_signals()
+        except Exception:  # noqa: BLE001
+            pass
 
     def _sandbox_watchlist_clock(self) -> tuple[bool, int | None, object | None]:
         """Return ``(sandbox_active, clock_ts, session_date)``.
@@ -1524,6 +1581,10 @@ class WatchlistTabMixin:
                 except Exception:  # noqa: BLE001
                     pass
         try:
+            self._preload_watchlist_signals()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
             self._populate_watchlist_tab()
         except Exception:  # noqa: BLE001
             pass
@@ -1656,6 +1717,123 @@ class WatchlistTabMixin:
         if orphan_repaired:
             try:
                 self._schedule_watchlist_tab_refresh()
+            except Exception:  # noqa: BLE001
+                pass
+
+    # ---- signal columns (configurable watchlist columns) --------------
+    def _pinned_signal_columns(self) -> list:
+        """Union of distinct signal columns across all pinned watchlists."""
+        mgr = getattr(self, "_watchlists", None)
+        if mgr is None:
+            return []
+        try:
+            names = mgr.pinned_names()
+        except Exception:  # noqa: BLE001
+            return []
+        seen: set[str] = set()
+        out: list = []
+        for name in names:
+            for col in self._watchlist_columns(name):
+                if (col.kind == KIND_SIGNAL and col.ref is not None
+                        and col.id not in seen):
+                    seen.add(col.id)
+                    out.append(col)
+        return out
+
+    def _preload_watchlist_signals(self) -> None:
+        """Evaluate configured signal columns off-thread for pinned lists.
+
+        No-op when no signal columns are configured (the default) — so a
+        watchlist with only system columns keeps its existing zero-cost
+        refresh path. Dedupes to a single in-flight job; the worker writes
+        ``snap["_sig"][col_id] = ColumnValue`` and posts a repaint.
+        """
+        executor = getattr(self, "_executor", None)
+        if executor is None:
+            return
+        cols = self._pinned_signal_columns()
+        if not cols:
+            return
+        if getattr(self, "_watchlist_signals_inflight", False):
+            return
+        try:
+            src = self.source_var.get()
+        except Exception:  # noqa: BLE001
+            return
+        try:
+            tickers = list(self._pinned_ticker_union())
+        except Exception:  # noqa: BLE001
+            return
+        if not tickers:
+            return
+        self._watchlist_signals_inflight = True
+        try:
+            executor.submit(self._compute_watchlist_signals,
+                            tuple(tickers), tuple(cols), src)
+        except Exception:  # noqa: BLE001
+            self._watchlist_signals_inflight = False
+
+    def _signal_bars(self, source: str, symbol: str, interval: str):
+        """``bars_provider`` for the signal evaluator (worker thread).
+
+        Prefers the shared ``_full_cache``; otherwise fetches via the
+        registered data source. Slices to the sandbox replay clock when a
+        replay session is active so signal columns carry no look-ahead.
+        """
+        bars = None
+        try:
+            bars = self._full_cache.get((source, symbol, interval))
+        except Exception:  # noqa: BLE001
+            bars = None
+        if not bars:
+            fetcher = DATA_SOURCES.get(source)
+            if fetcher is None:
+                return None
+            try:
+                bars = fetcher(symbol, interval)
+            except Exception:  # noqa: BLE001
+                return None
+        if not bars:
+            return None
+        sb_active, sb_ts, _sb_date = self._sandbox_watchlist_clock()
+        if sb_active and sb_ts is not None:
+            sliced = []
+            for c in bars:
+                try:
+                    if int(c.date.timestamp()) <= sb_ts:
+                        sliced.append(c)
+                    else:
+                        break
+                except Exception:  # noqa: BLE001
+                    continue
+            return sliced or None
+        return bars
+
+    def _compute_watchlist_signals(self, tickers, cols, src: str) -> None:
+        """Worker: evaluate signal columns and stash results in the snapshot."""
+        try:
+            from ..watchlists.signals import WatchlistSignalEvaluator
+            ev = getattr(self, "_watchlist_signal_evaluator", None)
+            ev_src = getattr(self, "_watchlist_signal_evaluator_src", None)
+            if ev is None or ev_src != src:
+                ev = WatchlistSignalEvaluator(
+                    bars_provider=self._signal_bars, source=src)
+                self._watchlist_signal_evaluator = ev
+                self._watchlist_signal_evaluator_src = src
+            results = ev.evaluate(list(tickers), list(cols))
+            for sym, cells in results.items():
+                snap = self._watchlist_snapshot.setdefault(sym, {})
+                existing = snap.get("_sig")
+                if not isinstance(existing, dict):
+                    existing = {}
+                    snap["_sig"] = existing
+                existing.update(cells)
+        except Exception:  # noqa: BLE001
+            pass
+        finally:
+            self._watchlist_signals_inflight = False
+            try:
+                self._worker_inbox.put_nowait(("refresh", None))
             except Exception:  # noqa: BLE001
                 pass
 
@@ -1936,13 +2114,19 @@ class WatchlistTabMixin:
             sandbox_active = bool(self._is_sandbox_active())
         except Exception:  # noqa: BLE001
             sandbox_active = False
-        if not sandbox_active and self._watchlist_tab_visible():
+        visible = self._watchlist_tab_visible()
+        if not sandbox_active and visible:
             try:
                 self._preload_watchlist()
             except Exception:  # noqa: BLE001
                 pass
             try:
                 self._preload_watchlist_daily()
+            except Exception:  # noqa: BLE001
+                pass
+        if visible:
+            try:
+                self._preload_watchlist_signals()
             except Exception:  # noqa: BLE001
                 pass
         delay_ms = self._watchlist_poll_effective_delay_ms()

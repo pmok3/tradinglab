@@ -27,7 +27,9 @@ larger; pinning makes a list reachable from the main UI.
 - `_DEFAULT_WATCHLIST_NAME` and `_DEFAULT_WATCHLIST_TICKERS` are
   re-exports of `tradinglab.watchlists.DEFAULT_WATCHLIST_NAME` /
   `DEFAULT_WATCHLIST_TICKERS` (single source of truth).
-  `_WL_COLUMNS` (4 tuples) module-local.
+  Columns are **configurable per watchlist** (see *Configurable
+  columns* below); the fixed `_WL_COLUMNS` tuple was removed in favour
+  of `watchlists.columns.default_columns()`.
 - `class WatchlistTabMixin`:
   - `_ensure_default_watchlist()` — first-run creates "Default";
     auto-pins first name if pin list is empty after load.
@@ -41,7 +43,7 @@ larger; pinning makes a list reachable from the main UI.
   `WatchlistManager.pinned_names()`. Preserves selection by name.
   Calls `_apply_theme()` so post-init rebuilds get bull/bear
   colors. Populates every sub-tab once.
-- `_make_watchlist_tree(parent, name) -> Treeview` — 4-column
+- `_make_watchlist_tree(parent, name) -> Treeview` — dynamic-column
   tree; sort command captures `name` so click-to-sort is
   per-sub-tab. Installs widget-level
   `<KeyPress-space>` → `_cycle_watchlist_ticker()` returning
@@ -117,8 +119,9 @@ larger; pinning makes a list reachable from the main UI.
   Used by the debounced refresh.
 - `_watchlist_sort_key(col, ticker, snap) -> (is_missing, value)`.
 - `_schedule_watchlist_tab_refresh(delay_ms=60)` /
-  `_run_watchlist_tab_refresh()` — debounce; callback hits every
-  pinned tab.
+  `_run_watchlist_tab_refresh()` — debounce; callback delegates to
+  `_populate_all_watchlist_tabs` (visible sub-tab only, with fallback
+  to all pinned tabs when selection is indeterminate).
 
 ### Ticker helpers
 
@@ -208,10 +211,44 @@ larger; pinning makes a list reachable from the main UI.
   `_schedule_watchlist_tab_refresh()` nudge ensures the repaint
   catches up.
 
+### Configurable columns (signal columns)
+
+- `_watchlist_columns(name) -> list[WatchlistColumn]` — the effective
+  ordered columns for a pinned sub-tab: `WatchlistManager.columns_for(name)`
+  when set, else `watchlists.columns.default_columns()` (today's
+  Ticker/Last/Change/Change%/Next). Drives `_make_watchlist_tree` (dynamic
+  `columns=` + `header_label` headings) and the per-row value tuple.
+- `_watchlist_cell_text(col, ticker, snap, now_ms) -> str` — one cell's
+  display string. System columns read `_watchlist_snapshot` as before;
+  signal columns read `snap["_sig"][col.id]` (a `signals.ColumnValue`),
+  showing `…` until the first evaluation and `–` on insufficient data.
+- Signal sort: `_watchlist_sort_key` falls through to
+  `snap["_sig"][col].raw` (blanks last) for non-system columns.
+- **Off-thread evaluation** (no-op when no signal columns configured):
+  `_preload_watchlist_signals()` collects the union of signal columns via
+  `_pinned_signal_columns()`, dedupes to one in-flight job
+  (`_watchlist_signals_inflight`), and submits `_compute_watchlist_signals`.
+  The worker drives a cached `watchlists.signals.WatchlistSignalEvaluator`
+  (rebuilt when `source_var` changes) whose `bars_provider` is
+  `_signal_bars` (prefers `_full_cache`, else the data-source fetcher;
+  slices to `_sandbox_watchlist_clock()` during replay). Results are
+  written into `snap["_sig"]` directly (worker-owned snapshot write, same
+  pattern as `_preload_one_last`) then a `("refresh", None)` inbox nudge
+  repaints. Triggered from `_watchlist_poll_tick` (live + sandbox when
+  visible), `_kick_watchlist_preloads`, and `_refresh_watchlist_for_sandbox`.
+- `_open_watchlist_columns_dialog(name)` — opens
+  [`gui/watchlist_columns_dialog`](watchlist_columns_dialog.spec.md) via
+  `open_columns_dialog(self, name)`; wired into the sub-tab right-click
+  menu ("Columns…"). On apply: `set_columns` → row-cache drop →
+  `_rebuild_watchlist_subtabs` → `_preload_watchlist_signals`.
+
 ## Dependencies
 
 - Internal: `..data.DATA_SOURCES`,
-  `..constants.BULL_COLOR`/`BEAR_COLOR` (late-imported).
+  `..constants.BULL_COLOR`/`BEAR_COLOR` (late-imported),
+  `..watchlists.columns` (`default_columns`, `header_label`, `KIND_SIGNAL`),
+  `..watchlists.signals` (`WatchlistSignalEvaluator`, lazy in the worker),
+  `.watchlist_columns_dialog.open_columns_dialog` (lazy).
 - External: `tkinter`, `tkinter.ttk`.
 
 ## Design Decisions
@@ -254,6 +291,13 @@ larger; pinning makes a list reachable from the main UI.
   and resubmits both preloads; called on (a) sandbox start,
   (b) every `next_bar` advance.
 - **Double-click preserves tab focus** (user-requested).
+- **Configurable signal columns** (feature `watchlist-columns`): a
+  watchlist's columns are user-chosen scanner `FieldRef`s evaluated at the
+  latest bar (reusing the scanner engine — no watchlist-specific math).
+  Zero cost when unused: a watchlist with only system columns never submits
+  a signal job. `ticker` stays first + locked. Values are sandbox-clock
+  sliced so signal columns carry no look-ahead in replay. See
+  `docs/WATCHLIST_COLUMNS.md`.
 
 ## Invariants
 
@@ -272,6 +316,10 @@ larger; pinning makes a list reachable from the main UI.
   `self.after`**. All worker→UI marshalling via `_worker_inbox`.
 - **`WatchlistManager` is NOT observed** — refresh requires
   explicit `_rebuild_watchlist_subtabs` after mutation.
+- **Signal columns are no-op-safe**: `_preload_watchlist_signals()` returns
+  immediately when no pinned watchlist has a signal column, so the legacy
+  system-only refresh path is unchanged. `snap["_sig"]` is a
+  `{col_id: ColumnValue}` dict written only by the signal worker.
 
 ## Data Flow
 

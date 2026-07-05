@@ -33,8 +33,8 @@ from pathlib import Path
 from ..core.io_helpers import atomic_write_json
 from ..disk_cache import _cache_dir
 
-_SCHEMA_VERSION = 2
-_SUPPORTED_VERSIONS = (1, 2)
+_SCHEMA_VERSION = 3
+_SUPPORTED_VERSIONS = (1, 2, 3)
 
 
 @dataclass
@@ -103,19 +103,84 @@ def load_all() -> tuple[list[Watchlist], list[str]]:
     return result, pinned
 
 
-def save_all(watchlists: list[Watchlist], pinned: list[str]) -> None:
-    """Overwrite the storage file with ``watchlists`` + ``pinned``.
+# --- display config (schema v3: configurable columns) ----------------------
+# The ``display`` block is opaque JSON to storage — a list of column dicts
+# (serialized by ``watchlists.columns``) so this module stays free of the
+# scanner import chain. v1 / v2 files have no ``display`` block → empty.
+
+
+def _empty_display() -> dict:
+    return {"default_columns": [], "by_watchlist": {}}
+
+
+def _parse_display(raw: object) -> dict:
+    """Extract + sanitize the ``display`` block from a loaded envelope."""
+    disp = _empty_display()
+    if not isinstance(raw, dict):
+        return disp
+    block = raw.get("display")
+    if not isinstance(block, dict):
+        return disp
+    dc = block.get("default_columns")
+    if isinstance(dc, list):
+        disp["default_columns"] = dc
+    bw = block.get("by_watchlist")
+    if isinstance(bw, dict):
+        disp["by_watchlist"] = {
+            str(k): v for k, v in bw.items() if isinstance(v, list)
+        }
+    return disp
+
+
+def _has_display(disp: object) -> bool:
+    return isinstance(disp, dict) and bool(
+        disp.get("default_columns") or disp.get("by_watchlist")
+    )
+
+
+def load_display() -> dict:
+    """Return the ``display`` block from the default storage file (or empty)."""
+    p = _storage_path()
+    if not p.exists():
+        return _empty_display()
+    try:
+        with p.open("r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return _empty_display()
+    return _parse_display(raw)
+
+
+def read_display(path: Path) -> dict:
+    """Return the ``display`` block from ``path`` (best-effort; empty on error)."""
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return _empty_display()
+    return _parse_display(raw)
+
+
+def save_all(
+    watchlists: list[Watchlist], pinned: list[str], display: dict | None = None,
+) -> None:
+    """Overwrite the storage file with ``watchlists`` + ``pinned`` (+ ``display``).
 
     Writes are best-effort: an IOError is swallowed (logged by callers
     if they care) — losing a watchlist save is annoying but not fatal.
-    Always writes the latest schema version (v2).
+    Always writes the latest schema version (v3). ``display`` is the
+    configurable-columns block; when ``None`` the existing file's block
+    is **preserved** (so a plain lists/pins save never wipes columns).
     """
     p = _storage_path()
-    payload = {
+    disp = display if display is not None else load_display()
+    payload: dict = {
         "version": _SCHEMA_VERSION,
         "watchlists": [asdict(w) for w in watchlists],
         "pinned": list(pinned),
     }
+    if _has_display(disp):
+        payload["display"] = disp
     try:
         atomic_write_json(p, payload, indent=2, sort_keys=False)
     except OSError as e:  # noqa: BLE001
@@ -129,18 +194,24 @@ def save_all(watchlists: list[Watchlist], pinned: list[str]) -> None:
 
 
 def export_to_file(
-    watchlists: list[Watchlist], path: Path, pinned: list[str] | None = None,
+    watchlists: list[Watchlist],
+    path: Path,
+    pinned: list[str] | None = None,
+    display: dict | None = None,
 ) -> None:
-    """Write ``watchlists`` (plus optional ``pinned`` list) to ``path``.
+    """Write ``watchlists`` (+ optional ``pinned`` / ``display``) to ``path``.
 
     ``pinned`` is written as an empty list when not supplied so exported
-    files always conform to v2 schema.
+    files always conform to the v3 schema. ``display`` (configurable
+    columns) is written only when non-empty.
     """
-    payload = {
+    payload: dict = {
         "version": _SCHEMA_VERSION,
         "watchlists": [asdict(w) for w in watchlists],
         "pinned": list(pinned) if pinned is not None else [],
     }
+    if _has_display(display):
+        payload["display"] = display
     with path.open("w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
 

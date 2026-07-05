@@ -34,6 +34,9 @@ from .storage import (
 from .storage import (
     import_from_file as _import_from_file,
 )
+from .storage import (
+    read_display as _read_display,
+)
 
 
 class WatchlistManager:
@@ -50,6 +53,8 @@ class WatchlistManager:
         self._pinned: list[str] = []
         self._dirty: bool = False
         self._loaded_path: Path | None = None
+        # v3 configurable-columns block (opaque JSON of column dicts).
+        self._display: dict = {"default_columns": [], "by_watchlist": {}}
         # Resolve the per-instance cap from the persisted tunable so
         # later mutations of the global tunable (settings reload
         # mid-session) don't surprise a manager that's already in
@@ -94,6 +99,7 @@ class WatchlistManager:
         self._pinned.clear()
         self._dirty = False
         self._loaded_path = None
+        self._display = {"default_columns": [], "by_watchlist": {}}
 
     # --- writes (in-memory; mark dirty) ------------------------------
     def create(self, name: str, tickers: list[str] | None = None) -> Watchlist:
@@ -110,6 +116,7 @@ class WatchlistManager:
         del self._items[name]
         if name in self._pinned:
             self._pinned.remove(name)
+        self._display.get("by_watchlist", {}).pop(name, None)
         self._dirty = True
         return True
 
@@ -124,6 +131,9 @@ class WatchlistManager:
         if old in self._pinned:
             idx = self._pinned.index(old)
             self._pinned[idx] = new
+        bw = self._display.get("by_watchlist", {})
+        if old in bw:
+            bw[new] = bw.pop(old)
         self._dirty = True
 
     def add_ticker(self, name: str, ticker: str) -> None:
@@ -251,6 +261,7 @@ class WatchlistManager:
         # the UI has a visible sub-tab. Mirrors v1 migration behavior.
         if not self._pinned and self._items:
             self._pinned.append(next(iter(self._items)))
+        self._display = _read_display(p)
         self._loaded_path = p
         self._dirty = False
         return len(self._items)
@@ -263,9 +274,49 @@ class WatchlistManager:
         """
         p = Path(path) if not isinstance(path, Path) else path
         p.parent.mkdir(parents=True, exist_ok=True)
-        _export_to_file(list(self._items.values()), p, list(self._pinned))
+        _export_to_file(
+            list(self._items.values()), p, list(self._pinned), self._display
+        )
         self._loaded_path = p
         self._dirty = False
+
+    # --- configurable columns (v3 display block) ----------------------
+    def default_columns(self):
+        """Default column set for new watchlists (list of ``WatchlistColumn``)."""
+        from . import columns as _cols
+        raw = self._display.get("default_columns")
+        if not raw:
+            return _cols.default_columns()
+        return _cols.columns_from_json(raw)
+
+    def set_default_columns(self, cols) -> None:
+        """Set the default column set inherited by watchlists without an override."""
+        from . import columns as _cols
+        self._display["default_columns"] = _cols.columns_to_json(
+            _cols.validate_columns(list(cols)))
+        self._dirty = True
+
+    def columns_for(self, name: str):
+        """Columns for watchlist ``name`` (its override, else the default set)."""
+        from . import columns as _cols
+        raw = (self._display.get("by_watchlist") or {}).get(name)
+        if raw:
+            return _cols.columns_from_json(raw)
+        return self.default_columns()
+
+    def set_columns(self, name: str, cols) -> None:
+        """Set a per-watchlist column override for ``name``."""
+        from . import columns as _cols
+        self._display.setdefault("by_watchlist", {})[name] = _cols.columns_to_json(
+            _cols.validate_columns(list(cols)))
+        self._dirty = True
+
+    def reset_columns(self, name: str) -> None:
+        """Drop ``name``'s column override so it inherits the default set."""
+        bw = self._display.get("by_watchlist") or {}
+        if name in bw:
+            del bw[name]
+            self._dirty = True
 
     # --- internals -----------------------------------------------------
     def _require(self, name: str) -> Watchlist:

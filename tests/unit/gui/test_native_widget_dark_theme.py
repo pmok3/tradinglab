@@ -174,6 +174,22 @@ def test_pre_trade_dialog_text_widgets_use_dark_theme(dark_root: tk.Toplevel) ->
         dlg.destroy()
 
 
+def test_watchlist_columns_dialog_listbox_uses_dark_theme(dark_root: tk.Toplevel) -> None:
+    from tradinglab.gui.watchlist_columns_dialog import WatchlistColumnsDialog
+    from tradinglab.watchlists.columns import default_columns
+
+    dlg = WatchlistColumnsDialog(
+        dark_root,
+        watchlist_name="Test",
+        columns=default_columns(),
+        on_apply=lambda _cols: None,
+    )
+    try:
+        _assert_dark_listbox(dlg._listbox)
+    finally:
+        dlg.destroy()
+
+
 def test_color_palette_canvas_uses_dark_theme(dark_root: tk.Toplevel) -> None:
     """The themed ``ThemedColorChooser`` (audit
     ``themed-color-chooser``) must paint its four ``tk.Canvas``
