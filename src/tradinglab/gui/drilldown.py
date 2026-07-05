@@ -34,7 +34,7 @@ Methods delegated back to ChartApp (called via ``self.``):
 from __future__ import annotations
 
 import time
-from concurrent.futures import Future
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import date as _date_t
 from datetime import datetime as _datetime_t
@@ -466,17 +466,37 @@ class DrilldownMixin:
                     src=req.src, t=req.ticker, cmp=compare,
                     day=req.day, now=now_ts,
                 ):
-                    primary = self._targeted_range_fetch(
-                        src, t, "5m", day, now, merge_to_disk=False,
-                    )
                     if cmp and cmp != t:
-                        try:
-                            self._targeted_range_fetch(
+                        # Fetch primary + compare CONCURRENTLY. Both are
+                        # network-bound (the HTTP call releases the GIL), so a
+                        # tiny 2-worker pool roughly halves the drill fetch
+                        # vs. the old sequential primary-then-compare form —
+                        # the single dominant cost on a slow range provider.
+                        # A LOCAL pool (not self._executor) avoids contending
+                        # with / deadlocking against the shared fetch workers.
+                        with ThreadPoolExecutor(
+                            max_workers=2, thread_name_prefix="drill-fetch",
+                        ) as pool:
+                            f_primary = pool.submit(
+                                self._targeted_range_fetch,
+                                src, t, "5m", day, now, merge_to_disk=False,
+                            )
+                            f_compare = pool.submit(
+                                self._targeted_range_fetch,
                                 src, cmp, "5m", day, now, merge_to_disk=True,
                             )
-                        except Exception:  # noqa: BLE001
-                            pass
-                    return primary
+                            try:
+                                primary = f_primary.result()
+                            except Exception:  # noqa: BLE001
+                                primary = []
+                            try:
+                                f_compare.result()
+                            except Exception:  # noqa: BLE001
+                                pass
+                        return primary
+                    return self._targeted_range_fetch(
+                        src, t, "5m", day, now, merge_to_disk=False,
+                    )
             else:
                 def _work(t=req.ticker):
                     try:

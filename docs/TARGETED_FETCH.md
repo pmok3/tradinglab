@@ -28,7 +28,7 @@ anchored on where the user is looking rather than on *now*.
 |---|---|---|
 | 1 | v1 scope | **Drill-down-only targeted fetch.** Keep the fast capped up-front load; pan-back lazy-loading deferred. |
 | 2 | Compare symbol | **Yes** — a drill-down also fetches the active compare symbol's matching range (RS/RW alignment), in parallel with the primary. |
-| 3 | Fetch size | **Fill ~1 API page (≤10k bars).** The API *call* is the bottleneck (~3.75s/page), not the bar count — so max out the single request. |
+| 3 | Fetch size | **Fill ~1 API page.** Round-trip time is dominated by the number of *pages* (each is one HTTP call), not the bar count within a page — so size the window to ~1 real page. **Empirically the free Alpaca IEX feed returns ~2,000 bars/page at ~0.6s/page** (NOT the advertised 10k `limit`); see §4.2. |
 | 4 | Window anchor | **Centered** on the clicked day, **boundary-aware**: when the clicked day is near the provider's data-start (or the live end), shift the window so the page fills with *real* bars instead of wasting half on an empty side. |
 | 5 | Coverage | **Minimal per-`(source,ticker,interval)` coverage record** — fetched range segments + a discovered data-start watermark. Enables boundary anchoring, skip-if-cached, and telling *loading* apart from *no-data* apart from *provider-exhausted*. |
 | 6 | Trigger UX | **Auto-fetch** on a drill-down miss (wait-cursor + status, chart stays interactive); no confirm prompt. |
@@ -66,16 +66,32 @@ DataFetcher = Callable[..., list[Candle] | None]
 
 ### 4.2 Page-span window sizing
 
-One Alpaca request returns up to **10,000 bars** for the same ~3.75s cost, so
-size the window to fill ~1 page. A new helper (in `constants.py`) converts the
-page cap to a calendar span per interval:
+Round-trip time is dominated by the **number of pages** (each page is one HTTP
+round trip), not the bar count within a page — so size the window to fill ~1
+page. A helper (in `constants.py`) converts the page size to a calendar span
+per interval:
 
 ```
-bars_per_page = 10_000  (Alpaca)         # provider-declared page cap
+bars_per_page = 2_000  (Alpaca IEX, empirical)   # see below
 span_days(interval) ≈ bars_per_page / bars_per_rth_day(interval)  (× calendar/trading slack)
 ```
 
-Per interval (Alpaca, ~1 page): **5m ≈ 6 mo · 1m ≈ 25 d · 15m ≈ 1.5 y · 1h ≈ 5.5 y**.
+Per interval (Alpaca IEX, ~1 page): **5m ≈ 35 d · 1m ≈ 7 d · 15m ≈ 107 d · 1h ≈ 466 d**.
+
+> **Empirical page size (verified, not the advertised 10k).** Alpaca's docs
+> advertise a 10,000-bar `limit`, but the free-tier **IEX** historical feed
+> caps each response at **~2,000 bars** regardless of `limit`. Round-trip time
+> is near-flat within a page (79 bars = 0.32s, 1,732 bars = 0.64s — mostly
+> fixed overhead) and **linear in pages** (~0.6s each). The original design
+> assumed 10k/page, which made the 5m window ~179 days = 5 pages ≈ 3s, and a
+> compare drilldown fetched that **twice, sequentially** → the ~10s hang users
+> reported. Fix: `DEFAULT_BARS_PER_PAGE = 2_000` (1-page window, ~0.6s/symbol)
+> **and** the drilldown fetches primary + compare **in parallel** (decision 2)
+> via a local 2-worker pool — measured 1.20s → 0.60s. Net drilldown fetch:
+> ~10s → ~0.6s. We still send `limit=10000` on each request so a paid SIP feed
+> (bigger real pages) benefits automatically. **Rate limit: 200 calls/MINUTE**
+> on the free plan (429 on exceed) — a 1-page-per-symbol drilldown (~2 calls)
+> is far under budget.
 
 **Anchoring** (`[start, end)` around clicked day `D`, page span `P`):
 1. Default **centered**: `start = D − P/2`, `end = D + P/2`.
@@ -129,8 +145,9 @@ so we never re-fetch what's already on disk.
      active, `range_fetch(compare, start, end)` — **in parallel** on the executor.
    - on completion (marshalled to Tk via the worker-inbox pattern):
      `disk_cache.merge` + `coverage.record_fetch` for each; then drill to `day`.
-   - keeps the existing 8s UI deadline (a 1-page fetch is ~3-4s) → "taking
-     longer than expected," not a scary error.
+   - keeps the existing 8s UI deadline (a 1-page parallel primary+compare
+     fetch is ~0.6s on Alpaca IEX; the deadline only trips on an unusually
+     slow network) → "taking longer than expected," not a scary error.
 4. If the provider reports the day is beyond its history (`exhausted_start`) →
    the *provider-limit* status, no fetch.
 
@@ -204,13 +221,17 @@ line is never truncated/misaligned. Sector-ETF auto-fetch is deferred (v2).
   fallback, provider-limit signalling.
 - Integration/offline: `range_fetch` merges into `disk_cache` + updates
   coverage; existing trailing-window behavior unchanged.
-- Smoke: drill into an 18-month-old Alpaca 5m day loads (<~4s) with the compare
-  symbol aligned; a beyond-history day shows the provider-limit status, no fetch;
-  no duplicate requests from one action; existing capped startup unchanged.
+- Smoke: drill into an 18-month-old Alpaca 5m day loads (~0.6s: 1 page/symbol,
+  primary+compare in parallel — comfortably under the 8s deadline) with the
+  compare symbol aligned; a beyond-history day shows the provider-limit status,
+  no fetch; no duplicate requests from one action; existing capped startup
+  unchanged.
 
 ## 9. Success metrics
 
-- Drill-down into an 18-month-old Alpaca 5m day succeeds, ~1 page, <~4s.
+- Drill-down into an 18-month-old Alpaca 5m day succeeds, ~1 page/symbol,
+  ~0.6s (primary + compare fetched in parallel; was ~10s before the
+  page-size right-size + parallel-fetch).
 - Compare (SPY) range matches the primary — no truncated RS line.
 - Existing startup speed unchanged; no false empty chart; no repeat-fetch loop.
 - Full unit + smoke suites stay green around drill-down / cache / data-load /

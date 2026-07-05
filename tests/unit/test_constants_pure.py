@@ -67,7 +67,9 @@ def test_page_span_days_intraday_progression():
     d1h = page_span_days("1h")
     # A coarser interval packs fewer bars/day → one page spans deeper history.
     assert d1 < d5 < d15 < d1h
-    assert 150 <= d5 <= 210  # ~6 months for 5m
+    # ~1 page of 5m bars ≈ 35 calendar days at DEFAULT_BARS_PER_PAGE=2000
+    # (the empirical Alpaca/IEX page size). See DEFAULT_BARS_PER_PAGE docstring.
+    assert 28 <= d5 <= 42
 
 
 def test_page_span_days_daily_raises():

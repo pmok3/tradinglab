@@ -122,11 +122,28 @@ Flow (all worker steps run on `self._executor`, never touching Tk):
      `_on_drilldown_fetch_done` merges into `_full_cache` + disk itself);
      `merge_to_disk=True` for the **compare** symbol (persisted here since
      the primary-only done-handler won't).
+   - **Primary + compare fetch in parallel.** When a compare symbol is
+     active, `_work` submits both `_targeted_range_fetch` calls to a local
+     `ThreadPoolExecutor(max_workers=2)` and joins — they are network-bound
+     (the HTTP call releases the GIL), so this roughly halves the fetch vs.
+     the old sequential form (measured: 1.20s → 0.60s on Alpaca). A LOCAL
+     pool is used (not `self._executor`) so the two fetches can't contend
+     with / deadlock against the shared fetch workers. A compare failure is
+     swallowed; the primary result still drives the drill.
 4. **Tk: `_on_drilldown_fetch_done`** merges the primary result as before,
    then — when `req.compare_ticker` is set — reloads the compare symbol's
    `_full_cache` entry from disk (the worker extended it) so the drill's
    re-render draws an aligned RS/compare line over the same window, and
    drills.
+
+**Window size / round-trip cost.** The window fills ~1 API page
+(`constants.DEFAULT_BARS_PER_PAGE`, empirically **2,000** for the free
+Alpaca IEX feed — not the advertised 10k). Round-trip time is dominated by
+the page COUNT (~0.6s/page), not bar count, so a 1-page window keeps a
+drilldown to ~0.6s/symbol. Sizing to 10k made the 5m window ~179 days = 5
+pages and, fetched for primary + compare sequentially, produced the ~10s
+hang this design + the parallel fetch above replaced. See
+`constants.spec.md` / `docs/TARGETED_FETCH.md`.
 
 Non-range providers (yfinance) keep the original single-fetcher path
 unchanged. `_targeted_range_fetch` / `_trailing_fetch` never raise.

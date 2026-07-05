@@ -835,10 +835,22 @@ def provider_lookback_days(source: str, interval: str) -> int:
     return _period_to_days(INTERVAL_PERIODS.get(interval, "60d"))
 
 
-#: Alpaca's per-request bar cap (one page). Targeted intraday fetches size
-#: their window to ~1 page so a single request stays fast (~3-4s). Providers
-#: with a different cap can pass their own value to :func:`targeted_window`.
-DEFAULT_BARS_PER_PAGE = 10_000
+#: Bars per API page used to size the targeted intraday fetch window (~1 page
+#: = 1 HTTP round trip). Round-trip time is dominated by the NUMBER of pages
+#: (~0.6s each on the free IEX feed), NOT the bar count within a page — so we
+#: size the window to ~1 real page to keep a drilldown fast (~0.6s/symbol).
+#:
+#: **Empirically 2,000, not 10,000.** Alpaca's docs advertise a 10,000-bar
+#: ``limit``, but the free-tier IEX historical feed caps each response at
+#: ~2,000 bars regardless (verified: same 1,732-bar window is 1 page/0.6s at
+#: limit=10000 but 9 pages/3.5s at limit=200; a 179-day 5m window is ~9,500
+#: bars = 5 pages = ~3s). Sizing to 10,000 made the 5m window ~179 days = 5
+#: pages, and a compare drilldown fetched that twice → the ~10s hang. At
+#: 2,000 the 5m window is ~35 days = 1 page. Providers with a larger real page
+#: (paid SIP, Polygon) can pass their own value to :func:`targeted_window`.
+#: We still SEND ``limit=10000`` on each request (see ``alpaca_source``) so a
+#: paid feed returns bigger pages automatically.
+DEFAULT_BARS_PER_PAGE = 2_000
 
 #: Regular-session minutes (09:30-16:00 ET) — bars/day = _RTH_MINUTES / interval.
 _RTH_MINUTES = 390

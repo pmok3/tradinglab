@@ -21090,9 +21090,15 @@ def check_d84_targeted_intraday_fetch(app) -> None:
         # Window is CENTERED on the clicked day, not trailing-from-now:
         assert w_start <= day_ts < w_end, \
             "clicked day must fall inside the targeted window"
+        # Window is ~1 API page-span (page_span_days), NOT a trailing-from-now
+        # window and NOT a single day. Tie the assertion to the helper so it
+        # survives a DEFAULT_BARS_PER_PAGE re-tune (5m page-span depends on it).
+        from tradinglab.constants import page_span_days as _page_span_days
+        expected_span = _page_span_days("5m")
         span_days = (w_end - w_start) / 86400.0
-        assert span_days > 90, \
-            f"targeted 5m window should be a page-span (>90d); got {span_days:.0f}d"
+        assert abs(span_days - expected_span) <= 2, (
+            f"targeted 5m window should be ~1 page-span ({expected_span}d); "
+            f"got {span_days:.0f}d")
         assert (now_ts - w_end) > 300 * 86400, \
             "targeted window must end ~2y ago (centered on the day), not near now"
         # The 2-year-old day actually landed.
