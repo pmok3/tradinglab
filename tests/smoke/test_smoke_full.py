@@ -4469,6 +4469,214 @@ def check_d53_compare_off_during_drilldown_ylim(app) -> None:
           "(no click required)")
 
 
+def check_d86_compare_toggle_preserves_drilldown_day(app) -> None:
+    """Regression: drill into an OLD day, toggle Compare → view MUST stay.
+
+    Bug (``compare-toggle-drilldown-preserve``): with a deep-history
+    provider (Alpaca) the user drilled 5m into an old day (e.g.
+    2021-12-16), then enabled Compare. The compare fast-path aligned
+    ``_primary_raw`` against the compare's IN-MEMORY cache (only the
+    recent trailing window — Alpaca 5m reaches back just 120 days) and
+    re-rendered with the DEFAULT right-edge window, snapping the chart to
+    "today" and losing the drilled day.
+
+    Fix: ``_on_compare_toggle`` routes through
+    ``_reload_preserving_drilldown`` while drilled-in, re-zooming to
+    ``_drilldown_day`` after the reload. This test drills into an EARLY
+    day (far from the right edge, so a right-edge snap is unambiguous) and
+    asserts the primary's visible window still sits on that day after the
+    toggle.
+    """
+    from datetime import timedelta
+
+    import numpy as np
+
+    from tradinglab.models import Candle
+
+    src = app.source_var.get()
+    primary_t = "ZDR6A"
+    compare_t = "ZDR6B"
+
+    saved_ticker = app.ticker_var.get()
+    saved_compare_ticker = app.compare_ticker_var.get()
+    saved_compare_on = bool(app.compare_var.get())
+    saved_interval = app.interval_var.get()
+    saved_preserve = app._preserve_xlim_on_render
+    saved_drill = getattr(app, "_drilldown_day", None)
+    saved_stale = app._cache_is_stale
+    saved_cache = {
+        k: app._full_cache.pop(k, None)
+        for k in [(src, primary_t, "1d"), (src, primary_t, "5m"),
+                  (src, compare_t, "1d"), (src, compare_t, "5m")]
+    }
+
+    def make_1d(seed, n=30):
+        out, base = [], datetime(2026, 1, 5, 16, 0)
+        for d in range(n):
+            lo = 50 + d * 2 + seed
+            out.append(Candle(date=base + timedelta(days=d),
+                              open=lo, high=lo + 5, low=lo - 1,
+                              close=lo + 2, volume=80000, session="regular"))
+        return out
+
+    def make_5m(seed, n=30):
+        out, base = [], datetime(2026, 1, 5, 9, 30)
+        for d in range(n):
+            lo = 50 + d * 2 + seed
+            for i in range(78):
+                p = lo + i * 0.05
+                out.append(Candle(date=base + timedelta(days=d, minutes=5 * i),
+                                  open=p, high=p + 0.3, low=p - 0.3,
+                                  close=p + 0.1, volume=1000 + i,
+                                  session="regular"))
+        return out
+
+    try:
+        app._cache_is_stale = lambda *a, **k: False  # type: ignore[assignment]
+        app._full_cache[(src, primary_t, "1d")] = make_1d(0)
+        app._full_cache[(src, primary_t, "5m")] = make_5m(0)
+        app._full_cache[(src, compare_t, "1d")] = make_1d(100)
+        app._full_cache[(src, compare_t, "5m")] = make_5m(100)
+
+        if app.compare_var.get():
+            app.compare_var.set(False)
+        app.interval_var.set("1d")
+        app.ticker_var.set(primary_t)
+        app.compare_ticker_var.set(compare_t)
+        app._preserve_xlim_on_render = False
+        app._drilldown_day = None
+        app._load_data()
+        _pump_until(app,
+            lambda: getattr(app, "_primary", None) and len(app._primary) > 0,
+            timeout=0.6)
+        app._full_cache[(src, primary_t, "1d")] = make_1d(0)
+        app._full_cache[(src, primary_t, "5m")] = make_5m(0)
+        app._full_cache[(src, compare_t, "1d")] = make_1d(100)
+        app._full_cache[(src, compare_t, "5m")] = make_5m(100)
+
+        # Drill into an EARLY day (day 3 → 2026-01-08) — far from the
+        # right edge (day 30). A default-window snap would land on the
+        # last day, which the assertion below rejects.
+        drill_day = datetime(2026, 1, 8).date()
+        ok = app._zoom_5m_for_date(drill_day)
+        if not ok:
+            raise AssertionError(f"d86: drill-down to {drill_day} failed")
+        _pump_until(app, lambda: app.interval_var.get() == "5m", timeout=0.6)
+        assert app.interval_var.get() == "5m", "drill-down must switch to 5m"
+        assert getattr(app, "_drilldown_day", None) == drill_day
+
+        def _visible_days():
+            ps = app._panel_state.get("primary") or {}
+            ax = ps.get("price_ax")
+            cs = ps.get("candles") or []
+            if ax is None or not cs:
+                return set()
+            xlo, xhi = ax.get_xlim()
+            lo = max(0, int(np.ceil(xlo - 1e-6)))
+            hi = min(len(cs), int(np.floor(xhi + 1e-6)) + 1)
+            return {c.date.date() for c in cs[lo:hi]
+                    if not getattr(c, "is_gap", False)}
+
+        before = _visible_days()
+        assert before == {drill_day}, (
+            f"d86 precondition: drilled window should show only {drill_day}; "
+            f"got {sorted(before)}")
+
+        # Reproduce the deep-history trigger: the compare's IN-MEMORY 5m
+        # cache holds ONLY the recent trailing window (does NOT reach the
+        # early drilled day), while its FULL history lives on disk (the
+        # universe download). Without the fix, ``align_pair``'s low-end
+        # intersection drops the drilled day and the view snaps to the
+        # recent edge; the fix pulls the compare's disk history into the
+        # cache first so the drilled day survives.
+        from tradinglab import disk_cache as _dc
+        compare_full = make_5m(100)
+        _dc.save(src, compare_t, "5m", compare_full)
+        recent_only = [c for c in compare_full
+                       if c.date.date() >= datetime(2026, 1, 30).date()]
+        assert not any(c.date.date() == drill_day for c in recent_only), (
+            "d86 setup: recent-only compare cache must NOT cover the drilled day")
+        app._full_cache[(src, compare_t, "5m")] = recent_only
+
+        # Enable compare AFTER the drill — must NOT jump the view.
+        app.compare_var.set(True)
+        app._on_compare_toggle()
+        _pump_until(app,
+            lambda: (app._panel_state.get("compare") or {}).get("price_ax") is not None,
+            timeout=0.8)
+
+        after = _visible_days()
+        assert drill_day in after, (
+            f"d86: compare toggle JUMPED the view off the drilled day. "
+            f"visible={sorted(after)} expected to include {drill_day}")
+        # The last (right-edge) day must NOT be what we snapped to.
+        last_day = datetime(2026, 2, 3).date()  # 2026-01-05 + 29 days
+        assert last_day not in after, (
+            f"d86: view snapped to the recent right edge ({last_day}) instead "
+            f"of staying on the drilled day {drill_day}; visible={sorted(after)}")
+        assert getattr(app, "_drilldown_day", None) == drill_day, (
+            "d86: _drilldown_day must survive the compare toggle")
+        # Compare panel exists AND now covers the drilled day (disk history
+        # was pulled in so align_pair keeps it).
+        ps_c = app._panel_state.get("compare") or {}
+        assert ps_c.get("price_ax") is not None, (
+            "d86: compare panel must be created by the toggle")
+        comp_days = {c.date.date() for c in (app._compare or [])
+                     if not getattr(c, "is_gap", False)}
+        assert drill_day in comp_days, (
+            f"d86: compare must cover the drilled day after the toggle; "
+            f"got {sorted(comp_days)[:3]}…")
+
+    finally:
+        try:
+            del app._cache_is_stale
+        except AttributeError:
+            app._cache_is_stale = saved_stale  # type: ignore[assignment]
+        for k, v in saved_cache.items():
+            app._full_cache.pop(k, None)
+            if v is not None:
+                app._full_cache[k] = v
+        try:
+            import os
+            base = os.environ.get("LOCALAPPDATA", "")
+            if base:
+                from pathlib import Path
+                p = Path(base) / "tradinglab"
+                for t in (primary_t, compare_t):
+                    for iv in ("1d", "5m"):
+                        for f in p.glob(f"{src}__{t}__{iv}.jsonl"):
+                            try:
+                                f.unlink()
+                            except Exception:  # noqa: BLE001
+                                pass
+        except Exception:  # noqa: BLE001
+            pass
+        # d86 also writes the compare's full 5m history to the disk cache
+        # (TRADINGLAB_CACHE_DIR, not LOCALAPPDATA) — clean that too.
+        try:
+            from tradinglab import disk_cache as _dc
+            for t in (primary_t, compare_t):
+                for iv in ("1d", "5m"):
+                    _dc._path_for(src, t, iv).unlink(missing_ok=True)
+        except Exception:  # noqa: BLE001
+            pass
+        if app.compare_var.get() != saved_compare_on:
+            app.compare_var.set(saved_compare_on)
+        app.interval_var.set(saved_interval)
+        app.ticker_var.set(saved_ticker)
+        app.compare_ticker_var.set(saved_compare_ticker)
+        app._preserve_xlim_on_render = saved_preserve
+        app._drilldown_day = saved_drill
+        try:
+            app._load_data()
+        except Exception:  # noqa: BLE001
+            pass
+        _pump(app, 0.3)
+
+    print("  [OK] §d86 compare toggle preserves the drilled-in day "
+          "(no right-edge snap)")
+
+
 def check_d35_config_import_export_round_trip(app) -> None:
     """Configuration file load/save round-trip via :mod:`settings`.
 
@@ -21368,6 +21576,7 @@ def _run_all_checks(app) -> None:
     check_d34_compare_toggle_after_drilldown_ylim(app)
     check_d34b_compare_toggle_today_drilldown_keeps_primary(app)
     check_d53_compare_off_during_drilldown_ylim(app)
+    check_d86_compare_toggle_preserves_drilldown_day(app)
     check_d35_config_import_export_round_trip(app)
     check_d35a_config_theme_round_trip(app)
     check_d35b_view_settings_round_trip(app)
@@ -21679,6 +21888,8 @@ def _build_check_sequence():
          check_d34b_compare_toggle_today_drilldown_keeps_primary),
         ("check_d53_compare_off_during_drilldown_ylim",
          check_d53_compare_off_during_drilldown_ylim),
+        ("check_d86_compare_toggle_preserves_drilldown_day",
+         check_d86_compare_toggle_preserves_drilldown_day),
         ("check_d35_config_import_export_round_trip",
          check_d35_config_import_export_round_trip),
         ("check_d35a_config_theme_round_trip",

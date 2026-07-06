@@ -2091,6 +2091,69 @@ class ChartApp(
                     self.compare_var.set(False)
             return
 
+        # Drilldown-preserving branch: when the user is inspecting a
+        # specific day in 5m drill-down, toggling compare must KEEP that
+        # day in view — not snap to the default right-edge window. The
+        # regular toggle body re-aligns ``_primary_raw`` against the
+        # compare's IN-MEMORY cache (only the recent trailing window for a
+        # deep-history provider — Alpaca 5m reaches back just
+        # ``_DEEP_HISTORY_INTRADAY_DAYS["5m"]`` = 120 days) and renders
+        # with the DEFAULT window, so a drill-down to an OLD day (e.g.
+        # 2021-12-16) jumped the chart to the recent right edge AND left
+        # the compare panel with no bars for that day. Fix: pull the
+        # compare's FULL disk history into ``_full_cache`` first so
+        # ``align_pair``'s low-end intersection (``lo_day = max(p[0],
+        # c[0])``) keeps the drilled day — which, for a same-grid intraday
+        # pair, also means NO gap bars are inserted, so the primary's bar
+        # indices (and the drilled-day xlim) are preserved and the
+        # UNCHANGED toggle body's ``preserve``-xlim render holds the view.
+        # Audit ``compare-toggle-drilldown-preserve``.
+        try:
+            in_drilldown = (
+                getattr(self, "_drilldown_day", None) is not None
+                and is_intraday(self.interval_var.get())
+            )
+        except Exception:  # noqa: BLE001
+            in_drilldown = False
+        if in_drilldown and compare_on:
+            # Disk-preload the compare's FULL history (universe download /
+            # prior drills populate it) so the drilled day survives the
+            # align. Mirrors ``_on_drilldown_fetch_done``'s disk-reload.
+            try:
+                raw_compare = self.compare_ticker_var.get().strip().upper()
+                if raw_compare:
+                    cmp_key = (self.source_var.get(), raw_compare,
+                               self.interval_var.get())
+                    cmp_disk = disk_cache.load(*cmp_key) or []
+                    if cmp_disk:
+                        cur = self._full_cache.get(cmp_key)
+                        self._full_cache[cmp_key] = (
+                            disk_cache.merge_candles(cur, cmp_disk)
+                            if cur else cmp_disk
+                        )
+                        self._trim_full_cache()
+            except Exception:  # noqa: BLE001
+                pass
+
+        self._apply_compare_toggle(compare_on)
+
+        # NOTE: no explicit re-zoom here. With the compare's full history
+        # disk-preloaded above, ``align_pair`` keeps the drilled day and —
+        # for same-grid intraday (primary + compare share the exchange 5m
+        # grid) — inserts NO gap bars, so the primary's bar indices are
+        # unchanged and the toggle's own ``preserve``-xlim render already
+        # holds the drilled-day window. An explicit ``_zoom_primary_to_date``
+        # recompute here raced in-flight companion prefetches (compare
+        # overwritten mid-re-render → primary/compare length desync).
+
+    def _apply_compare_toggle(self, compare_on: bool) -> None:
+        """Regular (non-sandbox) compare toggle: align cached data + render.
+
+        Extracted from :meth:`_on_compare_toggle` so the drilldown-preserve
+        wrapper can run it verbatim then re-zoom. Behaviour is unchanged:
+        compare-off is a layout-only re-render; compare-on uses the warm
+        ``_full_cache`` entry (instant) or falls back to ``_load_data``.
+        """
         if not compare_on:
             # Layout-only switch; keep _primary_raw + cached data as-is
             # and just re-render without the compare panel.
