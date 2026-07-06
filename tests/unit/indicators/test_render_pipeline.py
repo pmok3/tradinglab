@@ -29,6 +29,7 @@ import numpy as np
 import pytest
 
 from tradinglab.indicators import render as _render
+from tradinglab.indicators.base import LineStyle
 from tradinglab.indicators.cache import IndicatorCache
 from tradinglab.indicators.config import IndicatorConfig, IndicatorManager
 from tradinglab.models import Candle
@@ -504,6 +505,79 @@ class TestRenderForSlot:
         # was removed entirely.
         assert cfg.id not in state.overlay_lines
         plt.close(fig)
+
+    def test_bbands_per_output_visibility_fresh_and_toggle(self):
+        """Per-band show/hide: honouring ``LineStyle.visible`` per output.
+
+        Bollinger has 3 overlay lines (middle/upper/lower). Hiding
+        ``upper``/``lower`` must (a) draw only ``middle`` on a fresh
+        render, and (b) hide the existing upper/lower artists — without
+        deleting them — when toggled mid-session, mirroring the whole-
+        indicator ``visible=False`` behaviour but scoped to one output.
+        """
+        candles = _make_candles(40)
+
+        # (a) Fresh render with upper/lower hidden → only middle drawn.
+        mgr = IndicatorManager()
+        cfg = mgr.add(IndicatorConfig(
+            kind_id="bbands",
+            display_name="BB(5,2)",
+            params={"length": 5, "num_std": 2.0},
+            visible=True,
+            style={
+                "upper": LineStyle(color="#2ca02c", visible=False),
+                "lower": LineStyle(color="#2ca02c", visible=False),
+            },
+        ))
+        cache = IndicatorCache()
+        state = _render.PanelIndicatorState()
+        fig = plt.figure()
+        price_ax = fig.add_subplot()
+        _render.render_for_slot(
+            price_ax=price_ax, pane_axes=[], candles=candles,
+            offset=0, manager=mgr, cache=cache,
+            interval="1d", scope="main", state=state,
+        )
+        lines = state.overlay_lines.get(cfg.id, {})
+        # Only the middle band is drawn; upper/lower were never created.
+        assert set(lines.keys()) == {"middle"}, (
+            f"hidden bands must not be drawn; got {set(lines.keys())}"
+        )
+        assert lines["middle"].get_visible() is True
+
+        # (b) Toggle path: start all-visible, then hide upper/lower.
+        mgr2 = IndicatorManager()
+        cfg2 = mgr2.add(IndicatorConfig(
+            kind_id="bbands", display_name="BB(5,2)",
+            params={"length": 5, "num_std": 2.0}, visible=True,
+        ))
+        state2 = _render.PanelIndicatorState()
+        fig2 = plt.figure()
+        ax2 = fig2.add_subplot()
+        _render.render_for_slot(
+            price_ax=ax2, pane_axes=[], candles=candles, offset=0,
+            manager=mgr2, cache=cache, interval="1d", scope="main",
+            state=state2,
+        )
+        assert set(state2.overlay_lines[cfg2.id].keys()) == {
+            "middle", "upper", "lower"
+        }
+        mgr2.update(cfg2.id, style={
+            "upper": LineStyle(color="#2ca02c", visible=False),
+            "lower": LineStyle(color="#2ca02c", visible=False),
+        })
+        _render.render_for_slot(
+            price_ax=ax2, pane_axes=[], candles=candles, offset=0,
+            manager=mgr2, cache=cache, interval="1d", scope="main",
+            state=state2,
+        )
+        lines2 = state2.overlay_lines[cfg2.id]
+        # Artists retained (toggling back doesn't recompute) but hidden.
+        assert lines2["upper"].get_visible() is False
+        assert lines2["lower"].get_visible() is False
+        assert lines2["middle"].get_visible() is True
+        plt.close(fig)
+        plt.close(fig2)
 
     def test_offset_applied_to_x_coordinates(self):
         """The ``offset`` parameter shifts the indicator x-data — used

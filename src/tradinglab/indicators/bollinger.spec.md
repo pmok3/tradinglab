@@ -59,6 +59,15 @@ population-σ window regardless of kernel.
   MACD; one bug fix to `RMA`/`WMA` covers all.
 - **`std_length` independent of `length`** lets the user smooth band
   width without flattening the centerline.
+- **Per-band visibility is user-toggleable.** Each of the three outputs
+  (`middle` / `upper` / `lower`) has an independent show/hide checkbox in
+  the indicator dialog (`gui.indicator_dialog` per-output "Lines:" row),
+  persisted as `IndicatorConfig.style[key].visible`. `indicators.render.
+  _output_visible` honours it in the draw loop and `gui.readout_legend`
+  drops the hidden key, so hiding e.g. `upper` + `lower` leaves only the
+  centerline on the chart AND legend. Nothing about `compute_arr` changes
+  — all three arrays are still computed; visibility is a pure render-layer
+  gate.
 
 ## Invariants
 - `upper >= middle >= lower` at every defined position when

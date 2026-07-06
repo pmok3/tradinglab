@@ -34,21 +34,37 @@ settings popup via `restricted_to_config_id`.
 
 ## Design decisions
 
-### Per-output color overrides (b42)
-Each row has a Colors row with one swatch button per output key (e.g. `sma`;
+### Per-output color + visibility overrides (b42)
+Each row has a **Lines:** row with one cell per output key (e.g. `sma`;
 `middle`/`upper`/`lower` for Bollinger; `macd`/`signal`/`hist` for MACD).
-The swatch's text label routes through the factory's `output_key_label(key)`
-hook so verbose canonical keys display compactly (e.g. Prior Day H/L/C's
-`prior_day_high` → `pd_high`) — matching the in-chart readout legend; the
-swatch + `row.color_buttons` are still keyed by the canonical output key.
-Swatch opens the themed `ThemedColorChooser` via `pick_color` (audit
-`themed-color-chooser`; a Win32-ChooseColor look-alike that follows the
-app's light/dark theme). Chosen hex lands on row's `style_overrides`,
-committed via `manager.update(style=...)` as `LineStyle(color=...,
-width=default, visible=default)`. Switching kind purges `style_overrides`.
-Default-equals-override is skipped — `_build_style` drops entries matching
-factory `default_style.color`, so unedited rows persist with empty `style`
-dicts and future default tweaks propagate.
+Each cell is a **visibility checkbox** (show/hide that one line) followed by
+a **color swatch**. The swatch's text label routes through the factory's
+`output_key_label(key)` hook so verbose canonical keys display compactly
+(e.g. Prior Day H/L/C's `prior_day_high` → `pd_high`) — matching the
+in-chart readout legend; the swatch + `row.color_buttons` (and the
+`row.visible_vars` BooleanVars) are still keyed by the canonical output key.
+
+**Color.** The swatch opens the themed `ThemedColorChooser` via `pick_color`
+(audit `themed-color-chooser`; a Win32-ChooseColor look-alike that follows
+the app's light/dark theme). Chosen hex lands on the row's `style_overrides`.
+
+**Visibility.** The checkbox reflects `_resolved_visible_for(row, key,
+default_style)` (override → factory `default_style.visible` → `True`).
+Toggling calls `_on_toggle_output_visible(row, key)`, which records the bool
+in `row.visible_overrides` and commits — letting the user hide, e.g.,
+Bollinger's `upper`/`lower` bands while keeping `middle`. `indicators.render.
+_output_visible` honours the persisted `LineStyle.visible` (hidden band
+vanishes from BOTH chart and legend, the latter via
+`readout_legend._effective_output_keys_for`). This is finer-grained than the
+whole-indicator Primary/Compare master toggle.
+
+Both are committed via `manager.update(style=...)` where `_build_style`
+materialises one `LineStyle(color, width=default, visible)` per output whose
+**color OR visibility** differs from the factory `default_style` (so a hidden
+default-colour band is still persisted, while an untouched output persists no
+entry and future default tweaks propagate). Switching kind purges both
+`style_overrides` and `visible_overrides`; re-hydrating a row from a saved
+config brings each checkbox up matching the persisted `visible` flag.
 
 ### Per-interval visibility checkboxes (b41)
 Inline `{1m,2m,5m,15m,30m,1h,1d,1wk,1mo}` checkbox group maps to

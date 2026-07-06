@@ -15817,6 +15817,114 @@ def check_b42_indicator_color_palette(app) -> None:
           "default-equals-override skipped; persistence round-trip)")
 
 
+def check_d85_bollinger_band_visibility(app) -> None:
+    """Per-output band show/hide via the indicator dialog (Bollinger).
+
+    Bollinger has three overlay outputs (middle/upper/lower). The
+    dialog exposes a visibility checkbox next to each colour swatch
+    (``_rebuild_color_buttons`` → ``row.visible_vars``); toggling one
+    commits a per-output ``LineStyle.visible`` flip that
+    ``indicators.render._output_visible`` honours (hidden band vanishes
+    from BOTH chart and legend).
+
+    Validates:
+      A. A BB row exposes one visibility BooleanVar per output, all
+         defaulting True.
+      B. Toggling ``upper`` off commits ``cfg.style['upper'].visible ==
+         False`` while ``middle`` stays visible (no style entry, or one
+         with ``visible=True``).
+      C. ``_build_style`` emits a hidden band even when its colour is
+         the factory default (colour-unchanged, visibility-changed).
+      D. ``to_dict``/``from_dict`` round-trips ``visible=False``.
+      E. Re-hydrating a fresh row from the persisted config brings the
+         ``upper`` checkbox up unchecked (``visible_overrides``).
+      F. ``render._output_visible`` agrees: upper hidden, middle shown.
+    """
+    from tradinglab.gui.indicator_dialog import open_indicator_dialog
+    from tradinglab.indicators import render as _ind_render
+    from tradinglab.indicators.config import IndicatorConfig
+
+    mgr = app._indicator_manager
+    mgr.clear()
+
+    dlg = open_indicator_dialog(app)
+    try:
+        dlg._on_click_add()
+        row = dlg._rows[-1]
+        bb_display = dlg._display_for_kind_id("bbands")
+        row.kind_var.set(bb_display)
+        dlg._on_kind_changed(row)
+
+        # A: one visibility var per output, all True by default.
+        assert {"middle", "upper", "lower"}.issubset(
+            set(row.visible_vars.keys())
+        ), (
+            f"BB row must expose middle/upper/lower visibility toggles; "
+            f"got {set(row.visible_vars.keys())}"
+        )
+        assert all(
+            row.visible_vars[k].get() is True
+            for k in ("middle", "upper", "lower")
+        ), "all bands must default to visible"
+
+        # B: uncheck upper → commit → persisted visible=False.
+        row.visible_vars["upper"].set(False)
+        dlg._on_toggle_output_visible(row, "upper")
+        cfg = mgr.get(row.config_id)
+        assert cfg is not None, "commit must produce a manager config"
+        assert cfg.style.get("upper") is not None, (
+            "hiding a band must persist a style entry for it"
+        )
+        assert cfg.style["upper"].visible is False, (
+            f"upper band must be hidden; got visible={cfg.style['upper'].visible!r}"
+        )
+        # middle untouched → either absent or explicitly visible.
+        mid = cfg.style.get("middle")
+        assert mid is None or mid.visible is True, (
+            "untouched middle must remain visible"
+        )
+
+        # C: _build_style emits the hidden band despite default colour.
+        built = dlg._build_style(row, "bbands")
+        assert "upper" in built and built["upper"].visible is False, (
+            f"_build_style must emit the hidden default-colour band; got {built}"
+        )
+
+        # D: persistence round-trip preserves visible=False.
+        cfg2 = IndicatorConfig.from_dict(cfg.to_dict())
+        assert cfg2.style["upper"].visible is False, (
+            "to_dict/from_dict must round-trip the hidden flag"
+        )
+
+        # F: render agrees (upper hidden, middle shown).
+        assert _ind_render._output_visible(cfg2, "upper") is False
+        assert _ind_render._output_visible(cfg2, "middle") is True
+
+        # E: a fresh row hydrated from the persisted config comes up
+        # with the upper checkbox unchecked.
+        dlg._on_click_add()
+        row2 = dlg._rows[-1]
+        dlg._hydrate_row_from_config(row2, cfg2)
+        assert row2.visible_vars["upper"].get() is False, (
+            "re-hydrated row must show the hidden band's checkbox unchecked"
+        )
+        assert row2.visible_vars["middle"].get() is True
+
+        try:
+            dlg.destroy()
+        except Exception:  # noqa: BLE001
+            pass
+        app._indicator_dialog = None
+    finally:
+        try:
+            mgr.clear()
+        except Exception:  # noqa: BLE001
+            pass
+
+    print("  [OK] d85 per-output Bollinger band visibility (dialog checkbox → "
+          "LineStyle.visible → render hides band; round-trips)")
+
+
 def check_b43_bollinger_bands_ema(app) -> None:
     """Bollinger Bands ma_type dropdown unifies SMA/EMA/WMA/RMA centerlines (b43).
 
@@ -21336,6 +21444,7 @@ def _run_all_checks(app) -> None:
     check_b40_sandbox_watchlist_uses_replay_clock(app)
     check_b41_indicator_intervals_per_instance(app)
     check_b42_indicator_color_palette(app)
+    check_d85_bollinger_band_visibility(app)
     check_b43_bollinger_bands_ema(app)
     check_b44_bollinger_separate_std_window(app)
     check_b45_vwap_session_anchored(app)
@@ -21694,6 +21803,8 @@ def _build_check_sequence():
         ("check_b41_indicator_intervals_per_instance",
          check_b41_indicator_intervals_per_instance),
         ("check_b42_indicator_color_palette", check_b42_indicator_color_palette),
+        ("check_d85_bollinger_band_visibility",
+         check_d85_bollinger_band_visibility),
         ("check_b43_bollinger_bands_ema", check_b43_bollinger_bands_ema),
         ("check_b44_bollinger_separate_std_window",
          check_b44_bollinger_separate_std_window),

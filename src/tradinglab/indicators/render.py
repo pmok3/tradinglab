@@ -644,6 +644,27 @@ def _resolve_style(cfg: IndicatorConfig, output_key: str) -> tuple[str, float]:
     return color, width
 
 
+def _output_visible(cfg: IndicatorConfig, output_key: str) -> bool:
+    """Return the per-output visibility flag for one line of a config.
+
+    Honours the user-flippable ``LineStyle.visible`` on
+    ``cfg.style[output_key]`` (e.g. hiding Bollinger's ``upper`` /
+    ``lower`` bands while keeping ``middle``). A key the user never
+    touched falls back to the factory's ``default_style`` visibility,
+    then to ``True``. This mirrors the readout-legend resolution
+    (``gui.readout_legend._effective_output_keys_for``) so a hidden
+    band vanishes from BOTH the chart and the legend.
+    """
+    spec = dict(getattr(cfg, "style", {}) or {}).get(output_key)
+    if spec is None:
+        cls = factory_by_kind_id(cfg.kind_id)
+        if cls is not None:
+            spec = dict(getattr(cls, "default_style", {}) or {}).get(output_key)
+    if spec is None:
+        return True
+    return bool(getattr(spec, "visible", True))
+
+
 def _draw_histogram(
     ax_lower: Any,
     existing: dict[str, Any],
@@ -902,8 +923,10 @@ def render_for_slot(
             dict(getattr(cls_ov, "output_kinds", {}) or {}) if cls_ov else {}
         )
         for key, arr in out.items():
-            if not bool(cfg.visible):
-                # Hide existing line if any.
+            if not bool(cfg.visible) or not _output_visible(cfg, key):
+                # Master toggle off OR this specific output hidden by the
+                # user (e.g. Bollinger ``upper``/``lower`` unchecked while
+                # ``middle`` stays on). Hide existing line if any.
                 ln = existing.get(key)
                 if ln is not None:
                     ln.set_visible(False)
@@ -1024,7 +1047,7 @@ def render_for_slot(
                 dict(getattr(cls, "output_kinds", {}) or {}) if cls else {}
             )
             for key, arr in out.items():
-                if not bool(cfg.visible):
+                if not bool(cfg.visible) or not _output_visible(cfg, key):
                     ln = existing.get(key)
                     if ln is not None:
                         ln.set_visible(False)

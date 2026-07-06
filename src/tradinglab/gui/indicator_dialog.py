@@ -224,6 +224,8 @@ class _IndicatorRow:
         "color_subframe",
         "color_buttons",
         "style_overrides",
+        "visible_vars",
+        "visible_overrides",
         "last_good_params",
         "is_unknown",
         "suppress",
@@ -294,6 +296,16 @@ class _IndicatorRow:
         self.color_subframe: tk.Frame | None = None
         self.color_buttons: dict[str, tk.Frame] = {}
         self.style_overrides: dict[str, str] = {}
+        # Per-output visibility toggles (per-band show/hide). One
+        # ``tk.BooleanVar`` per output key, paired with the color swatch
+        # in ``color_subframe`` (e.g. hide Bollinger ``upper``/``lower``
+        # while keeping ``middle``). ``visible_overrides`` maps the
+        # output key to the user's chosen bool; a key absent from the
+        # dict means "use the factory's default_style visibility"
+        # (True for every built-in output). Rebuilt alongside the color
+        # swatches whenever the row's kind changes.
+        self.visible_vars: dict[str, tk.BooleanVar] = {}
+        self.visible_overrides: dict[str, bool] = {}
         # Last params dict that successfully constructed an indicator
         # — used to revert in-place when validation fails so the
         # chart never sees an invalid config.
@@ -1342,11 +1354,18 @@ class IndicatorDialog(BaseModalDialog):
         # config's style dict — only the entries the user actually
         # changed are kept; the others fall back to default_style.
         row.style_overrides = {}
+        row.visible_overrides = {}
         if cfg is not None:
             for k, ls in (cfg.style or {}).items():
                 col = getattr(ls, "color", None)
                 if col:
                     row.style_overrides[str(k)] = str(col)
+                # Hydrate a hidden band (visible=False) so its checkbox
+                # comes up unchecked; visible=True is the default so we
+                # only record explicit hides to keep the override dict
+                # minimal.
+                if getattr(ls, "visible", True) is False:
+                    row.visible_overrides[str(k)] = False
         self._rebuild_color_buttons(row, kind_id)
         # Last-good params snapshot: starts at the hydrated values so
         # an immediate revert before the user has typed anything goes
@@ -2139,9 +2158,10 @@ class IndicatorDialog(BaseModalDialog):
             seed = self._collect_param_values(row)
             self._build_param_widgets(row, new_kind_id, seed)
             # Output keys differ per kind — clear stale per-output
-            # color overrides and rebuild the color-swatch row to
-            # match the new factory's default_style keys (b42).
+            # color + visibility overrides and rebuild the color-swatch
+            # row to match the new factory's default_style keys (b42).
             row.style_overrides = {}
+            row.visible_overrides = {}
             self._rebuild_color_buttons(row, new_kind_id)
         finally:
             row.suppress = False
@@ -2568,14 +2588,53 @@ class IndicatorDialog(BaseModalDialog):
             return getattr(ls, "color", FALLBACK_GRAY) or FALLBACK_GRAY
         return FALLBACK_GRAY
 
+    def _resolved_visible_for(self, row: _IndicatorRow, key: str,
+                             default_style: dict[str, LineStyle]) -> bool:
+        """Return the visibility currently assigned to output ``key``.
+
+        User override (if any) wins; otherwise the factory default's
+        :attr:`LineStyle.visible`; finally ``True``. Mirrors
+        :meth:`_resolved_color_for` for the per-output show/hide
+        checkbox."""
+        if key in row.visible_overrides:
+            return bool(row.visible_overrides[key])
+        ls = default_style.get(key)
+        if ls is not None:
+            return bool(getattr(ls, "visible", True))
+        return True
+
+    def _on_toggle_output_visible(self, row: _IndicatorRow,
+                                  key: str) -> None:
+        """Record a per-output visibility toggle and commit.
+
+        Called from the visibility checkbox's ``command``. Stores the
+        new bool on the row's ``visible_overrides`` and commits through
+        the manager so the chart redraws with the line shown / hidden
+        (``indicators.render._output_visible`` reads the persisted
+        ``LineStyle.visible``; the readout legend suppresses the same
+        key via ``readout_legend._effective_output_keys_for``)."""
+        if row.is_unknown:
+            return
+        var = row.visible_vars.get(key)
+        if var is None:
+            return
+        try:
+            row.visible_overrides[key] = bool(var.get())
+        except tk.TclError:
+            return
+        self._commit_now(row)
+
     def _rebuild_color_buttons(self, row: _IndicatorRow,
                                kind_id: str) -> None:
-        """Tear down + rebuild the row's color-swatch buttons.
+        """Tear down + rebuild the row's per-output line controls.
 
-        One button per output key declared in the factory's
-        ``default_style``. Each button shows the resolved color as
-        its background; clicking it opens the native OS color
-        chooser and commits the chosen color via ``_commit_now``.
+        One cell per output key declared in the factory's
+        ``default_style``: a visibility checkbox (show/hide that line)
+        followed by a color swatch. The swatch shows the resolved color
+        as its background; clicking it opens the native OS color chooser
+        and commits via ``_commit_now``. Toggling the checkbox commits a
+        per-output ``LineStyle.visible`` flip (e.g. hide Bollinger's
+        ``upper``/``lower`` while keeping ``middle``).
         """
         sf = row.color_subframe
         if sf is None:
@@ -2586,6 +2645,7 @@ class IndicatorDialog(BaseModalDialog):
             except tk.TclError:
                 pass
         row.color_buttons = {}
+        row.visible_vars = {}
         if row.is_unknown:
             return
         default_style = self._default_style_for_kind(kind_id)
@@ -2605,13 +2665,27 @@ class IndicatorDialog(BaseModalDialog):
         except Exception:  # noqa: BLE001
             _label_for_key = None
         try:
-            tk.Label(sf, text="Colors:").pack(side="left", padx=(0, 4))
+            tk.Label(sf, text="Lines:").pack(side="left", padx=(0, 4))
         except tk.TclError:
             return
         for key in default_style.keys():
             color = self._resolved_color_for(row, key, default_style)
             cell = tk.Frame(sf)
             cell.pack(side="left", padx=(0, 8))
+            # Per-output visibility checkbox (show/hide this line) —
+            # sits immediately left of the colour swatch so the cell
+            # reads "[✓] ■ upper". Unchecking hides just this output on
+            # the chart (and its legend segment) while leaving the
+            # indicator otherwise active.
+            vis_var = tk.BooleanVar(
+                value=self._resolved_visible_for(row, key, default_style)
+            )
+            row.visible_vars[str(key)] = vis_var
+            chk = ttk.Checkbutton(
+                cell, variable=vis_var, takefocus=False,
+                command=lambda r=row, k=str(key): self._on_toggle_output_visible(r, k),
+            )
+            chk.pack(side="left", padx=(0, 3))
             swatch = tk.Frame(
                 cell, width=22, height=14,
                 bg=color, bd=1, relief="solid",
@@ -2680,27 +2754,33 @@ class IndicatorDialog(BaseModalDialog):
                      kind_id: str) -> dict[str, LineStyle]:
         """Materialise the row's per-output style overrides.
 
-        Only emits entries for outputs whose color differs from the
-        factory's ``default_style`` color, so a config saved without
-        any user-picked colors round-trips with an empty ``style``
-        dict (matches the "no overrides" intent and lets future
-        default_style tweaks propagate through unchanged).
+        Emits an entry for any output whose color OR visibility differs
+        from the factory's ``default_style`` — so a config saved without
+        any user tweaks round-trips with an empty ``style`` dict (matches
+        the "no overrides" intent and lets future default_style tweaks
+        propagate through unchanged), while a hidden band (default color,
+        ``visible=False``) is still persisted.
         """
         if row.is_unknown:
             return {}
         default_style = self._default_style_for_kind(kind_id)
         out: dict[str, LineStyle] = {}
-        for key, color in row.style_overrides.items():
+        keys = set(row.style_overrides) | set(row.visible_overrides)
+        for key in keys:
             ls_default = default_style.get(key)
             default_color = (getattr(ls_default, "color", FALLBACK_GRAY)
                              if ls_default is not None else FALLBACK_GRAY)
-            if (color or "").upper() == (default_color or "").upper():
-                # User picked the default — no override needed.
-                continue
+            default_visible = (getattr(ls_default, "visible", True)
+                               if ls_default is not None else True)
             width = (getattr(ls_default, "width", 1.2)
                      if ls_default is not None else 1.2)
-            visible = (getattr(ls_default, "visible", True)
-                       if ls_default is not None else True)
+            color = row.style_overrides.get(key, default_color)
+            visible = row.visible_overrides.get(key, default_visible)
+            color_differs = (color or "").upper() != (default_color or "").upper()
+            visible_differs = bool(visible) != bool(default_visible)
+            if not color_differs and not visible_differs:
+                # User's choices match the factory defaults — no override.
+                continue
             out[str(key)] = LineStyle(color=color, width=float(width),
                                       visible=bool(visible))
         return out
