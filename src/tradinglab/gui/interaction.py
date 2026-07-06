@@ -1196,8 +1196,9 @@ class InteractionMixin:
             _rm(art)
         for art in getattr(self, "_readout_artists", {}).values():
             _rm(art)
-        for art in getattr(self, "_pane_value_labels", {}).values():
-            _rm(art)
+        for rows in getattr(self, "_pane_value_labels", {}).values():
+            for _cid, art in rows:
+                _rm(art)
         _rm(getattr(self, "_hover_ann", None))
 
     def _ensure_overlay_artists(self) -> None:
@@ -1373,33 +1374,38 @@ class InteractionMixin:
                 self._readout_artists[ax] = box
             except Exception:  # noqa: BLE001
                 pass
-        # Per-pane hover value badge (audit ``pane-value-readout``).
-        # Shown on EVERY dedicated indicator pane (RVOL, RRVOL, RSI, MACD,
-        # ADX, ATR, …) — a top-RIGHT value badge (the existing clickable
-        # name label stays top-left, so name + value read together across
-        # the pane top). The gate is purely "is this an indicator pane"
-        # (``kind == "indicator"`` in ``_ax_candle_map``), which is set for
-        # any ``overlay=False`` indicator during rendering — so a NEW pane
-        # indicator gets value tracking automatically, with no per-kind
-        # allowlist to maintain. The **volume** pane is deliberately NOT
-        # badged: its magnitude is already in the price-pane OHLCV strip,
-        # so a volume-pane badge would be redundant. Animated Text so each
-        # hover is a cheap blit; refreshed by ``_update_readout``.
+        # Per-pane INLINE value labels (audit ``pane-value-readout``).
+        # One value artist PER visible config, positioned right after that
+        # config's name label (``ax._sc_pane_value_x_by_cid``, recorded by
+        # ``indicators.render._render_pane_labels``) so the pane top reads
+        # ``RVOL Cum(20) 1.23   RRVOL Cum(20) 1.00`` — name then value, left to
+        # right. Replaces the old single right-aligned combined badge, which
+        # collided with the left-hand names on a narrow shared pane. Shown on
+        # EVERY dedicated indicator pane (kind == "indicator" in
+        # ``_ax_candle_map``); the volume pane is deliberately NOT badged (its
+        # magnitude is already in the price-pane OHLCV strip). Animated Text so
+        # each hover is a cheap blit; refreshed by ``_update_readout``.
         for ax, entry in self._ax_candle_map.items():
             kind = entry[1] if entry else None
             if kind != "indicator":
                 continue
-            try:
-                label = ax.text(
-                    0.995, 0.97, "", transform=ax.transAxes,
-                    ha="right", va="top", fontsize=9, family="monospace",
-                    color=theme["text"], zorder=11, animated=True,
-                    visible=False, clip_on=False,
-                )
-                label._sc_pane_value_kind = "indicator"
-                self._pane_value_labels[ax] = label
-            except Exception:  # noqa: BLE001
-                pass
+            x_by_cid = getattr(ax, "_sc_pane_value_x_by_cid", None) or {}
+            rows: list = []
+            for cid, xfrac in x_by_cid.items():
+                try:
+                    label = ax.text(
+                        float(xfrac), 0.97, "", transform=ax.transAxes,
+                        ha="left", va="top", fontsize=8, family="monospace",
+                        color=theme["text"], zorder=11, animated=True,
+                        visible=False, clip_on=False,
+                    )
+                    label._sc_pane_value_kind = "indicator"
+                    label._sc_pane_value_config_id = int(cid)
+                    rows.append((int(cid), label))
+                except Exception:  # noqa: BLE001
+                    pass
+            if rows:
+                self._pane_value_labels[ax] = rows
         # Populate readout with latest bar so it's visible immediately —
         # _on_draw_event composites it onto the fresh blit background.
         try:
@@ -2243,22 +2249,26 @@ class InteractionMixin:
         # Per-pane hover value badges (audit ``pane-value-readout``) — the
         # RVOL / RRVOL value(s) at the same cursor bar. Mirrors the
         # price-pane readout's latest-bar fallback so a badge is never blank.
-        for ax, label in (getattr(self, "_pane_value_labels", None) or {}).items():
+        for ax, rows in (getattr(self, "_pane_value_labels", None) or {}).items():
             try:
                 idx = self._readout_bar_idx(ax, xdata)
                 if idx is None:
-                    label.set_visible(False)
+                    for _cid, label in rows:
+                        label.set_visible(False)
                     continue
-                text, color = self._pane_indicator_readout(ax, idx)
-                if not text:
-                    label.set_visible(False)
-                    continue
-                label.set_text(text)
-                label.set_color(color)
-                label.set_visible(True)
+                by_cid = self._pane_config_values(ax, idx)
+                for cid, label in rows:
+                    tc = by_cid.get(cid)
+                    if not tc or not tc[0]:
+                        label.set_visible(False)
+                        continue
+                    label.set_text(tc[0])
+                    label.set_color(tc[1])
+                    label.set_visible(True)
             except Exception:  # noqa: BLE001
                 try:
-                    label.set_visible(False)
+                    for _cid, label in rows:
+                        label.set_visible(False)
                 except Exception:  # noqa: BLE001
                     pass
 
@@ -2383,6 +2393,69 @@ class InteractionMixin:
         color = last_color if (n_vals == 1 and last_color) else neutral
         return "  ".join(parts), color
 
+    def _pane_config_values(self, ax, idx):
+        """Return ``{config_id: (text, color)}`` for each visible config on ``ax``.
+
+        Per-config counterpart of :meth:`_pane_indicator_readout`, used to fill
+        the INLINE value labels that sit right after each config's name label
+        (see ``indicators.render._render_pane_labels`` +
+        ``gui.interaction`` value-label creation). Each config's text is JUST
+        its value(s) — no indicator-name prefix, because the adjacent name
+        label already identifies it. Multi-output configs (MACD's macd/signal/
+        hist) prefix each value with its output key (dropping a key that merely
+        repeats the indicator's ``kind_id``). A single-value config is coloured
+        by its line (matches the pane's curve); multi-value uses neutral text.
+        Configs with no defined value at ``idx`` (warmup bars) are omitted so
+        the caller hides their label.
+        """
+        out: dict[int, tuple[str, Any]] = {}
+        neutral = self._theme["text"]
+        ps_match, kind = self._find_indicator_panel_for_axes(ax)
+        if ps_match is None or kind != "ind":
+            return out
+        state = ps_match.get("ind_state")
+        mgr = getattr(self, "_indicator_manager", None)
+        if state is None or mgr is None:
+            return out
+        for cid, pa in getattr(state, "panes", {}).items():
+            if pa is not ax:
+                continue
+            cfg = mgr.get(cid)
+            if cfg is None or not getattr(cfg, "visible", True):
+                continue
+            lines = state.pane_lines.get(cid, {})
+            if not lines:
+                continue
+            vals: list[tuple[str, float, Any]] = []
+            for out_key, ln in lines.items():
+                val = self._line_value_at(ln, idx)
+                if val is None:
+                    continue
+                try:
+                    color = ln.get_color()
+                except Exception:  # noqa: BLE001
+                    color = None
+                vals.append((str(out_key), val, color))
+            if not vals:
+                continue
+            short = str(getattr(cfg, "kind_id", "") or "")
+            multi_out = len(vals) > 1
+            parts: list[str] = []
+            last_color = None
+            for out_key, val, color in vals:
+                bits: list[str] = []
+                if multi_out and out_key.lower() != short.lower():
+                    bits.append(out_key)
+                bits.append(f"{val:,.2f}")
+                parts.append(" ".join(bits))
+                last_color = color
+            color = last_color if (len(vals) == 1 and last_color) else neutral
+            try:
+                out[int(cid)] = ("  ".join(parts), color)
+            except Exception:  # noqa: BLE001
+                pass
+        return out
+
     def _update_crosshair_pixels(self, current_ax=None, px=None, py=None) -> None:
         """Revive the crosshair after a re-render using cached pixel coords."""
         if current_ax is None or px is None or py is None:
@@ -2448,7 +2521,9 @@ class InteractionMixin:
                 (getattr(self, "_pane_value_labels", None) or {}).items()
             )
             pane_val_vis = tuple(
-                bool(a.get_visible()) for _ax, a in pane_val_items
+                bool(art.get_visible())
+                for _ax, rows in pane_val_items
+                for _cid, art in rows
             )
             fp = (
                 getattr(self, "_last_readout_key", None),
@@ -2467,9 +2542,10 @@ class InteractionMixin:
                 for ax, box in readout_items:
                     if box.get_visible():
                         ax.draw_artist(box)
-                for ax, art in pane_val_items:
-                    if art.get_visible():
-                        ax.draw_artist(art)
+                for ax, rows in pane_val_items:
+                    for _cid, art in rows:
+                        if art.get_visible():
+                            ax.draw_artist(art)
                 self._overlay_bg = canvas.copy_from_bbox(self._figure.bbox)
                 self._overlay_bg_fp = fp
                 # The canvas buffer already holds base + readout; fall through
@@ -2538,9 +2614,12 @@ class InteractionMixin:
             getattr(self, "_price_label_artists", None),
             getattr(self, "_time_label_artists", None),
             getattr(self, "_readout_artists", None),
-            getattr(self, "_pane_value_labels", None),
         ):
             for a in (src or {}).values():
+                if a is not None:
+                    ids.add(id(a))
+        for rows in (getattr(self, "_pane_value_labels", None) or {}).values():
+            for _cid, a in rows:
                 if a is not None:
                     ids.add(id(a))
         ha = getattr(self, "_hover_ann", None)

@@ -276,15 +276,16 @@ class ThemeController:
                 art.set_color(theme["text"])
             except Exception:  # noqa: BLE001
                 pass
-        # Per-pane hover value badges (volume + indicator panes). Their
-        # colour is baked at build time / re-set on hover; recolor here so a
-        # live theme swap updates any currently-visible badge. Single-value
-        # indicator badges are re-coloured by their line on the next hover.
-        for art in getattr(root, "_pane_value_labels", {}).values():
-            try:
-                art.set_color(theme["text"])
-            except Exception:  # noqa: BLE001
-                pass
+        # Per-pane inline value labels (indicator panes). Their colour is
+        # baked at build time / re-set on hover; recolor here so a live theme
+        # swap updates any currently-visible value. Single-value indicator
+        # values are re-coloured by their line on the next hover.
+        for rows in getattr(root, "_pane_value_labels", {}).values():
+            for _cid, art in rows:
+                try:
+                    art.set_color(theme["text"])
+                except Exception:  # noqa: BLE001
+                    pass
         live_price_overlay = getattr(root, "_live_price_overlay", None)
         if live_price_overlay is not None:
             try:

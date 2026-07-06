@@ -92,14 +92,18 @@ def test_render_pane_labels_one_pickable_artist_per_config():
     cfgs = [_cfg(1, "RVOL Cum(20)"), _cfg(2, "RVOL ToD(20)")]
     R._render_pane_labels(ax, cfgs, scope="main")
     artists = ax._sc_pane_label_artists
-    # Two name artists (each carrying ONE config id) + one "•" spacer.
+    # Two name artists (each carrying ONE config id) — no "•" spacers anymore
+    # (each name is followed by its own inline value slot instead).
     name_artists = [a for a in artists if getattr(a, "_sc_pane_label_config_ids", ())]
     assert len(name_artists) == 2
+    assert len(artists) == 2, "only name artists are stored (no bullet spacers)"
     ids = {a._sc_pane_label_config_ids for a in name_artists}
     assert ids == {(1,), (2,)}, "each name artist carries exactly its own id"
-    # Spacer present, non-pickable.
-    spacers = [a for a in artists if not getattr(a, "_sc_pane_label_config_ids", ())]
-    assert len(spacers) == 1
+    # A value slot (x-position) is reserved per config, right after its name,
+    # laid out left-to-right so value[1] sits before name[2].
+    x_by_cid = ax._sc_pane_value_x_by_cid
+    assert set(x_by_cid) == {1, 2}, "one reserved value x-position per config"
+    assert x_by_cid[1] < x_by_cid[2], "values laid out left-to-right after names"
     # Back-compat singular points at the first name artist.
     assert ax._sc_pane_label_artist is name_artists[0]
 

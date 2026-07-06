@@ -91,8 +91,8 @@ by `ChartApp._build_ui`.
 - `_pane_indicator_label_hit` iterates the pane's per-config name
   artists (`ax._sc_pane_label_artists`) and returns the config of the
   name under the cursor (each carries a length-1
-  `_sc_pane_label_config_ids`; `•` spacers carry `()` and are skipped),
-  so clicking a name on a shared pane opens THAT indicator. Falls back
+  `_sc_pane_label_config_ids`), so clicking a name on a shared pane opens
+  THAT indicator. Falls back
   to the legacy singular `_sc_pane_label_artist` when the list is
   absent.
 - Crosshair: `_update_crosshair`, `_update_crosshair_pixels`
@@ -231,43 +231,44 @@ note: the crosshair now draws **over** the readout box (it used to draw
 under) where they overlap at the far-left edge — acceptable and standard
 for trading crosshairs.
 
-### Per-pane hover value badges (`pane-value-readout`)
+### Per-pane inline value labels (`pane-value-readout`)
 
 Mirrors how the price pane's readout surfaces overlay-indicator values on
 hover, extended to **every dedicated indicator pane** (`overlay=False`
 indicators: RVOL, RRVOL, RSI, MACD, ADX, ATR, LRSI, SMI, overlap-score, …).
-`_pane_value_labels` is a `dict[axes, Text]` of animated `Text` artists
-built in `_ensure_overlay_artists` and refreshed by `_update_readout`:
+`_pane_value_labels` is a `dict[axes, list[(config_id, Text)]]` of animated
+`Text` artists — **one value artist per visible config**, positioned
+**inline right after that config's name label** — built in
+`_ensure_overlay_artists` and refreshed by `_update_readout`:
 
-- **Indicator pane** → a top-**right** (`ha="right"`) badge showing the
-  pane indicator's value(s) at the hovered bar. The existing clickable
-  name label (`_render_pane_labels`, top-left) is untouched, so name
-  (left) + value (right) read together across the pane top. A single
-  value is coloured by its line (matches the pane's curve); multiple
-  values share the neutral colour. Built by `_pane_indicator_readout(ax,
-  idx)` from `state.pane_lines` in render order, `_line_value_at` per line.
-  **Labelling** (so shared panes are readable):
-  - A **lone** config shows just the value (`"1.23"`) — the pane's name
-    label already identifies it.
-  - **Multiple configs** on one pane (e.g. RVOL + RRVOL) prefix each value
-    with its indicator: `"rvol 1.23  rrvol 1.00"`. The prefix is the short
-    `kind_id`; if two configs share a `kind_id` (two RVOLs of different
-    length) the unique `display_name` is used instead.
-  - **Multi-output** configs (e.g. MACD's macd/signal/hist) prefix each
-    value with its output key; when the output key duplicates the
-    indicator prefix it is dropped (no `"macd macd"`).
-  Empty at NaN/warmup bars → badge hidden.
-- **Volume pane** → **no** badge. Volume is already shown in the price
-  pane's OHLCV readout strip, so a volume-pane badge would be redundant.
+- **Placement.** Each value sits `ha="left"` at the x recorded by
+  `indicators.render._render_pane_labels` in `ax._sc_pane_value_x_by_cid`
+  (right after the config's name), so the pane top reads
+  `RVOL Cum(20) 1.23   RRVOL Cum(20) 1.00` — name then value, flowing left
+  to right. This **replaced** the old single right-aligned combined badge,
+  which collided with the left-hand names on a narrow **shared** pane
+  (RVOL + RRVOL). Because value artists are keyed by config id and the name
+  label already identifies each one, the value text is **just the number(s)**
+  — no indicator prefix.
+- **Colour.** A single-value config is coloured by its line (matches the
+  pane's curve); a multi-output config uses the neutral text colour.
+- **Per-config value** comes from `_pane_config_values(ax, idx) ->
+  {config_id: (text, color)}` (`state.pane_lines`, `_line_value_at` per
+  line). Multi-output configs (MACD's macd/signal/hist) prefix each value
+  with its output key, dropping a key that merely repeats the `kind_id`.
+  A config with no defined value at `idx` (warmup) is omitted → its label
+  is hidden. (`_pane_indicator_readout` — the old single-string combined
+  formatter — is retained for the unit tests + any legacy caller.)
+- **Volume pane** → **no** labels. Volume is already shown in the price
+  pane's OHLCV readout strip, so a volume-pane value would be redundant.
 
-The gate is intentionally allowlist-free: a badge is created (in
+The gate is intentionally allowlist-free: value labels are created (in
 `_ensure_overlay_artists`) for every axes whose `_ax_candle_map` kind is
 `"indicator"` — which is set during rendering for any `overlay=False`
 indicator. So a **new pane indicator is covered automatically**, with no
-per-kind table to maintain. `_pane_indicator_readout` reads out every
-visible config on the pane. This universality is pinned by the
+per-kind table to maintain. This universality is pinned by the
 registry-driven meta-test `check_d51c_all_pane_indicators_value_badge`
-(walks every `overlay=False` indicator, asserts a numeric badge; asserts a
+(walks every `overlay=False` indicator, asserts a numeric value; asserts a
 price-overlay indicator gets none).
 
 Shared bar resolution: `_readout_bar_idx(ax, xdata)` returns the in-render-

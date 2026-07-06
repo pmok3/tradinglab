@@ -9021,34 +9021,41 @@ def check_d51b_pane_value_readouts(app) -> None:
         vol_ax = ps.get("vol_ax")
         ind_ax = ind_axes[0]
 
-        labels = app._pane_value_labels
-        assert vol_ax not in labels, (
+        # NOTE: read app._pane_value_labels FRESH each time — the overlay
+        # rebuild reassigns the dict (self._pane_value_labels = {}), so a
+        # captured reference goes stale after the next full render.
+        def _val_arts(ax):
+            return [a for _cid, a in (app._pane_value_labels.get(ax) or [])]
+
+        assert vol_ax not in app._pane_value_labels, (
             "volume pane must NOT have a value badge (redundant with "
             "the price pane OHLCV readout)")
-        assert ind_ax in labels, "RVOL pane must have a value badge"
-        assert getattr(labels[ind_ax], "_sc_pane_value_kind", "") == "indicator"
-        # Placement: indicator badge right-aligned.
-        assert labels[ind_ax].get_ha() == "right"
+        assert ind_ax in app._pane_value_labels, "RVOL pane must have a value badge"
+        _ia = _val_arts(ind_ax)
+        assert _ia, "RVOL pane must have >=1 inline value artist"
+        assert getattr(_ia[0], "_sc_pane_value_kind", "") == "indicator"
+        # Placement: inline value sits LEFT-aligned right after the name.
+        assert _ia[0].get_ha() == "left"
 
         # Hover over a specific bar (idx 60) — value must reflect THAT bar.
         idx = 60
         app._update_readout(float(idx))
-        assert vol_ax not in labels, "volume badge must never be created"
+        assert vol_ax not in app._pane_value_labels, "volume badge must never be created"
 
-        itext = labels[ind_ax].get_text()
+        itext = _val_arts(ind_ax)[0].get_text()
         assert itext.strip(), "RVOL badge must show a value at a defined bar"
         # Must parse as a number (RVOL ratio), not the indicator name.
         try:
             float(itext.replace(",", "").split()[-1])
         except ValueError:
             raise AssertionError(f"RVOL badge should be numeric; got {itext!r}")
-        assert labels[ind_ax].get_visible() is True
+        assert _val_arts(ind_ax)[0].get_visible() is True
 
         # Never-blank fallback: xdata=None → latest non-gap bar.
         app._update_readout(None)
-        assert labels[ind_ax].get_text().strip(), (
+        assert _val_arts(ind_ax)[0].get_text().strip(), (
             "RVOL fallback badge should read the latest bar, not blank")
-        assert labels[ind_ax].get_visible() is True
+        assert _val_arts(ind_ax)[0].get_visible() is True
 
         # Shared pane: two indicators on one pane must LABEL each value with
         # its indicator so they're distinguishable. Two RVOLs of different
@@ -9075,10 +9082,21 @@ def check_d51b_pane_value_readouts(app) -> None:
             sh_ax = sh_axes[0]
             assert sh_ax in app._pane_value_labels
             app._update_readout(None)
-            sh_text = app._pane_value_labels[sh_ax].get_text()
-            assert "RVOL(20)" in sh_text and "RVOL(10)" in sh_text, (
-                "shared pane must label each config's value with its "
-                f"indicator so they're distinguishable; got {sh_text!r}")
+            sh_arts = _val_arts(sh_ax)
+            assert len(sh_arts) == 2, (
+                "shared pane must have one inline value artist per config; "
+                f"got {len(sh_arts)}")
+            for a in sh_arts:
+                assert a.get_text().strip(), (
+                    "each shared-pane inline value must be non-blank")
+            # Distinguishability now comes from the NAME labels (each value
+            # sits right after its own name), not from a combined value string.
+            name_texts = " ".join(
+                t.get_text()
+                for t in getattr(sh_ax, "_sc_pane_label_artists", []))
+            assert "RVOL(20)" in name_texts and "RVOL(10)" in name_texts, (
+                "shared pane name labels must identify each config so their "
+                f"adjacent values are distinguishable; got {name_texts!r}")
 
         # RSI pane now ALSO gets a value badge (value tracking is a property
         # of every dedicated indicator pane, not just the RVOL family). The
@@ -9106,7 +9124,7 @@ def check_d51b_pane_value_readouts(app) -> None:
             assert rsi_axes[0] in app._pane_value_labels, (
                 "RSI pane must get a value badge (all indicator panes do)")
             app._update_readout(None)
-            assert app._pane_value_labels[rsi_axes[0]].get_text().strip(), (
+            assert _val_arts(rsi_axes[0])[0].get_text().strip(), (
                 "RSI badge must show a value at the latest bar")
 
         print("  [OK] §pane-value-readout RVOL + RSI pane hover values "
@@ -9286,9 +9304,11 @@ def check_d51c_all_pane_indicators_value_badge(app) -> None:
             if kind_id in _value_exempt:
                 continue
             app._update_readout(None)  # latest, fully-hydrated bar
-            label = app._pane_value_labels[ax]
-            if not (label.get_visible() and _has_number(label.get_text())):
-                missing_value.append(f"{kind_id}→{label.get_text()!r}")
+            arts = [a for _cid, a in (app._pane_value_labels.get(ax) or [])]
+            if not any(
+                    a.get_visible() and _has_number(a.get_text()) for a in arts):
+                missing_value.append(
+                    f"{kind_id}→{[a.get_text() for a in arts]!r}")
         assert not missing_badge, (
             "pane indicators missing a value badge (value-tracking "
             f"regression): {missing_badge}")

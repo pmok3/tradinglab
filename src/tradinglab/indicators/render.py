@@ -756,15 +756,19 @@ def _draw_histogram(
 def _render_pane_labels(ax_lower: Any, visible_label_cfgs: list, scope: str) -> None:
     """(Re)create per-config clickable in-pane name labels.
 
-    Each visible config gets its OWN pickable ``Text`` artist (carrying a
-    length-1 ``_sc_pane_label_config_ids``) laid left-to-right with dim,
-    non-pickable ``•`` spacers between, so a click targets the SPECIFIC
-    indicator under the cursor — not just the first config on a shared
-    pane (e.g. RVOL Cumulative + ToD). All created artists (names +
-    spacers) are stored on ``ax_lower._sc_pane_label_artists`` for
-    teardown + hit-testing (spacers carry an empty id tuple so the
-    hit-tester skips them); ``_sc_pane_label_artist`` keeps pointing at
-    the first NAME artist for back-compat (theme recolor / legacy reads).
+    Each visible config gets its OWN pickable ``Text`` name artist laid
+    left-to-right, and — right after each name — a **reserved slot for that
+    config's live value** (the value ``Text`` artist itself is owned by
+    ``gui.interaction`` so it can be blitted/updated on hover without a full
+    redraw; here we only record where it goes in ``ax._sc_pane_value_x_by_cid``
+    and advance the layout past it). This puts the reading as
+    ``RVOL Cum(20) 1.23   RRVOL Cum(20) 1.00`` — name then value, flowing left
+    to right — instead of the old top-left names + single right-aligned combined
+    value badge, which overlapped on a narrow shared pane (RVOL + RRVOL).
+
+    Name artists (only) are stored on ``ax_lower._sc_pane_label_artists`` for
+    teardown + hit-testing; ``_sc_pane_label_artist`` keeps pointing at the
+    first NAME artist for back-compat (theme recolor / legacy reads).
 
     Remove-and-recreate each render — labels are cheap and only rebuilt
     on a full render, never on the blit path. X-layout uses an estimated
@@ -776,6 +780,7 @@ def _render_pane_labels(ax_lower: Any, visible_label_cfgs: list, scope: str) -> 
         _safe_remove_line(old)
     ax_lower._sc_pane_label_artists = []
     ax_lower._sc_pane_label_artist = None
+    ax_lower._sc_pane_value_x_by_cid = {}
     if not visible_label_cfgs:
         return
     try:
@@ -789,8 +794,14 @@ def _render_pane_labels(ax_lower: Any, visible_label_cfgs: list, scope: str) -> 
         char_frac = ((8.0 * dpi / 72.0) * 0.58) / ax_w_px
     except Exception:  # noqa: BLE001
         char_frac = 0.012
-    sep_frac = 2.0 * char_frac
+    #: Chars reserved after each name for its live value (e.g. "1.23"). A
+    #: multi-output pane (MACD) is single-config so its longer value never
+    #: crowds a sibling; the shared RVOL+RRVOL pane has short (~4-char) values.
+    value_reserve = 6.0 * char_frac
+    name_value_gap = 0.6 * char_frac
+    group_gap = 2.0 * char_frac
     created: list[Any] = []
+    value_x_by_cid: dict[int, float] = {}
     x = 0.005
     n = len(visible_label_cfgs)
     for i, cfg in enumerate(visible_label_cfgs):
@@ -810,25 +821,22 @@ def _render_pane_labels(ax_lower: Any, visible_label_cfgs: list, scope: str) -> 
         except Exception:  # noqa: BLE001
             pass
         created.append(t)
-        x += len(name) * char_frac
+        x += len(name) * char_frac + name_value_gap
+        # Reserve the value slot right after the name; interaction owns the
+        # artist (animated, hover-updated). Record where it starts.
+        try:
+            value_x_by_cid[int(cfg.id)] = x
+        except Exception:  # noqa: BLE001
+            pass
+        x += value_reserve
         if i < n - 1:
-            try:
-                sp = ax_lower.text(
-                    x + sep_frac * 0.25, 0.97, "\u2022",
-                    transform=ax_lower.transAxes, ha="left", va="top",
-                    fontsize=8, color=text_color, alpha=0.5, zorder=10,
-                    clip_on=False,
-                )
-                sp._sc_pane_label_config_ids = ()
-                created.append(sp)
-            except Exception:  # noqa: BLE001
-                pass
-            x += sep_frac
+            x += group_gap
     ax_lower._sc_pane_label_artists = created
     ax_lower._sc_pane_label_artist = next(
         (a for a in created if getattr(a, "_sc_pane_label_config_ids", ())),
         None,
     )
+    ax_lower._sc_pane_value_x_by_cid = value_x_by_cid
 
 
 def render_for_slot(
