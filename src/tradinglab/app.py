@@ -3696,6 +3696,7 @@ class ChartApp(
         # so they aren't redefined on every render. The locator holds a
         # back-ref to ``self`` for live access to ``_panel_state``.
         _AdaptiveXLocator = _adaptive_x_locator_class()
+        primary_window: tuple[int, int] | None = None
         for slot_key, candles, ax_p, ax_v, ind_axes, scope in slots:
             hide_vol = self._slot_hides_volume(slot_key)
             candles = self._maybe_rebase_candles(slot_key, candles)
@@ -3780,7 +3781,10 @@ class ChartApp(
                 slide_to_right=slide_to_right,
                 prev_primary_dates=prev_primary_dates,
                 prev_primary_xlim=prev_primary_xlim,
+                primary_window=primary_window,
             )
+            if slot_key == "primary":
+                primary_window = (lo, hi)
             start, end = _compute_render_range(
                 lo, hi, n, _MIN_RENDER_CANDLES, _MAX_RENDER_CANDLES,
             )
@@ -3822,6 +3826,7 @@ class ChartApp(
         if compare_on:
             slots.append(("compare", self._compare))
 
+        primary_window: tuple[int, int] | None = None
         for slot_key, candles in slots:
             ps = self._panel_state.get(slot_key)
             if ps is None:
@@ -3866,7 +3871,10 @@ class ChartApp(
                 preserve=False, preserved_xlim=None, slide_to_right=False,
                 prev_primary_dates=prev_primary_dates,
                 prev_primary_xlim=prev_primary_xlim,
+                primary_window=primary_window,
             )
+            if slot_key == "primary":
+                primary_window = (lo, hi)
             start, end = _compute_render_range(
                 lo, hi, n, _MIN_RENDER_CANDLES, _MAX_RENDER_CANDLES,
             )
@@ -4289,6 +4297,7 @@ class ChartApp(
         preserved_xlim: tuple[float, float] | None, slide_to_right: bool,
         prev_primary_dates: list | None,
         prev_primary_xlim: tuple[float, float] | None,
+        primary_window: tuple[int, int] | None = None,
     ) -> tuple[int, int, bool]:
         """Resolve a slot's visible ``(lo, hi)`` bar window.
 
@@ -4301,9 +4310,32 @@ class ChartApp(
         ``prev_primary_xlim`` are non-None only on a time-window-preserve
         ticker switch (the slow-path capture gates on ``preserve_by_time``); a
         ``None`` pair simply skips the remap.
+
+        ``primary_window`` is the ``(lo, hi)`` the primary slot resolved to,
+        passed in for the **compare** slot. Because every slot shares the SAME
+        x-axis (``sharex=ax_p1``), the compare slot MUST land on the identical
+        window — otherwise its ``set_xlim`` clobbers the primary's on the
+        shared axis. This is the fix for the compare-mode ticker-switch bug
+        where the primary correctly remapped to today's session but the
+        compare slot then reset the shared axis to the default right-edge
+        window (showing the prior session). The time-remap is primary-only, so
+        without this mirror the compare slot always fell to the default.
         """
         n = len(candles)
         default_win = _defaults.get("default_window_bars")
+        # Compare (or any non-primary) slot shares the x-axis with the primary
+        # — mirror the primary's resolved window so it can't clobber it.
+        if slot != "primary" and primary_window is not None:
+            p_lo, p_hi = primary_window
+            p_lo = max(0, min(n, int(p_lo)))
+            p_hi = max(0, min(n, int(p_hi)))
+            if p_hi <= p_lo:
+                p_lo, p_hi = max(0, n - default_win), n
+            try:
+                ax_p.set_xlim(p_lo - 0.5, p_hi - 0.5)
+            except Exception:  # noqa: BLE001
+                pass
+            return p_lo, p_hi, True
         time_remap_applied = False
         if (slot == "primary"
                 and prev_primary_dates is not None
