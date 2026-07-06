@@ -22,7 +22,7 @@ Internal: `..constants.is_intraday`, `..models.Candle`. External: none.
 
 ## Invariants
 - After `apply_pair_filter(raw, None, ...)`, primary is filtered correctly regardless of `compare_raw=None` (single-chart mode still honors Pre/Post).
-- After `align_pair(p, c, interval)`: `len(p_out) == len(c_out)`. For **intraday**, each pair shares the same normalized timestamp key; real bars retain their original `.date` (including tz-awareness), while a gap placeholder uses the normalized key for the missing slot. For **daily+**, `p_out[i].date.date() == c_out[i].date.date()` (same calendar day) — the time-of-day may differ when one side is a synth-today bar (09:30) and the other a midnight provider bar; gap placeholders borrow a real bar's `.date` for the slot.
+- After `align_pair(p, c, interval)`: `len(p_out) == len(c_out)`. For **intraday**, each pair shares the same normalized timestamp key; real bars retain their original `.date` (including tz-awareness), while a gap placeholder **borrows a real bar's `.date`** from the other side at that slot (NOT the tz-stripped normalized key) so the output list stays uniformly tz-aware/naive — a naive gap injected into a tz-aware series (e.g. Alpaca's ET-localized bars) would produce a mixed-tz list that later trips `can't compare offset-naive and offset-aware` in downstream timestamp math (audit `compare-intraday-gap-tz`). For **daily+**, `p_out[i].date.date() == c_out[i].date.date()` (same calendar day) — the time-of-day may differ when one side is a synth-today bar (09:30) and the other a midnight provider bar; gap placeholders likewise borrow a real bar's `.date` for the slot.
 - Real (non-gap) output bars share `id()` with input bars.
 - `apply_pair_filter` returns the input list object unchanged when no filtering needed.
 
@@ -53,5 +53,7 @@ align_pair(p, c, interval=None):
     by_c = {_normalize_pairing_key(c.date): c for c in c_in if lo_day <= c.date.date() <= hi_day}
     merged_dates = sorted(set(by_p) | set(by_c))
     for d in merged_dates:
-        emit (by_p.get(d) or Candle.gap(d), by_c.get(d) or Candle.gap(d))
+        pbar, cbar = by_p.get(d), by_c.get(d)
+        ref = (pbar or cbar).date          # borrow a REAL bar's tz-aware date
+        emit (pbar or Candle.gap(ref), cbar or Candle.gap(ref))
 ```

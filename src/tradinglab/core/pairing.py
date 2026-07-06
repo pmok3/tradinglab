@@ -155,8 +155,19 @@ def align_pair(
     out_p = []
     out_c = []
     for d in merged:
-        out_p.append(by_p.get(d) or Candle.gap(d))
-        out_c.append(by_c.get(d) or Candle.gap(d))
+        pbar = by_p.get(d)
+        cbar = by_c.get(d)
+        # Gap placeholders borrow a REAL bar's timestamp for the slot (at
+        # least one side is real for every merged key) so the output keeps
+        # a consistent tz-awareness. Using the normalized (tz-stripped)
+        # key ``d`` here would emit a tz-NAIVE gap into an otherwise
+        # tz-AWARE series (e.g. Alpaca's ET-localized bars), producing a
+        # mixed-tz list that trips ``can't compare offset-naive and
+        # offset-aware`` in downstream timestamp math. Mirrors the daily
+        # branch above. Audit ``compare-intraday-gap-tz``.
+        ref = (pbar or cbar).date
+        out_p.append(pbar or Candle.gap(ref))
+        out_c.append(cbar or Candle.gap(ref))
     return out_p, out_c
 
 

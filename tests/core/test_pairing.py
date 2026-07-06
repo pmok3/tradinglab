@@ -242,3 +242,50 @@ def test_weekly_keys_on_calendar_date():
 
     assert len(out_p) == len(out_c) == 3
     assert not any(c.is_gap for c in out_p + out_c)
+
+
+# ---------------------------------------------------------------------------
+# Intraday gap tz-consistency (audit ``compare-intraday-gap-tz``).
+# A gap placeholder inserted into a tz-AWARE intraday series (e.g. Alpaca's
+# ET-localized bars) must ALSO be tz-aware — a naive gap in an aware series
+# produces a mixed-tz list that later trips "can't compare offset-naive and
+# offset-aware datetimes" in downstream timestamp math.
+# ---------------------------------------------------------------------------
+
+def test_intraday_gap_is_tz_aware_when_series_is_aware():
+    # 9:30 aligns; primary has 9:35, compare has 9:40 → one gap per side.
+    primary = [_intraday(_TODAY, dt.time(9, 30), 100.0),
+               _intraday(_TODAY, dt.time(9, 35), 100.5)]
+    compare = [_intraday(_TODAY, dt.time(9, 30), 200.0),
+               _intraday(_TODAY, dt.time(9, 40), 200.5)]
+
+    out_p, out_c = align_pair(primary, compare, interval="5m")
+
+    # The gaps must be tz-aware (borrowed from the real bar on the other
+    # side), so EVERY bar in each output list is tz-aware — no mixed tz.
+    for out in (out_p, out_c):
+        kinds = {(c.date.tzinfo is not None) for c in out}
+        assert kinds == {True}, (
+            f"aligned intraday output must be uniformly tz-aware; got {kinds}"
+        )
+    # The compare gap (primary's 9:35 slot) borrows the primary bar's ET date.
+    gap_c = next(c for c in out_c if c.is_gap)
+    assert gap_c.date.tzinfo is not None
+    assert gap_c.date == primary[1].date  # exact borrowed timestamp
+
+
+def test_intraday_gap_tz_consistency_survives_naive_inputs():
+    """Symmetric guard: when BOTH sides are tz-naive the gaps stay naive
+    (no accidental tz injection) — the fix only borrows the neighbouring
+    real bar's tzinfo, whatever it is."""
+    def _naive(t: dt.time, px: float) -> Candle:
+        d = dt.datetime(_TODAY.year, _TODAY.month, _TODAY.day, t.hour, t.minute)
+        return Candle(date=d, open=px, high=px + 0.5, low=px - 0.5,
+                      close=px + 0.2, volume=500)
+
+    primary = [_naive(dt.time(9, 30), 100.0), _naive(dt.time(9, 35), 100.5)]
+    compare = [_naive(dt.time(9, 30), 200.0), _naive(dt.time(9, 40), 200.5)]
+    out_p, out_c = align_pair(primary, compare, interval="5m")
+    for out in (out_p, out_c):
+        assert {(c.date.tzinfo is not None) for c in out} == {False}
+

@@ -2425,10 +2425,37 @@ class ChartApp(
             compare_clean = list(
                 self._full_cache.get((src, raw_compare, interval)) or [],
             )
-            compare_raw = self._maybe_upsample_today_daily(
-                compare_clean, source=src, symbol=raw_compare,
-                interval=interval, allow_prefetch=False,
-            )
+            if not compare_clean:
+                # The compare's daily bars may have been LRU-evicted from
+                # the bounded in-memory ``_full_cache`` (companion-prefetch
+                # / compare-warm churn — the cache holds only
+                # ``full_cache_size`` entries). This best-effort synth
+                # refresh (triggered by a PRIMARY intraday prefetch) must
+                # NEVER blank a compare panel that is currently on-screen.
+                # Fall back to disk (the truthful persistent store), then
+                # re-warm memory so subsequent refreshes hit the cache.
+                # Audit ``daily-synth-compare-drop``.
+                try:
+                    compare_clean = list(
+                        disk_cache.load(src, raw_compare, interval) or [],
+                    )
+                except Exception:  # noqa: BLE001
+                    compare_clean = []
+                if compare_clean:
+                    self._full_cache[(src, raw_compare, interval)] = compare_clean
+                    try:
+                        self._trim_full_cache()
+                    except Exception:  # noqa: BLE001
+                        pass
+            if not compare_clean:
+                # Still nothing (compare not on disk either) — preserve the
+                # currently-rendered compare rather than dropping the panel.
+                compare_clean = list(getattr(self, "_compare_raw", None) or [])
+            if compare_clean:
+                compare_raw = self._maybe_upsample_today_daily(
+                    compare_clean, source=src, symbol=raw_compare,
+                    interval=interval, allow_prefetch=False,
+                )
         if compare_on and compare_raw:
             primary, compare = self._apply_pair_filter_and_align(
                 primary_raw, compare_raw,
