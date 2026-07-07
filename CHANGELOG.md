@@ -1,6 +1,6 @@
 # Changelog
 
-## [5.0.0] - 2026-07-07
+## [0.5.0] - 2026-07-07
 
 ### Added
 - **Coverage visibility in CI.** A new non-gating `coverage` job emits a
