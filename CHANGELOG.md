@@ -1,5 +1,28 @@
 # Changelog
 
+## [5.0.0] - 2026-07-07
+
+### Added
+- **Coverage visibility in CI.** A new non-gating `coverage` job emits a
+  term-missing summary and uploads `coverage.xml`; `pytest-cov` is now a dev
+  dependency with a `[tool.coverage]` config (no threshold — visibility only).
+- **`app.py` LOC ratchet.** A codebase-invariant test pins `app.py` at its
+  high-water mark and ratchets down only, so the ChartApp god-object cannot
+  silently regrow after the mixin-extraction sprints.
+- **Data-source conformance suite.** One canonical candle contract
+  (ET-localized, finite OHLC, integer volume, strictly-increasing timestamps)
+  is now pinned for every registered data source, so a new provider cannot
+  regress compare mode or drill-down.
+
+### Changed
+- **Faster intraday data normalization.** Session tagging in the yfinance
+  DataFrame path is now vectorized (`constants.classify_session_arr`) instead
+  of a per-bar Python call — the classification step is ~3.4× faster on large
+  1-minute histories, with bit-for-bit-identical output.
+
+### Fixed
+- Corrected stale `app.py` size and mixin-count figures in the agent docs.
+
 ## [0.4.4] - 2026-07-04
 
 ### Added
