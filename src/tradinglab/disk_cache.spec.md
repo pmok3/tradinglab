@@ -83,6 +83,22 @@ Durable cache of fetched candle data, keyed by `(source, ticker, interval)`. Act
   object unchanged on the all-finite fast path (no spurious copy / object
   identity preserved); it only allocates a filtered copy when a poison
   bar is present.
+- `merge_adds_nothing(previous, merged) -> bool` — cheap O(1) predicate
+  used to SKIP a redundant `save()` on the ticker-switch / prefetch path
+  (`app._load_data_async._work`). The provider fetch there is a **trailing
+  window**; when it returns only bars already on disk (the common case for
+  a fully pre-downloaded, sealed universe — e.g. browsing / drilling
+  historical 5m data), `merge_candles` yields a list byte-identical to what
+  is persisted, and rewriting the whole multi-MB JSONL (~450 ms for a
+  115k-bar 5m file) is pure waste. Returns True (⇒ skip save) iff `merged`
+  has the same length AND same last bar (date + OHLCV) as `previous`.
+  **Correct for the trailing-fetch merge path only** — where `new` overlaps
+  just the recent tail, so any real change is visible at the length or the
+  last bar. NOT a general list-equality predicate; a caller whose `new` can
+  revise an interior bar must not rely on it (the drilldown targeted-range
+  fetch uses its own merge/save in `gui/drilldown.py`, not this guard).
+  Errs toward False (do save) on any ambiguity — empty side, gap/NaN last
+  bar (`NaN != NaN`), or comparison error.
 - `mark_no_persist(source) / unmark_no_persist(source) /
   is_no_persist(source) / clear_no_persist()` — opt-source-out-of-
   persistence registry. When a source name is in the no-persist set,

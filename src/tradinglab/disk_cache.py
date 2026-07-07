@@ -288,6 +288,44 @@ def load(source: str, ticker: str, interval: str) -> list[Candle] | None:
     return cleaned
 
 
+def merge_adds_nothing(previous: list[Candle] | None,
+                       merged: list[Candle] | None) -> bool:
+    """True when ``merged`` is identical to ``previous`` at the tail.
+
+    Used to skip a redundant :func:`save` on the ticker-switch /
+    prefetch path, where the freshly-fetched bars are a **trailing
+    window** merged into the on-disk series. When the provider returns
+    only bars already present on disk (the common case for a fully
+    pre-downloaded, sealed universe — e.g. drilling / browsing historical
+    5m data), ``merge_candles`` yields a list byte-identical to what is
+    already persisted, and rewriting the whole multi-MB JSONL (≈450 ms
+    for a 115k-bar 5m file) is pure waste.
+
+    Cheap O(1) check: same length AND same last bar (date + OHLCV). This
+    is **correct for the trailing-fetch merge path only** — where ``new``
+    overlaps just the recent tail, any change (appended bars or a revised
+    forming bar) is visible at the length or the last bar. It is NOT a
+    general list-equality predicate; a caller whose ``new`` can revise an
+    interior bar (e.g. a wide targeted range fetch) must not rely on it.
+    Errs toward ``False`` (i.e. "do save") on any ambiguity — a gap/NaN
+    last bar or a comparison error returns ``False``.
+    """
+    if not previous or not merged:
+        return False
+    if len(previous) != len(merged):
+        return False
+    a, b = previous[-1], merged[-1]
+    try:
+        return bool(
+            a.date == b.date
+            and a.open == b.open and a.high == b.high
+            and a.low == b.low and a.close == b.close
+            and a.volume == b.volume
+        )
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def save(source: str, ticker: str, interval: str, candles: list[Candle]) -> None:
     """Atomically persist ``candles`` keyed by (source, ticker, interval).
 

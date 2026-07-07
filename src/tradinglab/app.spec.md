@@ -78,7 +78,7 @@ File structure:
 4. `_full_cache[(source,ticker,interval)]` — OrderedDict, LRU, soft cap `_FULL_CACHE_MAX=16`. Pinned entries (watchlist + currently active chart ticker) never evicted by trim. The active-ticker pin is essential so the 1d view's 5m companion (used by the volume-TOD overlay and the synthetic today-bar in `_maybe_upsample_today_daily`) survives stashes for unrelated tickers landing from background prefetches.
 5. `_series_cache[id(candles)]` — memoizes `_build_series_safe(...)`; verified via `sa._candles is candles` to defend against id-reuse.
 6. `_prefetched_raw` ingests executor-fetched bars from `_load_data_async` or the poll tick without a second
-   provider call. Its worker payload may include disk-preloaded and pre-merged/pre-saved primary/compare lists so `_load_data` can skip Tk-thread JSON parsing, `merge_candles`, and `disk_cache.save`. When it supplies fresh primary/compare data,
+   provider call. Its worker payload may include disk-preloaded and pre-merged/pre-saved primary/compare lists so `_load_data` can skip Tk-thread JSON parsing, `merge_candles`, and `disk_cache.save`. The worker's per-side merge+save is itself guarded by `disk_cache.merge_adds_nothing(disk, merged)`: when the trailing fetch adds nothing new (fully pre-downloaded / sealed universe — the common case when browsing the cached S&P/Nasdaq universe), the ~450 ms rewrite of the multi-MB 5m JSONL is skipped (the in-memory merged list is still returned for render). When it supplies fresh primary/compare data,
    `_load_data` invalidates indicator entries for the prior visible
    lists before rendering. This prevents stale fingerprint hits from
    rebinding onto replacement lists.

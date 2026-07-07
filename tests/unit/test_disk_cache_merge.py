@@ -168,3 +168,58 @@ def test_merge_candles_all_finite_preserves_identity_fast_path():
     assert merge_candles([only_old], [])[0] is only_old
     only_new = _candle(t1, 2.0)
     assert merge_candles([], [only_new])[0] is only_new
+
+
+# --- merge_adds_nothing (skip-redundant-save guard) ------------------
+
+
+def test_merge_adds_nothing_identical_tail():
+    # A trailing fetch that adds no new bars → merged is identical to
+    # disk → save should be skipped.
+    from tradinglab.disk_cache import merge_adds_nothing
+    t1 = datetime(2024, 1, 1, 9, 30)
+    t2 = datetime(2024, 1, 1, 9, 35)
+    disk = [_candle(t1, 1.0), _candle(t2, 2.0)]
+    merged = merge_candles(disk, [_candle(t2, 2.0)])  # re-fetch last bar, same
+    assert merge_adds_nothing(disk, merged) is True
+
+
+def test_merge_adds_nothing_false_on_appended_bar():
+    # A trailing fetch that appends a NEW bar → length grows → must save.
+    from tradinglab.disk_cache import merge_adds_nothing
+    t1 = datetime(2024, 1, 1, 9, 30)
+    t2 = datetime(2024, 1, 1, 9, 35)
+    t3 = datetime(2024, 1, 1, 9, 40)
+    disk = [_candle(t1, 1.0), _candle(t2, 2.0)]
+    merged = merge_candles(disk, [_candle(t3, 3.0)])
+    assert len(merged) == 3
+    assert merge_adds_nothing(disk, merged) is False
+
+
+def test_merge_adds_nothing_false_on_revised_last_bar():
+    # Same length but the last (forming) bar's value changed → must save.
+    from tradinglab.disk_cache import merge_adds_nothing
+    t1 = datetime(2024, 1, 1, 9, 30)
+    t2 = datetime(2024, 1, 1, 9, 35)
+    disk = [_candle(t1, 1.0), _candle(t2, 2.0)]
+    merged = merge_candles(disk, [_candle(t2, 9.9)])  # revise last close
+    assert merged[-1].close == 9.9
+    assert merge_adds_nothing(disk, merged) is False
+
+
+def test_merge_adds_nothing_false_on_empty_sides():
+    from tradinglab.disk_cache import merge_adds_nothing
+    t1 = datetime(2024, 1, 1, 9, 30)
+    assert merge_adds_nothing(None, [_candle(t1)]) is False
+    assert merge_adds_nothing([_candle(t1)], None) is False
+    assert merge_adds_nothing([], []) is False
+
+
+def test_merge_adds_nothing_nan_last_bar_errs_to_save():
+    # A gap/NaN last bar cannot be proven equal (NaN != NaN) → returns
+    # False so we err toward persisting rather than silently skipping.
+    from tradinglab.disk_cache import merge_adds_nothing
+    t1 = datetime(2024, 1, 1)
+    disk = [_candle(t1, 1.0), _nan_candle(datetime(2024, 1, 2))]
+    assert merge_adds_nothing(disk, list(disk)) is False
+
