@@ -22,9 +22,35 @@ from __future__ import annotations
 from datetime import date, timedelta
 from types import SimpleNamespace
 
+import pytest
+
 from tradinglab.gui.drilldown import DrilldownMixin, _day_to_ts
 
 _f = DrilldownMixin._day_within_intraday_fetch_window
+
+
+@pytest.fixture(autouse=True)
+def _ensure_alpaca_range_capable():
+    """Guarantee the range-capable regime is exercised regardless of creds.
+
+    ``data/__init__`` registers ``alpaca`` with ``supports_range=True``
+    ONLY when ``AlpacaCredentials.is_configured()`` — true on a dev box
+    that has Alpaca keys, but FALSE in CI (fresh checkout, no creds). The
+    range-capable tests below hardcode ``"alpaca"`` as their exemplar
+    range-capable provider, so without this fixture they silently fall
+    into the trailing-window regime on CI and mis-assert (a day beyond the
+    ~60-day yfinance window reads unreachable). Force ``alpaca`` into
+    ``_RANGE_CAPABLE`` for the test and restore the prior state afterwards
+    so a real credentialed registration is never clobbered.
+    """
+    from tradinglab.data import base
+    had = "alpaca" in base._RANGE_CAPABLE
+    base._RANGE_CAPABLE.add("alpaca")
+    try:
+        yield
+    finally:
+        if not had:
+            base._RANGE_CAPABLE.discard("alpaca")
 
 
 def _self(src: str) -> SimpleNamespace:
