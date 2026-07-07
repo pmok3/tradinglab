@@ -86,7 +86,7 @@ tradinglab/
 ├── src/tradinglab/           # the package (src layout)
 │   ├── __main__.py            # `python -m tradinglab` entry; also exposed as `tradinglab` console script
 │   ├── _version.py            # SINGLE SOURCE OF TRUTH for __version__ (read by pyproject + build_exe.ps1)
-│   ├── app.py                 # ChartApp god-object (6036 LOC after waves 1+2+3 mixin extraction; was 7790)
+│   ├── app.py                 # ChartApp god-object (7885 LOC; waves 1-3 cut 7790→6036, later features regrew it — now LOC-gated, see §7.24)
 │   ├── backtest/ core/ data/ drawings/ entries/ events/ exits/
 │   ├── gui/                   # dialogs, menus, widgets (e.g. dialogs.py, help_menu.py, watchlist_dialog.py)
 │   │   ├── drawings_app.py        # DrawingsAppMixin (wave 1)
@@ -1405,7 +1405,7 @@ paths).
 `tk.Tk`** after waves 1+2+3 of the god-file extraction (commits
 `358ad16`, `d0cdadc`, `73a4adb`, `bfe80fc`, `e9fa1b2`, `a1f11ba`,
 `9393301`, plus the wave-3 sprint adding `ScannerAppMixin` and
-`SandboxAppMixin`). The MRO declaration lives at L233-255:
+`SandboxAppMixin`). The MRO declaration lives at L245-267:
 
 ```python
 class ChartApp(
@@ -1444,6 +1444,11 @@ class ChartApp(
    `tradinglab.app.filedialog` etc., the `from tkinter import
    filedialog` line in `app.py` MUST stay (with `# noqa: F401` if
    needed) even when no in-file code references it.
+7. **`app.py` has a LOC ceiling.** `tests/unit/test_codebase_invariants.py`
+   pins `app.py` at a high-water mark that ratchets DOWN only — growth
+   fails the gate until you bump `_APP_PY_LOC_CEILING` deliberately (prefer
+   extracting a mixin instead). This is what stops the god-object silently
+   regrowing after an extraction sprint.
 
 **Pending extractions** (LOW-MED risk, ~700 LOC removable, see
 checkpoint 006 for backlog): WatchlistsAppMixin (section L5841-6092
@@ -1842,7 +1847,7 @@ These files are **never** committed to git. Use them for working memory.
 |---|---|
 | Version number | `src/tradinglab/_version.py` |
 | App entry point | `src/tradinglab/__main__.py` → `app.py` `ChartApp` |
-| ChartApp MRO declaration | `src/tradinglab/app.py:229-250` (18 mixins + `tk.Tk`; see §7.24) |
+| ChartApp MRO declaration | `src/tradinglab/app.py:245-267` (20 mixins + `tk.Tk`; see §7.24) |
 | Drawing canvas-menu + Alt+H + snap helpers | `src/tradinglab/gui/drawings_app.py` (DrawingsAppMixin, wave 1) |
 | Live-price overlay glue | `src/tradinglab/gui/live_price_overlay_app.py` (LivePriceOverlayAppMixin) |
 | Recent-symbols / recent-intervals menus | `src/tradinglab/gui/recent_menus.py` (RecentMenusMixin) |

@@ -45,6 +45,10 @@ dependencies = [
 dev = [
     "pytest>=7.4",
     "pytest-timeout>=2.3",
+    # Opt-in coverage measurement. NOT wired into pytest ``addopts`` (so the
+    # default test session stays fast and doesn't require the plugin) — used
+    # explicitly via ``pytest --cov=tradinglab`` and the CI ``coverage`` job.
+    "pytest-cov>=5",
     "ruff>=0.15,<0.16",
 ]
 schwab = [
@@ -79,6 +83,29 @@ addopts = "-ra --strict-markers --timeout=120 --timeout-method=thread -m 'not pe
 markers = [
     "smoke: end-to-end smoke tests (slow, headless GUI)",
     "perf: indicator perf-budget regression gates (opt-in via `-m perf`; never run in default test session)",
+]
+
+# Coverage is a VISIBILITY tool, not a gate. There is deliberately no
+# ``fail_under`` threshold here (thresholds flake as tests move and invite
+# gaming); the CI ``coverage`` job emits a term-missing report + coverage.xml
+# artifact and never blocks a merge. Run locally with:
+#   pytest tests/unit tests/scanner --cov=tradinglab --cov-report=term-missing
+[tool.coverage.run]
+source = ["tradinglab"]
+branch = true
+omit = [
+    "*/tradinglab/_build_info.py",  # generated at build time, gitignored
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+precision = 1
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@(abc\\.)?abstractmethod",
+    "if __name__ == .__main__.:",
 ]
 
 [tool.ruff]

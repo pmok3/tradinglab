@@ -15,6 +15,8 @@ Contracts in this file:
    - ``tk.Tk`` is the LAST base of ``ChartApp``.
    - No mixin defines ``__init__`` (adding one breaks the MRO
      chain to ``tk.Tk`` which is positional-arg sensitive).
+   - ``app.py`` stays within its LOC ceiling (ratchets down only)
+     so the god-object can't silently regrow after an extraction.
 
 3. **TriggerKind dispatch completeness** (per AGENTS.md §7.20):
    - Every member of ``entries.model.TriggerKind`` is a key in
@@ -192,6 +194,50 @@ def test_app_spec_md_mro_matches_real_chartapp_bases():
         f"  spec: {spec_bases}\n  code: {real}\n"
         "Update the `class ChartApp(...)` line in app.spec.md (and the "
         "§11/§12 mixin lists) to match src/tradinglab/app.py."
+    )
+
+
+# High-water mark for ``app.py`` line count, measured the SAME way this
+# test measures it (``str.splitlines()``). ``app.py`` is a god-object under
+# active mixin extraction (AGENTS.md §7.24): waves 1-3 cut it from 7790 to
+# ~6036 LOC, but later feature work (Alpaca source, targeted intraday fetch,
+# compare-mode fixes, ...) silently regrew it past 7800 with no guardrail —
+# the exact regression this ceiling now prevents.
+#
+# RATCHET-DOWN ONLY. Shrinking app.py is always fine; GROWTH must bump this
+# constant as a conscious, reviewed decision — and the right move is almost
+# always to extract a mixin (WatchlistsAppMixin is the next candidate, §7.24)
+# rather than raise the cap.
+_APP_PY_LOC_CEILING = 7885
+
+# Once a real extraction drops app.py well under the ceiling, lower the
+# constant to lock the reduction in. The band keeps ordinary small edits from
+# tripping the floor while forcing a ratchet after a genuine ~500+ LOC cut.
+_APP_PY_LOC_RATCHET_BAND = 500
+
+
+def test_app_py_stays_within_loc_ceiling():
+    """``app.py`` must not silently regrow past its high-water mark.
+
+    The mixin-extraction sprints (§7.24) exist to shrink the god-object;
+    without a ceiling it refills invisibly (it grew ~1800 LOC past the
+    documented 6036 post-wave-3 count before this gate landed). Fires at PR
+    time so any growth is a deliberate, reviewed bump of
+    ``_APP_PY_LOC_CEILING`` — ideally replaced by extracting a mixin.
+    """
+    app_py = _SRC / "app.py"
+    loc = len(app_py.read_text(encoding="utf-8").splitlines())
+    assert loc <= _APP_PY_LOC_CEILING, (
+        f"app.py grew to {loc} LOC, over the ceiling of {_APP_PY_LOC_CEILING}. "
+        "app.py is a god-object under active extraction (AGENTS.md §7.24) — "
+        "prefer extracting a mixin (e.g. WatchlistsAppMixin) over growing it. "
+        "If the growth is genuinely justified, raise _APP_PY_LOC_CEILING "
+        "deliberately in tests/unit/test_codebase_invariants.py."
+    )
+    assert loc >= _APP_PY_LOC_CEILING - _APP_PY_LOC_RATCHET_BAND, (
+        f"app.py shrank to {loc} LOC, far under the ceiling of "
+        f"{_APP_PY_LOC_CEILING}. Lower _APP_PY_LOC_CEILING to lock in the "
+        "reduction — this ceiling ratchets DOWN only."
     )
 
 
