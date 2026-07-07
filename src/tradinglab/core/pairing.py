@@ -80,6 +80,8 @@ def align_pair(
     primary: list[Candle],
     compare: list[Candle],
     interval: str | None = None,
+    *,
+    keep_window: tuple[float, float] | None = None,
 ) -> tuple[list[Candle], list[Candle]]:
     """Timestamp-align two candle series.
 
@@ -104,9 +106,23 @@ def align_pair(
     snaps both today bars into a single slot, fixing the spurious
     "gap before today + blank tomorrow" rendering in compare mode.
     Audit ``compare-daily-today-align``.
+
+    ``keep_window`` (opt-in ``(lo_ts, hi_ts)`` epoch seconds) retains
+    **primary** bars whose timestamp falls in that window even if they
+    predate the compare's first bar (the low-end intersection ``lo_day =
+    max(...)`` would otherwise DROP them). The compare side gets
+    :py:meth:`Candle.gap` placeholders inside the window until its data is
+    fetched. This lets a drilled / panned view of an OLD window the compare
+    doesn't yet cover survive the align (so the view never jumps) WITHOUT
+    globally relaxing the intersection — the retained set is just the
+    on-screen window, never a multi-year leading gap run. Default ``None``
+    = legacy behaviour. Audit ``compare-toggle-drilldown-preserve``.
     """
     if not primary or not compare:
         return list(primary or []), list(compare or [])
+
+    def _in_keep(ts: float) -> bool:
+        return keep_window is not None and keep_window[0] <= ts <= keep_window[1]
 
     lo_day = max(primary[0].date.date(), compare[0].date.date())
     # Overlap guard: if the two series share no calendar day at all, leave
@@ -129,7 +145,8 @@ def align_pair(
     if interval is not None and not is_intraday(interval):
         by_p = {
             c.date.date(): c
-            for c in primary if lo_day <= c.date.date() <= hi_day
+            for c in primary
+            if (lo_day <= c.date.date() <= hi_day) or _in_keep(c.date.timestamp())
         }
         by_c = {
             c.date.date(): c
@@ -148,7 +165,10 @@ def align_pair(
         return out_p, out_c
 
     _k = _normalize_pairing_key
-    by_p = {_k(c.date): c for c in primary if lo_day <= c.date.date() <= hi_day}
+    by_p = {
+        _k(c.date): c for c in primary
+        if (lo_day <= c.date.date() <= hi_day) or _in_keep(c.date.timestamp())
+    }
     by_c = {_k(c.date): c for c in compare if lo_day <= c.date.date() <= hi_day}
     merged = sorted(set(by_p) | set(by_c))
 
@@ -176,11 +196,18 @@ def apply_pair_filter_and_align(
     compare_raw: list[Candle] | None,
     interval: str,
     extended_hours: bool,
+    *,
+    keep_window: tuple[float, float] | None = None,
 ) -> tuple[list[Candle], list[Candle]]:
-    """Pair-filter, then timestamp-align in compare mode."""
+    """Pair-filter, then timestamp-align in compare mode.
+
+    ``keep_window`` is forwarded to :func:`align_pair` — see there.
+    """
     primary, compare = apply_pair_filter(
         primary_raw, compare_raw, interval, extended_hours,
     )
     if compare_raw is not None and primary and compare:
-        primary, compare = align_pair(primary, compare, interval)
+        primary, compare = align_pair(
+            primary, compare, interval, keep_window=keep_window,
+        )
     return primary, compare

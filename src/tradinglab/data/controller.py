@@ -265,12 +265,14 @@ class DataController:
         *,
         interval: str,
         prepost: bool,
+        keep_window: tuple[float, float] | None = None,
     ) -> tuple[list[Candle], list[Candle]]:
         return apply_pair_filter_and_align(
             primary_raw,
             compare_raw,
             interval,
             prepost,
+            keep_window=keep_window,
         )
 
 

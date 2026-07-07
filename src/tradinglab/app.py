@@ -68,6 +68,7 @@ from .data import (
     FetchService,
     is_ratio_symbol,
     ratio_display_label,
+    source_supports_range,
     user_visible_sources,
 )
 from .data.stream_controller import StreamController
@@ -930,6 +931,12 @@ class ChartApp(
         # bars overlapping the captured time range. One-shot; cleared
         # at end of _render.
         self._preserve_xlim_by_time_on_render = False
+        # Compare-fill async fetch (compare-toggle-drilldown-preserve).
+        # ``_compare_fill_inflight`` coalesces per-(src, cmp, interval, day)
+        # targeted compare fetches so repeated toggles don't stack; the
+        # monotonic ``_compare_fetch_token`` drops a superseded completion.
+        self._compare_fill_inflight: set = set()
+        self._compare_fetch_token: int = 0
         # When True, _render shifts xlim forward to the new right edge
         # keeping width. Set by the poll-tick path when the user was
         # glued to the right edge before new bars arrived, so live
@@ -2091,23 +2098,22 @@ class ChartApp(
                     self.compare_var.set(False)
             return
 
-        # Drilldown-preserving branch: when the user is inspecting a
-        # specific day in 5m drill-down, toggling compare must KEEP that
-        # day in view — not snap to the default right-edge window. The
-        # regular toggle body re-aligns ``_primary_raw`` against the
-        # compare's IN-MEMORY cache (only the recent trailing window for a
-        # deep-history provider — Alpaca 5m reaches back just
-        # ``_DEEP_HISTORY_INTRADAY_DAYS["5m"]`` = 120 days) and renders
-        # with the DEFAULT window, so a drill-down to an OLD day (e.g.
-        # 2021-12-16) jumped the chart to the recent right edge AND left
-        # the compare panel with no bars for that day. Fix: pull the
-        # compare's FULL disk history into ``_full_cache`` first so
-        # ``align_pair``'s low-end intersection (``lo_day = max(p[0],
-        # c[0])``) keeps the drilled day — which, for a same-grid intraday
-        # pair, also means NO gap bars are inserted, so the primary's bar
-        # indices (and the drilled-day xlim) are preserved and the
-        # UNCHANGED toggle body's ``preserve``-xlim render holds the view.
-        # Audit ``compare-toggle-drilldown-preserve``.
+        # View-safe compare toggle (compare-toggle-drilldown-preserve).
+        # When the user is viewing an OLD window (reached by double-click
+        # drill OR manual pan/zoom) that the compare's cached 5m history
+        # doesn't cover, the naive toggle re-aligned ``_primary_raw``
+        # against the compare's recent-only cache and — via
+        # ``align_pair``'s low-end intersection (``lo_day = max(p0, c0)``) —
+        # DROPPED the viewed bars, snapping the chart to the recent right
+        # edge (the "jumped to June 5th" bug; deep-history providers like
+        # Alpaca cap intraday depth at ``_DEEP_HISTORY_INTRADAY_DAYS`` ≈
+        # 120 days). Fix: (1) keep the viewed primary bars through the
+        # align via ``keep_window`` (compare padded with gaps there); (2)
+        # preserve the view by TIME across the re-align
+        # (``_preserve_xlim_by_time_on_render``); (3) if the compare
+        # doesn't cover the window, fetch it in the background and fill the
+        # panel when it lands — NEVER moving the primary. Audit
+        # ``compare-toggle-drilldown-preserve``.
         try:
             in_drilldown = (
                 getattr(self, "_drilldown_day", None) is not None
@@ -2115,44 +2121,285 @@ class ChartApp(
             )
         except Exception:  # noqa: BLE001
             in_drilldown = False
-        if in_drilldown and compare_on:
-            # Disk-preload the compare's FULL history (universe download /
-            # prior drills populate it) so the drilled day survives the
-            # align. Mirrors ``_on_drilldown_fetch_done``'s disk-reload.
+        vis = self._current_visible_window_ts() if in_drilldown else None
+        # ONLY engage the special (keep_window + time-preserve + fill) path
+        # for a DRILLED-IN intraday view whose compare cache genuinely LACKS
+        # the drilled window. Scoped to drilldown (``_drilldown_day`` set) —
+        # a normal manual interior zoom must keep using the existing
+        # index-preserve, which frames the window tighter than the time-remap
+        # (the time-remap widens it; d52 pins this). The manual-pan case is a
+        # deferred follow-up.
+        compare_lacks = bool(
+            in_drilldown
+            and vis is not None and vis[2]  # historical view
+            and compare_on
+            and self._compare_cache_earliest_gt(vis[0])  # compare misses it
+        )
+        if compare_lacks:
+            # Preserve the view by TIME across the re-align. Clear the
+            # INDEX-based preserve first: ``_compute_slot_window`` skips the
+            # time-remap when index-preserve is active, and the stale drilled
+            # index xlim overflows the (now shorter/gapped) aligned list →
+            # snaps to the right edge. Re-armed AFTER the render, when the
+            # remapped index xlim is correct again.
+            self._preserve_xlim_by_time_on_render = True
+            self._preserve_xlim_on_render = False
+        keep_window = (vis[0], vis[1]) if compare_lacks else None
+
+        self._apply_compare_toggle(compare_on, keep_window=keep_window)
+
+        if compare_lacks:
+            # The time-remap landed the (now-correct) index xlim on the
+            # viewed window; re-arm index-preserve so later renders hold it.
+            self._preserve_xlim_on_render = True
+
+        if compare_lacks:
+            # Background-fill the compare's data for the viewed window.
+            # Non-blocking; the primary stays put.
             try:
-                raw_compare = self.compare_ticker_var.get().strip().upper()
-                if raw_compare:
-                    cmp_key = (self.source_var.get(), raw_compare,
-                               self.interval_var.get())
-                    cmp_disk = disk_cache.load(*cmp_key) or []
-                    if cmp_disk:
-                        cur = self._full_cache.get(cmp_key)
-                        self._full_cache[cmp_key] = (
-                            disk_cache.merge_candles(cur, cmp_disk)
-                            if cur else cmp_disk
-                        )
-                        self._trim_full_cache()
+                self._maybe_fill_compare_for_window(vis[0], vis[1])
             except Exception:  # noqa: BLE001
                 pass
 
-        self._apply_compare_toggle(compare_on)
+    def _compare_cache_earliest_gt(self, lo_ts: float) -> bool:
+        """True when the compare's cached 5m history starts AFTER ``lo_ts``.
 
-        # NOTE: no explicit re-zoom here. With the compare's full history
-        # disk-preloaded above, ``align_pair`` keeps the drilled day and —
-        # for same-grid intraday (primary + compare share the exchange 5m
-        # grid) — inserts NO gap bars, so the primary's bar indices are
-        # unchanged and the toggle's own ``preserve``-xlim render already
-        # holds the drilled-day window. An explicit ``_zoom_primary_to_date``
-        # recompute here raced in-flight companion prefetches (compare
-        # overwritten mid-re-render → primary/compare length desync).
+        i.e. the compare does NOT cover the viewed window's start — the
+        trigger for the keep_window / time-preserve / background-fill path.
+        Consults the in-memory cache first, then disk; treats a genuinely
+        empty compare as "lacks the window". Cheap; no network.
+        """
+        try:
+            src = self.source_var.get()
+            cmp = self.compare_ticker_var.get().strip().upper()
+            interval = self.interval_var.get()
+        except Exception:  # noqa: BLE001
+            return False
+        if not cmp:
+            return False
+        key = (src, cmp, interval)
+        cached = self._full_cache.get(key) or []
+        if not cached:
+            try:
+                cached = disk_cache.load(*key) or []
+            except Exception:  # noqa: BLE001
+                cached = []
+        if not cached:
+            # No cache at all → a FRESH compare; the cache-miss load path
+            # will fetch its (recent) data normally. Don't engage the
+            # keep_window/time-preserve path here (that would widen a normal
+            # recent interior zoom — d52). Only a compare that HAS cached
+            # data starting AFTER the viewed window genuinely lacks it.
+            return False
+        try:
+            return float(cached[0].date.timestamp()) > lo_ts + 1.0
+        except Exception:  # noqa: BLE001
+            return False
 
-    def _apply_compare_toggle(self, compare_on: bool) -> None:
+    def _current_visible_window_ts(
+        self,
+    ) -> tuple[float, float, bool] | None:
+        """Return ``(lo_ts, hi_ts, is_historical)`` for the on-screen primary.
+
+        ``lo_ts`` / ``hi_ts`` are epoch seconds of the earliest / latest
+        NON-gap bar currently within the primary price axes' xlim.
+        ``is_historical`` is True when the visible right edge sits before
+        the primary's last real bar (the user is viewing history, not the
+        default right-edge). Returns ``None`` when there are no primary
+        axes / candles yet. Works for BOTH double-click drilldown and
+        manual pan/zoom (no reliance on ``_drilldown_day``).
+        """
+        try:
+            ps = self._panel_state.get("primary") or {}
+            ax = ps.get("price_ax")
+            cs = ps.get("candles") or []
+            if ax is None or not cs:
+                return None
+            xlo, xhi = ax.get_xlim()
+            lo = max(0, int(math.floor(xlo)))
+            hi = min(len(cs) - 1, int(math.ceil(xhi)))
+            if hi < lo:
+                return None
+            times = [
+                c.date.timestamp() for c in cs[lo:hi + 1]
+                if not getattr(c, "is_gap", False)
+            ]
+            if not times:
+                return None
+            # ``cs`` (the panel slot's candles) can be a virtualized SLICE
+            # after a drilldown/zoom, so its last bar is NOT the series end.
+            # Read the last real bar from the FULL primary series to decide
+            # whether the view is historical (bars exist to the right).
+            full = self._primary or cs
+            last_ts = None
+            for c in reversed(full):
+                if not getattr(c, "is_gap", False):
+                    last_ts = c.date.timestamp()
+                    break
+            hi_ts = max(times)
+            is_historical = last_ts is not None and hi_ts < last_ts - 1.0
+            return (min(times), hi_ts, is_historical)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _maybe_fill_compare_for_window(
+        self, lo_ts: float, hi_ts: float,
+    ) -> None:
+        """Background-fetch the compare's bars for the viewed window.
+
+        Only fires for range-capable intraday providers (Alpaca) when the
+        compare's cache doesn't already reach ``lo_ts``. Reuses the
+        drilldown's :meth:`_targeted_range_fetch` (targeted window +
+        coverage sidecar + ``fetch_range`` + merge-to-disk), marshals the
+        completion via :meth:`_await_future_on_tk`, and on success reloads
+        the compare from disk and re-renders WITHOUT moving the primary.
+        Coalesced per ``(src, cmp, interval, day)``; token-gated so a
+        superseded completion is dropped. Audit
+        ``compare-toggle-drilldown-preserve``.
+        """
+        src = self.source_var.get()
+        interval = self.interval_var.get()
+        cmp = self.compare_ticker_var.get().strip().upper()
+        if not cmp or not is_intraday(interval):
+            return
+        if not source_supports_range(src):
+            return
+        cmp_key = (src, cmp, interval)
+        cached = self._full_cache.get(cmp_key) or []
+        try:
+            earliest = cached[0].date.timestamp() if cached else None
+        except Exception:  # noqa: BLE001
+            earliest = None
+        if earliest is not None and earliest <= lo_ts + 1.0:
+            return  # already covered
+        try:
+            day = datetime.fromtimestamp(
+                lo_ts, tz=cached[0].date.tzinfo if cached else None,
+            ).date()
+        except Exception:  # noqa: BLE001
+            try:
+                day = datetime.fromtimestamp(lo_ts).date()
+            except Exception:  # noqa: BLE001
+                return
+        fill_key = (src, cmp, interval, day)
+        if fill_key in self._compare_fill_inflight:
+            return  # coalesce — already fetching this window
+        executor = getattr(self, "_fetch_executor", None)
+        if executor is None:
+            return
+        self._compare_fill_inflight.add(fill_key)
+        self._compare_fetch_token += 1
+        token = self._compare_fetch_token
+        try:
+            self._status.info(
+                f"Fetching {cmp} {interval} for {day}… (primary view held)")
+        except Exception:  # noqa: BLE001
+            pass
+        now_ts = int(time.time())
+
+        def _work():
+            return self._targeted_range_fetch(
+                src, cmp, interval, day, now_ts, merge_to_disk=True,
+            )
+
+        def _on_done(bars) -> None:
+            self._compare_fill_inflight.discard(fill_key)
+            # Superseded by a newer fill / toggle → drop silently.
+            if token != self._compare_fetch_token:
+                return
+            self._on_compare_fill_done(src, cmp, interval, day, bars or [])
+
+        try:
+            fut = executor.submit(_work)
+        except Exception:  # noqa: BLE001
+            self._compare_fill_inflight.discard(fill_key)
+            return
+        self._await_future_on_tk(fut, _on_done)
+
+    def _on_compare_fill_done(
+        self, src: str, cmp: str, interval: str, day, bars: list,
+    ) -> None:
+        """Tk-thread: a compare-fill fetch landed — reload + re-render.
+
+        Reloads the compare from disk into ``_full_cache`` (the worker
+        merged the fetched bars there), then — if compare is still ON for
+        the same ticker/interval — re-runs the view-safe toggle so the
+        newly-arrived bars fill the compare panel with the primary view
+        held. Never moves the primary.
+        """
+        # Only act if the user is still on the same compare context.
+        try:
+            still_on = (
+                bool(self.compare_var.get())
+                and self.compare_ticker_var.get().strip().upper() == cmp
+                and self.source_var.get() == src
+                and self.interval_var.get() == interval
+            )
+        except Exception:  # noqa: BLE001
+            still_on = False
+        if not still_on:
+            return
+        cmp_key = (src, cmp, interval)
+        try:
+            disk = disk_cache.load(*cmp_key) or []
+            if disk:
+                cur = self._full_cache.get(cmp_key)
+                self._full_cache[cmp_key] = (
+                    disk_cache.merge_candles(cur, disk) if cur else disk
+                )
+                self._trim_full_cache()
+        except Exception:  # noqa: BLE001
+            pass
+        merged = self._full_cache.get(cmp_key) or []
+        covers = False
+        try:
+            covers = any(
+                (not getattr(c, "is_gap", False)) and c.date.date() == day
+                for c in merged
+            )
+        except Exception:  # noqa: BLE001
+            covers = False
+        # Re-render holding the current view.
+        vis = self._current_visible_window_ts()
+        if vis is not None and vis[2]:
+            self._preserve_xlim_by_time_on_render = True
+            self._preserve_xlim_on_render = False
+            keep_window = (vis[0], vis[1])
+        else:
+            keep_window = None
+        try:
+            self._apply_compare_toggle(True, keep_window=keep_window)
+        finally:
+            if vis is not None and vis[2]:
+                self._preserve_xlim_on_render = True
+        try:
+            if covers:
+                n = sum(
+                    1 for c in merged
+                    if (not getattr(c, "is_gap", False))
+                    and c.date.date() == day
+                )
+                self._status.info(
+                    f"Compare {cmp} loaded for {day} ({n} bars on {interval})")
+            else:
+                self._status.warn(
+                    f"No {cmp} {interval} bars found for {day}; "
+                    f"primary view kept")
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _apply_compare_toggle(
+        self, compare_on: bool, *,
+        keep_window: tuple[float, float] | None = None,
+    ) -> None:
         """Regular (non-sandbox) compare toggle: align cached data + render.
 
-        Extracted from :meth:`_on_compare_toggle` so the drilldown-preserve
-        wrapper can run it verbatim then re-zoom. Behaviour is unchanged:
-        compare-off is a layout-only re-render; compare-on uses the warm
-        ``_full_cache`` entry (instant) or falls back to ``_load_data``.
+        Extracted from :meth:`_on_compare_toggle` so the view-safe wrapper
+        can pass a ``keep_window`` (retain the on-screen primary bars
+        through ``align_pair`` even when they predate the compare's cached
+        history). Compare-off is a layout-only re-render; compare-on uses
+        the warm ``_full_cache`` entry (instant) or falls back to
+        ``_load_data``.
         """
         if not compare_on:
             # Layout-only switch; keep _primary_raw + cached data as-is
@@ -2201,7 +2448,7 @@ class ChartApp(
             )
             self._confirmed_compare_ticker = raw_compare
             primary, compare = self._apply_pair_filter_and_align(
-                self._primary_raw, compare_raw,
+                self._primary_raw, compare_raw, keep_window=keep_window,
             )
             self._set_data_state(
                 primary=primary,
@@ -3436,12 +3683,14 @@ class ChartApp(
 
     def _apply_pair_filter_and_align(
         self, primary_raw: list[Candle], compare_raw: list[Candle] | None,
+        *, keep_window: tuple[float, float] | None = None,
     ) -> tuple[list[Candle], list[Candle]]:
         return self._data_ctrl.apply_pair_filter(
             primary_raw,
             compare_raw,
             interval=self.interval_var.get(),
             prepost=bool(self.prepost_var.get()),
+            keep_window=keep_window,
         )
 
     # ------------------------------------------------------------------

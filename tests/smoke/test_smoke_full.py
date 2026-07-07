@@ -4582,17 +4582,12 @@ def check_d86_compare_toggle_preserves_drilldown_day(app) -> None:
             f"d86 precondition: drilled window should show only {drill_day}; "
             f"got {sorted(before)}")
 
-        # Reproduce the deep-history trigger: the compare's IN-MEMORY 5m
-        # cache holds ONLY the recent trailing window (does NOT reach the
-        # early drilled day), while its FULL history lives on disk (the
-        # universe download). Without the fix, ``align_pair``'s low-end
-        # intersection drops the drilled day and the view snaps to the
-        # recent edge; the fix pulls the compare's disk history into the
-        # cache first so the drilled day survives.
-        from tradinglab import disk_cache as _dc
-        compare_full = make_5m(100)
-        _dc.save(src, compare_t, "5m", compare_full)
-        recent_only = [c for c in compare_full
+        # Reproduce the deep-history trigger: the compare's 5m cache holds
+        # ONLY the recent trailing window (does NOT reach the early drilled
+        # day). The fix keeps the view via ``keep_window`` + time-preserve
+        # (no jump), and fills the compare's old-day bars via a background
+        # targeted fetch. Audit ``compare-toggle-drilldown-preserve``.
+        recent_only = [c for c in make_5m(100)
                        if c.date.date() >= datetime(2026, 1, 30).date()]
         assert not any(c.date.date() == drill_day for c in recent_only), (
             "d86 setup: recent-only compare cache must NOT cover the drilled day")
@@ -4616,16 +4611,25 @@ def check_d86_compare_toggle_preserves_drilldown_day(app) -> None:
             f"of staying on the drilled day {drill_day}; visible={sorted(after)}")
         assert getattr(app, "_drilldown_day", None) == drill_day, (
             "d86: _drilldown_day must survive the compare toggle")
-        # Compare panel exists AND now covers the drilled day (disk history
-        # was pulled in so align_pair keeps it).
         ps_c = app._panel_state.get("compare") or {}
         assert ps_c.get("price_ax") is not None, (
             "d86: compare panel must be created by the toggle")
+
+        # The compare doesn't cover the drilled day YET (recent-only cache);
+        # it renders gaps there. Drive the async targeted-fetch COMPLETION
+        # handler with the compare's full history (the worker merged it to
+        # disk) and assert it fills WITHOUT moving the view.
+        from tradinglab import disk_cache as _dc
+        _dc.save(src, compare_t, "5m", make_5m(100))
+        app._on_compare_fill_done(src, compare_t, "5m", drill_day, make_5m(100))
+        _pump(app, 0.2)
         comp_days = {c.date.date() for c in (app._compare or [])
                      if not getattr(c, "is_gap", False)}
         assert drill_day in comp_days, (
-            f"d86: compare must cover the drilled day after the toggle; "
+            f"d86: compare must cover the drilled day after the fill; "
             f"got {sorted(comp_days)[:3]}…")
+        assert drill_day in _visible_days(), (
+            "d86: the compare fill must not move the view off the drilled day")
 
     finally:
         try:
@@ -9593,6 +9597,12 @@ def check_d52_manual_zoom_pan_arms_preserve_xlim(app) -> None:
     saved_compare_on = bool(app.compare_var.get())
     saved_compare_ticker = app.compare_ticker_var.get()
     saved_xlim = price_ax.get_xlim()
+    saved_drill = getattr(app, "_drilldown_day", None)
+    # This check exercises MANUAL rubber-band zoom/pan (NOT drill-down).
+    # Clear any inherited ``_drilldown_day`` so the compare-toggle in
+    # sub-test C takes the ordinary (index-preserve) path, not the
+    # drilldown-scoped view-safe path.
+    app._drilldown_day = None
     try:
         # ---- A. _zoom_end arms preserve flag --------------------------
         app._preserve_xlim_on_render = False
@@ -9692,6 +9702,7 @@ def check_d52_manual_zoom_pan_arms_preserve_xlim(app) -> None:
         app._pan_state = saved_pan_state
         app._preserve_xlim_on_render = saved_preserve
         app._slide_xlim_to_right_edge = saved_slide
+        app._drilldown_day = saved_drill
         try:
             app.compare_var.set(saved_compare_on)
             app.compare_ticker_var.set(saved_compare_ticker)

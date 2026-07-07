@@ -289,3 +289,57 @@ def test_intraday_gap_tz_consistency_survives_naive_inputs():
     for out in (out_p, out_c):
         assert {(c.date.tzinfo is not None) for c in out} == {False}
 
+
+# ---------------------------------------------------------------------------
+# keep_window: retain viewed primary bars that predate the compare's start
+# (audit ``compare-toggle-drilldown-preserve``). A drilled/panned view of an
+# OLD window the compare doesn't cover must survive the low-end intersection.
+# ---------------------------------------------------------------------------
+
+def test_keep_window_retains_old_primary_bars_with_compare_gaps():
+    old = dt.date(2021, 12, 16)
+    recent = _TODAY
+    # Primary has an OLD day + a recent day; compare has ONLY the recent day.
+    primary = _intraday_session(old, px0=50.0) + _intraday_session(recent, px0=80.0)
+    compare = _intraday_session(recent, px0=200.0)
+
+    # Default: the old day is DROPPED (lo_day = max => recent).
+    p_def, _ = align_pair(primary, compare, interval="5m")
+    assert old not in {c.date.date() for c in p_def if not c.is_gap}
+
+    # With keep_window covering the old day, its primary bars survive and the
+    # compare side is gap-filled there.
+    lo = dt.datetime(old.year, old.month, old.day, 9, 30, tzinfo=ET).timestamp()
+    hi = dt.datetime(old.year, old.month, old.day, 16, 0, tzinfo=ET).timestamp()
+    p_kw, c_kw = align_pair(primary, compare, interval="5m", keep_window=(lo, hi))
+    assert len(p_kw) == len(c_kw)
+    old_slots = [(pp, cc) for pp, cc in zip(p_kw, c_kw, strict=False)
+                 if not pp.is_gap and pp.date.date() == old]
+    assert old_slots, "keep_window must retain the old-day primary bars"
+    assert all(cc.is_gap for _, cc in old_slots), "compare gap-filled in window"
+    # Small aligned length — NOT a multi-year continuous gap run.
+    assert len(p_kw) <= len(primary) + len(compare) + 2
+
+
+def test_keep_window_none_is_legacy_behaviour():
+    old = dt.date(2021, 12, 16)
+    recent = _TODAY
+    primary = _intraday_session(old, px0=50.0) + _intraday_session(recent, px0=80.0)
+    compare = _intraday_session(recent, px0=200.0)
+    a, b = align_pair(primary, compare, interval="5m")
+    a2, b2 = align_pair(primary, compare, interval="5m", keep_window=None)
+    assert [x.date for x in a] == [x.date for x in a2]
+    assert [x.date for x in b] == [x.date for x in b2]
+
+
+def test_keep_window_covered_window_adds_nothing():
+    # When the window is already inside the intersection, keep_window is a no-op.
+    primary = _intraday_session(_TODAY, px0=100.0)
+    compare = _intraday_session(_TODAY, px0=200.0)
+    lo = primary[0].date.timestamp()
+    hi = primary[-1].date.timestamp()
+    a, _ = align_pair(primary, compare, interval="5m")
+    a2, _ = align_pair(primary, compare, interval="5m", keep_window=(lo, hi))
+    assert len(a) == len(a2)
+
+

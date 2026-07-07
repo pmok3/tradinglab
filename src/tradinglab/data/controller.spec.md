@@ -13,7 +13,7 @@ Own the app's in-memory candle cache plus the active primary/compare candle list
 - `trim(pinned_tickers=frozenset(), *, protected_key=None)` — soft-cap the cache while preserving pinned tickers.
 - `disk_load(source, ticker, interval)` — defensive wrapper around `disk_cache.load`.
 - `set_primary(raw, filtered, *, compare_raw=None, compare_filtered=None)` — replace active raw/visible lists.
-- `apply_pair_filter(primary_raw, compare_raw, *, interval, prepost)` — delegate to `core.pairing.apply_pair_filter_and_align`.
+- `apply_pair_filter(primary_raw, compare_raw, *, interval, prepost, keep_window=None)` — delegate to `core.pairing.apply_pair_filter_and_align`; `keep_window=(lo_ts, hi_ts)` is forwarded verbatim to retain an old on-screen primary window the compare doesn't cover yet (see `core/pairing.spec.md`, audit `compare-toggle-drilldown-preserve`).
 
 ## Dependencies
 - Internal: `disk_cache`, `constants`, `core.pairing`, `models.Candle`.
