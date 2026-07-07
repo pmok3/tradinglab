@@ -35,6 +35,7 @@ Holds palette (light/dark theme dicts), the candlestick bull/bear colors, the in
 - `INTRADAY_INTERVALS: frozenset` = `{"1m","2m","5m","15m","30m","1h"}`.
 - `is_intraday(interval: str) -> bool` — membership test in `INTRADAY_INTERVALS`. Called throughout (app.py, data/normalize.py, streaming/synthetic.py, core/pairing.py, rendering.py indirectly via `draw_session_shading`).
 - `classify_session(hour: int, minute: int) -> str` — returns `"pre"`, `"regular"`, or `"post"` based on US Eastern wall clock: regular is `[09:30, 16:00)`, post is `[16:00, 20:00)`, everything else is `pre`. Called from `data/normalize.candles_from_dataframe`, `data/synthetic_source._gen_intraday`, `streaming/synthetic.SyntheticStreamSource._make_bar`, `rendering.draw_session_shading`.
+- `classify_session_arr(hours, minutes) -> list[str]` — vectorized `classify_session` over numpy hour/minute arrays, **bit-for-bit identical** to the scalar version element-by-element. Returns a `list[str]` reusing THREE shared label objects (integer category codes → tuple index), so it does not allocate one `str` per bar. Lazily imports numpy (called once per fetch, not per bar). Used by `data/normalize.candles_from_dataframe` to avoid a per-bar Python call on large intraday fetches. The minute-of-day thresholds are duplicated from `classify_session` — keep the two in lockstep.
 - `interval_minutes(interval: str) -> int` — converts `"5m"`/`"1h"` to minutes; **raises `ValueError`** on daily+ (callers reaching this on a daily interval are buggy). Used by `data/synthetic_source`, `streaming/synthetic`, `app._schedule_next_bar_fetch`, `app._cache_is_stale`.
 - `floor_to_interval(when: datetime, step_min: int) -> datetime` — zeros seconds/microseconds and floors `hour*60+minute` to a multiple of `step_min`. Used to line timestamps up with exchange bar boundaries in synthetic data and streaming rollover.
 
@@ -61,6 +62,9 @@ Holds palette (light/dark theme dicts), the candlestick bull/bear colors, the in
 - `is_intraday(i)` ↔ `i in INTRADAY_INTERVALS`.
 - `classify_session(9,30) == "regular"`; `(9,29) == "pre"`; `(16,0) == "post"`;
   `(20,0) == "pre"`.
+- `classify_session_arr(hours, minutes)[i] == classify_session(hours[i], minutes[i])`
+  for every `i` (bit-for-bit), and returns at most 3 distinct string objects
+  (shared labels, no per-bar allocation).
 - `interval_minutes("5m") == 5`; `("1h") == 60`; `("1d")` raises `ValueError`.
 - Every key in `LIGHT_THEME` is also in `DARK_THEME` and vice versa.
 - `build_ttk_style_spec(theme)` returns the same style names in the same

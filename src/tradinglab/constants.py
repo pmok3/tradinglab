@@ -1112,6 +1112,34 @@ def classify_session(hour: int, minute: int) -> str:
     return "pre"
 
 
+def classify_session_arr(hours, minutes) -> list[str]:
+    """Vectorized :func:`classify_session` over numpy hour + minute arrays.
+
+    Returns a ``list[str]`` of session labels that is **bit-for-bit
+    identical** to calling :func:`classify_session` element-by-element. The
+    minute-of-day thresholds are duplicated here for a single vectorized
+    pass — keep the two functions in lockstep (a change to the boundaries
+    must update BOTH).
+
+    Used by the data normalizers so large intraday fetches (multi-year 1m,
+    intraday universe preloads) don't pay a per-bar Python call. numpy is
+    imported lazily since this is called once per fetch, not per bar.
+    """
+    import numpy as np
+
+    total = np.asarray(hours, dtype=np.int32) * 60 + np.asarray(minutes, dtype=np.int32)
+    # Integer category codes (0=pre, 1=regular, 2=post) computed with two
+    # vectorized masked assignments, then mapped back to THREE shared string
+    # objects. Going via ``codes.tolist()`` (cached small-int refs) + tuple
+    # indexing keeps every label a shared reference — a numpy ``"<U7"`` array
+    # ``.tolist()`` would instead allocate one fresh ``str`` per bar.
+    codes = np.zeros(total.shape, dtype=np.int8)
+    codes[(total >= 9 * 60 + 30) & (total < 16 * 60)] = 1
+    codes[(total >= 16 * 60) & (total < 20 * 60)] = 2
+    _LABELS = ("pre", "regular", "post")
+    return [_LABELS[c] for c in codes.tolist()]
+
+
 def interval_minutes(interval: str) -> int:
     """Return ``interval`` as an integer number of minutes.
 

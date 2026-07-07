@@ -34,7 +34,7 @@ from typing import Any
 
 import numpy as np
 
-from ..constants import classify_session, is_intraday
+from ..constants import classify_session, classify_session_arr, is_intraday
 from ..models import Candle
 
 logger = logging.getLogger(__name__)
@@ -169,6 +169,15 @@ def candles_from_dataframe(
     # ts.to_pydatetime() in the iterrows loop.
     dts = df.index.to_pydatetime()
 
+    # Session tagging is vectorized in the build loop below: pull the ET
+    # wall-clock hour/minute off the tz-aware index in one C-level pass
+    # instead of a per-bar ``dt.hour`` / ``dt.minute`` access. Only needed
+    # for intraday; daily+ bars are all "regular".
+    intraday = is_intraday(interval)
+    if intraday:
+        hours = np.asarray(df.index.hour, dtype=np.int32)
+        minutes = np.asarray(df.index.minute, dtype=np.int32)
+
     # Drop rows whose OHLC is not all-finite. Providers (Yahoo in
     # particular) emit a placeholder row for the current/next session
     # BEFORE any trades print — NaN OHLC, sometimes with a stray volume.
@@ -191,6 +200,9 @@ def candles_from_dataframe(
         closes = closes[finite_ohlc]
         volumes = volumes[finite_ohlc]
         dts = dts[finite_ohlc]
+        if intraday:
+            hours = hours[finite_ohlc]
+            minutes = minutes[finite_ohlc]
         logger.debug(
             "candles_from_dataframe: dropped %d row(s) with non-finite OHLC "
             "(provider placeholder for an un-started session)", dropped,
@@ -203,20 +215,19 @@ def candles_from_dataframe(
     # cheaply in the per-row loops below.
     volumes_int = np.nan_to_num(volumes, nan=0.0).astype(np.int64, copy=False)
 
-    intraday = is_intraday(interval)
     n = len(dts)
     candles: list[Candle] = [None] * n  # type: ignore[list-item]
     if intraday:
-        # Per-bar session tag. classify_session is a ~3-cmp function so
-        # even a Python loop is cheap here; a fully vectorized version
-        # would require broadcasting the session thresholds across two
-        # int arrays, not worth the complexity today.
+        # Session tags in one vectorized pass (constants.classify_session_arr)
+        # rather than a per-bar ``classify_session(dt.hour, dt.minute)`` call —
+        # the win scales with bar count (multi-year 1m, intraday universe
+        # preloads). ``sessions`` is a plain list[str], length-aligned with dts.
+        sessions = classify_session_arr(hours, minutes)
         for i in range(n):
-            dt = dts[i]
             candles[i] = Candle(
-                date=dt, open=opens[i], high=highs[i], low=lows[i],
+                date=dts[i], open=opens[i], high=highs[i], low=lows[i],
                 close=closes[i], volume=int(volumes_int[i]),
-                session=classify_session(dt.hour, dt.minute),
+                session=sessions[i],
             )
     else:
         for i in range(n):
