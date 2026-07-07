@@ -4681,6 +4681,199 @@ def check_d86_compare_toggle_preserves_drilldown_day(app) -> None:
           "(no right-edge snap)")
 
 
+def check_d87_compare_toggle_drilldown_no_index_shift(app) -> None:
+    """Regression: compare toggle on a drilled day must not shift the view.
+
+    Bug (``compare-toggle-drilldown-preserve``, grid-mismatch variant):
+    the user drills 5m into an OLD in-coverage day (e.g. May 8th), then
+    enables Compare. The compare COVERS that day (so the deep-history
+    ``keep_window`` path does NOT trigger), but the primary and compare
+    5m grids differ (IEX serves sparse bars — the compare has timestamps
+    the primary lacks). ``align_pair`` inserts ``Candle.gap`` slots for
+    those extra compare timestamps, SHIFTING the drilled day's absolute
+    index in the aligned primary. Naive index-preserve then reuses the
+    stale index xlim and drags the view ~1 day to the LEFT — the drilled
+    day's open ends up in the middle of the screen and the PRIOR day
+    becomes the left edge.
+
+    Fix: ``_on_compare_toggle`` preserves the view by TIME (not index)
+    for every historical-day drilldown compare toggle, so the drilled day
+    stays framed regardless of align-induced index shifts.
+
+    This check seeds a SPARSE primary (skips every 3rd 5m bar, like an
+    illiquid IEX symbol) and a DENSE compare (all 78 bars/day) so the
+    align genuinely inserts gaps before the drilled day, then asserts the
+    drilled day is still the leftmost visible day after the toggle.
+    """
+    from datetime import timedelta
+
+    import numpy as np
+
+    from tradinglab.models import Candle
+
+    src = app.source_var.get()
+    primary_t = "ZDR7A"
+    compare_t = "ZDR7B"
+
+    saved_ticker = app.ticker_var.get()
+    saved_compare_ticker = app.compare_ticker_var.get()
+    saved_compare_on = bool(app.compare_var.get())
+    saved_interval = app.interval_var.get()
+    saved_preserve = app._preserve_xlim_on_render
+    saved_drill = getattr(app, "_drilldown_day", None)
+    saved_stale = app._cache_is_stale
+    saved_cache = {
+        k: app._full_cache.pop(k, None)
+        for k in [(src, primary_t, "1d"), (src, primary_t, "5m"),
+                  (src, compare_t, "1d"), (src, compare_t, "5m")]
+    }
+
+    def make_1d(seed, n=30):
+        out, base = [], datetime(2026, 1, 5, 16, 0)
+        for d in range(n):
+            lo = 50 + d * 2 + seed
+            out.append(Candle(date=base + timedelta(days=d),
+                              open=lo, high=lo + 5, low=lo - 1,
+                              close=lo + 2, volume=80000, session="regular"))
+        return out
+
+    def make_5m(seed, n=30, *, sparse=False):
+        out, base = [], datetime(2026, 1, 5, 9, 30)
+        for d in range(n):
+            lo = 50 + d * 2 + seed
+            for i in range(78):
+                # Sparse primary drops every 3rd bar → the dense compare
+                # has ~26 timestamps/day the primary lacks, which the
+                # align turns into inserted gap slots (index shift).
+                if sparse and i % 3 == 2:
+                    continue
+                p = lo + i * 0.05
+                out.append(Candle(date=base + timedelta(days=d, minutes=5 * i),
+                                  open=p, high=p + 0.3, low=p - 0.3,
+                                  close=p + 0.1, volume=1000 + i,
+                                  session="regular"))
+        return out
+
+    try:
+        app._cache_is_stale = lambda *a, **k: False  # type: ignore[assignment]
+        app._full_cache[(src, primary_t, "1d")] = make_1d(0)
+        app._full_cache[(src, primary_t, "5m")] = make_5m(0, sparse=True)
+        app._full_cache[(src, compare_t, "1d")] = make_1d(100)
+        app._full_cache[(src, compare_t, "5m")] = make_5m(100)  # dense
+
+        if app.compare_var.get():
+            app.compare_var.set(False)
+        app.interval_var.set("1d")
+        app.ticker_var.set(primary_t)
+        app.compare_ticker_var.set(compare_t)
+        app._preserve_xlim_on_render = False
+        app._drilldown_day = None
+        app._load_data()
+        _pump_until(app,
+            lambda: getattr(app, "_primary", None) and len(app._primary) > 0,
+            timeout=0.6)
+        app._full_cache[(src, primary_t, "1d")] = make_1d(0)
+        app._full_cache[(src, primary_t, "5m")] = make_5m(0, sparse=True)
+        app._full_cache[(src, compare_t, "1d")] = make_1d(100)
+        app._full_cache[(src, compare_t, "5m")] = make_5m(100)
+
+        # Drill into a mid-range day (day 10 → 2026-01-15). Enough days
+        # precede it that the inserted gaps would shift the naive
+        # index-preserve window several days to the LEFT if unfixed.
+        drill_day = datetime(2026, 1, 15).date()
+        ok = app._zoom_5m_for_date(drill_day)
+        if not ok:
+            raise AssertionError(f"d87: drill-down to {drill_day} failed")
+        _pump_until(app, lambda: app.interval_var.get() == "5m", timeout=0.6)
+        assert app.interval_var.get() == "5m", "drill-down must switch to 5m"
+        assert getattr(app, "_drilldown_day", None) == drill_day
+
+        def _visible_days():
+            ps = app._panel_state.get("primary") or {}
+            ax = ps.get("price_ax")
+            cs = ps.get("candles") or []
+            if ax is None or not cs:
+                return set()
+            xlo, xhi = ax.get_xlim()
+            lo = max(0, int(np.ceil(xlo - 1e-6)))
+            hi = min(len(cs), int(np.floor(xhi + 1e-6)) + 1)
+            return {c.date.date() for c in cs[lo:hi]
+                    if not getattr(c, "is_gap", False)}
+
+        before = _visible_days()
+        assert before == {drill_day}, (
+            f"d87 precondition: drilled window should show only {drill_day}; "
+            f"got {sorted(before)}")
+
+        # Re-seed IMMEDIATELY before the toggle: the 1d→5m drill triggers a
+        # companion prefetch that races against the smoke stub, which would
+        # otherwise overwrite our dense compare grid with generic 150-bar
+        # fake data (landmine §7.2) and flip the code path under test.
+        app._full_cache[(src, primary_t, "5m")] = make_5m(0, sparse=True)
+        app._full_cache[(src, compare_t, "5m")] = make_5m(100)  # dense
+
+        # Enable compare — the align inserts gaps before the drilled day.
+        app.compare_var.set(True)
+        app._on_compare_toggle()
+        _pump_until(app,
+            lambda: (app._panel_state.get("compare") or {}).get("price_ax") is not None,
+            timeout=0.8)
+
+        after = _visible_days()
+        assert drill_day in after, (
+            f"d87: drilled day {drill_day} vanished after compare toggle; "
+            f"visible={sorted(after)}")
+        # THE bug: the view drags LEFT so a PRIOR day becomes the left edge.
+        # The drilled day must remain the earliest (leftmost) visible day.
+        assert min(after) == drill_day, (
+            f"d87: compare toggle shifted the view LEFT — drilled day "
+            f"{drill_day} is no longer the left edge; visible={sorted(after)} "
+            f"(earliest={min(after)}). The align-induced index shift was not "
+            f"absorbed by time-preserve.")
+        assert getattr(app, "_drilldown_day", None) == drill_day, (
+            "d87: _drilldown_day must survive the compare toggle")
+
+    finally:
+        try:
+            del app._cache_is_stale
+        except AttributeError:
+            app._cache_is_stale = saved_stale  # type: ignore[assignment]
+        for k, v in saved_cache.items():
+            app._full_cache.pop(k, None)
+            if v is not None:
+                app._full_cache[k] = v
+        try:
+            import os
+            base = os.environ.get("LOCALAPPDATA", "")
+            if base:
+                from pathlib import Path
+                p = Path(base) / "tradinglab"
+                for t in (primary_t, compare_t):
+                    for iv in ("1d", "5m"):
+                        for f in p.glob(f"{src}__{t}__{iv}.jsonl"):
+                            try:
+                                f.unlink()
+                            except Exception:  # noqa: BLE001
+                                pass
+        except Exception:  # noqa: BLE001
+            pass
+        if app.compare_var.get() != saved_compare_on:
+            app.compare_var.set(saved_compare_on)
+        app.interval_var.set(saved_interval)
+        app.ticker_var.set(saved_ticker)
+        app.compare_ticker_var.set(saved_compare_ticker)
+        app._preserve_xlim_on_render = saved_preserve
+        app._drilldown_day = saved_drill
+        try:
+            app._load_data()
+        except Exception:  # noqa: BLE001
+            pass
+        _pump(app, 0.3)
+
+    print("  [OK] §d87 compare toggle on a drilled day holds the view "
+          "(grid-mismatch index shift absorbed by time-preserve)")
+
+
 def check_d35_config_import_export_round_trip(app) -> None:
     """Configuration file load/save round-trip via :mod:`settings`.
 
@@ -21588,6 +21781,7 @@ def _run_all_checks(app) -> None:
     check_d34b_compare_toggle_today_drilldown_keeps_primary(app)
     check_d53_compare_off_during_drilldown_ylim(app)
     check_d86_compare_toggle_preserves_drilldown_day(app)
+    check_d87_compare_toggle_drilldown_no_index_shift(app)
     check_d35_config_import_export_round_trip(app)
     check_d35a_config_theme_round_trip(app)
     check_d35b_view_settings_round_trip(app)
@@ -21901,6 +22095,8 @@ def _build_check_sequence():
          check_d53_compare_off_during_drilldown_ylim),
         ("check_d86_compare_toggle_preserves_drilldown_day",
          check_d86_compare_toggle_preserves_drilldown_day),
+        ("check_d87_compare_toggle_drilldown_no_index_shift",
+         check_d87_compare_toggle_drilldown_no_index_shift),
         ("check_d35_config_import_export_round_trip",
          check_d35_config_import_export_round_trip),
         ("check_d35a_config_theme_round_trip",

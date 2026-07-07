@@ -2122,33 +2122,46 @@ class ChartApp(
         except Exception:  # noqa: BLE001
             in_drilldown = False
         vis = self._current_visible_window_ts() if in_drilldown else None
-        # ONLY engage the special (keep_window + time-preserve + fill) path
-        # for a DRILLED-IN intraday view whose compare cache genuinely LACKS
-        # the drilled window. Scoped to drilldown (``_drilldown_day`` set) —
-        # a normal manual interior zoom must keep using the existing
-        # index-preserve, which frames the window tighter than the time-remap
-        # (the time-remap widens it; d52 pins this). The manual-pan case is a
-        # deferred follow-up.
-        compare_lacks = bool(
+        # TIME-preserve holds the drilled day across the compare re-align.
+        # It is needed for EVERY historical-day drilldown compare toggle —
+        # not just the deep-history (compare-lacks) case — because
+        # ``align_pair`` inserts gap slots wherever the primary and compare
+        # 5m grids differ (IEX sparse bars: SPY has timestamps AMD lacks and
+        # vice-versa). Those inserted slots SHIFT the drilled day's absolute
+        # index, so naive index-preserve reuses a now-stale index xlim and
+        # drags the view ~1 day to the left (the "May 8th start ends up in
+        # the middle, May 7th becomes the left edge" report). Remapping the
+        # window by TIME lands on the same calendar minutes in the new
+        # series → the drilled day stays framed exactly. Audit
+        # ``compare-toggle-drilldown-preserve``.
+        use_time_preserve = bool(
             in_drilldown
-            and vis is not None and vis[2]  # historical view
             and compare_on
+            and vis is not None and vis[2]  # historical view (not right edge)
+        )
+        # keep_window + background-fill ALSO engage only when the compare
+        # cache genuinely LACKS the drilled window (deep-history providers
+        # cap intraday depth). A normal manual interior zoom keeps using the
+        # existing index-preserve — d52 clears ``_drilldown_day`` so it takes
+        # this ``in_drilldown=False`` path.
+        compare_lacks = bool(
+            use_time_preserve
             and self._compare_cache_earliest_gt(vis[0])  # compare misses it
         )
-        if compare_lacks:
+        if use_time_preserve:
             # Preserve the view by TIME across the re-align. Clear the
             # INDEX-based preserve first: ``_compute_slot_window`` skips the
             # time-remap when index-preserve is active, and the stale drilled
-            # index xlim overflows the (now shorter/gapped) aligned list →
-            # snaps to the right edge. Re-armed AFTER the render, when the
-            # remapped index xlim is correct again.
+            # index xlim overflows the (now shifted/gapped) aligned list.
+            # Re-armed AFTER the render, when the remapped index xlim is
+            # correct again.
             self._preserve_xlim_by_time_on_render = True
             self._preserve_xlim_on_render = False
         keep_window = (vis[0], vis[1]) if compare_lacks else None
 
         self._apply_compare_toggle(compare_on, keep_window=keep_window)
 
-        if compare_lacks:
+        if use_time_preserve:
             # The time-remap landed the (now-correct) index xlim on the
             # viewed window; re-arm index-preserve so later renders hold it.
             self._preserve_xlim_on_render = True
