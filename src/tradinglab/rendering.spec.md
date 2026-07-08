@@ -19,7 +19,7 @@ Collections without rebuilding formatters/locators.
   `ChartApp.set_use_colorblind_palette` + `_render()` repaints with the new
   palette without a relaunch. Audit `color-blind-palette`.
 - `safe_remove(artist)` — `artist.remove()` wrapped in try/except.
-- `draw_candlesticks(ax, candles, x_offset=0, start=0, end=None, hollow_indices=None, flat_overlay=None) -> (wicks, bodies)`
+- `draw_candlesticks(ax, candles, x_offset=0, start=0, end=None, hollow_indices=None, flat_overlay=None, body_half=None) -> (wicks, bodies)`
   Builds `LineCollection` (wicks) + `PolyCollection` (bodies) for the slice.
   X coordinate is `global_index + x_offset` (stable across slice refills).
   Returns `(None, None)` on empty slice. Gap bars (`is_gap`) leave their
@@ -82,7 +82,7 @@ Collections without rebuilding formatters/locators.
   Soft vertical bands behind contiguous extended-hours runs. Uses a
   blended transform (data X, axes Y) so bands always span full axes height;
   contiguous same-session runs collapse into one Rectangle.
-- `setup_price_axes(ax)`, `setup_indicator_pane_axes(ax)`,
+- `setup_price_axes(ax)`, `setup_indicator_pane_axes(ax, *, min_label_px=28)`,
   `setup_volume_axes(ax)`, `style_axes(ax, theme)` — one-time axes setup
   (grid, `margins=0`, y-tick locator, theme colors). Y-tick labels on the
   **right** edge (TradingView/Sierra convention). `setup_indicator_pane_axes`

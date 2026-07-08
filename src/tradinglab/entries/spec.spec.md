@@ -56,5 +56,5 @@ position).
 - `should_fire_*` returns `False` when `trigger.kind` doesn't match
   the function. (Wrong-kind defensiveness.)
 - `should_fire_*` returns `False` when required prices are `None`.
-- `trigger_fill_price` returns `None` only for kinds without a
-  deterministic fill price (currently none — all six kinds resolve).
+- `trigger_fill_price` returns `None` when the required price field is
+  missing or the kind is unknown; all six valid configured kinds resolve.

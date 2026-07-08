@@ -92,8 +92,9 @@ class ExitsOverlay:
 ## Invariants
 
 - `OverlayLine` is hashable + frozen — safe to dedupe.
-- `clear()` and `close()` are idempotent; `close()` also unsubscribes
-  from the position tracker.
+- `clear()` and `close()` are idempotent; `clear()` removes current
+  overlay artists from their axes before dropping refs, and `close()`
+  also unsubscribes from the position tracker.
 - `redraw` returns `[]` when disabled, `primary_ax is None`, or no
   primary symbol is supplied.
 - `compute_overlay_lines(primary_symbol=X)` returns only lines for open

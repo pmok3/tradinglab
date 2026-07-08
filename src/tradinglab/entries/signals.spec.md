@@ -32,7 +32,7 @@ class EntrySignal:
     symbol: str                      # required (no position_id yet)
     trigger_id: str
     kind: EntryOrderKind
-    side: OrderSide                  # BUY (long-open) / SELL_SHORT
+    side: OrderSide                  # BUY (long-open) / SELL (short-open)
     position_side: Literal["long","short"]
     qty: float
     price: Optional[float] = None
@@ -65,19 +65,19 @@ class EntryManualSignalEvent:
 
 class EntryManualSink:
     def subscribe(cb) -> unsubscribe_fn
-    def acknowledge_fill(order_id, *, fill_price=None, fill_qty=None) -> bool
+    def acknowledge_fill(order_id) -> bool
 ```
 
 ## Dependencies
 
-- `..exits.model.OrderSide` (shared enum).
+- `..exits.model.OrderSide` (shared enum: BUY / SELL).
 - `..exits.paper_engine` (lazy import — avoids cycle) for `OrderTargetKind`, `PaperOrder`, `PaperOrderKind`.
 
 ## Design Decisions
 
 - **No `position_id` on `EntrySignal`** — position doesn't exist yet. `pending_position_id` is the *future* id minted by the evaluator before submission; `open_from_fill` uses it on fill so the audit chain (signal → order → fill → position) correlates deterministically.
 - **`symbol` is required** — no position_id to infer from.
-- **`position_side` disambiguates** `OrderSide` — `BUY` means *open long*, not *cover short*.
+- **`position_side` disambiguates** `OrderSide` — `BUY` means *open long*; `SELL` means *open short*, not *close long*.
 - **`on_fill_exit_ids` propagates to the `PaperOrder`** so the pending fill metadata carries which exit strategies the upstream evaluator should attach on fill.
 - **`EntryManualSink` is Tk-free** — subscribers marshal onto Tk before drawing.
 - **`EntryPaperSink.on_fill(order_id)`** drops the id from local indexes so `cancel_all_pending_for_symbol` doesn't hit a filled order. Idempotent.

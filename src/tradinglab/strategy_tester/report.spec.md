@@ -9,6 +9,7 @@ to `manifest.json`. The Strategy tab's Report view reads this file
 
 ## Public API
 - `AGGREGATE_FILENAME = "aggregate.json"` — canonical aggregate artifact name in a Run directory.
+- `TRADES_CSV_FILENAME = "trades.csv"` — canonical CSV artifact name in a Run directory.
 - `BOOTSTRAP_SAMPLES_DEFAULT = 10_000` — default resample count for expectancy / profit-factor confidence intervals.
 - `RunAggregate` — frozen dataclass holding the whole-Run rollup
   (trade counts, headline metrics + CIs, risk metrics, equity curve,
@@ -16,13 +17,16 @@ to `manifest.json`. The Strategy tab's Report view reads this file
 - `PerSymbolStats` / `PerYearStats` — rows in the per-X breakouts.
 - `ConfidenceInterval(lo, hi, point, confidence)` — 2-sided CI.
 - `aggregate_run(run_dir, *, bootstrap_samples=10_000, rng_seed=1337,
-  write_csv=False) -> RunAggregate` — disk-aware driver. Reads
+  interval_overrides=None, write_csv=False) -> RunAggregate` — disk-aware driver. Reads
   `manifest.json` + `per_symbol/*.json` → builds aggregate → writes
   `aggregate.json` atomically → returns the aggregate. When
   `write_csv=True`, writes `trades.csv` from the same in-memory
   `TradeRow` list so finalization does not re-read per-symbol JSON.
+  `interval_overrides` is a list of single-interval rewrite warnings
+  surfaced under the aggregate's `banners.interval_overrides`.
 - `compute_aggregate(*, run_id, rows_by_symbol, starting_cash,
-  bootstrap_samples=10_000, rng_seed=1337, schema_version=1)
+  bootstrap_samples=10_000, rng_seed=1337, schema_version=1,
+  interval_overrides=None)
   -> RunAggregate` — pure-function math kernel. The unit-test entry
   point.
 - `save_aggregate(run_dir, agg) -> Path` /
@@ -100,7 +104,7 @@ to `manifest.json`. The Strategy tab's Report view reads this file
   "per_symbol": [{"symbol": "AAPL", "trade_count": ...}, ...],
   "per_year": [{"year": 2024, "trade_count": ...}, ...],
   "per_setup": [...],
-  "banners": {"insufficient_sample": false, "low_sample": false},
+  "banners": {"insufficient_sample": false, "low_sample": false, "interval_overrides": []},
   "fingerprint": "deadbeefcafe1234"
 }
 ```

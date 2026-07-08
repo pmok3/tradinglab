@@ -12,7 +12,7 @@ half-validated continuously; final validation runs on Save via
 
 | Section            | Fields                                                                  |
 | ------------------ | ----------------------------------------------------------------------- |
-| **Identity**       | Name, Direction (LONG/SHORT), Label, Enabled                            |
+| **Identity**       | Strategy id (read-only), Name, Direction (LONG/SHORT), Enabled          |
 | **Universe**       | Mode (symbols / scanner / from-attached-chart); symbol list / scanner-id |
 | **Trigger**        | Kind dropdown -> kind-specific subform; INDICATOR embeds `BlockEditor`   |
 | **Sizing**         | Sizing kind (FIXED_QTY / FIXED_NOTIONAL), qty/notional, ShareRounding    |
@@ -69,7 +69,6 @@ Caller callbacks are stored as ``self._on_save_cb`` /
 - `..entries.model` for schema and validation.
 - `.scanner_block_editor.BlockEditor` (re-used) for INDICATOR triggers.
 - `exit_strategies` constructor data to populate the on-fill exits picker.
-- `..scanner.storage.load_all` for the SCANNER_ALERT scanner picker.
 
 ## Design Decisions
 
@@ -103,9 +102,9 @@ Caller callbacks are stored as ``self._on_save_cb`` /
   cosmetic chart-overlay reference lines and never affected trigger
   evaluation. The fields still exist on the underlying operator
   classes for backward-compatible JSON loads.
-- **SCANNER_ALERT picker** dropdown shows scanner names from
-  `scanner.storage.load_all`; the displayed scanner id is the value
-  stored in `EntryTrigger.scanner_id`.
+- **SCANNER_ALERT id field** is a plain string entry rendered by the
+  shared trigger-field renderer; its value is stored in
+  `EntryTrigger.scanner_id`.
 - **Save calls `validate_strategy` and surfaces errors** in the
   status / inline validation UI; doesn't dismiss the dialog on validation failure.
 - **`on_save` callback** lets the parent `EntriesTab` refresh its

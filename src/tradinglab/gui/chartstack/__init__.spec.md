@@ -18,7 +18,7 @@ overlay stack — cards now render miniature daily candles only.
 
 ## Public API (re-exported from `__init__.py`)
 - `ChartStackPanel` — `ttk.Frame` subclass owned by `ChartApp` via
-  composition (NOT a mixin — `ChartApp` already has 11).
+  composition (NOT a mixin — `ChartApp` already has a large mixin stack).
 - `BindingMode` — enum of `PINNED_WATCHLIST`, `SCANNER_TOP_N`,
   `OPEN_POSITIONS`, `HYBRID`.
 - `CardBinding` — dataclass `(symbol, source_label)`.

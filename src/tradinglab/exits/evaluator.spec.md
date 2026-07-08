@@ -19,7 +19,7 @@ class ExitEvaluator:
                  audit: Optional[AuditLog] = None,
                  bars_registry: Optional[BarsRegistry] = None,
                  session_close_time: time = time(16, 0),
-                 clock: Callable[[], datetime] = utc_now,
+                 clock: Callable[[], datetime] = _utc_now,
                  default_interval: str = "1m") -> None: ...
 
     @require_tk_thread

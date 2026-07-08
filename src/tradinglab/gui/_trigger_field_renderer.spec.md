@@ -47,7 +47,7 @@ def render_kind_params(
 | ``"time_str"``     | ``ttk.Entry``          | ``tk.StringVar`` | HH:MM regex gate. Empty → ``None``; invalid → no fire. |
 | ``"enum"``         | ``ttk.Combobox`` (RO)  | ``tk.StringVar`` | Choices: ``((value, label), …)``; selected label maps back. |
 | ``"enum_with_none"`` | ``ttk.Combobox`` (RO) | ``tk.StringVar`` | Prepends ``"(none)"`` choice mapped to ``None``.     |
-| ``"enum_str"``     | ``ttk.Combobox`` (RO)  | ``tk.StringVar`` | Flat ``(str, …)`` choices; stored verbatim (uppercased). |
+| ``"enum_str"``     | ``ttk.Combobox`` (RO)  | ``tk.StringVar`` | Flat ``(str, …)`` choices; stored verbatim.              |
 | ``"block_editor"`` | builder callback       | ``None``         | Delegates to ``block_editor_builder``; no Var.       |
 
 **Deviation note (``"float"`` / ``"int"``).** The audit task
@@ -61,10 +61,10 @@ nor ``IntVar`` can carry. We intentionally stay with
 
 ## Registration pattern
 
-Each consumer dialog declares its own
+Consumer dialogs declare their own
 ``_FIELD_SPECS_BY_KIND: dict[KindEnum, tuple[_FieldSpec, ...]]``
-at module scope and passes it through the ``specs_by_kind`` kwarg
-of :func:`render_kind_params`:
+at module scope. ``EntriesDialog`` passes it through the
+``specs_by_kind`` kwarg of :func:`render_kind_params`:
 
 ```python
 # in gui/entries_dialog.py
@@ -91,7 +91,9 @@ render_kind_params(
 
 Unknown kinds resolve to ``()`` → zero widgets rendered; the
 dialog can still draw a custom placeholder label (entries-side
-does this for ``TriggerKind.MARKET``).
+does this for ``TriggerKind.MARKET``). ``exits_dialog_widgets``
+iterates its registry in ``_TriggerRow._render_params`` and delegates
+each row through :func:`render_field` via ``_TriggerRow._render_field``.
 
 ## ``block_editor`` integration
 
@@ -106,7 +108,7 @@ bar). Instead it calls a caller-supplied
 full layout and returns the topmost widget so the orchestrator
 can include it in its returned widget list.
 
-Both dialogs use this for their INDICATOR trigger today; the
+``EntriesDialog`` uses this for its INDICATOR trigger today; the
 entries-side builder lives at
 ``EntriesDialog._build_indicator_block_editor`` and the
 exits-side equivalent is still inline in

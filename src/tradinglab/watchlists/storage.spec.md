@@ -22,7 +22,7 @@ JSON persistence for watchlists. Single file under the user's cache dir (`_cache
 - **`import_from_file` re-normalizes tickers on load** (upper-case + dedupe); `load_all` does NOT normalize (it trusts the file that `save_all` wrote).
 - **`export_to_file` / `import_from_file` raise on error** (unlike the internal save/load which swallows): dialogs surface these errors to the user via a messagebox.
 - **`pinned` is ordered**: left-to-right order of sub-tabs in the UI maps directly to this list. `reorder_pins` in the manager rewrites this list.
-- **Tickers coerced to `str` at the storage boundary** — `normalize_tickers` (used by both `save_all` and `import_from_file`) wraps each entry with `str(t)` before stripping/upper-casing (see `storage.py:97`). Callers that pass non-string tickers (numpy strings, `bytes`, `Path`) get safely-stringified output rather than a crash; the on-disk JSON is always pure-ASCII text.
+- **Tickers are coerced where untrusted input enters** — `normalize_tickers` wraps each entry with `str(t)` before stripping/upper-casing; `import_from_file` uses it, and `load_all` defensively stringifies stored tickers. `save_all` trusts its `Watchlist` inputs (manager-created lists are already normalized) and writes them as-is.
 
 ## Invariants
 - `save_all(*load_all()) == load_all()` — idempotent round-trip (modulo version upgrade from v1/v2 to v3).

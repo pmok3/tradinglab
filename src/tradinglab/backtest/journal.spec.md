@@ -5,7 +5,7 @@ Immutable records that the engine emits at order submission (`PreTradeEntry`) an
 
 ## Public API
 - `@dataclass(frozen=True) class PreTradeEntry` — `order_id`, `ts`, `symbol`, `side` (`"buy"` / `"sell"`), `setup_tag`, `thesis`, `conviction` (int), `size`, `target` (Optional[float]), `notes`, plus six **event-proximity** fields all defaulting to safe values (additive, back-compat for legacy save files): `next_earnings_ts` (UTC ms, 0 when unknown / blind), `last_earnings_ts` (UTC ms, 0 when unknown), `last_dividend_ts` (UTC ms, 0 when unknown), `last_split_ts` (UTC ms, 0 when unknown), `earnings_proximity_tag` (`"earnings_pre_print"` / `"earnings_post_print"` / `""`), `dividend_proximity_tag` (`"ex_div_day"` / `"post_special_div"` / `""`). Populated by `SandboxController._compute_event_proximity` at submit-order time so post-session analysis can group trades by event proximity without re-fetching the event provider.
-- `@dataclass(frozen=True) class PostTradeReview` — `symbol`, `entry_ts`, `exit_ts`, `entry_price`, `exit_price`, `quantity`, `side`, `pnl`, `pnl_pct`, `mae`, `mfe`, `mae_pct`, `mfe_pct`, `ref_pre_trade_id` (Optional[str]), `user_review` (str).
+- `@dataclass(frozen=True) class PostTradeReview` — `symbol`, `entry_ts`, `exit_ts`, `entry_price`, `exit_price`, `quantity`, `side`, `pnl`, `pnl_pct`, `mae`, `mfe`, `mae_pct`, `mfe_pct`, `ref_pre_trade_id` (Optional[str]), `user_review` (str). `entry_ts` / `exit_ts` are engine UTC epoch seconds (not milliseconds).
 
 ## Dependencies
 None beyond stdlib.

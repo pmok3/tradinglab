@@ -23,6 +23,8 @@ requests. Credentials / tokens / API keys are redacted before write.
   "has_settings": bool}`. `log_dir_override` is tests-only; production resolves
   via `paths.logs_dir()`. Raises `OSError` only if `out_path`'s parent is
   unwritable.
+- `redact_log_line(line: str) -> str` — idempotently replaces Bearer/Basic
+  auth blobs and known query-string secret values with `_REDACT_MARKER`.
 - `_looks_secret(key)` — substring-hint check; pure helper used internally
   and reachable for tests.
 

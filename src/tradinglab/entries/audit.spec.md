@@ -20,7 +20,7 @@ Append-only JSONL audit log for the entry-strategies subsystem. Mirrors `exits.a
 ```python
 class AuditLog:
     def __init__(self, root: Path = audit_dir(),
-                 clock: Callable[[], datetime] = utc_now)
+                 clock: Callable[[], datetime] = _utc_now)
 
     @require_tk_thread
     def append(

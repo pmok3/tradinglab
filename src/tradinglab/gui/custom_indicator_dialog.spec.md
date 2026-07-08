@@ -68,7 +68,8 @@ lines:
   visual editor on reopen).
 - **Expression** (header label `building_blocks`) — `expression`,
   `description`, `created`, `updated`, `scannable`.
-- **Python** — `description`, `created`, `updated`, `scannable`.
+- **Python** — `expression` (`(python mode)` placeholder),
+  `description`, `created`, `updated`, `scannable`.
 
 The `scannable: True | False` header field (default False on legacy
 files without the line) round-trips the "Expose to scanner" checkbox
@@ -93,7 +94,7 @@ block.
 
 ```
 ┌ Custom Indicator Builder ────────────────────────────────────┐
-│  Saved indicators │ Name [          ] Mode [Building blocks▼]│
+│  Saved indicators │ Name [          ] Mode [Expression     ▼]│
 │  • test_1         │ Description [                          ] │
 │  • momo_score     │ ┌─ Composition ─────────────────────────┐│
 │  [New] [Delete]   │ │ cheatsheet (series/funcs/ops)         ││

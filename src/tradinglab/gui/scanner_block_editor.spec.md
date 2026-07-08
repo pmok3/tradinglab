@@ -41,14 +41,14 @@ BlockEditor (ttk.Frame)
 Produces a `FieldRef`. Layout:
 
 ```
-[Type ▾] [value widgets] [param widgets, may wrap] [Output ▾] [@ Symbol ▾]?
+[Type ▾] [value widgets] [param widgets, may wrap] [Output ▾] [@ Symbol entry]?
 ```
 
 - Type combo: `Number` / `Builtin` / `Indicator`.
 - **Number**: Entry; sets `FieldRef.literal(float(text))`. **No** Symbol
   combo — literals are symbol-independent.
 - **Builtin**: Combobox over `fields.all_fields()` filtered to builtins.
-  Symbol combo present (last column).
+  Symbol entry present (last column).
 - **Indicator**: Combobox over `scanner.fields.all_fields()` filtered
   to scannable indicator specs + one
   widget per `ParamDef` (Spinbox int/float, Combobox choice,
@@ -56,7 +56,7 @@ Produces a `FieldRef`. Layout:
   allowlisted output keys (hidden when only one). Kind ids sorted
   alphabetically (`sorted(..., key=str.casefold)`); default seed
   on toggle to Indicator is the first id (`adx`). Same sort used
-  by Scanner blocks, Exits/Entries indicator triggers. Symbol combo
+  by Scanner blocks, Exits/Entries indicator triggers. Symbol entry
   present (last column, after Output).
 - **Symbol entry** (Builtin / Indicator only): writes `FieldRef.symbol`
   for cross-ticker references. Plain `ttk.Entry` (NOT a Combobox) —
@@ -239,7 +239,8 @@ Cancel, `transient` parent — hence the macOS smoke-skip per §7.1).
 ### `_ConditionFrame`
 
 - Owns one `Condition`; **mutations in place**.
-- Op combo from `OPERATOR_PARAM_SCHEMA.keys()`.
+- Op combo from `ALL_OPERATORS`; op changes are ignored when the chosen
+  op is not present in `OPERATOR_PARAM_SCHEMA`.
 - `_NO_LEFT_OPS = {OP_INSIDE_BAR, OP_OUTSIDE_BAR, OP_NR7}`: hide
   the left `_FieldRefPicker` (structural ops ignore left operand).
 - Op-change mutates existing `Condition.op` and `params` **in

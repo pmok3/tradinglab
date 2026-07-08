@@ -28,7 +28,7 @@ purely organisational).
 - `_confirm_close_when_dirty() -> bool` — quit-time prompt. Returns
   True to continue closing, False to abort. Uses the live
   ``self._config_manager`` if available; falls back to the
-  class-method ``ConfigManager.confirm_close_when_dirty_for(...)``
+  static method ``ConfigManager.confirm_close_when_dirty_for(...)``
   for the unusual case where the manager wasn't fully initialised
   (early-boot crash path).
 

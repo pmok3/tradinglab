@@ -14,7 +14,7 @@ Enforce the Tk-main-thread invariant on state-owning subsystems (PositionTracker
 ## Design Decisions
 - **Decorator, not per-method ad-hoc check**: keeps guarded methods uncluttered and the policy in one file.
 - **Bypass is a context manager, not a global flag mutation**: scoped bypass is harder to leak. Tests should use the `with tk_thread_check_disabled():` block rather than monkey-patching `_check_enabled`.
-- **Module-level lock around the flag**: prevents torn reads when one fixture flips the flag while another reads it. Not strictly needed under the GIL for a bool, but the lock also serialises the prior/restore in the contextmanager.
+- **Module-level lock around bypass transitions**: decorated calls read the flag lock-free, while the context manager serialises the prior/restore sequence. The bypass is intended for single-threaded fixtures and is not re-entrant safe across threads.
 - **Production code paths leave the check enabled.**
 
 ## Invariants
@@ -25,4 +25,3 @@ Enforce the Tk-main-thread invariant on state-owning subsystems (PositionTracker
 ## Testing
 - Covered by dedicated unit tests for the decorator itself plus off-thread guard tests for `PositionTracker`, `IndicatorManager`, and `DrawingStore`.
 - Other integration / smoke flows still run on the Tk main thread; tests that intentionally drive guarded methods from workers use `tk_thread_check_disabled()`.
-

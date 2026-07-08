@@ -177,8 +177,8 @@ because iid keys on `symbol`.
 - Default: `rank` desc.
 - Click header → toggle direction (or pick that column with a
   sensible default: `rank`/`tick` desc, `symbol`/`match` asc).
-- Missing values (None) sort to bottom regardless of direction —
-  same convention as watchlist tab.
+- Missing values (`None`) are part of the tuple sort key; in
+  descending modes they currently sort ahead of present values.
 
 ## Save callback debouncing
 

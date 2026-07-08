@@ -55,7 +55,7 @@ theme — no Tk, no matplotlib — so it is unit-testable headless.
     `effective_output_keys(params)` to get the visible output set
     (declares which bands are actually rendered for these params),
     then filters by per-output `cfg.style[key].visible` (user toggle).
-  - Returns `[]` on any failure (fail-safe — legend simply absent).
+  - Returns `[]` if overlay-config collection fails (fail-safe — legend simply absent).
 
 - `format_indicator_label(cfg: IndicatorConfig) -> str`:
   - Builds the `"DisplayName(param1, name2=val2, ...)"` prefix.

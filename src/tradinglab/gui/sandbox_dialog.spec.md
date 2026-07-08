@@ -8,7 +8,8 @@ sandbox session.
 ## File structure
 - `gui/sandbox_dialog.py` owns `SandboxStartDialog`.
 - `gui/pre_trade_dialog.py` owns `PreTradeFormDialog`; sandbox order
-  journaling imports that module directly.
+  journaling imports that module directly or through this module's
+  compatibility re-export.
 
 ## Public API
 - `class SandboxStartDialog(app, *, reference_symbol, intervals, eligible_dates_provider, fetch_provider=None, default_interval=None, default_selected_intervals=None, manifest_provider=None)` — modal, blocks via `wait_window`. `self.result` on close is either `None` (cancel) or a payload dict:
@@ -21,6 +22,8 @@ sandbox session.
   `auto_cycle == blind` (Phase 1d UX coupling — blind random implies auto-cycle). `interval` is the *primary* tick interval (= smallest checked entry in `display_intervals`); `display_intervals` is the sorted-ascending list of all checked intraday timeframes (e.g. `["5m", "15m", "1h"]`).
 
   `universe_id` is the manifest id (e.g. `"sp500"`, `"qqq"`, `"watchlist:Mega Caps"`) when the user picked a prepared universe, else `""`. `universe_symbols` is a sorted tuple of upper-case tickers (the strict-offline allow-list); empty tuple when no universe is chosen. `strict_offline` is `True` only when both a universe is chosen *and* the locked-checked checkbox is set (i.e. always `True` with a universe, always `False` without one).
+- `PreTradeFormDialog` is re-exported from `gui/pre_trade_dialog.py`
+  for backward-compatible imports; the implementation lives there.
 
 ## Dependencies
 - Internal: `..backtest.deck.draw_one_date` (for the "Random eligible date" button + blind-mode self-draw), `._modal_base.BaseModalDialog`, `._modal_base.protect_combobox_wheel`.

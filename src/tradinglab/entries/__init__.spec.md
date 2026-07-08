@@ -61,7 +61,7 @@ One-file-per-strategy at `<cache_dir>/entry_strategies/<id>.json` + `_index.json
 
 - **`model` / `spec` / `sizing`** — pure; any thread.
 - **`evaluator`** — Tk-thread-only for mutators. Read-only queries unrestricted.
-- **`signals` sinks** — Tk-thread-only for `submit`/`cancel`; `EntryManualSink` subscribers run on Tk (sink fires synchronously).
+- **`signals` sinks** — pure Python sinks; GUI callers marshal subscriber callbacks onto Tk before drawing. `EntryManualSink` fires subscribers synchronously on the caller's thread.
 - **`storage`** — single-process, Tk-thread.
 - **`audit.AuditLog.append`** — `@require_tk_thread`; readers unrestricted.
 

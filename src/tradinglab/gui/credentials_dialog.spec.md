@@ -35,8 +35,8 @@ in the current `os.environ`.
   Never raises. The sentinel is captured by `app.py::main()` which
   surfaces `decrypt_error` and `io_error` to the user via
   `status_log.warn(...)` after the chart app constructs.
-- `CredentialsDialog(parent)` — `BaseModalDialog` modal with seven
-  entry fields (3 Schwab, 4 Alpaca, 1 Polygon) and per-secret
+- `CredentialsDialog(parent)` — `BaseModalDialog` modal with eight
+  credential fields (3 Schwab, 4 Alpaca, 1 Polygon) and per-secret
   "show" toggles.
 - `open_credentials_dialog(parent)` — convenience wrapper:
   construct + `wait_window`. Returns the dialog instance (or
@@ -109,6 +109,6 @@ every Python program that holds secrets in env vars.
 ## Modal keys and wheel guard
 `__init__` calls `protect_combobox_wheel(self)` and then
 `BaseModalDialog._finalize_modal(primary=self._on_save,
-cancel=self._on_cancel)`. ESC dismisses, Return commits, and any
-future combobox / spinbox descendants are guarded against wheel-driven
+cancel=self._on_cancel)`. ESC dismisses, Return commits, and built
+combobox / spinbox descendants are guarded against wheel-driven
 value changes.

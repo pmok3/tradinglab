@@ -9,14 +9,14 @@ two-phase confirm button.
 ## Layout
 
 ```
-┌─ Attach ────────────────────────────────────────────────────────────┐
+┌─ Toolbar ───────────────────────────────────────────────────────────┐
+│  [Edit Strategies…] [PANIC: Flatten All] [Refresh]   ⚠ broken badge │
+├─ Open positions ────────────────────────────────────────────────────┤
 │  Per-open-position row: [Symbol qty entry_px] [Attach …] [Detach]   │
 │    (one _AttachRow widget per position)                              │
 ├─────────────────────────────────────────────────────────────────────┤
 │  Status Treeview: symbol | side | qty | strategy | leg | trigger    │
 │                   state | current | trigger px | distance            │
-├─────────────────────────────────────────────────────────────────────┤
-│  [PANIC]   ← red, two-phase: first click arms, second flattens      │
 ├─────────────────────────────────────────────────────────────────────┤
 │  Audit tail (last N records from exits audit log)                   │
 └─────────────────────────────────────────────────────────────────────┘
@@ -79,6 +79,8 @@ class _AttachRow(ttk.Frame):
 
 - **Refresh is host-driven**: the tab does not schedule its own tick;
   `ChartApp` calls `refresh` after sandbox ticks or library changes.
+- **Toolbar refresh is manual**: the user can also click `Refresh` to
+  force the same `refresh` path.
 - **Status Treeview is trigger-keyed**, not strategy-keyed. Rows use
   `(position, leg, trigger)` ids and preserve selection across refresh.
 - **`_AttachRow` is diff-updated** — one widget per open position;

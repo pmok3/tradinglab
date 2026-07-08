@@ -18,15 +18,15 @@ class EntryEvaluator:
                  tracker: PositionTracker,
                  sink: EntrySignalSink,
                  audit: Optional[AuditLog] = None,
+                 risk_gate: Optional[RiskGate] = None,
                  bars_registry: Optional[BarsRegistry] = None,
                  scan_runner: Optional[ScanRunner] = None,
                  exit_evaluator: Optional[ExitEvaluator] = None,
                  exit_storage: Optional[module] = None,
-                 get_active_symbol: Optional[Callable[[], str]] = None,
-                 risk_gate: Optional[RiskGate] = None,
-                 session_close_time: time = time(16, 0),
-                 clock: Callable[[], datetime] = utc_now,
-                 default_interval: str = "1m") -> None: ...
+                 get_active_symbol: Optional[Callable[[], str | None]] = None,
+                 clock: Callable[[], datetime] = _utc_now,
+                 default_interval: str = "1m",
+                 session_close_time: time = time(16, 0)) -> None: ...
 
     # Library + arm state
     def set_strategies(self, strategies: Iterable[EntryStrategy]) -> None
@@ -40,8 +40,8 @@ class EntryEvaluator:
     def reset_session() -> None  # rolls cooldown / max-fires counters
 
     # Per-tick evaluation
-    def on_tick(self, candles_by_symbol, *, interval, tick_id,
-                timestamp=None, is_close=True) -> List[EntrySignal]
+    def on_tick(self, bars_by_symbol, ts: datetime, *,
+                last_bar_forming: bool = False) -> List[EntrySignal]
 
     # GUI hooks
     def subscribe_modal_request(cb) -> unsubscribe_fn
@@ -58,17 +58,17 @@ class EvaluatorStats:
 
 ## Lifecycle gates (cheapest-first)
 
-1. `enabled` (config).
+1. `enabled` (config; enforced at `arm()`).
 2. `armed` (runtime).
 3. `arm_window_start ≤ now ≤ arm_window_end` (ET).
-4. `require_market_open` (RTH).
-5. `position_already_open_policy == BLOCK` + open position exists for
+4. `position_already_open_policy == BLOCK` + open position exists for
    the (strategy, symbol).
-6. Per-(strategy, symbol) cooldown.
-7. `max_fires_per_session_per_symbol` / `max_fires_per_session_total`.
-8. Dedup ring (`_DEDUP_LRU_SIZE = 1024`) keyed on
+5. Per-(strategy, symbol) cooldown.
+6. `max_fires_per_session_per_symbol` / `max_fires_per_session_total`.
+7. Dedup ring (`_DEDUP_LRU_SIZE = 1024`) keyed on
    `(strategy_id, symbol, bar_ts_ns)`.
-9. Risk gate.
+8. Trigger evaluation, reference-price resolution, and sizing.
+9. Risk gate (post-signal, pre-submit).
 
 Refusals are audited (`entry_blocked` / `entry_cooldown` /
 `entry_dedup_skipped`) with a reason.
@@ -99,13 +99,14 @@ wrappers around `dispatch.reference_price` / `dispatch.signal_price_for_kind`.
 
 ## SCANNER_ALERT path
 
-Evaluator subscribes one adapter to `ScanRunner`. The real
-`ScanRunner.subscribe` invokes `cb(scan_id, ScanResult)`;
-`EntriesAppMixin` wraps it into `Dict[scan_id, ScanResult]`. For each
-armed strategy with `trigger.kind == SCANNER_ALERT`, the evaluator
-reads `results[trigger.scanner_id].new_rows` and routes each row
-through the same fire path as `on_tick`. **`new_rows` is edge-filtered**
-by `MatchHistory` — re-arming uses `disarm` + `arm` to reset.
+`_on_scan_results` consumes `Dict[scan_id, ScanResult]`. The real
+`ScanRunner.subscribe` invokes `cb(scan_id, ScanResult)`, so
+`EntriesAppMixin` wraps it into the dict shape before calling the
+evaluator. For each armed strategy with `trigger.kind == SCANNER_ALERT`,
+the evaluator reads `results[trigger.scanner_id].new_rows` and routes
+each row through the same fire path as `on_tick`. **`new_rows` is
+edge-filtered** by `MatchHistory` — re-arming uses `disarm` + `arm` to
+reset.
 
 ## INDICATOR path
 

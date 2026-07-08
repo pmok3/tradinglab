@@ -33,7 +33,7 @@ Built-ins registered at import time (display name → kind_id):
 - `"RVOL"` → `"rvol"`
 - `"RRVOL"` → `"rrvol"`
 - `"Chandelier Stops"` → `"chandelier"`
-- `"Prior Day H/L/C"` → `"prior_day"`
+- `"Prior Day H/L/C"` → `"prior_day_hlc"`
 - `"Overlap Score Inverted"` → `"overlap_score_inv"`
 
 `SMA`, `EMA` are registered as **hidden legacy entries** via

@@ -1,12 +1,13 @@
 # backtest/actions.py — Spec
 
 ## Purpose
-Two engine-output dataclasses recording corporate actions during a
-sandbox replay: `CashAdjustment` (cash dividend, special dividend,
-spin-off cash) and `QuantityAdjustment` (stock split, reverse split).
-Persisted so loaded sessions deterministically reproduce equity-curve
-ex-event boundaries even if upstream `EarningsRecord` /
-`DividendRecord` data later mutates.
+Corporate-action records for sandbox replay: `CorporateAction` is the
+engine-input schedule registered from event bundles, while
+`CashAdjustment` (cash dividend, special dividend, spin-off cash) and
+`QuantityAdjustment` (stock split, reverse split) are engine-output
+records. Output records are persisted so loaded sessions deterministically
+reproduce equity-curve ex-event boundaries even if upstream
+`EarningsRecord` / `DividendRecord` data later mutates.
 
 ## Public API
 - `@dataclass(frozen=True) class CorporateAction(ts, kind, amount=0.0, ratio_num=1, ratio_den=1, source_ref="")` — engine-input record registered via `SandboxEngine.register_corporate_actions`; `kind ∈ {"cash_dividend", "special_dividend", "spinoff_cash", "stock_split"}`.
@@ -42,12 +43,15 @@ None beyond `dataclasses`.
 - `ts` is the engine bar timestamp in UTC epoch seconds. `replay_events.py` converts event-provider millisecond timestamps onto the engine timeline before registration.
 
 ## Data Flow
-1. `SandboxController.start_session` fetches per-symbol `EventBundle`
-   and pre-computes per-symbol pending `(ts, reason, payload)` tuples
-   sorted ascending.
-2. `SandboxEngine.tick()` between MAE/MFE roll (phase 2) and MTM
-   (phase 3) drains all tuples with `ts == clock.now_ts` for each
-   open-position symbol, applies them, appends records to
+1. `SandboxController` / `EventsControllerMixin` fetches per-symbol
+   `EventBundle`s via `prefetch_events_for` / `set_event_bundle`.
+2. `_register_corporate_actions_from_bundle` converts each dividend /
+   split record's millisecond `ex_ts` onto the engine's epoch-second
+   timeline and registers sorted `CorporateAction` records with
+   `SandboxEngine.register_corporate_actions`.
+3. `SandboxEngine.tick()` between MAE/MFE roll and MTM drains all
+   registered actions with `ts == clock.now_ts` for each open-position
+   symbol, applies them, and appends output records to
    `SessionResult.cash_adjustments` / `quantity_adjustments`.
-3. `Portfolio.cash` mutated in place for cash adjustments;
+4. `Portfolio.cash` mutated in place for cash adjustments;
    `Position.quantity` rescaled in place for splits.

@@ -32,7 +32,7 @@ records preserved for GUI recovery.
   — lenient bulk load. Sorted by `(name.lower(), id)`.
 - `delete(strategy_id, *, root=None) -> bool`.
 - `export_to_path(strategy, dst_path) -> Path`.
-- `import_from_path(src_path, *, on_collision=...) -> EntryStrategy`.
+- `import_from_path(src_path, *, root=None, on_id_collision="rename") -> EntryStrategy`.
 
 ## Dependencies
 

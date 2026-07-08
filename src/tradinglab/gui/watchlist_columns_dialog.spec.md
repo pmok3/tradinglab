@@ -14,7 +14,7 @@ watchlist. The tab's sub-tab right-click "Columns…" entry opens it. See
 - `class WatchlistColumnsDialog(BaseModalDialog)`:
   - `__init__(parent, *, watchlist_name, columns, on_apply, **kwargs)` —
     build the editor for `watchlist_name`; `on_apply(ordered_columns)`
-    fires on Apply with the validated list.
+    fires on OK with the validated list.
 - `open_columns_dialog(app, watchlist_name) -> WatchlistColumnsDialog | None`
   — menu / header-menu entry point.
 
@@ -29,24 +29,23 @@ watchlist. The tab's sub-tab right-click "Columns…" entry opens it. See
 
 ## Design Decisions
 - **Dialog primary, header-menu secondary** (decision UI/UX). The dialog
-  owns add / remove / reorder / edit / rename / format; a right-click
-  column header offers quick Sort / Add / Edit / Remove / Move / Columns….
+  owns add / remove / reorder / rename / format.
 - **Reuse the scanner field-picker.** `_FieldRefPicker` already handles
   Built-in vs Indicator, params, and interval — wrap it in a
   watchlist-column editor rather than a scanner condition builder (the
-  user is choosing a *value column*, not authoring a condition). v1 hides
-  the cross-symbol `@` pin (relative columns are v2).
+  user is choosing a *value column*, not authoring a condition). The
+  picker is created in `display_mode="detailed"`, so the cross-symbol
+  `@` entry is visible and signal columns can pin a non-active symbol.
 - **`ticker` locked + first.** Shown non-removable; `validate_columns`
   enforces it on Apply.
 - **Combobox-wheel guard** (CLAUDE.md §7.11) applied after every partial
   rebuild; **dark-mode theming** via `gui/native_theme` for the classic
   Tk list widgets.
 - **Drag-to-reorder deferred** — reorder via ↑/↓ + header "Move left/right".
-- **Per-watchlist scope** with "copy from…" / "set as default" / "reset"
-  affordances (global default + per-watchlist overrides).
+- **Per-watchlist scope** with a reset-to-defaults affordance.
 
 ## Invariants
-- Apply returns a `validate_columns`-clean list (`ticker` first + locked,
+- OK returns a `validate_columns`-clean list (`ticker` first + locked,
   deduped).
 - The picker round-trips a signal column's field / params / interval.
 - Cancel leaves the watchlist's columns unchanged.
@@ -65,12 +64,11 @@ OK → validate_columns → on_apply(cols); Cancel → result=None, no change
 ## Testing
 - `tests/unit/gui/test_watchlist_columns_dialog.py` — Tk/Agg:
   lists scanner fields (built-in + indicator); picker preserves params /
-  interval; add / remove / reorder; `ticker` not removable; Apply returns
+  interval; add / remove / reorder; `ticker` not removable; OK returns
   the ordered validated list; combobox-wheel guard applied.
 
 ## Known limitations / Future work
-- v1 hides the cross-symbol `@` pin (relative / RS columns are v2). No
-  per-column color-rule editor (per-cell heat is deferred). Drag-reorder
+- No per-column color-rule editor (per-cell heat is deferred). Drag-reorder
   and "add column from saved scan" are v2.
 
 ## Recent history

@@ -1,8 +1,8 @@
 # data/coverage.py — Spec
 
 > Design contract: [`docs/TARGETED_FETCH.md`](../../../docs/TARGETED_FETCH.md).
-> The module is implemented + unit-tested; it is **not yet consumed** by the
-> drilldown fetch path (Phase-1 wiring pending).
+> The module is implemented + unit-tested and is consumed by the drilldown
+> targeted-fetch path.
 
 ## Purpose
 Per-`(source, ticker, interval)` **fetch-coverage record** — a small sidecar
@@ -33,7 +33,7 @@ vs *provider-exhausted* in the UI.
 - `data_start(record) -> int | None`.
 
 ## Dependencies
-- Internal (planned): `.. disk_cache` (path + JSONL min/max ts for bootstrap),
+- Internal: `.. disk_cache` (path + JSONL min/max ts for bootstrap),
   `.. paths` / `.. core.io_helpers` (atomic JSON write).
 - External: stdlib only (`dataclasses`, `pathlib`, `json`).
 
@@ -65,8 +65,8 @@ vs *provider-exhausted* in the UI.
   bootstrap from a JSONL.
 
 ## Recent history
-- **Implemented** — segment merge, `missing_ranges`/`covered`, watermark
-  learning in `record_fetch`, atomic load/save, JSONL bootstrap. 14 unit tests.
-  Not yet consumed by the drilldown path (Phase-1 wiring pending).
+- **Implemented + wired** — segment merge, `missing_ranges`/`covered`,
+  watermark learning in `record_fetch`, atomic load/save, JSONL bootstrap, and
+  drilldown targeted-fetch consumption. 14 unit tests.
 - **API skeleton** — dataclass + constants + entry points defined; encoded the
   v1 decisions in `docs/TARGETED_FETCH.md`.

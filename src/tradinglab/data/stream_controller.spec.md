@@ -5,6 +5,7 @@ Encapsulates ChartApp's main-chart live-stream lifecycle: subscribe/unsubscribe,
 
 ## Public API
 - `StreamController()` — owns `_queue`, `_token`, `_unsubs`, `_subs`, and `_active`.
+- `IndicatorCacheLike` — protocol for optional indicator-cache invalidation (`invalidate_for_candles(candles) -> int`).
 - `active` / `token` — read-only convenience properties for legacy alias sync.
 - `start(source_name, ticker, interval, *, compare_on, compare_ticker, full_cache, stream_sources, is_intraday_fn) -> bool` — transactional subscribe for the primary slot only. Returns `True` when a subscription is committed.
 - `stop() -> None` — unsubscribe all main-chart subscriptions, stale the token, and clear queued main-chart events.

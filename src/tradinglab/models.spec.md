@@ -18,7 +18,7 @@ Defines the `Candle` dataclass — the one data type that flows end-to-end throu
 - **OHLCV semantics** — `open` = first trade in the bar's interval; `close` = last trade; `high`/`low` = extremes within the interval; `volume` = aggregate share count. The `date` field is the bar's **start** timestamp (matches yfinance and TradingView). A `5m` bar dated `09:30:00 ET` covers the half-open interval `[09:30, 09:35)`.
 - **Timezone convention for `date`** — `date` may be tz-naive (then treated as the asset's local exchange tz, US/Eastern for US equities) or tz-aware (US/Eastern after normalisation). The original timezone is NOT preserved on the engine's int64 epoch timeline; reconstruct ET via the display-tz at render time.
 - **`session='gap'` is fetcher-forbidden** — Only `Candle.gap()` (compare-mode alignment placeholder) emits it. Fetchers and stream sources never produce `session='gap'` directly.
-- Regular `@dataclass` (not frozen): streaming updates mutate in place to preserve object identity, which matters because pair-aligned compare views and `_SeriesArrays._candles` hold the same list reference. Freezing would force replace-on-tick and break that aliasing contract.
+- Regular `@dataclass` (not frozen, not `slots=True`): streaming updates mutate in place to preserve object identity, which matters because pair-aligned compare views and `_SeriesArrays._candles` hold the same list reference. Freezing or slotting would force/limit the cheap mutable object shape that streaming and tests rely on.
 - `session` is a `str` (not `Enum`) — keeps pickling and JSON serialization free, and the literal comparisons (`== "regular"`, `in ("pre","post")`) read naturally. Performance-critical code paths already use integer-valued discriminators via `is_extended`/`is_gap` properties.
 - NaN-priced gap placeholders rather than `None` so numpy operations (`nanmin`, `nanmax`, slice indexing) work without branching. `volume=0` so volume autoscale ignores them naturally.
 - `is_extended` deliberately excludes `"gap"` — regression: compare-mode Pre/Post toggling used to flicker because gap placeholders inherited extended-hours filtering.
@@ -35,4 +35,3 @@ Trivial — pure data.
 
 ## Known limitations
 - No adjusted-close field; if dividend/split-adjusted charts become a thing, add `close_adj` alongside `close` (not replacing it — raw prices are still useful).
-

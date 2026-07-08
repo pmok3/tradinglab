@@ -11,7 +11,7 @@ The `SandboxEngine` — headless replay kernel composing [`Clock`](clock.spec.md
 - `flatten_all_at_close(last_bar_ts, prices, *, order_id_prefix="auto-flat") -> List[Fill]` — synthesize zero-slippage / zero-commission close fills for every open position; emits a `PostTradeReview` per close. Used by the auto-cycle path.
 - `result() -> SessionResult` — snapshot current state.
 - `run_to_completion() -> SessionResult` — drive `tick()` until exhausted (used by smoke / kernel reproducibility checks; Strategy Tester drives ticks itself so it can interleave trigger decisions and cancellation polls).
-- Engine state (read-only from the outside): `clock`, `portfolio`, `pending_orders`, `fills`, `pre_trades`, `post_trades`, `cash_adjustments`, `quantity_adjustments`. The two adjustment lists are populated by the corporate-action tick phase (between MAE/MFE roll and mark-to-market) when `register_corporate_actions(symbol, bundle)` has been called for a symbol; they surface unchanged on `result().cash_adjustments` / `result().quantity_adjustments` for downstream consumers (proximity rollup, save/load round-trip).
+- Engine state (read-only from the outside): `clock`, `portfolio`, `pending_orders`, `fills`, `pre_trades`, `post_trades`, `cash_adjustments`, `quantity_adjustments`. The two adjustment lists are populated by the corporate-action tick phase (between MAE/MFE roll and mark-to-market) when `register_corporate_actions(symbol, actions)` has been called for a symbol; they surface unchanged on `result().cash_adjustments` / `result().quantity_adjustments` for downstream consumers (proximity rollup, save/load round-trip).
 - `register_corporate_actions(symbol, actions) -> int` — register a per-symbol list of `CorporateAction` records so dividends / splits are applied automatically during the corporate-action phase. Engine-version-stable (`ENGINE_VERSION="sandbox-1d"` unchanged). Idempotent on same-content re-register; returns the count registered (0 on idempotent re-call).
 
 ## Dependencies
@@ -31,6 +31,7 @@ The `SandboxEngine` — headless replay kernel composing [`Clock`](clock.spec.md
 
 ## Invariants
 - `len(equity_curve) == ticks_completed` (one MTM point per successful `tick`).
+- A normal closed round-trip contributes two `Fill` records (entry + exit) and one `PostTradeReview`.
 - After `register_bars(s, b)`, `s in bars_by_symbol`. Re-register with different content raises before any state mutation.
 - For a fixed `(SessionSpec, bars_by_symbol)` and a fixed sequence of `submit_order` calls, two engines produce byte-identical `result().to_dict()` JSON.
 - `master_timeline` length never changes after `__post_init__`.

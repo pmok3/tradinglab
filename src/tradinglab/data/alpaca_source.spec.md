@@ -6,6 +6,7 @@ Alpaca Market Data v2 → `List[Candle]`. Two-layer module: a pure response-mapp
 ## Public API
 - `candles_from_alpaca_response(payload: dict, *, interval: str) -> List[Candle]` — pure mapper. Accepts either the standard envelope `{"bars": [...]}` or a bare list. Uses `candles_from_json_rows` with `ts_unit="iso"` (Alpaca returns ISO-8601 `t` values) **and `tz=core.timezones.ET`** so UTC bars are converted to US-Eastern wall-clock (matching yfinance); non-finite OHLC rows are skipped by that shared normalizer.
 - `fetch_alpaca_data(ticker="AAPL", interval="1d", *, lookback_days=None, start=None, end=None) -> Optional[List[Candle]]` — `DataFetcher`-compatible. Without `start`/`end`, fetches a trailing window (`lookback_days` or `provider_lookback_days`). Passing kw-only `start`/`end` (aware datetimes) fetches that **explicit range** instead — the targeted intraday fetch path; this is what marks Alpaca `supports_range=True` at registration. Returns `None` on missing credentials, unsupported interval, or HTTP failure. Registered as `"alpaca"` in `DATA_SOURCES` (with `supports_range=True`) when `AlpacaCredentials.is_configured()`.
+- `pop_pending_downgrade_notice() -> str | None` — Tk-thread poll hook for the one-shot free-tier auto-detect popup; returns and clears the pending message.
 
 ## Dependencies
 - Internal: `..models.Candle`, `.credentials.AlpacaCredentials`, `.credentials.get_credentials`, `.normalize.candles_from_json_rows`, `._http.{MAX_RESPONSE_BYTES, credentialed_opener}`.
@@ -39,4 +40,3 @@ Alpaca Market Data v2 → `List[Candle]`. Two-layer module: a pure response-mapp
 
 ## Testing
 - `tests/unit/data/test_alpaca_source.py` — offline: the pure mapper (envelope + bare-list + empty + non-finite-drop + ET-localized timestamps/session labels + daily-date preservation) and the `_accumulate_bars` pagination loop (single page, multi-page token walk, non-dict stop, empty-token stop, `max_pages` cap, accumulate→map round-trip). Live fetch (`_http_get_page`) is `# pragma: no cover` (network).
-

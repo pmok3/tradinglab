@@ -9,6 +9,9 @@ Re-exports from `.base`:
 - `EventFetcher` — the protocol type.
 - `EVENT_SOURCES` — the registry dict.
 - `register_event_source(name, fetcher)`.
+Re-exports from provider / gating modules:
+- `fetch_yfinance_events`, `fetch_synthetic_events` — built-in fetchers registered as `"yfinance"` and `"synthetic"`.
+- `EventsView`, `events_visible_for` — sandbox gating + blind-redaction helpers.
 
 The `events_source` tunable (see `tradinglab.defaults`) selects the default provider; consumers fall back to `"synthetic"` when the named source is unavailable or the fetch fails.
 
@@ -16,13 +19,13 @@ The `events_source` tunable (see `tradinglab.defaults`) selects the default prov
 Internal: `.base`, conditionally `.synthetic_events`, `.yfinance_events`. External: none.
 
 ## Design Decisions
-- **Conditional registration.** `yfinance_events` registers only when `yfinance` imports cleanly; `synthetic_events` always registers. Mirrors `data/__init__.py` and lets headless smokes run without network.
+- **Unconditional built-in registration.** `"yfinance"` and `"synthetic"` are both registered at package import; `fetch_yfinance_events` itself returns `None` when yfinance cannot import or fetch.
 - **Single registry per source name.** Re-registration overwrites — smoke harness injects stubs this way.
 - **No matplotlib / Tk at package level.** Render glyphs live in `.render` and are imported lazily from the GUI; the events package stays headless.
 
 ## Invariants
 - `EVENT_SOURCES` is non-empty after package import (synthetic always registers).
-- The first source registered (`"yfinance"` when available, else `"synthetic"`) is the default for `defaults.get("events_source")`.
+- The first source registered (`"yfinance"`) is the default for `defaults.get("events_source")`; callers fall back to `"synthetic"` if the selected fetcher is unavailable or fails.
 
 ## Algorithm
 1. Package import runs registrations as side-effects.

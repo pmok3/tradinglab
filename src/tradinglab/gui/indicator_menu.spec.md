@@ -6,7 +6,7 @@ Hosts the menu-callback handlers for the **Indicators** cascade in the
 menubar built by `MenuBuilder` — Clear, Save Preset, Load Preset
 cascade, Delete Preset cascade, Custom Indicator Builder, plus
 file-based Save/Load Preset to/from File (Save-As / portable copies).
-It also keeps the quick-add helper used by the Add Indicator dialog.
+It also keeps the legacy/test quick-add helper.
 
 Extracted from `app.py` to keep `ChartApp` focused on chart-state and
 data-pipeline concerns. Pure UI glue: each method validates input,
@@ -16,8 +16,7 @@ mutates `self._indicator_manager`, and reports outcome via `self._status`.
 
 - `class IndicatorMenuMixin`. All methods are private (leading underscore)
   and called either by menu commands wired in `MenuBuilder`
-  or by other ChartApp methods (e.g., the Add Indicator dialog calls
-  `_on_menu_add_indicator` after collecting params from the user):
+  or by tests / legacy quick-add callers:
   - `_on_menu_add_indicator(kind_id, params, scopes=None)`
   - `_on_menu_clear_indicators()`
   - `_populate_indicator_preset_menu(menu, action)` — `postcommand`

@@ -37,7 +37,7 @@ Pure-logic batch fetch loop for the sandbox universe-preload feature. Serial, ca
 ## Design Decisions
 - **Pure-logic with injection**, not a class with instance state, because every dependency (fetcher, cache, sleep) needs to be substitutable for tests. A function with kwargs is the smallest interface that supports that.
 - **Disk-cache hit short-circuits live fetch.** Sealed bars are immutable, so a present cache means "we already have this." Re-fetching costs network budget for no payoff. If the user wants to refresh, they can delete the manifest + cache files; future work may add a "refresh" toggle.
-- **Verify-after-save**, because `disk_cache.save()` is `try: ... except: pass`. Without verification the service would falsely claim success on disk-full / permission-denied / corrupt-pickle write paths.
+- **Verify-after-save**, because `disk_cache.save()` is `try: ... except: pass`. Without verification the service would falsely claim success on disk-full / permission-denied / corrupt JSONL write paths.
 - **Retry on persist errors too**, not just fetch errors. The fetch succeeded; if persist fails, retrying the whole op (re-fetching) burns budget but also resyncs against potential transient FS issues. Conservative.
 - **Status is a string enum, not an `enum.Enum`**, to keep `to_dict` round-tripping trivial for downstream consumers (the dialog log + future metrics aggregators).
 - **Index/total in every ProgressEvent**, so the GUI can render `42 / 1006` without tracking state itself.

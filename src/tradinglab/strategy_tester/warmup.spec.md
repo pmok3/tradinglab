@@ -94,8 +94,8 @@ because their first-emit index is much earlier than full convergence:
   every indicator FieldRef on either side of any comparison is counted.
 - `SCANNER_ALERT` entry triggers do **not** resolve the referenced
   scan here (would require disk I/O); the runner is responsible for
-  loading the scan if it wants per-scan precision. The default-100 fallback
-  is the safe behaviour when no INDICATOR / CHANDELIER triggers exist.
+  loading the scan if it wants per-scan precision. When no INDICATOR /
+  CHANDELIER triggers exist, no warmup is requested (`0` / `{}`).
 - Multiple indicators → **max**, not sum. The longest single warmup
   is the binding constraint; layering EMAs doesn't compound.
 - Cache key is `(kind_id, frozen_params)` where `frozen_params` sorts

@@ -13,7 +13,7 @@ The `Order` and `Fill` dataclasses plus the `Side` enum that flow through the en
 ## Public API
 - `class Side(str, Enum)` — `BUY = "buy"`, `SELL = "sell"`. String-valued so JSON round-trip is trivial.
 - `@dataclass(frozen=True) class Order` — `order_id`, `symbol`, `side`, `quantity` (float), `submitted_ts` (int).
-- `@dataclass(frozen=True) class Fill` — `order_id`, `symbol`, `side`, `quantity`, `fill_price`, `fill_ts`, `slippage_bps`, `commission`.
+- `@dataclass(frozen=True) class Fill` — `order_id`, `symbol`, `side`, `quantity`, `fill_price`, `fill_ts`, `slippage_bps`, `commission`. `fill_ts` is an engine UTC epoch-second timestamp.
 
 ## Dependencies
 None beyond stdlib.

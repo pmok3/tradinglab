@@ -7,19 +7,19 @@ Each tunable has a validator so corrupt `settings.json` can't inject garbage.
 
 ## Public API
 - `TUNABLES: Tuple[Tunable, ...]` — ordered catalog. Each `Tunable` is a frozen dataclass `(key, default, kind, description, validator, is_user_facing)`.
-- `get(key) -> Any` — resolved value (validated override if present in `settings.json`, else built-in default). Raises `KeyError` for unknown keys (catches typos in consumer code).
+- `get(key) -> Any` — resolved value (validated override if present in the in-memory `settings` store, else built-in default). Raises `KeyError` for unknown keys (catches typos in consumer code).
 - `describe(key) -> (default, kind, description)` — for docs/dialogs.
-- `reload() -> None` — drop the cache and re-read `settings.json` on next `get()`. Mainly for tests.
+- `reload() -> None` — drop the cache and re-read the in-memory `settings` store on next `get()`. Mainly for tests.
 - `as_markdown_table() -> str` — render the catalog as a GFM table for `README.md`.
 - `user_facing_keys() -> Tuple[str, ...]` — subset of `TUNABLES` keys whose `is_user_facing=True`. Used by `gui/dialogs.py` (Settings dialog) to decide which keys to surface as editable rows.
 - `example_payload(*, with_comments: bool = True) -> Dict[str, Any]` — emits a fresh `settings.json`-shaped dict containing every user-facing key set to its default value. With `with_comments=True` the dict is wrapped to round-trip in JSON5 / comment-preserving emitters; with `False` it's a plain JSON-safe dict. Used to scaffold a sane starter `settings.json` from the Settings dialog's "Reset to defaults" button.
 
 ## Resolution model
-- One-shot resolve at first `get()`: `_load_overrides()` reads `settings.json`,
-  validates each known key, drops invalid entries silently. Cached in
-  `_resolved` for process lifetime — defaults are not re-read mid-session.
-  Restart-to-apply (live-mutation across tight loops / class-definition reads
-  is not worth the wiring complexity).
+- One-shot resolve at first `get()`: `_load_overrides()` reads
+  `settings.load()` (the in-memory store populated by explicit config import
+  or setters), validates each known key, drops invalid entries silently.
+  Cached in `_resolved` for process lifetime — defaults are not re-read until
+  `reload()` clears the cache.
 - Validators are per-key `(v) -> (ok, normalized)` callables. `_v_int`
   explicitly rejects `bool` (Python `bool` is an `int` subclass) so an
   int-typed key set to `true` doesn't silently become `1`.

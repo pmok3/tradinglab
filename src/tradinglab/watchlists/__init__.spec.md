@@ -8,6 +8,7 @@ Aggregates the watchlist data layer — manager + storage + dataclass + import/e
 - `WatchlistManager` — explicit-save CRUD manager (mutations stay in memory until `save()` is called).
 - `load_all`, `save_all` — low-level storage accessors.
 - `export_to_file`, `import_from_file` — round-trippable JSON I/O.
+- `DEFAULT_WATCHLIST_NAME`, `DEFAULT_WATCHLIST_TICKERS` — canonical starter watchlist seed.
 
 ## Dependencies
 - Internal: `.manager`, `.storage`.
@@ -24,4 +25,3 @@ Aggregates the watchlist data layer — manager + storage + dataclass + import/e
 
 ## Known limitations / Future work
 None.
-

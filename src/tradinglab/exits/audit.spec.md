@@ -28,7 +28,7 @@ crash mid-line — readers skip such trailing junk.
 
 ```python
 class AuditLog:
-    def __init__(self, root: Path = audit_dir(), clock: Callable[[], datetime] = utc_now)
+    def __init__(self, root: Path = audit_dir(), clock: Callable[[], datetime] = _utc_now)
 
     @require_tk_thread
     def append(

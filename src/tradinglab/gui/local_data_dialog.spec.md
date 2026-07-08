@@ -24,9 +24,9 @@ entries in the source-selector combobox.
   reads the `local_data` settings key.
 - `_save_roots_to_settings(enabled, roots) -> None` — persists the
   same key via `tradinglab.settings.set`.
-- `_refresh_data_registry()` — strips every hyphen-containing
-  non-builtin source key from `DATA_SOURCES`, calls `defaults.reload()`
-  so the cached `local_data` value is dropped, then calls
+- `_refresh_data_registry()` — calls `defaults.reload()` so the cached
+  `local_data` value is dropped, strips every hyphen-containing
+  non-builtin source key from `DATA_SOURCES`, then calls
   `register_local_sources()` to re-register from the new settings.
 
 ## Dependencies

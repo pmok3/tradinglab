@@ -26,8 +26,9 @@ horizontal-line drawing concern:
   `_render` on failure. Refreshes `_last_drawing_color`
   on `update` events.
 - `_on_drawing_save_error(exc)` — surfaces drawings.json save
-  failures into the status bar, throttled to one user-visible
-  message per 10s.
+  failures into the status bar. Tracks a 10s window on
+  `_drawing_save_error_last_ts`, but still calls `StatusLog.error`
+  for each failure so every save error reaches history/status.
 - `_friendly_oserror(exc)` — static helper rendering an
   `OSError` as a one-line user message.
 - `_redraw_drawings_overlay()` — attach horizontal-line artists
@@ -59,9 +60,10 @@ horizontal-line drawing concern:
 
 ## Dependencies
 
-- Internal: `..drawings.render.render_drawings` (re-exported as
-  `_render_drawings`), `..formatting.format_dt`,
-  `..status.StatusLog` (type-only).
+- Internal: `..drawings.DEFAULT_COLOR`, `..drawings.find_nearest_ohlc_snap`,
+  `..drawings.make_hline_drawing`, `..drawings.snap_price_to_grid`,
+  `..drawings.render.render_drawings` (re-exported as
+  `_render_drawings`), `..formatting.format_dt`.
 - External: `math`, `time`, `tkinter`, `typing.Any`.
 - `_repaint_drawings_only` imports
   `..drawings.render.clear_drawing_artists` lazily so the

@@ -10,7 +10,7 @@ On-disk persistence for Strategy Tester Runs. Atomic writes only — no in-fligh
     config.json
     manifest.json
     per_symbol/<SYMBOL>.json
-    screenshots/<order_id>_post.png      # populated by PR 2
+    screenshots/<SYM>_<order_id>_post.png # populated by PR 2
     aggregate.json                       # populated by PR 3
     trades.csv                           # populated by PR 3
     report.html / report.pdf             # populated by PR 5

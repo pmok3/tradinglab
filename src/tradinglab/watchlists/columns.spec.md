@@ -22,7 +22,7 @@ Consumed by [`watchlists/storage`](storage.spec.md) (persistence),
   locked, deduped, invalid dropped.
 - `signal_column_id(ref) -> str` — deterministic Treeview column id for a
   signal ref (`(field_id, params, interval, output_key, symbol)`).
-- `header_label(col) -> str` — compact `RVOL(20,5m)` / `ADX(14,D)` / `Chg%`.
+- `header_label(col) -> str` — compact `RVOL(20,5m)` / `ADX(14)` / `Chg%` (daily interval aliases are omitted).
 
 ## Dependencies
 - Internal: [`scanner/model`](../scanner/model.spec.md) (`FieldRef`).

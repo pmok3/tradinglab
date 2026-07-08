@@ -103,7 +103,7 @@ checkbox groups, called from `_on_menu_sandbox_start` / `_on_menu_sandbox_end`.
 - **Manager subscription, not snapshot ownership** — reconciles on every
   manager event (`add`/`remove`/`update`/`clear`/`reorder`/`preset_loaded`/
   `preset_saved`/`preset_deleted`/`loaded`). Only `redraw` is filtered.
-- **Preset Save/Load/Delete UI lives in `app.py` Indicators menu**; the
+- **Preset Save/Load/Delete UI lives in `gui/indicator_menu.py` Indicators menu**; the
   dialog only reacts to `preset_*` events for row refresh.
 - **Reorder propagates to overlay z-order** — `indicators/render.py` reads
   `IndicatorManager.reorder` events and assigns `zorder = 4 + 0.01 * pos`.
@@ -230,8 +230,8 @@ smoke-test path. Unknown rows participate (reorder is purely positional).
 
 ## Save / Cancel
 
-`[Apply] [Save and Close] [Cancel]` (Apply omitted on the live popup —
-see below). Snapshots `manager.to_dict()` on open. Cancel
+`[Save and Close] [Cancel]` by default (`[Apply]` is created only when
+`_SHOW_APPLY_UI` is `True`; see below). Snapshots `manager.to_dict()` on open. Cancel
 (Escape, X-button, WM_DELETE_WINDOW) restores via `manager.load_dict()`.
 Save and Close (Ctrl+S) accepts live state for the session and tears down
 the dialog — preset persistence is via Indicators → Save Preset. Dirty

@@ -2,8 +2,8 @@
 
 ## Purpose
 
-Per-indicator settings popup spawned by double-clicking an
-overlay-legend row or clicking a lower-pane indicator label. Lets
+Per-indicator settings popup spawned by clicking an in-readout
+overlay-legend row or a lower-pane indicator label. Lets
 the user edit one indicator's params /
 scopes / color / per-interval visibility without opening the
 multi-row Manage Indicators dialog. Reuses every widget the manager
@@ -18,8 +18,8 @@ popup can never drift from the canonical editor.
   popup focused if already open; creates one otherwise and stashes
   it on `app._per_indicator_dialogs[config_id]`. Returns `None` if
   the config is no longer on the manager (defensive guard for rapid
-  double-clicks that race a remove). `slot` records origin pane
-  (`"primary"` / `"compare"`); stored on `dlg._origin_slot` so the
+  clicks that race a remove). `slot` records origin pane
+  (`"primary"` / `"compare"` / `"drilldown"`); stored on `dlg._origin_slot` so the
   scope-split logic knows which scope a "this chart only" split
   carves off. Re-opening with a different `slot` mutates the slot
   and re-labels the scope radio.
@@ -116,10 +116,10 @@ popup can never drift from the canonical editor.
   meta-test (`tests/unit/gui/test_indicator_apply_defer.py` asserts
   `_PerIndicatorDialog._DEFERS_RENDER is False`) so the live exception
   is explicit and can't silently regress.
-- **Cleanup must remove from registry**. `_on_close` calls
-  `super()._on_close()` then evicts `self` from registry — only when
-  the slot still points at `self`, so racing close paths don't
-  corrupt unrelated popups.
+- **Cleanup must remove from registry**. `_on_close` routes through
+  `_on_cancel()`, which calls `_teardown_popup(...)`; teardown evicts
+  `self` from the registry only when the slot still points at `self`,
+  so racing close paths don't corrupt unrelated popups.
 
 ## Invariants
 
@@ -146,8 +146,8 @@ popup can never drift from the canonical editor.
 ## Data Flow
 
 ```
-dbl-click legend pill OR B1-click pane label
-  -> OverlayLegend._fire_dblclick(cfg.id) OR InteractionMixin pane-label hit-test
+B1-click readout legend row OR B1-click pane label
+  -> InteractionMixin readout-legend OR pane-label hit-test
   -> app._open_per_indicator_dialog(cfg.id, slot)
   -> open_per_indicator_dialog(app, cfg.id, slot)
        if registry[cfg.id] alive: deiconify + return

@@ -77,8 +77,9 @@ the signature for future `kind="rect"` / `kind="trend"`.
 ## Invariants
 
 - **No artist tracking.** `render_drawings` returns the artist list
-  but doesn't cache; `app.py` tracks and removes artists on next
-  render. Keeps the helper pure and re-entrant.
+  but doesn't cache; callers either clear the whole figure on full
+  render or use `clear_drawing_artists` for drawing-only refresh.
+  Keeps the helper pure and re-entrant.
 - **Drawing-only clearing.** `clear_drawing_artists` removes line and
   label artists tagged with drawing `gid` prefixes and returns the
   number removed. Removal errors are swallowed per artist.

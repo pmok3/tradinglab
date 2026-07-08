@@ -13,6 +13,10 @@
 - Keep menu commands routed back into `ChartApp` through a narrow callback protocol so the builder owns widget construction, not app business logic.
 
 ## Public API
+- `RecentPickCallback = Callable[[str], None]` — callback shape for
+  recent-file submenu picks.
+- `MenuBuilderCallbacks` — protocol for the callback/state surface
+  implemented by `ChartApp` and consumed by `MenuBuilder`.
 - `MenuBuilder(root, callbacks)`
   - `root`: the live `tk.Tk` instance that owns the menu widgets.
   - `callbacks`: protocol-typed command surface implemented naturally by `ChartApp`.

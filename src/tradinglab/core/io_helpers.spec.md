@@ -31,7 +31,10 @@ Parent dirs created on demand (`path.parent.mkdir(parents=True, exist_ok=True)`)
 
 ## Not adopted
 - `_dpapi.py:save_secrets_dict` — DPAPI-encrypted bytes, not JSON.
-- `events/cache.py:save`, `disk_cache.py:save` — pickle.
+- `events/cache.py:save` — writes a compact single JSON object with its
+  own best-effort temp-file path.
+- `disk_cache.py:save` — writes JSON Lines, one candle per line; it has a
+  different streaming shape from this whole-document JSON helper.
 
 ## `read_json` contract
 

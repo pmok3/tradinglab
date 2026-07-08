@@ -60,7 +60,7 @@ Translates `ExitSignal` → `PaperOrder` (mapping `ExitOrderKind` → `PaperOrde
 
 ## `ManualPaperSink`
 
-Surfaces signals via callback rather than filling — for users who paper-trade by mirroring on a real broker. Working set keyed by synthetic `manual-<uuid>` ids; cleared via `acknowledge_fill` or `cancel`. `subscribe(cb) -> unsubscribe_fn` registers listeners; sink emits `ManualSignalEvent("submitted"/"cancelled"/"ack-fill", signal, order_id)`. Tk-free — subscribers marshal onto Tk before drawing.
+Surfaces signals via callback rather than filling — for users who paper-trade by mirroring on a real broker. Working set keyed by synthetic `manual-<uuid>` ids; cleared via `acknowledge_fill` or `cancel`. `subscribe(cb) -> unsubscribe_fn` registers listeners; sink emits `ManualSignalEvent("submitted"/"cancelled"/"ack-fill", signal, order_id)`. Mutators are Tk-thread guarded; subscriber callbacks are otherwise plain Python callbacks that GUI listeners marshal onto Tk before drawing.
 
 ## `SchwabTraderSink`
 

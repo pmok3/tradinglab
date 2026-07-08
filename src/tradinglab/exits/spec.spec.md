@@ -86,7 +86,7 @@ A LONG **exit** stop fires *below*; a LONG **entry** stop fires *above* (breakou
 ## Design Decisions
 
 - **State is supplied by the caller.** Evaluator owns one `TriggerState` per `(position_id, leg_id, trigger_id)`; this module mutates that explicit state but holds no module-global state.
-- **`Decision.fire_price` is conservative.** TRAIL and CHANDELIER fire at the current stop level (not bar low/high); gap slippage is represented by stop/engine policy.
+- **`Decision.fire_price` is conservative.** STOP / TRAIL gap-through fills use the worse bar open; CHANDELIER fires at the current stop level and records unfavorable open-gap slippage on `TriggerState.chandelier_realized_slippage`.
 - **`update_*` mutates in place.** The caller persists or snapshots the supplied `TriggerState`; functions return `None`.
 - **`freeze_chandelier_params` runs once at arm** — lookback, ATR period, multiple, and MA type are captured and re-used for the trigger's lifetime; protects against indicator-drift while a trail is live.
 - **`evaluate_time_of_day`** treats `now` as authoritative; the evaluator passes a `datetime` already in ET.

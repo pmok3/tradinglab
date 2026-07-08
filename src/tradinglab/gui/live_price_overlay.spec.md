@@ -3,7 +3,7 @@
 ## Purpose
 Owns the dotted horizontal "live quote" line at the current price, plus its right-edge label, for every slot in `_panel_state`. Mirrors `exits_overlay.py` / `entries_overlay.py` in lifecycle: rebuild on every `_render`, mutate in place on every `_refresh_view_after_tick`.
 
-The overlay does **not** look up the latest price itself — the caller (`ChartApp`) resolves the price via `resolve_price(symbol, last_stream_price, panel_state_slot)` and passes it in. Keeps the renderer pure and the price-source policy in one place.
+The overlay does **not** look up the latest price itself — the caller (`ChartApp`) resolves the price via `resolve_price(symbol, *, last_stream_price, panel_state_slot)` and passes it in. Keeps the renderer pure and the price-source policy in one place.
 
 ## Public API
 - `class LivePriceOverlay`

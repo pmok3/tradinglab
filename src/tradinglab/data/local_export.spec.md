@@ -120,5 +120,4 @@ asserts every OHLCV field plus timestamp is bit-identical.
   loaded into memory and written. Acceptable for the target use case
   (sharing a few hundred symbol-intervals at a time).
 - **No compression**. Output is plain CSV. Gzip / Parquet support is
-  a future option; deferred because the disk cache itself is already
-  compressed (pickle) and most cache entries are <1MB on disk.
+  a future option; deferred because most cache entries are <1MB on disk.

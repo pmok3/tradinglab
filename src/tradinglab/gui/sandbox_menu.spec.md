@@ -3,7 +3,7 @@
 ## Purpose
 
 Menu-callback handlers for the **Sandbox** cascade — Start, End,
-Performance, Market Heatmap, Save, Load, Tags, and Download Replay
+Performance, Market Heatmap, Save, Load, Tags, and Prepare Universe
 Data. Extracted
 from `app.py` so menu wiring is decoupled from sandbox lifecycle
 helpers (those remain on ChartApp because they're also called from
@@ -111,6 +111,6 @@ non-menu paths: ticker entry, watchlist, drilldown).
   `is_active()==False`; panel self-detaches via
   `_on_sandbox_tick` → `detach_sandbox`. Wrapped in swallowing
   try/except — chartstack failure must never block sandbox start.
-- **Download Replay Data placement**: `_on_menu_sandbox_prepare_universe`
+- **Prepare Universe Data placement**: `_on_menu_sandbox_prepare_universe`
   is wired under the Sandbox cascade because it prepares the offline
   universe that strict-offline sessions replay.

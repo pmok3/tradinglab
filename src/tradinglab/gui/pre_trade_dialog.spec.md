@@ -44,7 +44,7 @@ review (`SandboxReviewDialog`) anchors to a stated plan.
    numeric → `float`; non-numeric → error.
 9. **Notes** — `tk.Text` (w=32, h=3), using the same native dark/light palette as Thesis.
 10. Inline red error label (`_error_var`).
-11. Footer: `[Cancel] [Submit]` (right-aligned).
+11. Footer: `[Submit] [Cancel]` (right-aligned, Windows dismiss action rightmost).
 
 ## Geometry
 
@@ -66,7 +66,8 @@ First failure short-circuits with `_error_var.set(msg)`.
 ## Dependencies
 
 - Internal: `._modal_base.BaseModalDialog`,
-  `._modal_base.protect_combobox_wheel`, `.colors.WARN_AMBER`.
+  `._modal_base.protect_combobox_wheel`, `.colors.WARN_AMBER`,
+  `.native_theme.apply_text_theme`, `.native_theme.current_theme`.
 - External: `tkinter`, `tkinter.ttk`.
 - Caller invokes from `SandboxController` / `SandboxPanel` on
   **Place order**; blocks via `wait_window`, reads `dlg.result`.
@@ -80,7 +81,7 @@ First failure short-circuits with `_error_var.set(msg)`.
 - **Editable setup_tag combobox**: traders refine taxonomy over time.
 - **Native Text theming**: `tests/unit/gui/test_native_widget_dark_theme.py` asserts both text areas use `DARK_THEME` colors and never the OS-default `SystemWindow` background.
 - **Base modal finalization**: `protect_combobox_wheel(self)` guards
-  side/setup/conviction widgets, then `_finalize_modal` makes ESC
+  the ttk side/setup comboboxes, then `_finalize_modal` makes ESC
   cancel and Enter submit. Enter inside multi-line Text widgets passes
   through to insert newlines.
 

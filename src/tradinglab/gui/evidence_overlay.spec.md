@@ -76,7 +76,7 @@ Pure-logic helpers are Tk-free and matplotlib-free; the
 - **Blended transform for labels**: `(transData, transAxes)` so
   label sits at y-axis-fraction 0.99 regardless of price y-range.
 - **Defensive swallowing**: missing audit logs, `audit.tail`
-  exceptions, malformed evidence dicts, and `ax.plot` / `ax.text`
+  exceptions, malformed evidence dicts, and `ax.axvline` / `ax.text`
   failures all log + continue.
 
 ## Invariants

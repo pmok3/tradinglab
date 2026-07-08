@@ -135,6 +135,10 @@ larger; pinning makes a list reachable from the main UI.
 - `_preload_watchlist()` / `_preload_watchlist_daily()` — one
   fetch per ticker in `_pinned_ticker_union()` (dedup prevents
   fetching shared tickers N times).
+- `_preload_watchlist_events()` — fans `_load_events_async` over
+  `_pinned_ticker_union()` for tickers missing from `_events_cache`,
+  so the default Next Earnings column fills proactively. Repeated calls
+  are harmless because `_load_events_async` also in-flight dedupes.
 - `_preload_one_last(ticker, src=None, itv=None)` /
   `_preload_one_daily(ticker, src=None)` — worker-thread fetchers.
   Populate `_watchlist_snapshot[ticker]` and warm

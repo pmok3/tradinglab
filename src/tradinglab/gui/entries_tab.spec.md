@@ -11,8 +11,8 @@ NOT bound to open positions (universe-driven).
 
 ```
 ┌─ Library ─────────────────────────────────┬─ Toolbar ──────────────┐
-│  Treeview: Name | Dir | Kind | Universe | │  [New] [Edit] [Delete] │
-│            Enabled | Armed | Fires        │  [Duplicate] [Import]  │
+│  Treeview: Name | Dir | Trigger | Enabled │  [New] [Edit] [Delete] │
+│            Armed | Fires | Id             │  [Duplicate] [Import]  │
 │            ───────────────────────────    │  [Export] [Load tmpl…] │
 │                                            │  ───────────────────── │
 │                                            │  [Arm] [Disarm]        │
@@ -38,7 +38,7 @@ class EntriesTab(ttk.Frame):
     @property
     def selected_strategy_id(self) -> str | None
     def refresh(self) -> None  # full library + stats redraw
-    def load_template_from_path(path: Path) -> EntryStrategy
+    def load_template_from_path(self, path: Path) -> EntryStrategy
     def _refresh_tree(self) -> None
     def _refresh_audit_tail(self) -> None
     def _refresh_stats(self) -> None
@@ -69,8 +69,8 @@ class EntriesTab(ttk.Frame):
   view's membership depends on live arm state; full `load_all()` happens
   in `refresh()` and explicit library actions.
 - **Treeview, not Listbox.** Multiple sortable columns (Name / Dir /
-  Kind / Universe / Enabled / Armed / Fires). Column widths tuned for
-  ~6-character symbol lists. Selection state is single-row.
+  Trigger / Enabled / Armed / Fires / Id). Selection state is
+  single-row.
 - **Mine | Active | Templates | All filter** (audit `template-filter`). A
   radio segment above the Treeview filters the library *view*; it
   **defaults to "All" on every construction** (session-only
@@ -108,7 +108,9 @@ class EntriesTab(ttk.Frame):
   `intraday-interval-guard`.
 - **Stats panel is read-only.** Hooks `evaluator.stats()` —
   numbers are display-only; resetting a counter requires
-  `reset_session()` via a future menu item.
+  `reset_session()` via a future menu item. Displayed counters are
+  fires, blocked, cooldowns, dedup skips, risk blocks, on-fill binds /
+  failures, indicator evaluations, and errors.
 - **Audit-tail footer** shows last N (default 20) records via
   `audit_log.tail(N)`. Each row is `<ts> <kind> <symbol/strategy>
   <meta-blurb>` so it fits on one line in a Treeview row.

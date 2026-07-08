@@ -23,9 +23,9 @@ semantics everywhere.
   has focus** (see `_focus_is_multiline_text`). This is the
   load-bearing detail: `tk.Text` widgets need Enter to insert
   newlines (PreTrade thesis, PostTrade review, notes fields), so
-  the helper checks the focus widget's class first and only
-  fires `primary` when the focus is a single-line `ttk.Entry` /
-  `ttk.Combobox` / button.
+  the helper checks the focus widget's class first and fires
+  `primary` for any non-`tk.Text` focus (including single-line
+  `ttk.Entry` / `ttk.Combobox` / button).
 - Numeric keypad Enter (`<KP_Enter>`) is bound to the same
   handler as `<Return>` so accountants happy on the 10-key still
   submit cleanly.
