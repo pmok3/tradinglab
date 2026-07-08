@@ -49,7 +49,11 @@ Same-wall-clock baseline:
 3. For each bar `i` in session `s` (with `s >= _MIN_WARMUP_SESSIONS`),
    collect TR at the same wall-clock key from sessions `[s - length, s)`.
    If at least `_MIN_WARMUP_SESSIONS` contain that key, emit
-   `aggregator(values)`; else NaN.
+   `aggregator(values)`; else NaN. The per-session aggregate is scattered
+   onto that session's admitted bars with a single vectorized fancy-index
+   assignment (`out[grp[sel]] = agg_per_col[cols[sel]]`, where `sel =
+   admit_mask & ready_cols & isfinite`), NOT a Python per-bar loop —
+   bit-for-bit identical, pinned by `tests/unit/test_atr_tod.py`.
 4. `_MIN_WARMUP_SESSIONS = 5` (parallels `rvol_tod`).
 
 ### `tod` (daily / weekly / monthly)
@@ -76,6 +80,15 @@ collapses to a plain 20-bar rolling mean of TR
 - **TR delegated to `wilder.true_range`** — shared with ADX. Rolling
   `ma_type="RMA"` delegates through `apply_ma` to the vectorized Wilder
   kernel rather than an indicator-local loop.
+- **ToD baseline is fully vectorized.** The per-session ToD map is a
+  dense `(n_sessions × n_tod_keys)` TR matrix (`np.unique` +
+  `return_inverse` for the key columns); the rolling per-column
+  aggregate (`np.nanmedian`/mean over the `[s-length, s)` window) is
+  computed once per current session and **scattered onto that session's
+  admitted bars with one fancy-index assignment**
+  (`out[grp[sel]] = agg_per_col[cols[sel]]`) — no per-bar Python loop on
+  the tod hot path. Bit-for-bit identical to the prior loop; pinned by
+  `tests/unit/test_atr_tod.py`.
 
 ## Invariants
 - All defined ATR values are `>= 0`.

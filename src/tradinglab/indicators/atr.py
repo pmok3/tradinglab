@@ -341,12 +341,15 @@ class ATR(BaseIndicator):
                     agg_per_col = np.where(
                         ready_cols, col_sums / counts, np.nan,
                     )
-            for idx in cur_grp:
-                if not admit_mask[idx]:
-                    continue
-                col = inv_idx[idx]
-                if ready_cols[col]:
-                    v = float(agg_per_col[col])
-                    if np.isfinite(v):
-                        out[idx] = v
+            # Vectorized scatter of the per-ToD-column aggregate back onto
+            # this session's admitted bars: a bar at index ``idx`` receives
+            # ``agg_per_col[inv_idx[idx]]`` iff it is admitted, its column is
+            # ready, and the aggregate is finite — bit-for-bit identical to
+            # the prior per-bar loop, but one fancy-index assignment instead
+            # of a Python iteration over every bar in the session.
+            grp_arr = np.asarray(cur_grp, dtype=np.int64)
+            cols = inv_idx[grp_arr]
+            vals = agg_per_col[cols]
+            sel = admit_mask[grp_arr] & ready_cols[cols] & np.isfinite(vals)
+            out[grp_arr[sel]] = vals[sel]
         return {"atr": out}

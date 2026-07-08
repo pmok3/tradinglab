@@ -222,6 +222,14 @@ def candles_from_dataframe(
         # rather than a per-bar ``classify_session(dt.hour, dt.minute)`` call —
         # the win scales with bar count (multi-year 1m, intraday universe
         # preloads). ``sessions`` is a plain list[str], length-aligned with dts.
+        #
+        # NOTE: a ``.tolist()``-first + ``zip`` build loop was benchmarked
+        # here and is NOT faster on this stack (Windows-ARM / CPython 3.12 /
+        # numpy 2.x) — it is ~10–30% SLOWER. ``Candle`` is a plain (non-slots)
+        # dataclass, so its ``__init__`` dominates; per-field numpy-scalar
+        # access is noise, and ``.tolist()`` just adds six large-list
+        # allocations plus per-row tuple unpacking. Keep the direct index
+        # loop. See tools/profile_normalize_sessions.py.
         sessions = classify_session_arr(hours, minutes)
         for i in range(n):
             candles[i] = Candle(
