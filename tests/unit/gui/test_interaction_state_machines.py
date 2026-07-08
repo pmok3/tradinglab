@@ -416,6 +416,7 @@ for _name in (
     "_cancel_click_to_type",
     "_refresh_typing_preview",
     "_blit_overlays",
+    "_draw_moving_overlays",
     "_overlay_artist_ids",
     "_on_draw_event",
     "_readout_bar_idx",

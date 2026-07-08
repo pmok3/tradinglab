@@ -747,6 +747,25 @@ class ChartApp(
         # nulled at every _blit_bg recapture. Audit ``crosshair-readout-cache``.
         self._overlay_bg = None
         self._overlay_bg_fp: tuple | None = None
+        # Semi-static tick background regions (perf: readout decouple + pane
+        # bake). The per-tick blit bakes decorations + indicator-pane data
+        # into ``_tick_blit_bg`` and pastes the static-per-bar readout /
+        # pane-value regions back from these cached snapshots, so a live tick
+        # redraws only the moving price candle + volume + overlay lines
+        # instead of the whole figure + a full readout re-layout. Rebuilt in
+        # lockstep with ``_tick_blit_bg`` (see gui/interaction.py). Audit
+        # ``tick-readout-decouple``.
+        self._tick_overlay_regions: list[Any] = []
+        # Adaptive live-tick repaint coalescing: rate-limit
+        # ``_refresh_view_after_tick`` so a fast (sub-minute LEVELONE) stream
+        # can't saturate the Tk thread. An EWMA of measured paint cost drives
+        # an adaptive minimum interval between repaints; ticks arriving inside
+        # the interval coalesce into a single trailing repaint (gui/polling.py
+        # :_request_tick_repaint). Audit ``tick-repaint-coalesce``.
+        self._tick_paint_ewma_ms: float = 0.0
+        self._tick_paint_next_allowed: float = 0.0
+        self._tick_repaint_pending: bool = False
+        self._tick_repaint_job: str | None = None
         # Live-tick blit fast path (gui/interaction.py:_paint_tick_frame).
         # When True, ``_on_draw_event`` skips its capture/composite so the
         # data-less background draw used to seed ``_tick_blit_bg`` doesn't

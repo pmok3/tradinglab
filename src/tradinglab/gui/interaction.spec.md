@@ -136,27 +136,57 @@ by `ChartApp._build_ui`.
 - `_paint_tick_frame(slot) -> bool` — repaints a streaming tick via blit
   instead of a full `canvas.draw_idle()`. The forming (rightmost) bar
   shares one Collection with every sealed bar, so a naive "restore full
-  background + redraw" **ghosts** when the bar's body shrinks. Instead we
-  keep `_tick_blit_bg` — a snapshot of the figure with ALL data artists
-  hidden (pure axes decorations) — and redraw the data on top each tick;
-  the background never contained the data, so there is no ghost.
-  - **Lazy seed.** When `_tick_blit_bg is None`, hide every data artist,
-    set `_suspend_draw_capture=True`, issue one `canvas.draw()`,
-    `copy_from_bbox` → `_tick_blit_bg`, then restore visibility. The
-    suspend flag keeps `_on_draw_event` from clobbering `_blit_bg` with
-    the hidden frame.
-  - **Blit.** `restore_region(_tick_blit_bg)` → `draw_artist` every data
-    artist → capture the buffer (decorations + data, no overlays) as the
-    fresh `_blit_bg` → `_blit_overlays()` composites the always-on readout
-    / crosshair and blits. Bumps the `_tick_blit_fires` counter (a
-    silent-fallback regression guard).
+  background + redraw" **ghosts** when the bar's body shrinks. So
+  `_tick_blit_bg` is a **semi-static** snapshot of the figure with ONLY
+  the moving price-pane artists hidden — decorations **and indicator-pane
+  data are baked in** — and each tick redraws just the moving subset on
+  top. The moving subset never contained the ghost-prone forming bar, and
+  the static panes/readout aren't re-rasterised every tick (audit
+  `tick-readout-decouple`).
+  - **Lazy seed** (`_seed_tick_blit_bg(data)`). When `_tick_blit_bg is
+    None`: hide only the moving artists (`data`), set
+    `_suspend_draw_capture=True`, one `canvas.draw()` (bakes decorations +
+    indicator-pane data), `copy_from_bbox` → `_tick_blit_bg`. Then refresh
+    the readout to the latest bar (`_update_readout(None)`), `draw_artist`
+    each visible readout box + per-pane value badge once, and snapshot its
+    `get_window_extent` region into `_tick_overlay_regions` for cheap
+    per-tick pasting. Restore visibility. The suspend flag keeps
+    `_on_draw_event` from clobbering `_blit_bg` with the hidden frame.
+  - **Blit.** `restore_region(_tick_blit_bg)` → `draw_artist` every moving
+    artist → capture the buffer (decorations + panes + moving data, **no
+    readout**) as the fresh `_blit_bg` → `restore_region` each cached
+    `_tick_overlay_regions` snapshot (pastes the static-per-bar readout /
+    pane badges back — a memcpy, no offsetbox re-layout) → `_draw_moving_
+    overlays()` (crosshair/hover/typing) → `canvas.blit`. Then null
+    `_overlay_bg` (a later hover must rebuild it from the readout-free
+    `_blit_bg`). Bumps `_tick_blit_fires` (silent-fallback regression
+    guard).
+  - **Why `_blit_bg` excludes the readout.** The hover path's
+    `_blit_overlays` draws the readout *on top of* `_blit_bg`; if the tick
+    baked the readout into `_blit_bg` a hover would double it. So the
+    readout is composited via the region-paste (display only) while
+    `_blit_bg` stays readout-free.
+  - **Hover-active guard.** When the cursor is over the chart
+    (`_last_cursor_px is not None`) the readout tracks the HOVERED bar,
+    which the cached latest-bar regions don't reflect — so that tick falls
+    back to the normal `_overlay_bg=None; _blit_overlays()` rebuild
+    (correct hovered readout, at the cost of one offsetbox re-layout). The
+    fast region-paste applies to the common streaming case (cursor
+    off-chart).
   - Returns `False` (→ caller does `draw_idle`) on no canvas/figure, no
-    data artists, or any exception (the partial snapshot is dropped).
-- `_collect_tick_blit_artists() -> [(ax, artist)]` — every Collection /
-  Line2D / Text on each slot's price / volume / indicator axes (candles,
-  volume, indicators, reference levels, drawings, the live-price line +
-  label), MINUS `_overlay_artist_ids()`, deduplicated by `id()`. The
-  live-price overlay's `(line, label)` are also added explicitly.
+    moving artists, or any exception (partial snapshots dropped).
+- `_collect_tick_dynamic_artists() -> [(ax, artist)]` — the MOVING subset
+  redrawn every tick: price-pane Collections/Lines (candles, overlay MAs /
+  VWAP / Bollinger, reference levels, drawings) + volume bars + the
+  live-price line, MINUS `_overlay_artist_ids()`. Indicator-PANE axes
+  (RSI/MACD/… — `overlay=False`) are EXCLUDED: on a same-length tick the
+  indicator cache returns the prior arrays unchanged (`indicators/cache.py`
+  same-id same-length), so those panes are baked into `_tick_blit_bg`
+  instead. Uses the canonical `price_ax`/`vol_ax` keys.
+- `_collect_tick_blit_artists() -> [(ax, artist)]` — the FULL data set
+  (every Collection/Line2D/Text on all price/volume/indicator axes MINUS
+  overlays). Retained for `_overlay_artist_ids` disjointness tests; the
+  per-tick paint uses `_collect_tick_dynamic_artists` instead.
 - `_overlay_artist_ids() -> set[int]` — `id()`s of the always-on / hover
   overlays (`_crosshair_artists`, `_price_label_artists`,
   `_time_label_artists`, `_readout_artists`, `_pane_value_labels`,
@@ -165,6 +195,10 @@ by `ChartApp._build_ui`.
 - The live-price overlay is slid to the fresh price by
   `ChartApp._refresh_view_after_tick` **before** the renderer repaints, so
   the blit paints it at the new price (it would otherwise lag one tick).
+- **Cadence.** `ChartApp._refresh_view_after_tick` is rate-limited by the
+  polling mixin's adaptive coalescer (`_request_tick_repaint`, see
+  `polling.spec.md`), so a fast sub-minute stream can't saturate the Tk
+  thread even though each paint is cheap.
 
 ### Click-to-type
 
@@ -208,7 +242,10 @@ every frame:
   <pane value-badge visibilities>)`.
 - **Layer 2 — moving overlays** (per frame): crosshair v/h lines, price /
   time badges, hover tooltip, and the click-to-type preview, drawn on top
-  of the restored `_overlay_bg` every frame. Cheap.
+  of the restored `_overlay_bg` every frame via the shared
+  `_draw_moving_overlays()` helper. Cheap. `_draw_moving_overlays()` is
+  also called by `_paint_tick_frame` so the moving-overlay z-order can't
+  drift between the hover and live-tick paths.
 
 **Cache validity / invalidation.** The cache is rebuilt when
 `_overlay_bg is None` or the fingerprint changes:
@@ -216,10 +253,15 @@ every frame:
   `_dispatch_hover` via the qw-hover-cache gate) → fingerprint flip.
 - Readout hide/show (cursor-leave, revival) flips a visibility bool in the
   fingerprint.
-- Any full redraw (`_on_draw_event`) or live tick (`_paint_tick_frame`)
-  recaptures `_blit_bg` and **explicitly nulls `_overlay_bg`** at that
-  site, so content changes that don't move the readout key (theme, resize,
-  indicator add, streaming forming-bar) still rebuild.
+- Any full redraw (`_on_draw_event`) recaptures `_blit_bg` and **explicitly
+  nulls `_overlay_bg`**, so content changes that don't move the readout key
+  (theme, resize, indicator add) still rebuild.
+- A **live tick** (`_paint_tick_frame`) does NOT rebuild `_overlay_bg`
+  mid-frame — it captures a readout-free `_blit_bg`, pastes the cached
+  readout/pane-badge regions (`_tick_overlay_regions`) for display, then
+  nulls `_overlay_bg` **after** the blit so the NEXT hover rebuilds the
+  cache from the fresh `_blit_bg`. This is what removes the per-tick
+  offsetbox re-layout during streaming (audit `tick-readout-decouple`).
 
 Because the readout is bar-indexed (identical content for any cursor-x
 within one bar), reusing `_overlay_bg` while the crosshair sweeps *within*

@@ -84,6 +84,22 @@ Also hosts the pure scheduler helpers (only caller is here).
   routes `tick`/`rollover` for main chart through
   `_apply_stream_tick`/`_apply_stream_rollover`. Rewires
   primary slot's candle list after rollover (may build new list).
+  A `tick`-only drain requests a repaint via `_request_tick_repaint`
+  (rate-limited); a `rollover` repaints synchronously via
+  `_refresh_view_after_append`.
+- `_request_tick_repaint(slot)` / `_do_tick_repaint(slot)` — adaptive
+  live-tick repaint coalescer (audit `tick-repaint-coalesce`). The first
+  tick after an idle gap paints immediately; ticks arriving inside the
+  adaptive minimum interval are dropped and a single **trailing** repaint
+  is scheduled via `_track_after` (the forming bar is already mutated in
+  `_full_cache`/`_primary`, so the deferred paint shows current state).
+  `_do_tick_repaint` measures the paint wall-clock, feeds an EWMA
+  (`_tick_paint_ewma_ms`), and sets the next deadline to
+  `clamp(ewma * _TICK_PAINT_INTERVAL_FACTOR, _TICK_PAINT_MIN_INTERVAL_MS,
+  _TICK_PAINT_MAX_INTERVAL_MS)` (33 ms / ~30 fps ceiling → 250 ms / ~4 fps
+  floor). A cheap chart repaints at 30 fps; a heavy multi-pane chart backs
+  off instead of letting a sub-minute LEVELONE stream saturate the Tk
+  thread.
 - `_schedule_reload(delay_ms=700)` — debounced reload (typing /
   interval flip / source flip).
 - `_do_scheduled_reload()` — debounce callback. Preserves

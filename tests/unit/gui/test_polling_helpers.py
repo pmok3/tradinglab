@@ -421,6 +421,97 @@ class TestScheduleReload:
 
 
 # ---------------------------------------------------------------------------
+# 5b. PollingMixin — adaptive live-tick repaint coalescing
+#     (audit ``tick-repaint-coalesce``)
+# ---------------------------------------------------------------------------
+
+
+class _Clock:
+    """Manually-advanced stand-in for ``time.monotonic``."""
+
+    def __init__(self, t: float = 0.0) -> None:
+        self.t = t
+
+    def __call__(self) -> float:
+        return self.t
+
+
+class _TickHarness(_PollingHarness):
+    """Harness for ``_request_tick_repaint`` / ``_do_tick_repaint``.
+
+    ``_refresh_view_after_tick`` advances the shared clock by
+    ``paint_cost_s`` so ``_do_tick_repaint`` measures a realistic paint
+    duration and re-arms the adaptive interval from it.
+    """
+
+    def __init__(self, clock: _Clock, paint_cost_s: float = 0.0) -> None:
+        super().__init__()
+        self._clock = clock
+        self._paint_cost_s = paint_cost_s
+        self.refresh_calls = 0
+        self._tick_paint_ewma_ms = 0.0
+        self._tick_paint_next_allowed = 0.0
+        self._tick_repaint_pending = False
+        self._tick_repaint_job: str | None = None
+
+    def _refresh_view_after_tick(self, slot: str = "primary") -> None:
+        self.refresh_calls += 1
+        self._clock.t += self._paint_cost_s
+
+
+class TestRequestTickRepaint:
+    def test_first_tick_paints_immediately(self):
+        clk = _Clock(100.0)
+        h = _TickHarness(clk, paint_cost_s=0.0)
+        with patch.object(_polling.time, "monotonic", clk):
+            h._request_tick_repaint("primary")
+        assert h.refresh_calls == 1
+        assert h._tick_repaint_pending is False
+        # A cheap paint clamps the next-allowed deadline to the 30 fps floor.
+        assert h._tick_paint_next_allowed == pytest.approx(
+            100.0 + _polling._TICK_PAINT_MIN_INTERVAL_MS / 1000.0)
+
+    def test_rapid_ticks_coalesce_to_single_trailing_repaint(self):
+        clk = _Clock(0.0)
+        h = _TickHarness(clk, paint_cost_s=0.02)
+        with patch.object(_polling.time, "monotonic", clk):
+            h._request_tick_repaint("primary")  # immediate paint
+            assert h.refresh_calls == 1
+            # Advance to just before the next-allowed deadline.
+            clk.t = h._tick_paint_next_allowed - 0.005
+            n_before = len(h._fake.scheduled)
+            for _ in range(5):
+                h._request_tick_repaint("primary")
+            # No extra synchronous paints; exactly one trailing job armed.
+            assert h.refresh_calls == 1
+            assert h._tick_repaint_pending is True
+            assert len(h._fake.scheduled) == n_before + 1
+            # Firing the trailing job paints once and clears the pending flag.
+            h._fake.scheduled[-1][1]()
+            assert h.refresh_calls == 2
+            assert h._tick_repaint_pending is False
+
+    def test_interval_adapts_to_measured_paint_cost(self):
+        clk = _Clock(0.0)
+        h = _TickHarness(clk, paint_cost_s=0.100)  # heavy 100 ms paint
+        with patch.object(_polling.time, "monotonic", clk):
+            h._request_tick_repaint("primary")
+        assert h._tick_paint_ewma_ms == pytest.approx(100.0)
+        # interval = clamp(100 * 1.5, 33, 250) = 150 ms, measured from the
+        # moment the paint finished (clock advanced to 0.100).
+        assert h._tick_paint_next_allowed == pytest.approx(0.100 + 0.150)
+
+    def test_interval_clamped_to_max_under_pathological_paint(self):
+        clk = _Clock(0.0)
+        h = _TickHarness(clk, paint_cost_s=1.0)  # 1000 ms paint
+        with patch.object(_polling.time, "monotonic", clk):
+            h._request_tick_repaint("primary")
+        # 1000 * 1.5 = 1500 ms, clamped down to the 250 ms floor.
+        assert h._tick_paint_next_allowed == pytest.approx(
+            1.0 + _polling._TICK_PAINT_MAX_INTERVAL_MS / 1000.0)
+
+
+# ---------------------------------------------------------------------------
 # 6. PollingMixin — _drain_worker_inbox
 # ---------------------------------------------------------------------------
 

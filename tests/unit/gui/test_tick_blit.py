@@ -256,3 +256,60 @@ def test_tick_blit_fires_end_to_end(rendered_app):
     assert app._tick_blit_fires >= 1, "blit fast path did not fire"
     assert di["n"] == 0, "fell back to draw_idle despite stable limits"
 
+
+def test_collect_dynamic_excludes_indicator_panes(rendered_app):
+    """The per-tick dynamic set bakes separate indicator-pane axes into the
+    background (they don't change on a same-length tick) and redraws only
+    the price + volume pane artists."""
+    from tradinglab.indicators.config import IndicatorConfig
+
+    app = rendered_app
+    mgr = app._indicator_manager
+    cfg = mgr.add(IndicatorConfig(kind_id="rsi", params={"length": 14}))
+    try:
+        app._render()
+        ps = app._panel_state.get("primary") or {}
+        ind_axes = list(ps.get("ind_axes") or [])
+        if not ind_axes:
+            pytest.skip("RSI pane not materialised in this render state")
+        dyn = app._collect_tick_dynamic_artists()
+        dyn_axes = {id(ax) for ax, _a in dyn}
+        # No indicator-pane axes in the moving subset — they are baked.
+        for iax in ind_axes:
+            assert id(iax) not in dyn_axes
+        # The price pane candles ARE in the moving subset.
+        price_ax = ps.get("price_ax")
+        assert price_ax is not None
+        assert id(price_ax) in dyn_axes
+    finally:
+        try:
+            mgr.remove(cfg.id)
+            app._render()
+        except Exception:
+            pass
+
+
+def test_paint_tick_frame_keeps_blit_bg_readout_free(rendered_app):
+    """The tick paint must leave ``_blit_bg`` readout-free (so a later hover
+    doesn't double the readout), cache the static readout regions for
+    pasting, and null ``_overlay_bg`` so the next hover rebuilds cleanly."""
+    app = rendered_app
+    if not app._apply_tick_to_artists("primary"):
+        pytest.skip("tick fast path not eligible in this render state")
+    app._tick_blit_bg = None
+    app._last_cursor_px = None  # force the off-chart fast (region-paste) path
+    ok = app._paint_tick_frame("primary")
+    assert ok is True
+    assert isinstance(app._tick_overlay_regions, list)
+    # The always-on OHLCV readout box is visible → its region is cached.
+    vis_readouts = [
+        b for b in (app._readout_artists or {}).values() if b.get_visible()
+    ]
+    if vis_readouts:
+        assert len(app._tick_overlay_regions) >= 1
+    # _overlay_bg nulled so a subsequent hover composite rebuilds it from
+    # the readout-free _blit_bg (never double-draws the readout).
+    assert app._overlay_bg is None
+    app._blit_overlays()
+    assert app._overlay_bg is not None
+

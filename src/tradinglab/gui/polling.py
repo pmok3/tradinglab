@@ -45,6 +45,20 @@ from .. import disk_cache as _disk_cache
 from ..constants import interval_minutes, is_intraday
 from ..data import DATA_SOURCES
 
+# Adaptive live-tick repaint coalescing (audit ``tick-repaint-coalesce``).
+# A sub-minute LEVELONE stream (Schwab) can enqueue many ticks/second; the
+# 50 ms drain already collapses a burst to one ``_refresh_view_after_tick``,
+# but on a heavy multi-pane chart a single repaint can itself cost tens of
+# ms, so an unthrottled 20 Hz repaint saturates the Tk thread. We gate
+# repaints to an adaptive minimum interval derived from the measured paint
+# cost: ``interval = clamp(paint_ms * _TICK_PAINT_INTERVAL_FACTOR,
+# _TICK_PAINT_MIN_INTERVAL_MS, _TICK_PAINT_MAX_INTERVAL_MS)``. A cheap chart
+# repaints at the 30 Hz floor; a heavy one backs off toward 4 Hz rather than
+# falling behind. The first tick after an idle gap always paints immediately.
+_TICK_PAINT_MIN_INTERVAL_MS = 33     # ~30 fps ceiling on repaint frequency
+_TICK_PAINT_MAX_INTERVAL_MS = 250    # ~4 fps floor under a heavy paint load
+_TICK_PAINT_INTERVAL_FACTOR = 1.5    # headroom over the measured paint cost
+
 
 # ---------------------------------------------------------------------------
 # Local ``_silent_tcl`` clone.
@@ -449,11 +463,55 @@ class PollingMixin:
                 except Exception:  # noqa: BLE001
                     pass
         elif ticked:
-            try:
-                self._refresh_view_after_tick("primary")
-            except Exception:  # noqa: BLE001
-                pass
+            self._request_tick_repaint("primary")
         self._schedule_drain()
+
+    def _request_tick_repaint(self, slot: str = "primary") -> None:
+        """Rate-limit live-tick repaints so a fast stream can't saturate Tk.
+
+        The first tick after an idle gap paints immediately. Ticks arriving
+        inside the adaptive minimum interval (see the module constants) are
+        coalesced: a single trailing repaint is scheduled and further ticks
+        are dropped until it fires. Dropping is safe — the forming bar is
+        mutated in place in ``_full_cache`` / ``_primary`` before we get
+        here, so the deferred paint always renders the freshest state.
+        """
+        now = time.monotonic()
+        if now >= getattr(self, "_tick_paint_next_allowed", 0.0):
+            self._do_tick_repaint(slot)
+            return
+        if getattr(self, "_tick_repaint_pending", False):
+            return
+        self._tick_repaint_pending = True
+        delay_ms = max(1, int((self._tick_paint_next_allowed - now) * 1000.0))
+        self._tick_repaint_job = self._track_after(
+            delay_ms, self._do_tick_repaint, slot)
+
+    def _do_tick_repaint(self, slot: str = "primary") -> None:
+        """Run one tick repaint, measure its cost, and re-arm the gate.
+
+        The measured wall-clock cost feeds an EWMA that drives the next
+        allowed-paint deadline, so the effective repaint rate adapts to how
+        expensive the current chart is to paint (pane count, indicators).
+        """
+        self._tick_repaint_pending = False
+        t0 = time.monotonic()
+        try:
+            self._refresh_view_after_tick(slot)
+        except Exception:  # noqa: BLE001
+            pass
+        paint_ms = (time.monotonic() - t0) * 1000.0
+        prev = getattr(self, "_tick_paint_ewma_ms", 0.0)
+        # Seed the EWMA with the first real sample so a cold 0.0 doesn't drag
+        # the first interval down to the floor before we know the true cost.
+        self._tick_paint_ewma_ms = (
+            paint_ms if prev <= 0.0 else 0.5 * prev + 0.5 * paint_ms)
+        interval_ms = min(
+            _TICK_PAINT_MAX_INTERVAL_MS,
+            max(_TICK_PAINT_MIN_INTERVAL_MS,
+                self._tick_paint_ewma_ms * _TICK_PAINT_INTERVAL_FACTOR),
+        )
+        self._tick_paint_next_allowed = time.monotonic() + interval_ms / 1000.0
 
     # ------------------------------------------------------------------
     # Debounced reload + next-bar scheduler (spec §9.3)

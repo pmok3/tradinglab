@@ -2553,43 +2553,53 @@ class InteractionMixin:
             else:
                 canvas.restore_region(self._overlay_bg)
             # ---- Layer 2: moving overlays (redrawn every frame) -----------
-            for ax, (vline, hline) in self._crosshair_artists.items():
-                if vline.get_visible():
-                    ax.draw_artist(vline)
-                if hline.get_visible():
-                    ax.draw_artist(hline)
-            # Price badge drawn AFTER hline so the crosshair doesn't cut
-            # through it; it must visually occlude the baked y-tick labels.
-            for ax, label in self._price_label_artists.items():
-                if label.get_visible():
-                    ax.draw_artist(label)
-            # Time badges (one per pane) — same rationale as the price
-            # badge but for the x-axis tick labels at the bottom of each
-            # pane. Only the hovered pane's badge is visible at a time.
-            for time_label in (
-                getattr(self, "_time_label_artists", None) or {}
-            ).values():
-                if time_label is not None and time_label.get_visible():
-                    ann_ax = time_label.axes
-                    if ann_ax is not None:
-                        ann_ax.draw_artist(time_label)
-            if self._hover_ann is not None and self._hover_ann.get_visible():
-                ann_ax = self._hover_ann.axes
-                if ann_ax is not None:
-                    ann_ax.draw_artist(self._hover_ann)
-            # Click-to-type preview letters (big grey ticker text). Composited
-            # here so each keystroke is a cheap blit instead of a full figure
-            # re-raster via ``draw_idle``. Audit ``typing-preview-blit``.
-            for art in (
-                getattr(self, "_typing_preview_artists", None) or {}
-            ).values():
-                if art is not None and art.get_visible():
-                    pa = art.axes
-                    if pa is not None:
-                        pa.draw_artist(art)
+            self._draw_moving_overlays()
             canvas.blit(self._figure.bbox)
         except Exception:  # noqa: BLE001
             pass
+
+    def _draw_moving_overlays(self) -> None:
+        """Draw the per-frame moving overlay artists onto the current buffer.
+
+        Layer 2 of the blit: crosshair v/h lines, the right-spine price
+        badge, the per-pane time badges, the hover tooltip, and the
+        click-to-type preview letters. Assumes the caller has already
+        restored the appropriate cached base layer and will ``blit`` after.
+        Shared by :meth:`_blit_overlays` (hover / pan path) and
+        :meth:`_paint_tick_frame` (live-tick path) so the moving-overlay
+        z-order can't drift between them.
+        """
+        for ax, (vline, hline) in self._crosshair_artists.items():
+            if vline.get_visible():
+                ax.draw_artist(vline)
+            if hline.get_visible():
+                ax.draw_artist(hline)
+        # Price badge drawn AFTER hline so the crosshair doesn't cut
+        # through it; it must visually occlude the baked y-tick labels.
+        for ax, label in self._price_label_artists.items():
+            if label.get_visible():
+                ax.draw_artist(label)
+        # Time badges (one per pane) — same rationale as the price
+        # badge but for the x-axis tick labels at the bottom of each pane.
+        for time_label in (
+            getattr(self, "_time_label_artists", None) or {}
+        ).values():
+            if time_label is not None and time_label.get_visible():
+                ann_ax = time_label.axes
+                if ann_ax is not None:
+                    ann_ax.draw_artist(time_label)
+        if self._hover_ann is not None and self._hover_ann.get_visible():
+            ann_ax = self._hover_ann.axes
+            if ann_ax is not None:
+                ann_ax.draw_artist(self._hover_ann)
+        # Click-to-type preview letters (big grey ticker text).
+        for art in (
+            getattr(self, "_typing_preview_artists", None) or {}
+        ).values():
+            if art is not None and art.get_visible():
+                pa = art.axes
+                if pa is not None:
+                    pa.draw_artist(art)
 
     # ------------------------------------------------------------------
     # Live-tick blit fast path (cluster 1)
@@ -2687,50 +2697,95 @@ class InteractionMixin:
                         _add(getattr(art, "axes", None), art)
         return out
 
+    def _collect_tick_dynamic_artists(self) -> list[tuple[Any, Any]]:
+        """Return ``(axes, artist)`` pairs for the artists that MOVE on a
+        live tick — the subset redrawn every tick over the semi-static
+        background.
+
+        This is the price pane's candle wicks/bodies + overlay lines
+        (MAs / VWAP / Bollinger + reference levels + drawings) + the volume
+        bars + the live-price line. Indicator-PANE artists (RSI / MACD /
+        ATR / RRVOL in their own axes) are deliberately EXCLUDED: on a
+        same-length streaming tick the indicator cache returns the prior
+        arrays unchanged (``indicators/cache.py`` — same ``id`` + same length
+        ⇒ cached result), so those panes are static between rollovers and get
+        baked into ``_tick_blit_bg`` instead of being redrawn every tick.
+        Animated overlay artists (crosshair / readout / hover) are excluded
+        via ``_overlay_artist_ids`` — the readout is composited separately by
+        :meth:`_paint_tick_frame`. Audit ``tick-readout-decouple``.
+        """
+        exclude = self._overlay_artist_ids()
+        out: list[tuple[Any, Any]] = []
+        seen: set[int] = set()
+
+        def _add(ax: Any, art: Any) -> None:
+            if ax is None or art is None:
+                return
+            i = id(art)
+            if i in seen or i in exclude:
+                return
+            seen.add(i)
+            out.append((ax, art))
+
+        ps_map = getattr(self, "_panel_state", None) or {}
+        for ps in ps_map.values():
+            # Canonical price/volume axes keys are ``price_ax`` / ``vol_ax``;
+            # ``volume_ax`` is tolerated for any legacy panel_state shape.
+            for key in ("price_ax", "vol_ax", "volume_ax"):
+                ax = ps.get(key)
+                if ax is None:
+                    continue
+                for coll in list(getattr(ax, "collections", []) or []):
+                    _add(ax, coll)
+                for ln in list(getattr(ax, "lines", []) or []):
+                    _add(ax, ln)
+        overlay = getattr(self, "_live_price_overlay", None)
+        if overlay is not None:
+            for entry in (getattr(overlay, "_artists", None) or {}).values():
+                try:
+                    line, label = entry
+                except (TypeError, ValueError):
+                    continue
+                for art in (line, label):
+                    if art is not None:
+                        _add(getattr(art, "axes", None), art)
+        return out
+
     def _paint_tick_frame(self, slot: str = "primary") -> bool:
-        """Blit the data artists onto a data-less background (ghost-free).
+        """Blit only the moving price artists onto a semi-static background.
 
-        The forming bar shares a Collection with every sealed bar, so a
-        naive "restore full bg + redraw" ghosts when the bar's body
-        shrinks. Instead we keep ``_tick_blit_bg`` — a snapshot of the
-        figure with ALL data artists hidden (pure axes decorations) — and
-        redraw the data on top each tick. No ghost because the background
-        never contained the data.
+        The per-tick cost used to be dominated by two things that don't
+        actually change on a same-length tick: (a) the indicator PANES
+        (RSI/MACD/… in their own axes), and (b) the top-left OHLCV /
+        indicator-value readout, whose ``AnchoredOffsetbox`` re-lays out its
+        whole packer tree (font metrics per row) on every ``draw_artist`` —
+        a cost that scales with indicator count.
 
-        Returns ``True`` if the frame was painted via blit; ``False`` to
-        tell the caller to fall back to ``canvas.draw_idle()``.
+        So ``_tick_blit_bg`` bakes decorations + indicator-pane data (hiding
+        ONLY the moving price-pane candle/volume/overlay artists), and the
+        static-per-bar readout / pane-value badges are snapshotted once into
+        ``_tick_overlay_regions`` and *pasted* back each tick with a cheap
+        ``restore_region`` (no re-layout). A live tick therefore redraws only
+        the moving price artists + the moving crosshair/hover layer.
+
+        ``_blit_bg`` is captured WITHOUT the readout (decorations + panes +
+        moving data), so the hover path's ``_blit_overlays`` — which draws
+        the readout on top of ``_blit_bg`` — stays correct and never doubles
+        the readout. Audit ``tick-readout-decouple``.
+
+        Returns ``True`` if painted via blit; ``False`` to tell the caller
+        to fall back to ``canvas.draw_idle()``.
         """
         canvas = getattr(self, "_canvas", None)
         figure = getattr(self, "_figure", None)
         if canvas is None or figure is None:
             return False
-        data = self._collect_tick_blit_artists()
+        data = self._collect_tick_dynamic_artists()
         if not data:
             return False
         try:
             if self._tick_blit_bg is None:
-                # Seed the data-less background: hide every data artist,
-                # do ONE suppressed full draw, snapshot, then restore
-                # visibility. ``_suspend_draw_capture`` keeps the draw_event
-                # handler from clobbering ``_blit_bg`` with this hidden frame.
-                vis: list[tuple[Any, bool]] = []
-                for _ax, art in data:
-                    try:
-                        vis.append((art, bool(art.get_visible())))
-                        art.set_visible(False)
-                    except Exception:  # noqa: BLE001
-                        pass
-                self._suspend_draw_capture = True
-                try:
-                    canvas.draw()
-                    self._tick_blit_bg = canvas.copy_from_bbox(figure.bbox)
-                finally:
-                    self._suspend_draw_capture = False
-                    for art, was in vis:
-                        try:
-                            art.set_visible(was)
-                        except Exception:  # noqa: BLE001
-                            pass
+                self._seed_tick_blit_bg(data)
                 if self._tick_blit_bg is None:
                     return False
             canvas.restore_region(self._tick_blit_bg)
@@ -2739,22 +2794,103 @@ class InteractionMixin:
                     ax.draw_artist(art)
                 except Exception:  # noqa: BLE001
                     pass
-            # The buffer now holds decorations + data (no overlays). Capture
-            # it as the fresh hover/pan background, then let _blit_overlays
-            # composite the always-on readout / crosshair on top and blit.
+            # Capture the hover/pan background WITHOUT the readout so the
+            # hover path can composite it on top without doubling it.
             self._blit_bg = canvas.copy_from_bbox(figure.bbox)
-            # The forming bar's readout changed with this tick, so the cached
-            # overlay layer is stale — force a rebuild. Audit
-            # ``crosshair-readout-cache``.
-            self._overlay_bg = None
-            self._blit_overlays()
+            if getattr(self, "_last_cursor_px", None) is not None:
+                # Cursor is over the chart: the readout tracks the HOVERED
+                # bar, which the cached (latest-bar) regions don't reflect.
+                # Rebuild the overlay layer the normal way so the hovered
+                # readout stays correct — costs the offsetbox re-layout, but
+                # only while actively hovering (rare during streaming).
+                self._overlay_bg = None
+                self._blit_overlays()
+            else:
+                # Common streaming case (cursor off-chart): paste the cached
+                # static-per-bar readout / pane-value regions on top (cheap
+                # memcpy — no offsetbox re-layout), then the moving layer.
+                for region in getattr(self, "_tick_overlay_regions", None) or ():
+                    try:
+                        canvas.restore_region(region)
+                    except Exception:  # noqa: BLE001
+                        pass
+                self._draw_moving_overlays()
+                canvas.blit(figure.bbox)
+                # A subsequent hover must rebuild _overlay_bg from the
+                # readout-free _blit_bg (not reuse a stale composite).
+                self._overlay_bg = None
             self._tick_blit_fires = getattr(self, "_tick_blit_fires", 0) + 1
             return True
         except Exception:  # noqa: BLE001
-            # Any failure: drop the (possibly half-built) snapshot and ask
+            # Any failure: drop the (possibly half-built) snapshots and ask
             # the caller to do a normal full redraw.
             self._tick_blit_bg = None
+            self._tick_overlay_regions = []
             return False
+
+    def _seed_tick_blit_bg(self, data: list[tuple[Any, Any]]) -> None:
+        """Seed the semi-static tick background + cached readout regions.
+
+        Hides ONLY the moving price artists (``data``) and does ONE
+        suppressed full draw, so decorations + indicator-pane data bake into
+        ``_tick_blit_bg``. Then refreshes the animated readout / pane-value
+        badges to the latest bar, draws each once, and snapshots its window
+        extent into ``_tick_overlay_regions`` for cheap per-tick pasting.
+        ``_suspend_draw_capture`` keeps the draw_event handler from adopting
+        this partial frame as ``_blit_bg``.
+        """
+        canvas = self._canvas
+        figure = self._figure
+        vis: list[tuple[Any, bool]] = []
+        for _ax, art in data:
+            try:
+                vis.append((art, bool(art.get_visible())))
+                art.set_visible(False)
+            except Exception:  # noqa: BLE001
+                pass
+        self._suspend_draw_capture = True
+        try:
+            canvas.draw()
+            self._tick_blit_bg = canvas.copy_from_bbox(figure.bbox)
+            # Refresh the readout to the latest bar and bake each visible
+            # static-per-bar badge's region for per-tick pasting.
+            try:
+                self._update_readout(None)
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                renderer = canvas.get_renderer()
+            except Exception:  # noqa: BLE001
+                renderer = None
+            static_artists: list[tuple[Any, Any]] = []
+            for ax, box in (
+                getattr(self, "_readout_artists", None) or {}
+            ).items():
+                if box is not None and box.get_visible():
+                    static_artists.append((ax, box))
+            for _ax, rows in (
+                getattr(self, "_pane_value_labels", None) or {}
+            ).items():
+                for _cid, art in rows:
+                    if art is not None and art.get_visible():
+                        static_artists.append((_ax, art))
+            regions: list[Any] = []
+            for ax, art in static_artists:
+                try:
+                    ax.draw_artist(art)
+                    if renderer is not None:
+                        ext = art.get_window_extent(renderer)
+                        regions.append(canvas.copy_from_bbox(ext))
+                except Exception:  # noqa: BLE001
+                    pass
+            self._tick_overlay_regions = regions
+        finally:
+            self._suspend_draw_capture = False
+            for art, was in vis:
+                try:
+                    art.set_visible(was)
+                except Exception:  # noqa: BLE001
+                    pass
 
     def _hide_overlays(self) -> None:
         self._hide_hover_only()
