@@ -143,6 +143,61 @@ def test_alpaca_feed_default_iex(monkeypatch):
     assert creds.alpaca.is_configured()
 
 
+def test_alpaca_adjustment_default_split(monkeypatch):
+    monkeypatch.setattr(creds_mod, "_load_dotenv_files", lambda: {
+        "ALPACA_API_KEY_ID": "k", "ALPACA_API_SECRET_KEY": "s",
+    })
+    monkeypatch.delenv("ALPACA_ADJUSTMENT", raising=False)
+    creds = creds_mod.reload()
+    # Default is split-adjusted (not raw) so post-split charts don't show a
+    # fake cliff — perf item #2.
+    assert creds.alpaca.adjustment == "split"
+
+
+def test_alpaca_adjustment_configurable(monkeypatch):
+    monkeypatch.setattr(creds_mod, "_load_dotenv_files", lambda: {
+        "ALPACA_API_KEY_ID": "k", "ALPACA_API_SECRET_KEY": "s",
+        "ALPACA_ADJUSTMENT": "all",
+    })
+    creds = creds_mod.reload()
+    assert creds.alpaca.adjustment == "all"
+
+
+def test_alpaca_tier_default_free_derives_iex(monkeypatch):
+    monkeypatch.setattr(creds_mod, "_load_dotenv_files", lambda: {
+        "ALPACA_API_KEY_ID": "k", "ALPACA_API_SECRET_KEY": "s",
+    })
+    monkeypatch.delenv("ALPACA_TIER", raising=False)
+    monkeypatch.delenv("ALPACA_FEED", raising=False)
+    creds = creds_mod.reload()
+    # Plan is the source of truth: default free → IEX feed (perf item (b)).
+    assert creds.alpaca.tier == "free"
+    assert creds.alpaca.feed == "iex"
+
+
+def test_alpaca_paid_tier_derives_sip_feed(monkeypatch):
+    monkeypatch.setattr(creds_mod, "_load_dotenv_files", lambda: {
+        "ALPACA_API_KEY_ID": "k", "ALPACA_API_SECRET_KEY": "s",
+        "ALPACA_TIER": "paid",
+    })
+    monkeypatch.delenv("ALPACA_FEED", raising=False)
+    creds = creds_mod.reload()
+    assert creds.alpaca.tier == "paid"
+    assert creds.alpaca.feed == "sip"  # paid → full-volume SIP feed
+
+
+def test_explicit_feed_overrides_tier(monkeypatch):
+    # Advanced escape hatch: an explicit ALPACA_FEED wins over the tier
+    # default (e.g. a paid user who deliberately wants IEX).
+    monkeypatch.setattr(creds_mod, "_load_dotenv_files", lambda: {
+        "ALPACA_API_KEY_ID": "k", "ALPACA_API_SECRET_KEY": "s",
+        "ALPACA_TIER": "paid", "ALPACA_FEED": "iex",
+    })
+    creds = creds_mod.reload()
+    assert creds.alpaca.tier == "paid"
+    assert creds.alpaca.feed == "iex"
+
+
 def test_configured_vendors_lists_all(monkeypatch):
     monkeypatch.setattr(creds_mod, "_load_dotenv_files", lambda: {
         "SCHWAB_APP_KEY": "a", "SCHWAB_APP_SECRET": "b",

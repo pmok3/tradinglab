@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from ..data import DATA_SOURCES
+from ..data import quality as _quality
 from ..models import Candle
 
 
@@ -75,6 +76,20 @@ class SandboxMenuMixin:
         # for. (Could be lifted in Phase 2.)
         sandbox_intervals = ["1m", "2m", "5m", "15m", "30m", "1h"]
 
+        def _sandbox_src(itv: str) -> str:
+            """Best available data source for a sandbox load at ``itv``.
+
+            Prefers the longest/highest-quality registered source the user
+            has configured (perf item #7) — a sandbox needs deep replayable
+            history — while respecting an explicit synthetic/stub choice and
+            falling back to the active source on any error.
+            """
+            try:
+                return _quality.preferred_source(
+                    self.source_var.get(), interval=itv)
+            except Exception:  # noqa: BLE001
+                return self.source_var.get()
+
         def _eligible_dates_at(itv: str) -> list[Any]:
             """Eligibility provider for the dialog. Cache-only — no fetch.
 
@@ -91,7 +106,7 @@ class SandboxMenuMixin:
             empty chart).
             """
             from ..backtest.deck import build_eligible_dates
-            src = self.source_var.get()
+            src = _sandbox_src(itv)
             cached = self._full_cache.get((src, reference_symbol, itv))
             if not cached:
                 return []
@@ -109,7 +124,8 @@ class SandboxMenuMixin:
             user lands on, or switches to, an interval SPY hasn't been
             loaded at yet.
             """
-            fetcher = DATA_SOURCES.get(self.source_var.get())
+            src = _sandbox_src(itv)
+            fetcher = DATA_SOURCES.get(src)
             if fetcher is None:
                 return False
             try:
@@ -118,8 +134,7 @@ class SandboxMenuMixin:
                 return False
             if not candles:
                 return False
-            self._full_cache[
-                (self.source_var.get(), reference_symbol, itv)] = candles
+            self._full_cache[(src, reference_symbol, itv)] = candles
             return True
 
         # Default the dialog to the chart's current interval if it's
@@ -164,8 +179,26 @@ class SandboxMenuMixin:
         lookback_days = dlg.result["lookback_days"]
         daily_lookback_bars = int(dlg.result.get("daily_lookback_bars", 100))
 
-        # Sync-fetch SPY if not cached at the chosen interval.
-        src = self.source_var.get()
+        # Sync-fetch SPY if not cached at the chosen interval. Prefer the
+        # longest/highest-quality source the user has configured (perf item
+        # #7) over whatever chart source is active — a sandbox needs deep
+        # replayable history (yfinance's ~60-day intraday cap barely covers
+        # two months of eligible days; Alpaca/Schwab reach years).
+        active_src = self.source_var.get()
+        src = _sandbox_src(chosen_itv)
+        if src != active_src:
+            try:
+                self._status.info(
+                    f"Sandbox: using '{src}' for the longest/highest-quality "
+                    f"history available (chart source is '{active_src}')")
+            except Exception:  # noqa: BLE001
+                pass
+        _vol_warn = _quality.partial_volume_warning(src)
+        if _vol_warn:
+            try:
+                self._status.warn(f"Sandbox: {_vol_warn}")
+            except Exception:  # noqa: BLE001
+                pass
         ref_key = (src, reference_symbol, chosen_itv)
         ref_candles = self._full_cache.get(ref_key)
         if not ref_candles:

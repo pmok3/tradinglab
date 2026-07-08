@@ -78,6 +78,20 @@ non-menu paths: ticker entry, watchlist, drilldown).
 - **Reference symbol**: `sandbox_reference_symbol` (default `SPY`)
   anchors the master clock. If it can't be fetched, fail fast with a
   status message rather than synthesizing a fallback timeline.
+- **Data source: longest + highest-quality available (perf item #7).**
+  The reference (and daily-context) fetch uses `_sandbox_src(itv)` =
+  `data.quality.preferred_source(source_var, interval=itv)` — the
+  best-ranked registered/user-visible source for the interval, NOT
+  merely the active chart source. Rationale: a sandbox needs deep
+  replayable history; yfinance's ~60-day intraday cap barely covers two
+  months of eligible days, while Alpaca/Schwab reach years. Respects an
+  explicit synthetic/stub choice (returns it unchanged), so the default
+  headless env (yfinance-only) is a no-op. When the chosen source differs
+  from the active one, a `_status.info` line names it; when it has partial
+  (IEX) volume, `_status.warn(partial_volume_warning(...))` fires (perf
+  item #1). All three source-selection sites (`_eligible_dates_at`,
+  `_fetch_reference_at`, the start-flow fetch) share `_sandbox_src` so the
+  `_full_cache` keys stay consistent.
 - **Sandbox intervals**: `["1m", "2m", "5m", "15m", "30m", "1h"]`
   only (master clock is intraday).
 - **Daily reference fetch** (`daily_lookback_bars > 0`): degrades

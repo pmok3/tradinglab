@@ -61,6 +61,18 @@ class AlpacaCredentials:
     api_key_id: str | None = None
     api_secret_key: str | None = None
     feed: str = "iex"
+    # Bar-price adjustment mode sent to Alpaca's ``/bars`` endpoint.
+    # Default ``split`` (splits back-adjusted so a post-split chart doesn't
+    # show a fake cliff); configurable via ``ALPACA_ADJUSTMENT`` to
+    # ``raw`` / ``dividend`` / ``all`` (``all`` ≈ yfinance auto_adjust).
+    # Validated at request time by ``alpaca_source._resolve_adjustment``.
+    adjustment: str = "split"
+    # Alpaca plan tier — the SINGLE SOURCE OF TRUTH for the request budget
+    # AND the default feed. ``free`` → IEX feed + 200 req/min; ``paid``
+    # (Algo Trader Plus) → SIP feed + 10,000 req/min. Derives ``feed`` in
+    # ``get_credentials`` unless ``ALPACA_FEED`` is set explicitly (advanced
+    # override). Drives the shared token bucket in ``alpaca_source``.
+    tier: str = "free"
 
     def is_configured(self) -> bool:
         return bool(self.api_key_id) and bool(self.api_secret_key)
@@ -228,6 +240,12 @@ _CRED_LABEL_MAP: dict[str, str] = {
     "alpacasecret": "ALPACA_API_SECRET_KEY",
     "feed": "ALPACA_FEED",
     "alpacafeed": "ALPACA_FEED",
+    "adjustment": "ALPACA_ADJUSTMENT",
+    "alpacaadjustment": "ALPACA_ADJUSTMENT",
+    "tier": "ALPACA_TIER",
+    "alpacatier": "ALPACA_TIER",
+    "plan": "ALPACA_TIER",
+    "alpacaplan": "ALPACA_TIER",
 }
 
 
@@ -389,10 +407,22 @@ def _load_now() -> Credentials:
         app_secret=_resolve("SCHWAB_APP_SECRET", f),
         redirect_uri=_resolve("SCHWAB_REDIRECT_URI", f),
     )
+    # Plan tier is the source of truth for the feed (and the rate budget in
+    # alpaca_source). An explicit ALPACA_FEED still overrides — an advanced
+    # escape hatch (e.g. a paid user who deliberately wants IEX). Default
+    # tier ``free`` → feed ``iex`` (unchanged behaviour for existing setups).
+    _alpaca_tier = (_resolve("ALPACA_TIER", f) or "free").lower()
+    _alpaca_feed_explicit = _resolve("ALPACA_FEED", f)
+    _alpaca_feed = (
+        _alpaca_feed_explicit.lower() if _alpaca_feed_explicit
+        else ("sip" if _alpaca_tier == "paid" else "iex")
+    )
     alpaca = AlpacaCredentials(
         api_key_id=_resolve("ALPACA_API_KEY_ID", f),
         api_secret_key=_resolve("ALPACA_API_SECRET_KEY", f),
-        feed=(_resolve("ALPACA_FEED", f) or "iex").lower(),
+        feed=_alpaca_feed,
+        adjustment=(_resolve("ALPACA_ADJUSTMENT", f) or "split").lower(),
+        tier=_alpaca_tier,
     )
     polygon = PolygonCredentials(
         api_key=_resolve("POLYGON_API_KEY", f),

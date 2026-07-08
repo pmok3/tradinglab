@@ -208,7 +208,11 @@ def test_app_spec_md_mro_matches_real_chartapp_bases():
 # constant as a conscious, reviewed decision — and the right move is almost
 # always to extract a mixin (WatchlistsAppMixin is the next candidate, §7.24)
 # rather than raise the cap.
-_APP_PY_LOC_CEILING = 7885
+#
+# Deliberate bumps (newest first):
+#   7899 — perf item #1: on_axis_change partial-volume (IEX) warning.
+#   7885 — initial high-water mark when the ratchet was introduced.
+_APP_PY_LOC_CEILING = 7899
 
 # Once a real extraction drops app.py well under the ceiling, lower the
 # constant to lock the reduction in. The band keeps ordinary small edits from

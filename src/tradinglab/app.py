@@ -1939,6 +1939,20 @@ class ChartApp(
     # Toolbar callbacks
     # ------------------------------------------------------------------
     def on_axis_change(self) -> None:
+        # Perf item #1: warn once when the active source is switched to one
+        # with partial (IEX) volume — RVOL/RRVOL and the volume pane are
+        # understated on ~2-3%-of-tape IEX data. Tracked via
+        # ``_partial_vol_warned_src`` so an interval change doesn't re-warn.
+        try:
+            _src = self.source_var.get()
+            if _src != getattr(self, "_partial_vol_warned_src", None):
+                from .data import quality as _q
+                _msg = _q.partial_volume_warning(_src)
+                self._partial_vol_warned_src = _src
+                if _msg:
+                    self._status.warn(_msg)
+        except Exception:  # noqa: BLE001
+            pass
         self._on_explicit_axis_change()
 
     def on_compare_toggle(self) -> None:

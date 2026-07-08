@@ -49,10 +49,35 @@ _FIELDS = [
     # Alpaca
     ("ALPACA_API_KEY_ID",    "Alpaca API Key ID",    True),
     ("ALPACA_API_SECRET_KEY","Alpaca API Secret Key",True),
-    ("ALPACA_FEED",          "Alpaca Feed (iex / sip)", False),
+    ("ALPACA_TIER",          "Alpaca data plan",     False),
+    ("ALPACA_ADJUSTMENT",    "Alpaca Adjustment (raw / split / all)", False),
     # Polygon
     ("POLYGON_API_KEY",      "Polygon API Key",      True),
 ]
+
+
+# Fields rendered as a constrained read-only DROPDOWN instead of a free-text
+# entry. Maps env var → ordered list of (display label, stored value). The
+# Alpaca plan selector is the single source of truth for the feed + rate
+# budget (see data.credentials / data.alpaca_source): ``free`` → IEX + 200
+# req/min, ``paid`` → SIP + 10,000 req/min. Replaces the old free-text
+# ``ALPACA_FEED`` field so plan and feed can't disagree (the #1 misconfig:
+# paid+iex → silently partial volume; free+sip → 403s). Chosen over a
+# checkbox per the tier-UX council.
+_CHOICE_FIELDS: dict[str, list[tuple[str, str]]] = {
+    "ALPACA_TIER": [
+        ("Free — IEX feed, 200 req/min", "free"),
+        ("Paid — SIP feed, 10,000 req/min", "paid"),
+    ],
+}
+
+# Muted helper text rendered under a choice field.
+_CHOICE_HELP: dict[str, str] = {
+    "ALPACA_TIER": (
+        "Paid uses full-volume SIP data. Free uses IEX only, so volume "
+        "indicators (RVOL/RRVOL) may be understated."
+    ),
+}
 
 
 def _visible_fields() -> list[tuple[str, str, bool]]:
@@ -185,6 +210,9 @@ class CredentialsDialog(BaseModalDialog):
 
         self._entries: dict[str, tk.Entry] = {}
         self._show_vars: dict[str, tk.BooleanVar] = {}
+        # For dropdown (choice) fields: display↔stored-value maps.
+        self._choice_value_by_display: dict[str, dict[str, str]] = {}
+        self._choice_display_by_value: dict[str, dict[str, str]] = {}
         self._build_widgets()
         self._populate_from_environment()
         protect_combobox_wheel(self)
@@ -219,6 +247,29 @@ class CredentialsDialog(BaseModalDialog):
 
             ttk.Label(frm, text=label + ":").grid(
                 row=row, column=0, sticky="e", padx=(0, 6), pady=2)
+
+            # Constrained dropdown fields (e.g. the Alpaca plan selector).
+            choices = _CHOICE_FIELDS.get(env_name)
+            if choices:
+                displays = [d for d, _v in choices]
+                combo = ttk.Combobox(frm, width=40, values=displays,
+                                     state="readonly")
+                combo.grid(row=row, column=1, columnspan=2, sticky="we", pady=2)
+                self._entries[env_name] = combo
+                self._choice_value_by_display[env_name] = {
+                    d: v for d, v in choices}
+                self._choice_display_by_value[env_name] = {
+                    v: d for d, v in choices}
+                row += 1
+                help_txt = _CHOICE_HELP.get(env_name)
+                if help_txt:
+                    ttk.Label(frm, text=help_txt, foreground=MUTED_GREY,
+                              wraplength=360, justify="left").grid(
+                                  row=row, column=1, columnspan=2, sticky="w",
+                                  pady=(0, 4))
+                    row += 1
+                continue
+
             entry = ttk.Entry(frm, width=42)
             if is_secret:
                 entry.configure(show="*")
@@ -269,6 +320,15 @@ class CredentialsDialog(BaseModalDialog):
     def _populate_from_environment(self) -> None:
         """Pre-fill entries from current ``os.environ`` so existing values are visible."""
         for env_name, entry in self._entries.items():
+            if env_name in self._choice_value_by_display:
+                # Dropdown: map the stored env value → its display; default to
+                # the first (safe) choice when unset/unrecognised.
+                current = (os.environ.get(env_name, "") or "").lower()
+                display = self._choice_display_by_value[env_name].get(current)
+                if display is None:
+                    display = next(iter(self._choice_value_by_display[env_name]))
+                entry.set(display)  # ttk.Combobox
+                continue
             current = os.environ.get(env_name, "")
             if current:
                 entry.delete(0, tk.END)
@@ -278,6 +338,9 @@ class CredentialsDialog(BaseModalDialog):
         out: dict[str, str] = {}
         for env_name, entry in self._entries.items():
             value = entry.get().strip()
+            if env_name in self._choice_value_by_display:
+                # Map the selected display label back to its stored value.
+                value = self._choice_value_by_display[env_name].get(value, "")
             if value:
                 out[env_name] = value
         return out

@@ -5,7 +5,7 @@ Stdlib-only loader for broker / data-vendor credentials from environment, `.env`
 
 ## Public API
 - `@dataclass(frozen=True) SchwabCredentials(app_key, app_secret, redirect_uri)` — `is_configured()` requires `app_key + app_secret`.
-- `@dataclass(frozen=True) AlpacaCredentials(api_key_id, api_secret_key, feed="iex")` — `is_configured()` requires `api_key_id + api_secret_key`.
+- `@dataclass(frozen=True) AlpacaCredentials(api_key_id, api_secret_key, feed="iex", adjustment="split", tier="free")` — `is_configured()` requires `api_key_id + api_secret_key`. `adjustment` (from `ALPACA_ADJUSTMENT`, default `split`) is the bar-price adjustment mode sent to Alpaca's `/bars` endpoint — validated at request time by `alpaca_source._resolve_adjustment` (`raw`/`split`/`dividend`/`all`). **`tier`** (from `ALPACA_TIER`, default `free`) is the plan tier and the **single source of truth** for the request budget AND the default feed: `free` → IEX feed + 200 req/min, `paid` → SIP feed + 10,000 req/min. `feed` is derived from `tier` in `get_credentials` UNLESS `ALPACA_FEED` is set explicitly (advanced override). `tier` drives the shared token bucket in `alpaca_source`.
 - `@dataclass(frozen=True) PolygonCredentials(api_key)` — `is_configured()` requires `api_key`.
 - `@dataclass(frozen=True) Credentials(schwab, alpaca, polygon)` — aggregate. `configured_vendors() -> list[str]` returns the subset that's fully configured.
 - `get_credentials() -> Credentials` — process-wide cache; first call reads env + dotenv, subsequent calls are O(1).
@@ -27,7 +27,7 @@ Stdlib-only loader for broker / data-vendor credentials from environment, `.env`
 ## Invariants
 - `get_credentials()` returns the same `Credentials` instance for the lifetime of the process (until `reload()` is called).
 - Dataclasses are frozen; values cannot be mutated by callers.
-- Missing optional fields are `None` (Schwab/Polygon) or default literals (Alpaca `feed="iex"`).
+- Missing optional fields are `None` (Schwab/Polygon) or default literals (Alpaca `feed="iex"`, `adjustment="split"`).
 
 ## Testing
 - `tests/unit/test_credentials.py` — dotenv parser + resolve/precedence, plus the plaintext-file parser (`_parse_credential_txt`: labels/aliases/env-passthrough/quotes/bare-two-lines), `_load_credential_txt_files` (tmp-dir), and `reload()` integration (`alpaca.txt` configures Alpaca; `os.environ` > txt > `.env`). The autouse fixture points `_candidate_credential_dirs` at nothing so a real repo-root `alpaca.txt` never leaks into the hermetic assertions.

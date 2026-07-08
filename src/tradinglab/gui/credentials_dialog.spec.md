@@ -36,7 +36,7 @@ in the current `os.environ`.
   surfaces `decrypt_error` and `io_error` to the user via
   `status_log.warn(...)` after the chart app constructs.
 - `CredentialsDialog(parent)` — `BaseModalDialog` modal with seven
-  entry fields (3 Schwab, 3 Alpaca, 1 Polygon) and per-secret
+  entry fields (3 Schwab, 4 Alpaca, 1 Polygon) and per-secret
   "show" toggles.
 - `open_credentials_dialog(parent)` — convenience wrapper:
   construct + `wait_window`. Returns the dialog instance (or
@@ -46,6 +46,22 @@ in the current `os.environ`.
 Order, label, and `is_secret` flag come from the module-level
 `_FIELDS` tuple. Adding a new vendor field is a one-line edit to
 that list — the dialog re-builds itself accordingly.
+
+### Constrained dropdown fields (`_CHOICE_FIELDS`)
+Fields listed in `_CHOICE_FIELDS` render as a **read-only
+`ttk.Combobox`** instead of a free-text entry, mapping a friendly
+display label ↔ a stored env value; optional muted helper text under
+the control comes from `_CHOICE_HELP`. Today the only choice field is
+**`ALPACA_TIER`** — the "Alpaca data plan" selector (`Free — IEX feed,
+200 req/min` / `Paid — SIP feed, 10,000 req/min`), which **replaced the
+old free-text `ALPACA_FEED` field** (tier-UX council decision). Making
+the plan the single control prevents the #1 misconfig — plan/feed
+disagreement (`paid`+`iex` → silently partial volume; `free`+`sip` →
+403s) — because `data.credentials` derives `feed` from `tier`. Round-trip:
+`_populate_from_environment` maps the stored value → display (default =
+first/`Free` when unset or unrecognised); `_collect` maps the selected
+display → stored value. The combobox is covered by the
+`protect_combobox_wheel` guard applied at the end of `__init__`.
 
 ### Vendor gating (`schwab-credentials-always-on`)
 Schwab credential fields are surfaced **unconditionally** so a user

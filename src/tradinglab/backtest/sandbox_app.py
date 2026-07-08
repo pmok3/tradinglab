@@ -9,9 +9,25 @@ from tkinter import ttk
 from typing import Any
 
 from ..data import DATA_SOURCES
+from ..data import quality as _quality
 from ..models import Candle
 from .session import SessionSpec
 from .tags import TagStore
+
+
+def _sandbox_preferred_src(app: Any, interval: str) -> str:
+    """Data source a sandbox mid-session fetch should use.
+
+    Mirrors the reference-load choice (perf item #7): the longest/
+    highest-quality source the user has configured, so compare / focus
+    symbols added mid-session share the reference's data basis instead of
+    silently pulling from a different (active-chart) source. Respects an
+    explicit synthetic/stub choice and falls back to the active source.
+    """
+    try:
+        return _quality.preferred_source(app.source_var.get(), interval=interval)
+    except Exception:  # noqa: BLE001
+        return app.source_var.get()
 
 
 class SandboxAppController:
@@ -392,7 +408,7 @@ class SandboxAppController:
             return False
         interval = self._sandbox.interval
         if sym not in self._sandbox.bars_by_symbol:
-            src = app.source_var.get()
+            src = _sandbox_preferred_src(app, interval)
             cached = app._full_cache.get((src, sym, interval))
             candles: list[Candle] = list(cached) if cached else []
             if not candles:
@@ -476,7 +492,7 @@ class SandboxAppController:
         if sym in self._sandbox.bars_by_symbol:
             self._sandbox.set_focus(sym)
             return True
-        src = app.source_var.get()
+        src = _sandbox_preferred_src(app, interval)
         cached = app._full_cache.get((src, sym, interval))
         candles: list[Candle] = list(cached) if cached else []
         if not candles:

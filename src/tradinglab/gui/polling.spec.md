@@ -73,7 +73,12 @@ Also hosts the pure scheduler helpers (only caller is here).
   fetcher that completion re-arrives before an unbounded loop drains,
   livelocking a single Tk `update()` (smoke 120s timeout on fast CI
   runners during market hours). Bounding defers freshly-enqueued items to
-  the next 80ms tick.
+  the next 80ms tick. **Alpaca free-tier popup:** each tick also polls
+  `data.alpaca_source.pop_pending_downgrade_notice()` and, if a fetch
+  worker auto-detected a free-tier key while "Paid" was selected (perf
+  item (b) auto-detect), shows a one-shot `messagebox.showerror` on the Tk
+  thread (falls back to `_status.warn` when headless). The worker only
+  *records* the notice — cross-thread Tk from the worker is unsafe here.
 - `_drain_stream_queue()` — pop streaming events. Routes
   `"card:N"`-slot events to `self._chartstack.apply_stream_event`;
   routes `tick`/`rollover` for main chart through

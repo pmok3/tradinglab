@@ -24,6 +24,7 @@
 
 ## Integration contract
 - `ChartApp` keeps legacy method names (`_is_sandbox_active`, `_sandbox_register_compare`, etc.) as thin delegation stubs.
+- **Mid-session fetches use the sandbox's preferred source (perf item #7).** `register_compare` and `register_and_focus` derive `src` via `_sandbox_preferred_src(app, interval)` = `data.quality.preferred_source(app.source_var, interval=interval)` — the SAME choice the reference load made — so compare/focus symbols added mid-session share the reference's data basis (volume/adjustment) instead of silently pulling from a different active-chart source. Falls back to the active source on any error.
 - `ChartApp` also keeps legacy sandbox attribute names via property-backed aliases so existing callers and tests can continue reading/writing `app._sandbox`, `app._sandbox_panel`, and related fields.
 - Complex UI work still flows through `ChartApp` callbacks/attributes (`_render`, `_set_data_state`, `_status`, `_toolbar`, Tk vars).
 

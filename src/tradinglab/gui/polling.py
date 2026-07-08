@@ -351,6 +351,27 @@ class PollingMixin:
                 self._reference_data_redraw()
             except Exception:  # noqa: BLE001
                 pass
+        # Perf item (b) auto-detect: if a fetch worker observed the Alpaca
+        # X-RateLimit-Limit header revealing a FREE-tier key while "Paid" was
+        # selected, it recorded a one-shot notice (and already downgraded the
+        # limiter + feed). Surface it HERE on the Tk thread as an error popup —
+        # cross-thread Tk from the worker is unsafe on this build (see this
+        # module's docstring). Rare (fires once per process, only on the
+        # mismatch), so the per-tick poll is a cheap lock + None check.
+        try:
+            from ..data import alpaca_source as _alpaca
+            _notice = _alpaca.pop_pending_downgrade_notice()
+        except Exception:  # noqa: BLE001
+            _notice = None
+        if _notice:
+            try:
+                from tkinter import messagebox
+                messagebox.showerror("Alpaca plan", _notice, parent=self)
+            except Exception:  # noqa: BLE001 - headless / no display: log instead
+                try:
+                    self._status.warn(_notice.replace("\n\n", " ").replace("\n", " "))
+                except Exception:  # noqa: BLE001
+                    pass
         self._schedule_worker_inbox_drain()
 
     def _drain_stream_queue(self) -> None:
