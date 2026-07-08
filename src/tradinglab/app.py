@@ -529,6 +529,18 @@ class ChartApp(
         self._sync_compare_label = self._state._sync_compare_label
         self.source_var = self._state.source
         self.interval_var = self._state.interval
+        # Axis-change tracking: a SOURCE-only switch preserves the visible
+        # DATE window (different-length providers must not reinterpret a stale
+        # bar-index window as another calendar day); an INTERVAL change snaps
+        # to the right edge. ``_axis_switch_inflight`` guards the async switch
+        # load so a live ``_next_bar_fetch_tick`` can't re-arm index-preserve
+        # mid-switch (audit ``source-switch-view-preserve``).
+        try:
+            self._prev_axis_source = self.source_var.get()
+            self._prev_axis_interval = self.interval_var.get()
+        except Exception:  # noqa: BLE001
+            self._prev_axis_source = self._prev_axis_interval = None
+        self._axis_switch_inflight = False
         self.prepost_var = self._state.prepost
         self.days_var = self._state.days
         self.dark_var = self._state.dark
@@ -747,21 +759,17 @@ class ChartApp(
         # nulled at every _blit_bg recapture. Audit ``crosshair-readout-cache``.
         self._overlay_bg = None
         self._overlay_bg_fp: tuple | None = None
-        # Semi-static tick background regions (perf: readout decouple + pane
-        # bake). The per-tick blit bakes decorations + indicator-pane data
-        # into ``_tick_blit_bg`` and pastes the static-per-bar readout /
-        # pane-value regions back from these cached snapshots, so a live tick
-        # redraws only the moving price candle + volume + overlay lines
-        # instead of the whole figure + a full readout re-layout. Rebuilt in
-        # lockstep with ``_tick_blit_bg`` (see gui/interaction.py). Audit
-        # ``tick-readout-decouple``.
+        # Semi-static tick background regions (audit ``tick-readout-decouple``):
+        # the per-tick blit bakes decorations + indicator-pane data into
+        # ``_tick_blit_bg`` and pastes the static-per-bar readout / pane-value
+        # regions back from these snapshots, so a live tick redraws only the
+        # moving price/volume/overlay artists (no figure rebuild / readout
+        # re-layout). Rebuilt in lockstep with ``_tick_blit_bg``.
         self._tick_overlay_regions: list[Any] = []
-        # Adaptive live-tick repaint coalescing: rate-limit
-        # ``_refresh_view_after_tick`` so a fast (sub-minute LEVELONE) stream
-        # can't saturate the Tk thread. An EWMA of measured paint cost drives
-        # an adaptive minimum interval between repaints; ticks arriving inside
-        # the interval coalesce into a single trailing repaint (gui/polling.py
-        # :_request_tick_repaint). Audit ``tick-repaint-coalesce``.
+        # Adaptive live-tick repaint coalescing (audit ``tick-repaint-coalesce``):
+        # an EWMA of measured paint cost drives an adaptive min interval between
+        # repaints; ticks inside it coalesce into one trailing repaint (see
+        # gui/polling.py:_request_tick_repaint) so a fast stream can't saturate Tk.
         self._tick_paint_ewma_ms: float = 0.0
         self._tick_paint_next_allowed: float = 0.0
         self._tick_repaint_pending: bool = False
@@ -3208,6 +3216,12 @@ class ChartApp(
         the user-triggered async wrapper that offloads fetcher HTTP
         calls to ``_fetch_executor`` (N7).
         """
+        # This render services whatever load is current (including a
+        # just-completed explicit source/interval switch), so release the
+        # poll-tick race guard: normal polling resumes when this render's
+        # _schedule_next_bar_fetch re-arms it. Audit
+        # ``source-switch-view-preserve``.
+        self._axis_switch_inflight = False
         # Sandbox replay owns primary-slot updates while active; route
         # ticker-entry / watchlist double-clicks through the controller's
         # register_ticker path instead of the regular cache+render path.
@@ -6183,42 +6197,59 @@ class ChartApp(
                 pass
 
     def _on_explicit_axis_change(self) -> None:
-        """User explicitly changed source/interval/pre-post — clear drill-down.
+        """User explicitly changed source/interval — clear drill-down + reload.
 
-        Drill-down is conceptually tied to a `(ticker, 5m, day)` triple;
-        flipping interval to anything else, swapping source, or toggling
-        pre/post invalidates the day-zoom. Ticker changes (typing,
-        watchlist double-click) intentionally do NOT clear it — those
-        go through ``_reload_preserving_drilldown``.
+        Drill-down is tied to a `(ticker, 5m, day)` triple; changing interval
+        or source invalidates it (ticker changes don't — those go through
+        ``_reload_preserving_drilldown``). View-preservation then depends on
+        WHICH axis changed:
 
-        Also drops the sticky ``_preserve_xlim_on_render`` flag so the
-        new series renders at the right-edge default window rather than
-        reusing the previous interval's (now meaningless) bar-index
-        xlim — see the inline note below.
+        * **Interval change** — bar width changes, so the old bar-index AND
+          calendar windows are both meaningless; clear both preserve flags →
+          ``_render`` snaps to the right-edge default.
+        * **Source-only change** (same ticker + interval, different provider)
+          — the visible *dates* are still what the user wants, but two
+          providers can return **different-length** series (yfinance 60d-5m vs
+          Alpaca 120d-5m), so reusing the bar-INDEX window jumps the view to a
+          different calendar day (the "switch source → jump a month back"
+          bug). Preserve by TIME instead (remap the date window).
 
-        While a sandbox session is active, the interval combobox is
-        intercepted: the only valid choices are the sandbox's locked
-        intraday interval and ``"1d"`` (for daily-context display).
-        Anything else is reverted with a status warning so the user
-        can't accidentally redirect the chart away from sandbox state.
+        ``_axis_switch_inflight`` is raised so a live ``_next_bar_fetch_tick``
+        can't re-arm index-preservation while the async switch load is in
+        flight; ``_load_data`` lowers it (audit ``source-switch-view-preserve``).
+
+        While a sandbox session is active the interval combobox is intercepted
+        (only the locked intraday interval and ``"1d"`` are valid) and the
+        change is routed to ``_sandbox_handle_interval_change``.
         """
         if self._is_sandbox_active() and self._sandbox is not None:
             self._sandbox_handle_interval_change()
             return
         self._drilldown_day = None
-        # An explicit source / interval / pre-post change re-bases the
-        # x-axis: bar-index coordinates from the previous interval are
-        # meaningless on the new series. Without clearing the sticky
-        # preserve flag, the old window (e.g. the last 200 *daily* bars,
-        # index ~[300, 500]) is reapplied to the new series (e.g. ~11k 5m
-        # bars), landing the view months in the past with data still to
-        # the right of it. Clear both preserve flags so _render snaps to
-        # the right-edge default window — the expected "show me this
-        # interval now" behavior. Mirrors _reset_view /
-        # _do_scheduled_reload, which also drop the bar-index preserve on
-        # explicit user intent.
+        # Classify the change: SOURCE-only (same interval) vs INTERVAL.
+        try:
+            new_source = self.source_var.get()
+        except Exception:  # noqa: BLE001
+            new_source = None
+        try:
+            new_interval = self.interval_var.get()
+        except Exception:  # noqa: BLE001
+            new_interval = None
+        prev_source = getattr(self, "_prev_axis_source", None)
+        prev_interval = getattr(self, "_prev_axis_interval", None)
+        source_changed = new_source is not None and new_source != prev_source
+        interval_changed = new_interval is not None and new_interval != prev_interval
+        source_only_change = source_changed and not interval_changed
+        self._prev_axis_source = new_source
+        self._prev_axis_interval = new_interval
+
+        # Source-only: preserve the visible date window (time-remap). Interval
+        # (or no-delta re-select): snap to the right-edge default. See docstring.
         self._preserve_xlim_on_render = False
-        self._preserve_xlim_by_time_on_render = False
+        self._preserve_xlim_by_time_on_render = bool(source_only_change)
+        # Race guard: block the live poll tick from re-arming index-preserve
+        # (or launching a competing fetch) until this switch's load renders.
+        self._axis_switch_inflight = True
         self._load_data_async()
 
     def _sandbox_handle_interval_change(self) -> None:

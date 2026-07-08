@@ -1,17 +1,24 @@
-"""``_on_explicit_axis_change`` snaps to the right edge on interval change.
+"""``_on_explicit_axis_change`` view-preservation policy.
 
-Regression for "switching to 5m takes me to a window ~3 months ago with
-data still to the right of it". ``_preserve_xlim_on_render`` is a sticky
-flag set by every pan / zoom / scroll / poll-tick and only cleared by
-explicit-user-intent paths. An explicit source / interval / pre-post
-change re-bases the x-axis: bar-index coordinates from the previous
-interval (e.g. the last 200 *daily* bars, index ~[300, 500]) are
-meaningless on the new series (e.g. ~11k 5m bars) and would land the
-view months in the past. ``_on_explicit_axis_change`` must drop the
-preserve flags so ``_render`` falls through to the right-edge default
-window.
+Two axis-change cases with DIFFERENT correct behavior:
 
-See ``app.spec.md`` invariant #6.
+* **Interval change** — bar width changes, so both the bar-index and the
+  calendar-window mappings from the previous interval are meaningless. Both
+  preserve flags are dropped so ``_render`` snaps to the right-edge default
+  ("switching to 5m must not land me in a window ~3 months ago with data
+  still to the right of it").
+* **Source-only change** (same ticker + interval, different provider) — the
+  visible *dates* are still what the user wants, but the two providers can
+  return different-length series (yfinance's 60-day 5m cap vs Alpaca's
+  120-day deep history), so reusing the stale bar-INDEX window jumps the view
+  to a different calendar day (the "switch source → jump to a month ago"
+  bug). Preserve by TIME instead.
+
+Also pins the ``_axis_switch_inflight`` race guard raised for the async load
+window (checked by ``_next_bar_fetch_tick`` so a live poll can't re-arm
+index-preservation mid-switch).
+
+See ``app.spec.md`` invariant #6 + the ``source-switch-view-preserve`` audit.
 """
 
 from __future__ import annotations
@@ -21,12 +28,26 @@ import types
 from tradinglab.app import ChartApp
 
 
-def _fake_app(**overrides):
+class _Var:
+    def __init__(self, value):
+        self._value = value
+
+    def get(self):
+        return self._value
+
+
+def _fake_app(*, source="yfinance", interval="1d",
+              prev_source="yfinance", prev_interval="1d", **overrides):
     calls = {"load_async": 0, "sandbox_handle": 0}
     fake = types.SimpleNamespace(
         _preserve_xlim_on_render=True,
         _preserve_xlim_by_time_on_render=True,
+        _axis_switch_inflight=False,
         _drilldown_day="2026-06-09",
+        _prev_axis_source=prev_source,
+        _prev_axis_interval=prev_interval,
+        source_var=_Var(source),
+        interval_var=_Var(interval),
         _sandbox=None,
         _is_sandbox_active=lambda: False,
         _load_data_async=lambda: calls.__setitem__(
@@ -39,18 +60,52 @@ def _fake_app(**overrides):
     return fake, calls
 
 
-def test_explicit_axis_change_clears_preserve_flags_and_reloads():
-    fake, calls = _fake_app()
+def test_interval_change_snaps_to_right_edge():
+    # Interval flipped 1d -> 5m: bar-index xlim from the previous interval
+    # must NOT be preserved, and there's no meaningful calendar window to
+    # carry either → both flags cleared (right-edge default).
+    fake, calls = _fake_app(
+        prev_source="yfinance", prev_interval="1d",
+        source="yfinance", interval="5m",
+    )
 
     ChartApp._on_explicit_axis_change(fake)
 
-    # Bar-index xlim from the previous interval must NOT be preserved.
     assert fake._preserve_xlim_on_render is False
     assert fake._preserve_xlim_by_time_on_render is False
-    # Drill-down is invalidated by an explicit axis change.
     assert fake._drilldown_day is None
-    # The reload was triggered.
     assert calls["load_async"] == 1
+    # Tracking advanced for the next classification.
+    assert fake._prev_axis_interval == "5m"
+
+
+def test_source_only_change_preserves_by_time():
+    # Same interval, different provider (yfinance -> alpaca): the visible
+    # DATE window must be preserved (the two providers return different-length
+    # 5m series, so a stale bar-index window would jump to a different day).
+    fake, calls = _fake_app(
+        prev_source="yfinance", prev_interval="5m",
+        source="alpaca", interval="5m",
+    )
+
+    ChartApp._on_explicit_axis_change(fake)
+
+    assert fake._preserve_xlim_by_time_on_render is True
+    assert fake._preserve_xlim_on_render is False
+    assert fake._drilldown_day is None
+    assert calls["load_async"] == 1
+    assert fake._prev_axis_source == "alpaca"
+
+
+def test_axis_change_raises_inflight_guard():
+    # The async-load race guard must be raised so a live _next_bar_fetch_tick
+    # can't re-arm index-preservation mid-switch.
+    fake, _calls = _fake_app(source="alpaca", interval="5m",
+                             prev_source="yfinance", prev_interval="5m")
+
+    ChartApp._on_explicit_axis_change(fake)
+
+    assert fake._axis_switch_inflight is True
 
 
 def test_explicit_axis_change_sandbox_active_routes_to_controller():
@@ -68,3 +123,5 @@ def test_explicit_axis_change_sandbox_active_routes_to_controller():
     # Untouched in the sandbox branch.
     assert fake._preserve_xlim_on_render is True
     assert fake._drilldown_day == "2026-06-09"
+    assert fake._axis_switch_inflight is False
+

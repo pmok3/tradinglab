@@ -120,7 +120,13 @@ Also hosts the pure scheduler helpers (only caller is here).
   "5m", force=True)`) for primary + compare instead of refetching
   daily — the prefetch-arrival handler then re-renders the
   daily chart with the updated synthetic today-bar (audit
-  `daily-today-upsample`).
+  `daily-today-upsample`). **Source-switch race guard (audit
+  `source-switch-view-preserve`):** bails at the top (clearing
+  `_poll_job`, before re-arming `_preserve_xlim_on_render`) when
+  `_axis_switch_inflight` is set — an explicit source/interval switch
+  is loading a new (possibly different-length) series, and re-arming
+  index-preservation here would jump the view to a different calendar
+  day. The switch's `_load_data` lowers the guard + re-arms polling.
 
 ### Class attributes expected on the host
 

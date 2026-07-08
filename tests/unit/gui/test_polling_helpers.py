@@ -512,6 +512,57 @@ class TestRequestTickRepaint:
 
 
 # ---------------------------------------------------------------------------
+# 5c. PollingMixin — _next_bar_fetch_tick source-switch race guard
+#     (audit ``source-switch-view-preserve``)
+# ---------------------------------------------------------------------------
+
+
+class _NextBarGuardHarness(_PollingHarness):
+    """Minimal harness to exercise the `_next_bar_fetch_tick` guard bail."""
+
+    def __init__(self, *, inflight: bool) -> None:
+        super().__init__()
+        self._axis_switch_inflight = inflight
+        self._poll_job = "job-live"
+        self._preserve_xlim_on_render = False
+        self._slide_xlim_to_right_edge = None
+        self._proceeded = False
+
+    def _is_sandbox_active(self) -> bool:
+        return False
+
+    def _user_has_panned_x(self) -> bool:
+        # If the method proceeds past the guard it reaches this call; record
+        # that so the test can prove the guard did (not) short-circuit.
+        self._proceeded = True
+        return False
+
+
+class TestNextBarFetchGuard:
+    def test_guard_bails_without_rearming_index_preserve(self):
+        # While a source/interval switch is loading, the poll tick must NOT
+        # re-arm index-based preservation nor proceed to fetch.
+        h = _NextBarGuardHarness(inflight=True)
+        h._next_bar_fetch_tick()
+        assert h._preserve_xlim_on_render is False  # not re-armed
+        assert h._proceeded is False  # returned before the fetch body
+        assert h._poll_job is None  # cleared; switch load will re-arm polling
+
+    def test_no_guard_proceeds_and_arms_preserve(self):
+        # Normal operation (no switch in flight): the tick proceeds past the
+        # guard and re-arms index preservation as before.
+        h = _NextBarGuardHarness(inflight=False)
+        # The fetch body reads more state than we stub; we only need to prove
+        # it got PAST the guard (set preserve + reached _user_has_panned_x).
+        try:
+            h._next_bar_fetch_tick()
+        except Exception:  # noqa: BLE001 - downstream fetch machinery absent
+            pass
+        assert h._preserve_xlim_on_render is True
+        assert h._proceeded is True
+
+
+# ---------------------------------------------------------------------------
 # 6. PollingMixin — _drain_worker_inbox
 # ---------------------------------------------------------------------------
 

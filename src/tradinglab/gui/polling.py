@@ -640,6 +640,15 @@ class PollingMixin:
             self._poll_job = None
             return
         self._poll_job = None
+        # Race guard (audit ``source-switch-view-preserve``): while an
+        # explicit source/interval switch is loading a new series, do NOT
+        # re-arm index-based preservation or launch a competing fetch — the
+        # new series can be a different length (e.g. yfinance 60d-5m vs
+        # Alpaca 120d-5m), so reusing the stale bar-index window would jump
+        # the view to a different calendar day. The switch load owns the
+        # render and re-arms polling via _schedule_next_bar_fetch when done.
+        if getattr(self, "_axis_switch_inflight", False):
+            return
         self._preserve_xlim_on_render = True
         self._slide_xlim_to_right_edge = not self._user_has_panned_x()
 

@@ -210,9 +210,12 @@ def test_app_spec_md_mro_matches_real_chartapp_bases():
 # rather than raise the cap.
 #
 # Deliberate bumps (newest first):
+#   7949 — source-switch view-preserve (prev-axis tracking + race guard) +
+#          steady-state tick-refresh perf state (tick-readout-decouple +
+#          repaint coalescing). Both are feature/bugfix logic, not regrowth.
 #   7899 — perf item #1: on_axis_change partial-volume (IEX) warning.
 #   7885 — initial high-water mark when the ratchet was introduced.
-_APP_PY_LOC_CEILING = 7899
+_APP_PY_LOC_CEILING = 7949
 
 # Once a real extraction drops app.py well under the ceiling, lower the
 # constant to lock the reduction in. The band keeps ordinary small edits from
