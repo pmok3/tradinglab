@@ -89,6 +89,7 @@ tradinglab/
 │   ├── app.py                 # ChartApp god-object (7885 LOC; waves 1-3 cut 7790→6036, later features regrew it — now LOC-gated, see §7.24)
 │   ├── backtest/ core/ data/ drawings/ entries/ events/ exits/
 │   ├── gui/                   # dialogs, menus, widgets (e.g. dialogs.py, help_menu.py, watchlist_dialog.py)
+│   │   ├── anchor_pick_app.py     # AnchorPickAppMixin (wave 4 — AVWAP Pick-Anchor flow)
 │   │   ├── drawings_app.py        # DrawingsAppMixin (wave 1)
 │   │   ├── live_price_overlay_app.py # LivePriceOverlayAppMixin (wave 1)
 │   │   ├── recent_menus.py        # RecentMenusMixin (wave 1)
@@ -1399,22 +1400,23 @@ Tests: `tests/core/test_timezones.py` (8 tests covering cached
 identity, summer/winter DST offsets, all 3 missing-tzdata fallback
 paths).
 
-### 7.24 ChartApp MRO — 20 mixins, alphabetical insertion, no `__init__`
+### 7.24 ChartApp MRO — 21 mixins, alphabetical insertion, no `__init__`
 
-`ChartApp` (in `src/tradinglab/app.py`) inherits from **20 mixins +
+`ChartApp` (in `src/tradinglab/app.py`) inherits from **21 mixins +
 `tk.Tk`** after waves 1+2+3 of the god-file extraction (commits
 `358ad16`, `d0cdadc`, `73a4adb`, `bfe80fc`, `e9fa1b2`, `a1f11ba`,
 `9393301`, plus the wave-3 sprint adding `ScannerAppMixin` and
-`SandboxAppMixin`). The MRO declaration lives at L245-267:
+`SandboxAppMixin`, plus the wave-4 low-risk extraction of
+`AnchorPickAppMixin`). The MRO declaration lives at L245-268:
 
 ```python
 class ChartApp(
     PollingMixin, InteractionMixin, WatchlistTabMixin, WorkerPoolMixin,
     IndicatorMenuMixin, SandboxMenuMixin, ConfigMenuMixin, DrilldownMixin,
     EntriesAppMixin, ExitsAppMixin, HelpMenuMixin, FirstRunBannerMixin,
-    DrawingsAppMixin, LivePriceOverlayAppMixin, RecentMenusMixin,
-    SandboxAliasMixin, SandboxAppMixin, ScannerAppMixin, SnapshotMixin,
-    UpdateCheckMixin,
+    AnchorPickAppMixin, DrawingsAppMixin, LivePriceOverlayAppMixin,
+    RecentMenusMixin, SandboxAliasMixin, SandboxAppMixin, ScannerAppMixin,
+    SnapshotMixin, UpdateCheckMixin,
     tk.Tk,
 ):
 ```
@@ -1847,7 +1849,7 @@ These files are **never** committed to git. Use them for working memory.
 |---|---|
 | Version number | `src/tradinglab/_version.py` |
 | App entry point | `src/tradinglab/__main__.py` → `app.py` `ChartApp` |
-| ChartApp MRO declaration | `src/tradinglab/app.py:245-267` (20 mixins + `tk.Tk`; see §7.24) |
+| ChartApp MRO declaration | `src/tradinglab/app.py:245-268` (21 mixins + `tk.Tk`; see §7.24) |
 | Drawing canvas-menu + Alt+H + snap helpers | `src/tradinglab/gui/drawings_app.py` (DrawingsAppMixin, wave 1) |
 | Live-price overlay glue | `src/tradinglab/gui/live_price_overlay_app.py` (LivePriceOverlayAppMixin) |
 | Recent-symbols / recent-intervals menus | `src/tradinglab/gui/recent_menus.py` (RecentMenusMixin) |

@@ -350,6 +350,7 @@ _CLASSIFIED_MUTATORS: dict[str, str] = {
     "per_indicator_dialog.py": "live-dialog (single-overlay quick edit)",
     "indicator_menu.py": "menu action (immediate, not a window)",
     "overlay_legend.py": "legend visibility toggle (immediate, single click)",
+    "anchor_pick_app.py": "live canvas pick (immediate, single click — AVWAP anchor)",
 }
 
 _MUTATION_RE = re.compile(

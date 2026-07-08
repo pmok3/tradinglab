@@ -4,7 +4,7 @@
 Top-level Tk + matplotlib application. Owns all runtime state (Tk widgets, `Figure`, caches, stream/fetch tokens, worker pool) and orchestrates the data → render → stream pipeline. `ChartApp` is composed of `tk.Tk` + a stack of mixins (each owns a concern documented in its own `*.spec.md`).
 
 ## Public API
-- `class ChartApp(PollingMixin, InteractionMixin, WatchlistTabMixin, WorkerPoolMixin, IndicatorMenuMixin, SandboxMenuMixin, ConfigMenuMixin, DrilldownMixin, EntriesAppMixin, ExitsAppMixin, HelpMenuMixin, FirstRunBannerMixin, DrawingsAppMixin, LivePriceOverlayAppMixin, RecentMenusMixin, SandboxAliasMixin, SandboxAppMixin, ScannerAppMixin, SnapshotMixin, UpdateCheckMixin, tk.Tk)`
+- `class ChartApp(PollingMixin, InteractionMixin, WatchlistTabMixin, WorkerPoolMixin, IndicatorMenuMixin, SandboxMenuMixin, ConfigMenuMixin, DrilldownMixin, EntriesAppMixin, ExitsAppMixin, HelpMenuMixin, FirstRunBannerMixin, AnchorPickAppMixin, DrawingsAppMixin, LivePriceOverlayAppMixin, RecentMenusMixin, SandboxAliasMixin, SandboxAppMixin, ScannerAppMixin, SnapshotMixin, UpdateCheckMixin, tk.Tk)`
 - `ChartApp(*, splash: SplashController | None = None)` — construct + open the window.
 - `_load_data()` / `_load_data_async()` — synchronous / executor-backed fetch + render.
 - `_render()` — rebuild figure from in-memory series. Sole site of `figure.clear()` (in its slow path; the topology-preserving fast path reuses axes — see Rendering §).
@@ -69,7 +69,7 @@ File structure:
 - `app.py` — class body (lifecycle, rendering, data load, sandbox bridge, themes, menus).
 - `gui/polling.py` — `PollingMixin` + scheduler helpers (`_market_window_et`, `_postpone_past_closed_market`, `_next_daily_close_epoch`, `_compute_fetch_delay_ms`); owns `_track_after`, stream-queue / worker-inbox drains, `_schedule_reload`, `_schedule_next_bar_fetch`.
 - `gui/x_axis_locator.py` — `_AdaptiveXLocator` + `_make_x_formatter`.
-- `gui/{drilldown,interaction,workers,watchlist_tab,indicator_menu,sandbox_menu,entries_app,exits_app,help_menu,banner,config_menu,drawings_app,live_price_overlay_app,recent_menus,scanner_app,snapshot,update_check}.py` and `backtest/{sandbox_app_aliases,sandbox_app_methods}.py` — other mixins (`ScannerAppMixin` in `gui/scanner_app.py`; `SandboxAppMixin` in `backtest/sandbox_app_methods.py`).
+- `gui/{drilldown,interaction,workers,watchlist_tab,indicator_menu,sandbox_menu,entries_app,exits_app,help_menu,banner,config_menu,anchor_pick_app,drawings_app,live_price_overlay_app,recent_menus,scanner_app,snapshot,update_check}.py` and `backtest/{sandbox_app_aliases,sandbox_app_methods}.py` — other mixins (`AnchorPickAppMixin` in `gui/anchor_pick_app.py` — the AVWAP "Pick Anchor…" click flow; `ScannerAppMixin` in `gui/scanner_app.py`; `SandboxAppMixin` in `backtest/sandbox_app_methods.py`).
 
 ### Two-phase data load (`_load_data_async` → `_load_data`)
 1. `_load_data_async` probes `_full_cache`; on cold/stale sides it submits a worker that calls the source fetcher, preloads disk-cache rows, and pre-merges/pre-saves fresh bars. Cache-hit-only paths call `_load_data` directly so its deferred-render branch still applies.

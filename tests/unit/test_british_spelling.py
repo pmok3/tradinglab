@@ -24,6 +24,7 @@ from pathlib import Path
 import tradinglab
 import tradinglab.app
 import tradinglab.diagnostics
+import tradinglab.gui.anchor_pick_app
 import tradinglab.gui.exits_tab
 import tradinglab.gui.help_menu
 import tradinglab.gui.universe_prepare_dialog
@@ -40,7 +41,9 @@ def _read(mod) -> str:
 class TestAmericanSpellingPresent:
 
     def test_anchor_pick_canceled_status_message(self):
-        src = _read(tradinglab.app)
+        # The anchor-pick flow was extracted to AnchorPickAppMixin
+        # (gui/anchor_pick_app.py); the status string lives there now.
+        src = _read(tradinglab.gui.anchor_pick_app)
         assert '"Anchor pick canceled"' in src, (
             "Anchor-pick cancel status message must use the American "
             "spelling 'canceled' (audit british-spelling).")

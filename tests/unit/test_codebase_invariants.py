@@ -210,12 +210,15 @@ def test_app_spec_md_mro_matches_real_chartapp_bases():
 # rather than raise the cap.
 #
 # Deliberate bumps (newest first):
+#   7702 — extract AnchorPickAppMixin (gui/anchor_pick_app.py): the AVWAP
+#          "Pick Anchor…" click flow (4 methods, ~247 LOC) moved out of the
+#          god-object. RATCHET DOWN (locks in the reduction).
 #   7949 — source-switch view-preserve (prev-axis tracking + race guard) +
 #          steady-state tick-refresh perf state (tick-readout-decouple +
 #          repaint coalescing). Both are feature/bugfix logic, not regrowth.
 #   7899 — perf item #1: on_axis_change partial-volume (IEX) warning.
 #   7885 — initial high-water mark when the ratchet was introduced.
-_APP_PY_LOC_CEILING = 7949
+_APP_PY_LOC_CEILING = 7702
 
 # Once a real extraction drops app.py well under the ceiling, lower the
 # constant to lock the reduction in. The band keeps ordinary small edits from
