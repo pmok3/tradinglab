@@ -4282,6 +4282,27 @@ class ChartApp(
             )
             if slot_key == "primary":
                 primary_window = (lo, hi)
+                # Opt-in view diagnostics (TRADINGLAB_DEBUG_VIEW=1): log which
+                # preserve mode the render used + the resolved visible date
+                # window. Zero cost / silent unless the env var is set. Used to
+                # diagnose the 1d source-switch "jump to an old year" report —
+                # shows whether a render is index-preserving a stale short
+                # window onto a longer new series. Audit ``view-debug-log``.
+                if os.environ.get("TRADINGLAB_DEBUG_VIEW"):
+                    try:
+                        mode = ("time" if preserve_by_time else
+                                ("index" if preserve else
+                                 ("slide" if slide_to_right else "default")))
+                        _dlo = candles[max(0, min(len(candles) - 1, lo))].date
+                        _dhi = candles[max(0, min(len(candles) - 1, hi - 1))].date
+                        self._status.info(
+                            f"[VIEW] mode={mode} n={n} win=({lo},{hi}) "
+                            f"vis={_dlo.date()}..{_dhi.date()} "
+                            f"src={self.source_var.get()} "
+                            f"tkr={self.ticker_var.get()} "
+                            f"iv={self.interval_var.get()}")
+                    except Exception:  # noqa: BLE001
+                        pass
                 # Capture the EXACT xlim the primary just applied (only when
                 # the helper set it — the default path applies it AFTER the
                 # draw below, where the integer fallback already agrees). The

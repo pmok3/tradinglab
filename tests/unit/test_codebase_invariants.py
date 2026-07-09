@@ -234,7 +234,9 @@ def test_app_spec_md_mro_matches_real_chartapp_bases():
 #   7380 — load-complete readout now shows the loaded series' date range
 #          (_series_date_span); surfaces a provider returning years-stale /
 #          incomplete data. Diagnostic feature.
-_APP_PY_LOC_CEILING = 7380
+#   7394 — opt-in view diagnostics (TRADINGLAB_DEBUG_VIEW) log the per-render
+#          preserve mode + resolved visible window. Silent unless env-set.
+_APP_PY_LOC_CEILING = 7394
 
 # Once a real extraction drops app.py well under the ceiling, lower the
 # constant to lock the reduction in. The band keeps ordinary small edits from
