@@ -210,6 +210,9 @@ def test_app_spec_md_mro_matches_real_chartapp_bases():
 # rather than raise the cap.
 #
 # Deliberate bumps (newest first):
+#   7234 — extract ChartStackAppMixin (gui/chartstack_app.py, ~294 LOC) +
+#          EventsAppMixin (gui/events_app.py, ~167 LOC): ChartStack sidebar
+#          glue + event-glyph fetch/overlay moved out. RATCHET DOWN.
 #   7702 — extract AnchorPickAppMixin (gui/anchor_pick_app.py): the AVWAP
 #          "Pick Anchor…" click flow (4 methods, ~247 LOC) moved out of the
 #          god-object. RATCHET DOWN (locks in the reduction).
@@ -218,7 +221,7 @@ def test_app_spec_md_mro_matches_real_chartapp_bases():
 #          repaint coalescing). Both are feature/bugfix logic, not regrowth.
 #   7899 — perf item #1: on_axis_change partial-volume (IEX) warning.
 #   7885 — initial high-water mark when the ratchet was introduced.
-_APP_PY_LOC_CEILING = 7702
+_APP_PY_LOC_CEILING = 7234
 
 # Once a real extraction drops app.py well under the ceiling, lower the
 # constant to lock the reduction in. The band keeps ordinary small edits from

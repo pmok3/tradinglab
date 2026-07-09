@@ -29,6 +29,9 @@ from unittest.mock import MagicMock, patch
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _MENU_BUILDER_PY = _REPO_ROOT / "src" / "tradinglab" / "gui" / "menu_builder.py"
 _APP_PY = _REPO_ROOT / "src" / "tradinglab" / "app.py"
+# The ChartStack callbacks were extracted from app.py to ChartStackAppMixin
+# (gui/chartstack_app.py) in the wave-4 mixin extraction (AGENTS.md §7.24).
+_CHARTSTACK_APP_PY = _REPO_ROOT / "src" / "tradinglab" / "gui" / "chartstack_app.py"
 
 # Accept the ellipsis as either the literal U+2026 char or its
 # ``\u2026`` Python string-escape — both are equivalent at runtime.
@@ -104,10 +107,12 @@ def test_menu_builder_protocol_declares_callbacks() -> None:
 
 
 def test_chart_app_defines_settings_callback() -> None:
-    src = _APP_PY.read_text(encoding="utf-8")
+    # Extracted to ChartStackAppMixin (gui/chartstack_app.py); ChartApp still
+    # exposes it via inheritance. Read the mixin source where the def now lives.
+    src = _CHARTSTACK_APP_PY.read_text(encoding="utf-8")
     assert re.search(r"^\s*def _on_view_chartstack_settings\(self\)",
                      src, re.MULTILINE), (
-        "ChartApp must define _on_view_chartstack_settings."
+        "ChartStackAppMixin must define _on_view_chartstack_settings."
     )
 
 

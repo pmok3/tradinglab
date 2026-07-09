@@ -96,6 +96,7 @@ from .gui.anchor_pick_app import AnchorPickAppMixin
 from .gui.app_state import AppState
 from .gui.banner import FirstRunBannerMixin
 from .gui.chart_renderer import ChartRenderer
+from .gui.chartstack_app import ChartStackAppMixin
 from .gui.config_manager import ConfigManager
 from .gui.config_menu import ConfigMenuMixin
 from .gui.dialog_manager import DialogManager
@@ -115,6 +116,7 @@ from .gui.dialogs import (
 from .gui.drawings_app import DrawingsAppMixin
 from .gui.drilldown import DrilldownMixin, _DrilldownRequest
 from .gui.entries_app import EntriesAppMixin
+from .gui.events_app import EventsAppMixin
 from .gui.exits_app import ExitsAppMixin
 from .gui.geometry_store import _parse_geometry, compute_screen_percent_geometry
 from .gui.help_menu import HelpMenuMixin
@@ -257,7 +259,9 @@ class ChartApp(
     HelpMenuMixin,
     FirstRunBannerMixin,
     AnchorPickAppMixin,
+    ChartStackAppMixin,
     DrawingsAppMixin,
+    EventsAppMixin,
     LivePriceOverlayAppMixin,
     RecentMenusMixin,
     SandboxAliasMixin,
@@ -5396,58 +5400,6 @@ class ChartApp(
             return str(getattr(self, "_confirmed_primary_ticker", "") or "")
         return str(getattr(self, "_confirmed_compare_ticker", "") or "")
 
-    def _get_events_view_for_slot(self, slot: str):
-        """Return a gated EventsView for the symbol displayed in ``slot``.
-
-        Routes:
-
-        * **Sandbox active** — delegates to the controller's
-          :meth:`SandboxController.events_visible_for`, which honors the
-          session clock + blind flag. Returns ``None`` if no bundle
-          has arrived yet.
-        * **Non-sandbox** — looks the bundle up in ``self._events_cache``
-          (populated by :meth:`_load_events_async`) and gates it
-          against ``time.time()*1000`` with ``blind=False``. Forward
-          earnings within the ``forward_window_days`` window are
-          visible; everything else is past.
-
-        Returns ``None`` when no bundle is known for the symbol or the
-        gating import fails — the caller renders an empty glyph list
-        in that case.
-        """
-        symbol = self._slot_symbol(slot)
-        if not symbol:
-            return None
-        ctl = getattr(self, "_sandbox_controller", None)
-        if ctl is not None and getattr(ctl, "is_active", lambda: False)():
-            try:
-                return ctl.events_visible_for(symbol)
-            except Exception:  # noqa: BLE001
-                return None
-        bundle = self._events_cache.get(symbol)
-        if bundle is None:
-            return None
-        try:
-            import time as _time
-
-            from .events.gating import events_visible_for as _gate
-            now_ms = int(_time.time() * 1000)
-            return _gate(bundle, now_ms, blind=False)
-        except Exception:  # noqa: BLE001
-            return None
-
-    def _render_event_glyphs_for_slot(self, slot: str) -> None:
-        ctl = getattr(self, "_sandbox_controller", None)
-        sandbox_blind = False
-        if ctl is not None and getattr(ctl, "is_active", lambda: False)():
-            sandbox_blind = bool(getattr(ctl, "blind", False))
-        ChartApp._ensure_renderer(self).render_event_glyphs_for_slot(
-            slot,
-            get_events_view=self._get_events_view_for_slot,
-            theme=self._theme,
-            sandbox_blind=sandbox_blind,
-        )
-
     def _render_volume_tod_for_slot(self, slot: str) -> None:
         try:
             interval = self.interval_var.get()
@@ -5612,125 +5564,6 @@ class ChartApp(
             except Exception:  # noqa: BLE001
                 pass
 
-    def _load_events_async(self, symbol: str) -> None:
-        """Submit a background EventBundle fetch for ``symbol``.
-
-        Sibling of :meth:`_load_data_async`: runs on ``_fetch_executor``,
-        marshals the result back to the Tk main thread via
-        :meth:`_await_future_on_tk` (never ``add_done_callback`` +
-        ``self.after`` from a worker thread — see ``app.spec.md``
-        Recent history → "Worker-inbox queue").
-
-        Token-gated: a superseded ``_load_events_async`` no-ops on
-        arrival. Inflight-deduped per symbol so a typed-ticker storm
-        doesn't fan out to N parallel fetches of the same data.
-
-        On success the result lands in ``self._events_cache[symbol]``
-        and a redraw is requested so the bottom-pane glyphs (and any
-        watchlist "Next Earn" column rows) pick up the new bundle.
-        """
-        sym = str(symbol or "").strip().upper()
-        if not sym:
-            return
-        if sym in self._events_fetch_inflight:
-            return
-        # In-memory cache hit short-circuits the executor submit so the
-        # candle-cache fast path stays "no submit" (N7 smoke invariant).
-        # Disk-cache hydration still happens lazily on the worker the
-        # first time a symbol is requested in a process.
-        if self._events_cache.get(sym) is not None:
-            return
-        try:
-            from . import defaults as _defaults_mod
-            from .events import EVENT_SOURCES
-        except ImportError:
-            return
-        source_name = str(_defaults_mod.get("events_source") or "yfinance")
-        fetcher = EVENT_SOURCES.get(source_name) or EVENT_SOURCES.get("synthetic")
-        if fetcher is None:
-            return
-        executor = getattr(self, "_fetch_executor", None)
-        await_helper = getattr(self, "_await_future_on_tk", None)
-        if executor is None or await_helper is None:
-            return
-
-        self._events_fetch_token += 1
-        token = self._events_fetch_token
-        self._events_fetch_inflight.add(sym)
-
-        def _work():
-            try:
-                return fetcher(sym)
-            except Exception:  # noqa: BLE001
-                return None
-
-        def _on_done(bundle) -> None:
-            self._events_fetch_inflight.discard(sym)
-            if token != self._events_fetch_token and bundle is None:
-                # Stale + empty — drop. (A stale-but-non-empty result
-                # is still valid for the cache, since bundles are
-                # immutable in the past zone.)
-                return
-            if bundle is None:
-                return
-            self._events_cache[sym] = bundle
-            # Re-paint so the glyphs appear without waiting for the
-            # next user interaction. Best-effort; failures revert to
-            # "glyphs will appear on next render".
-            try:
-                self._request_redraw_for_events()
-            except Exception:  # noqa: BLE001
-                pass
-
-        try:
-            fut = executor.submit(_work)
-        except (RuntimeError, AttributeError):
-            self._events_fetch_inflight.discard(sym)
-            return
-        try:
-            await_helper(fut, _on_done)
-        except Exception:  # noqa: BLE001
-            self._events_fetch_inflight.discard(sym)
-
-    def _request_redraw_for_events(self) -> None:
-        """Re-render glyphs into the existing axes after a bundle arrives.
-
-        Cheap path: only ``_render_event_glyphs_for_slot`` per slot,
-        then a canvas redraw. No candle / indicator rebuild — those
-        haven't changed. Falls back to a full ``_render()`` if any
-        slot lookup fails (defensive; should be unreachable when called
-        from ``_load_events_async``'s success path).
-        """
-        try:
-            for slot_key in list(self._panel_state.keys()):
-                ps = self._panel_state.get(slot_key)
-                if not ps or ps.get("price_ax") is None:
-                    continue
-                # Tear down previous glyph artists before redrawing.
-                try:
-                    from .gui.events_overlay import clear_event_glyph_artists
-                    clear_event_glyph_artists(list(ps.get("event_artists", []) or []))
-                except Exception:  # noqa: BLE001
-                    pass
-                ps["event_artists"] = []
-                ps["event_hit_meta"] = []
-                ps["event_badge_tooltip"] = ""
-                self._render_event_glyphs_for_slot(slot_key)
-            # Force a canvas refresh so the new artists show up.
-            try:
-                self._figure.canvas.draw_idle()
-            except Exception:  # noqa: BLE001
-                pass
-            self._blit_bg = None
-            # Also poke the watchlist tab in case the "Next Earn"
-            # column wants to recompute now that a bundle landed.
-            try:
-                self._schedule_watchlist_tab_refresh()
-            except Exception:  # noqa: BLE001
-                pass
-        except Exception:  # noqa: BLE001
-            pass
-
 
     def _rewire_slot_candles(self, slot: str, candles: list[Candle]) -> None:
         """Repoint a slot at a different candles list (e.g., compare swap).
@@ -5868,86 +5701,6 @@ class ChartApp(
             except Exception:  # noqa: BLE001
                 pass
         return "break"
-
-    def _on_chartstack_promote(self, symbol: str) -> None:
-        """ChartStack callback: a card was clicked → promote to main chart.
-
-        Same-slot demote semantics (synthesis §2.5): the previously
-        focused ticker is rebound to the just-vacated card slot, so
-        the strip stays full and the user can swap back with one
-        click. No-op when the symbol matches the current ticker
-        (clicking a card showing what's already on the main chart
-        does nothing).
-
-        **Anchor / visible-window consistency** (locked in by
-        ``check_d72_chartstack_promote_preserves_view``): the
-        ticker-switch path mirrors
-        :meth:`~tradinglab.gui.watchlist_tab.WatchlistTabMixin._on_watchlist_double`,
-        which is the other "click in a sidebar to swap symbols" flow.
-        Both flows must produce the same chart state for the new
-        symbol so an AVWAP-anchored bar (or any time-anchored
-        artifact: drilldown day, panned time window) lands at the
-        same screen position regardless of which sidebar the user
-        clicked from.
-
-        Specifically:
-
-        * If a 5m drill-down day is locked, route through
-          :meth:`_reload_preserving_drilldown` so the new symbol
-          re-zooms to that calendar day (with most-recent-day
-          fallback per the drilldown helper).
-        * Otherwise set ``_preserve_xlim_by_time_on_render`` so the
-          render layer remaps the previous primary's time window
-          onto the new symbol's bar-index axis. The AVWAP / anchor
-          bar then stays visually anchored to its date instead of
-          snapping to the right edge.
-
-        Sandbox-active path is allowed — :meth:`_load_data_async`
-        already gates ticker changes through the sandbox controller,
-        matching the watchlist-double behavior during sessions.
-        """
-        if not symbol:
-            return
-        try:
-            current = (self.ticker_var.get() or "").strip().upper()
-        except Exception:  # noqa: BLE001
-            current = ""
-        target = symbol.strip().upper()
-        if not target or target == current:
-            return
-        try:
-            self.ticker_var.set(target)
-        except Exception:  # noqa: BLE001
-            return
-        # Mirror the watchlist-double ticker-switch path so the new
-        # symbol lands with the same visible window / anchor bar as
-        # any other sidebar-driven swap.
-        try:
-            in_drilldown = (
-                getattr(self, "_drilldown_day", None) is not None
-                and self.interval_var.get() == "5m"
-            )
-        except Exception:  # noqa: BLE001
-            in_drilldown = False
-        try:
-            if in_drilldown:
-                self._reload_preserving_drilldown(self._load_data)
-            else:
-                try:
-                    self._preserve_xlim_by_time_on_render = True
-                except Exception:  # noqa: BLE001
-                    pass
-                self._load_data_async()
-        except Exception:  # noqa: BLE001
-            pass
-        # Same-slot demote: rebind the just-promoted card to the
-        # previously focused symbol so the strip remains full.
-        cs = getattr(self, "_chartstack", None)
-        if cs is not None and current:
-            try:
-                cs.demote_to(target, current)
-            except Exception:  # noqa: BLE001
-                pass
 
     def _on_explicit_axis_change(self) -> None:
         """User explicitly changed source/interval — clear drill-down + reload.
@@ -6194,19 +5947,6 @@ class ChartApp(
             pass
         return "break"
 
-    def _on_accel_toggle_chartstack(self, _event=None):
-        """Ctrl+\u0060 \u2014 show / hide the ChartStack mini-chart strip.
-
-        Routes through :py:meth:`_toggle_chartstack` so the keyboard
-        shortcut, View-menu checkbutton, and any future button all
-        share the same construct-on-demand + settings-persistence
-        logic.
-        """
-        if not self._global_shortcut_allowed():
-            return None
-        self._toggle_chartstack()
-        return "break"
-
     def _on_accel_snapshot_chart(self, _event=None):
         """Ctrl+Shift+S — save the current chart as a PNG.
 
@@ -6228,20 +5968,6 @@ class ChartApp(
         except Exception:  # noqa: BLE001
             pass
         return "break"
-
-    def _on_view_toggle_chartstack(self) -> None:
-        """View menu callback for the "ChartStack" checkbutton.
-
-        ``self._chartstack_visible_var`` was already flipped by the
-        Tk checkbutton itself before the command fires; pass the new
-        intent through to :py:meth:`_toggle_chartstack` so it can
-        construct or destroy the panel to match.
-        """
-        try:
-            target = bool(self._chartstack_visible_var.get())
-        except Exception:  # noqa: BLE001
-            target = False
-        self._toggle_chartstack(target=target)
 
     def _on_view_heatmap(self) -> None:
         """View menu callback: open the Finviz S&P 500 sector heatmap.
@@ -6275,29 +6001,6 @@ class ChartApp(
             parent=self,
         )
 
-    def _on_view_chartstack_settings(self) -> None:
-        """View menu callback: open the ChartStack Settings popup.
-
-        Per-slot fixed-preset symbol editor — audit
-        ``chartstack-fixed-preset``. Delegates to
-        :func:`gui.chartstack_settings_dialog.open_chartstack_settings`
-        so the heavy Tk widget construction lives in its own
-        importable module + can be unit-tested without spinning up
-        a full ChartApp.
-
-        Swallow construction exceptions defensively (e.g. a Tk
-        init failure on a headless run) so a broken popup doesn't
-        propagate into the Tk event loop and bring down the chart.
-        """
-        try:
-            from .gui.chartstack_settings_dialog import open_chartstack_settings
-            open_chartstack_settings(self)
-        except Exception:  # noqa: BLE001
-            try:
-                self._status.warn("ChartStack Settings failed to open")
-            except Exception:  # noqa: BLE001
-                pass
-
     def _capture_notebook_boundary(
         self, paned: object, currently_visible: bool
     ) -> int:
@@ -6317,18 +6020,6 @@ class ChartApp(
             return int(paned.sashpos(idx))  # type: ignore[attr-defined]
         except Exception:  # noqa: BLE001
             return 0
-
-    def _chartstack_currently_visible(self, paned: object) -> bool:
-        """Return True if the ChartStack panel is currently a pane of
-        ``paned``. Duck-typed so unit tests can pass a stub paned with
-        a ``panes()`` method."""
-        cs = getattr(self, "_chartstack", None)
-        if cs is None:
-            return False
-        try:
-            return str(cs) in list(paned.panes())  # type: ignore[attr-defined]
-        except Exception:  # noqa: BLE001
-            return False
 
     def _current_notebook_width(self) -> int:
         """Return the live width (px) of the right-side notebook
@@ -6544,165 +6235,6 @@ class ChartApp(
             if isinstance(wc, int) and wc > 0 and wc != getattr(
                     self, "_worker_count", None):
                 self._apply_worker_count(wc)
-        except Exception:  # noqa: BLE001
-            pass
-
-    def _apply_chartstack_toggle_sash(
-        self, paned: object, notebook_boundary: int, *,
-        chartstack_visible: bool,
-    ) -> None:
-        """Pin sash positions so the watchlist column stays put across
-        a ChartStack toggle; only the chart pane resizes.
-
-        Uses the **live** paned width (``winfo_width``) — NOT the
-        stale startup ``_initial_geometry`` — so the boundary is
-        correct even after the user has resized / maximised the
-        window. That stale-width read was the root cause of the
-        "watchlist jumps to half the screen" bug
-        (audit ``chartstack-toggle-preserves-notebook``).
-
-        Falls back to the ratio-based
-        :func:`constants.compute_main_paned_sashes` only when the
-        captured boundary is unusable (e.g. the sash wasn't laid out
-        yet, so ``_capture_notebook_boundary`` returned ``0``).
-        """
-        try:
-            live_w = int(paned.winfo_width())  # type: ignore[attr-defined]
-        except Exception:  # noqa: BLE001
-            live_w = 0
-        if notebook_boundary and int(notebook_boundary) > 0:
-            try:
-                from .constants import compute_toggle_sashes
-            except Exception:  # noqa: BLE001
-                return
-            positions = compute_toggle_sashes(
-                live_w, int(notebook_boundary),
-                chartstack_visible=chartstack_visible)
-        else:
-            try:
-                from .constants import compute_main_paned_sashes
-            except Exception:  # noqa: BLE001
-                return
-            main_w = live_w
-            if main_w <= 0:
-                try:
-                    main_w = int(
-                        self._initial_geometry.split('+')[0].split('x')[0])
-                except (ValueError, IndexError, AttributeError):
-                    main_w = 1280
-            positions = compute_main_paned_sashes(
-                main_w, chartstack_visible=chartstack_visible)
-        try:
-            self._apply_forced_sash(paned, positions)
-        except Exception:  # noqa: BLE001
-            pass
-
-    def _toggle_chartstack(self, *, target: bool | None = None) -> None:
-        """Show or hide the ChartStack panel.
-
-        ``target=None`` (the default) flips the current state. Passing
-        an explicit ``bool`` forces that state — used by the View-menu
-        checkbutton which has already flipped its variable when the
-        user clicked.
-
-        Behavior:
-
-        * **First activation in a session**: constructs the panel
-          lazily (the ``__init__`` path skipped it because
-          ``chartstack.enabled`` was ``False``), inserts it as the
-          leftmost pane (index 0) of ``self._main_paned``, and wires
-          the ``on_card_promote`` callback.
-        * **Subsequent show**: just re-inserts the existing panel
-          (state preserved).
-        * **Hide**: removes the panel from the paned window. The
-          panel object stays alive in ``self._chartstack`` so a
-          re-show is instant.
-
-        Persists ``chartstack.enabled`` so the choice survives a
-        restart. Keeps ``self._chartstack_visible_var`` in sync with
-        the actual paned-window state so the menu checkmark never
-        lies.
-        """
-        paned = getattr(self, "_main_paned", None)
-        if paned is None:
-            return
-        try:
-            panes = list(paned.panes())
-        except Exception:  # noqa: BLE001
-            panes = []
-
-        cs = getattr(self, "_chartstack", None)
-        currently_visible = (cs is not None and str(cs) in panes)
-        if target is None:
-            target = not currently_visible
-
-        # Capture the chart|notebook boundary BEFORE mutating panes so
-        # the watchlist column can be pinned to its current position
-        # across the toggle (audit ``chartstack-toggle-preserves-notebook``).
-        notebook_boundary = self._capture_notebook_boundary(
-            paned, currently_visible)
-
-        if target and not currently_visible:
-            if cs is None:
-                try:
-                    from .gui.chartstack import (
-                        ChartStackPanel as _ChartStackPanel,
-                    )
-                    cs = _ChartStackPanel(
-                        paned, owner=self,
-                        geometry_store=getattr(self, "_geometry_store", None),
-                    )
-                    self._chartstack = cs
-                    try:
-                        cs.on_card_promote = self._on_chartstack_promote
-                    except Exception:  # noqa: BLE001
-                        pass
-                except Exception:  # noqa: BLE001
-                    self._chartstack = None
-                    cs = None
-            if cs is not None:
-                try:
-                    paned.insert(0, cs, weight=0)
-                except Exception:  # noqa: BLE001
-                    pass
-                # Pin the watchlist column to its CURRENT position so
-                # toggling ChartStack only steals pixels from the
-                # chart, never moves the notebook. ``after_idle``
-                # defers until the inserted pane has been laid out so
-                # ``winfo_width`` is sane. See
-                # ``_apply_chartstack_toggle_sash`` + audit
-                # ``chartstack-toggle-preserves-notebook``.
-                def _force_3pane_layout(_p=paned, _b=notebook_boundary):
-                    self._apply_chartstack_toggle_sash(
-                        _p, _b, chartstack_visible=True)
-                try:
-                    self.after_idle(_force_3pane_layout)
-                except Exception:  # noqa: BLE001
-                    _force_3pane_layout()
-        elif (not target) and currently_visible and cs is not None:
-            try:
-                paned.forget(cs)
-            except Exception:  # noqa: BLE001
-                pass
-            # Reclaim the ChartStack pixels into the chart while
-            # holding the notebook column fixed at its current
-            # position (audit ``chartstack-toggle-preserves-notebook``).
-            def _force_2pane_layout(_p=paned, _b=notebook_boundary):
-                self._apply_chartstack_toggle_sash(
-                    _p, _b, chartstack_visible=False)
-            try:
-                self.after_idle(_force_2pane_layout)
-            except Exception:  # noqa: BLE001
-                _force_2pane_layout()
-
-        try:
-            self._chartstack_visible_var.set(bool(target))
-        except Exception:  # noqa: BLE001
-            pass
-
-        try:
-            from . import settings as _settings
-            _settings.set("chartstack.enabled", bool(target))
         except Exception:  # noqa: BLE001
             pass
 
