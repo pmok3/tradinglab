@@ -224,7 +224,10 @@ def test_app_spec_md_mro_matches_real_chartapp_bases():
 #          repaint coalescing). Both are feature/bugfix logic, not regrowth.
 #   7899 — perf item #1: on_axis_change partial-volume (IEX) warning.
 #   7885 — initial high-water mark when the ratchet was introduced.
-_APP_PY_LOC_CEILING = 7235
+#   7283 — compare-toggle manual-pan creep fix: coverage-gated time-preserve
+#          (_compare_cache_first_ts + _compare_cache_covers helpers, broadened
+#          _on_compare_toggle gate). Bug fix logic, not regrowth.
+_APP_PY_LOC_CEILING = 7283
 
 # Once a real extraction drops app.py well under the ceiling, lower the
 # constant to lock the reduction in. The band keeps ordinary small edits from

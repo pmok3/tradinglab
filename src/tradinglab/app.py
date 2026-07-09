@@ -2162,17 +2162,17 @@ class ChartApp(
         # panel when it lands — NEVER moving the primary. Audit
         # ``compare-toggle-drilldown-preserve``.
         try:
-            in_drilldown = (
-                getattr(self, "_drilldown_day", None) is not None
-                and is_intraday(self.interval_var.get())
-            )
+            intraday_view = is_intraday(self.interval_var.get())
         except Exception:  # noqa: BLE001
-            in_drilldown = False
-        vis = self._current_visible_window_ts() if in_drilldown else None
-        # TIME-preserve holds the drilled day across the compare re-align,
+            intraday_view = False
+        vis = self._current_visible_window_ts() if intraday_view else None
+        in_drilldown = bool(
+            getattr(self, "_drilldown_day", None) is not None and intraday_view
+        )
+        # TIME-preserve holds the visible window across the compare re-align,
         # in BOTH directions (on AND off). ``align_pair`` inserts gap slots
         # wherever the primary and compare 5m grids differ (IEX sparse bars),
-        # SHIFTING the drilled day's absolute index; naive index-preserve then
+        # SHIFTING each bar's absolute index; naive index-preserve then
         # reuses a stale index xlim and drags the view sideways. Toggling
         # compare OFF reverts the primary from the aligned (gap-padded) list
         # to the filtered (ungapped) list, shifting indices the OTHER way —
@@ -2180,17 +2180,38 @@ class ChartApp(
         # window became the NEXT toggle-on's ``keep_window`` → compounding
         # "candles creep in from the left on every toggle". Remapping by TIME
         # lands on the same calendar minutes regardless of direction, so the
-        # drilled day stays framed exactly. Audit
-        # ``compare-toggle-drilldown-preserve`` (pinned by check_d87/d88).
+        # framed window stays put exactly.
+        #
+        # Gate = HISTORICAL intraday view (``vis[2]``) AND one of:
+        #   • ``in_drilldown`` — a formal double-click drilldown (the drilled
+        #     day is loaded; deep-history compare gaps are handled by
+        #     ``keep_window`` + background-fill below), OR
+        #   • ``compare_covers`` — the compare cache reaches at/before the
+        #     window's left edge, so the re-align won't DROP the framed bars
+        #     and the TIME-remap can land the same calendar window. This is
+        #     the manual pan/zoom-into-history case (``_drilldown_day`` is
+        #     None) — the still-reproducing half of the creep bug, where a
+        #     grid-density mismatch shifts indices under a COVERED window.
+        # A right-edge / today view (``vis[2]`` False) keeps the fast
+        # index-preserve — nothing drifts there. The coverage gate is what
+        # protects ``check_d52`` (recent interior zoom whose compare cache is
+        # short / non-overlapping → NOT covered → stays on index-preserve,
+        # instead of a TIME-remap that would reset the view to the data
+        # extent). Audit ``compare-toggle-drilldown-preserve`` (pinned by
+        # check_d87/d88 for drilldown, check_d89 for manual-pan).
+        compare_covers = bool(
+            intraday_view
+            and vis is not None
+            and self._compare_cache_covers(vis[0])
+        )
         use_time_preserve = bool(
-            in_drilldown
+            intraday_view
             and vis is not None and vis[2]  # historical view (not right edge)
+            and (in_drilldown or compare_covers)
         )
         # keep_window + background-fill ALSO engage only when compare is being
-        # turned ON and the compare cache genuinely LACKS the drilled window
-        # (deep-history providers cap intraday depth). A normal manual interior
-        # zoom keeps using the existing index-preserve — d52 clears
-        # ``_drilldown_day`` so it takes this ``in_drilldown=False`` path.
+        # turned ON and the compare cache genuinely LACKS the viewed window
+        # (deep-history providers cap intraday depth).
         compare_lacks = bool(
             use_time_preserve
             and compare_on
@@ -2222,22 +2243,24 @@ class ChartApp(
             except Exception:  # noqa: BLE001
                 pass
 
-    def _compare_cache_earliest_gt(self, lo_ts: float) -> bool:
-        """True when the compare's cached 5m history starts AFTER ``lo_ts``.
+    def _compare_cache_first_ts(self) -> float | None:
+        """Earliest cached compare-bar epoch-second ts, or ``None``.
 
-        i.e. the compare does NOT cover the viewed window's start — the
-        trigger for the keep_window / time-preserve / background-fill path.
-        Consults the in-memory cache first, then disk; treats a genuinely
-        empty compare as "lacks the window". Cheap; no network.
+        Resolves the current ``(source, compare, interval)`` key, consulting
+        the in-memory cache first then disk. Returns ``None`` when there is no
+        compare ticker or no cached bars at all (a genuinely FRESH compare —
+        the cache-miss load path will fetch its recent data normally). Cheap;
+        no network. Shared by :meth:`_compare_cache_earliest_gt` and
+        :meth:`_compare_cache_covers`.
         """
         try:
             src = self.source_var.get()
             cmp = self.compare_ticker_var.get().strip().upper()
             interval = self.interval_var.get()
         except Exception:  # noqa: BLE001
-            return False
+            return None
         if not cmp:
-            return False
+            return None
         key = (src, cmp, interval)
         cached = self._full_cache.get(key) or []
         if not cached:
@@ -2246,16 +2269,41 @@ class ChartApp(
             except Exception:  # noqa: BLE001
                 cached = []
         if not cached:
-            # No cache at all → a FRESH compare; the cache-miss load path
-            # will fetch its (recent) data normally. Don't engage the
-            # keep_window/time-preserve path here (that would widen a normal
-            # recent interior zoom — d52). Only a compare that HAS cached
-            # data starting AFTER the viewed window genuinely lacks it.
-            return False
+            return None
         try:
-            return float(cached[0].date.timestamp()) > lo_ts + 1.0
+            return float(cached[0].date.timestamp())
         except Exception:  # noqa: BLE001
-            return False
+            return None
+
+    def _compare_cache_earliest_gt(self, lo_ts: float) -> bool:
+        """True when the compare's cached history starts AFTER ``lo_ts``.
+
+        i.e. the compare does NOT cover the viewed window's start — the
+        trigger for the keep_window / background-fill path. An empty compare
+        returns False (a fresh compare uses the ordinary cache-miss load path;
+        engaging keep_window there would widen a normal recent interior zoom
+        — ``check_d52``). Only a compare that HAS cached data starting AFTER
+        the viewed window genuinely lacks it.
+        """
+        first = self._compare_cache_first_ts()
+        return first is not None and first > lo_ts + 1.0
+
+    def _compare_cache_covers(self, lo_ts: float) -> bool:
+        """True when the compare's cached history reaches AT/BEFORE ``lo_ts``.
+
+        i.e. the compare genuinely COVERS the viewed window's LEFT edge, so
+        ``align_pair`` will NOT drop the framed primary bars (``lo_day =
+        max(p0, c0)`` keeps the window) and the TIME-remap can land the same
+        calendar window on the re-aligned series. This is the discriminator
+        that makes manual-pan-into-history compare toggles safe to
+        TIME-preserve (grid-density mismatch shifts indices but the window is
+        covered — the user's creep bug) WITHOUT regressing the case where the
+        compare's cache is empty / short / non-overlapping (a recent interior
+        zoom whose compare doesn't reach back — ``check_d52``), which must
+        keep the ordinary index-preserve. An empty compare returns False.
+        """
+        first = self._compare_cache_first_ts()
+        return first is not None and first <= lo_ts + 1.0
 
     def _current_visible_window_ts(
         self,

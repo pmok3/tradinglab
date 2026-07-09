@@ -5054,6 +5054,207 @@ def check_d88_compare_toggle_repeated_no_creep(app) -> None:
           "creep candles in from the left (width + left-edge stable)")
 
 
+def check_d89_compare_toggle_manual_pan_no_creep(app) -> None:
+    """Regression: repeated Compare toggle on a MANUALLY-PANNED historical
+    intraday view (no ``_drilldown_day``) must not creep candles in from
+    the left (``compare-toggle-drilldown-preserve``).
+
+    This is the still-reproducing half of check_d88's bug. check_d88 drills
+    into a day via ``_zoom_5m_for_date`` (which sets ``_drilldown_day``);
+    the user, however, reaches a 5m historical window by manually
+    panning/zooming — ``_drilldown_day`` is None. The original fix gated
+    time-preserve on ``_drilldown_day`` being set, so this path fell back
+    to index-preserve and grew by exactly one bar on the left per toggle
+    (visible xlim left edge marched 519→518→517… while the right edge
+    stayed pinned).
+
+    Fix: ``_on_compare_toggle`` gates time-preserve on "historical intraday
+    view" (``_current_visible_window_ts()[2]``), independent of
+    ``_drilldown_day``. This check reproduces the manual-pan setup WITHOUT
+    reseeding the cache between toggles (the accumulation is real, not a
+    reseed artifact) and asserts the ON-state width AND left edge are
+    stable across 5 on/off cycles.
+    """
+    from datetime import timedelta
+
+    import numpy as np
+
+    from tradinglab.models import Candle
+
+    src = app.source_var.get()
+    primary_t, compare_t = "ZD89A", "ZD89B"
+
+    saved_ticker = app.ticker_var.get()
+    saved_compare_ticker = app.compare_ticker_var.get()
+    saved_compare_on = bool(app.compare_var.get())
+    saved_interval = app.interval_var.get()
+    saved_preserve = app._preserve_xlim_on_render
+    saved_preserve_t = getattr(app, "_preserve_xlim_by_time_on_render", False)
+    saved_drill = getattr(app, "_drilldown_day", None)
+    saved_stale = app._cache_is_stale
+    saved_cache = {
+        k: app._full_cache.pop(k, None)
+        for k in [(src, primary_t, "1d"), (src, primary_t, "5m"),
+                  (src, compare_t, "1d"), (src, compare_t, "5m")]
+    }
+
+    def make_1d(seed, n=30):
+        out, base = [], datetime(2026, 1, 5, 16, 0)
+        for d in range(n):
+            lo = 50 + d * 2 + seed
+            out.append(Candle(date=base + timedelta(days=d),
+                              open=lo, high=lo + 5, low=lo - 1,
+                              close=lo + 2, volume=80000, session="regular"))
+        return out
+
+    def make_5m(seed, n=30, *, sparse=False):
+        out, base = [], datetime(2026, 1, 5, 9, 30)
+        for d in range(n):
+            lo = 50 + d * 2 + seed
+            for i in range(78):
+                if sparse and i % 3 == 2:
+                    continue
+                p = lo + i * 0.05
+                out.append(Candle(date=base + timedelta(days=d, minutes=5 * i),
+                                  open=p, high=p + 0.3, low=p - 0.3,
+                                  close=p + 0.1, volume=1000 + i,
+                                  session="regular"))
+        return out
+
+    def _seed_5m():
+        # Re-assert the 5m cache (a reload can trigger a prefetch that
+        # overwrites it); the compare list content is invariant per toggle.
+        app._full_cache[(src, primary_t, "5m")] = make_5m(0, sparse=True)
+        app._full_cache[(src, compare_t, "5m")] = make_5m(100)  # dense
+
+    def _on_state():
+        ps = app._panel_state.get("primary") or {}
+        ax = ps.get("price_ax")
+        cs = ps.get("candles") or []
+        if ax is None or not cs:
+            return None
+        xlo, xhi = ax.get_xlim()
+        lo = max(0, int(np.ceil(xlo - 1e-6)))
+        hi = min(len(cs), int(np.floor(xhi + 1e-6)) + 1)
+        days = sorted({c.date.date() for c in cs[lo:hi]
+                       if not getattr(c, "is_gap", False)})
+        return (round(xhi - xlo, 1), days[0] if days else None)
+
+    try:
+        app._cache_is_stale = lambda *a, **k: False  # type: ignore[assignment]
+        app._full_cache[(src, primary_t, "1d")] = make_1d(0)
+        app._full_cache[(src, primary_t, "5m")] = make_5m(0, sparse=True)
+        app._full_cache[(src, compare_t, "1d")] = make_1d(100)
+        app._full_cache[(src, compare_t, "5m")] = make_5m(100)
+        if app.compare_var.get():
+            app.compare_var.set(False)
+        # Land directly on the 5m interval with NO drilldown day, then frame
+        # a historical day by setting the axis xlim manually (as a rubber-band
+        # zoom / pan would). This is the exact path the user hits.
+        app.interval_var.set("5m")
+        app.ticker_var.set(primary_t)
+        app.compare_ticker_var.set(compare_t)
+        app._preserve_xlim_on_render = False
+        app._drilldown_day = None
+        app._load_data()
+        _pump_until(app,
+            lambda: getattr(app, "_primary", None) and len(app._primary) > 0,
+            timeout=0.6)
+        _seed_5m()
+        app._load_data()
+        _pump(app, 0.1)
+
+        pan_day = datetime(2026, 1, 15).date()
+        ps = app._panel_state.get("primary") or {}
+        cs = ps.get("candles") or []
+        ax = ps.get("price_ax")
+        idx0 = next((i for i, c in enumerate(cs)
+                     if not getattr(c, "is_gap", False)
+                     and c.date.date() == pan_day), None)
+        per = sum(1 for c in cs if not getattr(c, "is_gap", False)
+                  and c.date.date() == pan_day)
+        if ax is None or idx0 is None or per < 5:
+            print("  [SKIP] d89: could not frame a manual-pan window")
+            return
+        # Frame the historical day and arm the manual-pan preserve flag.
+        ax.set_xlim(idx0 - 0.5, idx0 + per - 0.5)
+        app._preserve_xlim_on_render = True
+        app._drilldown_day = None  # explicit: NOT a formal drilldown
+        try:
+            app._canvas.draw_idle()
+        except Exception:  # noqa: BLE001
+            pass
+        _pump(app, 0.05)
+
+        widths: list[float] = []
+        left_days: list = []
+        for _ in range(5):
+            app.compare_var.set(True)
+            app._on_compare_toggle()
+            _pump_until(app,
+                lambda: (app._panel_state.get("compare") or {}).get("price_ax")
+                is not None,
+                timeout=0.8)
+            _pump(app, 0.05)
+            st = _on_state()
+            if st is not None:
+                widths.append(st[0])
+                left_days.append(st[1])
+            app.compare_var.set(False)
+            app._on_compare_toggle()
+            _pump(app, 0.05)
+
+        assert len(widths) >= 3, "d89: expected several ON-state samples"
+        # THE bug: manual-pan compare-ON width marches up one bar per toggle.
+        assert len(set(widths)) == 1, (
+            f"d89: manual-pan compare-ON window width drifted across repeated "
+            f"toggles (candles creeping in from the left): widths={widths}")
+        assert all(d == left_days[0] for d in left_days), (
+            f"d89: leftmost visible day drifted across manual-pan toggles: "
+            f"{left_days}")
+
+    finally:
+        try:
+            del app._cache_is_stale
+        except AttributeError:
+            app._cache_is_stale = saved_stale  # type: ignore[assignment]
+        for k, v in saved_cache.items():
+            app._full_cache.pop(k, None)
+            if v is not None:
+                app._full_cache[k] = v
+        try:
+            import os
+            base = os.environ.get("LOCALAPPDATA", "")
+            if base:
+                from pathlib import Path
+                p = Path(base) / "tradinglab"
+                for t in (primary_t, compare_t):
+                    for iv in ("1d", "5m"):
+                        for f in p.glob(f"{src}__{t}__{iv}.jsonl"):
+                            try:
+                                f.unlink()
+                            except Exception:  # noqa: BLE001
+                                pass
+        except Exception:  # noqa: BLE001
+            pass
+        if app.compare_var.get() != saved_compare_on:
+            app.compare_var.set(saved_compare_on)
+        app.interval_var.set(saved_interval)
+        app.ticker_var.set(saved_ticker)
+        app.compare_ticker_var.set(saved_compare_ticker)
+        app._preserve_xlim_on_render = saved_preserve
+        app._preserve_xlim_by_time_on_render = saved_preserve_t
+        app._drilldown_day = saved_drill
+        try:
+            app._load_data()
+        except Exception:  # noqa: BLE001
+            pass
+        _pump(app, 0.3)
+
+    print("  [OK] §d89 repeated compare toggle on a manually-panned "
+          "historical intraday view does not creep candles in from the left")
+
+
 def check_d35_config_import_export_round_trip(app) -> None:
     """Configuration file load/save round-trip via :mod:`settings`.
 
@@ -9972,9 +10173,13 @@ def check_d52_manual_zoom_pan_arms_preserve_xlim(app) -> None:
     saved_xlim = price_ax.get_xlim()
     saved_drill = getattr(app, "_drilldown_day", None)
     # This check exercises MANUAL rubber-band zoom/pan (NOT drill-down).
-    # Clear any inherited ``_drilldown_day`` so the compare-toggle in
-    # sub-test C takes the ordinary (index-preserve) path, not the
-    # drilldown-scoped view-safe path.
+    # Clearing ``_drilldown_day`` no longer changes the compare-toggle
+    # preserve strategy — the gate is now "historical intraday view"
+    # (``vis[2]``), which is true for a manual pan/zoom back into history
+    # just as for a formal drilldown. Sub-test C only asserts the framed
+    # window is PRESERVED (not reset to the data extent); both the
+    # time-preserve and index-preserve paths satisfy that for a single
+    # toggle. Repeated-toggle no-creep is pinned separately by check_d88.
     app._drilldown_day = None
     try:
         # ---- A. _zoom_end arms preserve flag --------------------------
@@ -21963,6 +22168,7 @@ def _run_all_checks(app) -> None:
     check_d86_compare_toggle_preserves_drilldown_day(app)
     check_d87_compare_toggle_drilldown_no_index_shift(app)
     check_d88_compare_toggle_repeated_no_creep(app)
+    check_d89_compare_toggle_manual_pan_no_creep(app)
     check_d35_config_import_export_round_trip(app)
     check_d35a_config_theme_round_trip(app)
     check_d35b_view_settings_round_trip(app)
@@ -22280,6 +22486,8 @@ def _build_check_sequence():
          check_d87_compare_toggle_drilldown_no_index_shift),
         ("check_d88_compare_toggle_repeated_no_creep",
          check_d88_compare_toggle_repeated_no_creep),
+        ("check_d89_compare_toggle_manual_pan_no_creep",
+         check_d89_compare_toggle_manual_pan_no_creep),
         ("check_d35_config_import_export_round_trip",
          check_d35_config_import_export_round_trip),
         ("check_d35a_config_theme_round_trip",
