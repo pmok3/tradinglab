@@ -4157,6 +4157,7 @@ class ChartApp(
         # back-ref to ``self`` for live access to ``_panel_state``.
         _AdaptiveXLocator = _adaptive_x_locator_class()
         primary_window: tuple[int, int] | None = None
+        primary_applied_xlim: tuple[float, float] | None = None
         for slot_key, candles, ax_p, ax_v, ind_axes, scope in slots:
             hide_vol = self._slot_hides_volume(slot_key)
             candles = self._maybe_rebase_candles(slot_key, candles)
@@ -4242,9 +4243,21 @@ class ChartApp(
                 prev_primary_dates=prev_primary_dates,
                 prev_primary_xlim=prev_primary_xlim,
                 primary_window=primary_window,
+                primary_applied_xlim=primary_applied_xlim,
             )
             if slot_key == "primary":
                 primary_window = (lo, hi)
+                # Capture the EXACT xlim the primary just applied (only when
+                # the helper set it — the default path applies it AFTER the
+                # draw below, where the integer fallback already agrees). The
+                # compare slot mirrors this verbatim to avoid the floor/ceil
+                # half-bar left-creep. Audit ``compare-slot-xlim-mirror``.
+                if xlim_set:
+                    try:
+                        _axlo, _axhi = ax_p.get_xlim()
+                        primary_applied_xlim = (float(_axlo), float(_axhi))
+                    except Exception:  # noqa: BLE001
+                        primary_applied_xlim = None
             start, end = _compute_render_range(
                 lo, hi, n, _MIN_RENDER_CANDLES, _MAX_RENDER_CANDLES,
             )
@@ -4287,6 +4300,7 @@ class ChartApp(
             slots.append(("compare", self._compare))
 
         primary_window: tuple[int, int] | None = None
+        primary_applied_xlim: tuple[float, float] | None = None
         for slot_key, candles in slots:
             ps = self._panel_state.get(slot_key)
             if ps is None:
@@ -4332,9 +4346,18 @@ class ChartApp(
                 prev_primary_dates=prev_primary_dates,
                 prev_primary_xlim=prev_primary_xlim,
                 primary_window=primary_window,
+                primary_applied_xlim=primary_applied_xlim,
             )
             if slot_key == "primary":
                 primary_window = (lo, hi)
+                # Mirror the primary's exact applied xlim on the compare slot
+                # (see slow path + ``compare-slot-xlim-mirror``).
+                if xlim_set:
+                    try:
+                        _axlo, _axhi = ax_p.get_xlim()
+                        primary_applied_xlim = (float(_axlo), float(_axhi))
+                    except Exception:  # noqa: BLE001
+                        primary_applied_xlim = None
             start, end = _compute_render_range(
                 lo, hi, n, _MIN_RENDER_CANDLES, _MAX_RENDER_CANDLES,
             )
@@ -4758,6 +4781,7 @@ class ChartApp(
         prev_primary_dates: list | None,
         prev_primary_xlim: tuple[float, float] | None,
         primary_window: tuple[int, int] | None = None,
+        primary_applied_xlim: tuple[float, float] | None = None,
     ) -> tuple[int, int, bool]:
         """Resolve a slot's visible ``(lo, hi)`` bar window.
 
@@ -4780,6 +4804,20 @@ class ChartApp(
         compare slot then reset the shared axis to the default right-edge
         window (showing the prior session). The time-remap is primary-only, so
         without this mirror the compare slot always fell to the default.
+
+        ``primary_applied_xlim`` is the EXACT float xlim the primary slot
+        applied to the shared axis. The compare slot mirrors it verbatim so
+        the two slots agree bit-for-bit. Reconstructing the xlim from the
+        integer ``primary_window`` as ``(p_lo - 0.5, p_hi - 0.5)`` was the
+        "candles creep in from the left on every render" bug: under an
+        INDEX-preserve render the primary applies a fractional xlim
+        ``(k + 0.5, m + 0.5)`` but ``primary_window`` is the floored/ceiled
+        ``(floor, ceil)`` = ``(k, m + 1)``; the compare's
+        ``(k - 0.5, m + 0.5)`` then shifts the shared left edge LEFT by 1.0.
+        Every subsequent render (notably the market-hours poll tick, which
+        force-arms ``_preserve_xlim_on_render``) re-floored the drifted xlim →
+        the window marched one bar left per render, provider-agnostic. Audit
+        ``compare-slot-xlim-mirror``.
         """
         n = len(candles)
         default_win = _defaults.get("default_window_bars")
@@ -4792,7 +4830,24 @@ class ChartApp(
             if p_hi <= p_lo:
                 p_lo, p_hi = max(0, n - default_win), n
             try:
-                ax_p.set_xlim(p_lo - 0.5, p_hi - 0.5)
+                # Mirror the primary's EXACT applied xlim when known (prevents
+                # the floor/ceil half-bar drift on INDEX-preserve renders) —
+                # but only when that shared window actually overlaps THIS
+                # slot's data. A degenerate non-overlapping compare (e.g. a
+                # stale cache whose dates don't intersect the primary, so
+                # ``align_pair`` returned the pair UNALIGNED at different
+                # lengths) would otherwise land the shared axis entirely off
+                # the compare's bars; fall back to the clamped integer window
+                # there. In normal aligned compare mode both series share the
+                # same length, so the primary window is always in range and
+                # the exact mirror is used. Audit ``compare-slot-xlim-mirror``.
+                if primary_applied_xlim is not None and (
+                        primary_applied_xlim[1] >= -0.5
+                        and primary_applied_xlim[0] <= (n - 0.5)):
+                    ax_p.set_xlim(primary_applied_xlim[0],
+                                  primary_applied_xlim[1])
+                else:
+                    ax_p.set_xlim(p_lo - 0.5, p_hi - 0.5)
             except Exception:  # noqa: BLE001
                 pass
             return p_lo, p_hi, True

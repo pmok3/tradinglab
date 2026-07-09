@@ -227,7 +227,11 @@ def test_app_spec_md_mro_matches_real_chartapp_bases():
 #   7283 — compare-toggle manual-pan creep fix: coverage-gated time-preserve
 #          (_compare_cache_first_ts + _compare_cache_covers helpers, broadened
 #          _on_compare_toggle gate). Bug fix logic, not regrowth.
-_APP_PY_LOC_CEILING = 7283
+#   7328 — compare-slot xlim-mirror fix: _compute_slot_window mirrors the
+#          primary's EXACT applied float xlim on the compare slot (kills the
+#          index-preserve floor/ceil left-creep under poll re-renders). Bug
+#          fix logic, not regrowth.
+_APP_PY_LOC_CEILING = 7338
 
 # Once a real extraction drops app.py well under the ceiling, lower the
 # constant to lock the reduction in. The band keeps ordinary small edits from

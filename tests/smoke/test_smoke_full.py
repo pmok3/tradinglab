@@ -5255,6 +5255,183 @@ def check_d89_compare_toggle_manual_pan_no_creep(app) -> None:
           "historical intraday view does not creep candles in from the left")
 
 
+def check_d90_compare_index_preserve_render_no_xlim_drift(app) -> None:
+    """Regression: repeated INDEX-preserve renders with Compare ON must NOT
+    drift the shared x-axis window (``compare-slot-xlim-mirror``).
+
+    THE user-reported bug ("candles incrementally added from the left on
+    every toggle, on BOTH yfinance and Alpaca"). Root cause was NOT the
+    compare-toggle path but ``_compute_slot_window``: under an index-preserve
+    render the PRIMARY slot applies a fractional xlim ``(k+0.5, m+0.5)`` while
+    the COMPARE slot (sharing the axis) reconstructed it from the
+    floored/ceiled integer window as ``(floor-0.5, ceil-0.5)`` → the shared
+    left edge shifted LEFT by exactly 1.0 every render. Harmless on a single
+    render, but the market-hours next-bar POLL tick force-arms
+    ``_preserve_xlim_on_render`` and re-renders every few seconds, so the
+    window marched one bar left per poll — provider-agnostic (nothing yfinance
+    /Alpaca-specific), which is why a non-polling repro never caught it.
+
+    Fix: the compare slot mirrors the primary's EXACT applied float xlim. This
+    check frames a historical intraday window, forces INDEX-preserve (NOT the
+    time-preserve toggle path), and calls ``_render()`` repeatedly (simulating
+    poll re-renders), asserting the primary xlim is byte-identical each time.
+    """
+    from datetime import timedelta
+
+    from tradinglab.models import Candle
+
+    src = app.source_var.get()
+    primary_t, compare_t = "ZD90A", "ZD90B"
+
+    saved_ticker = app.ticker_var.get()
+    saved_compare_ticker = app.compare_ticker_var.get()
+    saved_compare_on = bool(app.compare_var.get())
+    saved_interval = app.interval_var.get()
+    saved_preserve = app._preserve_xlim_on_render
+    saved_preserve_t = getattr(app, "_preserve_xlim_by_time_on_render", False)
+    saved_drill = getattr(app, "_drilldown_day", None)
+    saved_stale = app._cache_is_stale
+    saved_cache = {
+        k: app._full_cache.pop(k, None)
+        for k in [(src, primary_t, "1d"), (src, primary_t, "5m"),
+                  (src, compare_t, "1d"), (src, compare_t, "5m")]
+    }
+
+    def make_5m(seed, *, sparse=False):
+        out, base = [], datetime(2026, 1, 5, 9, 30)
+        for d in range(20):
+            lo = 50 + d * 2 + seed
+            for i in range(78):
+                if sparse and i % 3 == 2:
+                    continue
+                p = lo + i * 0.05
+                out.append(Candle(date=base + timedelta(days=d, minutes=5 * i),
+                                  open=p, high=p + 0.3, low=p - 0.3,
+                                  close=p + 0.1, volume=1000 + i,
+                                  session="regular"))
+        return out
+
+    def _xlim():
+        ps = app._panel_state.get("primary") or {}
+        ax = ps.get("price_ax")
+        if ax is None:
+            return None
+        lo, hi = ax.get_xlim()
+        return (round(float(lo), 3), round(float(hi), 3))
+
+    try:
+        app._cache_is_stale = lambda *a, **k: False  # type: ignore[assignment]
+        # Sparse primary + dense compare so align inserts gaps (fractional
+        # xlim edges) — the shape that made the floor/ceil drift visible.
+        app._full_cache[(src, primary_t, "5m")] = make_5m(0, sparse=True)
+        app._full_cache[(src, compare_t, "5m")] = make_5m(100)
+        if app.compare_var.get():
+            app.compare_var.set(False)
+        app.interval_var.set("5m")
+        app.ticker_var.set(primary_t)
+        app.compare_ticker_var.set(compare_t)
+        app._drilldown_day = None
+        app._preserve_xlim_on_render = False
+        app._load_data()
+        _pump_until(app,
+            lambda: getattr(app, "_primary", None) and len(app._primary) > 0,
+            timeout=0.6)
+        # Enable compare via the direct apply (so _compare is populated) and
+        # let it settle.
+        app._full_cache[(src, primary_t, "5m")] = make_5m(0, sparse=True)
+        app._full_cache[(src, compare_t, "5m")] = make_5m(100)
+        app.compare_var.set(True)
+        app._apply_compare_toggle(True)
+        _pump_until(app,
+            lambda: (app._panel_state.get("compare") or {}).get("price_ax")
+            is not None and app._compare,
+            timeout=0.8)
+
+        # Frame a historical interior window with FRACTIONAL edges (the
+        # index-preserve case) and force INDEX-preserve (not time-preserve).
+        ps = app._panel_state.get("primary") or {}
+        ax = ps.get("price_ax")
+        cs = ps.get("candles") or []
+        if ax is None or len(cs) < 200 or not app._compare:
+            print("  [SKIP] d90: compare/primary not ready")
+            return
+        # A ~1.5-day-ish interior window somewhere in the middle.
+        lo0 = 100.5
+        hi0 = 178.5
+        ax.set_xlim(lo0, hi0)
+        app._preserve_xlim_by_time_on_render = False
+        app._preserve_xlim_on_render = True
+        try:
+            app._canvas.draw_idle()
+        except Exception:  # noqa: BLE001
+            pass
+        _pump(app, 0.05)
+
+        # Simulate repeated poll re-renders: _render() does NOT clear
+        # _preserve_xlim_on_render (spec §9.3), so it stays armed.
+        xlims: list = []
+        first = _xlim()
+        xlims.append(first)
+        for _ in range(6):
+            app._preserve_xlim_on_render = True
+            app._preserve_xlim_by_time_on_render = False
+            app._render()
+            _pump(app, 0.02)
+            xlims.append(_xlim())
+
+        assert all(x is not None for x in xlims), f"d90: null xlim {xlims}"
+        # THE bug: the left edge marched left ~1.0 per render.
+        lefts = [x[0] for x in xlims]
+        widths = [round(x[1] - x[0], 3) for x in xlims]
+        assert len(set(lefts)) == 1, (
+            f"d90: index-preserve render drifted the LEFT edge with compare "
+            f"ON (candles creeping in from the left): lefts={lefts}")
+        assert len(set(widths)) == 1, (
+            f"d90: index-preserve render widened the window with compare ON: "
+            f"widths={widths}")
+
+    finally:
+        try:
+            del app._cache_is_stale
+        except AttributeError:
+            app._cache_is_stale = saved_stale  # type: ignore[assignment]
+        for k, v in saved_cache.items():
+            app._full_cache.pop(k, None)
+            if v is not None:
+                app._full_cache[k] = v
+        try:
+            import os
+            base = os.environ.get("LOCALAPPDATA", "")
+            if base:
+                from pathlib import Path
+                p = Path(base) / "tradinglab"
+                for t in (primary_t, compare_t):
+                    for iv in ("1d", "5m"):
+                        for f in p.glob(f"{src}__{t}__{iv}.jsonl"):
+                            try:
+                                f.unlink()
+                            except Exception:  # noqa: BLE001
+                                pass
+        except Exception:  # noqa: BLE001
+            pass
+        if app.compare_var.get() != saved_compare_on:
+            app.compare_var.set(saved_compare_on)
+        app.interval_var.set(saved_interval)
+        app.ticker_var.set(saved_ticker)
+        app.compare_ticker_var.set(saved_compare_ticker)
+        app._preserve_xlim_on_render = saved_preserve
+        app._preserve_xlim_by_time_on_render = saved_preserve_t
+        app._drilldown_day = saved_drill
+        try:
+            app._load_data()
+        except Exception:  # noqa: BLE001
+            pass
+        _pump(app, 0.3)
+
+    print("  [OK] §d90 repeated index-preserve renders with Compare ON keep "
+          "the shared x-window pinned (no left-edge creep across poll ticks)")
+
+
 def check_d35_config_import_export_round_trip(app) -> None:
     """Configuration file load/save round-trip via :mod:`settings`.
 
@@ -22169,6 +22346,7 @@ def _run_all_checks(app) -> None:
     check_d87_compare_toggle_drilldown_no_index_shift(app)
     check_d88_compare_toggle_repeated_no_creep(app)
     check_d89_compare_toggle_manual_pan_no_creep(app)
+    check_d90_compare_index_preserve_render_no_xlim_drift(app)
     check_d35_config_import_export_round_trip(app)
     check_d35a_config_theme_round_trip(app)
     check_d35b_view_settings_round_trip(app)
@@ -22488,6 +22666,8 @@ def _build_check_sequence():
          check_d88_compare_toggle_repeated_no_creep),
         ("check_d89_compare_toggle_manual_pan_no_creep",
          check_d89_compare_toggle_manual_pan_no_creep),
+        ("check_d90_compare_index_preserve_render_no_xlim_drift",
+         check_d90_compare_index_preserve_render_no_xlim_drift),
         ("check_d35_config_import_export_round_trip",
          check_d35_config_import_export_round_trip),
         ("check_d35a_config_theme_round_trip",
