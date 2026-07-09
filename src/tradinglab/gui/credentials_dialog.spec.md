@@ -106,6 +106,23 @@ machine or by a different user. The plaintext exists in
 the environment can leak the secret, but that's a property of
 every Python program that holds secrets in env vars.
 
+## Sizing (resizable + content-derived `minsize`)
+Opens at `default_geometry="600x660"`, `resizable=(True, True)`, and after
+layout (`_build_widgets` + `_populate_from_environment` + wheel guard) sets
+`self.minsize(max(540, reqwidth+16), max(480, reqheight+16))` from the
+*actual* laid-out request size. The dialog packs three sections (8 fields, a
+dropdown-with-help, a multi-line status line, buttons) that overflowed the old
+fixed `560x420` **non-resizable** window — the bottom (Polygon field, status,
+buttons) clipped on the reporter's Windows-on-ARM display (font/DPI scaling)
+with no way to enlarge. Deriving `minsize` from the request size makes the
+floor self-correcting under any font / DPI scaling (higher DPI ⇒ larger
+request ⇒ larger `minsize`), so the window can never open smaller than its
+content; resizable so the user can grow it; the persisted `dlg.credentials`
+geometry is bounded below by `minsize` (the WM clamps a stale-small saved size
+— e.g. the old `560x420` — back up). Mirrors `sandbox_dialog` (see its spec.md
+"Sizing" note). Pinned by `tests/unit/gui/test_credentials_dialog_sizing.py`
+(audit `credentials-dialog-sizing`).
+
 ## Modal keys and wheel guard
 `__init__` calls `protect_combobox_wheel(self)` and then
 `BaseModalDialog._finalize_modal(primary=self._on_save,

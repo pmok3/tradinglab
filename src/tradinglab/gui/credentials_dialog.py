@@ -204,8 +204,8 @@ class CredentialsDialog(BaseModalDialog):
             parent,
             title="Configure Credentials",
             geometry_key="dlg.credentials",
-            default_geometry="560x420",
-            resizable=(False, False),
+            default_geometry="600x660",
+            resizable=(True, True),
         )
 
         self._entries: dict[str, tk.Entry] = {}
@@ -216,6 +216,24 @@ class CredentialsDialog(BaseModalDialog):
         self._build_widgets()
         self._populate_from_environment()
         protect_combobox_wheel(self)
+        # Guarantee the window can never open smaller than its content. The
+        # dialog packs three sections (8 fields + a dropdown-with-help + a
+        # multi-line status line + buttons) that overflowed the old fixed
+        # 560x420 non-resizable window — the bottom (Polygon field, status,
+        # buttons) was clipped with no way to enlarge. Deriving ``minsize``
+        # from the *actual* laid-out request size makes it self-correcting
+        # under any font / DPI scaling (Windows-on-ARM display scaling in
+        # particular), and the WM clamps a stale-small persisted
+        # ``dlg.credentials`` geometry back up to it. Resizable so the user
+        # can still grow the window. Mirrors ``sandbox_dialog`` (see its
+        # spec.md "Sizing" note). A small margin absorbs border/rounding.
+        try:
+            self.update_idletasks()
+            req_w = self.winfo_reqwidth()
+            req_h = self.winfo_reqheight()
+            self.minsize(max(540, req_w + 16), max(480, req_h + 16))
+        except tk.TclError:
+            pass
         self._finalize_modal(primary=self._on_save, cancel=self._on_cancel)
 
     def _build_widgets(self) -> None:
