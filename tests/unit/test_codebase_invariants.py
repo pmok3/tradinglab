@@ -231,7 +231,10 @@ def test_app_spec_md_mro_matches_real_chartapp_bases():
 #          primary's EXACT applied float xlim on the compare slot (kills the
 #          index-preserve floor/ceil left-creep under poll re-renders). Bug
 #          fix logic, not regrowth.
-_APP_PY_LOC_CEILING = 7338
+#   7380 — load-complete readout now shows the loaded series' date range
+#          (_series_date_span); surfaces a provider returning years-stale /
+#          incomplete data. Diagnostic feature.
+_APP_PY_LOC_CEILING = 7380
 
 # Once a real extraction drops app.py well under the ceiling, lower the
 # constant to lock the reduction in. The band keeps ordinary small edits from

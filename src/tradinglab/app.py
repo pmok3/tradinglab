@@ -3661,7 +3661,19 @@ class ChartApp(
             _kick_events()
         try:
             n = len(primary)
-            self._status.info(f"{raw_primary} {interval}: {n} bars")
+            span = self._series_date_span(primary)
+            if span is not None:
+                first_d, last_d, _stale = span
+                # Surface the loaded series' DATE RANGE, not just the bar
+                # count — makes a provider returning years-stale / incomplete
+                # history (e.g. a source switch landing the view on an old
+                # data extent) immediately visible instead of a silent
+                # "jump to an old year". Audit ``source-data-range-readout``.
+                self._status.info(
+                    f"{raw_primary} {interval}: {n} bars "
+                    f"({first_d} \u2192 {last_d})")
+            else:
+                self._status.info(f"{raw_primary} {interval}: {n} bars")
         except Exception:  # noqa: BLE001
             pass
         # Arm the next-bar scheduler (event-driven, §9.3).
@@ -3698,6 +3710,29 @@ class ChartApp(
         self, key: tuple[str, str, str],
     ) -> list[Candle] | None:
         return self._data_ctrl.disk_load(*key)
+
+    @staticmethod
+    def _series_date_span(candles):
+        """Return ``(first_date, last_date, stale_days)`` for a candle list.
+
+        Dates are ``YYYY-MM-DD`` strings of the earliest / latest NON-gap
+        bars; ``stale_days`` is whole calendar days between the newest real
+        bar and now (>= 0). Returns ``None`` when there are no real bars.
+        Used purely for the load-complete status readout + gross-staleness
+        warning (audit ``source-stale-data-warning``); never affects data.
+        """
+        try:
+            reals = [c for c in candles if not getattr(c, "is_gap", False)]
+            if not reals:
+                return None
+            first_ts = reals[0].date
+            last_ts = reals[-1].date
+            first_d = first_ts.date().isoformat()
+            last_d = last_ts.date().isoformat()
+            stale_days = max(0, int((time.time() - last_ts.timestamp()) // 86400))
+            return (first_d, last_d, stale_days)
+        except Exception:  # noqa: BLE001
+            return None
 
     def _cache_is_stale(
         self, candles: list[Candle], interval: str,
