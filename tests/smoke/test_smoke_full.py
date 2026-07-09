@@ -4874,6 +4874,186 @@ def check_d87_compare_toggle_drilldown_no_index_shift(app) -> None:
           "(grid-mismatch index shift absorbed by time-preserve)")
 
 
+def check_d88_compare_toggle_repeated_no_creep(app) -> None:
+    """Regression: REPEATEDLY toggling Compare on a drilled day must not
+    grow / drift the view (``compare-toggle-drilldown-preserve``).
+
+    Bug (user-reported): on a 5m drilled day with a grid-mismatched
+    compare (sparse primary vs dense compare), toggling Compare on/off
+    repeatedly made candles "creep in from the left" — the visible window
+    widened a little on every toggle. Root cause: the compare-ON path
+    preserved the view by TIME (correct — ``align_pair`` inserts gap slots,
+    so the drilled day spans more indices) but the compare-OFF path fell
+    back to INDEX-preserve. Removing the gaps at the same index window
+    landed on MORE real days (drift + widen), and that widened window
+    became the next toggle-on's ``keep_window`` → the align inserted even
+    more gaps → compounding growth.
+
+    Fix: ``_on_compare_toggle`` time-preserves BOTH directions of the
+    toggle when in a historical drilldown (drop the ``compare_on`` gate on
+    ``use_time_preserve``). This check drills into a mid-range day and
+    toggles Compare on/off 4x, asserting the ON-state window width and the
+    leftmost visible day are STABLE across every cycle (no monotonic
+    growth, no drift).
+    """
+    from datetime import timedelta
+
+    import numpy as np
+
+    from tradinglab.models import Candle
+
+    src = app.source_var.get()
+    primary_t, compare_t = "ZD88A", "ZD88B"
+
+    saved_ticker = app.ticker_var.get()
+    saved_compare_ticker = app.compare_ticker_var.get()
+    saved_compare_on = bool(app.compare_var.get())
+    saved_interval = app.interval_var.get()
+    saved_preserve = app._preserve_xlim_on_render
+    saved_drill = getattr(app, "_drilldown_day", None)
+    saved_stale = app._cache_is_stale
+    saved_cache = {
+        k: app._full_cache.pop(k, None)
+        for k in [(src, primary_t, "1d"), (src, primary_t, "5m"),
+                  (src, compare_t, "1d"), (src, compare_t, "5m")]
+    }
+
+    def make_1d(seed, n=30):
+        out, base = [], datetime(2026, 1, 5, 16, 0)
+        for d in range(n):
+            lo = 50 + d * 2 + seed
+            out.append(Candle(date=base + timedelta(days=d),
+                              open=lo, high=lo + 5, low=lo - 1,
+                              close=lo + 2, volume=80000, session="regular"))
+        return out
+
+    def make_5m(seed, n=30, *, sparse=False):
+        out, base = [], datetime(2026, 1, 5, 9, 30)
+        for d in range(n):
+            lo = 50 + d * 2 + seed
+            for i in range(78):
+                if sparse and i % 3 == 2:
+                    continue
+                p = lo + i * 0.05
+                out.append(Candle(date=base + timedelta(days=d, minutes=5 * i),
+                                  open=p, high=p + 0.3, low=p - 0.3,
+                                  close=p + 0.1, volume=1000 + i,
+                                  session="regular"))
+        return out
+
+    def _reseed():
+        app._full_cache[(src, primary_t, "1d")] = make_1d(0)
+        app._full_cache[(src, primary_t, "5m")] = make_5m(0, sparse=True)
+        app._full_cache[(src, compare_t, "1d")] = make_1d(100)
+        app._full_cache[(src, compare_t, "5m")] = make_5m(100)  # dense
+
+    def _on_state():
+        ps = app._panel_state.get("primary") or {}
+        ax = ps.get("price_ax")
+        cs = ps.get("candles") or []
+        if ax is None or not cs:
+            return None
+        xlo, xhi = ax.get_xlim()
+        lo = max(0, int(np.ceil(xlo - 1e-6)))
+        hi = min(len(cs), int(np.floor(xhi + 1e-6)) + 1)
+        days = sorted({c.date.date() for c in cs[lo:hi]
+                       if not getattr(c, "is_gap", False)})
+        return (round(xhi - xlo, 1), days[0] if days else None)
+
+    try:
+        app._cache_is_stale = lambda *a, **k: False  # type: ignore[assignment]
+        _reseed()
+        if app.compare_var.get():
+            app.compare_var.set(False)
+        app.interval_var.set("1d")
+        app.ticker_var.set(primary_t)
+        app.compare_ticker_var.set(compare_t)
+        app._preserve_xlim_on_render = False
+        app._drilldown_day = None
+        app._load_data()
+        _pump_until(app,
+            lambda: getattr(app, "_primary", None) and len(app._primary) > 0,
+            timeout=0.6)
+        _reseed()
+
+        drill_day = datetime(2026, 1, 15).date()
+        ok = app._zoom_5m_for_date(drill_day)
+        if not ok:
+            raise AssertionError(f"d88: drill-down to {drill_day} failed")
+        _pump_until(app, lambda: app.interval_var.get() == "5m", timeout=0.6)
+        assert getattr(app, "_drilldown_day", None) == drill_day
+
+        widths: list[float] = []
+        left_days: list = []
+        for _ in range(4):
+            _reseed()
+            app.compare_var.set(True)
+            app._on_compare_toggle()
+            _pump_until(app,
+                lambda: (app._panel_state.get("compare") or {}).get("price_ax")
+                is not None,
+                timeout=0.8)
+            _pump(app, 0.05)
+            st = _on_state()
+            if st is not None:
+                widths.append(st[0])
+                left_days.append(st[1])
+            _reseed()
+            app.compare_var.set(False)
+            app._on_compare_toggle()
+            _pump(app, 0.05)
+
+        assert len(widths) >= 3, "d88: expected several ON-state samples"
+        # THE bug: the ON-state window width grows on every toggle.
+        assert len(set(widths)) == 1, (
+            f"d88: compare-ON window width drifted across repeated toggles "
+            f"(candles creeping in from the left): widths={widths}")
+        # And the drilled day must remain the leftmost visible day every time.
+        assert all(d == drill_day for d in left_days), (
+            f"d88: leftmost visible day drifted across toggles: {left_days} "
+            f"(expected all {drill_day})")
+
+    finally:
+        try:
+            del app._cache_is_stale
+        except AttributeError:
+            app._cache_is_stale = saved_stale  # type: ignore[assignment]
+        for k, v in saved_cache.items():
+            app._full_cache.pop(k, None)
+            if v is not None:
+                app._full_cache[k] = v
+        try:
+            import os
+            base = os.environ.get("LOCALAPPDATA", "")
+            if base:
+                from pathlib import Path
+                p = Path(base) / "tradinglab"
+                for t in (primary_t, compare_t):
+                    for iv in ("1d", "5m"):
+                        for f in p.glob(f"{src}__{t}__{iv}.jsonl"):
+                            try:
+                                f.unlink()
+                            except Exception:  # noqa: BLE001
+                                pass
+        except Exception:  # noqa: BLE001
+            pass
+        if app.compare_var.get() != saved_compare_on:
+            app.compare_var.set(saved_compare_on)
+        app.interval_var.set(saved_interval)
+        app.ticker_var.set(saved_ticker)
+        app.compare_ticker_var.set(saved_compare_ticker)
+        app._preserve_xlim_on_render = saved_preserve
+        app._drilldown_day = saved_drill
+        try:
+            app._load_data()
+        except Exception:  # noqa: BLE001
+            pass
+        _pump(app, 0.3)
+
+    print("  [OK] §d88 repeated compare toggle on a drilled day does not "
+          "creep candles in from the left (width + left-edge stable)")
+
+
 def check_d35_config_import_export_round_trip(app) -> None:
     """Configuration file load/save round-trip via :mod:`settings`.
 
@@ -21782,6 +21962,7 @@ def _run_all_checks(app) -> None:
     check_d53_compare_off_during_drilldown_ylim(app)
     check_d86_compare_toggle_preserves_drilldown_day(app)
     check_d87_compare_toggle_drilldown_no_index_shift(app)
+    check_d88_compare_toggle_repeated_no_creep(app)
     check_d35_config_import_export_round_trip(app)
     check_d35a_config_theme_round_trip(app)
     check_d35b_view_settings_round_trip(app)
@@ -22097,6 +22278,8 @@ def _build_check_sequence():
          check_d86_compare_toggle_preserves_drilldown_day),
         ("check_d87_compare_toggle_drilldown_no_index_shift",
          check_d87_compare_toggle_drilldown_no_index_shift),
+        ("check_d88_compare_toggle_repeated_no_creep",
+         check_d88_compare_toggle_repeated_no_creep),
         ("check_d35_config_import_export_round_trip",
          check_d35_config_import_export_round_trip),
         ("check_d35a_config_theme_round_trip",

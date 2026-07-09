@@ -2169,30 +2169,31 @@ class ChartApp(
         except Exception:  # noqa: BLE001
             in_drilldown = False
         vis = self._current_visible_window_ts() if in_drilldown else None
-        # TIME-preserve holds the drilled day across the compare re-align.
-        # It is needed for EVERY historical-day drilldown compare toggle —
-        # not just the deep-history (compare-lacks) case — because
-        # ``align_pair`` inserts gap slots wherever the primary and compare
-        # 5m grids differ (IEX sparse bars: SPY has timestamps AMD lacks and
-        # vice-versa). Those inserted slots SHIFT the drilled day's absolute
-        # index, so naive index-preserve reuses a now-stale index xlim and
-        # drags the view ~1 day to the left (the "May 8th start ends up in
-        # the middle, May 7th becomes the left edge" report). Remapping the
-        # window by TIME lands on the same calendar minutes in the new
-        # series → the drilled day stays framed exactly. Audit
-        # ``compare-toggle-drilldown-preserve``.
+        # TIME-preserve holds the drilled day across the compare re-align,
+        # in BOTH directions (on AND off). ``align_pair`` inserts gap slots
+        # wherever the primary and compare 5m grids differ (IEX sparse bars),
+        # SHIFTING the drilled day's absolute index; naive index-preserve then
+        # reuses a stale index xlim and drags the view sideways. Toggling
+        # compare OFF reverts the primary from the aligned (gap-padded) list
+        # to the filtered (ungapped) list, shifting indices the OTHER way —
+        # index-preserve there widened + drifted the view, and that drifted
+        # window became the NEXT toggle-on's ``keep_window`` → compounding
+        # "candles creep in from the left on every toggle". Remapping by TIME
+        # lands on the same calendar minutes regardless of direction, so the
+        # drilled day stays framed exactly. Audit
+        # ``compare-toggle-drilldown-preserve`` (pinned by check_d87/d88).
         use_time_preserve = bool(
             in_drilldown
-            and compare_on
             and vis is not None and vis[2]  # historical view (not right edge)
         )
-        # keep_window + background-fill ALSO engage only when the compare
-        # cache genuinely LACKS the drilled window (deep-history providers
-        # cap intraday depth). A normal manual interior zoom keeps using the
-        # existing index-preserve — d52 clears ``_drilldown_day`` so it takes
-        # this ``in_drilldown=False`` path.
+        # keep_window + background-fill ALSO engage only when compare is being
+        # turned ON and the compare cache genuinely LACKS the drilled window
+        # (deep-history providers cap intraday depth). A normal manual interior
+        # zoom keeps using the existing index-preserve — d52 clears
+        # ``_drilldown_day`` so it takes this ``in_drilldown=False`` path.
         compare_lacks = bool(
             use_time_preserve
+            and compare_on
             and self._compare_cache_earliest_gt(vis[0])  # compare misses it
         )
         if use_time_preserve:
