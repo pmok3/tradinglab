@@ -273,6 +273,16 @@ class ChartApp(
 ):
     """Top-level Tk window hosting the chart, controls, and data flow."""
 
+    # Class-level defaults for the axis-switch view-preserve flags so a
+    # bare ``ChartApp.__new__(ChartApp)`` harness (unit tests call
+    # ``_load_data`` on a stub without ``__init__``) can READ them without
+    # tripping tkinter's self-recursing ``__getattr__`` (a missing attr on a
+    # ``tk.Tk`` subclass raises ``RecursionError``, which ``getattr(..., default)``
+    # does NOT swallow). ``__init__`` re-assigns instance values; the real app
+    # never sees these defaults. Audit ``source-switch-view-preserve``.
+    _axis_switch_inflight = False
+    _pending_axis_switch_time_preserve = False
+
     _WORKER_COUNT_MIN = WORKER_COUNT_MIN
     _WORKER_COUNT_MAX = WORKER_COUNT_MAX
     _MIN_POLL_BACKOFF_MS = 30_000
@@ -547,6 +557,7 @@ class ChartApp(
         except Exception:  # noqa: BLE001
             self._prev_axis_source = self._prev_axis_interval = None
         self._axis_switch_inflight = False
+        self._pending_axis_switch_time_preserve = False
         self.prepost_var = self._state.prepost
         self.days_var = self._state.days
         self.dark_var = self._state.dark
@@ -3338,6 +3349,25 @@ class ChartApp(
         # poll-tick race guard: normal polling resumes when this render's
         # _schedule_next_bar_fetch re-arms it. Audit
         # ``source-switch-view-preserve``.
+        #
+        # Capture whether THIS load is the completion of an explicit
+        # source-only switch that wants its DATE window preserved. An
+        # intervening poll-tick / prefetch-driven render during the async
+        # switch load can (a) consume the one-shot
+        # ``_preserve_xlim_by_time_on_render`` flag and/or (b) re-arm
+        # ``_preserve_xlim_on_render`` (index-preserve). If index-preserve
+        # is armed at the switch's completing render it WINS over the
+        # time-remap (``_compute_slot_window`` skips the remap while
+        # index-preserve is active), reinterpreting the stale bar-INDEX
+        # window against the new provider's different-length series → the
+        # view jumps years back ("switch source → jump to 2021" after a
+        # Compare ON→OFF whose async prefetch lands mid-switch). Re-assert
+        # TIME-preserve just before this load's render below.
+        was_axis_switch = bool(getattr(self, "_axis_switch_inflight", False))
+        switch_wants_time_preserve = bool(
+            was_axis_switch
+            and getattr(self, "_pending_axis_switch_time_preserve", False)
+        )
         self._axis_switch_inflight = False
         # Sandbox replay owns primary-slot updates while active; route
         # ticker-entry / watchlist double-clicks through the controller's
@@ -3691,7 +3721,19 @@ class ChartApp(
         # and the Y autoscale silently no-ops (xlim indices fall outside
         # the old candle list -> hi <= lo). Force synchronous render so
         # callers downstream operate on fresh state.
-        if cache_hit_only and not getattr(self, "_preserve_xlim_on_render", False):
+        if switch_wants_time_preserve:
+            # Completion of an explicit source-only switch: re-assert
+            # TIME-preserve (and CLEAR index-preserve) so a mid-switch
+            # re-arm can't reinterpret the stale bar-index window against
+            # the new provider's different-length series. Render
+            # synchronously so no further poll-tick / prefetch event can
+            # consume the re-asserted flags before the render. Audit
+            # ``source-switch-view-preserve``.
+            self._preserve_xlim_by_time_on_render = True
+            self._preserve_xlim_on_render = False
+            self._pending_axis_switch_time_preserve = False
+            self._render()
+        elif cache_hit_only and not getattr(self, "_preserve_xlim_on_render", False):
             self._request_deferred_render()
         else:
             self._render()
@@ -5989,6 +6031,13 @@ class ChartApp(
         # (or no-delta re-select): snap to the right-edge default. See docstring.
         self._preserve_xlim_on_render = False
         self._preserve_xlim_by_time_on_render = bool(source_only_change)
+        # Durable companion to the one-shot flag above: an intervening
+        # poll-tick / prefetch render during the async switch load can
+        # consume the one-shot ``_preserve_xlim_by_time_on_render`` and/or
+        # re-arm index-preserve. ``_load_data`` re-asserts TIME-preserve at
+        # the switch's completing render iff this stays set (audit
+        # ``source-switch-view-preserve``).
+        self._pending_axis_switch_time_preserve = bool(source_only_change)
         # Race guard: block the live poll tick from re-arming index-preserve
         # (or launching a competing fetch) until this switch's load renders.
         self._axis_switch_inflight = True

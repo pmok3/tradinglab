@@ -248,7 +248,15 @@ def test_app_spec_md_mro_matches_real_chartapp_bases():
 #          the compare's ~120-day history) + pins the compare ticker in the
 #          cache trim/stash. Bug fix logic (compare-toggle-targeted-first-load
 #          + compare-ticker-cache-pin).
-_APP_PY_LOC_CEILING = 7470
+#   7519 — source-switch view-preserve hardened: a durable
+#          _pending_axis_switch_time_preserve + a re-assert of TIME-preserve
+#          at the switch's completing _load_data render, so a mid-switch
+#          index-preserve re-arm (poll-tick / Compare-prefetch render during
+#          the async load) can't reinterpret the stale bar-index window and
+#          jump the view years back. + class-level defaults for the two
+#          axis-switch flags (bare-__new__ harness read-safety). Bug fix
+#          logic (source-switch-view-preserve).
+_APP_PY_LOC_CEILING = 7519
 
 # Once a real extraction drops app.py well under the ceiling, lower the
 # constant to lock the reduction in. The band keeps ordinary small edits from

@@ -6048,6 +6048,167 @@ def check_d93_compare_toggle_empty_cache_targeted_fetch(app) -> None:
           "targeted single-day fill (no full _load_data) on a range provider")
 
 
+def check_d94_source_switch_time_preserve_survives_index_rearm(app) -> None:
+    """Regression: an explicit source switch whose completing render is raced
+    by a mid-switch index-preserve re-arm must still preserve the DATE window
+    — NOT reinterpret the stale bar-INDEX window against the new provider's
+    longer series (``source-switch-view-preserve``).
+
+    User-reported sequence (AMD 1d): startup → Compare ON → OFF → switch
+    source yfinance→alpaca → the chart jumped to 2021. Root cause: the async
+    switch load is serviced by ``_load_data`` when the fetch completes, but
+    an intervening poll-tick / Compare-prefetch render during that async
+    window (a) consumes the one-shot ``_preserve_xlim_by_time_on_render`` flag
+    and (b) re-arms ``_preserve_xlim_on_render`` (index-preserve). Index-
+    preserve WINS over the time-remap in ``_compute_slot_window``, so the
+    switch's completing render reused the stale ~200-bar recent index window
+    against alpaca's ~2× longer series → the view landed years back.
+
+    Fix: ``_on_explicit_axis_change`` records a DURABLE
+    ``_pending_axis_switch_time_preserve`` for a source-only change, and the
+    switch's completing ``_load_data`` re-asserts TIME-preserve (clears
+    index-preserve) right before its synchronous render. This check simulates
+    the race deterministically: render a SHORT recent series, then complete a
+    "switch" ``_load_data`` onto a LONG series with the index-preserve race
+    state armed, and assert the view stays RECENT.
+    """
+    from datetime import timedelta
+
+    import numpy as np
+
+    from tradinglab.models import Candle
+
+    src = app.source_var.get()
+    ticker = "ZD94"
+
+    saved_ticker = app.ticker_var.get()
+    saved_interval = app.interval_var.get()
+    saved_compare_on = bool(app.compare_var.get())
+    saved_preserve = app._preserve_xlim_on_render
+    saved_preserve_t = app._preserve_xlim_by_time_on_render
+    saved_inflight = getattr(app, "_axis_switch_inflight", False)
+    saved_pending = getattr(app, "_pending_axis_switch_time_preserve", False)
+    saved_drill = getattr(app, "_drilldown_day", None)
+    saved_stale = app._cache_is_stale
+    saved_cache = app._full_cache.pop((src, ticker, "1d"), None)
+
+    def make_daily(start_year, start_month, start_day, n):
+        out, base = [], datetime(start_year, start_month, start_day, 16, 0)
+        px = 40.0
+        for d in range(n):
+            dt = base + timedelta(days=d)
+            if dt.weekday() >= 5:
+                continue
+            out.append(Candle(date=dt, open=px, high=px + 3, low=px - 1,
+                              close=px + 1, volume=70000, session="regular"))
+            px += 0.05
+        return out
+
+    # SHORT recent series (~1.4y) and a LONG series (~5.4y) that SHARES the
+    # SHORT series' exact recent tail dates (so the time-remap can land the
+    # same calendar window). Same end date; LONG merely reaches further back.
+    short = make_daily(2025, 1, 6, 480)      # ~2025-01 .. 2026-04
+    long_tail_start = short[0].date
+    long_ = make_daily(2021, 1, 4, 1900)     # ~2021-01 .. 2026-04
+    # Splice: LONG = its own pre-2025 history + the EXACT short tail.
+    long_ = [c for c in long_ if c.date < long_tail_start] + list(short)
+
+    def visible_left():
+        ps = app._panel_state.get("primary") or {}
+        ax = ps.get("price_ax")
+        cs = ps.get("candles") or []
+        if ax is None or not cs:
+            return None
+        xlo, _xhi = ax.get_xlim()
+        lo = max(0, min(len(cs) - 1, int(np.ceil(xlo - 1e-6))))
+        return cs[lo].date.date()
+
+    try:
+        app._cache_is_stale = lambda *a, **k: False  # type: ignore[assignment]
+        if app.compare_var.get():
+            app.compare_var.set(False)
+        app.interval_var.set("1d")
+        app.ticker_var.set(ticker)
+        app._drilldown_day = None
+        app._preserve_xlim_on_render = False
+        app._preserve_xlim_by_time_on_render = False
+        app._axis_switch_inflight = False
+        app._pending_axis_switch_time_preserve = False
+
+        # Phase 1: render the SHORT series; default view frames the recent tail.
+        app._full_cache[(src, ticker, "1d")] = list(short)
+        app._load_data()
+        _pump_until(app, lambda: app._primary and len(app._primary) > 0, timeout=0.8)
+        left_short = visible_left()
+        assert left_short is not None and left_short.year >= 2025, (
+            f"d94 precondition: SHORT default view should be recent; "
+            f"got {left_short}")
+
+        # Phase 2: complete a source SWITCH onto the LONG series WITH the
+        # mid-switch race state armed: index-preserve re-armed + one-shot
+        # time flag already consumed. Without the fix, index-preserve wins
+        # and the view jumps back years.
+        app._full_cache[(src, ticker, "1d")] = list(long_)
+        app._axis_switch_inflight = True
+        app._pending_axis_switch_time_preserve = True
+        app._preserve_xlim_on_render = True          # the racing re-arm
+        app._preserve_xlim_by_time_on_render = False  # one-shot already consumed
+        app._load_data()
+        _pump_until(app, lambda: app._primary and len(app._primary) > 1000,
+                    timeout=0.8)
+        _pump(app, 0.05)
+
+        left_after = visible_left()
+        assert left_after is not None and left_after.year >= 2025, (
+            f"d94: source switch onto a longer provider series jumped the view "
+            f"back to {left_after} (expected the preserved recent window, "
+            f">=2025) — the mid-switch index-preserve re-arm defeated the "
+            f"source-switch time-preserve")
+        # The durable pending flag must be consumed by the completing load.
+        assert app._pending_axis_switch_time_preserve is False, (
+            "d94: _pending_axis_switch_time_preserve should be cleared after "
+            "the switch's completing render")
+
+    finally:
+        try:
+            del app._cache_is_stale
+        except AttributeError:
+            app._cache_is_stale = saved_stale  # type: ignore[assignment]
+        app._full_cache.pop((src, ticker, "1d"), None)
+        if saved_cache is not None:
+            app._full_cache[(src, ticker, "1d")] = saved_cache
+        try:
+            import os
+            b = os.environ.get("LOCALAPPDATA", "")
+            if b:
+                from pathlib import Path
+                p = Path(b) / "tradinglab"
+                for f in p.glob(f"{src}__{ticker}__1d.jsonl"):
+                    try:
+                        f.unlink()
+                    except Exception:  # noqa: BLE001
+                        pass
+        except Exception:  # noqa: BLE001
+            pass
+        if app.compare_var.get() != saved_compare_on:
+            app.compare_var.set(saved_compare_on)
+        app.interval_var.set(saved_interval)
+        app.ticker_var.set(saved_ticker)
+        app._preserve_xlim_on_render = saved_preserve
+        app._preserve_xlim_by_time_on_render = saved_preserve_t
+        app._axis_switch_inflight = saved_inflight
+        app._pending_axis_switch_time_preserve = saved_pending
+        app._drilldown_day = saved_drill
+        try:
+            app._load_data()
+        except Exception:  # noqa: BLE001
+            pass
+        _pump(app, 0.3)
+
+    print("  [OK] §d94 source switch time-preserve survives a mid-switch "
+          "index-preserve re-arm (no jump to years-back)")
+
+
 def check_d35_config_import_export_round_trip(app) -> None:
     """Configuration file load/save round-trip via :mod:`settings`.
 
@@ -22966,6 +23127,7 @@ def _run_all_checks(app) -> None:
     check_d91_ticker_switch_default_view_align(app)
     check_d92_compare_toggle_drilldown_no_extra_bar(app)
     check_d93_compare_toggle_empty_cache_targeted_fetch(app)
+    check_d94_source_switch_time_preserve_survives_index_rearm(app)
     check_d35_config_import_export_round_trip(app)
     check_d35a_config_theme_round_trip(app)
     check_d35b_view_settings_round_trip(app)
@@ -23293,6 +23455,8 @@ def _build_check_sequence():
          check_d92_compare_toggle_drilldown_no_extra_bar),
         ("check_d93_compare_toggle_empty_cache_targeted_fetch",
          check_d93_compare_toggle_empty_cache_targeted_fetch),
+        ("check_d94_source_switch_time_preserve_survives_index_rearm",
+         check_d94_source_switch_time_preserve_survives_index_rearm),
         ("check_d35_config_import_export_round_trip",
          check_d35_config_import_export_round_trip),
         ("check_d35a_config_theme_round_trip",
