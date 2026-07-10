@@ -104,7 +104,11 @@ Also hosts the pure scheduler helpers (only caller is here).
   interval flip / source flip).
 - `_do_scheduled_reload()` — debounce callback. Preserves
   drilldown state on mid-zoom ticker swaps; else clears bar-index
-  pan and preserves timestamp window.
+  pan and preserves the timestamp window ONLY when the current view
+  is historical (`_preserve_xlim_by_time_on_render =
+  _ticker_change_should_time_preserve()`) — at the default right-edge
+  view the new ticker shows its own default window instead of the
+  previous ticker's (audit `ticker-switch-default-view-align`).
 - `_schedule_next_bar_fetch()` — arm aligned next-bar timer.
   No-op in sandbox / while streaming. Retry path: if prev tick
   expected newer bar but fetch didn't advance, schedule retry at

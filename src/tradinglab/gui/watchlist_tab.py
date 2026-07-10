@@ -1320,10 +1320,14 @@ class WatchlistTabMixin:
                     and self.interval_var.get() == "5m"):
                 self._reload_preserving_drilldown(self._load_data)
             else:
-                # Preserve the visible time window across the ticker
-                # switch so the user stays on the same panned day.
+                # Preserve the visible time window across the ticker switch
+                # ONLY when the user has panned/zoomed back into history — at
+                # the default right-edge view (e.g. after Reset View) show the
+                # NEW ticker's own default window instead of imposing the
+                # previous ticker's (audit ``ticker-switch-default-view-align``).
                 try:
-                    self._preserve_xlim_by_time_on_render = True
+                    self._preserve_xlim_by_time_on_render = (
+                        self._ticker_change_should_time_preserve())
                 except Exception:  # noqa: BLE001
                     pass
                 self._load_data_async()
@@ -1383,10 +1387,13 @@ class WatchlistTabMixin:
                 and self.interval_var.get() == "5m"):
             self._reload_preserving_drilldown(self._load_data)
         else:
-            # Preserve the visible time window across the ticker switch
-            # so the user stays on the same panned day.
+            # Preserve the visible time window across the ticker switch ONLY
+            # when the user has panned/zoomed back into history — at the
+            # default right-edge view show the NEW ticker's own default window
+            # (audit ``ticker-switch-default-view-align``).
             try:
-                self._preserve_xlim_by_time_on_render = True
+                self._preserve_xlim_by_time_on_render = (
+                    self._ticker_change_should_time_preserve())
             except Exception:  # noqa: BLE001
                 pass
             self._load_data_async()

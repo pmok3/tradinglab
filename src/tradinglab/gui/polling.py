@@ -537,11 +537,17 @@ class PollingMixin:
             self._reload_preserving_drilldown(self._load_data)
             return
         # Default path: explicit user intent clears bar-index pan
-        # (spec §9.3) but DOES preserve the timestamp window so that
-        # switching to a new symbol keeps the same calendar day in
-        # view instead of snapping back to the right edge.
+        # (spec §9.3). Preserve the timestamp window so switching to a new
+        # symbol keeps the same calendar day in view — but ONLY when the
+        # user has panned/zoomed back into history. At the default
+        # right-edge view (e.g. after Reset View), preserving would impose
+        # the previous ticker's window on the new one, shifting its left
+        # edge to an unexpected earlier date when the two have different
+        # history depth/density; show the new ticker's own default instead.
+        # Audit ``ticker-switch-default-view-align``.
         self._preserve_xlim_on_render = False
-        self._preserve_xlim_by_time_on_render = True
+        self._preserve_xlim_by_time_on_render = (
+            self._ticker_change_should_time_preserve())
         # Explicit reload also clears any in-flight poll-retry bookkeeping
         # so the retry budget doesn't carry across an interval/ticker switch.
         self._poll_retry_count = 0

@@ -89,7 +89,14 @@ larger; pinning makes a list reachable from the main UI.
   `_last_clicked_slot`'s ticker to next entry in active pinned
   watchlist (mod-N wrap, stateless lookup by current symbol).
   Returns False on empty / no-op cycles. Honors drilldown lock
-  via `_reload_preserving_drilldown`.
+  via `_reload_preserving_drilldown`. Outside drilldown it sets
+  `_preserve_xlim_by_time_on_render = _ticker_change_should_time_preserve()`
+  (True only when the current view is HISTORICAL) so a cycle at the
+  default right-edge view shows the NEW ticker's own default window
+  instead of imposing the previous ticker's calendar window —
+  otherwise a sparse small-cap's wider reset window misaligns a dense
+  large-cap's left edge (audit `ticker-switch-default-view-align`).
+  Same gate applies to `_on_watchlist_double`.
 - `_sort_watchlist_by(name, col)` — toggle sort; updates
   `_watchlist_sort_by_name[name]`; repaints.
 - `_populate_watchlist_tab(name=None)` — repaint Treeview for

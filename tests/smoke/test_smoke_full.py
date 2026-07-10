@@ -2623,6 +2623,13 @@ def check_d72_chartstack_promote_preserves_view(app) -> None:
 
     app._reload_preserving_drilldown = fake_preserving
     app._load_data_async = fake_async
+    # The non-drilldown path now gates time-preserve on
+    # ``_ticker_change_should_time_preserve()`` (historical view only). Mock
+    # it True by default so the existing "sets the flag" assertions verify the
+    # path CONSULTS the gate + uses its result; a dedicated sub-case below
+    # pins the False (default right-edge view) behaviour.
+    real_gate = app._ticker_change_should_time_preserve
+    app._ticker_change_should_time_preserve = lambda: True
 
     try:
         # --- no-op: empty symbol ---------------------------------------
@@ -2701,9 +2708,29 @@ def check_d72_chartstack_promote_preserves_view(app) -> None:
         assert spy["async_calls"] == 1, \
             "drilldown-but-not-5m must call _load_data_async"
         assert app._preserve_xlim_by_time_on_render is True
+
+        # --- default right-edge view (gate False) → NO time-preserve ---
+        # The user is at the default view (e.g. after Reset View); promoting
+        # a new ticker must show ITS OWN default window, not impose the
+        # previous ticker's calendar window. Audit
+        # ``ticker-switch-default-view-align``.
+        app._ticker_change_should_time_preserve = lambda: False
+        app.ticker_var.set("AAA")
+        app._drilldown_day = None
+        app.interval_var.set("1d")
+        app._preserve_xlim_by_time_on_render = False
+        spy["preserving_calls"] = 0
+        spy["async_calls"] = 0
+        app._on_chartstack_promote("EEE")
+        assert spy["async_calls"] == 1, \
+            "default-view promote must still async-load the new ticker"
+        assert app._preserve_xlim_by_time_on_render is False, (
+            "at the default right-edge view the promote must NOT time-preserve "
+            "(show the new ticker's own default window)")
     finally:
         app._reload_preserving_drilldown = real_preserving
         app._load_data_async = real_async
+        app._ticker_change_should_time_preserve = real_gate
         app._drilldown_day = saved_drill
         app._preserve_xlim_by_time_on_render = saved_preserve
         app.interval_var.set(initial_interval)
@@ -5430,6 +5457,221 @@ def check_d90_compare_index_preserve_render_no_xlim_drift(app) -> None:
 
     print("  [OK] §d90 repeated index-preserve renders with Compare ON keep "
           "the shared x-window pinned (no left-edge creep across poll ticks)")
+
+
+def check_d91_ticker_switch_default_view_align(app) -> None:
+    """Regression: advancing/typing a new ticker while at the DEFAULT
+    right-edge view must show the NEW ticker's own default window, not
+    impose the previous ticker's calendar window
+    (``ticker-switch-default-view-align``).
+
+    Bug (user-reported): on a 1d chart, viewing a sparse small-cap (AREC) at
+    the default view (right after Reset View), pressing Space to cycle the
+    watchlist to a dense large-cap (AMD) left AMD "not aligned" — its leftmost
+    bar jumped from its own default (~2025-10) back to AREC's window start
+    (~2025-08). Root cause: the ticker-switch handlers unconditionally set
+    ``_preserve_xlim_by_time_on_render=True``, time-remapping the previous
+    (wider, sparse) ticker's calendar window onto the new (dense) ticker.
+
+    Fix: gate the time-preserve on ``_ticker_change_should_time_preserve()``
+    — preserve ONLY when the current view is HISTORICAL (the user panned
+    back). At the default right-edge view, show the new ticker's own default.
+
+    Validates: (A) at the default view the gate is False and a switch lands
+    the new ticker at ITS default right edge (leftmost == its own reset
+    leftmost, NOT the sparse ticker's earlier date); (B) after panning back
+    into history the gate is True and the calendar window IS preserved across
+    the switch.
+    """
+    from datetime import timedelta
+
+    import numpy as np
+
+    from tradinglab.models import Candle
+
+    src = app.source_var.get()
+    sparse_t, dense_t = "ZD91S", "ZD91D"
+    base = datetime(2024, 6, 3, 16, 0)  # Monday
+
+    saved_ticker = app.ticker_var.get()
+    saved_interval = app.interval_var.get()
+    saved_preserve = app._preserve_xlim_on_render
+    saved_preserve_t = getattr(app, "_preserve_xlim_by_time_on_render", False)
+    saved_drill = getattr(app, "_drilldown_day", None)
+    saved_stale = app._cache_is_stale
+    saved_cache = {
+        k: app._full_cache.pop(k, None)
+        for k in [(src, sparse_t, "1d"), (src, dense_t, "1d")]
+    }
+
+    def make_dense(n, seed):
+        out, d, price = [], base, 50.0 + seed
+        while len(out) < n:
+            if d.weekday() < 5:
+                price += 0.1
+                out.append(Candle(date=d, open=price, high=price + 2,
+                                  low=price - 1, close=price + 0.5,
+                                  volume=90000, session="regular"))
+            d += timedelta(days=1)
+        return out
+
+    def make_sparse(n, seed):
+        # >200 bars but only ~5 of every 7 business days → the last-200
+        # reset window spans a WIDER calendar than a dense 200.
+        out, d, price, i = [], base, 30.0 + seed, 0
+        while len(out) < n:
+            if d.weekday() < 5 and (i % 7) < 5:
+                price += 0.2
+                out.append(Candle(date=d, open=price, high=price + 1,
+                                  low=price - 0.5, close=price + 0.3,
+                                  volume=5000, session="regular"))
+            i += 1
+            d += timedelta(days=1)
+        return out
+
+    def _leftmost():
+        ps = app._panel_state.get("primary") or {}
+        ax = ps.get("price_ax")
+        cs = ps.get("candles") or []
+        if ax is None or not cs:
+            return None
+        xlo, xhi = ax.get_xlim()
+        lo = max(0, int(np.ceil(xlo - 1e-6)))
+        hi = min(len(cs), int(np.floor(xhi + 1e-6)) + 1)
+        reals = [c for c in cs[lo:hi] if not getattr(c, "is_gap", False)]
+        return reals[0].date.date() if reals else None
+
+    try:
+        app._cache_is_stale = lambda *a, **k: False  # type: ignore[assignment]
+
+        def _reseed():
+            app._full_cache[(src, sparse_t, "1d")] = make_sparse(330, 1)
+            app._full_cache[(src, dense_t, "1d")] = make_dense(500, 3)
+
+        _reseed()
+        app.interval_var.set("1d")
+        app._drilldown_day = None
+
+        # Reference: the dense ticker's OWN default leftmost.
+        app.ticker_var.set(dense_t)
+        app._preserve_xlim_on_render = False
+        app._preserve_xlim_by_time_on_render = False
+        app._load_data()
+        _pump_until(app, lambda: app._primary and len(app._primary) > 300,
+                    timeout=0.8)
+        app._reset_view()
+        _pump(app, 0.15)
+        dense_default_leftmost = _leftmost()
+
+        # Now: load the SPARSE ticker + reset view (default right edge).
+        _reseed()
+        app.ticker_var.set(sparse_t)
+        app._preserve_xlim_on_render = False
+        app._preserve_xlim_by_time_on_render = False
+        app._load_data()
+        _pump_until(app, lambda: app._primary and len(app._primary) > 200,
+                    timeout=0.8)
+        app._reset_view()
+        _pump(app, 0.15)
+        sparse_leftmost = _leftmost()
+        vis = app._current_visible_window_ts()
+        # Sanity: sparse ticker's reset window is at the right edge (not
+        # historical) and starts EARLIER than the dense ticker's default.
+        assert vis is not None and vis[2] is False, (
+            f"d91: sparse reset view should be right-edge (is_historical "
+            f"False), got {vis}")
+        assert app._ticker_change_should_time_preserve() is False, (
+            "d91: at the default view the ticker-switch gate must be False")
+
+        # --- A. advance to DENSE at the default view → DENSE's own default.
+        _reseed()
+        app.ticker_var.set(dense_t)
+        app._preserve_xlim_by_time_on_render = (
+            app._ticker_change_should_time_preserve())
+        app._load_data_async()
+        _pump_until(app,
+            lambda: app.ticker_var.get() == dense_t and app._primary
+            and len(app._primary) > 300, timeout=1.5)
+        _pump(app, 0.2)
+        after_leftmost = _leftmost()
+        assert after_leftmost == dense_default_leftmost, (
+            f"d91-A: default-view switch must show the NEW ticker's default "
+            f"leftmost {dense_default_leftmost}, got {after_leftmost} "
+            f"(sparse ticker's window {sparse_leftmost} must NOT be imposed)")
+        if sparse_leftmost is not None and dense_default_leftmost is not None:
+            assert after_leftmost != sparse_leftmost, (
+                "d91-A: the previous (sparse) ticker's earlier leftmost "
+                "must NOT be imposed on the dense ticker")
+
+        # --- B. pan DENSE back into history → gate True, preserve on switch.
+        ps = app._panel_state.get("primary") or {}
+        ax = ps.get("price_ax")
+        n = len(ps.get("candles") or [])
+        if ax is not None and n > 200:
+            ax.set_xlim(40.5, 140.5)  # historical interior window
+            app._preserve_xlim_on_render = True
+            try:
+                app._canvas.draw_idle()
+            except Exception:  # noqa: BLE001
+                pass
+            _pump(app, 0.1)
+            assert app._ticker_change_should_time_preserve() is True, (
+                "d91-B: after panning into history the gate must be True")
+            _reseed()
+            app.ticker_var.set(sparse_t)
+            app._preserve_xlim_by_time_on_render = (
+                app._ticker_change_should_time_preserve())
+            app._load_data_async()
+            _pump_until(app,
+                lambda: app.ticker_var.get() == sparse_t and app._primary,
+                timeout=1.5)
+            _pump(app, 0.2)
+            preserved_leftmost = _leftmost()
+            # The preserved historical window keeps the view OFF the right
+            # edge (leftmost well before the dense default), proving the pan
+            # survived the switch.
+            assert preserved_leftmost is not None, "d91-B: no bars after switch"
+            assert preserved_leftmost < dense_default_leftmost, (
+                f"d91-B: panned historical window must be preserved across the "
+                f"switch (leftmost {preserved_leftmost} should be < the dense "
+                f"default {dense_default_leftmost})")
+
+    finally:
+        try:
+            del app._cache_is_stale
+        except AttributeError:
+            app._cache_is_stale = saved_stale  # type: ignore[assignment]
+        for k, v in saved_cache.items():
+            app._full_cache.pop(k, None)
+            if v is not None:
+                app._full_cache[k] = v
+        try:
+            import os
+            b = os.environ.get("LOCALAPPDATA", "")
+            if b:
+                from pathlib import Path
+                p = Path(b) / "tradinglab"
+                for t in (sparse_t, dense_t):
+                    for f in p.glob(f"{src}__{t}__1d.jsonl"):
+                        try:
+                            f.unlink()
+                        except Exception:  # noqa: BLE001
+                            pass
+        except Exception:  # noqa: BLE001
+            pass
+        app.interval_var.set(saved_interval)
+        app.ticker_var.set(saved_ticker)
+        app._preserve_xlim_on_render = saved_preserve
+        app._preserve_xlim_by_time_on_render = saved_preserve_t
+        app._drilldown_day = saved_drill
+        try:
+            app._load_data()
+        except Exception:  # noqa: BLE001
+            pass
+        _pump(app, 0.3)
+
+    print("  [OK] §d91 ticker switch at the default view shows the new "
+          "ticker's own default window (panned view still preserved)")
 
 
 def check_d35_config_import_export_round_trip(app) -> None:
@@ -22347,6 +22589,7 @@ def _run_all_checks(app) -> None:
     check_d88_compare_toggle_repeated_no_creep(app)
     check_d89_compare_toggle_manual_pan_no_creep(app)
     check_d90_compare_index_preserve_render_no_xlim_drift(app)
+    check_d91_ticker_switch_default_view_align(app)
     check_d35_config_import_export_round_trip(app)
     check_d35a_config_theme_round_trip(app)
     check_d35b_view_settings_round_trip(app)
@@ -22668,6 +22911,8 @@ def _build_check_sequence():
          check_d89_compare_toggle_manual_pan_no_creep),
         ("check_d90_compare_index_preserve_render_no_xlim_drift",
          check_d90_compare_index_preserve_render_no_xlim_drift),
+        ("check_d91_ticker_switch_default_view_align",
+         check_d91_ticker_switch_default_view_align),
         ("check_d35_config_import_export_round_trip",
          check_d35_config_import_export_round_trip),
         ("check_d35a_config_theme_round_trip",

@@ -17,9 +17,12 @@ method-bag: no `__init__`, no `super()`; reads/writes state owned by
 - `_on_chartstack_promote(symbol)` — promote a card's `symbol` to the primary
   chart. If a 5m drilldown is locked, routes through
   `_reload_preserving_drilldown` (keeps the calendar day); otherwise sets
-  `_preserve_xlim_by_time_on_render` and `_load_data_async` so the anchored
-  date window is preserved. Then `demote_to` rebinds the freed card to the
-  previously focused symbol.
+  `_preserve_xlim_by_time_on_render = _ticker_change_should_time_preserve()`
+  (True only for a HISTORICAL view) and `_load_data_async` — a panned date
+  window is preserved, but a promote at the default right-edge view shows the
+  promoted ticker's own default window instead of imposing the previous
+  ticker's (audit `ticker-switch-default-view-align`). Then `demote_to`
+  rebinds the freed card to the previously focused symbol.
 - `_on_accel_toggle_chartstack(event=None)` — `<Control-grave>` accelerator;
   gated by `_global_shortcut_allowed`, delegates to `_toggle_chartstack`.
 - `_on_view_toggle_chartstack()` — View-menu checkbutton; reads

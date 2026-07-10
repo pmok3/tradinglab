@@ -98,8 +98,13 @@ class ChartStackAppMixin:
             if in_drilldown:
                 self._reload_preserving_drilldown(self._load_data)
             else:
+                # Preserve the visible time window ONLY when the user has
+                # panned/zoomed back into history — at the default right-edge
+                # view show the promoted ticker's own default window (audit
+                # ``ticker-switch-default-view-align``).
                 try:
-                    self._preserve_xlim_by_time_on_render = True
+                    self._preserve_xlim_by_time_on_render = (
+                        self._ticker_change_should_time_preserve())
                 except Exception:  # noqa: BLE001
                     pass
                 self._load_data_async()

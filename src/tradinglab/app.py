@@ -2351,6 +2351,29 @@ class ChartApp(
         except Exception:  # noqa: BLE001
             return None
 
+    def _ticker_change_should_time_preserve(self) -> bool:
+        """True when a ticker switch should preserve the visible CALENDAR
+        window (time-remap), False when it should show the NEW ticker's own
+        default right-edge window.
+
+        Gate: preserve ONLY when the current view is HISTORICAL — the user
+        has deliberately panned / zoomed back into history and expects that
+        calendar window carried onto the new symbol. At the default
+        right-edge view (e.g. right after **Reset View**, or just flipping a
+        watchlist), preserving imposes the PREVIOUS ticker's window on the
+        new one; when the two tickers have different-length / different-
+        density histories (a sparse small-cap vs a dense large-cap) that
+        shifts the new ticker's left edge to an unexpected earlier date
+        instead of showing its own recent default. Returns False on any
+        error / not-ready panel so the safe default (show the new ticker's
+        default window) wins. Audit ``ticker-switch-default-view-align``.
+        """
+        try:
+            vis = self._current_visible_window_ts()
+        except Exception:  # noqa: BLE001
+            return False
+        return bool(vis is not None and vis[2])
+
     def _maybe_fill_compare_for_window(
         self, lo_ts: float, hi_ts: float,
     ) -> None:

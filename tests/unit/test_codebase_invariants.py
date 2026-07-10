@@ -236,7 +236,11 @@ def test_app_spec_md_mro_matches_real_chartapp_bases():
 #          incomplete data. Diagnostic feature.
 #   7394 — opt-in view diagnostics (TRADINGLAB_DEBUG_VIEW) log the per-render
 #          preserve mode + resolved visible window. Silent unless env-set.
-_APP_PY_LOC_CEILING = 7394
+#   7417 — ticker-switch default-view alignment: _ticker_change_should_time_
+#          preserve() gates time-preserve on is_historical so a watchlist
+#          cycle / type / promote at the default view shows the NEW ticker's
+#          own default window. Bug fix logic.
+_APP_PY_LOC_CEILING = 7417
 
 # Once a real extraction drops app.py well under the ceiling, lower the
 # constant to lock the reduction in. The band keeps ordinary small edits from
