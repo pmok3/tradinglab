@@ -240,7 +240,10 @@ def test_app_spec_md_mro_matches_real_chartapp_bases():
 #          preserve() gates time-preserve on is_historical so a watchlist
 #          cycle / type / promote at the default view shows the NEW ticker's
 #          own default window. Bug fix logic.
-_APP_PY_LOC_CEILING = 7417
+#   7429 — compare-toggle on a historical drilled view no longer force-
+#          refetches the compare every toggle (gated on is_historical). Bug
+#          fix logic.
+_APP_PY_LOC_CEILING = 7429
 
 # Once a real extraction drops app.py well under the ceiling, lower the
 # constant to lock the reduction in. The band keeps ordinary small edits from

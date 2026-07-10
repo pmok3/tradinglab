@@ -2608,8 +2608,20 @@ class ChartApp(
             except Exception:  # noqa: BLE001
                 pass
             # Kick off a background refresh so any new ticks since
-            # prefetch are picked up soon (non-blocking).
-            self._ensure_compare_prefetched(force=True)
+            # prefetch are picked up soon (non-blocking) — but ONLY at the
+            # live right edge. On a HISTORICAL drilled/panned view the viewed
+            # window is in the PAST (no new ticks can arrive), so
+            # force-refetching a range-capable provider (Alpaca) on EVERY
+            # compare toggle is slow and pointless; a genuinely missing
+            # window is filled by ``_maybe_fill_compare_for_window`` instead.
+            # Audit ``compare-toggle-historical-no-refetch``.
+            try:
+                _vis = self._current_visible_window_ts()
+                _at_live_edge = not (_vis is not None and _vis[2])
+            except Exception:  # noqa: BLE001
+                _at_live_edge = True
+            if _at_live_edge:
+                self._ensure_compare_prefetched(force=True)
             return
         # Fallback: no prefetch hit → do it the slow way, but still try
         # to warm the cache so future toggles are instant.

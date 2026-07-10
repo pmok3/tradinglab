@@ -5674,6 +5674,188 @@ def check_d91_ticker_switch_default_view_align(app) -> None:
           "ticker's own default window (panned view still preserved)")
 
 
+def check_d92_compare_toggle_drilldown_no_extra_bar(app) -> None:
+    """Regression: toggling Compare on a drilled 5m day must NOT pull in the
+    NEXT day's first bar, and must NOT force-refetch the compare on a
+    historical view (``remap-window-halfbar-round`` +
+    ``compare-toggle-historical-no-refetch``).
+
+    Bugs (user-reported on WFC, drilled into May 8th):
+    1. Enabling Compare made an extra bar appear on the RIGHT — the first
+       bar of the NEXT trading day. Root cause: the drill's half-integer
+       xlim ``(lo-0.5, hi+0.5)`` fed ``remap_window_by_time``, whose
+       ``round(hi+0.5)`` (banker's rounding) yielded ``hi+1`` for ODD
+       ``hi`` → the next day's first bar entered the preserved window.
+    2. Every toggle re-fetched the compare (slow) even though it was
+       cached — ``_apply_compare_toggle`` called
+       ``_ensure_compare_prefetched(force=True)`` unconditionally to catch
+       new ticks, pointless on a PAST drilled day.
+
+    Fixes: ceil/floor in ``remap_window_by_time`` (lands on the visible day
+    exactly, any parity); the force-refresh is skipped when the view is
+    historical. This check drills into a mid day (dense primary + dense
+    compare, so no gap-shift confounds the result) and asserts the visible
+    window shows EXACTLY the drilled day and the force-prefetch was NOT
+    called.
+    """
+    from datetime import timedelta
+
+    import numpy as np
+
+    from tradinglab.models import Candle
+
+    src = app.source_var.get()
+    primary_t, compare_t = "ZD92A", "ZD92B"
+
+    saved_ticker = app.ticker_var.get()
+    saved_compare_ticker = app.compare_ticker_var.get()
+    saved_compare_on = bool(app.compare_var.get())
+    saved_interval = app.interval_var.get()
+    saved_preserve = app._preserve_xlim_on_render
+    saved_drill = getattr(app, "_drilldown_day", None)
+    saved_stale = app._cache_is_stale
+    saved_prefetch = app._ensure_compare_prefetched
+    saved_cache = {
+        k: app._full_cache.pop(k, None)
+        for k in [(src, primary_t, "1d"), (src, primary_t, "5m"),
+                  (src, compare_t, "1d"), (src, compare_t, "5m")]
+    }
+
+    def make_1d(seed, n=30):
+        out, base = [], datetime(2026, 1, 5, 16, 0)
+        for d in range(n):
+            lo = 50 + d * 2 + seed
+            out.append(Candle(date=base + timedelta(days=d),
+                              open=lo, high=lo + 5, low=lo - 1,
+                              close=lo + 2, volume=80000, session="regular"))
+        return out
+
+    def make_5m(seed, n=30):
+        out, base = [], datetime(2026, 1, 5, 9, 30)
+        for d in range(n):
+            lo = 50 + d * 2 + seed
+            for i in range(78):  # dense: 78 bars/day (last idx always odd)
+                p = lo + i * 0.05
+                out.append(Candle(date=base + timedelta(days=d, minutes=5 * i),
+                                  open=p, high=p + 0.3, low=p - 0.3,
+                                  close=p + 0.1, volume=1000 + i,
+                                  session="regular"))
+        return out
+
+    def _reseed():
+        app._full_cache[(src, primary_t, "1d")] = make_1d(0)
+        app._full_cache[(src, primary_t, "5m")] = make_5m(0)
+        app._full_cache[(src, compare_t, "1d")] = make_1d(100)
+        app._full_cache[(src, compare_t, "5m")] = make_5m(100)
+
+    def _visible_days():
+        ps = app._panel_state.get("primary") or {}
+        ax = ps.get("price_ax")
+        cs = ps.get("candles") or []
+        if ax is None or not cs:
+            return set()
+        xlo, xhi = ax.get_xlim()
+        lo = max(0, int(np.ceil(xlo - 1e-6)))
+        hi = min(len(cs), int(np.floor(xhi + 1e-6)) + 1)
+        return {c.date.date() for c in cs[lo:hi]
+                if not getattr(c, "is_gap", False)}
+
+    force_calls = {"n": 0}
+
+    def _spy_prefetch(*a, **k):
+        if k.get("force"):
+            force_calls["n"] += 1
+        return saved_prefetch(*a, **k)
+
+    try:
+        app._cache_is_stale = lambda *a, **k: False  # type: ignore[assignment]
+        _reseed()
+        if app.compare_var.get():
+            app.compare_var.set(False)
+        app.interval_var.set("1d")
+        app.ticker_var.set(primary_t)
+        app.compare_ticker_var.set(compare_t)
+        app._preserve_xlim_on_render = False
+        app._drilldown_day = None
+        app._load_data()
+        _pump_until(app,
+            lambda: getattr(app, "_primary", None) and len(app._primary) > 0,
+            timeout=0.6)
+        _reseed()
+
+        # Drill into day 10 (2026-01-15). Dense 78 bars/day → the day's last
+        # index in _primary is ODD (78*d+77), the parity that tripped round().
+        drill_day = datetime(2026, 1, 15).date()
+        ok = app._zoom_5m_for_date(drill_day)
+        if not ok:
+            raise AssertionError(f"d92: drill-down to {drill_day} failed")
+        _pump_until(app, lambda: app.interval_var.get() == "5m", timeout=0.6)
+        assert getattr(app, "_drilldown_day", None) == drill_day
+        assert _visible_days() == {drill_day}, (
+            f"d92 precondition: drilled window should show only {drill_day}; "
+            f"got {sorted(_visible_days())}")
+
+        _reseed()
+        app._ensure_compare_prefetched = _spy_prefetch  # type: ignore[assignment]
+        app.compare_var.set(True)
+        app._on_compare_toggle()
+        _pump_until(app,
+            lambda: (app._panel_state.get("compare") or {}).get("price_ax")
+            is not None, timeout=0.8)
+        _pump(app, 0.1)
+
+        after = _visible_days()
+        # THE bug #1: an extra next-day bar on the right.
+        assert after == {drill_day}, (
+            f"d92: compare toggle pulled an extra day into the drilled view "
+            f"(expected only {drill_day}); visible={sorted(after)}")
+        # THE bug #2: force-refetch on a historical drilled view.
+        assert force_calls["n"] == 0, (
+            f"d92: compare toggle force-refetched the compare on a HISTORICAL "
+            f"drilled view {force_calls['n']} time(s) — should be gated off")
+
+    finally:
+        app._ensure_compare_prefetched = saved_prefetch  # type: ignore[assignment]
+        try:
+            del app._cache_is_stale
+        except AttributeError:
+            app._cache_is_stale = saved_stale  # type: ignore[assignment]
+        for k, v in saved_cache.items():
+            app._full_cache.pop(k, None)
+            if v is not None:
+                app._full_cache[k] = v
+        try:
+            import os
+            b = os.environ.get("LOCALAPPDATA", "")
+            if b:
+                from pathlib import Path
+                p = Path(b) / "tradinglab"
+                for t in (primary_t, compare_t):
+                    for iv in ("1d", "5m"):
+                        for f in p.glob(f"{src}__{t}__{iv}.jsonl"):
+                            try:
+                                f.unlink()
+                            except Exception:  # noqa: BLE001
+                                pass
+        except Exception:  # noqa: BLE001
+            pass
+        if app.compare_var.get() != saved_compare_on:
+            app.compare_var.set(saved_compare_on)
+        app.interval_var.set(saved_interval)
+        app.ticker_var.set(saved_ticker)
+        app.compare_ticker_var.set(saved_compare_ticker)
+        app._preserve_xlim_on_render = saved_preserve
+        app._drilldown_day = saved_drill
+        try:
+            app._load_data()
+        except Exception:  # noqa: BLE001
+            pass
+        _pump(app, 0.3)
+
+    print("  [OK] §d92 compare toggle on a drilled day shows only that day "
+          "(no next-day bar) and does not force-refetch on a historical view")
+
+
 def check_d35_config_import_export_round_trip(app) -> None:
     """Configuration file load/save round-trip via :mod:`settings`.
 
@@ -22590,6 +22772,7 @@ def _run_all_checks(app) -> None:
     check_d89_compare_toggle_manual_pan_no_creep(app)
     check_d90_compare_index_preserve_render_no_xlim_drift(app)
     check_d91_ticker_switch_default_view_align(app)
+    check_d92_compare_toggle_drilldown_no_extra_bar(app)
     check_d35_config_import_export_round_trip(app)
     check_d35a_config_theme_round_trip(app)
     check_d35b_view_settings_round_trip(app)
@@ -22913,6 +23096,8 @@ def _build_check_sequence():
          check_d90_compare_index_preserve_render_no_xlim_drift),
         ("check_d91_ticker_switch_default_view_align",
          check_d91_ticker_switch_default_view_align),
+        ("check_d92_compare_toggle_drilldown_no_extra_bar",
+         check_d92_compare_toggle_drilldown_no_extra_bar),
         ("check_d35_config_import_export_round_trip",
          check_d35_config_import_export_round_trip),
         ("check_d35a_config_theme_round_trip",

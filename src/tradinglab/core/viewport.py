@@ -1,6 +1,8 @@
 """Pure math for computing y-limits and virtualized render ranges."""
 from __future__ import annotations
 
+import math
+
 import numpy as np
 
 from .series import SeriesArrays
@@ -139,8 +141,16 @@ def remap_window_by_time(
     if hi_f - lo_f <= 1.5:
         return None
     n_prev = len(prev_dates)
-    lo_i = max(0, min(n_prev - 1, int(round(lo_f))))
-    hi_i = max(0, min(n_prev - 1, int(round(hi_f))))
+    # Use the FULLY-visible bars at each edge: the leftmost bar whose center
+    # is >= lo_f (ceil) and the rightmost whose center is <= hi_f (floor).
+    # ``round`` was WRONG for the common HALF-INTEGER xlim (e.g. a drilled
+    # day's ``(lo-0.5, hi+0.5)``): banker's rounding of ``hi+0.5`` yields
+    # ``hi+1`` for odd ``hi``, pulling the NEXT day's first bar into the
+    # remapped window (the "extra bar on the right after a compare toggle"
+    # bug). ceil/floor land on exactly the visible ``[lo, hi]`` regardless of
+    # parity. Audit ``remap-window-halfbar-round``.
+    lo_i = max(0, min(n_prev - 1, int(math.ceil(lo_f))))
+    hi_i = max(0, min(n_prev - 1, int(math.floor(hi_f))))
     if hi_i <= lo_i:
         return None
     # Intent guard: when the source window spans the ENTIRE source series

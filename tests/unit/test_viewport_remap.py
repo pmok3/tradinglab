@@ -24,16 +24,36 @@ def _series(start: datetime, n: int, step_min: int = 5) -> list[datetime]:
 
 
 def test_identical_series_preserves_window():
-    """Same dates → mapped window equals the rounded source window."""
+    """Same dates → mapped window equals the fully-visible source window."""
     dates = _series(datetime(2026, 5, 1, 9, 30), 100)
     result = remap_window_by_time(dates, (40.2, 60.7), dates)
-    assert result == (40, 62)  # round(40.2)=40, round(60.7)=61, hi+1=62
+    # Fully-visible bars (centers within [40.2, 60.7]) are 41..60 →
+    # ceil(40.2)=41, floor(60.7)=60, hi+1=61.
+    assert result == (41, 61)
 
 
 def test_round_trip_close_to_int_bounds():
     dates = _series(datetime(2026, 5, 1, 9, 30), 50)
     # xlim of (10.0, 20.0) → lo_i=10, hi_i=20 → returns (10, 21).
     assert remap_window_by_time(dates, (10.0, 20.0), dates) == (10, 21)
+
+
+def test_halfinteger_drill_window_no_offbyone():
+    """A drilled day's HALF-INTEGER xlim ``(lo-0.5, hi+0.5)`` must map to
+    exactly ``[lo, hi+1)`` — NO extra bar — regardless of ``hi`` parity.
+
+    Regression (``remap-window-halfbar-round``): ``round`` used banker's
+    rounding, so ``round(hi+0.5)`` yielded ``hi+1`` for ODD ``hi``, pulling
+    the NEXT day's first bar into a compare-toggle-preserved drill window
+    ("extra bar on the right"). ceil(lo-0.5)=lo and floor(hi+0.5)=hi land on
+    the visible day exactly.
+    """
+    dates = _series(datetime(2026, 5, 1, 9, 30), 200)
+    for lo, hi in [(50, 77), (50, 78), (51, 78), (51, 77), (60, 137)]:
+        result = remap_window_by_time(dates, (lo - 0.5, hi + 0.5), dates)
+        assert result == (lo, hi + 1), (
+            f"drill window [{lo},{hi}] (hi parity "
+            f"{'odd' if hi % 2 else 'even'}) mis-mapped to {result}")
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +204,7 @@ def test_tz_aware_prev_naive_new_does_not_raise():
     prev = _aware_series(base, 100)           # tz-aware
     new = _series(base, 100)                  # tz-naive, same wall-clock
     result = remap_window_by_time(prev, (40.2, 60.7), new)
-    assert result == (40, 62)                 # same as the all-naive case
+    assert result == (41, 61)                 # same as the all-naive case
 
 
 def test_tz_naive_prev_aware_new_does_not_raise():
@@ -192,7 +212,7 @@ def test_tz_naive_prev_aware_new_does_not_raise():
     prev = _series(base, 100)                 # tz-naive
     new = _aware_series(base, 100)            # tz-aware, same wall-clock
     result = remap_window_by_time(prev, (40.2, 60.7), new)
-    assert result == (40, 62)
+    assert result == (41, 61)
 
 
 def test_tz_mixed_within_new_series_does_not_raise():
