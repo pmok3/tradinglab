@@ -2209,13 +2209,18 @@ class ChartApp(
             and vis is not None and vis[2]  # historical view (not right edge)
             and (in_drilldown or compare_covers)
         )
-        # keep_window + background-fill ALSO engage only when compare is being
-        # turned ON and the compare cache genuinely LACKS the viewed window
-        # (deep-history providers cap intraday depth).
+        # keep_window + background-fill ALSO engage when compare is being
+        # turned ON and the compare cache does NOT COVER the viewed window —
+        # including an EMPTY 5m cache (e.g. SPY is preloaded at 1d as the
+        # default compare but its 5m was never fetched). Without this, an
+        # empty cache fell through to a FULL ``_load_data`` of the compare's
+        # entire recent history (~5s on Alpaca for 120 days of 5m) instead of
+        # a ~1-page targeted fetch of just the viewed day. Audit
+        # ``compare-toggle-targeted-first-load``.
         compare_lacks = bool(
             use_time_preserve
             and compare_on
-            and self._compare_cache_earliest_gt(vis[0])  # compare misses it
+            and not self._compare_cache_covers(vis[0])  # compare misses it
         )
         if use_time_preserve:
             # Preserve the view by TIME across the re-align. Clear the
@@ -2623,8 +2628,30 @@ class ChartApp(
             if _at_live_edge:
                 self._ensure_compare_prefetched(force=True)
             return
-        # Fallback: no prefetch hit → do it the slow way, but still try
-        # to warm the cache so future toggles are instant.
+        # Fallback: no in-memory compare data for this (src, cmp, interval).
+        if (keep_window is not None
+                and source_supports_range(src)
+                and is_intraday(interval)):
+            # Historical drilled/panned view with a MISSING compare cache on a
+            # range-capable provider: do NOT full-load the compare's entire
+            # recent history (~5s on Alpaca for 120 days of 5m). Render the
+            # primary NOW (holding the drilled window); the caller's
+            # ``_maybe_fill_compare_for_window`` fetches ONLY the viewed day
+            # (~1 page, ~0.6s) and re-renders with the compare when it lands.
+            # Audit ``compare-toggle-targeted-first-load``.
+            try:
+                primary, _ = self._apply_pair_filter_and_align(
+                    self._primary_raw, None, keep_window=keep_window,
+                )
+                self._set_data_state(primary=primary, compare=[])
+                self._render()
+                self._autoscale_y_to_visible()
+                self._canvas.draw_idle()
+            except Exception:  # noqa: BLE001
+                pass
+            return
+        # Non-range / right-edge cache miss → do it the slow way, but still
+        # try to warm the cache so future toggles are instant.
         self._load_data()
         # Same post-load Y-autoscale pass for the cache-miss path, so
         # the compare panel doesn't briefly show a wrong Y while the
@@ -3809,23 +3836,42 @@ class ChartApp(
         minutes = et.hour * 60 + et.minute
         return 4 * 60 <= minutes < 20 * 60
 
+    def _view_pin_tickers(self) -> set[str]:
+        """Tickers whose cache entries must NOT be LRU-evicted: the active
+        primary and — while compare is ON — the compare ticker.
+
+        Both are actively displayed. Evicting their intraday data (the
+        default ``full_cache_size`` is only 16, and Alpaca compare-warm /
+        daily-synth churn evicts aggressively) forces a slow FULL re-fetch on
+        the next compare toggle of an already-loaded symbol — the "toggling
+        SPY compare on a drilled day takes 5s even though it was cached" bug.
+        Audit ``compare-ticker-cache-pin``.
+        """
+        out: set[str] = set()
+        try:
+            t = self.ticker_var.get().strip().upper()
+            if t:
+                out.add(t)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if bool(self.compare_var.get()):
+                c = self.compare_ticker_var.get().strip().upper()
+                if c:
+                    out.add(c)
+        except Exception:  # noqa: BLE001
+            pass
+        return out
+
     def _trim_full_cache(self, protected_key=None) -> None:
         try:
             pinned_tickers = frozenset(self._pinned_ticker_union())
         except Exception:  # noqa: BLE001
             pinned_tickers = frozenset()
-        try:
-            active_ticker = self.ticker_var.get().strip().upper()
-            if active_ticker:
-                # Pin the active ticker across ALL its intervals so the
-                # companion-prefetch pipeline doesn't LRU-evict its own
-                # warm data when a stash for an unrelated ticker
-                # overflows the cache. The 1d primary view depends on
-                # its 5m companion for the volume-TOD overlay and the
-                # synthetic today-bar (see _maybe_upsample_today_daily).
-                pinned_tickers = pinned_tickers | {active_ticker}
-        except Exception:  # noqa: BLE001
-            pass
+        # Pin the active primary + (while on) the compare ticker across ALL
+        # intervals so the companion-prefetch / daily-synth churn can't
+        # LRU-evict their warm data (audit ``compare-ticker-cache-pin``).
+        pinned_tickers = pinned_tickers | self._view_pin_tickers()
         self._data_ctrl.trim(
             pinned_tickers=pinned_tickers,
             protected_key=protected_key,
@@ -3851,17 +3897,12 @@ class ChartApp(
                 (active_src, active_ticker, active_interval)
                 if active_ticker else key
             )
-            # Pin the active ticker across ALL its intervals so the
-            # companion-prefetch pipeline doesn't LRU-evict its own
-            # warm data when a stash for an unrelated ticker overflows
-            # the cache. The 1d primary view depends on its 5m
-            # companion for the volume-TOD overlay and synthetic
-            # today-bar (see _maybe_upsample_today_daily); evicting
-            # the 5m partner breaks both features.
-            if active_ticker:
-                pinned_tickers = pinned_tickers | {active_ticker}
         except Exception:  # noqa: BLE001
             active_key = key
+        # Pin the active primary + (while on) the compare ticker across ALL
+        # intervals so a stash for an unrelated ticker can't LRU-evict their
+        # warm intraday data (audit ``compare-ticker-cache-pin``).
+        pinned_tickers = pinned_tickers | self._view_pin_tickers()
         self._data_ctrl.stash(
             key,
             bars,

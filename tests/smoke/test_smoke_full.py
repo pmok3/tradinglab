@@ -5856,6 +5856,198 @@ def check_d92_compare_toggle_drilldown_no_extra_bar(app) -> None:
           "(no next-day bar) and does not force-refetch on a historical view")
 
 
+def check_d93_compare_toggle_empty_cache_targeted_fetch(app) -> None:
+    """Regression: toggling Compare on a drilled day with an EMPTY compare
+    5m cache must do a TARGETED (single-day) fill — NOT a full recent-history
+    ``_load_data`` (``compare-toggle-targeted-first-load``).
+
+    User-reported (AMD primary + SPY compare on Alpaca, drilled May 8): the
+    compare took ~5s to appear even though the data "should be cached". Root
+    cause: SPY is preloaded at 1d only, so its 5m cache is EMPTY when the
+    user drills a 5m day and toggles SPY compare. The old empty-cache path
+    fell through to a FULL ``_load_data`` of the compare's entire recent
+    history (~120 days of 5m on a deep-history provider). Fix: on a range-
+    capable provider, when the compare 5m cache is empty on a HISTORICAL
+    drilled view, render the primary immediately (holding the drilled
+    window) and let ``_maybe_fill_compare_for_window`` fetch ONLY the viewed
+    day in the background.
+
+    This check makes the active source range-capable, drills a dense 5m day
+    with the compare's 5m cache deliberately empty, and asserts that toggling
+    Compare (a) does NOT call the full ``_load_data`` path, and (b) DOES
+    invoke the targeted ``_maybe_fill_compare_for_window`` fill.
+    """
+    from datetime import timedelta
+
+    import numpy as np
+
+    from tradinglab.data import base as _data_base
+    from tradinglab.models import Candle
+
+    src = app.source_var.get()
+    primary_t, compare_t = "ZD93A", "ZD93B"
+
+    saved_ticker = app.ticker_var.get()
+    saved_compare_ticker = app.compare_ticker_var.get()
+    saved_compare_on = bool(app.compare_var.get())
+    saved_interval = app.interval_var.get()
+    saved_preserve = app._preserve_xlim_on_render
+    saved_drill = getattr(app, "_drilldown_day", None)
+    saved_stale = app._cache_is_stale
+    saved_load = app._load_data
+    saved_fill = app._maybe_fill_compare_for_window
+    range_was_capable = src in _data_base._RANGE_CAPABLE
+    saved_cache = {
+        k: app._full_cache.pop(k, None)
+        for k in [(src, primary_t, "1d"), (src, primary_t, "5m"),
+                  (src, compare_t, "1d"), (src, compare_t, "5m")]
+    }
+
+    def make_1d(seed, n=30):
+        out, base = [], datetime(2026, 1, 5, 16, 0)
+        for d in range(n):
+            lo = 50 + d * 2 + seed
+            out.append(Candle(date=base + timedelta(days=d),
+                              open=lo, high=lo + 5, low=lo - 1,
+                              close=lo + 2, volume=80000, session="regular"))
+        return out
+
+    def make_5m(seed, n=30):
+        out, base = [], datetime(2026, 1, 5, 9, 30)
+        for d in range(n):
+            lo = 50 + d * 2 + seed
+            for i in range(78):
+                p = lo + i * 0.05
+                out.append(Candle(date=base + timedelta(days=d, minutes=5 * i),
+                                  open=p, high=p + 0.3, low=p - 0.3,
+                                  close=p + 0.1, volume=1000 + i,
+                                  session="regular"))
+        return out
+
+    def _seed_primary_only():
+        # Primary fully cached at 1d + 5m; compare cached at 1d ONLY (its 5m
+        # is deliberately absent — the SPY-preloaded-at-1d scenario).
+        app._full_cache[(src, primary_t, "1d")] = make_1d(0)
+        app._full_cache[(src, primary_t, "5m")] = make_5m(0)
+        app._full_cache[(src, compare_t, "1d")] = make_1d(100)
+        app._full_cache.pop((src, compare_t, "5m"), None)
+
+    load_calls = {"n": 0}
+    fill_calls = {"n": 0}
+
+    def _spy_load(*a, **k):
+        load_calls["n"] += 1
+        return saved_load(*a, **k)
+
+    def _spy_fill(*a, **k):
+        fill_calls["n"] += 1
+        return None  # count only; skip the real async targeted fetch
+
+    def _visible_days():
+        ps = app._panel_state.get("primary") or {}
+        ax = ps.get("price_ax")
+        cs = ps.get("candles") or []
+        if ax is None or not cs:
+            return set()
+        xlo, xhi = ax.get_xlim()
+        lo = max(0, int(np.ceil(xlo - 1e-6)))
+        hi = min(len(cs), int(np.floor(xhi + 1e-6)) + 1)
+        return {c.date.date() for c in cs[lo:hi]
+                if not getattr(c, "is_gap", False)}
+
+    try:
+        _data_base._RANGE_CAPABLE.add(src)  # provider supports range fetches
+        app._cache_is_stale = lambda *a, **k: False  # type: ignore[assignment]
+        _seed_primary_only()
+        if app.compare_var.get():
+            app.compare_var.set(False)
+        app.interval_var.set("1d")
+        app.ticker_var.set(primary_t)
+        app.compare_ticker_var.set(compare_t)
+        app._preserve_xlim_on_render = False
+        app._drilldown_day = None
+        app._load_data()
+        _pump_until(app,
+            lambda: getattr(app, "_primary", None) and len(app._primary) > 0,
+            timeout=0.6)
+        _seed_primary_only()
+
+        # Drill into day 10 (2026-01-15) — dense 78 bars/day.
+        drill_day = datetime(2026, 1, 15).date()
+        ok = app._zoom_5m_for_date(drill_day)
+        if not ok:
+            raise AssertionError(f"d93: drill-down to {drill_day} failed")
+        _pump_until(app, lambda: app.interval_var.get() == "5m", timeout=0.6)
+        assert getattr(app, "_drilldown_day", None) == drill_day
+        # Precondition: compare 5m cache is EMPTY.
+        _seed_primary_only()
+        assert not app._full_cache.get((src, compare_t, "5m")), (
+            "d93 precondition: compare 5m cache must be empty")
+
+        # Toggle Compare ON with the spies armed.
+        app._load_data = _spy_load          # type: ignore[assignment]
+        app._maybe_fill_compare_for_window = _spy_fill  # type: ignore[assignment]
+        app.compare_var.set(True)
+        app._on_compare_toggle()
+        _pump(app, 0.1)
+
+        assert load_calls["n"] == 0, (
+            f"d93: empty-cache compare toggle on a range-capable provider "
+            f"full-loaded the compare ({load_calls['n']} _load_data call(s)) "
+            f"instead of a targeted single-day fill")
+        assert fill_calls["n"] >= 1, (
+            f"d93: empty-cache compare toggle did NOT invoke the targeted "
+            f"_maybe_fill_compare_for_window (got {fill_calls['n']} call(s))")
+        # The primary stays framed on the drilled day (compare fills async).
+        assert _visible_days() == {drill_day}, (
+            f"d93: primary window drifted off the drilled day on toggle; "
+            f"visible={sorted(_visible_days())}")
+
+    finally:
+        app._load_data = saved_load          # type: ignore[assignment]
+        app._maybe_fill_compare_for_window = saved_fill  # type: ignore[assignment]
+        if not range_was_capable:
+            _data_base._RANGE_CAPABLE.discard(src)
+        try:
+            del app._cache_is_stale
+        except AttributeError:
+            app._cache_is_stale = saved_stale  # type: ignore[assignment]
+        for k, v in saved_cache.items():
+            app._full_cache.pop(k, None)
+            if v is not None:
+                app._full_cache[k] = v
+        try:
+            import os
+            b = os.environ.get("LOCALAPPDATA", "")
+            if b:
+                from pathlib import Path
+                p = Path(b) / "tradinglab"
+                for t in (primary_t, compare_t):
+                    for iv in ("1d", "5m"):
+                        for f in p.glob(f"{src}__{t}__{iv}.jsonl"):
+                            try:
+                                f.unlink()
+                            except Exception:  # noqa: BLE001
+                                pass
+        except Exception:  # noqa: BLE001
+            pass
+        if app.compare_var.get() != saved_compare_on:
+            app.compare_var.set(saved_compare_on)
+        app.interval_var.set(saved_interval)
+        app.ticker_var.set(saved_ticker)
+        app.compare_ticker_var.set(saved_compare_ticker)
+        app._preserve_xlim_on_render = saved_preserve
+        app._drilldown_day = saved_drill
+        try:
+            app._load_data()
+        except Exception:  # noqa: BLE001
+            pass
+        _pump(app, 0.3)
+
+    print("  [OK] §d93 compare toggle with an empty compare 5m cache does a "
+          "targeted single-day fill (no full _load_data) on a range provider")
+
+
 def check_d35_config_import_export_round_trip(app) -> None:
     """Configuration file load/save round-trip via :mod:`settings`.
 
@@ -22773,6 +22965,7 @@ def _run_all_checks(app) -> None:
     check_d90_compare_index_preserve_render_no_xlim_drift(app)
     check_d91_ticker_switch_default_view_align(app)
     check_d92_compare_toggle_drilldown_no_extra_bar(app)
+    check_d93_compare_toggle_empty_cache_targeted_fetch(app)
     check_d35_config_import_export_round_trip(app)
     check_d35a_config_theme_round_trip(app)
     check_d35b_view_settings_round_trip(app)
@@ -23098,6 +23291,8 @@ def _build_check_sequence():
          check_d91_ticker_switch_default_view_align),
         ("check_d92_compare_toggle_drilldown_no_extra_bar",
          check_d92_compare_toggle_drilldown_no_extra_bar),
+        ("check_d93_compare_toggle_empty_cache_targeted_fetch",
+         check_d93_compare_toggle_empty_cache_targeted_fetch),
         ("check_d35_config_import_export_round_trip",
          check_d35_config_import_export_round_trip),
         ("check_d35a_config_theme_round_trip",

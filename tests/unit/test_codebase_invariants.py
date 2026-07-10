@@ -243,7 +243,12 @@ def test_app_spec_md_mro_matches_real_chartapp_bases():
 #   7429 — compare-toggle on a historical drilled view no longer force-
 #          refetches the compare every toggle (gated on is_historical). Bug
 #          fix logic.
-_APP_PY_LOC_CEILING = 7429
+#   7470 — compare-toggle with an EMPTY compare 5m cache now does a targeted
+#          single-day fill on a range-capable provider (no full _load_data of
+#          the compare's ~120-day history) + pins the compare ticker in the
+#          cache trim/stash. Bug fix logic (compare-toggle-targeted-first-load
+#          + compare-ticker-cache-pin).
+_APP_PY_LOC_CEILING = 7470
 
 # Once a real extraction drops app.py well under the ceiling, lower the
 # constant to lock the reduction in. The band keeps ordinary small edits from
