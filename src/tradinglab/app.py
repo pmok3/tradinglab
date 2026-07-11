@@ -56,6 +56,7 @@ from .core.series import (
 from .core.series import (
     build_series_safe as _build_series_safe,
 )
+from .core.view_intent import ViewController, ViewMode
 from .core.viewport import (
     compute_render_range as _compute_render_range,
 )
@@ -273,15 +274,60 @@ class ChartApp(
 ):
     """Top-level Tk window hosting the chart, controls, and data flow."""
 
-    # Class-level defaults for the axis-switch view-preserve flags so a
-    # bare ``ChartApp.__new__(ChartApp)`` harness (unit tests call
-    # ``_load_data`` on a stub without ``__init__``) can READ them without
-    # tripping tkinter's self-recursing ``__getattr__`` (a missing attr on a
-    # ``tk.Tk`` subclass raises ``RecursionError``, which ``getattr(..., default)``
-    # does NOT swallow). ``__init__`` re-assigns instance values; the real app
-    # never sees these defaults. Audit ``source-switch-view-preserve``.
-    _axis_switch_inflight = False
-    _pending_axis_switch_time_preserve = False
+    # ------------------------------------------------------------------
+    # View-preservation flag bridge (audit ``view-intent-controller``).
+    # The historical booleans that decided the chart's visible-X behaviour
+    # (`_preserve_xlim_on_render` / `_preserve_xlim_by_time_on_render` /
+    # `_slide_xlim_to_right_edge` / `_axis_switch_inflight`) are now a thin
+    # compat surface over the single `core.view_intent.ViewController`
+    # (`self._view`). All decision + durability logic lives there; these
+    # properties keep the large existing read/write test surface working and
+    # let a bare ``ChartApp.__new__`` harness READ a sane default (no
+    # ``__getattr__`` recursion) via ``__dict__.get('_view')``. The old
+    # ``_pending_axis_switch_time_preserve`` flag is GONE — its role (survive
+    # the async switch boundary) is subsumed by the controller's HOLD-during-
+    # ``load_pending`` rule.
+    @property
+    def _preserve_xlim_on_render(self) -> bool:
+        v = self.__dict__.get("_view")
+        return v.preserve if v is not None else False
+
+    @_preserve_xlim_on_render.setter
+    def _preserve_xlim_on_render(self, value: bool) -> None:
+        self._view_or_new().preserve = bool(value)
+
+    @property
+    def _preserve_xlim_by_time_on_render(self) -> bool:
+        v = self.__dict__.get("_view")
+        return v.by_time if v is not None else False
+
+    @_preserve_xlim_by_time_on_render.setter
+    def _preserve_xlim_by_time_on_render(self, value: bool) -> None:
+        self._view_or_new().by_time = bool(value)
+
+    @property
+    def _slide_xlim_to_right_edge(self) -> bool:
+        v = self.__dict__.get("_view")
+        return v.slide if v is not None else False
+
+    @_slide_xlim_to_right_edge.setter
+    def _slide_xlim_to_right_edge(self, value: bool) -> None:
+        self._view_or_new().slide = bool(value)
+
+    @property
+    def _axis_switch_inflight(self) -> bool:
+        v = self.__dict__.get("_view")
+        return v.load_pending if v is not None else False
+
+    @_axis_switch_inflight.setter
+    def _axis_switch_inflight(self, value: bool) -> None:
+        self._view_or_new().load_pending = bool(value)
+
+    def _view_or_new(self) -> ViewController:
+        v = self.__dict__.get("_view")
+        if v is None:
+            v = self.__dict__["_view"] = ViewController()
+        return v
 
     _WORKER_COUNT_MIN = WORKER_COUNT_MIN
     _WORKER_COUNT_MAX = WORKER_COUNT_MAX
@@ -440,6 +486,13 @@ class ChartApp(
 
     def __init__(self, *, splash: Optional[SplashController] = None) -> None:
         super().__init__()
+        # Single owner of the chart's X-window preservation intent
+        # (``core.view_intent``). Created FIRST so the legacy-flag bridging
+        # properties (``_preserve_xlim_on_render`` etc., defined on the class)
+        # have a backing store from the very first assignment in this
+        # ``__init__``. Replaces the old scattered boolean soup — see
+        # ``core/view_intent.spec.md``.
+        self._view = ViewController()
         # Pin the named-font baseline before any widget is constructed.
         # Every later widget that says ``font="TkDefaultFont"`` (or
         # falls back to it implicitly) sees Segoe UI 9 on Windows
@@ -548,16 +601,14 @@ class ChartApp(
         # Axis-change tracking: a SOURCE-only switch preserves the visible
         # DATE window (different-length providers must not reinterpret a stale
         # bar-index window as another calendar day); an INTERVAL change snaps
-        # to the right edge. ``_axis_switch_inflight`` guards the async switch
-        # load so a live ``_next_bar_fetch_tick`` can't re-arm index-preserve
-        # mid-switch (audit ``source-switch-view-preserve``).
+        # to the right edge. The switch-in-flight guard + durable time-preserve
+        # intent now live in ``self._view`` (``core.view_intent``); see the
+        # bridging properties on the class (audit ``view-intent-controller``).
         try:
             self._prev_axis_source = self.source_var.get()
             self._prev_axis_interval = self.interval_var.get()
         except Exception:  # noqa: BLE001
             self._prev_axis_source = self._prev_axis_interval = None
-        self._axis_switch_inflight = False
-        self._pending_axis_switch_time_preserve = False
         self.prepost_var = self._state.prepost
         self.days_var = self._state.days
         self.dark_var = self._state.dark
@@ -941,7 +992,11 @@ class ChartApp(
         self._ensure_default_watchlist()
 
         # --- render-related flags ---------------------------------------
-        self._preserve_xlim_on_render = False
+        # The visible-X preservation flags (index-preserve / time-remap /
+        # slide-to-right / switch-in-flight) now live in ``self._view``
+        # (``core.view_intent.ViewController``, created at the top of
+        # ``__init__``); the historical flag NAMES are bridging properties on
+        # the class. Audit ``view-intent-controller``.
         # Stage 0 of the topology-preserving paint pipeline
         # (docs/PAINT_PIPELINE_REFACTOR.md): the figure-topology signature
         # of the most recent slow-path render. COMPUTED but NOT yet consulted
@@ -965,28 +1020,12 @@ class ChartApp(
             self._paint_topology_preserve = bool(
                 _settings.get("paint_topology_preserve", True))
         self._render_topology_preserved_fires = 0
-        # When True, _render captures the *timestamp* range of the
-        # primary panel's current xlim BEFORE figure.clear() and remaps
-        # it to bar-index coordinates in the freshly-loaded primary
-        # series. Used by ticker-switch paths so a user panned to (e.g.)
-        # last Tuesday's session on AAPL stays on last Tuesday when they
-        # switch to MSFT, instead of snapping back to the right edge.
-        # Falls back to default windowing if the new series has no
-        # bars overlapping the captured time range. One-shot; cleared
-        # at end of _render.
-        self._preserve_xlim_by_time_on_render = False
         # Compare-fill async fetch (compare-toggle-drilldown-preserve).
         # ``_compare_fill_inflight`` coalesces per-(src, cmp, interval, day)
         # targeted compare fetches so repeated toggles don't stack; the
         # monotonic ``_compare_fetch_token`` drops a superseded completion.
         self._compare_fill_inflight: set = set()
         self._compare_fetch_token: int = 0
-        # When True, _render shifts xlim forward to the new right edge
-        # keeping width. Set by the poll-tick path when the user was
-        # glued to the right edge before new bars arrived, so live
-        # updates remain visible without clobbering zoom. Auto-clears
-        # after being consumed by _render.
-        self._slide_xlim_to_right_edge = False
         # Sandbox: when a session pre-allocates the chart's xlim to
         # span the **full** session window (so the chart looks "ready"
         # for the entire reveal-as-you-tick session instead of
@@ -2234,14 +2273,13 @@ class ChartApp(
             and not self._compare_cache_covers(vis[0])  # compare misses it
         )
         if use_time_preserve:
-            # Preserve the view by TIME across the re-align. Clear the
-            # INDEX-based preserve first: ``_compute_slot_window`` skips the
-            # time-remap when index-preserve is active, and the stale drilled
-            # index xlim overflows the (now shifted/gapped) aligned list.
-            # Re-armed AFTER the render, when the remapped index xlim is
-            # correct again.
-            self._preserve_xlim_by_time_on_render = True
-            self._preserve_xlim_on_render = False
+            # Preserve the view by TIME across the re-align (KEEP_DATES). The
+            # controller's ``by_time`` > index precedence means the stale
+            # drilled index xlim can't overflow the (now shifted/gapped)
+            # aligned list. Re-armed to KEEP_BARS AFTER the render, when the
+            # remapped index xlim is correct again. Audit
+            # ``view-intent-controller``.
+            self._view.request(ViewMode.KEEP_DATES)
         keep_window = (vis[0], vis[1]) if compare_lacks else None
 
         self._apply_compare_toggle(compare_on, keep_window=keep_window)
@@ -2249,7 +2287,7 @@ class ChartApp(
         if use_time_preserve:
             # The time-remap landed the (now-correct) index xlim on the
             # viewed window; re-arm index-preserve so later renders hold it.
-            self._preserve_xlim_on_render = True
+            self._view.arm_keep_bars()
 
         if compare_lacks:
             # Background-fill the compare's data for the viewed window.
@@ -2510,8 +2548,7 @@ class ChartApp(
         # Re-render holding the current view.
         vis = self._current_visible_window_ts()
         if vis is not None and vis[2]:
-            self._preserve_xlim_by_time_on_render = True
-            self._preserve_xlim_on_render = False
+            self._view.request(ViewMode.KEEP_DATES)
             keep_window = (vis[0], vis[1])
         else:
             keep_window = None
@@ -2519,7 +2556,7 @@ class ChartApp(
             self._apply_compare_toggle(True, keep_window=keep_window)
         finally:
             if vis is not None and vis[2]:
-                self._preserve_xlim_on_render = True
+                self._view.arm_keep_bars()
         try:
             if covers:
                 n = sum(
@@ -3345,30 +3382,20 @@ class ChartApp(
         calls to ``_fetch_executor`` (N7).
         """
         # This render services whatever load is current (including a
-        # just-completed explicit source/interval switch), so release the
-        # poll-tick race guard: normal polling resumes when this render's
-        # _schedule_next_bar_fetch re-arms it. Audit
-        # ``source-switch-view-preserve``.
-        #
-        # Capture whether THIS load is the completion of an explicit
-        # source-only switch that wants its DATE window preserved. An
-        # intervening poll-tick / prefetch-driven render during the async
-        # switch load can (a) consume the one-shot
-        # ``_preserve_xlim_by_time_on_render`` flag and/or (b) re-arm
-        # ``_preserve_xlim_on_render`` (index-preserve). If index-preserve
-        # is armed at the switch's completing render it WINS over the
-        # time-remap (``_compute_slot_window`` skips the remap while
-        # index-preserve is active), reinterpreting the stale bar-INDEX
-        # window against the new provider's different-length series → the
-        # view jumps years back ("switch source → jump to 2021" after a
-        # Compare ON→OFF whose async prefetch lands mid-switch). Re-assert
-        # TIME-preserve just before this load's render below.
-        was_axis_switch = bool(getattr(self, "_axis_switch_inflight", False))
-        switch_wants_time_preserve = bool(
-            was_axis_switch
-            and getattr(self, "_pending_axis_switch_time_preserve", False)
-        )
-        self._axis_switch_inflight = False
+        # just-completed explicit source/interval switch). Tell the view
+        # controller: lower the switch-in-flight guard (so normal polling
+        # resumes) and learn whether THIS load completes an explicit async
+        # switch. While the switch was in flight, ``render_directives`` HELD
+        # the view on every intervening render (poll tick, prefetch daily-synth
+        # refresh, reference redraw, deferred idle render) so none of them
+        # could consume the durable time-remap intent or let a racing
+        # index-preserve re-arm win. When ``was_completing_switch`` is True the
+        # switch's own render (below) applies + consumes that intent — and we
+        # render SYNCHRONOUSLY so nothing can slip in first (this is the
+        # generic replacement for the old ``_pending_axis_switch_time_preserve``
+        # re-assertion; audit ``view-intent-controller`` / earlier
+        # ``source-switch-view-preserve``).
+        was_completing_switch = self._view.begin_completing_load()
         # Sandbox replay owns primary-slot updates while active; route
         # ticker-entry / watchlist double-clicks through the controller's
         # register_ticker path instead of the regular cache+render path.
@@ -3721,17 +3748,15 @@ class ChartApp(
         # and the Y autoscale silently no-ops (xlim indices fall outside
         # the old candle list -> hi <= lo). Force synchronous render so
         # callers downstream operate on fresh state.
-        if switch_wants_time_preserve:
-            # Completion of an explicit source-only switch: re-assert
-            # TIME-preserve (and CLEAR index-preserve) so a mid-switch
-            # re-arm can't reinterpret the stale bar-index window against
-            # the new provider's different-length series. Render
-            # synchronously so no further poll-tick / prefetch event can
-            # consume the re-asserted flags before the render. Audit
-            # ``source-switch-view-preserve``.
-            self._preserve_xlim_by_time_on_render = True
-            self._preserve_xlim_on_render = False
-            self._pending_axis_switch_time_preserve = False
+        if was_completing_switch:
+            # Completion of an explicit source/interval switch. The view
+            # controller already holds the switch's intent (KEEP_DATES for a
+            # source-only change, DEFAULT for an interval change) and
+            # ``render_directives`` will apply it now — enforcing
+            # ``by_time`` > index-preserve so any mid-switch index re-arm
+            # loses. Render SYNCHRONOUSLY so no intervening poll-tick /
+            # prefetch event can consume the intent first. Audit
+            # ``view-intent-controller``.
             self._render()
         elif cache_hit_only and not getattr(self, "_preserve_xlim_on_render", False):
             self._request_deferred_render()
@@ -4142,15 +4167,15 @@ class ChartApp(
         streaming use :meth:`_ensure_rendered_for_view` +
         :meth:`_refresh_view_after_tick` to avoid tearing down axes.
         """
-        preserve = self._preserve_xlim_on_render
-        # Consume the one-shot slide signal immediately. The flag is a
-        # directive for THIS render call only; subsequent renders must
-        # not silently slide the view if the caller didn't re-assert it.
-        slide_to_right = self._slide_xlim_to_right_edge
-        self._slide_xlim_to_right_edge = False
-        # Consume the time-window preserve signal one-shot too.
-        preserve_by_time = self._preserve_xlim_by_time_on_render
-        self._preserve_xlim_by_time_on_render = False
+        # Resolve the visible-X directives from the single view controller
+        # (``core.view_intent``). This centralises: one-shot consumption of the
+        # time-remap / slide signals, the ``by_time`` > index-preserve
+        # precedence (a stale bar-index window can never clobber a calendar
+        # remap), and the HOLD rule while an async source/interval switch is in
+        # flight (an intervening render can't eat the switch's intent). Replaces
+        # the old scattered ``_preserve_xlim_*`` / ``_slide_*`` reads (audit
+        # ``view-intent-controller``).
+        preserve, preserve_by_time, slide_to_right = self._view.render_directives()
         # spec §9.3: DO NOT clear _preserve_xlim_on_render at end of _render
 
         compare_on = bool(self.compare_var.get()) and bool(self._compare)
@@ -6027,20 +6052,17 @@ class ChartApp(
         self._prev_axis_source = new_source
         self._prev_axis_interval = new_interval
 
-        # Source-only: preserve the visible date window (time-remap). Interval
-        # (or no-delta re-select): snap to the right-edge default. See docstring.
-        self._preserve_xlim_on_render = False
-        self._preserve_xlim_by_time_on_render = bool(source_only_change)
-        # Durable companion to the one-shot flag above: an intervening
-        # poll-tick / prefetch render during the async switch load can
-        # consume the one-shot ``_preserve_xlim_by_time_on_render`` and/or
-        # re-arm index-preserve. ``_load_data`` re-asserts TIME-preserve at
-        # the switch's completing render iff this stays set (audit
-        # ``source-switch-view-preserve``).
-        self._pending_axis_switch_time_preserve = bool(source_only_change)
-        # Race guard: block the live poll tick from re-arming index-preserve
-        # (or launching a competing fetch) until this switch's load renders.
-        self._axis_switch_inflight = True
+        # Declare the switch intent on the single view controller and mark the
+        # async load in flight. SOURCE-only change → KEEP_DATES (remap the
+        # visible calendar window onto the new provider's series); INTERVAL
+        # change → DEFAULT (right-edge snap). ``load_pending=True`` makes every
+        # intervening render HOLD until this switch's own completing render
+        # applies the intent, so the async race that jumped the view years back
+        # is structurally impossible (audit ``view-intent-controller``).
+        self._view.request(
+            ViewMode.KEEP_DATES if source_only_change else ViewMode.DEFAULT,
+            load_pending=True,
+        )
         self._load_data_async()
 
     def _sandbox_handle_interval_change(self) -> None:
@@ -6533,7 +6555,7 @@ class ChartApp(
         series is companion-prefetched so cache-hit is the norm.
         """
         try:
-            self._preserve_xlim_on_render = False
+            self._view.request(ViewMode.DEFAULT)
             # Reset view explicitly abandons drill-down state.
             self._drilldown_day = None
             if self.interval_var.get() != "1d":

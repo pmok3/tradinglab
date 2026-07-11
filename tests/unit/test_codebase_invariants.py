@@ -256,7 +256,14 @@ def test_app_spec_md_mro_matches_real_chartapp_bases():
 #          jump the view years back. + class-level defaults for the two
 #          axis-switch flags (bare-__new__ harness read-safety). Bug fix
 #          logic (source-switch-view-preserve).
-_APP_PY_LOC_CEILING = 7519
+#   7541 — view-intent controller (core.view_intent.ViewController): the
+#          scattered visible-X booleans became a thin bridging-property surface
+#          over ONE controller that centralises one-shot consumption, the
+#          by_time > index precedence, and the HOLD-during-async-switch rule
+#          (generic replacement for _pending_axis_switch_time_preserve). Adds
+#          ~53 LOC of bridging properties; net +22 after deleting the bespoke
+#          d94 re-assertion + redundant inits. Refactor (view-intent-controller).
+_APP_PY_LOC_CEILING = 7541
 
 # Once a real extraction drops app.py well under the ceiling, lower the
 # constant to lock the reduction in. The band keeps ordinary small edits from

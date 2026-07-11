@@ -396,9 +396,9 @@ during drag.
   primary x-axis. Scroll DOWN zooms IN, UP zooms OUT (`factor =
   1.15 ** step` with step negated). Anchor:
   `new_lo = x - (x - lo) * factor`, `new_hi = x + (hi - x) * factor`
-  so bar at `event.xdata` stays at the same pixel. Sets
-  `_preserve_xlim_on_render=True` and
-  `_slide_xlim_to_right_edge=False`. No-op when `event.inaxes is
+  so bar at `event.xdata` stays at the same pixel. Requests
+  `self._view.arm_keep_bars()` (KEEP_BARS — see
+  `core/view_intent.spec.md`). No-op when `event.inaxes is
   None`, when pan/zoom states are active, or `step == 0`.
   `|step|` clamped ≤ 2. Floor: 3-bar min width with cursor anchor
   preserved by recomputing `new_lo`.
@@ -406,10 +406,10 @@ during drag.
   `_scroll_zoom_invert` (from settings.json); negates `event.step`
   when True. `set_scroll_zoom_invert(bool)` persists.
 - **Manual zoom / pan preserve xlim across compare toggle**:
-  `_zoom_end` and `_pan_end` set `_preserve_xlim_on_render=True`
-  and `_slide_xlim_to_right_edge=False` so a subsequent re-render
+  `_zoom_end` and `_pan_end` request `self._view.arm_keep_bars()`
+  (KEEP_BARS) so a subsequent re-render
   (e.g. `_on_compare_toggle`) doesn't snap xlim back to data
-  extent. Flag stays sticky until Reset View / source-flip /
+  extent. Intent stays sticky until Reset View / source-flip /
   interval-flip / pre-post-flip clears via
   `_clear_drilldown_state`.
 - **Pan-end blit-bg invalidation**: `_pan_end` clears `_blit_bg

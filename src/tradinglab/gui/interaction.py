@@ -860,9 +860,8 @@ class InteractionMixin:
         self._blit_bg = None
         # User explicitly framed the chart via pan — persist this view
         # across subsequent renders (compare toggle, ticker swap, etc.).
-        # Mirrors scroll-wheel zoom, rubber-band zoom, and drill-down.
-        self._preserve_xlim_on_render = True
-        self._slide_xlim_to_right_edge = False
+        # Mirrors scroll-wheel zoom, rubber-band zoom, and drilldown.
+        self._view.arm_keep_bars()
         try:
             self._autoscale_y_to_visible()
             self._canvas.draw_idle()
@@ -925,9 +924,8 @@ class InteractionMixin:
             # persist this view across subsequent renders so toggling
             # compare on/off, swapping compare ticker, etc. don't snap
             # back to the data extent. Mirrors the scroll-wheel zoom
-            # and drill-down paths (app._do_drilldown).
-            self._preserve_xlim_on_render = True
-            self._slide_xlim_to_right_edge = False
+            # and drilldown paths (app._do_drilldown).
+            self._view.arm_keep_bars()
             self._autoscale_y_to_visible()
             self._canvas.draw_idle()
         except Exception:  # noqa: BLE001
@@ -1051,8 +1049,7 @@ class InteractionMixin:
         # subsequent renders, and cancel any pending poll-tick auto-
         # slide-to-right-edge that may already have been pre-armed by
         # _next_bar_fetch_tick before this wheel event arrived.
-        self._preserve_xlim_on_render = True
-        self._slide_xlim_to_right_edge = False
+        self._view.arm_keep_bars()
         # Hover/crosshair were anchored to the previous xlim's pixel
         # geometry; they'll be reacquired on the next motion event.
         try:

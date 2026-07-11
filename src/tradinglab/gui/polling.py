@@ -43,6 +43,7 @@ import tkinter as tk
 
 from .. import disk_cache as _disk_cache
 from ..constants import interval_minutes, is_intraday
+from ..core.view_intent import ViewMode
 from ..data import DATA_SOURCES
 
 # Adaptive live-tick repaint coalescing (audit ``tick-repaint-coalesce``).
@@ -653,10 +654,15 @@ class PollingMixin:
         # Alpaca 120d-5m), so reusing the stale bar-index window would jump
         # the view to a different calendar day. The switch load owns the
         # render and re-arms polling via _schedule_next_bar_fetch when done.
-        if getattr(self, "_axis_switch_inflight", False):
+        if self._view.load_pending:
             return
-        self._preserve_xlim_on_render = True
-        self._slide_xlim_to_right_edge = not self._user_has_panned_x()
+        # Live tick: keep the current width and (unless the user has panned
+        # away from the right edge) shift to the newest bar — SNAP_RIGHT;
+        # a panned view holds its bars (KEEP_BARS). Audit
+        # ``view-intent-controller``.
+        self._view.request(
+            ViewMode.KEEP_BARS if self._user_has_panned_x() else ViewMode.SNAP_RIGHT
+        )
 
         src = self.source_var.get()
         interval = self.interval_var.get()

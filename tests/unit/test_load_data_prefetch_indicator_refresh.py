@@ -61,6 +61,8 @@ def _changed_inside_same_fingerprint(old: list[Candle], close: float) -> list[Ca
 
 
 def _install_load_data_harness(app, *, primary, compare) -> None:
+    from tradinglab.core.view_intent import ViewController
+    app._view = ViewController()
     app._primary = primary
     app._compare = compare
     app._primary_raw = primary

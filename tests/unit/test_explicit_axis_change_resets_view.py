@@ -26,6 +26,7 @@ from __future__ import annotations
 import types
 
 from tradinglab.app import ChartApp
+from tradinglab.core.view_intent import ViewController, ViewMode
 
 
 class _Var:
@@ -39,10 +40,11 @@ class _Var:
 def _fake_app(*, source="yfinance", interval="1d",
               prev_source="yfinance", prev_interval="1d", **overrides):
     calls = {"load_async": 0, "sandbox_handle": 0}
+    view = ViewController()
+    # Pre-arm some intent so we can prove the sandbox branch leaves it alone.
+    view.request(ViewMode.KEEP_BARS)
     fake = types.SimpleNamespace(
-        _preserve_xlim_on_render=True,
-        _preserve_xlim_by_time_on_render=True,
-        _axis_switch_inflight=False,
+        _view=view,
         _drilldown_day="2026-06-09",
         _prev_axis_source=prev_source,
         _prev_axis_interval=prev_interval,
@@ -61,9 +63,7 @@ def _fake_app(*, source="yfinance", interval="1d",
 
 
 def test_interval_change_snaps_to_right_edge():
-    # Interval flipped 1d -> 5m: bar-index xlim from the previous interval
-    # must NOT be preserved, and there's no meaningful calendar window to
-    # carry either → both flags cleared (right-edge default).
+    # Interval flipped 1d -> 5m: request DEFAULT → no index/time preserve.
     fake, calls = _fake_app(
         prev_source="yfinance", prev_interval="1d",
         source="yfinance", interval="5m",
@@ -71,8 +71,9 @@ def test_interval_change_snaps_to_right_edge():
 
     ChartApp._on_explicit_axis_change(fake)
 
-    assert fake._preserve_xlim_on_render is False
-    assert fake._preserve_xlim_by_time_on_render is False
+    assert fake._view.preserve is False
+    assert fake._view.by_time is False
+    assert fake._view.load_pending is True
     assert fake._drilldown_day is None
     assert calls["load_async"] == 1
     # Tracking advanced for the next classification.
@@ -80,9 +81,8 @@ def test_interval_change_snaps_to_right_edge():
 
 
 def test_source_only_change_preserves_by_time():
-    # Same interval, different provider (yfinance -> alpaca): the visible
-    # DATE window must be preserved (the two providers return different-length
-    # 5m series, so a stale bar-index window would jump to a different day).
+    # Same interval, different provider (yfinance -> alpaca): request KEEP_DATES
+    # so the visible DATE window is preserved across different-length series.
     fake, calls = _fake_app(
         prev_source="yfinance", prev_interval="5m",
         source="alpaca", interval="5m",
@@ -90,27 +90,28 @@ def test_source_only_change_preserves_by_time():
 
     ChartApp._on_explicit_axis_change(fake)
 
-    assert fake._preserve_xlim_by_time_on_render is True
-    assert fake._preserve_xlim_on_render is False
+    assert fake._view.by_time is True
+    assert fake._view.preserve is False
+    assert fake._view.load_pending is True
     assert fake._drilldown_day is None
     assert calls["load_async"] == 1
     assert fake._prev_axis_source == "alpaca"
 
 
 def test_axis_change_raises_inflight_guard():
-    # The async-load race guard must be raised so a live _next_bar_fetch_tick
-    # can't re-arm index-preservation mid-switch.
+    # The async-load race guard (load_pending) must be raised so a live
+    # _next_bar_fetch_tick can't re-arm index-preservation mid-switch.
     fake, _calls = _fake_app(source="alpaca", interval="5m",
                              prev_source="yfinance", prev_interval="5m")
 
     ChartApp._on_explicit_axis_change(fake)
 
-    assert fake._axis_switch_inflight is True
+    assert fake._view.load_pending is True
 
 
 def test_explicit_axis_change_sandbox_active_routes_to_controller():
     # While a sandbox session is active the change is intercepted by the
-    # sandbox handler and the preserve flags / drill-down are left alone.
+    # sandbox handler and the view intent is left alone.
     fake, calls = _fake_app(
         _is_sandbox_active=lambda: True,
         _sandbox=object(),
@@ -120,8 +121,9 @@ def test_explicit_axis_change_sandbox_active_routes_to_controller():
 
     assert calls["sandbox_handle"] == 1
     assert calls["load_async"] == 0
-    # Untouched in the sandbox branch.
-    assert fake._preserve_xlim_on_render is True
+    # Untouched in the sandbox branch: the pre-armed KEEP_BARS intent stands
+    # and no switch was marked in flight.
+    assert fake._view.preserve is True
+    assert fake._view.load_pending is False
     assert fake._drilldown_day == "2026-06-09"
-    assert fake._axis_switch_inflight is False
 

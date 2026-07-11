@@ -20,6 +20,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from tradinglab.core.view_intent import ViewController
 from tradinglab.gui import polling as _polling
 
 ET = ZoneInfo("America/New_York")
@@ -522,10 +523,9 @@ class _NextBarGuardHarness(_PollingHarness):
 
     def __init__(self, *, inflight: bool) -> None:
         super().__init__()
-        self._axis_switch_inflight = inflight
+        self._view = ViewController()
+        self._view.load_pending = inflight
         self._poll_job = "job-live"
-        self._preserve_xlim_on_render = False
-        self._slide_xlim_to_right_edge = None
         self._proceeded = False
 
     def _is_sandbox_active(self) -> bool:
@@ -544,13 +544,13 @@ class TestNextBarFetchGuard:
         # re-arm index-based preservation nor proceed to fetch.
         h = _NextBarGuardHarness(inflight=True)
         h._next_bar_fetch_tick()
-        assert h._preserve_xlim_on_render is False  # not re-armed
+        assert h._view.preserve is False  # not re-armed
         assert h._proceeded is False  # returned before the fetch body
         assert h._poll_job is None  # cleared; switch load will re-arm polling
 
     def test_no_guard_proceeds_and_arms_preserve(self):
         # Normal operation (no switch in flight): the tick proceeds past the
-        # guard and re-arms index preservation as before.
+        # guard and requests SNAP_RIGHT (preserve + slide) as before.
         h = _NextBarGuardHarness(inflight=False)
         # The fetch body reads more state than we stub; we only need to prove
         # it got PAST the guard (set preserve + reached _user_has_panned_x).
@@ -558,7 +558,7 @@ class TestNextBarFetchGuard:
             h._next_bar_fetch_tick()
         except Exception:  # noqa: BLE001 - downstream fetch machinery absent
             pass
-        assert h._preserve_xlim_on_render is True
+        assert h._view.preserve is True
         assert h._proceeded is True
 
 

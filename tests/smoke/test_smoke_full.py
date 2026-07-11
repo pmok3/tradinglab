@@ -6076,6 +6076,7 @@ def check_d94_source_switch_time_preserve_survives_index_rearm(app) -> None:
 
     import numpy as np
 
+    from tradinglab.core.view_intent import ViewMode
     from tradinglab.models import Candle
 
     src = app.source_var.get()
@@ -6084,10 +6085,7 @@ def check_d94_source_switch_time_preserve_survives_index_rearm(app) -> None:
     saved_ticker = app.ticker_var.get()
     saved_interval = app.interval_var.get()
     saved_compare_on = bool(app.compare_var.get())
-    saved_preserve = app._preserve_xlim_on_render
-    saved_preserve_t = app._preserve_xlim_by_time_on_render
-    saved_inflight = getattr(app, "_axis_switch_inflight", False)
-    saved_pending = getattr(app, "_pending_axis_switch_time_preserve", False)
+    saved_view = app._view.snapshot()
     saved_drill = getattr(app, "_drilldown_day", None)
     saved_stale = app._cache_is_stale
     saved_cache = app._full_cache.pop((src, ticker, "1d"), None)
@@ -6130,10 +6128,7 @@ def check_d94_source_switch_time_preserve_survives_index_rearm(app) -> None:
         app.interval_var.set("1d")
         app.ticker_var.set(ticker)
         app._drilldown_day = None
-        app._preserve_xlim_on_render = False
-        app._preserve_xlim_by_time_on_render = False
-        app._axis_switch_inflight = False
-        app._pending_axis_switch_time_preserve = False
+        app._view.request(ViewMode.DEFAULT)
 
         # Phase 1: render the SHORT series; default view frames the recent tail.
         app._full_cache[(src, ticker, "1d")] = list(short)
@@ -6144,15 +6139,15 @@ def check_d94_source_switch_time_preserve_survives_index_rearm(app) -> None:
             f"d94 precondition: SHORT default view should be recent; "
             f"got {left_short}")
 
-        # Phase 2: complete a source SWITCH onto the LONG series WITH the
-        # mid-switch race state armed: index-preserve re-armed + one-shot
-        # time flag already consumed. Without the fix, index-preserve wins
-        # and the view jumps back years.
+        # Phase 2: complete a source SWITCH onto the LONG series with the
+        # mid-switch race simulated. ``_on_explicit_axis_change`` for a
+        # source-only change requests KEEP_DATES with the load in flight; an
+        # intervening render then re-arms index-preserve. Without the
+        # controller's HOLD + ``by_time`` > index rule, index-preserve wins at
+        # the completing render and the view jumps back years.
         app._full_cache[(src, ticker, "1d")] = list(long_)
-        app._axis_switch_inflight = True
-        app._pending_axis_switch_time_preserve = True
-        app._preserve_xlim_on_render = True          # the racing re-arm
-        app._preserve_xlim_by_time_on_render = False  # one-shot already consumed
+        app._view.request(ViewMode.KEEP_DATES, load_pending=True)  # the switch
+        app._preserve_xlim_on_render = True   # a racing mid-switch index re-arm
         app._load_data()
         _pump_until(app, lambda: app._primary and len(app._primary) > 1000,
                     timeout=0.8)
@@ -6164,10 +6159,10 @@ def check_d94_source_switch_time_preserve_survives_index_rearm(app) -> None:
             f"back to {left_after} (expected the preserved recent window, "
             f">=2025) — the mid-switch index-preserve re-arm defeated the "
             f"source-switch time-preserve")
-        # The durable pending flag must be consumed by the completing load.
-        assert app._pending_axis_switch_time_preserve is False, (
-            "d94: _pending_axis_switch_time_preserve should be cleared after "
-            "the switch's completing render")
+        # The switch-in-flight guard must be lowered by the completing load.
+        assert app._view.load_pending is False, (
+            "d94: view controller load_pending should be cleared after the "
+            "switch's completing render")
 
     finally:
         try:
@@ -6194,10 +6189,7 @@ def check_d94_source_switch_time_preserve_survives_index_rearm(app) -> None:
             app.compare_var.set(saved_compare_on)
         app.interval_var.set(saved_interval)
         app.ticker_var.set(saved_ticker)
-        app._preserve_xlim_on_render = saved_preserve
-        app._preserve_xlim_by_time_on_render = saved_preserve_t
-        app._axis_switch_inflight = saved_inflight
-        app._pending_axis_switch_time_preserve = saved_pending
+        app._view.restore(saved_view)
         app._drilldown_day = saved_drill
         try:
             app._load_data()

@@ -28,6 +28,7 @@ from typing import Any, Optional
 import numpy as np
 import pytest
 
+from tradinglab.core.view_intent import ViewController
 from tradinglab.drawings import DrawingStore, make_hline_drawing
 from tradinglab.gui.interaction import InteractionMixin
 from tradinglab.models import Candle
@@ -301,8 +302,7 @@ class _InteractionHarness:
         self._drawing_drag_state = None
         self._anchor_pick_state = None
         self._pick_cache = None
-        self._preserve_xlim_on_render = False
-        self._slide_xlim_to_right_edge = False
+        self._view = ViewController()
         self._drawing_hover_cursor_active = False
         self._display_tz = ""
         self._scroll_zoom_invert = False
@@ -1414,7 +1414,7 @@ class TestPanStateMachine:
     def test_pan_end_with_no_active_state_is_noop(self):
         h = _InteractionHarness()
         h._pan_end(_FakeEvent())
-        assert h._preserve_xlim_on_render is False
+        assert h._view.preserve is False
         assert h._canvas.draw_idle_calls == 0
 
     def test_pan_end_clears_state_and_persists_view(self):
@@ -1428,8 +1428,8 @@ class TestPanStateMachine:
         assert h._pan_animated == []
         assert h._pan_bg is None
         assert h._blit_bg is None
-        assert h._preserve_xlim_on_render is True
-        assert h._slide_xlim_to_right_edge is False
+        assert h._view.preserve is True
+        assert h._view.slide is False
         assert h.autoscale_calls == 1
         assert h._canvas.draw_idle_calls == 1
 
@@ -1488,8 +1488,8 @@ class TestScrollZoom:
         h._on_scroll_zoom(ev)
         lo, hi = h._price_ax.get_xlim()
         assert (hi - lo) < 100.0
-        assert h._preserve_xlim_on_render is True
-        assert h._slide_xlim_to_right_edge is False
+        assert h._view.preserve is True
+        assert h._view.slide is False
         assert "primary" in h.ensure_rendered_calls
         assert h.autoscale_calls == 1
         assert h._canvas.draw_idle_calls == 1
@@ -1604,8 +1604,8 @@ class TestRubberBandZoom:
         h._zoom_end(_FakeEvent(xdata=50.0, ydata=110.0))
         assert h._price_ax.get_xlim() == (10.0, 50.0)
         assert h._zoom_state is None
-        assert h._preserve_xlim_on_render is True
-        assert h._slide_xlim_to_right_edge is False
+        assert h._view.preserve is True
+        assert h._view.slide is False
         assert h.autoscale_calls == 1
 
     def test_zoom_end_below_minimum_width_aborts(self):
