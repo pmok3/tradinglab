@@ -23,6 +23,10 @@ bounded oscillators.
   - `ma_type: choice` (default `"EMA"`, `SMA | EMA | WMA | RMA`) —
     applied uniformly to fast, slow, and signal.
   - `source: choice` (default `"close"`, `close | hl2 | hlc3 | ohlc4`).
+    **Case-insensitive on input** — `__init__` lowercases the source (accepts
+    `"Close"` or `"close"`) and canonicalizes to the lowercase registry form,
+    so a source value is portable across every indicator (audit
+    `indicator-source-case-insensitive`; matches `MovingAverage`'s leniency).
 - `default_style`: `macd` `#2ca02c` w=1.4 and `signal` `#ff7f0e` w=1.2
   via `_palette`; `histogram` `#26a69a` w=1.0 (bar colors come from `histogram_palette`
   via the classifier — the style color is only used for legend hint).

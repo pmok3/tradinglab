@@ -193,13 +193,18 @@ class MACD(BaseIndicator):
             )
         if ma_type not in MA_TYPES:
             raise ValueError(f"ma_type must be one of {MA_TYPES!r}")
+        # Accept any casing (e.g. "Close" or "close") and canonicalize to the
+        # lowercase form the indicator registry uses — matches MovingAverage's
+        # case-insensitive source handling so a source value is portable across
+        # every indicator (audit ``indicator-source-case-insensitive``).
+        source = str(source).strip().lower()
         if source not in _SOURCES:
             raise ValueError(f"source must be one of {_SOURCES!r}")
         self.fast_length = int(fast_length)
         self.slow_length = int(slow_length)
         self.signal_length = int(signal_length)
         self.ma_type = str(ma_type)
-        self.source = str(source)
+        self.source = source
         self.name = self._render_name()
 
     @property

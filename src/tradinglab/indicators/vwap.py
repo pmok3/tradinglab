@@ -62,6 +62,9 @@ class VWAP(BaseIndicator):
     overlay = True
 
     def __init__(self, price_source: str = "typical") -> None:
+        # Case-insensitive: accept "Close"/"close" etc.; canonicalize to the
+        # lowercase registry form (audit ``indicator-source-case-insensitive``).
+        price_source = str(price_source).strip().lower()
         if price_source not in _PRICE_SOURCES:
             raise ValueError(
                 f"price_source must be one of {_PRICE_SOURCES!r}; "

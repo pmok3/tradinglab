@@ -92,13 +92,23 @@ block.
 
 ## Layout
 
+**Fit (audit `custom-indicator-dialog-fit`):** dialog opens at
+`default_geometry="1040x720"`. The header `meta` grid puts `Name`+`Mode` on
+row 0, the **`Overlay on price pane` + `Expose to scanner` checkboxes on their
+OWN row** (row 1) — never crammed alongside Name/Mode where a narrow dialog
+would clip the "Expose to scanner" label off the right edge — and
+`Description` on row 2. Every mode's help/prose label carries a `wraplength`
+(≈740) so a long single-line help string can't force the dialog to ~1519 px
+wide. Net effect: the content's requested width fits inside the 1040 px dialog.
+
 ```
 ┌ Custom Indicator Builder ────────────────────────────────────┐
 │  Saved indicators │ Name [          ] Mode [Expression     ▼]│
-│  • test_1         │ Description [                          ] │
-│  • momo_score     │ ┌─ Composition ─────────────────────────┐│
-│  [New] [Delete]   │ │ cheatsheet (series/funcs/ops)         ││
-│  [Import…][Export…]│ │ Expression:                           ││
+│  • test_1         │ [x] Overlay on price pane [x] Expose to scanner │
+│  • momo_score     │ Description [                          ] │
+│  [New] [Delete]   │ ┌─ Composition ─────────────────────────┐│
+│  [Import…][Export…]│ │ cheatsheet (series/funcs/ops)         ││
+│                   │ │ Expression:                           ││
 │                   │ │ [        text widget        ]         ││
 │                   │ └───────────────────────────────────────┘│
 │                   │ [Validate] [Preview]   [Save] [Close]    │

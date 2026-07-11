@@ -184,7 +184,7 @@ class CustomIndicatorDialog(BaseModalDialog):
             app,
             title="Custom Indicator Builder",
             geometry_key="dlg.custom_indicator",
-            default_geometry="980x720",
+            default_geometry="1040x720",
             apply_dark_theme=True,
         )
         self._app = app
@@ -283,7 +283,7 @@ class CustomIndicatorDialog(BaseModalDialog):
         meta = ttk.Frame(right)
         meta.pack(side="top", fill="x")
         ttk.Label(meta, text="Name:").grid(row=0, column=0, sticky="w", padx=(0, 4))
-        ttk.Entry(meta, textvariable=self._name_var, width=28).grid(
+        ttk.Entry(meta, textvariable=self._name_var, width=22).grid(
             row=0, column=1, sticky="w",
         )
         ttk.Label(meta, text="Mode:").grid(row=0, column=2, sticky="e", padx=(12, 4))
@@ -293,20 +293,23 @@ class CustomIndicatorDialog(BaseModalDialog):
         )
         self._mode_combo.grid(row=0, column=3, sticky="w")
         self._mode_combo.bind("<<ComboboxSelected>>", self._on_mode_changed)
+        # Checkboxes on their own row so a narrow dialog never clips the
+        # "Expose to scanner" label off the right edge (audit
+        # ``custom-indicator-dialog-fit``).
+        checks = ttk.Frame(meta)
+        checks.grid(row=1, column=0, columnspan=6, sticky="w", pady=(4, 0))
         ttk.Checkbutton(
-            meta, text="Overlay on price pane", variable=self._overlay_var,
-        ).grid(row=0, column=4, sticky="w", padx=(12, 0))
+            checks, text="Overlay on price pane", variable=self._overlay_var,
+        ).pack(side="left")
         ttk.Checkbutton(
-            meta,
-            text="Expose to scanner",
-            variable=self._scannable_var,
-        ).grid(row=0, column=5, sticky="w", padx=(12, 0))
+            checks, text="Expose to scanner", variable=self._scannable_var,
+        ).pack(side="left", padx=(16, 0))
 
         ttk.Label(meta, text="Description:").grid(
-            row=1, column=0, sticky="w", padx=(0, 4), pady=(4, 0),
+            row=2, column=0, sticky="w", padx=(0, 4), pady=(4, 0),
         )
-        ttk.Entry(meta, textvariable=self._desc_var, width=64).grid(
-            row=1, column=1, columnspan=5, sticky="we", pady=(4, 0),
+        ttk.Entry(meta, textvariable=self._desc_var, width=48).grid(
+            row=2, column=1, columnspan=5, sticky="we", pady=(4, 0),
         )
         meta.columnconfigure(1, weight=1)
 
@@ -586,7 +589,7 @@ class CustomIndicatorDialog(BaseModalDialog):
                 "The indicator emits 1.0 when the group is TRUE at a bar, "
                 "0.0 when FALSE, NaN during warmup."
             ),
-            foreground="#666666", justify="left",
+            foreground="#666666", justify="left", wraplength=740,
         ).pack(side="top", anchor="w", pady=(0, 4))
         ttk.Label(self._compose_frame, text="Condition tree:").pack(
             side="top", anchor="w",
@@ -644,7 +647,7 @@ class CustomIndicatorDialog(BaseModalDialog):
                 "indicator is computed.\n"
                 "    Only save indicators you trust."
             ),
-            foreground="#a02020", justify="left",
+            foreground="#a02020", justify="left", wraplength=740,
         ).pack(side="top", anchor="w", pady=(0, 6))
         ttk.Label(self._compose_frame, text="Python source:").pack(
             side="top", anchor="w",

@@ -84,7 +84,8 @@ in `tests/smoke/test_smoke_full.py`.
     symbols" checkbox. When checked, one `shared_anchor_ts` applies to
     every symbol; when unchecked, anchors are per-symbol.
   - `price_source: choice` (default `"typical"`, choices
-    `typical | close | ohlc4`).
+    `typical | close | ohlc4`). **Case-insensitive on input** (`__init__`
+    lowercases; audit `indicator-source-case-insensitive`).
   - `bands: choice` (default `"off"`, choices `off | 1σ | 2σ | both`).
 - Non-schema params (set by the pick flow, not typed in the dialog):
   - `anchors: dict[str, str]` — `{SYMBOL_UPPER: ISO ts}` per-symbol

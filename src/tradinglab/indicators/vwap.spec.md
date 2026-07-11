@@ -13,7 +13,8 @@ own session), so the line auto-hides.
 - `params_schema`:
   - `price_source: choice` (default `"typical"`, choices
     `typical | close | ohlc4`) — `typical = (H+L+C)/3`,
-    `ohlc4 = (O+H+L+C)/4`.
+    `ohlc4 = (O+H+L+C)/4`. **Case-insensitive on input** (`__init__`
+    lowercases; audit `indicator-source-case-insensitive`).
 - `default_style.vwap`: purple `#9467bd`, width 1.6.
 - `scannable_outputs = (("vwap","numeric"),)` and `resets_daily = True` — opts the indicator into the scanner AND declares it as session-anchored so engine/runner know to evict cached prefixes at session boundaries (see `scanner.fields.field_ref_resets_daily`).
 - `is_available_for(interval) -> Availability` (static) — returns `intraday_only(interval)`: `ok=False` on daily / weekly / monthly, `ok=True` on intraday. Lets the chart Add-Indicator menu grey VWAP out on a daily chart AND lets the Strategy Tester's `interval_compat` guard block a Run that references VWAP on a non-intraday interval (it would resolve to NaN every bar → zero trades). Audit `intraday-interval-guard`.

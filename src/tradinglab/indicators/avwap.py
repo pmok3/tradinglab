@@ -169,6 +169,8 @@ class AnchoredVWAP(BaseIndicator):
         anchors: dict | None = None,
         shared_anchor_ts: str = "",
     ) -> None:
+        # Case-insensitive source (audit ``indicator-source-case-insensitive``).
+        price_source = str(price_source).strip().lower()
         if price_source not in _PRICE_SOURCES:
             raise ValueError(
                 f"price_source must be one of {_PRICE_SOURCES!r}; "
