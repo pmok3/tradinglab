@@ -248,6 +248,16 @@ class SandboxController(EventsControllerMixin):
     # because the master clock crossed midnight.
     _last_clock_session_date: _dt.date | None = None
 
+    # Per-day free-text "watch notes" the trader jots during (blind)
+    # replay, keyed by the UTC session date (``current_session_date``).
+    # Folded into ``SessionResult.day_notes`` by :meth:`result` so they
+    # persist through save_session and surface in the Performance View's
+    # daily-journal pane. ``_day_ordinal`` is the 1-based count of
+    # distinct session days visited so far — used for the blind-safe
+    # "Replay Day N" panel label (never leaks the calendar date).
+    _day_notes: dict[str, str] = field(default_factory=dict)
+    _day_ordinal: int = 1
+
     # Events feature: per-symbol raw event bundles fetched at session
     # start / register_ticker time. Stored as opaque ``Any`` because
     # the events subpackage is imported lazily — the controller never
@@ -563,6 +573,9 @@ class SandboxController(EventsControllerMixin):
         # Seed the day tracker so the first day-boundary detection in
         # ``next_bar`` has a baseline.
         self._last_clock_session_date = self.current_session_date()
+        # Fresh watch-note buffer + day counter for this session.
+        self._day_notes = {}
+        self._day_ordinal = 1
         panel = getattr(self.app, "_sandbox_panel", None)
         if panel is not None:
             with _silent_tcl():
@@ -693,6 +706,7 @@ class SandboxController(EventsControllerMixin):
                 or self._archived_post_trades or self._archived_equity
                 or self._archived_cash_adjustments
                 or self._archived_quantity_adjustments):
+            cur.day_notes = dict(self._day_notes)
             return cur
         return SessionResult(
             spec=cur.spec,
@@ -708,6 +722,7 @@ class SandboxController(EventsControllerMixin):
                              + list(cur.cash_adjustments),
             quantity_adjustments=list(self._archived_quantity_adjustments)
                                  + list(cur.quantity_adjustments),
+            day_notes=dict(self._day_notes),
         )
 
     def cycle_to_next(self) -> bool:
@@ -921,6 +936,8 @@ class SandboxController(EventsControllerMixin):
         self._last_clock_session_date = cur_day
         day_changed = (prev_day is not None and cur_day is not None
                        and prev_day != cur_day)
+        if day_changed:
+            self._day_ordinal += 1
 
         if self.display_interval == "1d":
             # Daily display: skip the per-intraday-tick chart refresh
@@ -1355,6 +1372,42 @@ class SandboxController(EventsControllerMixin):
             return None
         return _dt.datetime.fromtimestamp(
             int(ts), tz=_dt.timezone.utc).date()
+
+    def current_day_note(self) -> str:
+        """Return the watch note for the current replay session day.
+
+        Empty string when there's no clock yet or no note was written.
+        """
+        d = self.current_session_date()
+        if d is None:
+            return ""
+        return self._day_notes.get(d.isoformat(), "")
+
+    def set_day_note(self, text: str) -> None:
+        """Store (or clear) the watch note for the current session day.
+
+        Keyed by the UTC session date (:meth:`current_session_date`).
+        Trailing whitespace is stripped; an empty result removes the
+        day's entry entirely so a blank note never persists. No-op when
+        there's no active clock.
+        """
+        d = self.current_session_date()
+        if d is None:
+            return
+        key = d.isoformat()
+        cleaned = (text or "").rstrip()
+        if cleaned:
+            self._day_notes[key] = cleaned
+        else:
+            self._day_notes.pop(key, None)
+
+    def current_day_ordinal(self) -> int:
+        """1-based count of distinct session days visited so far.
+
+        Blind-safe — a monotone counter that never reveals the calendar
+        date, so the panel can label the note box "Replay Day N".
+        """
+        return int(self._day_ordinal)
 
     def daily_visible_for(self, symbol: str) -> list[Any]:
         """Return the daily-bar slice for ``symbol`` visible at the

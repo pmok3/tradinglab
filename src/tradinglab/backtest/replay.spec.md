@@ -29,6 +29,8 @@ pre-sandbox app-state snapshot restored on `end_session`.
 - `set_post_trade_callback(cb)` — register the post-trade review callback.
 - `register_card_subscriber(callback) -> Callable[[], None]` — M5 ChartStack lockstep: register a zero-arg callback fired synchronously inside `next_bar` / `cycle_to_next` after the engine has advanced and per-symbol visibles extended. Returns an idempotent `release()` callable. Exceptions are swallowed per subscriber. Cleared on `end_session` AFTER one final fire — subscribers can observe `is_active() == False` and self-detach.
 - `current_session_date() -> Optional[date]`.
+- `current_day_note() -> str` / `set_day_note(text)` — get / set the trader's free-text watch note for the current replay session day. Keyed by the UTC `current_session_date()`; `set_day_note` strips trailing whitespace and removes the entry when the result is empty; both no-op when there is no clock.
+- `current_day_ordinal() -> int` — blind-safe 1-based count of distinct session days visited so far (drives the panel's "Replay Day N" label without leaking the calendar date).
 - `daily_visible_for(symbol) -> List[Any]` — daily slice strictly before `current_session_date()`, capped to `daily_lookback_bars`.
 - Inspection helpers: `is_active`, `positions_snapshot`, `cash`, `clock_ts`, `tickers`.
 - Public attributes: `engine`, `spec`, `interval`, `focus_symbol`, `visible_candles_by_symbol`, `tag_store`, `session_id`, `screenshot_dir`, `include_extended`, `auto_cycle`, `blind`, `display_interval`, `display_intervals`, `daily_lookback_bars`.
@@ -55,6 +57,7 @@ pre-sandbox app-state snapshot restored on `end_session`.
 - **`SandboxMemento` is explicit**: every pre-sandbox app state captured + restored in one call.
 - **Bumps `app._fetch_token` at start**: stale background fetches bail. Also clears `_prefetched_raw` and `_drilldown_day`.
 - **Blind mode (display-only)**: replay behaviour identical to non-blind; only display differs. Price axis anchored as if `now` were the right edge; date readout suppressed (only time-of-day shows). Time-of-day NOT hidden — session-relative position is inferable. Mirrored in [`session.spec.md`](session.spec.md).
+- **Per-day watch notes**: `_day_notes` (dict keyed by UTC session date) buffers the trader's free-text pre-trade observations captured during replay via `set_day_note`; `_day_ordinal` counts distinct session days visited (incremented on each `next_bar` day-boundary cross, reset to 1 in `start_session`). `result()` folds `_day_notes` into `SessionResult.day_notes` on BOTH the single-cycle fast path and the auto-cycle merge path, so they persist through `save_session` and surface in the Performance View daily-journal pane. Engine-independent (like the post-trade review text) so reproducibility is unaffected.
 - **Auto-cycle**: `next_bar` past end-of-data calls `cycle_to_next`, which auto-flattens (synthetic fills at last close), archives, draws the next eligible date (deterministic round-robin on seeded shuffle), rebuilds with cash carried forward, ticks + fast-forwards. Compare slot is force-cleared each cycle.
 - **Multi-timeframe daily context**: `daily_full_by_symbol` stores raw daily candles per symbol; `daily_visible_for(symbol)` derives the slice live. Visibility rule: bar's session date **strictly less than** current — the in-progress day is omitted. Capped at `daily_lookback_bars`.
 - **Daily-context refresh on day-boundary cross only**: `next_bar` tracks `_last_clock_session_date`; per-intraday-tick refreshes skipped while `display_interval == "1d"`. On a cross the daily slice is re-installed.
@@ -82,7 +85,7 @@ pre-sandbox app-state snapshot restored on `end_session`.
 - After `start_session`, `engine.master_timeline` length never changes.
 - `register_ticker(s, c)` twice with the same content returns the **same** visible-list object (`is`-equal); different content raises before any state mutation.
 - `daily_visible_for(s)` never includes the in-progress day.
-- `result()` for non-auto-cycle equals `engine.result()`; auto-cycle prepends archived lists in cycle order.
+- `result()` for non-auto-cycle equals `engine.result()` (fills / pre / post / equity), with `day_notes` overwritten from the controller's watch-note buffer; auto-cycle prepends archived lists in cycle order.
 - `end_session` calls `memento.restore` exactly once and clears `self.active` regardless of restore exceptions.
 
 ## See also

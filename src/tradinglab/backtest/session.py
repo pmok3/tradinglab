@@ -141,6 +141,16 @@ class SessionResult:
     # — no ENGINE_VERSION bump required.
     cash_adjustments: list[CashAdjustment] = field(default_factory=list)
     quantity_adjustments: list[QuantityAdjustment] = field(default_factory=list)
+    # Per-day free-text "watch notes" captured during (blind) sandbox
+    # replay — the trader's real-time read of what they were watching
+    # that session, keyed by the UTC session date (``YYYY-MM-DD``,
+    # equal to the ET date for regular-hours replay). Populated by the
+    # controller (see replay.py ``set_day_note``), NOT the engine — the
+    # engine emits an empty map, mirroring how ``PostTradeReview
+    # .user_review`` is attached post-hoc, so engine-level
+    # reproducibility is unaffected. Additive default-empty so existing
+    # ``sandbox-1d`` saves load cleanly (no ``ENGINE_VERSION`` bump).
+    day_notes: dict[str, str] = field(default_factory=dict)
 
     # ---- serialisation -------------------------------------------------
 
@@ -154,6 +164,7 @@ class SessionResult:
             "final_cash": float(self.final_cash),
             "cash_adjustments": [_cash_adj_to_dict(a) for a in self.cash_adjustments],
             "quantity_adjustments": [_qty_adj_to_dict(a) for a in self.quantity_adjustments],
+            "day_notes": {str(k): str(v) for k, v in self.day_notes.items()},
         }
 
     @classmethod
@@ -167,6 +178,7 @@ class SessionResult:
             final_cash=float(d.get("final_cash", 0.0)),
             cash_adjustments=[_cash_adj_from_dict(x) for x in d.get("cash_adjustments") or ()],
             quantity_adjustments=[_qty_adj_from_dict(x) for x in d.get("quantity_adjustments") or ()],
+            day_notes={str(k): str(v) for k, v in (d.get("day_notes") or {}).items()},
         )
 
 

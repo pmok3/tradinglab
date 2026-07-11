@@ -677,3 +677,49 @@ class TestPostTradeCallback:
         ctl.set_post_trade_callback(lambda r: "")
         ctl.set_post_trade_callback(None)
         assert ctl._post_trade_callback is None
+
+
+# ---------------------------------------------------------------------------
+# 10. Per-day watch notes (blind-safe pre-trade journaling)
+# ---------------------------------------------------------------------------
+
+
+class TestDayNotes:
+    def test_capture_and_result_injection(self):
+        ctl, _, _ = _ctl_and_start()
+        d = ctl.current_session_date()
+        assert d is not None
+        key = d.isoformat()
+        assert ctl.current_day_note() == ""
+        ctl.set_day_note("SPY pulling back to 9ema, NVDA holding RS")
+        assert ctl.current_day_note() == "SPY pulling back to 9ema, NVDA holding RS"
+        # Folded into the SessionResult (single-cycle fast path).
+        r = ctl.result()
+        assert r.day_notes[key] == "SPY pulling back to 9ema, NVDA holding RS"
+
+    def test_whitespace_only_note_clears_entry(self):
+        ctl, _, _ = _ctl_and_start()
+        key = ctl.current_session_date().isoformat()
+        ctl.set_day_note("temp thesis")
+        assert ctl.current_day_note() == "temp thesis"
+        ctl.set_day_note("   \n  ")
+        assert ctl.current_day_note() == ""
+        assert key not in ctl.result().day_notes
+
+    def test_ordinal_starts_at_one(self):
+        ctl, _, _ = _ctl_and_start()
+        assert ctl.current_day_ordinal() == 1
+
+    def test_notes_survive_result_merge(self):
+        ctl, _, _ = _ctl_and_start()
+        key = ctl.current_session_date().isoformat()
+        ctl._archived_pre_trades = [object()]  # force the merge path
+        ctl.set_day_note("archived-cycle day note")
+        assert ctl.result().day_notes.get(key) == "archived-cycle day note"
+
+    def test_set_day_note_noop_without_active_clock(self):
+        ctl = SandboxController(app=_FakeChartApp(), tag_store=TagStore())
+        # No session started ⇒ no clock ⇒ safe no-op, no crash.
+        ctl.set_day_note("ignored")
+        assert ctl.current_day_note() == ""
+        assert ctl.current_day_ordinal() == 1

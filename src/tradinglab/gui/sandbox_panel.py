@@ -22,7 +22,7 @@ from tkinter import ttk
 from typing import Any
 
 from ..core.timezones import get_et, get_zoneinfo
-from .native_theme import apply_listbox_theme, current_theme
+from .native_theme import apply_listbox_theme, apply_text_theme, current_theme
 
 _MS_PER_DAY = 86_400_000
 
@@ -131,9 +131,22 @@ class SandboxPanel(ttk.Frame):
             self._pos_tree.column(c, width=w, anchor="w")
         self._pos_tree.grid(row=8, column=0, sticky="ew", **pad)
 
+        # Watch notes — day-by-day pre-trade observations. Blind-safe:
+        # the frame label shows "Replay Day N" (never the date) while
+        # the session is blind. Committed to the controller's day-note
+        # map and surfaced in the Performance View's daily-journal pane.
+        self._notes_frame = ttk.LabelFrame(self, text="Watch notes")
+        self._notes_frame.grid(row=9, column=0, sticky="ew", **pad)
+        self._notes_text = tk.Text(self._notes_frame, height=4, width=22,
+                                   wrap="word", undo=True)
+        self._notes_text.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
+        apply_text_theme(self._notes_text, current_theme(self.app))
+        self._notes_text.bind("<FocusOut>", self._commit_day_note)
+        self._notes_day_key: str | None = None
+
         # End session.
         ttk.Button(self, text="End session", command=self._on_end_session) \
-            .grid(row=9, column=0, sticky="ew", **pad)
+            .grid(row=10, column=0, sticky="ew", **pad)
 
         # Bind Right-arrow globally (only fires when sandbox active —
         # controller checks ``is_active``). Migrated from the legacy
@@ -279,10 +292,17 @@ class SandboxPanel(ttk.Frame):
                     ))
                 self._pos_sig = sig
 
+        # Watch-notes box: reload only on a day roll (never clobbers
+        # in-progress typing on the current day).
+        self._refresh_day_notes(ctl, blind)
+
     def _on_next_bar(self) -> None:
         ctl = self.controller
         if ctl is None or not ctl.is_active():
             return
+        # Persist the current day's watch note before the clock may roll
+        # to the next day inside next_bar().
+        self._commit_day_note()
         if not ctl.next_bar():
             try:
                 self.app._status.info("Sandbox: end of replay reached")
@@ -473,7 +493,72 @@ class SandboxPanel(ttk.Frame):
         wiring bug and should surface in the console rather than be
         silently eaten.
         """
+        self._commit_day_note()
         self.app._on_menu_sandbox_end()
+
+    def _refresh_day_notes(self, ctl: Any, blind: bool) -> None:
+        """Sync the watch-notes box to the controller's current day.
+
+        Reloads the note text (and blind-safe frame label) only when the
+        session day changes, so per-day typing is never clobbered by the
+        high-frequency per-tick refresh. No-op when no session is active.
+        """
+        if ctl is None:
+            return
+        try:
+            if not ctl.is_active():
+                return
+        except Exception:  # noqa: BLE001
+            return
+        try:
+            d = ctl.current_session_date()
+        except Exception:  # noqa: BLE001
+            d = None
+        key = d.isoformat() if d is not None else ""
+        if key == self._notes_day_key:
+            return
+        self._notes_day_key = key
+        try:
+            note = ctl.current_day_note()
+        except Exception:  # noqa: BLE001
+            note = ""
+        try:
+            self._notes_text.delete("1.0", tk.END)
+            if note:
+                self._notes_text.insert("1.0", note)
+        except tk.TclError:
+            return
+        if blind:
+            try:
+                n = int(ctl.current_day_ordinal())
+            except Exception:  # noqa: BLE001
+                n = 1
+            label = f"Watch notes — Replay Day {n}"
+        else:
+            label = f"Watch notes — {key}" if key else "Watch notes"
+        try:
+            self._notes_frame.configure(text=label)
+        except tk.TclError:
+            pass
+
+    def _commit_day_note(self, _event: Any = None) -> None:
+        """Write the box's current text to the controller's day-note map."""
+        ctl = self.controller
+        if ctl is None:
+            return
+        try:
+            if not ctl.is_active():
+                return
+        except Exception:  # noqa: BLE001
+            return
+        try:
+            text = self._notes_text.get("1.0", "end-1c")
+        except tk.TclError:
+            return
+        try:
+            ctl.set_day_note(text)
+        except AttributeError:
+            pass
 
 
 __all__ = ("SandboxPanel",)

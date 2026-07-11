@@ -1,12 +1,13 @@
 # gui/performance_view.py — Spec
 
 ## Purpose
-Phase 1d read-only Performance View Toplevel. Multi-pane window driven by a [`SessionResult`](../backtest/session.spec.md): a summary line, an equity-curve chart, a sortable trade table (one row per closed round-trip), a per-setup aggregates table, and a per-proximity aggregates table. Bottom button bar carries `Export CSV…`, `Copy to clipboard`, and `Close`. Used both for "View Performance…" on a live or just-ended session and for the post-Load review window.
+Phase 1d read-only Performance View Toplevel. Multi-pane window driven by a [`SessionResult`](../backtest/session.spec.md): a summary line, an equity-curve chart, a sortable trade table (one row per closed round-trip), a per-setup aggregates table, a per-proximity aggregates table, and a daily-journal pane (each replay day's watch note above that day's trades). Bottom button bar carries `Export CSV…`, `Copy to clipboard`, and `Close`. Used both for "View Performance…" on a live or just-ended session and for the post-Load review window.
 
 ## Public API
 - `class PerformanceView(BaseModalDialog)` — `__init__(parent, result: SessionResult, *, title="Sandbox — Performance", screenshot_dir: Optional[Path] = None)`. `screenshot_dir` is the directory holding `<order_id>_pre.png` / `<ref_id>_post.png` files captured by [`SandboxController`](../backtest/replay.spec.md); when provided, `Export CSV…` mirrors them into a sibling bundle.
 - `_fmt_ts(ts: int) -> str` — render epoch-seconds as `YYYY-MM-DD HH:MM` UTC.
 - `_truncate(s, n=60) -> str` — single-line, ellipsis-clipped string for the thesis column.
+- `_fmt_day(date_iso: str) -> str` — render a `YYYY-MM-DD` day key as `Mon DD, YYYY` for the daily-journal headers.
 
 ## Dependencies
 - Internal: [`..backtest.performance`](../backtest/performance.spec.md) (`build_trade_rows`, `build_setup_aggregates`, `build_proximity_aggregates`, `TradeRow`, `SetupAggregate`, `ProximityAggregate`, `realized_pnl_curve`, `trade_rows_to_tsv`, `write_trade_rows_csv`), [`..backtest.session.SessionResult`](../backtest/session.spec.md), `gui._modal_base.BaseModalDialog` / `protect_combobox_wheel`.
@@ -19,6 +20,7 @@ Phase 1d read-only Performance View Toplevel. Multi-pane window driven by a [`Se
 - **Chart pane hidden when `result.equity_curve` is empty** (engine never ticked, headless smoke). The trade table is still useful in that case.
 - **Trade table is sortable, aggregates are not**: discretionary traders sort trades by P/L / setup / conviction freely; aggregates are intentionally pinned to the canonical `(-count, tag)` order from `build_setup_aggregates` so screenshots / cross-session comparisons are stable.
 - **Per-proximity aggregates are not sortable**: market-event proximity rows come from `build_proximity_aggregates` and use the same count/win-rate/expectancy shape as setup aggregates; an empty proximity key renders as `(no-proximity)`.
+- **Daily-journal pane**: a `ttk.Treeview` (`show="tree headings"`, columns `pl` / `detail`) with one expanded parent node per replay day from `build_day_groups` — the day's watch note as a header row, that day's trades nested beneath, and "flat" note-only days shown with no children — so the note reads *ahead of* the trades it preceded. A "Blind (hide dates)" `Checkbutton` re-renders day labels as "Replay Day N" via `_populate_journal`; default off, since the exercise is over and the post-hoc report reveals dates unless the user opts back into blind review.
 - **Sort is stable across re-clicks**: clicking the same column toggles direction; the underlying sort uses Python's stable `sorted` so within-bucket ordering is preserved.
 - **UTC everywhere** (`_fmt_ts` and the chart's `mdates.DateFormatter`): saved sessions render identically across timezones — the main chart's display-tz setting governs chart axes only, not the analytics window.
 - **Thesis truncated to 60 chars in the table**; the full text is preserved in the CSV / clipboard exports.
@@ -37,6 +39,7 @@ Phase 1d read-only Performance View Toplevel. Multi-pane window driven by a [`Se
 ## Testing
 - `check_b5_sandbox_save_load` exercises the underlying `build_trade_rows` / `build_setup_aggregates` pipeline.
 - `check_d57_performance_view_equity_csv_export` covers the chart-toggle wiring, both export buttons (CSV with mirrored-screenshots bundle, TSV-to-clipboard), the cancel path, and the screenshot-filename fallback for unattributed closes.
+- Daily-journal data (`build_day_groups`) is pinned in `tests/unit/test_day_notes_journal.py`; the pane is rendered by `_populate_journal` from `self._day_groups`.
 
 ## Modal keys
 `__init__` calls `_finalize_modal(primary=None, cancel=self.destroy, grab=False)`; this is a read-only non-modal window so ESC closes, Return is intentionally a no-op, and the parent chart remains interactive while the view is open.

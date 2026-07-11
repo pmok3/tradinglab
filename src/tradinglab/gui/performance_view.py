@@ -42,9 +42,11 @@ from tkinter import filedialog, ttk
 from typing import Any
 
 from ..backtest.performance import (
+    DayGroup,
     ProximityAggregate,
     SetupAggregate,
     TradeRow,
+    build_day_groups,
     build_proximity_aggregates,
     build_setup_aggregates,
     build_trade_rows,
@@ -118,6 +120,14 @@ def _truncate(s: str, n: int = 60) -> str:
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
+def _fmt_day(date_iso: str) -> str:
+    """``2025-04-29`` -> ``Apr 29, 2025``; passthrough on parse failure."""
+    try:
+        return _dt.date.fromisoformat(date_iso).strftime("%b %d, %Y")
+    except (ValueError, TypeError):
+        return date_iso or "(unknown day)"
+
+
 class PerformanceView(BaseModalDialog):
     """Read-only Toplevel showing trades + per-setup aggregates."""
 
@@ -143,6 +153,10 @@ class PerformanceView(BaseModalDialog):
         # mirror the setup table's ordering convention.
         self._proxs: list[ProximityAggregate] = (
             build_proximity_aggregates(self._rows))
+        # Daily journal: per-day watch note joined with that day's
+        # trades (blind-safe day labels). See build_day_groups.
+        self._day_groups: list[DayGroup] = build_day_groups(result)
+        self._journal_blind_var: tk.BooleanVar | None = None
         # Per-column sort state for the trade table: (column_key,
         # ascending). Toggled on every header click.
         self._trade_sort: tuple = ("exit_ts", True)
@@ -160,6 +174,7 @@ class PerformanceView(BaseModalDialog):
         self._populate_aggregates()
         self._populate_proximity()
         self._populate_summary()
+        self._populate_journal()
         protect_combobox_wheel(self)
         # Read-only view: no primary action. ESC / WM_DELETE destroy.
         # Non-modal (no grab) — original Toplevel did not grab_set; the
@@ -175,10 +190,12 @@ class PerformanceView(BaseModalDialog):
         # Row layout: 0 summary, 1 equity chart (optional), 2 "Trades:"
         # label, 3 trades treeview, 4 "Per-setup aggregates:" label,
         # 5 aggregates treeview, 6 "Per-proximity aggregates:" label,
-        # 7 proximity treeview, 8 button bar.
+        # 7 proximity treeview, 8 "Daily journal:" header,
+        # 9 journal treeview, 10 button bar.
         outer.rowconfigure(3, weight=3)
         outer.rowconfigure(5, weight=2)
         outer.rowconfigure(7, weight=2)
+        outer.rowconfigure(9, weight=2)
 
         # Summary line.
         self._summary_var = tk.StringVar(value="")
@@ -254,9 +271,39 @@ class PerformanceView(BaseModalDialog):
                                    stretch=False)
         self._prox_tree.grid(row=0, column=0, sticky="nsew")
 
+        # ----- Daily-journal pane: each replay day's watch note as a
+        # header row, with that day's trades nested beneath it. Flat
+        # days (a note but no trade) show as a header with no children.
+        journal_header = ttk.Frame(outer)
+        journal_header.grid(row=8, column=0, sticky="ew", pady=(8, 0))
+        ttk.Label(journal_header, text="Daily journal:").pack(side=tk.LEFT)
+        self._journal_blind_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            journal_header, text="Blind (hide dates)",
+            variable=self._journal_blind_var,
+            command=self._populate_journal).pack(side=tk.LEFT, padx=(10, 0))
+        journal_frame = ttk.Frame(outer)
+        journal_frame.grid(row=9, column=0, sticky="nsew")
+        journal_frame.columnconfigure(0, weight=1)
+        journal_frame.rowconfigure(0, weight=1)
+        self._journal_tree = ttk.Treeview(
+            journal_frame, columns=("pl", "detail"),
+            show="tree headings", height=8)
+        self._journal_tree.heading("#0", text="Day / Trade")
+        self._journal_tree.heading("pl", text="P/L")
+        self._journal_tree.heading("detail", text="Note / Setup")
+        self._journal_tree.column("#0", width=210, anchor="w", stretch=False)
+        self._journal_tree.column("pl", width=90, anchor="e", stretch=False)
+        self._journal_tree.column("detail", width=560, anchor="w", stretch=True)
+        self._journal_tree.grid(row=0, column=0, sticky="nsew")
+        jscroll = ttk.Scrollbar(journal_frame, orient="vertical",
+                                command=self._journal_tree.yview)
+        jscroll.grid(row=0, column=1, sticky="ns")
+        self._journal_tree.configure(yscrollcommand=jscroll.set)
+
         # ----- Button bar.
         bar = ttk.Frame(outer)
-        bar.grid(row=8, column=0, sticky="ew", pady=(8, 0))
+        bar.grid(row=10, column=0, sticky="ew", pady=(8, 0))
         bar.columnconfigure(0, weight=1)
         export_state = "normal" if self._rows else "disabled"
         self._export_btn = ttk.Button(
@@ -477,6 +524,40 @@ class PerformanceView(BaseModalDialog):
         for i, a in enumerate(self._proxs):
             tree.insert("", "end", iid=str(i),
                         values=self._prox_values(a))
+
+    def _populate_journal(self) -> None:
+        """Render each replay day's watch note with its trades nested.
+
+        Day nodes are expanded by default so the report reads top-to-
+        bottom: the day's note (header) sits *ahead of* the trades taken
+        that day. The Blind checkbox swaps calendar dates for
+        "Replay Day N" so a hindsight-safe review is possible.
+        """
+        tree = getattr(self, "_journal_tree", None)
+        if tree is None:
+            return
+        for child in tree.get_children():
+            tree.delete(child)
+        blind = bool(self._journal_blind_var.get()) if self._journal_blind_var else False
+        for g in self._day_groups:
+            if blind:
+                day_label = f"Replay Day {g.ordinal}"
+            else:
+                day_label = f"{_fmt_day(g.date_iso)}  ·  Day {g.ordinal}"
+            note_line = (_truncate(g.note.replace("\r\n", " ").replace("\n", " "), 90)
+                         if g.note else "(no note)")
+            pl_str = f"{g.total_pnl:+,.2f}" if g.rows else ""
+            parent = tree.insert(
+                "", "end", text=day_label, open=True,
+                values=(pl_str, note_line))
+            for r in g.rows:
+                setup = r.setup_tag or "(unattributed)"
+                detail = f"{r.post.side} · {setup}"
+                if r.thesis:
+                    detail += f" · {_truncate(r.thesis, 50)}"
+                tree.insert(
+                    parent, "end", text=f"    {r.post.symbol}",
+                    values=(f"{float(r.post.pnl):+,.2f}", detail))
 
     def _populate_summary(self) -> None:
         n = len(self._rows)

@@ -125,6 +125,26 @@ class ProximityAggregate:
     expectancy: float
 
 
+@dataclass(frozen=True)
+class DayGroup:
+    """One replay session-day: its watch note joined with that day's trades.
+
+    ``date_iso`` is the UTC session date (``YYYY-MM-DD``). ``ordinal`` is
+    the 1-based chronological rank of the day within the session, used
+    for the blind-mode "Replay Day N" label. ``note`` is the trader's
+    free-text pre-trade watch note for that day (empty when none was
+    written). ``rows`` are the day's closed trades in entry order (empty
+    for a "flat" day that carries a note but no trade).
+    """
+    date_iso: str
+    ordinal: int
+    note: str
+    rows: tuple[TradeRow, ...]
+    total_pnl: float
+    wins: int
+    losses: int
+
+
 def build_trade_rows(result: SessionResult) -> list[TradeRow]:
     """Pair each closed trade with its opening pre-trade entry.
 
@@ -248,13 +268,63 @@ def build_proximity_aggregates(rows: list[TradeRow]) -> list[ProximityAggregate]
     return out
 
 
+def _utc_date_iso(ts: int) -> str:
+    """UTC calendar-date ISO string (``YYYY-MM-DD``) for an epoch-second int.
+
+    Matches ``SandboxController.current_session_date`` (also UTC), so the
+    day key a trade groups under is identical to the key its session's
+    watch-note was stored under. For regular-hours replay the UTC date
+    equals the ET date; only extended-hours postmarket bars (off by
+    default) can roll to the next UTC date.
+    """
+    try:
+        return _dt.datetime.fromtimestamp(
+            int(ts), tz=_dt.timezone.utc).date().isoformat()
+    except (OverflowError, ValueError, OSError):
+        return ""
+
+
+def build_day_groups(result: SessionResult) -> list[DayGroup]:
+    """Group closed trades by session day and attach that day's watch note.
+
+    Days are the union of (a) every distinct UTC session date a closed
+    trade entered on and (b) every date carrying a
+    :attr:`SessionResult.day_notes` entry — so a "flat" day the trader
+    watched but took no trade on still appears (with its note and no
+    child rows). Output is chronological; ``ordinal`` is the 1-based
+    chronological rank (used for the blind-mode "Replay Day N" label so
+    the report can stay hindsight-safe). Trades within a day are ordered
+    by entry timestamp.
+    """
+    rows = build_trade_rows(result)
+    by_day: dict[str, list[TradeRow]] = {}
+    for r in rows:
+        by_day.setdefault(_utc_date_iso(r.post.entry_ts), []).append(r)
+    notes = {str(k): str(v) for k, v in (getattr(result, "day_notes", {}) or {}).items()}
+    out: list[DayGroup] = []
+    for i, key in enumerate(sorted(set(by_day) | set(notes)), start=1):
+        day_rows = sorted(by_day.get(key, []), key=lambda r: int(r.post.entry_ts))
+        out.append(DayGroup(
+            date_iso=key,
+            ordinal=i,
+            note=notes.get(key, ""),
+            rows=tuple(day_rows),
+            total_pnl=sum(float(r.post.pnl) for r in day_rows),
+            wins=sum(1 for r in day_rows if r.is_win),
+            losses=sum(1 for r in day_rows if r.is_loss),
+        ))
+    return out
+
+
 __all__ = (
     "TradeRow",
     "SetupAggregate",
     "ProximityAggregate",
+    "DayGroup",
     "build_trade_rows",
     "build_setup_aggregates",
     "build_proximity_aggregates",
+    "build_day_groups",
     "realized_pnl_curve",
     "screenshot_filenames",
     "trade_row_to_csv_record",
