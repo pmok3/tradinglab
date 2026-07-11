@@ -1,7 +1,7 @@
 # scanner/field_categories.py — Spec
 
 ## Purpose
-Concept **categories** for the field catalog, so the raw field pickers can render a *grouped* dropdown (section headers + members) instead of one long flat list — the "don't throw every building block at me up front" ask, applied to the raw picker (the curated palette in [`scanner/blocks`](blocks.spec.md) is the other half).
+Concept **categories** for the field catalog, so the raw field pickers can render a *grouped* dropdown (section headers + members) instead of one long flat list — the "don't throw every building block at me up front" ask, applied to the raw picker. (The composable [`gui/expression_builder`](../gui/expression_builder.spec.md) "+" token-stacker is the complementary half of that same ask — modular *operands* rather than a fixed palette.)
 
 Pure module (no Tk). Reads the catalog via [`scanner.fields.all_fields`](fields.spec.md) and assigns each field a category. Consumed by [`gui/scanner_block_editor._FieldRefPicker`](../gui/scanner_block_editor.spec.md) (builtin branch today; the indicator branch — which already has typeahead search — is a clean follow-up).
 
