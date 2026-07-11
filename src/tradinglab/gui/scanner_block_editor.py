@@ -56,10 +56,12 @@ from tkinter import ttk
 from typing import Any
 
 from ..indicators.base import ParamDef
+from ..scanner.field_categories import grouped_combo_values, is_category_header
 from ..scanner.fields import all_fields, get_field
 from ..scanner.model import (
     ALL_OPERATORS,
     FIELD_KIND_BUILTIN,
+    FIELD_KIND_EXPRESSION,
     FIELD_KIND_INDICATOR,
     FIELD_KIND_LITERAL,
     OP_BETWEEN,
@@ -280,6 +282,9 @@ def _estimate_picker_width(ref: FieldRef | None, *, compact: bool = False) -> in
     type_combo = 9 * _CHAR_PX + _COMBO_OVERHEAD  # picker type combo width=9
     if ref is None or ref.kind == FIELD_KIND_LITERAL:
         return type_combo + 10 * _CHAR_PX + _ENTRY_OVERHEAD + _FRAME_PAD_PX
+    if ref.kind == FIELD_KIND_EXPRESSION:
+        # An expression is a wide token strip — always force stacked.
+        return 9999
     symbol_cluster = 0
     if ref.symbol:
         # "@" label + space + combo width=11
@@ -450,6 +455,7 @@ class _FieldRefPicker(ttk.Frame):
         "Number": FIELD_KIND_LITERAL,
         "Builtin": FIELD_KIND_BUILTIN,
         "Indicator": FIELD_KIND_INDICATOR,
+        "Expression": FIELD_KIND_EXPRESSION,
     }
     _TYPE_BY_KIND = {v: k for k, v in _TYPE_LABELS.items()}
 
@@ -627,6 +633,8 @@ class _FieldRefPicker(ttk.Frame):
         prev_interval = self._ref.interval
         if new_kind == FIELD_KIND_LITERAL:
             self._ref = FieldRef.literal(self._last_literal)
+        elif new_kind == FIELD_KIND_EXPRESSION:
+            self._ref = FieldRef.expression(())
         elif new_kind == FIELD_KIND_BUILTIN:
             self._ref = FieldRef.builtin(
                 "close",
@@ -683,6 +691,7 @@ class _FieldRefPicker(ttk.Frame):
         self._symbol_badge = None
         self._validation_label = None
         self._indicator_combo = None
+        self._expr_builder = None
         self._badge_frame = None
         self._status_badges = []
         self._validation_var.set("")
@@ -697,6 +706,18 @@ class _FieldRefPicker(ttk.Frame):
         )
         self._symbol_is_placeholder = not bool(self._ref.symbol)
         kind = self._ref.kind
+        if kind == FIELD_KIND_EXPRESSION:
+            # Embed the visual "+" token-stacker (composable expression
+            # over field / indicator / constant leaves). Lazy import
+            # avoids the scanner_block_editor <-> expression_builder cycle.
+            from .expression_builder import ExpressionBuilder
+            self._expr_builder = ExpressionBuilder(
+                self._value_pane, ref=self._ref,
+                on_change=self._on_expression_change,
+                data_status_provider=self._data_status_provider,
+            )
+            self._expr_builder.grid(row=0, column=0, sticky="nw")
+            return
         if kind == FIELD_KIND_LITERAL:
             self._literal_var = tk.StringVar(
                 value=_format_number(self._ref.value if self._ref.value is not None else 0.0)
@@ -711,12 +732,20 @@ class _FieldRefPicker(ttk.Frame):
 
         if kind == FIELD_KIND_BUILTIN:
             ids = [s.id for s in all_fields() if s.kind == "builtin"]
+            # Categorized dropdown: non-selectable section headers group
+            # the 30+ builtins by concept (Price & Volume / Session /
+            # Heikin-Ashi / Key Bars). Members keep their raw id as the
+            # value, so the commit path is unchanged; header rows are
+            # rejected in ``_commit_builtin``. The combo is fixed-width
+            # (18), so the grouped values do not affect the auto-stack
+            # width estimate.
+            grouped_values, _ = grouped_combo_values("builtin")
             self._field_id_var = tk.StringVar(
                 value=self._ref.id if self._ref.id in ids else (ids[0] if ids else "close")
             )
             cb = ttk.Combobox(
                 self._value_pane, textvariable=self._field_id_var,
-                state="readonly", values=tuple(ids), width=18,
+                state="readonly", values=grouped_values, width=18,
             )
             cb.grid(row=0, column=0, padx=(0, 4))
             cb.bind("<<ComboboxSelected>>", lambda _e: self._commit_builtin())
@@ -1151,6 +1180,11 @@ class _FieldRefPicker(ttk.Frame):
 
     def _commit_builtin(self) -> None:
         new_id = self._field_id_var.get()
+        if is_category_header(new_id):
+            # Section header is not a real field — revert the readonly
+            # combo to the committed id and ignore the click.
+            self._field_id_var.set(self._ref.id)
+            return
         sym = self._current_symbol_from_combo()
         if new_id and (new_id != self._ref.id or sym != self._ref.symbol):
             self._ref = FieldRef.builtin(new_id, symbol=sym, interval=self._ref.interval)
@@ -1679,7 +1713,16 @@ class _FieldRefPicker(ttk.Frame):
         self._toplevel_for_reflow = None
         self._toplevel_bind_id = None
 
+    def _on_expression_change(self) -> None:
+        builder = getattr(self, "_expr_builder", None)
+        if builder is not None:
+            self._ref = builder.get()
+        self._fire()
+
     def _collect(self) -> FieldRef:
+        builder = getattr(self, "_expr_builder", None)
+        if self._ref.kind == FIELD_KIND_EXPRESSION and builder is not None:
+            return builder.get()
         return self._ref
 
     def _fire(self) -> None:

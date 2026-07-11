@@ -59,7 +59,7 @@ through JSON without losing information.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from dataclasses import field as dc_field
 from datetime import datetime, timezone
@@ -261,8 +261,33 @@ class MatchEvidence:
 FIELD_KIND_BUILTIN   = "builtin"
 FIELD_KIND_INDICATOR = "indicator"
 FIELD_KIND_LITERAL   = "literal"
+#: A composable arithmetic expression over other :class:`FieldRef` leaves
+#: (fields / indicators — including custom ones — and literals), combined
+#: with binary operators + parentheses. Built by the GUI "+" token-stacker
+#: and evaluated per-bar by :func:`evaluate_expression`.
+FIELD_KIND_EXPRESSION = "expression"
 
-_FIELD_KINDS = (FIELD_KIND_BUILTIN, FIELD_KIND_INDICATOR, FIELD_KIND_LITERAL)
+_FIELD_KINDS = (
+    FIELD_KIND_BUILTIN, FIELD_KIND_INDICATOR, FIELD_KIND_LITERAL,
+    FIELD_KIND_EXPRESSION,
+)
+
+#: Expression token kinds (see :class:`ExprToken`).
+EXPR_OPERAND = "operand"
+EXPR_OP = "op"
+
+#: Binary arithmetic operators allowed in an expression.
+EXPR_BINARY_OPS: tuple[str, ...] = ("+", "-", "*", "/", "%", "**")
+EXPR_PAREN_OPEN = "("
+EXPR_PAREN_CLOSE = ")"
+#: All operator-position tokens (binary ops + parentheses).
+EXPR_OPS: tuple[str, ...] = EXPR_BINARY_OPS + (EXPR_PAREN_OPEN, EXPR_PAREN_CLOSE)
+
+#: Operator precedence (higher binds tighter); ``**`` is right-associative.
+_EXPR_PRECEDENCE: dict[str, int] = {
+    "+": 2, "-": 2, "*": 3, "/": 3, "%": 3, "**": 4,
+}
+_EXPR_RIGHT_ASSOC: frozenset[str] = frozenset({"**"})
 
 
 @dataclass(frozen=True)
@@ -303,10 +328,26 @@ class FieldRef:
     #: ``(symbol, interval)`` via ``EvaluationContext.bars_registry``.
     #: See :func:`tradinglab.scanner.engine._sub_context_for_symbol_at_ts`.
     symbol: str = ""
+    #: Ordered infix token list — ONLY for ``kind == "expression"``.
+    #: Operand tokens wrap a nested :class:`FieldRef`; op tokens carry a
+    #: binary operator or parenthesis. Empty for every other kind.
+    terms: tuple[ExprToken, ...] = ()
 
     def __post_init__(self) -> None:
         if self.kind not in _FIELD_KINDS:
             raise ValueError(f"FieldRef.kind must be one of {_FIELD_KINDS}, got {self.kind!r}")
+        object.__setattr__(self, "terms", tuple(self.terms))
+        if self.kind == FIELD_KIND_EXPRESSION:
+            if self.value is not None or self.id or self.output_key:
+                raise ValueError(
+                    "FieldRef(kind='expression') must not set id/value/output_key"
+                )
+            object.__setattr__(self, "params", dict(self.params))
+            return
+        if self.terms:
+            raise ValueError(
+                f"FieldRef(kind={self.kind!r}) must not set terms (expression-only)"
+            )
         if self.kind == FIELD_KIND_LITERAL:
             if self.value is None:
                 raise ValueError("FieldRef(kind='literal') requires a numeric value")
@@ -326,6 +367,8 @@ class FieldRef:
         d: dict[str, Any] = {"kind": self.kind}
         if self.kind == FIELD_KIND_LITERAL:
             d["value"] = float(self.value)  # type: ignore[arg-type]
+        elif self.kind == FIELD_KIND_EXPRESSION:
+            d["terms"] = [t.to_dict() for t in self.terms]
         else:
             d["id"] = self.id
             if self.params:
@@ -351,6 +394,16 @@ class FieldRef:
             return cls(
                 kind=FIELD_KIND_LITERAL,
                 value=float(d["value"]),
+                interval=d.get("interval"),
+                symbol=str(d.get("symbol", "") or ""),
+            )
+        if kind == FIELD_KIND_EXPRESSION:
+            terms = tuple(
+                ExprToken.from_dict(t) for t in (d.get("terms") or ())
+            )
+            return cls(
+                kind=FIELD_KIND_EXPRESSION,
+                terms=terms,
                 interval=d.get("interval"),
                 symbol=str(d.get("symbol", "") or ""),
             )
@@ -411,11 +464,218 @@ class FieldRef:
                    params=dict(params or {}), output_key=output_key,
                    interval=interval, symbol=symbol)
 
+    @classmethod
+    def expression(cls, terms: tuple[ExprToken, ...]) -> FieldRef:
+        """Build an expression ref from an ordered infix token list."""
+        return cls(kind=FIELD_KIND_EXPRESSION, terms=tuple(terms))
+
     # -- queries -------------------------------------------------------------
 
     def is_cross_symbol(self) -> bool:
         """``True`` iff this ref pins a non-active symbol (``symbol != ""``)."""
         return bool(self.symbol)
+
+
+# ---------------------------------------------------------------------------
+# Expression operand — an arithmetic stack over FieldRef leaves
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ExprToken:
+    """One token in an expression :class:`FieldRef`.
+
+    Either an **operand** (``kind == EXPR_OPERAND``) wrapping a nested
+    :class:`FieldRef` leaf — a field, an indicator (built-in *or custom*),
+    or a literal — or an **operator** (``kind == EXPR_OP``) carrying a
+    binary operator (``+ - * / % **``) or a parenthesis (``( )``).
+    """
+
+    kind: str
+    operand: FieldRef | None = None
+    op: str = ""
+
+    def __post_init__(self) -> None:
+        if self.kind == EXPR_OPERAND:
+            if self.operand is None:
+                raise ValueError("ExprToken operand token requires a FieldRef")
+            if self.op:
+                raise ValueError("ExprToken operand token must not set op")
+        elif self.kind == EXPR_OP:
+            if self.op not in EXPR_OPS:
+                raise ValueError(f"ExprToken op must be one of {EXPR_OPS}, got {self.op!r}")
+            if self.operand is not None:
+                raise ValueError("ExprToken op token must not set operand")
+        else:
+            raise ValueError(
+                f"ExprToken.kind must be {EXPR_OPERAND!r} or {EXPR_OP!r}, got {self.kind!r}"
+            )
+
+    @classmethod
+    def operand_token(cls, ref: FieldRef) -> ExprToken:
+        return cls(kind=EXPR_OPERAND, operand=ref)
+
+    @classmethod
+    def op_token(cls, op: str) -> ExprToken:
+        return cls(kind=EXPR_OP, op=op)
+
+    def to_dict(self) -> dict[str, Any]:
+        if self.kind == EXPR_OPERAND:
+            return {"t": EXPR_OPERAND,
+                    "operand": self.operand.to_dict()}  # type: ignore[union-attr]
+        return {"t": EXPR_OP, "op": self.op}
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any]) -> ExprToken:
+        t = d.get("t")
+        if t == EXPR_OPERAND:
+            return cls(kind=EXPR_OPERAND, operand=FieldRef.from_dict(d["operand"]))
+        if t == EXPR_OP:
+            return cls(kind=EXPR_OP, op=str(d["op"]))
+        raise ValueError(f"invalid ExprToken dict: {d!r}")
+
+
+def validate_expression(terms: tuple[ExprToken, ...]) -> tuple[bool, str]:
+    """Structurally validate an infix token list.
+
+    Checks operand/operator alternation and balanced parentheses. Returns
+    ``(True, "")`` when well-formed, else ``(False, reason)`` for the GUI to
+    surface. Does NOT evaluate — see :func:`evaluate_expression`.
+    """
+    if not terms:
+        return (False, "expression is empty")
+    depth = 0
+    expect_operand = True
+    for t in terms:
+        if t.kind == EXPR_OPERAND:
+            if not expect_operand:
+                return (False, "expected an operator before this value")
+            expect_operand = False
+        elif t.op == EXPR_PAREN_OPEN:
+            if not expect_operand:
+                return (False, "expected an operator before '('")
+            depth += 1
+        elif t.op == EXPR_PAREN_CLOSE:
+            if expect_operand:
+                return (False, "expected a value before ')'")
+            if depth == 0:
+                return (False, "unbalanced ')'")
+            depth -= 1
+        elif t.op in _EXPR_PRECEDENCE:
+            if expect_operand:
+                return (False, f"expected a value before '{t.op}'")
+            expect_operand = True
+        else:
+            return (False, f"invalid token {t.op!r}")
+    if expect_operand:
+        return (False, "expression ends with an operator")
+    if depth != 0:
+        return (False, "unbalanced '('")
+    return (True, "")
+
+
+def evaluate_expression(
+    terms: tuple[ExprToken, ...],
+    resolve: Callable[[FieldRef], float | None],
+) -> float | None:
+    """Evaluate an expression to a scalar using ``resolve`` for each operand.
+
+    ``resolve`` maps an operand :class:`FieldRef` to its per-bar value (the
+    engine passes its own ``evaluate_field_at`` here, so custom indicators,
+    cross-symbol and cross-interval leaves all resolve correctly). Returns
+    ``None`` when any operand is ``None`` (Kleene propagation), on a
+    division / modulo by zero, or when the token list is malformed.
+    """
+    items: list[float | str] = []
+    for t in terms:
+        if t.kind == EXPR_OPERAND:
+            v = resolve(t.operand)  # type: ignore[arg-type]
+            if v is None:
+                return None
+            items.append(float(v))
+        else:
+            items.append(t.op)
+    if not items:
+        return None
+    return _eval_infix(items)
+
+
+def _eval_infix(items: list[float | str]) -> float | None:
+    """Evaluate an infix list (numbers + operator/paren strings) → scalar.
+
+    Shunting-yard to RPN with standard precedence (``**`` right-assoc), then
+    RPN evaluation. Returns ``None`` on any structural error, divide-by-zero,
+    or non-finite result.
+    """
+    output: list[float | str] = []
+    stack: list[str] = []
+    for it in items:
+        if isinstance(it, (int, float)):
+            output.append(float(it))
+        elif it == EXPR_PAREN_OPEN:
+            stack.append(it)
+        elif it == EXPR_PAREN_CLOSE:
+            while stack and stack[-1] != EXPR_PAREN_OPEN:
+                output.append(stack.pop())
+            if not stack:
+                return None
+            stack.pop()
+        elif it in _EXPR_PRECEDENCE:
+            while (
+                stack and stack[-1] != EXPR_PAREN_OPEN
+                and (
+                    _EXPR_PRECEDENCE[stack[-1]] > _EXPR_PRECEDENCE[it]
+                    or (
+                        _EXPR_PRECEDENCE[stack[-1]] == _EXPR_PRECEDENCE[it]
+                        and it not in _EXPR_RIGHT_ASSOC
+                    )
+                )
+            ):
+                output.append(stack.pop())
+            stack.append(it)
+        else:
+            return None
+    while stack:
+        top = stack.pop()
+        if top == EXPR_PAREN_OPEN:
+            return None
+        output.append(top)
+    vals: list[float] = []
+    for tok in output:
+        if isinstance(tok, float):
+            vals.append(tok)
+            continue
+        if len(vals) < 2:
+            return None
+        b = vals.pop()
+        a = vals.pop()
+        try:
+            if tok == "+":
+                vals.append(a + b)
+            elif tok == "-":
+                vals.append(a - b)
+            elif tok == "*":
+                vals.append(a * b)
+            elif tok == "/":
+                if b == 0.0:
+                    return None
+                vals.append(a / b)
+            elif tok == "%":
+                if b == 0.0:
+                    return None
+                vals.append(a % b)
+            elif tok == "**":
+                vals.append(a ** b)
+            else:
+                return None
+        except (ValueError, OverflowError, ZeroDivisionError):
+            return None
+    if len(vals) != 1:
+        return None
+    result = vals[0]
+    if result != result or result in (float("inf"), float("-inf")):
+        return None
+    return float(result)
 
 
 # ---------------------------------------------------------------------------

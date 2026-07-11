@@ -75,3 +75,7 @@ src/tradinglab/_build_info.py
 # Local commit-message scratch files (used by the CLI agent because
 # multi-line `git commit -m` strings are PowerShell-hostile).
 .commit-msg-*.txt
+
+# GUI-test scratch dirs (screenshot probes + fetched-data caches)
+_guitest/
+_guitest_probe_cache/

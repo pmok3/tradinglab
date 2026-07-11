@@ -44,11 +44,21 @@ Produces a `FieldRef`. Layout:
 [Type ▾] [value widgets] [param widgets, may wrap] [Output ▾] [@ Symbol entry]?
 ```
 
-- Type combo: `Number` / `Builtin` / `Indicator`.
+- Type combo: `Number` / `Builtin` / `Indicator` / `Expression`.
 - **Number**: Entry; sets `FieldRef.literal(float(text))`. **No** Symbol
   combo — literals are symbol-independent.
-- **Builtin**: Combobox over `fields.all_fields()` filtered to builtins.
-  Symbol entry present (last column).
+- **Builtin**: readonly Combobox over `fields.all_fields()` filtered to
+  builtins, **grouped by concept category** via
+  [`scanner.field_categories.grouped_combo_values("builtin")`](../scanner/field_categories.spec.md)
+  — non-selectable section headers (Price & Volume / Session /
+  Heikin-Ashi / Key Bars) precede their members so the 30+ builtins are
+  navigable. `_commit_builtin` rejects a header selection
+  (`is_category_header` → revert to the committed id, no fire). Members
+  carry their raw id, so the commit / persistence path is unchanged. The
+  combo is fixed-width (18), so grouping does not affect the auto-stack
+  width estimate. Symbol entry present (last column). *(The Indicator
+  branch keeps its flat typeahead-searchable list for now; categorizing
+  it is a clean follow-up.)*
 - **Indicator**: Combobox over `scanner.fields.all_fields()` filtered
   to scannable indicator specs + one
   widget per `ParamDef` (Spinbox int/float, Combobox choice,
@@ -58,6 +68,7 @@ Produces a `FieldRef`. Layout:
   on toggle to Indicator is the first id (`adx`). Same sort used
   by Scanner blocks, Exits/Entries indicator triggers. Symbol entry
   present (last column, after Output).
+- **Expression**: embeds the [`ExpressionBuilder`](expression_builder.spec.md) "+" token-stacker — a composable operand (`FieldRef(kind="expression")`) over field / indicator (incl. custom) / constant leaves. `_collect` returns the builder's current expression; `_on_type_change` seeds an empty expression when switched to; `_estimate_picker_width` returns a wide sentinel so an expression operand forces the condition row to the stacked layout.
 - **Symbol entry** (Builtin / Indicator only): writes `FieldRef.symbol`
   for cross-ticker references. Plain `ttk.Entry` (NOT a Combobox) —
   no dropdown, no history, no LRU, no suggestions. The user types
@@ -413,7 +424,7 @@ a row with a sibling (inline) or owns the full row (stacked).
 ### `_GroupFrame`
 
 - Recursive: nested `_GroupFrame` or `_ConditionFrame` rows.
-- Header: `+ Cond` / `+ Group` / `Delete` (root group's Delete hidden).
+- Header: `+ Condition` / `+ Group` / `Delete` (root group's Delete hidden).
 - Combinator radio: AND / OR. Mutates `Group.combinator` in place
   (lowercase normalized).
 - Enabled checkbox: mutates `Group.enabled`.

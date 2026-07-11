@@ -18,7 +18,13 @@ Pure-Python tri-valued (Kleene) scan evaluator. Takes a
 
 - `evaluate_field(ref, ctx) -> Optional[float]` — at the current bar.
 - `evaluate_field_at(ref, ctx, i) -> Optional[float]` — at bar `i`
-  (lookback ops).
+  (lookback ops). For an **expression** operand (`ref.kind ==
+  "expression"`), resolved *before* the symbol/interval swap by walking
+  `ref.terms`: each operand leaf is resolved via a recursive
+  `evaluate_field_at(leaf, ctx, i)` (so custom-indicator / cross-symbol /
+  cross-interval leaves all work) and the infix stack is folded to a
+  scalar by `model.evaluate_expression`. `None` propagates if any operand
+  is `None`.
 - `evaluate_condition(cond, ctx) -> Optional[bool]` — dispatches all
   19 operators on named params.
 - `evaluate_group(group, ctx) -> Optional[bool]` — tri-valued AND/OR.

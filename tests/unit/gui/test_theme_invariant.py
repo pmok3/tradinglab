@@ -61,6 +61,13 @@ _DIALOG_COVERAGE_EXEMPTIONS: dict[str, str] = {
     # Helper base classes — never instantiated directly.
     "BaseModalDialog": "Abstract base — concrete dialogs cover the chrome.",
     "BaseEditorDialog": "Abstract base — concrete dialogs cover the chrome.",
+    "_OperandDialog": (
+        "Pure ttk wrapper (Label + Buttons) around the shared "
+        "_FieldRefPicker for the expression token-stacker — no classic Tk "
+        "widgets; chrome themed by the global ttk ThemeController and the "
+        "picker's own theme path. Behavior pinned by "
+        "tests/scanner/test_expression_builder_gui.py."
+    ),
     "SandboxHeatmapWindow": (
         "Matplotlib figure pop-out (FigureCanvasTkAgg) — no classic Tk "
         "Listbox/Text needing native_theme; tile colors are computed by the "

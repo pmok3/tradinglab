@@ -9,7 +9,9 @@ correctness against the registry.
 
 ## Public types
 
-- `FieldRef(kind: "builtin"|"indicator"|"literal", id, params, output_key, value, interval, symbol)` — single value reference.
+- `FieldRef(kind: "builtin"|"indicator"|"literal"|"expression", id, params, output_key, value, interval, symbol, terms)` — single value reference. `kind="expression"` carries an ordered infix `terms` list (see below) instead of an id / value.
+- `ExprToken(kind: "operand"|"op", operand: FieldRef|None, op)` — one token of an expression: an operand wrapping a nested `FieldRef` leaf (field / indicator — incl. custom — / literal), or a binary operator (`+ - * / % **`) / parenthesis (`( )`).
+- `validate_expression(terms) -> (ok, reason)` — structural check (operand/operator alternation + balanced parens). `evaluate_expression(terms, resolve) -> Optional[float]` — fold the infix stack to a scalar via a caller-supplied per-operand `resolve` callback; returns `None` on any `None` operand (Kleene), divide/modulo-by-zero, non-finite, or malformed input. Precedence: `**` (right-assoc) `> * / % > + -`.
 - `Condition(left, op, params, interval, enabled, id, comment,
   within_last_bars, within_last_mode)` — leaf comparison.
 - `Group(combinator: "and"|"or", children, enabled, id,

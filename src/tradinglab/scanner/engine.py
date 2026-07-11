@@ -68,6 +68,7 @@ from .fields import (
 )
 from .model import (
     FIELD_KIND_BUILTIN,
+    FIELD_KIND_EXPRESSION,
     FIELD_KIND_INDICATOR,
     FIELD_KIND_LITERAL,
     OP_BETWEEN,
@@ -87,6 +88,7 @@ from .model import (
     Group,
     MatchEvidence,
     ScanDefinition,
+    evaluate_expression,
 )
 from .operators import OPERATOR_EVALUATORS
 from .operators import TRANSITION_OPS as _TRANSITION_OPS  # noqa: F401  (back-compat re-export)
@@ -432,6 +434,13 @@ def evaluate_field_at(
     """
     sub_ctx = ctx
     sub_index = index
+    if ref.kind == FIELD_KIND_EXPRESSION:
+        # Composable expression: resolve each operand leaf via the same
+        # engine path (so custom indicators / cross-symbol / cross-interval
+        # leaves all work), then evaluate the infix stack to a scalar.
+        return evaluate_expression(
+            ref.terms, lambda leaf: evaluate_field_at(leaf, ctx, index)
+        )
     # 1. Symbol swap (cross-ticker).
     if ref.symbol and ref.symbol.upper() != ctx.symbol.upper():
         swapped = _sub_context_for_symbol_at_ts(ctx, ref.symbol)
