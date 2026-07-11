@@ -158,7 +158,7 @@ class ExpressionBuilder(ttk.Frame):
     def _add_menu(self, parent: tk.Misc) -> tk.Menu:
         opts = menu_theme_options(current_theme(self))
         m = tk.Menu(parent, tearoff=False, **opts)
-        m.add_command(label="Value\u2026", command=self._add_operand)
+        m.add_command(label="Value…", command=self._add_operand)
         opm = tk.Menu(m, tearoff=False, **opts)
         for o in EXPR_BINARY_OPS:
             opm.add_command(label=o, command=lambda o=o: self._add_op(o))

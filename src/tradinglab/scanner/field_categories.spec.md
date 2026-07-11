@@ -17,7 +17,7 @@ Pure module (no Tk). Reads the catalog via [`scanner.fields.all_fields`](fields.
 
 ## Design Decisions
 - **Builtins classified by rule, indicators by map** — builtins use prefix / membership rules (`ha_*` → Heikin-Ashi, `*key_bar*` → Key Bars, `{hod, lod, time_of_day, bars_since_open}` → Session, else Price & Volume), so new builtins land sensibly without editing this module. Indicators use `_INDICATOR_CATEGORY`; unknown / user-plugin indicators fall to `Other` (fail-open, still reachable).
-- **Header rows recognised by prefix** — headers start with a distinctive horizontal-bar glyph (`\u2015\u2015 `) that no field id begins with, so `is_category_header` is a cheap prefix test (no header-set bookkeeping needed at the call site).
+- **Header rows recognised by prefix** — headers start with a distinctive horizontal-bar glyph (`―― `) that no field id begins with, so `is_category_header` is a cheap prefix test (no header-set bookkeeping needed at the call site).
 - **Members carry the raw id** — the value committed by the picker is unchanged (still the field id); only the *ordering* + header rows are new, so the commit path and persistence are untouched.
 - **Fixed-width combobox** — the builtin picker's combo is `width=18` (fixed), so grouped values do NOT change the auto-stack width estimate (`_estimate_picker_width`, CLAUDE.md §7.19). This is why the builtin branch was safe to categorize first.
 
