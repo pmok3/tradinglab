@@ -52,15 +52,19 @@ registry — a separator-free string like `RSPSPY` is treated as an ordinary
   cached ratio going stale vs its legs. The in-memory `_full_cache` (keyed by
   the raw `(source, ticker, interval)` tuple — a `/` in a dict key is fine)
   still gives session-level responsiveness.
-- **Resolution lives at the fetcher, not a new `DATA_SOURCES` entry.** The hook
-  is at the top of `yfinance_source.fetch_live_data`: if `parse_ratio_symbol`
-  matches, it calls `fetch_ratio(..., leg_fetcher=fetch_live_data)` and recurses
-  on the two legs. Because every fetch surface (main chart, compare panel,
-  companion prefetch, watchlist, and the daily synthetic today-bar via its 5m
-  legs) routes through `DATA_SOURCES["yfinance"]`, resolving here covers them
-  all with one edit. Ratios therefore resolve on the yfinance source (the
-  default + only fully-wired live source); extending to other sources is a
-  follow-up.
+- **Resolution is source-agnostic, installed at `register_source`.** Every
+  fetcher in `DATA_SOURCES` is wrapped by `data.base._ratio_aware` so a typed
+  `NUM/DEN` symbol is decomposed and each leg fetched from the SAME source via
+  `fetch_ratio(..., leg_fetcher=<that source>)`. Because every fetch surface
+  (main chart, compare panel, companion prefetch, watchlist, sandbox, strategy
+  tester, and the daily synthetic today-bar via its 5m legs) routes through a
+  `DATA_SOURCES[...]` fetcher, ratios resolve everywhere on ANY source with one
+  wrapper. `yfinance_source.fetch_live_data` ALSO keeps its own internal hook
+  (calling `fetch_ratio(..., leg_fetcher=fetch_live_data)`) — now redundant for
+  the registry path but retained so a direct importer of `fetch_live_data`
+  still gets ratios. (Historically resolution lived ONLY in that yfinance hook,
+  so a ratio typed under Alpaca/Polygon failed — fixed by the registration
+  wrapper; see `data/base.spec.md`.)
 - **Component-wise OHLC quotient + widened envelope.** For each shared bar:
   `O = numO/denO`, `H = numH/denH`, `L = numL/denL`, `C = numC/denC`, then
   `H ← max(O,H,L,C)` and `L ← min(O,H,L,C)` so the result is always a valid

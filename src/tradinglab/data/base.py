@@ -17,6 +17,7 @@ To add a new provider:
 
 from __future__ import annotations
 
+import functools
 from collections.abc import Callable
 
 from ..models import Candle
@@ -50,6 +51,47 @@ _INTERNAL_SOURCES: set[str] = set()
 _RANGE_CAPABLE: set[str] = set()
 
 
+def _ratio_aware(fetcher: DataFetcher) -> DataFetcher:
+    """Wrap ``fetcher`` so ratio pseudo-symbols resolve leg-by-leg.
+
+    A *ratio symbol* (``NUM/DEN`` — e.g. ``IGV/SMH``; see
+    :mod:`tradinglab.data.ratio_source`) can't be fetched as a single
+    vendor ticker: no data provider has a symbol literally named
+    ``IGV/SMH``. Historically only the yfinance fetcher decomposed
+    ratios (its own internal hook), so a ratio typed while a DIFFERENT
+    source (Alpaca / Polygon) was active was passed through verbatim and
+    failed with "Ratio '…' could not be loaded. Check that both legs are
+    valid tickers" — even though each leg fetched fine on its own.
+
+    Wrapping at registration makes ratio resolution **source-agnostic**:
+    every fetcher in :data:`DATA_SOURCES` decomposes ``NUM/DEN`` into its
+    two legs and fetches each from the SAME source, so ratios work on any
+    source at every call site (main chart, compare, prefetch, watchlists,
+    sandbox, strategy tester, targeted range fetch) with no per-site
+    wiring. ``**kwargs`` (e.g. range-fetch ``start`` / ``end``) are
+    forwarded to each leg so the targeted-range path works for ratios too.
+
+    Idempotent: an already-wrapped fetcher is returned unchanged, so
+    re-registering ``DATA_SOURCES.get(name)`` never double-wraps. The
+    original fetcher stays reachable via ``__wrapped__`` (``functools``).
+    """
+    if getattr(fetcher, "_tl_ratio_aware", False):
+        return fetcher
+    from .ratio_source import fetch_ratio, parse_ratio_symbol
+
+    @functools.wraps(fetcher)
+    def wrapped(ticker: str, interval: str, **kwargs: object) -> list[Candle] | None:
+        if parse_ratio_symbol(ticker) is not None:
+            return fetch_ratio(
+                ticker, interval,
+                leg_fetcher=lambda t, i: fetcher(t, i, **kwargs),
+            )
+        return fetcher(ticker, interval, **kwargs)
+
+    wrapped._tl_ratio_aware = True  # type: ignore[attr-defined]
+    return wrapped
+
+
 def register_source(
     name: str, fetcher: DataFetcher, *, internal: bool = False,
     supports_range: bool = False,
@@ -59,6 +101,12 @@ def register_source(
     Idempotent: repeat registrations overwrite. This is intentional so
     smoke tests can stub real sources by calling
     ``register_source("yfinance", fake)``.
+
+    The fetcher is wrapped by :func:`_ratio_aware` so it transparently
+    resolves ratio pseudo-symbols (``NUM/DEN``) leg-by-leg through this
+    same source — ratios therefore work on EVERY source, not just
+    yfinance. ``DATA_SOURCES[name]`` is that wrapper; the raw fetcher is
+    reachable via ``DATA_SOURCES[name].__wrapped__``.
 
     Set ``internal=True`` for sources that should remain dispatchable
     (tests, sandbox replay, programmatic offline use) but be hidden from
@@ -74,7 +122,7 @@ def register_source(
     tests (which bypasses ``register_source`` entirely and therefore
     preserves the internal flag), so this is a non-issue.
     """
-    DATA_SOURCES[name] = fetcher
+    DATA_SOURCES[name] = _ratio_aware(fetcher)
     if internal:
         _INTERNAL_SOURCES.add(name)
     else:

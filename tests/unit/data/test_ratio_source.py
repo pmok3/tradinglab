@@ -287,3 +287,103 @@ def test_fetch_live_data_non_ratio_does_not_call_fetch_ratio(monkeypatch):
     monkeypatch.setitem(sys.modules, "yfinance", fake_yf)
 
     assert yfs.fetch_live_data("AAPL", "1d") is None
+
+
+# ------------------------------------------------- source-agnostic registration
+# Regression: a ratio typed while a NON-yfinance source (Alpaca / Polygon) was
+# active used to be passed VERBATIM to that source's fetcher, which has no
+# symbol literally named "IGV/SMH" -> empty -> "Ratio '...' could not be loaded.
+# Check that both legs are valid tickers" — even though each leg fetched fine.
+# register_source now wraps EVERY fetcher so ratios resolve leg-by-leg through
+# the SAME source. These tests pin that fix.
+
+
+def _restore_source(name, fn):
+    from tradinglab.data.base import DATA_SOURCES, register_source
+    if fn is None:
+        DATA_SOURCES.pop(name, None)
+    else:
+        # ``fn`` is the wrapped fetcher already in the registry; restore it
+        # directly so we don't double-wrap the real source.
+        DATA_SOURCES[name] = fn
+
+
+def test_register_source_makes_any_source_ratio_aware():
+    """A source that only knows single symbols (returns None for a "/"
+    symbol, like a real vendor API) still serves ratios once registered —
+    the wrapper decomposes NUM/DEN and the source never sees the "/" form."""
+    from tradinglab.data.base import DATA_SOURCES, register_source
+
+    seen: list[str] = []
+
+    def vendor(ticker, interval):
+        seen.append(ticker)
+        if "/" in ticker:  # a real vendor has no symbol named "IGV/SMH"
+            return None
+        base = 10.0 if ticker == "IGV" else 20.0
+        return _series([base, base + 1.0, base + 2.0])
+
+    prev = DATA_SOURCES.get("vendor_probe")
+    try:
+        register_source("vendor_probe", vendor)
+        wrapped = DATA_SOURCES["vendor_probe"]
+        # The stored fetcher is the ratio-aware wrapper; raw is __wrapped__.
+        assert getattr(wrapped, "_tl_ratio_aware", False) is True
+        assert wrapped.__wrapped__ is vendor
+
+        # Single leg still works.
+        assert len(wrapped("IGV", "1d") or []) == 3
+        # The ratio now resolves — the vendor never sees "IGV/SMH".
+        out = wrapped("IGV/SMH", "1d")
+        assert out is not None and len(out) == 3
+        assert "IGV/SMH" not in seen  # decomposed BEFORE hitting the source
+        assert "IGV" in seen and "SMH" in seen
+        # close = price + 0.5 (see _series): 10.5/20.5, 11.5/21.5, 12.5/22.5.
+        assert out[0].close == pytest.approx(10.5 / 20.5)
+        assert out[2].close == pytest.approx(12.5 / 22.5)
+    finally:
+        _restore_source("vendor_probe", prev)
+
+
+def test_register_source_is_idempotent_no_double_wrap():
+    """Re-registering an already-wrapped fetcher must not double-wrap it."""
+    from tradinglab.data.base import DATA_SOURCES, register_source
+
+    def vendor(ticker, interval):
+        return _series([1.0, 2.0]) if "/" not in ticker else None
+
+    prev = DATA_SOURCES.get("vendor_probe2")
+    try:
+        register_source("vendor_probe2", vendor)
+        once = DATA_SOURCES["vendor_probe2"]
+        # Re-register the wrapper itself (mirrors the internal-flag test's
+        # ``register_source(name, DATA_SOURCES.get(name))`` restore pattern).
+        register_source("vendor_probe2", once)
+        twice = DATA_SOURCES["vendor_probe2"]
+        assert twice is once  # same wrapper object, not wrapped again
+        assert twice.__wrapped__ is vendor  # still one layer deep
+    finally:
+        _restore_source("vendor_probe2", prev)
+
+
+def test_register_source_ratio_forwards_range_kwargs():
+    """Range-fetch kwargs (start/end) reach BOTH legs of a ratio so the
+    targeted intraday fetch path works for ratios too."""
+    from tradinglab.data.base import DATA_SOURCES, register_source
+
+    seen: list[tuple] = []
+
+    def vendor(ticker, interval, *, start=None, end=None):
+        seen.append((ticker, start, end))
+        return _series([5.0, 6.0]) if "/" not in ticker else None
+
+    prev = DATA_SOURCES.get("vendor_probe3")
+    try:
+        register_source("vendor_probe3", vendor, supports_range=True)
+        wrapped = DATA_SOURCES["vendor_probe3"]
+        out = wrapped("IGV/SMH", "5m", start="S", end="E")
+        assert out is not None and len(out) == 2
+        # Both legs fetched with the same range window.
+        assert ("IGV", "S", "E") in seen and ("SMH", "S", "E") in seen
+    finally:
+        _restore_source("vendor_probe3", prev)

@@ -87,7 +87,10 @@ def test_internal_flag_round_trips_on_repeat_registration() -> None:
         register_source("synthetic", replacement, internal=True)
         assert is_internal_source("synthetic") is True
         assert "synthetic" not in user_visible_sources()
-        assert DATA_SOURCES["synthetic"] is replacement
+        # register_source wraps the fetcher for source-agnostic ratio
+        # resolution (see data/base._ratio_aware), so the registry stores a
+        # ratio-aware wrapper — the raw fetcher is preserved as __wrapped__.
+        assert DATA_SOURCES["synthetic"].__wrapped__ is replacement
     finally:
         # Restore the real fetcher for downstream tests.
         register_source("synthetic", original_fn, internal=True)

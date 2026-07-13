@@ -218,8 +218,11 @@ def _to_alpaca_symbol(ticker: str) -> str:
     simply doesn't exist on Alpaca), which previously made every share-class
     ticker silently un-fetchable on Alpaca. Plain symbols (``AMD``) are
     unchanged; ratio pseudo-symbols (containing ``/``) never reach here —
-    they're resolved leg-by-leg upstream. A US-equity Alpaca symbol never
-    contains a dash, so a straight dash→dot is safe.
+    they are decomposed leg-by-leg by the ratio-aware wrapper installed on
+    every source at ``data.base.register_source`` (see
+    ``ratio_source.fetch_ratio``), so this fetcher only ever sees single
+    real symbols. A US-equity Alpaca symbol never contains a dash, so a
+    straight dash→dot is safe.
     """
     return (ticker or "").strip().upper().replace("-", ".")
 
