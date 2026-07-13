@@ -5,7 +5,7 @@ return the ordered set of intervals to warm for a symbol:
 
 * on-screen interval FIRST,
 * then the escape-hatch interval — intraday → ``1d`` (Reset-View target),
-  daily (``1d``) → ``5m`` (drill-down target),
+  daily (``1d``) → ``5m`` (drilldown target),
 * then any remaining of ``{5m, 1d}`` not yet present.
 
 ``5m`` and ``1d`` are ALWAYS present (they back the two one-click escape
@@ -22,7 +22,7 @@ from tradinglab.data.prefetch.intervals import dual_interval
     "active,expected",
     [
         ("5m", ["5m", "1d"]),      # intraday on-screen → reset-view 1d next
-        ("1d", ["1d", "5m"]),      # daily on-screen → drill-down 5m next
+        ("1d", ["1d", "5m"]),      # daily on-screen -> drilldown 5m next
         ("1m", ["1m", "1d", "5m"]),   # exotic intraday → active, reset, drilldown
         ("15m", ["15m", "1d", "5m"]),
         ("1h", ["1h", "1d", "5m"]),

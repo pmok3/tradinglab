@@ -3,14 +3,14 @@
 ## Purpose
 The **dual-interval policy**: map the on-screen interval to the ordered set of
 intervals a symbol should warm, so the two one-click escape hatches
-(Reset-View → `1d`, drill-down → `5m`) are already cached.
+(Reset-View → `1d`, drilldown → `5m`) are already cached.
 
 ## Public API
 - `dual_interval(active_interval: str | None) -> list[str]`
 
 ## Contract
 1. **Active first.** The on-screen interval is position 0.
-2. **Escape hatch next.** A daily (`1d`) chart's escape is the drill-down
+2. **Escape hatch next.** A daily (`1d`) chart's escape is the drilldown
    target `5m`; any intraday chart's escape is the Reset-View target `1d`.
 3. **Remaining of `{5m, 1d}`** appended after.
 4. **`5m` and `1d` are always present** (they back the escape hatches).

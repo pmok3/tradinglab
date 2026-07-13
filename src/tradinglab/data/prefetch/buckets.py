@@ -2,7 +2,7 @@
 scheduler.
 
 :class:`SourceBucketRegistry` is the **single accounting gate** for every fetch
-path to a source (Decision 1) — foreground load, live poll, drill-down,
+path to a source (Decision 1) — foreground load, live poll, drilldown,
 compare-fill, and the background scheduler all acquire from the same per-source
 :class:`~tradinglab.data.rate_limiter.TokenBucket`.
 
