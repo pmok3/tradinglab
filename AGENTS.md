@@ -276,7 +276,7 @@ The canonical end-to-end gate is `test_smoke_full.py`.
 | Job | OS × Python | Step |
 |---|---|---|
 | `lint` | ubuntu-latest × 3.12 | `ruff check src tests` |
-| `unit` (matrix) | windows-latest × {3.11, 3.12} | `pytest tests/unit` |
+| `unit` (matrix) | windows-latest × {3.11, 3.12} | `pytest tests/unit` + logic suites (`core`/`data`/`entries`/`exits`/`positions`/`streaming`) + `tests/gui` (own interpreter) |
 | `smoke` (matrix) | {ubuntu, windows, macos}-latest × {3.11, 3.12} | `pytest tests/smoke tests/scanner -v --tb=short` (Linux via `xvfb-run`) |
 | `perf-gate` | ubuntu-latest × 3.12 | `pytest tests/perf -m perf` |
 

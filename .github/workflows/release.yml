@@ -103,6 +103,22 @@ jobs:
         run: |
           python -m pytest tests/scanner -q
 
+      # Previously-orphaned suites (core/data/entries/exits/positions/
+      # streaming + gui). These gate the release exactly like unit +
+      # scanner do. Same clean-env + separate-invocation discipline:
+      # the pure-logic suites run together, tests/gui runs in its own
+      # interpreter so its Tk-object GC can't race another suite's
+      # teardown (the Tcl_AsyncDelete hazard the unit/scanner split
+      # above guards against).
+      - name: Run logic suites (clean env)
+        shell: pwsh
+        run: |
+          python -m pytest tests/core tests/data tests/entries tests/exits tests/positions tests/streaming -q
+      - name: Run gui widget suite (clean env, isolated)
+        shell: pwsh
+        run: |
+          python -m pytest tests/gui -q
+
       # Smoke tests are allowed to use ``TRADINGLAB_CACHE_DIR``
       # (already set by ``tests/smoke/conftest.py`` to a fresh tempdir
       # at import time). We do NOT set ``TRADINGLAB_DATA_DIR`` here

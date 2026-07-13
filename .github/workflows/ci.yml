@@ -55,6 +55,19 @@ jobs:
       - run: pip install -e .[dev]
       - name: Run unit tests
         run: pytest tests/unit -q
+      # Previously-orphaned suites: these deterministic logic suites
+      # (core / data / entries / exits / positions / streaming) and the
+      # tests/gui widget suite existed but were run by NO CI job or the
+      # release gate — a regression in that code sailed through green CI.
+      # Wired in here (Windows, mirroring the unit gate + the release
+      # gate below). Pure-logic suites run as one invocation; tests/gui
+      # runs in its OWN interpreter so its Tk-object GC can't race the
+      # other suites' teardown (the Tcl_AsyncDelete cross-suite hazard
+      # documented in release.yml).
+      - name: Run logic suites (core/data/entries/exits/positions/streaming)
+        run: pytest tests/core tests/data tests/entries tests/exits tests/positions tests/streaming -q
+      - name: Run gui widget suite (isolated interpreter)
+        run: pytest tests/gui -q
 
   coverage:
     # Informational coverage report — NOT a gate. Runs the deterministic,
@@ -77,7 +90,7 @@ jobs:
           python-version: "3.12"
       - run: pip install -e .[dev]
       - name: Run tests with coverage
-        run: pytest tests/unit tests/scanner --cov=tradinglab --cov-report=xml --cov-report=term-missing:skip-covered -q
+        run: pytest tests/unit tests/scanner tests/core tests/data tests/entries tests/exits tests/positions tests/streaming --cov=tradinglab --cov-report=xml --cov-report=term-missing:skip-covered -q
       - name: Upload coverage.xml artifact
         if: always()
         uses: actions/upload-artifact@v7
