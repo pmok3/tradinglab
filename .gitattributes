@@ -1,0 +1,4 @@
+# Committed market-data test fixtures: keep LF-stable across platforms so the
+# JSONL is byte-identical on Windows + Linux CI (no spurious CRLF diffs).
+tests/_fixtures/market_data/*.jsonl text eol=lf
+tests/_fixtures/market_data/manifest.json text eol=lf

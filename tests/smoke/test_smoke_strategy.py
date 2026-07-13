@@ -1192,6 +1192,221 @@ def tmp_cache_root(tmp_path, monkeypatch):
     return tmp_path
 
 
+def check_st9_ema_cross_real_data_e2e(app) -> None:
+    """END-TO-END on REAL market data: EMA 3/8 cross across SPY / AMD / NVDA /
+    INTC / MSFT / AAPL 5m, driven through the StrategyTab Run button, with
+    per-trade screenshots.
+
+    Uses the committed ``testdata`` fixture (5 RTH trading days of real
+    yfinance 5m bars — see ``tests/_fixtures/market_data.py`` +
+    ``tools/fetch_test_fixtures.py``) as the ``candles_fetcher``, so the flow
+    exercises genuine market microstructure (real EMA crosses, gaps, RTH
+    boundaries, volume) rather than only the engineered series in
+    ``check_st8``. Offline + deterministic (sealed OHLCV bars are immutable).
+
+    Asserts the Run completes DONE across all 6 symbols and produces many
+    per-trade PNGs whose filenames encode each trade's real entry date (within
+    the fixture's trading week) and whose raw-byte content hashes are unique.
+    """
+    import hashlib
+    import re
+    import sys
+    import time as _time
+    import tkinter as tk
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo
+
+    if sys.platform == "darwin":
+        print("[SKIP] check_st9 — Tk widget hang risk on headless macos-15-arm64")
+        return
+
+    from tests._fixtures import market_data as _md
+
+    if not _md.available("SPY"):
+        print("[SKIP] check_st9 — committed testdata fixtures not present")
+        return
+
+    import tradinglab.indicators  # noqa: F401 — register the EMA factory
+    from tradinglab.backtest.session import SessionResult
+    from tradinglab.entries.model import (
+        Direction,
+        EntryStrategy,
+        EntryTrigger,
+        ShareRounding,
+        SizingKind,
+        SizingRule,
+    )
+    from tradinglab.entries.model import TriggerKind as EntryTriggerKind
+    from tradinglab.entries.model import Universe as EntryUniverse
+    from tradinglab.exits.model import ExitLeg, ExitStrategy, ExitTrigger
+    from tradinglab.exits.model import TriggerKind as ExitTriggerKind
+    from tradinglab.gui import strategy_tab as _strategy_tab_mod
+    from tradinglab.gui.strategy_tab import StrategyTab
+    from tradinglab.scanner.model import (
+        OP_CROSSES_ABOVE,
+        OP_CROSSES_BELOW,
+        Condition,
+        FieldRef,
+        Group,
+    )
+    from tradinglab.strategy_tester import RunStatus
+
+    _ET = ZoneInfo("America/New_York")
+    # The committed fixture carries 6 tickers; run a representative subset
+    # through the (screenshot-rendering) GUI flow to keep CI lean while still
+    # exercising multi-ticker real-data e2e. The full 6-ticker set is pinned
+    # by tests/_fixtures/test_market_data.py.
+    _RUN_TICKERS = ("SPY", "AMD", "NVDA")
+    # Allowed entry dates = the fixture's captured trading days (from manifest).
+    _man = _md.manifest()
+    allowed_dates = {
+        d for tk_meta in _man.get("tickers", {}).values() for d in tk_meta.get("days", [])
+    }
+
+    def _ema(length: int) -> FieldRef:
+        return FieldRef(kind="indicator", id="ema", params={"length": length})
+
+    def _cross(op: str) -> Group:
+        return Group(combinator="and", children=[Condition(
+            left=_ema(3), op=op,
+            params={"right": _ema(8), "lookback": 1}, interval="5m",
+        )])
+
+    entry = EntryStrategy(
+        id="entry-ema38-real", name="3/8 EMA cross (long)",
+        direction=Direction.LONG,
+        universe=EntryUniverse(symbols=_RUN_TICKERS),
+        trigger=EntryTrigger(kind=EntryTriggerKind.INDICATOR,
+                             condition=_cross(OP_CROSSES_ABOVE), interval="5m"),
+        sizing=SizingRule(kind=SizingKind.FIXED_QTY, qty=10.0,
+                          share_rounding=ShareRounding.DOWN),
+        max_fires_per_session_per_symbol=10,
+    )
+    exit_strat = ExitStrategy(
+        id="exit-ema38-real", name="3/8 EMA cross (exit)",
+        legs=[ExitLeg(id="leg", triggers=[ExitTrigger(
+            kind=ExitTriggerKind.INDICATOR, condition=_cross(OP_CROSSES_BELOW),
+            interval="5m", qty_pct=100.0,
+        )])],
+        eod_kill_switch=True,
+    )
+
+    class _FakeEntries:
+        @staticmethod
+        def load_all():
+            return ([entry], [])
+
+    class _FakeExits:
+        @staticmethod
+        def load_all():
+            return ([exit_strat], [])
+
+    class _FakeWatchlists:
+        @staticmethod
+        def load_all():
+            return ([], [])
+
+    orig_info = _strategy_tab_mod.messagebox.showinfo
+    orig_err = _strategy_tab_mod.messagebox.showerror
+    _strategy_tab_mod.messagebox.showinfo = lambda *a, **k: "ok"  # type: ignore[assignment]
+    _strategy_tab_mod.messagebox.showerror = lambda *a, **k: "ok"  # type: ignore[assignment]
+
+    top = tk.Toplevel(app)
+    top.withdraw()
+    try:
+        tab = StrategyTab(
+            top, entries_storage=_FakeEntries(), exits_storage=_FakeExits(),
+            watchlists_storage=_FakeWatchlists(),
+            candles_fetcher=_md.fetcher,  # the committed real-data test source
+        )
+        tab.pack(fill="both", expand=True)
+        for _ in range(5):
+            app.update()
+
+        tab._var_universe_kind.set("symbols")
+        tab._var_universe_symbols.set(", ".join(_RUN_TICKERS))
+        tab._on_universe_kind_change()
+        tab._var_date_preset.set("custom")
+        tab._on_date_preset_change()
+        tab._var_start_date.set("2026-07-01")
+        tab._var_end_date.set("2026-07-31")
+        tab._var_interval.set("5m")
+        tab._var_screenshots.set(True)
+        tab._var_include_extended_hours.set(False)  # fixtures are RTH-only
+
+        assert tab._selected_entry() is not None
+        assert tab._selected_exit() is not None
+
+        tab._btn_run.invoke()
+
+        deadline = _time.monotonic() + 120.0
+        while _time.monotonic() < deadline:
+            app.update()
+            if tab._worker is None and tab._current_aggregate is not None:
+                break
+            _time.sleep(0.05)
+        else:
+            raise AssertionError("StrategyTab real-data Run did not complete in 120s")
+
+        result = tab._worker_result.get("result")
+        assert result is not None, f"worker error: {tab._worker_result.get('error')!r}"
+        assert result.test_run.status is RunStatus.DONE, (
+            f"expected DONE, got {result.test_run.status} "
+            f"(error={result.test_run.error!r})"
+        )
+        assert result.test_run.symbol_count_done == len(_RUN_TICKERS)
+        agg = tab._current_aggregate
+        assert agg is not None
+        # Real 5m EMA 3/8 cross across the subset over a week fires many times;
+        # >=12 (avg 4/ticker) is a wide safety margin below the ~51 observed.
+        assert agg.trade_count >= 12, (
+            f"expected many trades from the real-data EMA cross, got {agg.trade_count}"
+        )
+
+        run_dir = tab._current_run_dir
+        assert run_dir is not None
+        pngs = sorted((run_dir / "screenshots").glob("*.png"))
+        assert len(pngs) >= 12, f"expected >=12 per-trade screenshots, got {len(pngs)}"
+
+        # Filenames encode each trade's entry timestamp; decode to a real
+        # fixture trading day, and collect symbols to prove multi-ticker.
+        name_re = re.compile(r"^(?P<sym>[A-Z]+)_t(?P<ts>\d+)_post\.png$")
+        symbols_seen: set[str] = set()
+        for p in pngs:
+            assert p.stat().st_size > 1024, f"{p.name} looks empty"
+            m = name_re.match(p.name)
+            assert m, f"unexpected screenshot filename: {p.name!r}"
+            symbols_seen.add(m.group("sym"))
+            got_date = _dt.fromtimestamp(int(m.group("ts")), _ET).date().isoformat()
+            assert got_date in allowed_dates, (
+                f"{p.name}: entry date {got_date} not in fixture week {sorted(allowed_dates)}"
+            )
+        assert len(symbols_seen & set(_RUN_TICKERS)) >= 2, (
+            f"expected screenshots across multiple tickers; saw {symbols_seen}"
+        )
+
+        # Cross-check the per-symbol trade entries are real (SPY loads + parses).
+        spy = SessionResult.from_dict(json.loads(
+            (run_dir / "per_symbol" / "SPY.json").read_text(encoding="utf-8")))
+        assert spy.post_trades, "SPY should have closed at least one real trade"
+
+        # Every screenshot's raw-byte content hash is unique (the §7.7
+        # "every screenshot identical" regression, on real data at scale).
+        hashes = [hashlib.sha256(p.read_bytes()).hexdigest() for p in pngs]
+        assert len(set(hashes)) == len(hashes), (
+            f"screenshot byte-hashes not unique: {len(pngs)} PNGs, "
+            f"{len(set(hashes))} distinct"
+        )
+    finally:
+        _strategy_tab_mod.messagebox.showinfo = orig_info  # type: ignore[assignment]
+        _strategy_tab_mod.messagebox.showerror = orig_err  # type: ignore[assignment]
+        try:
+            top.destroy()
+        except Exception:  # noqa: BLE001
+            pass
+        gc.collect()
+
+
 def test_strategy_kernel(tmp_cache_root: Path) -> None:
     check_st0_kernel_only(tmp_cache_root)
 
@@ -1226,6 +1441,10 @@ def test_strategy_failed_status_surfaces_error(app) -> None:
 
 def test_strategy_ema_cross_e2e_screenshots(app) -> None:
     check_st8_ema_cross_gui_e2e_screenshots(app)
+
+
+def test_strategy_ema_cross_real_data_e2e(app) -> None:
+    check_st9_ema_cross_real_data_e2e(app)
 
 
 def test_strategy_menu_present_in_chartapp(app) -> None:
