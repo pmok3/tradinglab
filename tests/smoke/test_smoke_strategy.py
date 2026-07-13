@@ -887,6 +887,305 @@ def check_st7_failed_status_surfaces_error(app) -> None:
 
 
 
+def check_st8_ema_cross_gui_e2e_screenshots(app) -> None:
+    """END-TO-END: EMA(3)/EMA(8) cross on a synthetic SPY 5m chart, driven
+    through the **real StrategyTab Run button**, producing per-trade PNG
+    screenshots.
+
+    User request: exercise the entire flow of a simple strategy (EMA 3/8
+    cross on the SPY 5-minute chart) via the actual Run button and assert:
+
+    * >= 1 trade (we engineer >= 2 so the uniqueness check below is
+      meaningful),
+    * >= 1 screenshot,
+    * each screenshot filename encodes the trade's entry timestamp
+      (``SPY_t<epoch>_post.png``) which decodes to the correct ET
+      trading date,
+    * each rendered PNG's title shows the correct ET date for that trade
+      (validated via the exact ``_draw_title_and_labels`` path the
+      renderer uses — no brittle OCR), and
+    * each screenshot's raw-byte content hash (sha256 of the file) is
+      pairwise-unique.
+
+    Offline + deterministic: smoke tests never hit the network, so "SPY"
+    is a synthetic RTH-aligned ET 5-minute series engineered to make
+    EMA(3) cross above / below EMA(8) several times (lead-in downtrend
+    seats EMA3<EMA8, then sawtooth cycles), yielding multiple round-trip
+    trades -> multiple distinct screenshots.
+    """
+    import hashlib
+    import re
+    import sys
+    import time as _time
+    import tkinter as tk
+    from datetime import date as _date
+    from datetime import datetime as _dt
+    from datetime import timedelta as _td
+    from zoneinfo import ZoneInfo
+
+    if sys.platform == "darwin":
+        # ttk widget operations on a hidden root can deadlock on headless
+        # macos-15-arm64 CI runners (same Tk transient() quirk as the modal
+        # dialogs). The runner/screenshot pipeline itself is Tk-free and is
+        # unit-tested on every platform; skip only the GUI-driven wrapper.
+        print("[SKIP] check_st8 — Tk widget hang risk on headless macos-15-arm64")
+        return
+
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+
+    import tradinglab.indicators  # noqa: F401 — register the EMA factory
+    from tradinglab.backtest.performance import build_trade_rows
+    from tradinglab.backtest.session import SessionResult
+    from tradinglab.entries.model import (
+        Direction,
+        EntryStrategy,
+        EntryTrigger,
+        ShareRounding,
+        SizingKind,
+        SizingRule,
+    )
+    from tradinglab.entries.model import TriggerKind as EntryTriggerKind
+    from tradinglab.entries.model import Universe as EntryUniverse
+    from tradinglab.exits.model import ExitLeg, ExitStrategy, ExitTrigger
+    from tradinglab.exits.model import TriggerKind as ExitTriggerKind
+    from tradinglab.gui import strategy_tab as _strategy_tab_mod
+    from tradinglab.gui.strategy_tab import StrategyTab
+    from tradinglab.models import Candle
+    from tradinglab.scanner.model import (
+        OP_CROSSES_ABOVE,
+        OP_CROSSES_BELOW,
+        Condition,
+        FieldRef,
+        Group,
+    )
+    from tradinglab.strategy_tester import RunStatus
+    from tradinglab.strategy_tester.screenshot import (
+        _draw_title_and_labels,
+        _format_et_timestamp_from_ms,
+        build_candle_timestamp_index,
+    )
+
+    _ET = ZoneInfo("America/New_York")
+    _TRADING_DAY = _date(2026, 1, 5)  # a Monday, RTH
+
+    def _ema(length: int) -> FieldRef:
+        return FieldRef(kind="indicator", id="ema", params={"length": length})
+
+    def _cross(op: str) -> Group:
+        # EMA(3) crosses_above / crosses_below EMA(8), lookback=1 — the
+        # canonical 3/8 EMA cross condition (mirrors the on-disk
+        # tmpl-ema-3-8-cross-long.json + the evaluator regression tests).
+        return Group(combinator="and", children=[Condition(
+            left=_ema(3), op=op,
+            params={"right": _ema(8), "lookback": 1},
+            interval="5m",
+        )])
+
+    entry = EntryStrategy(
+        id="entry-ema38-smoke", name="3/8 EMA cross (long)",
+        direction=Direction.LONG,
+        universe=EntryUniverse(symbols=("SPY",)),
+        trigger=EntryTrigger(kind=EntryTriggerKind.INDICATOR,
+                             condition=_cross(OP_CROSSES_ABOVE), interval="5m"),
+        sizing=SizingRule(kind=SizingKind.FIXED_QTY, qty=10.0,
+                          share_rounding=ShareRounding.DOWN),
+        # Default cap is 1/day (the historical 1-trade-per-symbol landmine);
+        # raise it so the strategy re-enters on every up-cross of the day.
+        max_fires_per_session_per_symbol=10,
+    )
+    exit_strat = ExitStrategy(
+        id="exit-ema38-smoke", name="3/8 EMA cross (exit)",
+        legs=[ExitLeg(id="leg", triggers=[ExitTrigger(
+            kind=ExitTriggerKind.INDICATOR, condition=_cross(OP_CROSSES_BELOW),
+            interval="5m", qty_pct=100.0,
+        )])],
+        eod_kill_switch=True,  # flatten any residual position at EOD
+    )
+
+    def _spy_candles() -> list:
+        # Lead-in downtrend (seats EMA3 below EMA8), then sawtooth cycles.
+        # Each up-leg makes EMA(3) cross above EMA(8) (entry); each down-leg
+        # crosses below (exit). All bars are RTH-aligned ET on one trading
+        # day, so include_extended_hours=False keeps them all.
+        closes = [100.0 - i for i in range(10)]  # 100 .. 91
+        price = closes[-1]
+        for _ in range(5):
+            for _ in range(6):
+                price += 4.0
+                closes.append(price)
+            for _ in range(6):
+                price -= 4.0
+                closes.append(price)
+        out = []
+        t = _dt(2026, 1, 5, 9, 30, tzinfo=_ET)
+        prev = closes[0]
+        for i, cl in enumerate(closes):
+            op = prev
+            hi = max(op, cl) + 0.5
+            lo = min(op, cl) - 0.5
+            out.append(Candle(date=t, open=op, high=hi, low=lo, close=cl,
+                              volume=1000 + i, session="regular"))
+            prev = cl
+            t = t + _td(minutes=5)
+        return out
+
+    spy_candles = _spy_candles()
+
+    def _fetch(_symbol: str, _interval: str) -> list:
+        return list(spy_candles)
+
+    class _FakeEntries:
+        @staticmethod
+        def load_all():
+            return ([entry], [])
+
+    class _FakeExits:
+        @staticmethod
+        def load_all():
+            return ([exit_strat], [])
+
+    class _FakeWatchlists:
+        @staticmethod
+        def load_all():
+            return ([], [])
+
+    # Capture any messagebox so a surprise dialog can't hang the headless
+    # runner (EMA/5m is interval-compatible, so none is expected).
+    orig_info = _strategy_tab_mod.messagebox.showinfo
+    orig_err = _strategy_tab_mod.messagebox.showerror
+    _strategy_tab_mod.messagebox.showinfo = lambda *a, **k: "ok"  # type: ignore[assignment]
+    _strategy_tab_mod.messagebox.showerror = lambda *a, **k: "ok"  # type: ignore[assignment]
+
+    top = tk.Toplevel(app)
+    top.withdraw()
+    try:
+        tab = StrategyTab(
+            top,
+            entries_storage=_FakeEntries(),
+            exits_storage=_FakeExits(),
+            watchlists_storage=_FakeWatchlists(),
+            candles_fetcher=_fetch,
+        )
+        tab.pack(fill="both", expand=True)
+        for _ in range(5):
+            app.update()
+
+        tab._var_universe_kind.set("symbols")
+        tab._var_universe_symbols.set("SPY")
+        tab._on_universe_kind_change()
+        tab._var_date_preset.set("custom")
+        tab._on_date_preset_change()
+        tab._var_start_date.set("2026-01-01")
+        tab._var_end_date.set("2026-01-31")
+        tab._var_interval.set("5m")
+        tab._var_screenshots.set(True)               # render per-trade PNGs
+        tab._var_include_extended_hours.set(False)   # candles are RTH-aligned ET
+
+        assert tab._selected_entry() is not None, "EMA-cross entry must auto-select"
+        assert tab._selected_exit() is not None, "EMA-cross exit must auto-select"
+
+        # Click the REAL Run button (command=_on_run_clicked).
+        tab._btn_run.invoke()
+
+        deadline = _time.monotonic() + 60.0
+        while _time.monotonic() < deadline:
+            app.update()
+            if tab._worker is None and tab._current_aggregate is not None:
+                break
+            _time.sleep(0.05)
+        else:
+            raise AssertionError(
+                "StrategyTab EMA-cross Run did not complete within 60 seconds"
+            )
+
+        result = tab._worker_result.get("result")
+        assert result is not None, f"worker error: {tab._worker_result.get('error')!r}"
+        assert result.test_run.status is RunStatus.DONE, (
+            f"expected DONE, got {result.test_run.status} "
+            f"(error={result.test_run.error!r})"
+        )
+        agg = tab._current_aggregate
+        assert agg is not None, "aggregate should have rendered after the Run"
+        assert agg.trade_count >= 2, (
+            f"expected >=2 trades from the SPY 3/8 EMA cross, got {agg.trade_count}"
+        )
+
+        run_dir = tab._current_run_dir
+        assert run_dir is not None, "Run should have set _current_run_dir"
+        shots_dir = run_dir / "screenshots"
+        pngs = sorted(shots_dir.glob("*.png"))
+        assert len(pngs) >= 2, (
+            f"expected >=2 per-trade screenshots, got {len(pngs)} in {shots_dir}"
+        )
+
+        # Load the SPY trades so we can cross-check filenames + titles.
+        sr = SessionResult.from_dict(json.loads(
+            (run_dir / "per_symbol" / "SPY.json").read_text(encoding="utf-8")
+        ))
+        rows = build_trade_rows(sr)
+        assert len(rows) >= 2, f"expected >=2 SPY trade rows, got {len(rows)}"
+        trade_entry_ts = {int(r.post.entry_ts) for r in rows}
+
+        # (a) Filename encodes the entry timestamp, decoding to the right date.
+        name_re = re.compile(r"^SPY_t(\d+)_post\.png$")
+        for p in pngs:
+            assert p.stat().st_size > 1024, f"{p.name} looks empty ({p.stat().st_size} B)"
+            m = name_re.match(p.name)
+            assert m, f"filename must be SPY_t<epoch>_post.png; got {p.name!r}"
+            ts = int(m.group(1))
+            assert ts in trade_entry_ts, (
+                f"{p.name}: entry_ts {ts} not among SPY trade entries {trade_entry_ts}"
+            )
+            got_date = _dt.fromtimestamp(ts, _ET).date()
+            assert got_date == _TRADING_DAY, (
+                f"{p.name}: filename entry date {got_date} != trading day {_TRADING_DAY}"
+            )
+
+        # (b) Rendered PNG title shows the correct ET date per trade. Re-derive
+        #     via the EXACT helper the renderer uses (render_trade_screenshot ->
+        #     _draw_title_and_labels) so this is faithful, not brittle OCR.
+        index = build_candle_timestamp_index(spy_candles)
+        date_str = _TRADING_DAY.strftime("%Y-%m-%d")
+        for r in rows:
+            fig = Figure(figsize=(6.0, 3.5), dpi=72)
+            FigureCanvasAgg(fig)
+            ax = fig.add_subplot(111)
+            _draw_title_and_labels(
+                fig, ax, r, candles=spy_candles,
+                entry_index=index.index_of(r.post.entry_ts),
+                entry_strategy=entry,
+            )
+            title = ax.get_title(loc="left")
+            assert "SPY" in title, f"title missing symbol: {title!r}"
+            assert date_str in title, (
+                f"title missing correct ET date {date_str!r}: {title!r}"
+            )
+            # Sanity: the timestamp-derived ET date matches the same day too.
+            assert _format_et_timestamp_from_ms(int(r.post.entry_ts)).startswith(
+                date_str
+            ), f"entry_ts {r.post.entry_ts} did not map to {date_str}"
+
+        # (c) Each screenshot's raw-byte content hash is pairwise-unique.
+        hashes = [hashlib.sha256(p.read_bytes()).hexdigest() for p in pngs]
+        assert len(set(hashes)) == len(hashes), (
+            f"screenshot byte-hashes are NOT unique: {len(pngs)} PNGs but "
+            f"only {len(set(hashes))} distinct sha256 digests "
+            f"(files={[p.name for p in pngs]})"
+        )
+    finally:
+        _strategy_tab_mod.messagebox.showinfo = orig_info  # type: ignore[assignment]
+        _strategy_tab_mod.messagebox.showerror = orig_err  # type: ignore[assignment]
+        try:
+            top.destroy()
+        except Exception:  # noqa: BLE001
+            pass
+        # Drain Tk Variable.__del__ on the main thread now (a later check
+        # spawning worker threads could otherwise GC leftover Vars off-thread
+        # → Tcl_AsyncDelete → SIGABRT on Linux CPython 3.11).
+        gc.collect()
+
+
 @pytest.fixture
 def tmp_cache_root(tmp_path, monkeypatch):
     monkeypatch.setenv("TRADINGLAB_CACHE_DIR", str(tmp_path))
@@ -923,6 +1222,10 @@ def test_strategy_universe_kind_layout(app) -> None:
 
 def test_strategy_failed_status_surfaces_error(app) -> None:
     check_st7_failed_status_surfaces_error(app)
+
+
+def test_strategy_ema_cross_e2e_screenshots(app) -> None:
+    check_st8_ema_cross_gui_e2e_screenshots(app)
 
 
 def test_strategy_menu_present_in_chartapp(app) -> None:
