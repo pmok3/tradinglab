@@ -232,3 +232,119 @@ def _scroll(app, ax, x, y, step):
     e.step = step
     e.key = None
     app._on_scroll_zoom(e)
+
+
+# ---------------------------------------- Tk widget interaction helpers ----
+#
+# These drive the ACTUAL widgets (invoke a Button's command, pick a menu
+# entry, walk the widget tree) rather than calling the underlying handler
+# methods directly — so a mis-wired ``command=`` / ``<<ComboboxSelected>>``
+# binding is caught, not silently passed over. Used by
+# ``test_smoke_gui_actions.py`` and available to any smoke check that
+# wants to click a real button.
+
+def _all_descendants(widget):
+    """Depth-first iterator over every descendant widget of ``widget``."""
+    for child in widget.winfo_children():
+        yield child
+        yield from _all_descendants(child)
+
+
+def _find_widgets(root, *, cls=None, text=None):
+    """Return descendants matching an optional widget ``cls`` and/or ``text``.
+
+    ``text`` is a substring match against the widget's ``text`` option
+    (Buttons / Labels / Checkbuttons). Widgets lacking a ``text`` option
+    are skipped when ``text`` is given.
+    """
+    out = []
+    for w in _all_descendants(root):
+        if cls is not None and not isinstance(w, cls):
+            continue
+        if text is not None:
+            try:
+                if text not in str(w.cget("text")):
+                    continue
+            except Exception:  # noqa: BLE001
+                continue
+        out.append(w)
+    return out
+
+
+def _find_button(root, text):
+    """First Button / Checkbutton / Menubutton whose text contains ``text``.
+
+    Returns the widget or ``None``. Matches both ``ttk`` and classic ``tk``
+    variants so it works across the mixed widget set in the app.
+    """
+    import tkinter as tk
+    from tkinter import ttk
+    btn_types = (ttk.Button, tk.Button, ttk.Checkbutton, tk.Checkbutton,
+                 ttk.Menubutton, tk.Menubutton, ttk.Radiobutton, tk.Radiobutton)
+    for w in _all_descendants(root):
+        if isinstance(w, btn_types):
+            try:
+                if text in str(w.cget("text")):
+                    return w
+            except Exception:  # noqa: BLE001
+                continue
+    return None
+
+
+def _click(widget):
+    """Invoke a button/checkbutton/menubutton exactly as a mouse click would.
+
+    Runs the widget's ``command`` callback (and toggles a Checkbutton's
+    variable) via the Tk ``invoke`` command, returning its result.
+    """
+    return widget.invoke()
+
+
+def _menu_invoke(menu, label, *, exact: bool = False) -> bool:
+    """Invoke the first non-separator entry of ``menu`` matching ``label``.
+
+    ``exact=False`` (default) does a substring match; ``exact=True`` requires
+    the whole label to equal ``label`` (needed to pick ``"*"`` without also
+    matching ``"**"``). Returns ``True`` if an entry was found and invoked.
+    """
+    try:
+        end = menu.index("end")
+    except Exception:  # noqa: BLE001
+        return False
+    if end is None:
+        return False
+    for i in range(end + 1):
+        try:
+            if menu.type(i) in ("separator", "tearoff"):
+                continue
+            lbl = str(menu.entrycget(i, "label"))
+        except Exception:  # noqa: BLE001
+            continue
+        if (lbl == label) if exact else (label in lbl):
+            menu.invoke(i)
+            return True
+    return False
+
+
+def _submenu_of(menu, label):
+    """Return the submenu (``tk.Menu``) of the cascade entry whose label
+    contains ``label``, or ``None``."""
+    try:
+        end = menu.index("end")
+    except Exception:  # noqa: BLE001
+        return None
+    if end is None:
+        return None
+    for i in range(end + 1):
+        try:
+            if menu.type(i) != "cascade":
+                continue
+            lbl = str(menu.entrycget(i, "label"))
+        except Exception:  # noqa: BLE001
+            continue
+        if label in lbl:
+            try:
+                return menu.nametowidget(menu.entrycget(i, "menu"))
+            except Exception:  # noqa: BLE001
+                return None
+    return None
