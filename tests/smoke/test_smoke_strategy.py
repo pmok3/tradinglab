@@ -18,6 +18,7 @@ from __future__ import annotations
 import gc
 import json
 import os
+import shutil
 import tempfile
 import time
 from pathlib import Path
@@ -1180,6 +1181,15 @@ def check_st8_ema_cross_gui_e2e_screenshots(app) -> None:
             top.destroy()
         except Exception:  # noqa: BLE001
             pass
+        # CI hygiene: delete this Run's artifacts (the per-trade screenshot
+        # PNGs + per_symbol JSON + aggregate/csv) so repeated smoke runs don't
+        # accumulate under the session cache dir. Best-effort; runs pass OR fail.
+        try:
+            _rd = tab._current_run_dir
+            if _rd is not None:
+                shutil.rmtree(_rd, ignore_errors=True)
+        except Exception:  # noqa: BLE001
+            pass
         # Drain Tk Variable.__del__ on the main thread now (a later check
         # spawning worker threads could otherwise GC leftover Vars off-thread
         # → Tcl_AsyncDelete → SIGABRT on Linux CPython 3.11).
@@ -1402,6 +1412,15 @@ def check_st9_ema_cross_real_data_e2e(app) -> None:
         _strategy_tab_mod.messagebox.showerror = orig_err  # type: ignore[assignment]
         try:
             top.destroy()
+        except Exception:  # noqa: BLE001
+            pass
+        # CI hygiene: delete this Run's artifacts (the ~51 per-trade screenshot
+        # PNGs + per_symbol JSON + aggregate/csv) so repeated smoke runs don't
+        # accumulate under the session cache dir. Best-effort; runs pass OR fail.
+        try:
+            _rd = tab._current_run_dir
+            if _rd is not None:
+                shutil.rmtree(_rd, ignore_errors=True)
         except Exception:  # noqa: BLE001
             pass
         gc.collect()
