@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.5.5] - 2026-07-13
+
+### Fixed
+- **Switching data source no longer jumps the chart years back.** Toggling the
+  data source (e.g. yfinance → Alpaca) on the same ticker and interval could
+  occasionally throw the view from the current window back several years — most
+  often right after a fresh start or a cache wipe. The visible date window is
+  now reliably preserved across the switch, even when the new provider returns a
+  much longer history.
+- **Ratio charts load on every data source.** A ratio symbol such as `IGV/SMH`
+  rendered under yfinance but failed under Alpaca and other providers with a
+  "combination is not valid — check both legs" error. Ratio decomposition now
+  happens for every source, so `A/B` charts work regardless of the selected
+  provider.
+
+### Changed
+- **Substantially expanded automated test coverage.** Previously-unrun test
+  suites are now gated in CI and the release pipeline, and new GUI smoke tests
+  drive real buttons and menus (Entries, Exits, Custom Indicator Builder,
+  Sandbox, Strategy Tester) plus an end-to-end EMA-cross strategy run — hardening
+  the app against regressions.
+
 ## [0.5.0] - 2026-07-07
 
 ### Added
