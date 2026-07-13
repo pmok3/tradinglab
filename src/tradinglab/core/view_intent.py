@@ -33,7 +33,11 @@ structurally prevent the recurring bug classes:
    daily-synth refresh, reference-data redraw, deferred idle render) resolve to
    HOLD — they keep the current view and CONSUME NOTHING. The switch's own
    completing render (after :meth:`begin_completing_load`) is the only one that
-   applies + consumes the intent. This replaces the per-bug
+   applies + consumes the intent. Symmetrically, an intervening
+   :meth:`request` that does NOT start a new switch is IGNORED, so a mid-switch
+   re-arm (``arm_keep_bars`` from a poll/compare/pan path) cannot overwrite the
+   armed one-shot intent either. Together these guard BOTH the consumption and
+   the intent-setting sides, replacing the per-bug
    ``_pending_axis_switch_time_preserve`` band-aid with one generic rule.
 3. **One-shot vs sticky is explicit.** ``KEEP_DATES`` / ``SNAP_RIGHT`` are
    one-shot (applied once, then the view reverts to plain index-preserve);
@@ -117,7 +121,23 @@ class ViewController:
         in flight — intervening renders will HOLD until the switch completes
         (see :meth:`render_directives`). Callers must NOT pass
         ``load_pending=True`` for synchronous reloads.
+
+        **Durability across an in-flight switch.** While a switch load is
+        already pending, a request that does NOT itself start a new switch
+        (``load_pending=False``) is IGNORED — it must not overwrite the
+        durable one-shot ``KEEP_DATES`` (or ``SNAP_RIGHT``) intent the switch
+        armed. Without this guard an intervening re-arm through this method
+        (a poll-tick ``SNAP_RIGHT``/``KEEP_BARS``, a compare re-apply's
+        ``arm_keep_bars()``, a mid-fetch pan/zoom end) would silently reset
+        ``by_time`` to ``False`` while ``load_pending`` stayed ``True``, so the
+        switch's completing render fell back to a stale bar-INDEX window
+        against the new provider's (often longer) series — the "switch source
+        → jump years back" bug. ``render_directives``'s HOLD only guards the
+        CONSUMPTION side; this guards the INTENT-SETTING side. A genuinely new
+        explicit switch (``load_pending=True``) still supersedes.
         """
+        if self._load_pending and not load_pending:
+            return
         self._preserve, self._by_time, self._slide = mode_to_flags(mode)
         if load_pending:
             self._load_pending = True

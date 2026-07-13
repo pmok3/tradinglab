@@ -37,6 +37,15 @@ existing test surface while the DECISION logic lives here.
 - `request(mode, *, load_pending=False)` — set the directives from `mode`; when
   `load_pending` mark that an async switch is in flight. Entry points call this
   instead of poking booleans. `arm_keep_bars()` is sugar for the pan/zoom path.
+  **Honours a pending switch:** while `load_pending` is already set, a `request`
+  that does NOT itself start a new switch (`load_pending=False`) is IGNORED — it
+  cannot overwrite the armed one-shot `KEEP_DATES`/`SNAP_RIGHT` intent. This is
+  the INTENT-SETTING counterpart to the `render_directives` HOLD (which only
+  guards CONSUMPTION): a mid-switch `arm_keep_bars()` from a poll/compare/pan
+  path used to reset `by_time` to False while `load_pending` stayed True, so the
+  completing render fell back to stale index-preserve on the new (often longer)
+  series — the reproduced "toggle yfinance→alpaca jumps to 2021" bug. A
+  genuinely new explicit switch (`load_pending=True`) still supersedes.
 - `load_pending` (property) — True while a switch is loading; the live poll tick
   bails while set so it can't re-arm index-preserve or launch a competing fetch.
 - `begin_completing_load() -> bool` — called at the TOP of the load servicing the
@@ -54,7 +63,10 @@ existing test surface while the DECISION logic lives here.
    `by_time`/`slide` intent nor let a racing index-preserve re-arm win. Only the
    switch's own completing render (after `begin_completing_load`) applies +
    consumes it. This is the generic replacement for the per-bug
-   `_pending_axis_switch_time_preserve` fix.
+   `_pending_axis_switch_time_preserve` fix. Its INTENT-SETTING counterpart —
+   `request` ignoring non-switch re-arms while `load_pending` — is documented on
+   `request` above; together they close BOTH the consumption and the re-arm
+   routes to the "jump years back" bug.
 2. **`by_time` wins over index-preserve.** Outside a pending load, if `by_time`
    is set the returned `preserve` is forced False AND the stored sticky
    `_preserve` is cleared — so a stale bar-index window can never clobber the
@@ -71,8 +83,12 @@ existing test surface while the DECISION logic lives here.
   race).
 - During `load_pending`: `render_directives` returns `(preserve, False, False)`
   and leaves `by_time`/`slide` intact (no consumption).
+- During `load_pending`: a non-switch `request` (`arm_keep_bars`, `KEEP_BARS`,
+  `SNAP_RIGHT`, `DEFAULT`) is a no-op — the armed `KEEP_DATES` intent survives;
+  a new `request(..., load_pending=True)` still overrides.
 - `begin_completing_load` lowers `load_pending` and reports whether a switch was
-  pending; the subsequent `render_directives` then applies the held intent.
+  pending; the subsequent `render_directives` then applies the held intent
+  (including after an intervening `arm_keep_bars` re-arm attempt).
 - `snapshot`/`restore` round-trip.
 
 ## Non-goals

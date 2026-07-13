@@ -144,6 +144,47 @@ def test_begin_completing_load_false_when_no_switch():
     assert vc.begin_completing_load() is False
 
 
+def test_request_ignored_during_pending_switch():
+    """A non-switch re-arm through ``request`` while a switch is pending must
+    NOT overwrite the armed one-shot intent (the reproduced 'switch source →
+    jump years back' bug: a mid-switch ``arm_keep_bars`` clobbered ``by_time``
+    to False so the completing render did stale index-preserve)."""
+    for rearm in (
+        lambda vc: vc.arm_keep_bars(),
+        lambda vc: vc.request(ViewMode.KEEP_BARS),
+        lambda vc: vc.request(ViewMode.SNAP_RIGHT),
+        lambda vc: vc.request(ViewMode.DEFAULT),
+    ):
+        vc = ViewController()
+        vc.request(ViewMode.KEEP_DATES, load_pending=True)
+        rearm(vc)  # intervening non-switch re-arm — must be ignored
+        # The durable one-shot intent survives intact.
+        assert vc.snapshot() == (False, True, False, True)
+
+
+def test_completing_switch_survives_request_rearm():
+    """End-to-end at the controller level: the exact reproduced sequence —
+    KEEP_DATES switch in flight, an intervening ``arm_keep_bars`` (a poll /
+    compare / pan re-arm), then the completing render — must still apply the
+    time-remap (``by_time``), NOT stale index-preserve."""
+    vc = ViewController()
+    vc.request(ViewMode.KEEP_DATES, load_pending=True)
+    vc.render_directives()          # intervening HOLD render
+    vc.arm_keep_bars()              # the clobber attempt (now a no-op)
+    assert vc.begin_completing_load() is True
+    assert vc.render_directives() == (False, True, False)
+
+
+def test_new_switch_supersedes_pending_switch():
+    """A genuinely NEW explicit switch (load_pending=True) still overrides an
+    in-flight one — e.g. the user toggles source again before the first
+    switch's fetch lands."""
+    vc = ViewController()
+    vc.request(ViewMode.KEEP_DATES, load_pending=True)
+    vc.request(ViewMode.DEFAULT, load_pending=True)  # a new interval switch
+    assert vc.snapshot() == (False, False, False, True)
+
+
 def test_interval_switch_snaps_right_on_completion():
     vc = ViewController()
     vc.request(ViewMode.DEFAULT, load_pending=True)  # interval change

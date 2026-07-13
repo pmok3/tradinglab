@@ -6164,6 +6164,38 @@ def check_d94_source_switch_time_preserve_survives_index_rearm(app) -> None:
             "d94: view controller load_pending should be cleared after the "
             "switch's completing render")
 
+        # Phase 3: the OTHER mid-switch re-arm mechanism — a racing
+        # ``arm_keep_bars()`` (what a live poll tick / compare re-apply /
+        # pan-zoom end does) instead of a bare ``_preserve_xlim_on_render``
+        # poke. This is the path Phase 2 does NOT cover: ``arm_keep_bars``
+        # goes through ``request(KEEP_BARS)`` which resets ``by_time`` to
+        # False, so before the ``request``-honours-``load_pending`` guard it
+        # silently clobbered the switch's KEEP_DATES and the completing render
+        # fell back to stale index-preserve → the reproduced "toggle
+        # yfinance→alpaca jumps to 2021" bug. Re-establish the SHORT recent
+        # view, then switch onto LONG with the arm_keep_bars race.
+        app._full_cache[(src, ticker, "1d")] = list(short)
+        app._view.request(ViewMode.DEFAULT)
+        app._load_data()
+        _pump_until(app, lambda: app._primary and len(app._primary) < 1000,
+                    timeout=0.8)
+        left_reset = visible_left()
+        assert left_reset is not None and left_reset.year >= 2025, (
+            f"d94 phase3 precondition: SHORT default view should be recent; "
+            f"got {left_reset}")
+        app._full_cache[(src, ticker, "1d")] = list(long_)
+        app._view.request(ViewMode.KEEP_DATES, load_pending=True)  # the switch
+        app._view.arm_keep_bars()   # racing re-arm via request() (was the clobber)
+        app._load_data()
+        _pump_until(app, lambda: app._primary and len(app._primary) > 1000,
+                    timeout=0.8)
+        _pump(app, 0.05)
+        left_after3 = visible_left()
+        assert left_after3 is not None and left_after3.year >= 2025, (
+            f"d94: a mid-switch arm_keep_bars() re-arm defeated the "
+            f"source-switch time-preserve — view jumped to {left_after3} "
+            f"(expected >=2025). request() must honour load_pending.")
+
     finally:
         try:
             del app._cache_is_stale
