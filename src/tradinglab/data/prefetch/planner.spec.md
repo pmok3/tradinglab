@@ -23,10 +23,15 @@ newest-first, exhausting the provider (Decision 8).
   limit=max_page)` (most recent page). `band(_, iv, k>0, oldest_ts=T)` →
   `FetchWindow(kind="range", end=T, limit=max_page)`. `band(k>0, oldest_ts=None)`
   → `None` (needs the previous band's boundary). `band(k<0)` → `None`.
+- **One-HTTP-page-per-band (review):** the range fetch primitive MUST be
+  "most-recent `limit` bars with ts **strictly before** `end` (`sort=desc`)" =
+  **one HTTP request = one token**. `end` is exclusive so bands don't overlap;
+  `end=oldest_ts` step-back is exact under that primitive. Deepening stops when
+  `oldest_ts` fails to advance (scheduler-owned), not by planner index.
 - Foreground (band −1) is NOT planned here — the scheduler supplies an explicit
   window for the exact user-requested slice.
 - Pure: the scheduler translates a `FetchWindow` into the real fetcher /
-  `fetch_range` call at dispatch; exhaustion is detected by the scheduler from
+  range-page call at dispatch; exhaustion is detected by the scheduler from
   fetch results, not signalled by the planner (for range providers).
 
 ## Design Decisions

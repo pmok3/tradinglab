@@ -25,6 +25,7 @@ from .planner import (
     planner_for,
 )
 from .priority import FOREGROUND_BAND, FetchJob, PriorityKey
+from .scheduler import DispatchDecision, PrefetchScheduler
 from .tiers import (
     PrefetchContext,
     TierProvider,
@@ -38,4 +39,5 @@ __all__ = [
     "PrefetchContext", "TierProvider", "expand_all", "standard_tiers",
     "FetchWindow", "PeriodWindowPlanner", "RangeWindowPlanner", "planner_for",
     "SourceBucketRegistry", "AIMDRateController", "looks_throttled",
+    "DispatchDecision", "PrefetchScheduler",
 ]

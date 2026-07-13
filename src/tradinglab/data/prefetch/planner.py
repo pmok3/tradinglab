@@ -71,7 +71,19 @@ class PeriodWindowPlanner:
 
 
 class RangeWindowPlanner:
-    """Alpaca-style planner: newest max page first, step back via ``oldest_ts``."""
+    """Alpaca-style planner: newest max page first, step back via ``oldest_ts``.
+
+    **One-HTTP-page-per-band contract** (principal-SWE review): the fetch
+    primitive this drives must return the *most recent* ``limit`` bars whose
+    timestamp is **strictly before** ``end`` (i.e. ``sort=desc`` + ``end`` +
+    ``limit``), which is **one HTTP request = one rate-limiter token**. Under
+    that primitive the ``end = oldest_ts`` step-back is exactly correct: band 0
+    fetches the latest page, band *k* fetches the page ending at band *k-1*'s
+    oldest bar. ``end`` is treated as **exclusive**, so consecutive bands don't
+    overlap. The scheduler stops deepening when a fetch yields no older bars
+    (``oldest_ts`` fails to advance); the planner itself never signals
+    exhaustion by index.
+    """
 
     def __init__(self, max_page: int = ALPACA_MAX_PAGE) -> None:
         self._max_page = int(max_page)
