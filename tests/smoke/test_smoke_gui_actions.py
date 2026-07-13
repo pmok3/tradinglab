@@ -31,6 +31,7 @@ from tests.smoke._helpers import (
     _find_button,
     _menu_invoke,
     _pump,
+    _pump_until,
     _submenu_of,
 )
 
@@ -42,6 +43,32 @@ _skip_modal_on_darwin = pytest.mark.skipif(
     sys.platform == "darwin",
     reason="Tk transient() modal dialog deadlock on headless macOS — CLAUDE.md §7.1",
 )
+
+
+def _settle_app(app) -> None:
+    """Drain any in-flight async work before returning to the shared session.
+
+    These checks run against the session-scoped ``ChartApp`` interleaved
+    with the mega-test's checks. If a check leaves an async baseline
+    reload in flight (e.g. a sandbox ``end_session`` reloading the prior
+    ticker), it can land mid-assertion in a LATER check — the mega-test's
+    ``check_d58`` stage F reads ``app._panel_state["primary"]["candles"]``
+    and indexes it directly, so a transient short list there is an
+    ``IndexError``. Pump until the primary candles are back to a healthy
+    length (the yfinance stub loads 150), then a final settle.
+    """
+    _pump_until(
+        app,
+        lambda: len(
+            (app._panel_state.get("primary") or {}).get("candles") or []
+        ) >= 100,
+        timeout=5.0,
+    )
+    # A fixed final drain so any pending Tk ``after()`` jobs left by a
+    # dialog teardown (e.g. the §7.19 auto-stack ``after(100)`` reclassify)
+    # fire HERE — inside this check's teardown — rather than during a
+    # later check's pump.
+    _pump(app, 0.5)
 
 
 # --------------------------------------------------------------------------
@@ -272,6 +299,7 @@ def test_gui_action_entries_dialog_validate_and_save(app):
                 dlg.destroy()
         except tk.TclError:
             pass
+        _settle_app(app)
 
 
 # --------------------------------------------------------------------------
@@ -341,6 +369,7 @@ def test_gui_action_exits_dialog_new_addleg_save(app):
             dlg.destroy()
         except tk.TclError:
             pass
+        _settle_app(app)
 
 
 # --------------------------------------------------------------------------
@@ -387,6 +416,7 @@ def test_gui_action_custom_indicator_mode_toggle(app, tmp_path):
             dlg.destroy()
         except tk.TclError:
             pass
+        _settle_app(app)
 
 
 # --------------------------------------------------------------------------
@@ -457,3 +487,4 @@ def test_gui_action_sandbox_day_note_commit_on_next_bar(app):
                 host.destroy()
             except tk.TclError:
                 pass
+        _settle_app(app)
