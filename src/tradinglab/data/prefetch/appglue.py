@@ -17,6 +17,11 @@ from __future__ import annotations
 import os
 from collections.abc import Callable, Iterable
 
+from .buckets import (
+    SourceBucketRegistry,
+    global_bucket_registry,
+    unlimited_bucket_registry,
+)
 from .tiers import PrefetchContext
 
 _FLAG_ENV = "TRADINGLAB_PREFETCH_SCHEDULER"
@@ -35,6 +40,21 @@ def scheduler_enabled() -> bool:
 def scheduler_mode() -> str:
     """``"live"`` when explicitly requested, else ``"shadow"`` (safe default)."""
     return "live" if _flag_value() == "live" else "shadow"
+
+
+def bucket_registry_for_mode(mode: str) -> SourceBucketRegistry:
+    """Pick the rate-limiter registry for a scheduler ``mode``.
+
+    ``live`` shares the process-wide :func:`global_bucket_registry` — the single
+    accounting gate every real fetch path acquires from (Decision 1). Every
+    other mode (``shadow``) gets a throwaway :func:`unlimited_bucket_registry`
+    so dry-run planning cannot consume real vendor tokens (principal-SWE review
+    Must-fix: shadow observation must be genuinely side-effect-free).
+    """
+    return (
+        global_bucket_registry() if mode == "live"
+        else unlimited_bucket_registry()
+    )
 
 
 def _norm(symbol: object) -> str:
@@ -108,5 +128,6 @@ def build_context(
 
 
 __all__ = [
-    "scheduler_enabled", "scheduler_mode", "partition_watchlists", "build_context",
+    "scheduler_enabled", "scheduler_mode", "bucket_registry_for_mode",
+    "partition_watchlists", "build_context",
 ]

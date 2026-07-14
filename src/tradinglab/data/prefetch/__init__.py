@@ -13,6 +13,7 @@ imports Tk or ``ChartApp``.
 from __future__ import annotations
 
 from .appglue import (
+    bucket_registry_for_mode,
     build_context,
     partition_watchlists,
     scheduler_enabled,
@@ -24,6 +25,7 @@ from .buckets import (
     global_bucket_registry,
     looks_throttled,
     set_global_bucket_registry,
+    unlimited_bucket_registry,
 )
 from .driver import PrefetchDriver
 from .intervals import dual_interval
@@ -49,6 +51,8 @@ __all__ = [
     "FetchWindow", "PeriodWindowPlanner", "RangeWindowPlanner", "planner_for",
     "SourceBucketRegistry", "AIMDRateController", "looks_throttled",
     "global_bucket_registry", "set_global_bucket_registry",
+    "unlimited_bucket_registry",
     "DispatchDecision", "PrefetchScheduler", "PrefetchDriver",
-    "scheduler_enabled", "scheduler_mode", "partition_watchlists", "build_context",
+    "scheduler_enabled", "scheduler_mode", "bucket_registry_for_mode",
+    "partition_watchlists", "build_context",
 ]

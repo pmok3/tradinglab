@@ -73,16 +73,24 @@ class SourceBucketRegistry:
         self,
         *,
         defaults: dict[str, float] | None = None,
+        fallback_rate: float | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._defaults = dict(DEFAULT_RATES)
         if defaults:
             self._defaults.update({_norm(k): float(v) for k, v in defaults.items()})
+        self._fallback_rate = (
+            None if fallback_rate is None else float(fallback_rate)
+        )
         self._clock = clock
         self._buckets: dict[str, TokenBucket] = {}
 
     def _default_rate(self, source: str) -> float:
-        return self._defaults.get(source, CONSERVATIVE_DEFAULT_RATE)
+        fallback = (
+            CONSERVATIVE_DEFAULT_RATE
+            if self._fallback_rate is None else self._fallback_rate
+        )
+        return self._defaults.get(source, fallback)
 
     def bucket_for(self, source: str) -> TokenBucket:
         key = _norm(source)
@@ -156,8 +164,28 @@ class AIMDRateController:
 __all__ = [
     "UNLIMITED_RATE", "CONSERVATIVE_DEFAULT_RATE", "DEFAULT_RATES",
     "looks_throttled", "SourceBucketRegistry", "AIMDRateController",
+    "unlimited_bucket_registry",
     "global_bucket_registry", "set_global_bucket_registry",
 ]
+
+
+def unlimited_bucket_registry(
+    clock: Callable[[], float] = time.monotonic,
+) -> SourceBucketRegistry:
+    """A throwaway registry where **every** source is effectively unlimited.
+
+    Used by the prefetch scheduler's **shadow** (dry-run) mode so planning /
+    dispatch never consumes a token from the process-wide
+    :func:`global_bucket_registry` — otherwise shadow "observation" would spend
+    real vendor tokens and throttle the live/foreground fetch it is meant to
+    passively measure (principal-SWE review, Must-fix). Known sources AND
+    unknown (BYOD) sources both ride :data:`UNLIMITED_RATE`.
+    """
+    return SourceBucketRegistry(
+        defaults={src: UNLIMITED_RATE for src in DEFAULT_RATES},
+        fallback_rate=UNLIMITED_RATE,
+        clock=clock,
+    )
 
 
 # --------------------------------------------------------------- global singleton

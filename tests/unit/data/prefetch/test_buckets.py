@@ -14,6 +14,7 @@ from tradinglab.data.prefetch.buckets import (
     AIMDRateController,
     SourceBucketRegistry,
     looks_throttled,
+    unlimited_bucket_registry,
 )
 from tradinglab.data.rate_limiter import TokenBucket
 
@@ -57,6 +58,32 @@ def test_custom_defaults():
 def test_source_name_normalized():
     reg = SourceBucketRegistry()
     assert reg.bucket_for(" YFinance ") is reg.bucket_for("yfinance")
+
+
+# ---------------------------------------------- fallback_rate + unlimited registry
+def test_fallback_rate_overrides_conservative_default():
+    reg = SourceBucketRegistry(fallback_rate=UNLIMITED_RATE)
+    # Unknown source now rides the fallback instead of the conservative default.
+    assert reg.bucket_for("mystery").rate_per_min == UNLIMITED_RATE
+    # A known default still wins over the fallback.
+    assert reg.bucket_for("alpaca").rate_per_min == 200.0
+
+
+def test_unlimited_registry_all_sources_unlimited():
+    reg = unlimited_bucket_registry()
+    for src in ("alpaca", "yfinance", "polygon", "mystery-byod"):
+        assert reg.bucket_for(src).rate_per_min == UNLIMITED_RATE
+
+
+def test_unlimited_registry_never_throttles():
+    reg = unlimited_bucket_registry()
+    b = reg.bucket_for("alpaca")
+    # Even the real Alpaca source name bursts without limit here (shadow dry-run).
+    assert all(b.try_acquire(1) for _ in range(5000))
+
+
+def test_unlimited_registry_is_fresh_instance():
+    assert unlimited_bucket_registry() is not unlimited_bucket_registry()
 
 
 # ------------------------------------------------------------ looks_throttled

@@ -36,16 +36,16 @@ class PrefetchAppMixin:
         from ..data.prefetch import (
             PrefetchDriver,
             PrefetchScheduler,
-            global_bucket_registry,
+            bucket_registry_for_mode,
             scheduler_mode,
             standard_tiers,
         )
+        mode = scheduler_mode()
         scheduler = PrefetchScheduler(
             standard_tiers(),
-            buckets=global_bucket_registry(),
+            buckets=bucket_registry_for_mode(mode),
             supports_range=source_supports_range,
         )
-        mode = scheduler_mode()
         logger.info("prefetch scheduler enabled (mode=%s)", mode)
         return PrefetchDriver(
             scheduler,

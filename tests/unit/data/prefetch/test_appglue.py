@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 
 from tradinglab.data.prefetch.appglue import (
+    bucket_registry_for_mode,
     build_context,
     partition_watchlists,
     scheduler_enabled,
@@ -44,6 +45,71 @@ def test_scheduler_mode_defaults_to_shadow(monkeypatch):
 def test_scheduler_mode_live(monkeypatch):
     monkeypatch.setenv("TRADINGLAB_PREFETCH_SCHEDULER", "live")
     assert scheduler_mode() == "live"
+
+
+# ------------------------------------------------------ bucket_registry_for_mode
+def test_live_mode_shares_the_global_registry():
+    from tradinglab.data.prefetch import global_bucket_registry
+    assert bucket_registry_for_mode("live") is global_bucket_registry()
+
+
+def test_shadow_mode_gets_a_separate_unlimited_registry():
+    from tradinglab.data.prefetch import global_bucket_registry
+    reg = bucket_registry_for_mode("shadow")
+    assert reg is not global_bucket_registry()
+    # Every source is unlimited so dry-run planning never rate-stalls.
+    assert reg.bucket_for("alpaca").rate_per_min > 1_000.0
+    assert reg.bucket_for("mystery").rate_per_min > 1_000.0
+
+
+def test_shadow_driver_does_not_consume_global_tokens():
+    """The whole point of shadow: observe the plan with ZERO real-token spend.
+
+    Regression guard for the principal-SWE Must-fix — before the fix,
+    ``_build_prefetch_driver`` handed the scheduler the process-wide
+    ``global_bucket_registry`` in shadow mode too, so a shadow ``pump`` spent
+    real Alpaca tokens (``next_dispatch`` → ``bucket.try_acquire``) and could
+    throttle the live/foreground fetch it is meant to passively measure.
+    """
+    from tradinglab.data.prefetch import (
+        PrefetchDriver,
+        PrefetchScheduler,
+        SourceBucketRegistry,
+        global_bucket_registry,
+        set_global_bucket_registry,
+        standard_tiers,
+    )
+
+    frozen = [1000.0]
+    prev = global_bucket_registry()
+    try:
+        set_global_bucket_registry(SourceBucketRegistry(clock=lambda: frozen[0]))
+        gbucket = global_bucket_registry().bucket_for("alpaca")
+        # Force a capacity-1 bucket (starts full → exactly 1 token, no refill
+        # under the frozen clock): any shadow consumption is immediately visible.
+        gbucket.configure(10.0, burst=1.0)
+
+        sched = PrefetchScheduler(
+            standard_tiers(),
+            buckets=bucket_registry_for_mode("shadow"),
+            supports_range=lambda s: s == "alpaca",
+        )
+        driver = PrefetchDriver(sched, submit=lambda job: None, shadow=True)
+        driver.set_context(build_context(
+            source="alpaca", active_symbol="AMD", active_interval="1d",
+            compare_symbol="SPY",
+        ))
+        driver.pump()
+
+        # Full plan observed (active + compare, dual interval = 4 band-0 jobs),
+        # NOT rate-stalled after a single token — proof shadow used the unlimited
+        # registry, not the capacity-1 global bucket.
+        assert len(driver.shadow_log) >= 4
+        # The single real global token is still there — shadow spent nothing.
+        assert gbucket.try_acquire(1) is True
+        assert gbucket.try_acquire(1) is False  # and there was exactly one
+    finally:
+        set_global_bucket_registry(prev)
 
 
 # --------------------------------------------------------- partition_watchlists

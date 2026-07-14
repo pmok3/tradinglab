@@ -9,6 +9,10 @@ app-coupled surface thin + testable.
   `{1,on,true,yes,shadow,live}` (case-insensitive), else False (default).
 - `scheduler_mode() -> str` — `"live"` iff the flag is exactly `live`, else
   `"shadow"` (safe default whenever enabled).
+- `bucket_registry_for_mode(mode) -> SourceBucketRegistry` — `live` shares the
+  process-wide `global_bucket_registry()` (the one real accounting gate);
+  every other mode (`shadow`) gets a throwaway `unlimited_bucket_registry()` so
+  dry-run planning never spends a real vendor token (review Must-fix).
 - `partition_watchlists(active_name, pinned_names, tickers_of) -> (focused,
   other)` — focused = active sub-tab's tickers (if pinned); other = the rest of
   the pinned lists minus focused. Normalized (`strip().upper()`) + deduped,
@@ -25,5 +29,8 @@ app-coupled surface thin + testable.
 
 ## Testing
 `tests/unit/data/prefetch/test_appglue.py` — flag enabled/disabled values, mode
-shadow/live, watchlist partition (focused+other, focused-not-pinned, empty,
-normalize+dedupe), build_context normalization + blank compare.
+shadow/live, `bucket_registry_for_mode` (live shares global; shadow gets a
+separate unlimited registry; a shadow driver `pump` consumes ZERO tokens from a
+capacity-1 global bucket), watchlist partition (focused+other,
+focused-not-pinned, empty, normalize+dedupe), build_context normalization +
+blank compare.

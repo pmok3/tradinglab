@@ -9,8 +9,8 @@ ceiling (§7.24). A pure method-bag mixin: **no `__init__`**.
 - `_maybe_build_prefetch_driver()` — construct a `PrefetchDriver` iff
   `scheduler_enabled()`, else `None` (called once from `ChartApp.__init__`).
 - `_build_prefetch_driver()` — `PrefetchScheduler(standard_tiers(),
-  buckets=global_bucket_registry(), supports_range=source_supports_range)` +
-  `PrefetchDriver(shadow=mode != "live")`.
+  buckets=bucket_registry_for_mode(mode), supports_range=source_supports_range)`
+  + `PrefetchDriver(shadow=mode != "live")`.
 - `_prefetch_submit(job)` / `_prefetch_apply(job, bars, memory_allowed)` —
   live-mode seams (no-ops until the cut-over).
 - `_build_prefetch_context()` — snapshot source/ticker/interval/compare +
@@ -25,8 +25,11 @@ ceiling (§7.24). A pure method-bag mixin: **no `__init__`**.
   None` → zero behaviour change). Reads only `self.<attr>` state owned by
   `ChartApp` (`source_var`/`ticker_var`/`interval_var`/`compare_ticker_var`/
   `watchlist_var`/`_watchlists`/`_prefetch_driver`).
-- The driver's bucket registry IS the process-wide `global_bucket_registry()` —
-  the same per-source `TokenBucket` the Alpaca fetch path uses (Decision 1).
+- The driver's bucket registry depends on the mode (`bucket_registry_for_mode`):
+  **live** shares the process-wide `global_bucket_registry()` — the same
+  per-source `TokenBucket` the Alpaca fetch path uses (Decision 1); **shadow**
+  gets a throwaway `unlimited_bucket_registry()` so dry-run observation never
+  spends a real vendor token (review Must-fix).
 - Wired into `ChartApp.__init__` (`self._prefetch_driver =
   self._maybe_build_prefetch_driver()`) and `_on_explicit_axis_change`
   (`self._prefetch_observe()`).

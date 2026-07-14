@@ -10,9 +10,16 @@ for yfinance (Decision 10).
   `DEFAULT_RATES` (yfinance 100, alpaca 200, polygon 100, synthetic/-stream/
   testdata unlimited).
 - `looks_throttled(error, *, latency_s=None, latency_threshold_s=5.0) -> bool`.
-- `SourceBucketRegistry(*, defaults=None, clock=time.monotonic)`:
+- `SourceBucketRegistry(*, defaults=None, fallback_rate=None, clock=time.monotonic)`:
   `bucket_for(source) -> TokenBucket` (lazy + cached), `configure(source,
-  rate_per_min, *, burst=None)`, `rate_for(source) -> float`.
+  rate_per_min, *, burst=None)`, `rate_for(source) -> float`. `fallback_rate`
+  overrides the per-source default for names not in `defaults`/`DEFAULT_RATES`
+  (default `None` → `CONSERVATIVE_DEFAULT_RATE`).
+- `unlimited_bucket_registry(clock=time.monotonic) -> SourceBucketRegistry` — a
+  throwaway registry where EVERY source (known + BYOD) is `UNLIMITED_RATE`. Used
+  by the scheduler's **shadow** (dry-run) mode so planning/dispatch never
+  consumes a token from the process-wide gate (principal-SWE review Must-fix:
+  shadow observation must be genuinely side-effect-free).
 - `global_bucket_registry() -> SourceBucketRegistry` — the process-wide singleton
   (Decision 1: the ONE gate shared by direct source fetchers AND the scheduler).
 - `set_global_bucket_registry(registry | None)` — swap/reset (app wiring + tests).
@@ -23,8 +30,9 @@ for yfinance (Decision 10).
 ## Contract
 - **One bucket per source, cached** — the same `TokenBucket` instance is returned
   per (normalized) source name, so all fetch paths share one budget.
-- Unknown source → `CONSERVATIVE_DEFAULT_RATE`; internal sources → `UNLIMITED_RATE`
-  (a long burst all succeeds). Source names are normalized (`strip().lower()`).
+- Unknown source → `CONSERVATIVE_DEFAULT_RATE` (or `fallback_rate` when set);
+  internal sources → `UNLIMITED_RATE` (a long burst all succeeds). Source names
+  are normalized (`strip().lower()`).
 - `looks_throttled` is True on explicit throttle text (`429` / `999` /
   `too many requests` / `rate limit`) or a latency spike; **False** on ordinary
   errors and on a single empty result (empty → poison path, not throttle).
