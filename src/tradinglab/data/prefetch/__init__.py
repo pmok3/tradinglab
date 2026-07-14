@@ -19,6 +19,7 @@ from .buckets import (
     looks_throttled,
     set_global_bucket_registry,
 )
+from .driver import PrefetchDriver
 from .intervals import dual_interval
 from .planner import (
     FetchWindow,
@@ -42,5 +43,5 @@ __all__ = [
     "FetchWindow", "PeriodWindowPlanner", "RangeWindowPlanner", "planner_for",
     "SourceBucketRegistry", "AIMDRateController", "looks_throttled",
     "global_bucket_registry", "set_global_bucket_registry",
-    "DispatchDecision", "PrefetchScheduler",
+    "DispatchDecision", "PrefetchScheduler", "PrefetchDriver",
 ]
