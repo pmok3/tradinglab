@@ -56,6 +56,7 @@ def _fake_app(*, source="yfinance", interval="1d",
             "load_async", calls["load_async"] + 1),
         _sandbox_handle_interval_change=lambda: calls.__setitem__(
             "sandbox_handle", calls["sandbox_handle"] + 1),
+        _prefetch_observe=lambda: None,
     )
     for k, v in overrides.items():
         setattr(fake, k, v)

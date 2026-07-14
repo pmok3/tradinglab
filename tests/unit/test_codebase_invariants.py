@@ -263,7 +263,14 @@ def test_app_spec_md_mro_matches_real_chartapp_bases():
 #          (generic replacement for _pending_axis_switch_time_preserve). Adds
 #          ~53 LOC of bridging properties; net +22 after deleting the bespoke
 #          d94 re-assertion + redundant inits. Refactor (view-intent-controller).
-_APP_PY_LOC_CEILING = 7541
+#   7548 — flagged background prefetch scheduler wired in (data/prefetch/*).
+#          The bulk of the glue is EXTRACTED to gui/prefetch_app.PrefetchAppMixin
+#          (§7.24 preferred); only the irreducible wiring remains in app.py: the
+#          mixin import + MRO entry, the __init__ construction
+#          (self._prefetch_driver = self._maybe_build_prefetch_driver()), and the
+#          _prefetch_observe() hook in _on_explicit_axis_change. Default OFF →
+#          driver is None → zero behaviour change. Feature (prefetch-scheduler).
+_APP_PY_LOC_CEILING = 7548
 
 # Once a real extraction drops app.py well under the ceiling, lower the
 # constant to lock the reduction in. The band keeps ordinary small edits from

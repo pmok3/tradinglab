@@ -138,6 +138,7 @@ from .gui.named_fonts import (
 
 # Polling / scheduling lives in ``gui.polling``.
 from .gui.polling import PollingMixin
+from .gui.prefetch_app import PrefetchAppMixin
 from .gui.recent_menus import RecentMenusMixin
 from .gui.sandbox_menu import SandboxMenuMixin
 from .gui.scanner_app import ScannerAppMixin
@@ -264,6 +265,7 @@ class ChartApp(
     DrawingsAppMixin,
     EventsAppMixin,
     LivePriceOverlayAppMixin,
+    PrefetchAppMixin,
     RecentMenusMixin,
     SandboxAliasMixin,
     SandboxAppMixin,
@@ -968,6 +970,10 @@ class ChartApp(
         # compare-warming path (_ensure_compare_prefetched wrapper) and
         # the companion-interval prefetch fired at end of _load_data.
         self._prefetch_inflight = self._fetch_svc._prefetch_inflight
+
+        # Background prefetch scheduler glue (PrefetchAppMixin); opt-in via
+        # TRADINGLAB_PREFETCH_SCHEDULER (default OFF → None → no behaviour change).
+        self._prefetch_driver = self._maybe_build_prefetch_driver()
 
         # --- cross-symbol reference data registry (RRVOL et al.) --------
         # Indicators that need a second symbol (e.g. RRVOL = RVOL/SPY)
@@ -6064,6 +6070,7 @@ class ChartApp(
             load_pending=True,
         )
         self._load_data_async()
+        self._prefetch_observe()  # flagged prefetch scheduler (no-op when off)
 
     def _sandbox_handle_interval_change(self) -> None:
         """Route interval-combobox changes through the sandbox controller.

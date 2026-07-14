@@ -4,7 +4,7 @@
 Top-level Tk + matplotlib application. Owns all runtime state (Tk widgets, `Figure`, caches, stream/fetch tokens, worker pool) and orchestrates the data → render → stream pipeline. `ChartApp` is composed of `tk.Tk` + a stack of mixins (each owns a concern documented in its own `*.spec.md`).
 
 ## Public API
-- `class ChartApp(PollingMixin, InteractionMixin, WatchlistTabMixin, WorkerPoolMixin, IndicatorMenuMixin, SandboxMenuMixin, ConfigMenuMixin, DrilldownMixin, EntriesAppMixin, ExitsAppMixin, HelpMenuMixin, FirstRunBannerMixin, AnchorPickAppMixin, ChartStackAppMixin, DrawingsAppMixin, EventsAppMixin, LivePriceOverlayAppMixin, RecentMenusMixin, SandboxAliasMixin, SandboxAppMixin, ScannerAppMixin, SnapshotMixin, UpdateCheckMixin, tk.Tk)`
+- `class ChartApp(PollingMixin, InteractionMixin, WatchlistTabMixin, WorkerPoolMixin, IndicatorMenuMixin, SandboxMenuMixin, ConfigMenuMixin, DrilldownMixin, EntriesAppMixin, ExitsAppMixin, HelpMenuMixin, FirstRunBannerMixin, AnchorPickAppMixin, ChartStackAppMixin, DrawingsAppMixin, EventsAppMixin, LivePriceOverlayAppMixin, PrefetchAppMixin, RecentMenusMixin, SandboxAliasMixin, SandboxAppMixin, ScannerAppMixin, SnapshotMixin, UpdateCheckMixin, tk.Tk)`
 - `ChartApp(*, splash: SplashController | None = None)` — construct + open the window.
 - `_load_data()` / `_load_data_async()` — synchronous / executor-backed fetch + render.
 - `_render()` — rebuild figure from in-memory series. Sole site of `figure.clear()` (in its slow path; the topology-preserving fast path reuses axes — see Rendering §).
@@ -83,6 +83,7 @@ File structure:
    lists before rendering. This prevents stale fingerprint hits from
    rebinding onto replacement lists.
 7. Compare-mode pre-fetch via `_ensure_compare_prefetched` runs after successful non-cache-hit loads; companion-interval prefetches are kicked near the start of cold/stale loads so they can run in parallel with the foreground fetch.
+8. **Background prefetch scheduler (opt-in, shadow-mode; `data/prefetch/*`).** A priority-queue, rate-gated, breadth-first preloader is being integrated behind the `TRADINGLAB_PREFETCH_SCHEDULER` env flag (default OFF → `self._prefetch_driver is None` → zero behaviour change). When enabled it constructs a `PrefetchDriver`+`PrefetchScheduler` over the process-wide `global_bucket_registry()` (the SAME per-source `TokenBucket` the Alpaca fetch path uses — Decision 1). `_build_prefetch_context()` snapshots app state (source/ticker/interval/compare + `partition_watchlists(active sub-tab, pinned)`; universe deferred) into a `PrefetchContext`; `_prefetch_observe()` (hooked into `_on_explicit_axis_change`, no-op when off) re-arms the scheduler and, in **shadow** mode, logs how many jobs it WOULD dispatch with no fetch/cache side effects — the observation path validating the scheduler against the live reactive paths before the flagged **live** cut-over replaces them. `_prefetch_submit`/`_prefetch_apply` are the live-mode seams (wired at cut-over). Full design: session `PREFETCH_SCHEDULER_DESIGN.md`.
 
 ### Cache staleness (`_cache_is_stale`)
 Interval- and session-aware:
