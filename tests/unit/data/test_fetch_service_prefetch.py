@@ -123,3 +123,61 @@ def test_apply_prefetch_result_reads_disk_when_key_absent_from_memory():
     assert stashed == [fetched]
     assert len(disk.saved) == 1
     assert disk.saved[0][3] == fetched
+
+
+# --------------------------------------------------------------------------
+# Increment 8a: memory-vs-disk split (Decision 5)
+# --------------------------------------------------------------------------
+def test_disk_only_skips_memory_stash_but_still_saves():
+    """``memory_allowed=False`` (disk-only tiers) persists to disk but does NOT
+    stash into the in-memory cache — so watchlist/universe/deep-band prefetch
+    can't evict the active-chart working set."""
+    key = ("yfinance", "MSFT", "5m")
+    current = [_candle(0)]
+    fetched = [_candle(0), _candle(1)]
+    disk = _FakeDiskCache(existing=list(current))
+    svc = FetchService(worker_count=1)
+    stashed: list[list[Candle]] = []
+    try:
+        merged = svc.apply_prefetch_result(
+            key, fetched=list(fetched), full_cache={key: list(current)},
+            disk_cache_mod=disk,
+            stash_fn=lambda _k, c: stashed.append(list(c)),
+            memory_allowed=False,
+        )
+    finally:
+        svc.shutdown()
+    assert stashed == []                 # no memory stash
+    assert len(disk.saved) == 1          # but persisted to disk
+    assert disk.saved[0][3] == fetched
+    assert merged == fetched             # returns merged bars for the driver
+
+
+def test_apply_returns_merged_when_memory_allowed():
+    key = ("yfinance", "AAPL", "5m")
+    current = [_candle(0)]
+    fetched = [_candle(0), _candle(1)]
+    disk = _FakeDiskCache(existing=list(current))
+    svc = FetchService(worker_count=1)
+    try:
+        merged = svc.apply_prefetch_result(
+            key, fetched=list(fetched), full_cache={key: list(current)},
+            disk_cache_mod=disk, stash_fn=lambda _k, _c: None,
+        )
+    finally:
+        svc.shutdown()
+    assert merged == fetched
+
+
+def test_apply_returns_none_on_empty_fetch():
+    key = ("yfinance", "AAPL", "5m")
+    disk = _FakeDiskCache(existing=None)
+    svc = FetchService(worker_count=1)
+    try:
+        merged = svc.apply_prefetch_result(
+            key, fetched=[], full_cache={}, disk_cache_mod=disk,
+            stash_fn=lambda _k, _c: None,
+        )
+    finally:
+        svc.shutdown()
+    assert merged is None

@@ -162,8 +162,20 @@ class FetchService:
         stash_fn: StashFn,
         *,
         status_fn: StatusFn | None = None,
-    ) -> None:
-        """Merge a completed prefetch onto the Tk-thread-owned cache."""
+        memory_allowed: bool = True,
+    ) -> list[Candle] | None:
+        """Merge a completed prefetch onto the cache; return the merged bars.
+
+        Always merges + persists to disk (the authoritative store). Whether the
+        merged series is ALSO stashed into the Tk-thread in-memory
+        ``full_cache`` is gated by ``memory_allowed`` (Decision 5): the prefetch
+        scheduler passes ``False`` for disk-only tiers (watchlist / universe /
+        deep bands) so they can't evict the active-chart working set; it passes
+        ``True`` only for the active + compare band-0 working set. Default
+        ``True`` preserves the legacy always-stash behaviour. Returns the merged
+        list (or ``None`` on an empty / stale-guarded result) so the caller can
+        derive ``oldest_ts`` / bar count for the scheduler.
+        """
         ticker = key[1]
         interval = key[2]
         self._prefetch_inflight.discard(key)
@@ -173,7 +185,7 @@ class FetchService:
                 status_fn,
                 f"Prefetch empty: {ticker}/{interval} (fetcher returned no bars)",
             )
-            return
+            return None
         try:
             current = full_cache.get(key)
             if current and fetched:
@@ -185,7 +197,7 @@ class FetchService:
                             status_fn,
                             f"Prefetch skipped (stale-guard): {ticker}/{interval}",
                         )
-                        return
+                        return None
                 except Exception:  # noqa: BLE001
                     pass
             # The in-memory copy is disk-authoritative: ``_load_data_async``
@@ -199,7 +211,8 @@ class FetchService:
             # Both sides are date-ascending (disk saved sorted; fetchers
             # return time-ordered) → skip merge_candles' O(N) sort checks.
             merged = disk_cache_mod.merge_candles(base, fetched, presorted=True)
-            stash_fn(key, merged)
+            if memory_allowed:
+                stash_fn(key, merged)
             if _candles_extended_or_updated(base, merged):
                 try:
                     disk_cache_mod.save(*key, merged)
@@ -211,8 +224,10 @@ class FetchService:
                 status_fn,
                 f"Prefetch done: {ticker}/{interval} ({len(merged)} bars, {first} → {last})",
             )
+            return merged
         except Exception:  # noqa: BLE001
             pass
+        return None
 
     def prefetch_compare(
         self,
