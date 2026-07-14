@@ -48,7 +48,7 @@ def _candles_extended_or_updated(
 class FetchService:
     """Own thread pools and background fetch/prefetch orchestration."""
 
-    def __init__(self, worker_count: int = 4):
+    def __init__(self, worker_count: int = 4, *, prefetch_workers: int = 2):
         self._executor: ThreadPoolExecutor | None = ThreadPoolExecutor(
             max_workers=worker_count,
             thread_name_prefix="tradinglab",
@@ -56,6 +56,16 @@ class FetchService:
         self._fetch_executor: ThreadPoolExecutor | None = ThreadPoolExecutor(
             max_workers=2,
             thread_name_prefix="tradinglab-fetch",
+        )
+        # Dedicated pool for the background prefetch scheduler (principal-SWE
+        # review Must-fix): kept SEPARATE from ``_fetch_executor`` (which
+        # ``_load_data_async`` uses for interactive ticker switches) so bulk
+        # background fetches can't occupy both foreground workers and starve a
+        # user-triggered load. The scheduler's own global/per-source inflight
+        # caps bound concurrency further.
+        self._prefetch_executor: ThreadPoolExecutor | None = ThreadPoolExecutor(
+            max_workers=max(1, int(prefetch_workers)),
+            thread_name_prefix="tradinglab-prefetch",
         )
         self._prefetch_inflight: set[CacheKey] = set()
         self._prefetch_futures: dict[CacheKey, Future[list[Candle]]] = {}
@@ -395,6 +405,24 @@ class FetchService:
         except Exception:  # noqa: BLE001
             pass
 
+    def submit_prefetch(
+        self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any,
+    ) -> Future[Any] | None:
+        """Submit ``fn(*args, **kwargs)`` to the DEDICATED prefetch pool.
+
+        Returns the :class:`Future`, or ``None`` if the pool is shut down /
+        rejects the submission. The background prefetch scheduler's live-mode
+        ``submit`` seam routes through here so its fetches never compete with
+        interactive ticker-switch loads on ``_fetch_executor``.
+        """
+        executor = self._prefetch_executor
+        if executor is None:
+            return None
+        try:
+            return executor.submit(fn, *args, **kwargs)
+        except Exception:  # noqa: BLE001 — executor shutting down
+            return None
+
     def shutdown(self) -> None:
         """Best-effort shutdown of both executors and related fetch state."""
         executor = self._executor
@@ -413,8 +441,17 @@ class FetchService:
                 fetch_executor.shutdown(wait=False)
             except Exception:  # noqa: BLE001
                 pass
+        prefetch_executor = self._prefetch_executor
+        if prefetch_executor is not None:
+            try:
+                prefetch_executor.shutdown(wait=False, cancel_futures=True)
+            except TypeError:
+                prefetch_executor.shutdown(wait=False)
+            except Exception:  # noqa: BLE001
+                pass
         self._executor = None
         self._fetch_executor = None
+        self._prefetch_executor = None
         self._prefetch_inflight.clear()
         self._prefetch_futures.clear()
         self._poll_job = None

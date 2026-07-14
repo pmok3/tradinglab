@@ -231,3 +231,36 @@ def test_stale_guard_false_merges_older_deep_band():
     # disk-only tier → the in-memory working set is NOT restashed.
     assert stashed == []
 
+
+# --------------------------------------------------------------------------
+# Dedicated prefetch executor (principal-SWE review Must-fix)
+# --------------------------------------------------------------------------
+def test_prefetch_executor_is_separate_from_fetch_executor():
+    """Background scheduler work runs on a DEDICATED pool so it can't starve the
+    2-worker foreground `_fetch_executor` used by interactive ticker switches."""
+    svc = FetchService(worker_count=1)
+    try:
+        assert svc._prefetch_executor is not None
+        assert svc._prefetch_executor is not svc._fetch_executor
+        assert svc._prefetch_executor is not svc._executor
+    finally:
+        svc.shutdown()
+
+
+def test_submit_prefetch_runs_work():
+    svc = FetchService(worker_count=1)
+    try:
+        fut = svc.submit_prefetch(lambda a, b: a + b, 2, 3)
+        assert fut is not None
+        assert fut.result(timeout=5) == 5
+    finally:
+        svc.shutdown()
+
+
+def test_submit_prefetch_after_shutdown_returns_none():
+    svc = FetchService(worker_count=1)
+    svc.shutdown()
+    assert svc._prefetch_executor is None
+    assert svc.submit_prefetch(lambda: 1) is None
+
+

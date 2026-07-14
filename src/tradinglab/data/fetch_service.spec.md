@@ -5,7 +5,7 @@ Owns TradingLab's general worker pool, dedicated foreground fetch pool, and the 
 
 ## Public API
 - `class FetchService`
-  - `FetchService(worker_count=4)` — creates the shared worker executors plus fetch-related state.
+  - `FetchService(worker_count=4, *, prefetch_workers=2)` — creates the shared worker executors plus fetch-related state. `prefetch_workers` sizes the DEDICATED prefetch pool.
   - `prefetch(...) -> Future | None` — submit a background cache warm-up for `(source, ticker, interval)`.
   - `apply_prefetch_result(..., *, memory_allowed=True, stale_guard=True) -> list[Candle] | None` — Tk-thread merge/apply step for a finished prefetch; returns the merged bars.
   - `prefetch_compare(...) -> None` — normalize compare symbol and delegate to a prefetch callable.
@@ -13,12 +13,14 @@ Owns TradingLab's general worker pool, dedicated foreground fetch pool, and the 
   - `fetch_reference(...) -> None` — background provider used by `core.reference_data` (RRVOL/SPY path).
   - `on_reference_data_arrived(...) -> None` — queue a worker-inbox marker instead of touching Tk from a worker thread.
   - `await_future_on_tk(...) -> None` — poll a `Future` from the Tk main loop.
-  - `shutdown() -> None` — cancel and tear down both thread pools.
+  - `submit_prefetch(fn, /, *args, **kwargs) -> Future | None` — submit to the DEDICATED `_prefetch_executor` (or `None` if shut down). The background prefetch scheduler's live-mode `submit` seam routes through here so its fetches never compete with interactive ticker-switch loads on `_fetch_executor` (principal-SWE review Must-fix).
+  - `shutdown() -> None` — cancel and tear down all three thread pools.
 
 ## State
 Owns:
 - `_executor`
 - `_fetch_executor`
+- `_prefetch_executor` — dedicated background-prefetch pool (`prefetch_workers`, default 2); kept separate from `_fetch_executor` so bulk scheduler fetches can't starve foreground ticker-switch loads.
 - `_prefetch_inflight`
 - `_prefetch_futures`
 - `_poll_job`
