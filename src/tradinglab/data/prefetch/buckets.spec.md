@@ -13,6 +13,9 @@ for yfinance (Decision 10).
 - `SourceBucketRegistry(*, defaults=None, clock=time.monotonic)`:
   `bucket_for(source) -> TokenBucket` (lazy + cached), `configure(source,
   rate_per_min, *, burst=None)`, `rate_for(source) -> float`.
+- `global_bucket_registry() -> SourceBucketRegistry` — the process-wide singleton
+  (Decision 1: the ONE gate shared by direct source fetchers AND the scheduler).
+- `set_global_bucket_registry(registry | None)` — swap/reset (app wiring + tests).
 - `AIMDRateController(*, initial, min_rate, max_rate, increase_step=10.0,
   decrease_factor=0.5, increase_every=20, bucket=None)`: `rate`,
   `on_success()`, `on_throttle()`.

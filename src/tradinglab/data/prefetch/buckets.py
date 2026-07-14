@@ -156,4 +156,27 @@ class AIMDRateController:
 __all__ = [
     "UNLIMITED_RATE", "CONSERVATIVE_DEFAULT_RATE", "DEFAULT_RATES",
     "looks_throttled", "SourceBucketRegistry", "AIMDRateController",
+    "global_bucket_registry", "set_global_bucket_registry",
 ]
+
+
+# --------------------------------------------------------------- global singleton
+# THE process-wide registry (Decision 1): the single accounting gate shared by
+# every fetch path — the direct source fetchers (e.g. alpaca_source) AND the
+# background prefetch scheduler acquire from the SAME per-source bucket.
+_GLOBAL_REGISTRY: SourceBucketRegistry | None = None
+
+
+def global_bucket_registry() -> SourceBucketRegistry:
+    """Return the process-wide :class:`SourceBucketRegistry` (lazily created)."""
+    global _GLOBAL_REGISTRY
+    if _GLOBAL_REGISTRY is None:
+        _GLOBAL_REGISTRY = SourceBucketRegistry()
+    return _GLOBAL_REGISTRY
+
+
+def set_global_bucket_registry(registry: SourceBucketRegistry | None) -> None:
+    """Replace (or reset with ``None``) the process-wide registry — for the app
+    wiring and for test isolation."""
+    global _GLOBAL_REGISTRY
+    _GLOBAL_REGISTRY = registry

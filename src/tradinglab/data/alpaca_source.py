@@ -40,6 +40,7 @@ from ..models import Candle
 from ._http import MAX_RESPONSE_BYTES, credentialed_opener
 from .credentials import AlpacaCredentials, get_credentials
 from .normalize import candles_from_json_rows
+from .prefetch.buckets import global_bucket_registry
 from .rate_limiter import TokenBucket
 
 LOG = logging.getLogger(__name__)
@@ -87,10 +88,12 @@ _PAGE_PAUSE_S = 0.2
 _ALPACA_RATE_BY_TIER = {"free": 200, "paid": 10000}
 _DEFAULT_TIER = "free"
 
-# Shared bucket for the single Alpaca account. Starts at the SAFE free rate;
-# reconfigured live when the tier changes (free↔paid) so an upgrade takes
-# effect without a restart.
-_ALPACA_BUCKET = TokenBucket(_ALPACA_RATE_BY_TIER[_DEFAULT_TIER])
+# Shared bucket for the single Alpaca account. This IS the process-wide
+# ``SourceBucketRegistry`` bucket for ``"alpaca"`` (Decision 1: one accounting
+# gate for every fetch path — the direct fetch path here AND the background
+# prefetch scheduler share it). Starts at the SAFE free rate; reconfigured live
+# when the tier changes (free↔paid) so an upgrade takes effect without a restart.
+_ALPACA_BUCKET = global_bucket_registry().bucket_for("alpaca")
 _ALPACA_BUCKET_RATE = _ALPACA_RATE_BY_TIER[_DEFAULT_TIER]
 
 # --- Auto-detect: downgrade to free tier from the X-RateLimit-Limit header ---
@@ -455,13 +458,17 @@ def _http_get_page(
     })
 
     def _do_request() -> dict[str, Any]:
+        # Proactive pacing: acquire ONE token per HTTP attempt (Decision 1 —
+        # "token = 1 HTTP request"). Placed inside the attempt (not once before
+        # the retry loop) so each paginated page AND each 429/5xx retry spends a
+        # token, keeping the shared budget honest under retries.
+        _alpaca_bucket_for(creds).acquire()
         with credentialed_opener().open(req, timeout=15) as resp:
             # Observe the true tier from the response header (auto-detect).
             _observe_rate_limit_header(resp.headers)
             return json.loads(resp.read(MAX_RESPONSE_BYTES).decode("utf-8"))
 
-    # Proactive pacing: block on the shared per-account token bucket so we
-    # stay under the tier's per-minute budget before spending an API call.
-    _alpaca_bucket_for(creds).acquire()
-    # Bounded retry on 429 / 5xx with Retry-After / exponential backoff.
+    # Bounded retry on 429 / 5xx with Retry-After / exponential backoff; the
+    # per-attempt token acquire above makes ``_request_with_retry`` purely
+    # reactive backoff.
     return _request_with_retry(_do_request)

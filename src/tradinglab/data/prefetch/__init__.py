@@ -15,7 +15,9 @@ from __future__ import annotations
 from .buckets import (
     AIMDRateController,
     SourceBucketRegistry,
+    global_bucket_registry,
     looks_throttled,
+    set_global_bucket_registry,
 )
 from .intervals import dual_interval
 from .planner import (
@@ -39,5 +41,6 @@ __all__ = [
     "PrefetchContext", "TierProvider", "expand_all", "standard_tiers",
     "FetchWindow", "PeriodWindowPlanner", "RangeWindowPlanner", "planner_for",
     "SourceBucketRegistry", "AIMDRateController", "looks_throttled",
+    "global_bucket_registry", "set_global_bucket_registry",
     "DispatchDecision", "PrefetchScheduler",
 ]
