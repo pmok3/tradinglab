@@ -468,6 +468,89 @@ class TestWatchlistChangeAnchors:
         assert snap["change_1d"] == pytest.approx(3.0)
         assert snap["pct_1d"] == pytest.approx(3.0 / 110.0 * 100.0)
 
+
+# ---------------------------------------------------------------------------
+# 7. Scheduler snapshot seam
+# ---------------------------------------------------------------------------
+
+
+class TestApplyWatchlistSnapshotFromBars:
+    def _install_fetcher(
+        self,
+        monkeypatch,
+        *,
+        daily: list[Candle],
+        intraday: list[Candle],
+    ) -> None:
+        def _fake_fetch(ticker: str, interval: str):
+            if ticker != "INTC":
+                return []
+            if interval == "1d":
+                return list(daily)
+            return list(intraday)
+
+        monkeypatch.setitem(_wl_tab.DATA_SOURCES, "yfinance", _fake_fetch)
+
+    def test_intraday_sets_last_recomputes_change_and_queues_refresh(self):
+        day_1 = _dt.date(2025, 5, 13)
+        today = _dt.date(2025, 5, 14)
+        h = _Harness(tickers=["INTC"])
+        h._full_cache[("yfinance", "INTC", "1d")] = [
+            _dated_candle(day_1, 110.0),
+            _dated_candle(today, 111.0),
+        ]
+
+        changed = h._apply_watchlist_snapshot_from_bars(
+            "intc", "yfinance", "5m",
+            [_dated_candle(today, 113.0, hour=15, minute=55)],
+        )
+
+        assert changed is True
+        snap = h._watchlist_snapshot["INTC"]
+        assert snap["last"] == pytest.approx(113.0)
+        assert snap["_last_source"] == "intraday"
+        assert snap["_last_day"] == today
+        assert snap["change_1d"] == pytest.approx(3.0)
+        assert h._worker_inbox.items[-1] == ("refresh", None)
+
+    def test_sandbox_intraday_slices_to_replay_clock(self):
+        replay_day = _dt.date(2025, 5, 14)
+        bars = [
+            _dated_candle(replay_day, 112.0, hour=10, minute=0),
+            _dated_candle(replay_day, 113.0, hour=10, minute=5),
+            _dated_candle(replay_day, 130.0, hour=15, minute=55),
+        ]
+        replay_ts = int(bars[1].date.timestamp())
+        h = _Harness(
+            tickers=["INTC"],
+            sandbox=True,
+            sandbox_clock=(True, replay_ts, replay_day),
+        )
+
+        changed = h._apply_watchlist_snapshot_from_bars(
+            "INTC", "yfinance", "5m", bars)
+
+        assert changed is True
+        assert h._watchlist_snapshot["INTC"]["last"] == pytest.approx(113.0)
+        assert h._worker_inbox.items[-1] == ("refresh", None)
+
+    def test_daily_updates_change_and_queues_refresh(self):
+        day_2 = _dt.date(2025, 5, 12)
+        day_1 = _dt.date(2025, 5, 13)
+        h = _Harness(tickers=["INTC"])
+
+        changed = h._apply_watchlist_snapshot_from_bars(
+            "INTC", "yfinance", "1d",
+            [_dated_candle(day_2, 100.0), _dated_candle(day_1, 110.0)],
+        )
+
+        assert changed is True
+        snap = h._watchlist_snapshot["INTC"]
+        assert snap["last"] == pytest.approx(110.0)
+        assert snap["_last_source"] == "daily"
+        assert snap["change_1d"] == pytest.approx(10.0)
+        assert h._worker_inbox.items[-1] == ("refresh", None)
+
     def test_live_change_excludes_today_partial_daily_bar(self, monkeypatch):
         day_2 = _dt.date(2025, 5, 12)
         day_1 = _dt.date(2025, 5, 13)

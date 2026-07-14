@@ -22,7 +22,9 @@ ceiling (§7.24). A pure method-bag mixin: **no `__init__`**.
   into the in-memory working set ONLY when `cache_policy_for(job) ==
   CACHE_MEMORY_AND_DISK`, calls `driver.complete(bars_count=…, oldest_ts=…,
   error=…, retry_after_s=…)` (only the count is marshalled back, not the page),
-  then `_prefetch_pump()`.
+  updates Watchlist Last/Change via
+  `_apply_watchlist_snapshot_from_bars` for focused/other watchlist tier jobs
+  when merged bars exist, then `_prefetch_pump()`.
 - `_prefetch_pump()` — dispatch ready jobs; self-reschedule on the Tk thread via
   `_track_after` while gated. `driver.pump()` → `None` (idle → stop; a context
   change / completion re-pumps), `0.0` (hit per-pump bound → re-pump in 1 ms), or
@@ -63,7 +65,8 @@ ceiling (§7.24). A pure method-bag mixin: **no `__init__`**.
   `ChartApp` (`source_var`/`ticker_var`/`interval_var`/`compare_ticker_var`/
   `watchlist_var`/`_watchlists`/`_prefetch_driver`), plus, for the live seam,
   `_fetch_svc` (`submit_prefetch` / `apply_prefetch_result`), `_full_cache`,
-  `_stash_full_cache`, `_await_future_on_tk`, `_track_after`.
+  `_stash_full_cache`, `_apply_watchlist_snapshot_from_bars`,
+  `_await_future_on_tk`, `_track_after`.
 - The driver's bucket registry depends on the mode (`bucket_registry_for_mode`):
   **live** shares the process-wide `global_bucket_registry()` — the same
   per-source `TokenBucket` the Alpaca fetch path uses (Decision 1); **shadow**

@@ -72,6 +72,7 @@ class PrefetchAppMixin:
         if driver is None:
             return
         from ..data.prefetch import CACHE_MEMORY_AND_DISK
+        from ..data.prefetch.tiers import TIER_FOCUSED_WL, TIER_OTHER_WL
 
         scheduler = driver.scheduler
         window = scheduler.window_for(job)
@@ -122,6 +123,12 @@ class PrefetchAppMixin:
             if memory_allowed and merged:
                 try:
                     stash(key, merged)
+                except Exception:  # noqa: BLE001
+                    pass
+            if job.tier_rank in (TIER_FOCUSED_WL, TIER_OTHER_WL) and merged:
+                try:
+                    self._apply_watchlist_snapshot_from_bars(
+                        job.symbol, job.source, job.interval, merged)
                 except Exception:  # noqa: BLE001
                     pass
             driver.complete(

@@ -146,9 +146,19 @@ larger; pinning makes a list reachable from the main UI.
   `_pinned_ticker_union()` for tickers missing from `_events_cache`,
   so the default Next Earnings column fills proactively. Repeated calls
   are harmless because `_load_events_async` also in-flight dedupes.
+- `_apply_watchlist_snapshot_from_bars(ticker, src, itv, bars)` —
+  Tk-thread snapshot seam shared by legacy preload workers and the
+  scheduler live seam. Intraday bars update `last`, `_last_source`,
+  `_last_day`, then recompute Change from cached daily tails; daily bars
+  update the Change columns (and may provide a daily fallback Last when no
+  intraday Last exists). Preserves sandbox replay slicing: intraday Last
+  uses only bars at-or-before the replay clock, and daily Change uses only
+  sessions before the replay session date. Successful updates queue a
+  `("refresh", None)` inbox item.
 - `_preload_one_last(ticker, src=None, itv=None)` /
   `_preload_one_daily(ticker, src=None)` — worker-thread fetchers.
-  Populate `_watchlist_snapshot[ticker]` and warm
+  Fetch bars, delegate snapshot derivation to
+  `_apply_watchlist_snapshot_from_bars`, and warm
   `ChartApp._full_cache[(src, ticker, itv)]`. `src` / `itv` read
   on **caller's** thread (typically Tk main) and passed as args
   — workers must not access Tcl/Tk variables. Intraday Last writes

@@ -1542,6 +1542,75 @@ class WatchlistTabMixin:
                 ticker, tail, allow_last_fallback=False)
         return False
 
+    def _queue_watchlist_snapshot_refresh(self) -> None:
+        """Queue a debounced watchlist repaint from snapshot changes."""
+        try:
+            self._worker_inbox.put_nowait(("refresh", None))
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _apply_watchlist_snapshot_from_bars(
+        self,
+        ticker: str,
+        src: str | None,
+        itv: str | None,
+        bars: object,
+    ) -> bool:
+        """Derive Watchlist Last/Change cells from fetched bars on the Tk thread.
+
+        This is the shared snapshot seam for legacy watchlist preload workers
+        and scheduler-warmed watchlist jobs. It preserves the sandbox clock
+        slicing rules that keep replay watchlists free of look-ahead bias.
+        """
+        try:
+            cs = list(bars or [])
+        except Exception:  # noqa: BLE001
+            return False
+        if not ticker or not cs:
+            return False
+        ticker = str(ticker).strip().upper()
+        interval = str(itv or "")
+        changed = False
+        if interval == "1d":
+            sb_active, _sb_ts, sb_date = self._sandbox_watchlist_clock()
+            if sb_active and sb_date is not None:
+                filtered = [c for c in cs if c.date.date() < sb_date]
+                if not filtered:
+                    return False
+                changed = self._apply_watchlist_change_from_daily(
+                    ticker, filtered, allow_last_fallback=False)
+            else:
+                changed = self._apply_watchlist_change_from_daily(
+                    ticker, cs, allow_last_fallback=True)
+        else:
+            sb_active, sb_ts, _sb_date = self._sandbox_watchlist_clock()
+            last_bar = None
+            if sb_active and sb_ts is not None:
+                for c in cs:
+                    try:
+                        cts = int(c.date.timestamp())
+                    except Exception:  # noqa: BLE001
+                        continue
+                    if cts <= sb_ts:
+                        last_bar = c
+                    else:
+                        break
+            else:
+                last_bar = cs[-1]
+            if last_bar is None:
+                return False
+            snap = self._watchlist_snapshot.setdefault(ticker, {})
+            snap["last"] = last_bar.close
+            snap["_last_source"] = "intraday"
+            day = _watchlist_candle_day(last_bar)
+            if day is not None:
+                snap["_last_day"] = day
+            self._refresh_watchlist_change_after_last(ticker, src)
+            changed = True
+        if changed:
+            self._queue_watchlist_snapshot_refresh()
+        return changed
+
     def _refresh_watchlist_for_sandbox(self) -> None:
         """Re-run the price-preload pipeline so watchlist Last/Change
         reflect the sandbox clock.
@@ -1869,31 +1938,7 @@ class WatchlistTabMixin:
                 return
             cs = fetcher(ticker, itv)
             if cs:
-                # Sandbox: slice to bars whose timestamp <= replay clock
-                # so Last reflects the historical moment, not today's
-                # live close (look-ahead bias).
-                sb_active, sb_ts, _sb_date = self._sandbox_watchlist_clock()
-                last_bar = None
-                if sb_active and sb_ts is not None:
-                    for c in cs:
-                        try:
-                            cts = int(c.date.timestamp())
-                        except Exception:  # noqa: BLE001
-                            continue
-                        if cts <= sb_ts:
-                            last_bar = c
-                        else:
-                            break
-                else:
-                    last_bar = cs[-1]
-                if last_bar is not None:
-                    snap = self._watchlist_snapshot.setdefault(ticker, {})
-                    snap["last"] = last_bar.close
-                    snap["_last_source"] = "intraday"
-                    day = _watchlist_candle_day(last_bar)
-                    if day is not None:
-                        snap["_last_day"] = day
-                    self._refresh_watchlist_change_after_last(ticker, src)
+                self._apply_watchlist_snapshot_from_bars(ticker, src, itv, cs)
                 # Hand bars to the Tk-thread inbox; ``self.after`` from
                 # a worker thread blocks on tk.createcommand on this
                 # Python/Tk build, so we use a thread-safe queue.
@@ -1942,24 +1987,7 @@ class WatchlistTabMixin:
                 return
             cs = fetcher(ticker, "1d")
             if cs:
-                # Sandbox: filter daily series to bars whose session
-                # date is strictly less than the replay session date,
-                # then compute change vs prior session close. Live mode
-                # uses the same anchor rule: intraday Last is the
-                # current price, and the reference is the latest daily
-                # close strictly before that Last's session date. If no
-                # intraday Last has landed, daily closes provide a
-                # temporary fallback that _preload_one_last overwrites.
-                sb_active, _sb_ts, sb_date = self._sandbox_watchlist_clock()
-                if sb_active and sb_date is not None:
-                    filtered = [c for c in cs if c.date.date() < sb_date]
-                    if not filtered:
-                        return
-                    self._apply_watchlist_change_from_daily(
-                        ticker, filtered, allow_last_fallback=False)
-                else:
-                    self._apply_watchlist_change_from_daily(
-                        ticker, cs, allow_last_fallback=True)
+                self._apply_watchlist_snapshot_from_bars(ticker, src, "1d", cs)
                 try:
                     bars = list(cs)
                     if threading.current_thread() is threading.main_thread():
