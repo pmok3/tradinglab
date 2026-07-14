@@ -163,6 +163,7 @@ class FetchService:
         *,
         status_fn: StatusFn | None = None,
         memory_allowed: bool = True,
+        stale_guard: bool = True,
     ) -> list[Candle] | None:
         """Merge a completed prefetch onto the cache; return the merged bars.
 
@@ -175,6 +176,14 @@ class FetchService:
         ``True`` preserves the legacy always-stash behaviour. Returns the merged
         list (or ``None`` on an empty / stale-guarded result) so the caller can
         derive ``oldest_ts`` / bar count for the scheduler.
+
+        ``stale_guard`` (default ``True``) drops a result whose newest bar is
+        OLDER than the in-memory copy's newest — the legacy "a slow trailing
+        refresh raced past a newer one" guard. The prefetch scheduler passes
+        ``False`` for **deep bands** (``band_index > 0``): a historical page's
+        newest bar is *expected* to be older than the loaded working set, so the
+        guard would wrongly discard every backward-deepening page and history
+        would never extend on disk (principal-SWE review Must-fix).
         """
         ticker = key[1]
         interval = key[2]
@@ -188,7 +197,7 @@ class FetchService:
             return None
         try:
             current = full_cache.get(key)
-            if current and fetched:
+            if stale_guard and current and fetched:
                 try:
                     cur_last = current[-1].date.timestamp()
                     new_last = fetched[-1].date.timestamp()

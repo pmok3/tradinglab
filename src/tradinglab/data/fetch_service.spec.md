@@ -7,7 +7,7 @@ Owns TradingLab's general worker pool, dedicated foreground fetch pool, and the 
 - `class FetchService`
   - `FetchService(worker_count=4)` — creates the shared worker executors plus fetch-related state.
   - `prefetch(...) -> Future | None` — submit a background cache warm-up for `(source, ticker, interval)`.
-  - `apply_prefetch_result(..., *, memory_allowed=True) -> list[Candle] | None` — Tk-thread merge/apply step for a finished prefetch; returns the merged bars.
+  - `apply_prefetch_result(..., *, memory_allowed=True, stale_guard=True) -> list[Candle] | None` — Tk-thread merge/apply step for a finished prefetch; returns the merged bars.
   - `prefetch_compare(...) -> None` — normalize compare symbol and delegate to a prefetch callable.
   - `prefetch_companion_intervals(...) -> None` — warm adjacent intervals for primary/compare symbols.
   - `fetch_reference(...) -> None` — background provider used by `core.reference_data` (RRVOL/SPY path).
@@ -34,6 +34,7 @@ Owns:
 - **No `ChartApp` import**: the service accepts callbacks/mappings (`stash_fn`, worker-inbox callback, cache map) so it stays reusable and avoids a circular import.
 - **Two-stage prefetch apply**: the network fetch runs on the worker pool, but the final merge/apply step is re-entered through the app's worker inbox so Tk-thread cache mutations stay centralized.
 - **Memory-vs-disk split (Decision 5, increment 8a)**: `apply_prefetch_result` ALWAYS merges + persists to disk (authoritative), but only stashes into the in-memory `full_cache` when `memory_allowed=True`. The prefetch scheduler passes `False` for disk-only tiers (watchlist / universe / deep bands) so they cannot evict the active-chart working set, and `True` only for the active + compare band-0 working set. Default `True` preserves the legacy always-stash behaviour for existing callers. The method returns the merged list (or `None` on empty/stale-guard) so the scheduler driver can derive `oldest_ts` / bar count for `complete()`.
+- **Deep-band stale-guard bypass (principal-SWE review Must-fix)**: `stale_guard` (default `True`) drops a result whose newest bar is OLDER than the in-memory copy's newest — the legacy "a slow trailing refresh raced past a newer one" guard. The scheduler passes `stale_guard=False` for **deep bands** (`band_index > 0`): a historical backward-deepening page's newest bar is *expected* to predate the loaded working set, so the guard would otherwise discard every deepening page and disk history would never extend. Deep bands therefore pair `memory_allowed=False` (disk-only) with `stale_guard=False` (merge older bars anyway).
 - **Legacy attribute compatibility**: `ChartApp` keeps exposing `_executor`, `_fetch_executor`, `_prefetch_inflight`, `_prefetch_futures`, `_poll_job`, `_reload_job`, `_poll_retry_count`, and `_poll_retry_expected_min_ts`, but those are now backed by this service.
 - **Reference-data path stays async**: RRVOL-style secondary-symbol requests still use the general worker pool and trigger redraw through `core.reference_data`'s arrival callback.
 - **No-op prefetch writes are skipped, and the disk re-read is avoided**:

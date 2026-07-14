@@ -181,3 +181,53 @@ def test_apply_returns_none_on_empty_fetch():
     finally:
         svc.shutdown()
     assert merged is None
+
+
+# --------------------------------------------------------------------------
+# Deep-band stale-guard bypass (principal-SWE review Must-fix)
+# --------------------------------------------------------------------------
+def test_stale_guard_default_skips_older_page():
+    """A trailing refresh whose newest bar is OLDER than the loaded working set
+    is dropped by default (the legacy race guard)."""
+    key = ("alpaca", "AMD", "5m")
+    current = [_candle(5), _candle(6)]          # loaded working set (newer)
+    fetched = [_candle(0), _candle(1)]          # an older page
+    disk = _FakeDiskCache(existing=list(current))
+    svc = FetchService(worker_count=1)
+    try:
+        merged = svc.apply_prefetch_result(
+            key, fetched=list(fetched), full_cache={key: list(current)},
+            disk_cache_mod=disk, stash_fn=lambda _k, _c: None,
+        )
+    finally:
+        svc.shutdown()
+    assert merged is None            # guarded → skipped
+    assert disk.saved == []          # nothing persisted
+
+
+def test_stale_guard_false_merges_older_deep_band():
+    """A deep backward-deepening band (``stale_guard=False``) merges its older
+    bars into disk even though its newest bar predates the working set."""
+    key = ("alpaca", "AMD", "5m")
+    current = [_candle(5), _candle(6)]          # loaded working set (newer)
+    fetched = [_candle(0), _candle(1)]          # older historical page
+    disk = _FakeDiskCache(existing=list(current))
+    stashed: list[list[Candle]] = []
+    svc = FetchService(worker_count=1)
+    try:
+        merged = svc.apply_prefetch_result(
+            key, fetched=list(fetched), full_cache={key: list(current)},
+            disk_cache_mod=disk,
+            stash_fn=lambda _k, c: stashed.append(list(c)),
+            memory_allowed=False,        # deep bands are disk-only (Decision 5)
+            stale_guard=False,           # ...and bypass the newer-than guard
+        )
+    finally:
+        svc.shutdown()
+    # Older bars merged in → 4 unique bars, ascending, persisted to disk.
+    assert merged is not None
+    assert [c.close for c in merged] == [0.0, 1.0, 5.0, 6.0]
+    assert len(disk.saved) == 1 and len(disk.saved[0][3]) == 4
+    # disk-only tier → the in-memory working set is NOT restashed.
+    assert stashed == []
+
