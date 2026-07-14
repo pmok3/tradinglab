@@ -23,7 +23,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 from .buckets import AIMDRateController, SourceBucketRegistry, looks_throttled
-from .planner import PeriodWindowPlanner, RangeWindowPlanner, planner_for
+from .planner import FetchWindow, PeriodWindowPlanner, RangeWindowPlanner, planner_for
 from .priority import FetchJob
 from .tiers import (
     TIER_ACTIVE,
@@ -157,6 +157,23 @@ class PrefetchScheduler:
         if job.tier_rank in self._memory_tiers and job.band_index <= 0:
             return CACHE_MEMORY_AND_DISK
         return CACHE_DISK_ONLY
+
+    def window_for(self, job: FetchJob) -> FetchWindow | None:
+        """Translate a job into the concrete :class:`FetchWindow` to fetch.
+
+        Pure read of the per-source planner + the per-series ``oldest_ts``
+        progress state — the live-mode ``submit`` seam calls this for the job it
+        is about to fetch. Band 0 (and any foreground band ``≤ 0``) requests the
+        newest max window; a deepened band ``k > 0`` steps back from the
+        ``oldest_ts`` boundary recorded when band ``k-1`` completed. Returns
+        ``None`` when the provider has no such band (e.g. yfinance intraday
+        band > 0). Does not mutate the queue.
+        """
+        band = job.band_index if job.band_index > 0 else 0
+        return self._planner(job.source).band(
+            job.symbol, job.interval, band,
+            oldest_ts=self._series_oldest.get(job.series_key),
+        )
 
     def _planner(self, source: str):
         planner = self._planners.get(source)

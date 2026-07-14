@@ -27,7 +27,7 @@ cache-policy (this update — the scheduler core is now complete).
   - `generation_of(rank)`; `is_exhausted(source, symbol, interval)`;
     `is_poison(source, symbol)`; `foreground_pending(source)`;
     `next_wakeup() -> float | None`; `cache_policy_for(job) -> str`;
-    `pending_count`; `inflight_count`.
+    `window_for(job) -> FetchWindow | None`; `pending_count`; `inflight_count`.
 
 ## Contract
 - **Heap** stores `(PriorityKey, seq, FetchJob)`; the monotonic `seq` (also in
@@ -83,6 +83,12 @@ cache-policy (this update — the scheduler core is now complete).
   `CACHE_MEMORY_AND_DISK` for `memory_tiers` (default active+compare) at
   `band ≤ 0` (incl. foreground), else `CACHE_DISK_ONLY` (Decision 5). `_forget`
   clears all per-dk bookkeeping when a job leaves the queue.
+- **window_for(job)**: pure read that maps a job to the concrete `FetchWindow`
+  the live-mode `submit` seam fetches. Band 0 (and any foreground `band ≤ 0`)
+  requests the newest max window; a deepened band `k > 0` steps back from the
+  `oldest_ts` boundary recorded in `_series_oldest[series_key]` when band `k-1`
+  completed. Returns `None` when the provider has no such band (yfinance
+  intraday `band > 0`). Does not mutate the queue.
 
 ## Testing
 `tests/unit/data/prefetch/test_scheduler.py` (17) — band-major dispatch, dedup,
@@ -93,6 +99,10 @@ inflight, foreground-first + foreground-survives-generation-bump.
 `tests/unit/data/prefetch/test_scheduler_deepen.py` (8) — range deepen next-band
 / repeat-while-advancing / stop-on-no-progress / stop-on-zero-bars, period
 no-deeper-band, error + foreground no-deepen, deepened-band sorts after band-0.
+`tests/unit/data/prefetch/test_scheduler_window.py` (7) — `window_for` band-0
+newest-window (range + period max-period + daily full-history), deepened-band
+uses recorded `oldest_ts`, purity (no queue mutation), period deep-band `None`,
+foreground → band-0 window.
 `tests/unit/data/prefetch/test_scheduler_retry.py` (9) — error backoff re-enqueue,
 Retry-After honored, poison after max_retries, poisoned-enqueue-skipped, cooldown
 expiry, success resets attempts/poison, foreground no-retry, AIMD down-on-throttle
