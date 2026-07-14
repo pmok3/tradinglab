@@ -550,9 +550,12 @@ def check_c0_watchlist_tab(app) -> None:
     app._schedule_watchlist_tab_refresh(delay_ms=0)
     assert app._watchlist_tab_refresh_job is not None, (
         "§18.4 _schedule_watchlist_tab_refresh must set _watchlist_tab_refresh_job")
-    _pump(app, 0.2)
-    assert app._watchlist_tab_refresh_job is None, (
-        "§18.4 refresh job should clear after callback runs")
+    scheduled_job = app._watchlist_tab_refresh_job
+    assert _pump_until(
+        app,
+        lambda: app._watchlist_tab_refresh_job != scheduled_job,
+        timeout=0.5,
+    ), "§18.4 scheduled refresh callback should run"
     print("  [OK] §18.4 watchlist tab 4-col + bull/bear tags + debouncer")
 
 
@@ -1874,13 +1877,21 @@ def check_d17_double_click_drilldown_to_5m(app) -> None:
         ps = app._panel_state.get("primary") or {}
         candles = ps.get("candles") or []
         assert candles, "primary panel must have candles after 1d load"
-        # Pick a real (non-gap) candle's date.
+        # Pick a real (non-gap) candle whose date is covered by the seeded
+        # 5m cache. With the scheduler live by default, a recent trailing 5m
+        # warm may already exist; the test's explicit seed is the contract
+        # for the happy path below.
+        seed_5m = multi_day_fetch(ticker, "5m")
+        seed_days = {
+            c.date.date() for c in seed_5m
+            if not getattr(c, "is_gap", False)
+        }
         day = None
         for c in candles:
-            if not getattr(c, "is_gap", False):
+            if not getattr(c, "is_gap", False) and c.date.date() in seed_days:
                 day = c.date.date()
                 break
-        assert day is not None, "no real candles on primary panel"
+        assert day is not None, "no real primary candle covered by seeded 5m cache"
 
         # --- no-op: missing 5m cache ---------------------------------
         app._full_cache.pop(key_5m, None)
@@ -1907,7 +1918,6 @@ def check_d17_double_click_drilldown_to_5m(app) -> None:
         # validation passes; _load_data may then refetch (since our
         # multi_day_fetch returns fresher data), but either way the
         # resulting 5m panel will span 8 days so the zoom is meaningful.
-        seed_5m = multi_day_fetch(ticker, "5m")
         app._full_cache[key_5m] = seed_5m
 
         ok = app._zoom_5m_for_date(day)
@@ -1980,7 +1990,8 @@ def check_d17_double_click_drilldown_to_5m(app) -> None:
         cs3 = ps3.get("candles") or []
         # Find a real candle so xdata is meaningful.
         target_idx = next(
-            (i for i, c in enumerate(cs3) if not getattr(c, "is_gap", False)),
+            (i for i, c in enumerate(cs3)
+             if not getattr(c, "is_gap", False) and c.date.date() in seed_days),
             0,
         )
         ev = types.SimpleNamespace(
@@ -2021,7 +2032,7 @@ def check_d17_double_click_drilldown_to_5m(app) -> None:
             if cmp_ax_p is not None and cmp_cs:
                 cmp_target = next(
                     (i for i, c in enumerate(cmp_cs)
-                     if not getattr(c, "is_gap", False)),
+                     if not getattr(c, "is_gap", False) and c.date.date() in seed_days),
                     0,
                 )
                 ev2 = types.SimpleNamespace(
@@ -2129,6 +2140,14 @@ def check_d60_drilldown_works_in_heikin_ashi_mode(app) -> None:
         app.update_idletasks()
         assert bool(app._ha_display_var.get()) is True, "HA must be on"
 
+        # Seed 5m cache so the drill-down succeeds without I/O.
+        seed_5m = multi_day_fetch(ticker, "5m")
+        app._full_cache[key_5m] = seed_5m
+        seed_days = {
+            c.date.date() for c in seed_5m
+            if not getattr(c, "is_gap", False)
+        }
+
         ps = app._panel_state.get("primary") or {}
         ax_p = ps.get("price_ax")
         candles = ps.get("candles") or []
@@ -2137,14 +2156,11 @@ def check_d60_drilldown_works_in_heikin_ashi_mode(app) -> None:
         )
         target_idx = next(
             (i for i, c in enumerate(candles)
-             if not getattr(c, "is_gap", False)),
+             if not getattr(c, "is_gap", False) and c.date.date() in seed_days),
             -1,
         )
-        assert target_idx >= 0, "no non-gap candle to click"
+        assert target_idx >= 0, "no non-gap candle covered by seeded 5m cache"
         day = candles[target_idx].date.date()
-        # Seed 5m cache so the drill-down succeeds without I/O.
-        seed_5m = multi_day_fetch(ticker, "5m")
-        app._full_cache[key_5m] = seed_5m
 
         # --- happy path: dblclick on HA 1d candle drills to 5m ------
         ev = types.SimpleNamespace(
@@ -2181,7 +2197,7 @@ def check_d60_drilldown_works_in_heikin_ashi_mode(app) -> None:
         cs2 = ps2.get("candles") or []
         t2 = next(
             (i for i, c in enumerate(cs2)
-             if not getattr(c, "is_gap", False)),
+             if not getattr(c, "is_gap", False) and c.date.date() in seed_days),
             -1,
         )
         assert t2 >= 0 and ax2 is not None

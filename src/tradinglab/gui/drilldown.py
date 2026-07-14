@@ -665,7 +665,7 @@ class DrilldownMixin:
             pass
 
     def _on_drilldown_fetch_done(
-        self, request_id: int, result: list[Candle] | None,
+        self, request_id: int, result: list[Candle] | dict | None,
     ) -> None:
         """Future completed: drill if request still valid, else discard."""
         req = self._drilldown_request
@@ -690,7 +690,10 @@ class DrilldownMixin:
                 pass
             self._finish_drilldown_request(req)
             return
-        bars = result or []
+        if isinstance(result, dict):
+            bars = result.get("merged") or []
+        else:
+            bars = result or []
         if not bars:
             try:
                 self._status.error(

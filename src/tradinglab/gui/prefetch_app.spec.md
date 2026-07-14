@@ -24,7 +24,10 @@ ceiling (§7.24). A pure method-bag mixin: **no `__init__`**.
   error=…, retry_after_s=…)` (only the count is marshalled back, not the page),
   updates Watchlist Last/Change via
   `_apply_watchlist_snapshot_from_bars` for focused/other watchlist tier jobs
-  when merged bars exist, then `_prefetch_pump()`.
+  when merged bars exist, then `_prefetch_pump()`. While the worker future is
+  active it is also published through `_prefetch_futures[(source, symbol,
+  interval)]` so the existing drilldown in-flight reuse seam can attach to a
+  scheduler-warmed 5m fetch instead of duplicating it.
 - `_prefetch_pump()` — dispatch ready jobs; self-reschedule on the Tk thread via
   `_track_after` while gated. `driver.pump()` → `None` (idle → stop; a context
   change / completion re-pumps), `0.0` (hit per-pump bound → re-pump in 1 ms), or

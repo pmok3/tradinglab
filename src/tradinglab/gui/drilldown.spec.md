@@ -77,6 +77,10 @@ be missing even though a manual 5m toggle would load it. The fix:
   `_on_drilldown_fetch_done` re-checks coverage and drills, or warns
   `"5m data fetched but does not cover …"` if the provider genuinely
   lacks it.
+- The in-flight reuse seam accepts both legacy `Future[list[Candle]]` values
+  and scheduler-live futures whose result envelope carries `merged` bars; the
+  latter lets the default-live scheduler satisfy a pending drilldown without a
+  duplicate trailing fetch.
 - **Day predates the window** → the synchronous WARN `"… no-op: 5m
   data only available from … onward"` and no fetch (the only
   case that warning now fires).

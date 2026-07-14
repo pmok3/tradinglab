@@ -115,6 +115,18 @@ class PrefetchAppMixin:
         if fut is None:
             driver.complete(job, bars_count=0)
             return
+        try:
+            # Keep the scheduler's active fetch visible to the legacy
+            # drilldown attach-to-inflight seam so a double-click while a
+            # scheduler 5m warm is sleeping does not submit a duplicate fetch.
+            fetch_svc._prefetch_futures[key] = fut
+            fut.add_done_callback(
+                lambda _f, _key=key: fetch_svc._prefetch_futures.pop(
+                    _key, None,
+                ),
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
         def _on_done(res) -> None:
             res = res or {}
