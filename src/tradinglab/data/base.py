@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import functools
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from ..models import Candle
 
@@ -49,6 +50,14 @@ _INTERNAL_SOURCES: set[str] = set()
 # — i.e. can fetch an explicit range on demand (targeted intraday fetch, see
 # :func:`fetch_range`). Alpaca / Polygon; not yfinance/local/synthetic.
 _RANGE_CAPABLE: set[str] = set()
+
+# Per-source *page* fetchers: ``(ticker, interval, *, end, limit) -> list[Candle]``
+# returning the most recent ``limit`` bars strictly before ``end`` (``end=None``
+# → newest page) in ONE request = one rate-limiter token. Distinct capability
+# from ``supports_range`` (which is ``[start,end)``): a source may support
+# targeted ranges but not efficient backward pages, or vice versa (principal-SWE
+# review). Drives the prefetch scheduler's ``RangeWindowPlanner`` deepening.
+_PAGE_FETCHERS: dict[str, DataFetcher] = {}
 
 
 def _ratio_aware(fetcher: DataFetcher) -> DataFetcher:
@@ -94,7 +103,7 @@ def _ratio_aware(fetcher: DataFetcher) -> DataFetcher:
 
 def register_source(
     name: str, fetcher: DataFetcher, *, internal: bool = False,
-    supports_range: bool = False,
+    supports_range: bool = False, page_fetcher: DataFetcher | None = None,
 ) -> None:
     """Register a new data source under ``name``.
 
@@ -131,11 +140,89 @@ def register_source(
         _RANGE_CAPABLE.add(name)
     else:
         _RANGE_CAPABLE.discard(name)
+    if page_fetcher is not None:
+        _PAGE_FETCHERS[name] = page_fetcher
+    else:
+        _PAGE_FETCHERS.pop(name, None)
 
 
 def source_supports_range(name: str) -> bool:
     """True if ``name``'s fetcher accepts kw-only ``start`` / ``end`` datetimes."""
     return name in _RANGE_CAPABLE
+
+
+def source_supports_page(name: str) -> bool:
+    """True if ``name`` registered a ``(ticker, interval, *, end, limit)`` page
+    fetcher (newest-``limit``-bars-before-``end``; see :func:`fetch_page`)."""
+    return name in _PAGE_FETCHERS
+
+
+@dataclass(frozen=True)
+class FetchPageResult:
+    """Outcome of a :func:`fetch_page` call.
+
+    Rich (vs :func:`fetch_range`'s ``(candles, status)`` tuple) so the prefetch
+    scheduler — which owns retry / poison / AIMD — gets the raw ``error`` and any
+    provider ``Retry-After`` seconds. ``status`` ∈ ``"ok" | "empty" |
+    "unsupported" | "error"``. ``bars`` is ``None`` on unsupported/error,
+    ``[]`` on empty, the ascending candle list on ok.
+    """
+
+    bars: list[Candle] | None
+    status: str
+    error: BaseException | None = None
+    retry_after_s: float | None = None
+
+
+def _retry_after_from_error(error: BaseException | None) -> float | None:
+    """Best-effort parse of a standard HTTP ``Retry-After`` header off an error
+    (e.g. ``urllib.error.HTTPError``). Returns seconds or ``None``."""
+    headers = getattr(error, "headers", None)
+    if headers is None:
+        return None
+    try:
+        raw = headers.get("Retry-After")
+    except AttributeError:
+        return None
+    if raw is None:
+        return None
+    try:
+        val = float(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+    return val if val >= 0 else None
+
+
+def fetch_page(
+    source: str, ticker: str, interval: str,
+    *, end_ts: float | None = None, limit: int = 10_000,
+) -> FetchPageResult:
+    """Fetch the most recent ``limit`` bars strictly before ``end_ts``.
+
+    ``end_ts`` is epoch seconds (``None`` → newest page). One request = one
+    rate-limiter token — the prefetch scheduler consumes the token in
+    ``next_dispatch`` before dispatch, so the page fetcher must NOT re-acquire it
+    (single-owner rate/retry, principal-SWE review). The fetcher performs ONE
+    HTTP attempt and raises on error; this wrapper translates the outcome into a
+    :class:`FetchPageResult` (never raises) so the scheduler owns retry / poison.
+    """
+    fetcher = _PAGE_FETCHERS.get(source)
+    if fetcher is None:
+        return FetchPageResult(None, "unsupported")
+    from datetime import datetime, timezone
+    end = (
+        None if end_ts is None
+        else datetime.fromtimestamp(float(end_ts), timezone.utc)
+    )
+    try:
+        bars = fetcher(ticker, interval, end=end, limit=int(limit))
+    except Exception as exc:  # noqa: BLE001 — network/parse; scheduler owns retry
+        return FetchPageResult(
+            None, "error", error=exc, retry_after_s=_retry_after_from_error(exc),
+        )
+    if not bars:
+        return FetchPageResult([], "empty")
+    return FetchPageResult(list(bars), "ok")
 
 
 def fetch_range(

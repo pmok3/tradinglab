@@ -472,3 +472,75 @@ def _http_get_page(
     # per-attempt token acquire above makes ``_request_with_retry`` purely
     # reactive backoff.
     return _request_with_retry(_do_request)
+
+
+def _http_get_single_page(
+    ticker: str, timeframe: str, creds: AlpacaCredentials, *,
+    end: datetime | None, limit: int,
+) -> dict[str, Any]:
+    """ONE Alpaca bars page, newest-first (``sort=desc``), no pagination.
+
+    The prefetch scheduler's page primitive (Option A). Deliberately does NOT
+    acquire the shared rate bucket (the scheduler already spent the token in
+    ``next_dispatch`` — single-owner rate/retry) and does NOT retry: a single
+    GET that raises ``urllib.error.HTTPError`` on an error status so
+    :func:`base.fetch_page` can surface the ``Retry-After`` to the scheduler,
+    which owns the backoff. The rate-limit response header is still observed so
+    free-tier auto-detect keeps working. ``end`` is exclusive; ``end=None`` →
+    newest page.
+    """
+    params = {
+        "timeframe": timeframe,
+        "limit": str(int(limit)),
+        "sort": "desc",
+        "adjustment": _resolve_adjustment(creds),
+        "feed": "iex" if _detected_free else creds.feed,
+    }
+    if end is not None:
+        params["end"] = end.isoformat().replace("+00:00", "Z")
+    url = f"{_ALPACA_BASE}/v2/stocks/{urllib.parse.quote(ticker)}/bars?" + \
+        urllib.parse.urlencode(params)
+    req = urllib.request.Request(url, headers={
+        "APCA-API-KEY-ID": creds.api_key_id or "",
+        "APCA-API-SECRET-KEY": creds.api_secret_key or "",
+        "Accept": "application/json",
+    })
+    try:
+        with credentialed_opener().open(req, timeout=15) as resp:
+            _observe_rate_limit_header(resp.headers)
+            return json.loads(resp.read(MAX_RESPONSE_BYTES).decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        # Observe the tier header even on error (auto-detect), then re-raise so
+        # the scheduler owns retry/backoff via base.fetch_page.
+        _observe_rate_limit_header(getattr(exc, "headers", None))
+        raise
+
+
+def fetch_alpaca_page(
+    ticker: str, interval: str, *,
+    end: datetime | None = None, limit: int = 10_000,
+) -> list[Candle]:
+    """One-HTTP-page Alpaca fetch: newest ``limit`` bars strictly before ``end``.
+
+    The concrete primitive behind :func:`base.fetch_page` for Alpaca (registered
+    via ``page_fetcher=``). Unlike :func:`fetch_alpaca_data` it does NOT
+    paginate, retry, or acquire the rate bucket (see
+    :func:`_http_get_single_page`). Returns candles **ascending** (``sort=desc``
+    yields newest-first) so scheduler deepening reads ``bars[0]`` as the oldest
+    bar. ``end=None`` → newest page. Returns ``[]`` on missing creds /
+    unsupported interval; raises on HTTP error (the scheduler owns backoff).
+    """
+    creds = get_credentials().alpaca
+    if not creds.is_configured():
+        return []
+    timeframe = _INTERVAL_TO_ALPACA.get(interval)
+    if timeframe is None:
+        LOG.warning("alpaca: unsupported interval %r for page fetch", interval)
+        return []
+    api_symbol = _to_alpaca_symbol(ticker)
+    payload = _http_get_single_page(
+        api_symbol, timeframe, creds, end=end, limit=limit,
+    )
+    candles = candles_from_alpaca_response(payload, interval=interval)
+    candles.sort(key=lambda c: c.date)  # sort=desc → return ascending
+    return candles

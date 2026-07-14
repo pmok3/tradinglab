@@ -21,13 +21,20 @@ Normalization + parallelism helpers (shared across providers)::
     fetch_chunks_parallel  — I/O-parallel fetch primitive for chunked providers
 """
 
-from .alpaca_source import candles_from_alpaca_response, fetch_alpaca_data
+from .alpaca_source import (
+    candles_from_alpaca_response,
+    fetch_alpaca_data,
+    fetch_alpaca_page,
+)
 from .base import (
     DATA_SOURCES,
     DataFetcher,
+    FetchPageResult,
+    fetch_page,
     fetch_range,
     is_internal_source,
     register_source,
+    source_supports_page,
     source_supports_range,
     user_visible_sources,
 )
@@ -90,7 +97,8 @@ _creds = get_credentials()
 # if _creds.schwab.is_configured():
 #     register_source("schwab", fetch_schwab_data)
 if _creds.alpaca.is_configured():
-    register_source("alpaca", fetch_alpaca_data, supports_range=True)
+    register_source("alpaca", fetch_alpaca_data, supports_range=True,
+                    page_fetcher=fetch_alpaca_page)
 if _creds.polygon.is_configured():
     register_source("polygon", fetch_polygon_data)
 
@@ -159,7 +167,10 @@ __all__ = [
     "is_internal_source",
     "user_visible_sources",
     "source_supports_range",
+    "source_supports_page",
     "fetch_range",
+    "fetch_page",
+    "FetchPageResult",
     "register_local_sources",
     "make_local_fetcher",
     "discover_subsources",
@@ -168,6 +179,7 @@ __all__ = [
     "fetch_synthetic_stream_bootstrap",
     "fetch_schwab_data",
     "fetch_alpaca_data",
+    "fetch_alpaca_page",
     "fetch_polygon_data",
     "candles_from_dataframe",
     "candles_from_json_rows",
