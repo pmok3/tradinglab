@@ -12,6 +12,12 @@ imports Tk or ``ChartApp``.
 """
 from __future__ import annotations
 
+from .appglue import (
+    build_context,
+    partition_watchlists,
+    scheduler_enabled,
+    scheduler_mode,
+)
 from .buckets import (
     AIMDRateController,
     SourceBucketRegistry,
@@ -44,4 +50,5 @@ __all__ = [
     "SourceBucketRegistry", "AIMDRateController", "looks_throttled",
     "global_bucket_registry", "set_global_bucket_registry",
     "DispatchDecision", "PrefetchScheduler", "PrefetchDriver",
+    "scheduler_enabled", "scheduler_mode", "partition_watchlists", "build_context",
 ]
