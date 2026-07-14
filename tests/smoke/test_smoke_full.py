@@ -7517,48 +7517,39 @@ def check_d38_drilldown_race_and_coverage(app) -> None:
             app._finish_drilldown_request(app._drilldown_request)
             app._DRILLDOWN_PREFETCH_GRACE_MS = 200
 
-        # ---- Sub-test G: reuse in-flight prefetch (no duplicate fetch) ----
-        # Drain prior sub-tests' lingering prefetches FIRST. The DLR
-        # prefetch from sub-test F has delay_5m=2.0 and is still
-        # sleeping in the executor — without draining, it queues
-        # REUSE's prefetch behind it and our `state["calls_5m"]`
-        # accounting is polluted (an unrelated worker increments
-        # before REUSE's own prefetch starts).
+        # ---- Sub-test G: drilldown does its own fetch (no external reuse) ----
+        # Post-cut-over there is no reactive companion prefetch to reuse, and
+        # the background scheduler's in-flight 5m warm must NOT be reused for a
+        # drilldown (it fetches a trailing/banded window, not the clicked day —
+        # reusing it would return wrong-day bars for an old-day range drill, see
+        # check_d84). So while the scheduler's 5m warm is in flight, the
+        # drilldown submits its OWN fetch rather than attaching.
         drain_prefetches()
         reset_state("REUSE")
-        # Use a large delay so the prefetch is *guaranteed* to still be
-        # in-flight when the click + grace timer expire and the sync
-        # fetch attaches. The prior value (0.5s) raced against grace
-        # (200ms) on slow CI: if `_pump_until(calls_5m>=1)` itself took
-        # >300ms, the prefetch could complete before the click and the
-        # sync path would submit a fresh fetch instead of attaching.
-        # The cancellable poll loop in slow_fetch lets us shorten this
-        # back to 0 once the attach has been verified.
+        # Large delay so the scheduler's 5m warm is *guaranteed* still in-flight
+        # (not yet landed in cache) when the click + grace timer expire.
         state["delay_5m"] = 5.0
         app.interval_var.set("1d")
         app.ticker_var.set("REUSE")
         app._schedule_reload(delay_ms=0)
-        # Need a longer pump than the other sub-tests because we have
-        # to wait for the executor worker to actually pick up the
-        # prefetch task and increment calls_5m (the increment happens
+        # Wait for the scheduler's 5m warm to be picked up (calls_5m increments
         # at the start of slow_fetch, before its sleep).
         _pump_until(app, lambda: state["calls_5m"] >= 1, timeout=2.0)
         calls_before = state["calls_5m"]
-        # Prefetch should already have been kicked off (parallel with 1d).
+        # The scheduler's 5m warm should already have fired (parallel with 1d).
         assert calls_before >= 1, \
-            f"companion prefetch should have fired (calls_5m={calls_before})"
+            f"scheduler 5m warm should have fired (calls_5m={calls_before})"
         target = (datetime(2026, 4, 29) - timedelta(days=2)).date()
         app._zoom_5m_for_date(target)
-        # Wait past grace period to trigger the sync-fetch path
-        # (future attached). 200ms grace + small margin.
+        # Wait past grace period to trigger the sync-fetch path (future set).
         _pump_until(app,
             lambda: app._drilldown_request is not None
                     and app._drilldown_request.future is not None,
             timeout=1.0)
-        # The sync-fetch should have ATTACHED to the existing prefetch
-        # future, not submitted a new fetch.
-        assert state["calls_5m"] == calls_before, (
-            f"sync fetch should reuse prefetch future "
+        # The drill submits its OWN fetch — it does NOT attach to the
+        # scheduler's in-flight warm (unsound; see check_d84).
+        assert state["calls_5m"] == calls_before + 1, (
+            f"drill should do its own fetch, not reuse the scheduler warm "
             f"(calls_5m went from {calls_before} to {state['calls_5m']})"
         )
         # Now release the worker so the drill-down can complete within

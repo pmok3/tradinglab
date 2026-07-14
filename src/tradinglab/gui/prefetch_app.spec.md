@@ -24,16 +24,14 @@ ceiling (§7.24). A pure method-bag mixin: **no `__init__`**.
   error=…, retry_after_s=…)` (only the count is marshalled back, not the page),
   updates Watchlist Last/Change via
   `_apply_watchlist_snapshot_from_bars` for focused/other watchlist tier jobs
-  when merged bars exist, and — for a memory-tier **intraday** warm — calls
+  when merged bars exist,   and — for a memory-tier **intraday** warm — calls
   `_refresh_daily_synth_for_active_view(prefetched_symbol=job.symbol)` so a 1d
   chart's synthetic today-bar re-renders when its 5m companion lands (mirrors the
   legacy prefetch-arrival seam; else the today-bar lagged a poll interval), then
-  `_prefetch_pump()`. While the worker future is active it is also published
-  through `_prefetch_futures[(source, symbol, interval)]` **for non-range
-  providers only** (`not source_supports_range`) so the existing drilldown
-  in-flight reuse seam can attach to a scheduler-warmed trailing fetch instead of
-  duplicating it — range providers fetch a specific band/page here (not the
-  drilldown's targeted day) so they are NOT published.
+  `_prefetch_pump()`. The scheduler does NOT publish its worker futures to
+  `_prefetch_futures`: a scheduler fetch is a trailing/banded window, not a
+  drilldown's targeted day, so the drilldown attach-to-inflight seam must never
+  reuse it (would return wrong-day bars — see `check_d84`).
 - `_prefetch_pump()` — dispatch ready jobs; self-reschedule on the Tk thread via
   `_track_after` while gated. `driver.pump()` → `None` (idle → stop; a context
   change / completion re-pumps), `0.0` (hit per-pump bound → re-pump in 1 ms), or
