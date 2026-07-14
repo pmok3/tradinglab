@@ -27,7 +27,7 @@ import time
 import tkinter as tk
 import webbrowser
 from collections import OrderedDict
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog as filedialog  # noqa: F401  # patch seam for tests
@@ -75,9 +75,6 @@ from .data import (
 from .data.stream_controller import StreamController
 from .data.today_upsample import (
     SUPPORTED_INTERVALS as _DAILY_UPSAMPLE_INTERVALS,
-)
-from .data.today_upsample import (
-    daily_last_bar_is_today as _daily_last_bar_is_today,
 )
 from .data.today_upsample import (
     find_best_intraday_source as _find_best_intraday_source,
@@ -966,13 +963,13 @@ class ChartApp(
         # tick ``_drain_worker_inbox`` drains and applies them.
         self._worker_inbox: queue.Queue[tuple[str, Any]] = queue.Queue()
         self._worker_inbox_after: str | None = None
-        # Prefetch dedup set (see _ensure_prefetched). Shared by the
-        # compare-warming path (_ensure_compare_prefetched wrapper) and
-        # the companion-interval prefetch fired at end of _load_data.
+        # Prefetch dedup set (see _ensure_prefetched). Still used by the live
+        # poll and on-demand overlay warm paths; scheduler prefetches use the
+        # dedicated prefetch pool seam.
         self._prefetch_inflight = self._fetch_svc._prefetch_inflight
 
-        # Background prefetch scheduler glue (PrefetchAppMixin); opt-in via
-        # TRADINGLAB_PREFETCH_SCHEDULER (default OFF → None → no behaviour change).
+        # Background prefetch scheduler glue (PrefetchAppMixin); live by
+        # default, with TRADINGLAB_PREFETCH_SCHEDULER=off as the kill-switch.
         self._prefetch_driver = self._maybe_build_prefetch_driver()
 
         # --- cross-symbol reference data registry (RRVOL et al.) --------
@@ -1168,15 +1165,8 @@ class ChartApp(
                 self._render()
             except Exception:  # noqa: BLE001
                 pass
-        # Warm the compare ticker's cache in the background so toggling
-        # compare on later is instant (no blocking provider call).
-        try:
-            self._ensure_compare_prefetched()
-        except Exception:  # noqa: BLE001
-            pass
-
         # Kick off the (flagged) background prefetch scheduler now that the
-        # initial chart has loaded — no-op when the feature is off.
+        # initial chart has loaded — no-op when killed via the env flag.
         self._prefetch_observe_soon()
 
         # Final splash stage + idle-queued close so the first paint
@@ -1217,12 +1207,9 @@ class ChartApp(
         except Exception:  # noqa: BLE001
             pass
 
-        # Recurring watchlist poll loop. Re-fires
-        # _preload_watchlist + _preload_watchlist_daily every
-        # ``watchlist_poll_interval_sec`` seconds during RTH (5×
-        # outside RTH) so a transient yfinance hiccup on a single
-        # ticker self-heals instead of leaving an empty row. Set
-        # ``watchlist_poll_interval_sec`` to 0 to disable.
+        # Recurring watchlist poll loop. Re-arms scheduler watchlist tiers every
+        # ``watchlist_poll_interval_sec`` seconds during RTH (5× outside RTH)
+        # and refreshes signal/event columns. Set the interval to 0 to disable.
         # See gui/watchlist_tab.py::_start_watchlist_poll_loop.
         try:
             self._start_watchlist_poll_loop()
@@ -2163,10 +2150,10 @@ class ChartApp(
     def _on_compare_toggle(self) -> None:
         """Compare checkbox callback — instant UI switch, no provider fetch.
 
-        The compare ticker is kept warm in ``_full_cache`` by
-        :meth:`_ensure_compare_prefetched`, so toggling on reuses cached
-        candles and just re-renders (no yfinance round-trip). Toggling
-        off is a pure layout change — no data path touched at all.
+        The compare ticker is kept warm in ``_full_cache`` by the background
+        prefetch scheduler, so toggling on reuses cached candles and just
+        re-renders (no yfinance round-trip). Toggling off is a pure layout
+        change — no data path touched at all.
 
         If the compare key somehow isn't cached yet (first-ever toggle
         before prefetch finishes, or an unexpected cache eviction), we
@@ -2673,21 +2660,6 @@ class ChartApp(
                 self._canvas.draw_idle()
             except Exception:  # noqa: BLE001
                 pass
-            # Kick off a background refresh so any new ticks since
-            # prefetch are picked up soon (non-blocking) — but ONLY at the
-            # live right edge. On a HISTORICAL drilled/panned view the viewed
-            # window is in the PAST (no new ticks can arrive), so
-            # force-refetching a range-capable provider (Alpaca) on EVERY
-            # compare toggle is slow and pointless; a genuinely missing
-            # window is filled by ``_maybe_fill_compare_for_window`` instead.
-            # Audit ``compare-toggle-historical-no-refetch``.
-            try:
-                _vis = self._current_visible_window_ts()
-                _at_live_edge = not (_vis is not None and _vis[2])
-            except Exception:  # noqa: BLE001
-                _at_live_edge = True
-            if _at_live_edge:
-                self._ensure_compare_prefetched(force=True)
             return
         # Fallback: no in-memory compare data for this (src, cmp, interval).
         if (keep_window is not None
@@ -2711,8 +2683,7 @@ class ChartApp(
             except Exception:  # noqa: BLE001
                 pass
             return
-        # Non-range / right-edge cache miss → do it the slow way, but still
-        # try to warm the cache so future toggles are instant.
+        # Non-range / right-edge cache miss → do it the slow way.
         self._load_data()
         # Same post-load Y-autoscale pass for the cache-miss path, so
         # the compare panel doesn't briefly show a wrong Y while the
@@ -2722,7 +2693,6 @@ class ChartApp(
             self._canvas.draw_idle()
         except Exception:  # noqa: BLE001
             pass
-        self._ensure_compare_prefetched()
 
     def _queue_worker_inbox(self, kind: str, payload: Any) -> None:
         try:
@@ -2750,15 +2720,6 @@ class ChartApp(
             self._stash_full_cache,
         )
 
-    def _ensure_compare_prefetched(self, *, force: bool = False) -> None:
-        """Warm ``_full_cache`` with the compare ticker off the Tk thread."""
-        self._fetch_svc.prefetch_compare(
-            self.compare_ticker_var.get(),
-            self.interval_var.get(),
-            prefetch_fn=self._ensure_prefetched,
-            force=force,
-        )
-
     def _ensure_prefetched(
         self, ticker: str, interval: str, *, force: bool = False,
     ) -> None:
@@ -2780,11 +2741,6 @@ class ChartApp(
             inflight_max=self._PREFETCH_INFLIGHT_MAX,
         )
 
-    # Companion intervals prefetched on every successful _load_data to
-    # make switching between 5m/1d instant (the two most-used intervals
-    # per user feedback). Sized for worst-case primary+compare × 2
-    # companion intervals, capped by _PREFETCH_INFLIGHT_MAX.
-    _PREFETCH_COMPANION_INTERVALS: tuple[str, ...] = ("5m", "1d")
     _PREFETCH_INFLIGHT_MAX: int = 4
 
     # --- Reference-data provider (RRVOL et al.) ------------------------
@@ -2831,21 +2787,6 @@ class ChartApp(
         except Exception:  # noqa: BLE001
             pass
 
-    def _prefetch_companion_intervals(
-        self, tickers: Iterable[str],
-    ) -> None:
-        """Fire prefetches for each ``ticker`` at each companion interval."""
-        try:
-            active_interval = self.interval_var.get()
-        except Exception:  # noqa: BLE001
-            active_interval = ""
-        self._fetch_svc.prefetch_companion_intervals(
-            tickers,
-            active_interval=active_interval,
-            all_intervals=self._PREFETCH_COMPANION_INTERVALS,
-            prefetch_fn=self._ensure_prefetched,
-        )
-
     def _maybe_upsample_today_daily(
         self,
         candles: list[Candle],
@@ -2867,9 +2808,9 @@ class ChartApp(
         No-op (returns ``candles`` unchanged) when:
         - ``interval`` is not in :data:`_DAILY_UPSAMPLE_INTERVALS`
         - no symbol provided (compare slot off)
-        - no intraday cache exists for ``symbol`` — the companion-
-          interval prefetch fired by :meth:`_prefetch_companion_intervals`
-          will warm the 5m cache shortly; the prefetch-arrival path
+        - no intraday cache exists for ``symbol`` — the scheduler's
+          dual-interval policy will warm the 5m cache shortly; the
+          prefetch-arrival path
           (:meth:`_drain_worker_inbox`) re-renders with the synth bar
           once data lands.
 
@@ -2878,15 +2819,9 @@ class ChartApp(
         subsequent provider fetch that finally contains today's daily
         bar replaces the synth bar at the next render boundary.
 
-        ``allow_prefetch`` (default ``True``) gates the missing-intraday
-        self-heal companion prefetch. The prefetch-arrival refresh path
-        (:meth:`_refresh_daily_synth_for_active_view`) passes ``False``: it
-        runs BECAUSE a companion prefetch just landed, so re-issuing one
-        when the (stub / still-incomplete) intraday can't yet satisfy
-        "today" would feed an endless prefetch -> refresh -> prefetch loop
-        (the ``inbox-drain-livelock`` / d61 smoke hang seen on fast CI
-        runners during market hours). The normal load path keeps the
-        default so a warm-served daily still self-heals.
+        ``allow_prefetch`` is retained as a compatibility/documentation knob
+        for callers that explicitly mark a "do not self-feed" refresh path; the
+        helper no longer submits reactive OHLC prefetches itself.
         """
         if not symbol or interval not in _DAILY_UPSAMPLE_INTERVALS:
             return candles
@@ -2894,27 +2829,11 @@ class ChartApp(
             self._full_cache, source=source, symbol=symbol,
         )
         if intraday is None:
-            # No intraday cached → can't synthesize today's bar yet. Warm
-            # the symbol's 5m companion so the synth can run once it lands
-            # (the prefetch-arrival handler re-renders via
-            # ``_refresh_daily_synth_for_active_view``). This is what makes
-            # the synth SELF-HEAL for a daily served WARM from cache —
-            # e.g. SPY, preloaded as the default compare + ChartStack
-            # reference, whose cold-path companion prefetch (in
-            # ``_load_data_async``) never fires because its daily isn't
-            # missing/stale. Without this, such a symbol's 1d chart sticks
-            # on yesterday while freshly-charted (cold) stocks show today.
-            # Gated: in-session only (today's intraday bars exist) and only
-            # when the cached daily doesn't already carry today's bar.
-            # ``_ensure_prefetched`` dedups via staleness + in-flight, so a
-            # repeat call is cheap. Audit ``daily-today-upsample``.
-            try:
-                if (allow_prefetch
-                        and self._intraday_session_open(time.time())
-                        and not _daily_last_bar_is_today(candles)):
-                    self._prefetch_companion_intervals([symbol])
-            except Exception:  # noqa: BLE001
-                pass
+            # No intraday cached → can't synthesize today's bar yet. The
+            # background scheduler's dual-interval policy warms the 5m
+            # companion; the prefetch-arrival handler re-renders when it lands.
+            # ``allow_prefetch`` remains for back-compat with callers that use
+            # it to document "do not self-feed" refresh paths.
             return candles
         return _upsample_daily_with_today(
             candles, intraday_candles=intraday,
@@ -3498,22 +3417,6 @@ class ChartApp(
             else None
         )
 
-        # Companion-interval prefetch: only fire when the current load is
-        # actually going to touch the source. That preserves the parallel
-        # warmup for cold/stale views (the drill-down race fix) without
-        # re-hitting background fetchers during an in-session memory-cache
-        # revisit.
-        try:
-            if raw_primary and (
-                primary_raw is None
-                or (compare_on and raw_compare and compare_raw is None)
-            ):
-                self._prefetch_companion_intervals(
-                    [raw_primary] + ([raw_compare] if raw_compare else []),
-                )
-        except Exception:  # noqa: BLE001
-            pass
-
         # Phase 2: source fetch for any side still missing (spec §9). We
         # intentionally do NOT consult the disk cache as a primary source
         # — that would risk showing stale historical data and miss any
@@ -3832,22 +3735,11 @@ class ChartApp(
             self._start_stream_if_applicable()
         except Exception:  # noqa: BLE001
             pass
-        # Keep the compare ticker's cache warm in the background so the
-        # Compare toggle is instant even before the user first clicks it.
-        # Skip this on a pure memory-hit revisit to avoid re-hitting the
-        # source fetcher during no-network fast paths.
+        # Compare / dual-interval / watchlist OHLC warming is scheduler-owned
+        # after the cut-over. Keep the non-OHLC watchlist background refreshes.
         try:
-            if not cache_hit_only:
-                self._ensure_compare_prefetched()
-        except Exception:  # noqa: BLE001
-            pass
-        # Companion-interval prefetch was moved to the START of
-        # _load_data (above) so it runs in parallel with the foreground
-        # 1d fetch — see the drill-down race fix.
-        # Kick off background watchlist refresh (snapshot only).
-        try:
-            self._preload_watchlist()
-            self._preload_watchlist_daily()
+            self._preload_watchlist_events()
+            self._preload_watchlist_signals()
         except Exception:  # noqa: BLE001
             pass
 

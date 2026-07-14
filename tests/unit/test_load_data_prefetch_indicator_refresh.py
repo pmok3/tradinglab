@@ -86,7 +86,6 @@ def _install_load_data_harness(app, *, primary, compare) -> None:
     app._bump_fetch_token = lambda: 1
     app._stop_stream = lambda: None
     app._cache_is_stale = lambda _candles, _interval: True
-    app._prefetch_companion_intervals = lambda _tickers: None
     app._disk_load = lambda _key: None
     app._trim_full_cache = lambda: None
     app._maybe_upsample_today_daily = lambda candles, **_kwargs: candles
@@ -110,7 +109,6 @@ def _install_load_data_harness(app, *, primary, compare) -> None:
     app._load_events_async = lambda _symbol: None
     app._schedule_next_bar_fetch = lambda: None
     app._start_stream_if_applicable = lambda: None
-    app._ensure_compare_prefetched = lambda: None
     app._preload_watchlist = lambda: None
     app._preload_watchlist_daily = lambda: None
 

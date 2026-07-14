@@ -1401,50 +1401,13 @@ class WatchlistTabMixin:
             self._load_data_async()
 
     def _kick_watchlist_preloads(self) -> None:
-        """Fire-and-forget snapshot refresh for *newly-pinned* tickers.
-
-        Only submits fetches for tickers that don't yet have a ``last``
-        entry in :attr:`_watchlist_snapshot`. This keeps executor load
-        bounded when the user pins a list whose tickers overlap with
-        already-cached ones, and avoids re-flooding the pool on every
-        sub-tab rebuild (init build, theme reload, rename, etc.).
-
-        The full-refresh path (``_load_data`` → ``_preload_watchlist`` /
-        ``_preload_watchlist_daily``) still runs unchanged on chart loads
-        to keep prices fresh; this helper is purely additive for the
-        "pinned a new list, want to see prices without clicking" case.
-        """
-        executor = getattr(self, "_executor", None)
-        if executor is None:
-            return
-        try:
-            tickers = self._pinned_ticker_union()
-        except Exception:  # noqa: BLE001
-            return
-        # Read Tk vars once on the main thread so workers don't touch
-        # them — Tcl/Tk variable access from worker threads can deadlock
-        # the pool (observed under N7 async loads).
-        try:
-            src = self.source_var.get()
-            itv = self.interval_var.get()
-        except Exception:  # noqa: BLE001
-            return
-        for t in tickers:
-            snap = self._watchlist_snapshot.get(t) or {}
-            has_intraday_last = (
-                "last" in snap and snap.get("_last_source") != "daily"
-            )
-            if has_intraday_last and ("change_1d" in snap or "chg" in snap):
-                continue
-            try:
-                if not has_intraday_last:
-                    executor.submit(self._preload_one_last, t, src, itv)
-                if "change_1d" not in snap and "chg" not in snap:
-                    executor.submit(self._preload_one_daily, t, src)
-            except Exception:  # noqa: BLE001
-                pass
+        """Re-arm scheduler watchlist tiers for newly-pinned tickers."""
         try:
             self._preload_watchlist_signals()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            self._preload_watchlist_events()
         except Exception:  # noqa: BLE001
             pass
         # Pinned watchlists changed → re-arm the WL tiers (flagged; no-op off).
@@ -1633,31 +1596,28 @@ class WatchlistTabMixin:
                     "_last_source", "_last_day", "_daily_change_tail",
                 ):
                     snap.pop(k, None)
-        # Bypass _preload_watchlist*'s cache-freshness short-circuit:
-        # the cached candles ARE still fresh (only the sandbox clock
-        # changed), but the snapshot must be re-derived from that new
-        # clock. Submit the per-ticker workers directly. Last must
-        # land before Daily because _preload_one_daily reads
-        # snap["last"] when sandbox is active.
-        executor = getattr(self, "_executor", None)
         try:
             src = self.source_var.get()
             itv = self.interval_var.get()
         except Exception:  # noqa: BLE001
             src = itv = None
-        if executor is not None and src and itv:
+        if src and itv:
             try:
                 tickers = list(self._pinned_ticker_union())
             except Exception:  # noqa: BLE001
                 tickers = []
             for t in tickers:
                 try:
-                    executor.submit(self._preload_one_last, t, src, itv)
+                    bars = self._full_cache.get((src, t, itv))
+                    if bars:
+                        self._apply_watchlist_snapshot_from_bars(t, src, itv, bars)
                 except Exception:  # noqa: BLE001
                     pass
             for t in tickers:
                 try:
-                    executor.submit(self._preload_one_daily, t, src)
+                    bars = self._full_cache.get((src, t, "1d"))
+                    if bars:
+                        self._apply_watchlist_snapshot_from_bars(t, src, "1d", bars)
                 except Exception:  # noqa: BLE001
                     pass
         try:
@@ -1671,28 +1631,7 @@ class WatchlistTabMixin:
 
     # ---- preload (ticker-union deduped) ------------------------------
     def _preload_watchlist(self) -> None:
-        """Best-effort background refresh of last-price snapshots across
-        every pinned watchlist (ticker-union deduped).
-
-        Cache-aware: skips submission for any ticker whose intraday
-        cache entry is already present and not stale. In-flight-deduped
-        via :attr:`_watchlist_preload_inflight` so repeated calls (e.g.
-        every ``_load_data``) don't pile up duplicate jobs while the
-        first round is still running. The worker (:meth:`_preload_one_last`)
-        clears its key in ``finally``.
-
-        Orphan-snapshot recovery: when the cache is fresh but the
-        :attr:`_watchlist_snapshot` row is missing ``last`` (e.g. after
-        sandbox exit cleared the snapshot, or an earlier worker fetched
-        bars but the dict write was lost), rebuild ``last`` from
-        ``cached[-1].close`` directly so the watchlist doesn't sit
-        forever waiting on a re-fetch that the cache-fresh check will
-        keep skipping. The full sandbox-aware repaint will overwrite
-        this from the next genuine fetch.
-        """
-        executor = self._executor
-        if executor is None:
-            return
+        """Repair Last snapshots from memory cache and re-arm WL scheduling."""
         try:
             src = self.source_var.get()
             itv = self.interval_var.get()
@@ -1709,35 +1648,26 @@ class WatchlistTabMixin:
                 )
                 if needs_intraday_last and cached:
                     try:
-                        last_bar = cached[-1]
-                        snap["last"] = last_bar.close
-                        snap["_last_source"] = "intraday"
-                        day = _watchlist_candle_day(last_bar)
-                        if day is not None:
-                            snap["_last_day"] = day
-                        self._refresh_watchlist_change_after_last(t, src)
-                        orphan_repaired = True
+                        orphan_repaired = (
+                            self._apply_watchlist_snapshot_from_bars(
+                                t, src, itv, cached,
+                            ) or orphan_repaired
+                        )
                     except Exception:  # noqa: BLE001
                         pass
                 continue
-            if key in self._watchlist_preload_inflight:
-                continue
-            try:
-                self._watchlist_preload_inflight.add(key)
-                executor.submit(self._preload_one_last, t, src, itv)
-            except Exception:  # noqa: BLE001
-                self._watchlist_preload_inflight.discard(key)
         if orphan_repaired:
             try:
                 self._schedule_watchlist_tab_refresh()
             except Exception:  # noqa: BLE001
                 pass
-        # Piggy-back the events prefetch so the "Next Earn" column
-        # fills in proactively as the user adds tickers to a watchlist.
-        # _load_events_async is safe to call repeatedly — it dedups on
-        # ``_events_fetch_inflight`` and TTLs via the cache module.
+        # Non-OHLC watchlist work stays outside the scheduler.
         try:
             self._preload_watchlist_events()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            self._prefetch_observe_watchlists()
         except Exception:  # noqa: BLE001
             pass
 
@@ -1759,17 +1689,7 @@ class WatchlistTabMixin:
                 pass
 
     def _preload_watchlist_daily(self) -> None:
-        """Daily-interval background refresh for Chg/Chg% columns across
-        every pinned watchlist (ticker-union deduped).
-
-        Cache- and in-flight-aware (see :meth:`_preload_watchlist`).
-        Same orphan-snapshot recovery semantics: rebuild
-        ``change_1d``/``pct_1d`` from the cached daily series when the
-        cache is fresh but the snapshot row is missing them.
-        """
-        executor = self._executor
-        if executor is None:
-            return
+        """Repair Change snapshots from memory cache and re-arm WL scheduling."""
         try:
             src = self.source_var.get()
         except Exception:  # noqa: BLE001
@@ -1787,18 +1707,15 @@ class WatchlistTabMixin:
                     except Exception:  # noqa: BLE001
                         pass
                 continue
-            if key in self._watchlist_preload_inflight:
-                continue
-            try:
-                self._watchlist_preload_inflight.add(key)
-                executor.submit(self._preload_one_daily, t, src)
-            except Exception:  # noqa: BLE001
-                self._watchlist_preload_inflight.discard(key)
         if orphan_repaired:
             try:
                 self._schedule_watchlist_tab_refresh()
             except Exception:  # noqa: BLE001
                 pass
+        try:
+            self._prefetch_observe_watchlists()
+        except Exception:  # noqa: BLE001
+            pass
 
     # ---- signal columns (configurable watchlist columns) --------------
     def _pinned_signal_columns(self) -> list:
@@ -2133,12 +2050,10 @@ class WatchlistTabMixin:
         body but DO re-arm so polling resumes immediately on sandbox
         exit.
 
-        The preload helpers (``_preload_watchlist`` /
-        ``_preload_watchlist_daily``) own their own cache-freshness
-        and in-flight dedup, so a tick on a fully-cached watchlist
-        during RTH costs zero HTTP calls. A tick after a transient
-        fetch failure re-submits the missing tickers and clears
-        the visible orphan.
+        The scheduler owns watchlist OHLC refreshes after the cut-over. The
+        tick re-arms the watchlist tiers and still runs non-OHLC signal/event
+        refreshes; cache-only snapshot repair handles any orphaned rows without
+        submitting provider fetches itself.
 
         qw-watchlist-visguard: the preload body is also skipped while
         the Watchlist outer-notebook tab is off screen (user on the
@@ -2161,6 +2076,10 @@ class WatchlistTabMixin:
                 pass
             try:
                 self._preload_watchlist_daily()
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                self._preload_watchlist_events()
             except Exception:  # noqa: BLE001
                 pass
         if visible:

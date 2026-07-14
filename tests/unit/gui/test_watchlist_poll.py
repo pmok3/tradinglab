@@ -97,6 +97,7 @@ class _Harness(WatchlistTabMixin):
         self._stale = stale
         self.after_calls: list[tuple[int, Callable[..., Any]]] = []
         self.refresh_called: int = 0
+        self.prefetch_observe_watchlists_called: int = 0
 
     # ---- mixin-required stubs ----
     def _pinned_ticker_union(self) -> list[str]:
@@ -125,6 +126,9 @@ class _Harness(WatchlistTabMixin):
 
     def _preload_watchlist_events(self) -> None:  # neutralised
         return
+
+    def _prefetch_observe_watchlists(self) -> None:
+        self.prefetch_observe_watchlists_called += 1
 
 
 def _candle(close: float, ts: float = 0.0) -> Candle:
@@ -298,12 +302,13 @@ class TestStartPollLoop:
 
 
 class TestPollTick:
-    def test_tick_fires_preloads_and_rearms(self):
-        h = _Harness(stale=True)  # force re-fetch path
+    def test_tick_rearms_scheduler_and_timer(self):
+        h = _Harness(stale=True)
         with patch.object(_Harness, "_watchlist_poll_in_rth_now", return_value=True):
             h._watchlist_poll_tick()
-        # Both AAPL and INTC submitted (intraday + daily = 4 tasks).
-        assert len(h._executor.submitted) == 4
+        # Watchlist OHLC fetches are scheduler-owned after the cut-over.
+        assert h._executor.submitted == []
+        assert h.prefetch_observe_watchlists_called == 2
         # Re-armed.
         assert len(h.after_calls) == 1
         assert h.after_calls[0][1] == h._watchlist_poll_tick
@@ -331,13 +336,14 @@ class TestPollTick:
 
     def test_visible_tab_runs_preload(self):
         # Default visibility (no outer frame) resolves True, so the
-        # preloads run as before — guards against the helper accidentally
+        # scheduler re-arm runs — guards against the helper accidentally
         # starving a genuinely visible watchlist.
         h = _Harness(stale=True)
         assert h._watchlist_tab_visible() is True
         with patch.object(_Harness, "_watchlist_poll_in_rth_now", return_value=True):
             h._watchlist_poll_tick()
-        assert len(h._executor.submitted) == 4
+        assert h._executor.submitted == []
+        assert h.prefetch_observe_watchlists_called == 2
         assert len(h.after_calls) == 1
 
     def test_disabled_no_rearm(self):

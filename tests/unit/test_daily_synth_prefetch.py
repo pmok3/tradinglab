@@ -1,12 +1,10 @@
-"""Self-heal prefetch in ``ChartApp._maybe_upsample_today_daily``.
+"""Daily synth behavior when intraday cache is missing.
 
-Audit ``daily-today-upsample``. When the daily synth finds no cached
-intraday for a symbol, it must kick a 5m companion prefetch so the synthetic
-today-bar can form — even when the daily was served WARM from cache (the SPY
-bug: SPY is preloaded as the default compare + ChartStack reference, so its
-cold-path companion prefetch never fired and its 1d chart stuck on yesterday).
+Audit ``daily-today-upsample``. When the daily synth finds no cached intraday
+for a symbol, it returns the truthful daily bars unchanged; the background
+prefetch scheduler's dual-interval policy now owns warming the 5m companion.
 
-Bound to a ``SimpleNamespace`` stub (no Tk) so only the prefetch-decision
+Bound to a ``SimpleNamespace`` stub (no Tk) so only the daily-synth decision
 logic is exercised.
 """
 from __future__ import annotations
@@ -58,7 +56,6 @@ def _stub(full_cache=None, *, session_open=True):
     stub = SimpleNamespace(
         _full_cache=dict(full_cache or {}),
         _intraday_session_open=lambda _now_s: session_open,
-        _prefetch_companion_intervals=lambda syms: calls.append(list(syms)),
     )
     stub._maybe_upsample_today_daily = (
         app_mod.ChartApp._maybe_upsample_today_daily.__get__(stub)
@@ -66,12 +63,12 @@ def _stub(full_cache=None, *, session_open=True):
     return stub, calls
 
 
-def test_kicks_prefetch_when_intraday_missing_and_synth_needed():
+def test_intraday_missing_returns_daily_unchanged_without_reactive_prefetch():
     stub, calls = _stub(session_open=True)
     daily = [_daily(_prev_weekday(_YESTERDAY)), _daily(_YESTERDAY)]
     out = stub._maybe_upsample_today_daily(
         daily, source="yfinance", symbol="SPY", interval="1d")
-    assert calls == [["SPY"]], "must prefetch SPY's 5m companion"
+    assert calls == [], "scheduler owns 5m companion warming after cut-over"
     assert out is daily or out == daily  # unchanged (no intraday yet)
 
 
@@ -119,13 +116,11 @@ def test_synth_applied_and_no_prefetch_when_intraday_present():
 
 
 def test_no_prefetch_when_allow_prefetch_false():
-    """``allow_prefetch=False`` suppresses the self-heal companion prefetch.
+    """``allow_prefetch`` remains accepted but no longer submits prefetches.
 
-    Regression for ``inbox-drain-livelock`` (d61 smoke hang). The
-    prefetch-arrival refresh path passes ``allow_prefetch=False`` so that a
-    synth which STILL can't form today's bar (stub / incomplete intraday
-    during market hours) does NOT re-issue a companion prefetch — otherwise
-    the arrival re-fires the refresh which re-prefetches, ad infinitum.
+    The scheduler owns dual-interval warming after the cut-over. Keeping the
+    argument avoids churn at call sites that use it to document "do not
+    self-feed" refresh paths.
     """
     stub, calls = _stub(session_open=True)
     daily = [_daily(_prev_weekday(_YESTERDAY)), _daily(_YESTERDAY)]
@@ -150,7 +145,6 @@ def _refresh_stub(*, session_open=True, symbol="SPY"):
         compare_ticker_var=SimpleNamespace(get=lambda: ""),
         _full_cache={("yfinance", symbol, "1d"): list(daily)},
         _intraday_session_open=lambda _s: session_open,
-        _prefetch_companion_intervals=lambda syms: calls.append(list(syms)),
         _apply_pair_filter_and_align=lambda p, c: (p, c or []),
         _set_data_state=lambda **k: None,
         _invalidate_focused_panels=lambda c: None,
@@ -224,7 +218,6 @@ def _refresh_compare_stub(*, primary="AMD", compare="SPY",
         _full_cache=_FC(fc),
         _compare_raw=list(compare_raw_existing or []),
         _intraday_session_open=lambda _s: False,
-        _prefetch_companion_intervals=lambda syms: None,
         _apply_pair_filter_and_align=lambda p, c: (list(p), list(c or [])),
         _set_data_state=lambda **k: captured.update(k),
         _invalidate_focused_panels=lambda c: None,
@@ -292,4 +285,3 @@ def test_refresh_uses_memory_compare_without_disk_when_cached(monkeypatch):
     stub._refresh_daily_synth_for_active_view(prefetched_symbol="AMD")
     assert captured.get("compare"), "cached compare must render"
     assert hits == [], "memory-cached compare must not hit disk"
-

@@ -70,8 +70,8 @@ non-menu paths: ticker entry, watchlist, drilldown).
 `_restrict_toolbar_intervals_for_sandbox`,
 `_restore_toolbar_intervals_from_sandbox`, `_reset_scanner_state`,
 `_refresh_watchlist_for_sandbox`, `_current_sandbox_result`,
-`_current_sandbox_screenshot_dir`, `_preload_watchlist`,
-`_preload_watchlist_daily`, `_populate_watchlist_tab`.
+`_current_sandbox_screenshot_dir`, `_kick_watchlist_preloads`,
+`_populate_watchlist_tab`.
 
 ## Locked Design Decisions
 

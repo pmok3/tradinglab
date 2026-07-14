@@ -91,7 +91,7 @@ Each tunable has a validator so corrupt `settings.json` can't inject garbage.
 | `worker_count` | `gui/workers.py` + Settings worker slider; live-swaps the background executor. |
 | `watchlist_max_pinned` | Watchlist manager/tab construction cap for pinned sub-tabs. |
 | `local_data` | `data/__init__.py:register_local_sources`, `gui/local_data_dialog.py` |
-| `watchlist_poll_interval_sec` / `watchlist_poll_offhours_multiplier` | `gui/watchlist_tab.py:_watchlist_poll_effective_delay_ms`, `_start_watchlist_poll_loop`, `_watchlist_poll_tick`. Recurring background poll that re-runs `_preload_watchlist` + `_preload_watchlist_daily` so transient yfinance failures self-heal. Set interval to 0 to disable. Off-hours (outside 09:30–16:00 ET weekdays) multiplies the interval. Floor of 5 seconds in `_watchlist_poll_effective_delay_ms` defends against misconfiguration. |
+| `watchlist_poll_interval_sec` / `watchlist_poll_offhours_multiplier` | `gui/watchlist_tab.py:_watchlist_poll_effective_delay_ms`, `_start_watchlist_poll_loop`, `_watchlist_poll_tick`. Recurring background poll that re-arms scheduler watchlist tiers and refreshes watchlist events/signals. Set interval to 0 to disable. Off-hours (outside 09:30–16:00 ET weekdays) multiplies the interval. Floor of 5 seconds in `_watchlist_poll_effective_delay_ms` defends against misconfiguration. |
 
 ## Adding a new tunable
 1. Append a `Tunable(...)` to the `TUNABLES` tuple.

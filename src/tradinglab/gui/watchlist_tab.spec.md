@@ -139,9 +139,10 @@ larger; pinning makes a list reachable from the main UI.
 
 ### Preload
 
-- `_preload_watchlist()` / `_preload_watchlist_daily()` — one
-  fetch per ticker in `_pinned_ticker_union()` (dedup prevents
-  fetching shared tickers N times).
+- `_preload_watchlist()` / `_preload_watchlist_daily()` — cache-only orphan
+  repair + scheduler re-arm for watchlist OHLC data. They no longer submit
+  provider fetches; the background scheduler owns focused/other-watchlist OHLC
+  warming after the cut-over.
 - `_preload_watchlist_events()` — fans `_load_events_async` over
   `_pinned_ticker_union()` for tickers missing from `_events_cache`,
   so the default Next Earnings column fills proactively. Repeated calls
@@ -156,7 +157,9 @@ larger; pinning makes a list reachable from the main UI.
   sessions before the replay session date. Successful updates queue a
   `("refresh", None)` inbox item.
 - `_preload_one_last(ticker, src=None, itv=None)` /
-  `_preload_one_daily(ticker, src=None)` — worker-thread fetchers.
+  `_preload_one_daily(ticker, src=None)` — legacy worker-thread fetchers kept
+  as direct seams for tests/manual callers; normal watchlist refresh no longer
+  submits them.
   Fetch bars, delegate snapshot derivation to
   `_apply_watchlist_snapshot_from_bars`, and warm
   `ChartApp._full_cache[(src, ticker, itv)]`. `src` / `itv` read
@@ -172,12 +175,9 @@ larger; pinning makes a list reachable from the main UI.
   Items: `("stash", (key, bars))`, `("refresh", None)`.
 - **Synchronous fast path** for smoke tests: when invoked on the
   Tk thread the cache stash is applied inline.
-- `_kick_watchlist_preloads()` — incremental wrapper invoked at
-  the end of `_rebuild_watchlist_subtabs`. Submits
-  `_preload_one_last` when `last` is missing or only a daily fallback,
-  and `_preload_one_daily` only when both `change_1d` and `chg` are
-  missing. Lets brand-new pins populate without requiring
-  `_load_data`.
+- `_kick_watchlist_preloads()` — invoked at the end of
+  `_rebuild_watchlist_subtabs`; re-arms the scheduler watchlist tiers and keeps
+  non-OHLC events/signals preloads.
 
 ### Recurring poll loop
 
@@ -201,29 +201,27 @@ larger; pinning makes a list reachable from the main UI.
   (`getattr(self, "_watchlist_poll_job", None) is not None` ⇒
   no-op). When polling is disabled, sets `_watchlist_poll_job =
   None` and returns.
-- `_watchlist_poll_tick()` — re-runs `_preload_watchlist` +
-  `_preload_watchlist_daily` and re-arms itself. **Sandbox guard**:
+- `_watchlist_poll_tick()` — runs cache-only orphan repair, re-arms scheduler
+  watchlist tiers, refreshes events/signals, and re-arms itself. **Sandbox guard**:
   while a replay session is active the engine drives clock
   advancement, so we skip the preload body BUT still re-arm so
   polling resumes immediately on sandbox exit (different from
   `_schedule_next_bar_fetch`, which drops the timer entirely on
   sandbox). **Visibility guard (qw-watchlist-visguard)**: the preload
   body is also skipped when `_watchlist_tab_visible()` is False (the
-  Watchlist outer-notebook tab is off screen) — the fetch + snapshot
+  Watchlist outer-notebook tab is off screen) — the snapshot/scheduler
   work competes with chart interaction and isn't visible anyway; the
   tick still re-arms, so the data refreshes within one poll interval
-  of the user returning to the Watchlist tab. The preload helpers own
-  their own cache-freshness + in-flight dedup, so a tick on a
-  fully-cached watchlist during RTH costs zero HTTP calls. A tick
-  after a transient fetch failure re-submits the missing tickers and
-  clears the visible orphan.
+  of the user returning to the Watchlist tab. The scheduler owns provider
+  retry/self-heal; the preload helpers only rebuild visible orphan snapshots
+  from fresh memory-cache bars.
 - `_watchlist_tab_visible() -> bool` — `True` when the Watchlist
   outer frame `winfo_viewable()` is truthy. Defaults to `True` when
   `_watchlist_outer_frame` is missing or Tk geometry can't be probed
   (early init / headless harness) so a visible watchlist is never
   starved.
 - **Orphan-snapshot recovery** in `_preload_watchlist` /
-  `_preload_watchlist_daily`: when the disk-cache is fresh but the
+  `_preload_watchlist_daily`: when the memory cache is fresh but the
   `_watchlist_snapshot` row is missing `last` / `change_1d` /
   `pct_1d`, rebuild from cached intraday Last plus the cached daily
   tail. A daily-only fallback is tagged with `_last_source="daily"`

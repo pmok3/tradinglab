@@ -5,14 +5,13 @@ driver instance lives on ``ChartApp`` (built in ``ChartApp.__init__`` via
 :meth:`_maybe_build_prefetch_driver`), but the flag check, context snapshot, and
 shadow/live observe logic live here to keep ``app.py`` under its LOC ceiling.
 
-Gated by the ``TRADINGLAB_PREFETCH_SCHEDULER`` env flag (default OFF →
-``self._prefetch_driver is None`` → zero behaviour change). In **shadow** mode
+Gated by the ``TRADINGLAB_PREFETCH_SCHEDULER`` env flag (default live; explicit
+``off`` kill-switch). In **shadow** mode
 ``_prefetch_observe`` logs how many jobs the scheduler WOULD dispatch with no
 fetch/cache side effects; **live** mode drives real fetches through the
 dedicated prefetch worker pool (worker-side merge/save; Tk-thread stash +
-``complete`` + re-pump). The live paths are reachable only when the flag is
-``live`` — the atomic default flip + reactive-path removal is a separate
-cut-over commit. Full design: session ``PREFETCH_SCHEDULER_DESIGN.md``.
+``complete`` + re-pump). Full design: session
+``PREFETCH_SCHEDULER_DESIGN.md``.
 """
 from __future__ import annotations
 

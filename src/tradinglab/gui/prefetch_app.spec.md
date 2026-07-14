@@ -60,8 +60,8 @@ ceiling (§7.24). A pure method-bag mixin: **no `__init__`**.
   `_prefetch_observe_soon()`.
 
 ## Contract
-- Gated by `TRADINGLAB_PREFETCH_SCHEDULER` (default OFF → `_prefetch_driver is
-  None` → zero behaviour change). Reads only `self.<attr>` state owned by
+- Gated by `TRADINGLAB_PREFETCH_SCHEDULER` (default live; explicit `off` /
+  `0` / `false` / `no` disables construction). Reads only `self.<attr>` state owned by
   `ChartApp` (`source_var`/`ticker_var`/`interval_var`/`compare_ticker_var`/
   `watchlist_var`/`_watchlists`/`_prefetch_driver`), plus, for the live seam,
   `_fetch_svc` (`submit_prefetch` / `apply_prefetch_result`), `_full_cache`,

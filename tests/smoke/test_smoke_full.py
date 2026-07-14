@@ -511,9 +511,8 @@ def check_c0_watchlist_tab(app) -> None:
         "§18.4 missing watchlists manager")
     assert hasattr(app, "_populate_watchlist_tab"), (
         "§18.4 missing _populate_watchlist_tab")
-    assert hasattr(app, "_preload_watchlist"), "§18.4 missing _preload_watchlist"
-    assert hasattr(app, "_preload_watchlist_daily"), (
-        "§18.4 missing _preload_watchlist_daily (Change columns pinned to 1d)")
+    assert hasattr(app, "_apply_watchlist_snapshot_from_bars"), (
+        "§18.4 missing scheduler watchlist snapshot seam")
     # Behavioral: 5-column tree (Ticker, Last, Change, Change Pct, Next Earn)
     # + bull/bear tag rendering + debouncer. The Next Earn column was
     # added with the earnings & dividends feature.
@@ -1079,66 +1078,24 @@ def check_d10_poll_tick_offloads_fetch_to_executor(app) -> None:
 
 
 def check_d12_companion_prefetch_warms_cache(app) -> None:
-    """On _load_data success, companion intervals (5m + 1d) for both
-    primary and compare must be queued for prefetch via
-    ``_ensure_prefetched``. Asserts the wiring without racing the real
-    thread pool (executor behavior is covered by check_d10).
-    """
-    import datetime as dt
+    """Scheduler context covers primary+compare dual intervals after cut-over."""
 
-    import tradinglab.data as _data_pkg
-    from tradinglab.models import Candle
-
-    src = app.source_var.get()
-    prev_fetcher = _data_pkg.DATA_SOURCES.get(src)
     prev_primary_ticker = app.ticker_var.get()
     prev_compare_ticker = app.compare_ticker_var.get()
     prev_interval = app.interval_var.get()
     prev_compare_on = bool(app.compare_var.get())
-    prev_full_cache = OrderedDict(app._full_cache)
-    prev_primary = list(app._primary)
-    prev_primary_raw = list(app._primary_raw)
-    prev_compare_data = list(app._compare)
-    prev_compare_raw = list(app._compare_raw)
-    prev_confirmed_primary = app._confirmed_primary_ticker
-    prev_confirmed_compare = app._confirmed_compare_ticker
-    prev_ensure = app._ensure_prefetched
-
-    def sync_fetcher(ticker, interval):
-        now = dt.datetime.now()
-        return [
-            Candle(
-                date=now - dt.timedelta(minutes=5 * (30 - i)),
-                open=100.0, high=101.0, low=99.0, close=100.5,
-                volume=1000, session="regular",
-            ) for i in range(30)
-        ]
-
-    # Record companion-prefetch invocations instead of submitting to
-    # the executor (avoids races against real-yfinance startup tasks).
-    recorded: list = []
-
-    def stub_ensure_prefetched(ticker, interval, *, force=False):
-        recorded.append((ticker, interval, force))
-
-    _data_pkg.DATA_SOURCES[src] = sync_fetcher
-    app._ensure_prefetched = stub_ensure_prefetched  # type: ignore[method-assign]
     try:
         app.ticker_var.set("PREFETCHA")
         app.compare_ticker_var.set("PREFETCHB")
         app.compare_var.set(True)
         app.interval_var.set("15m")
-        for t in ("PREFETCHA", "PREFETCHB"):
-            for iv in ("5m", "1d", "15m"):
-                app._full_cache.pop((src, t, iv), None)
 
-        recorded.clear()
-        app._load_data()
-        _pump(app, 0.05)
+        from tradinglab.data.prefetch.tiers import expand_all, standard_tiers
 
-        # Should have queued prefetches for primary 5m, primary 1d,
-        # compare 5m, compare 1d — NOT the current interval (15m).
-        queued = {(t, iv) for (t, iv, _force) in recorded}
+        ctx = app._build_prefetch_context()
+        assert ctx is not None, "prefetch context should build for chart state"
+        jobs = expand_all(standard_tiers(), ctx)
+        queued = {(j.symbol, j.interval) for j in jobs}
         expected = {
             ("PREFETCHA", "5m"), ("PREFETCHA", "1d"),
             ("PREFETCHB", "5m"), ("PREFETCHB", "1d"),
@@ -1147,41 +1104,16 @@ def check_d12_companion_prefetch_warms_cache(app) -> None:
         assert not missing, (
             f"companion prefetch missing {missing}; "
             f"got={sorted(queued)}")
-        # Must NOT queue the PRIMARY at the current interval
-        # (companion prefetch excludes current). The compare ticker
-        # at current interval IS expected from the pre-existing
-        # _ensure_compare_prefetched warming path — not a regression.
-        assert ("PREFETCHA", "15m") not in queued, (
-            f"primary should not be re-prefetched at current interval: {queued}")
-
-        # Independent sanity: _prefetch_companion_intervals should
-        # also be a no-op when ticker list is empty.
-        recorded.clear()
-        app._prefetch_companion_intervals([])
-        app._prefetch_companion_intervals([""])
-        assert recorded == [], (
-            f"empty ticker list should not queue anything: {recorded}")
+        assert ("PREFETCHA", "15m") in queued, (
+            f"primary active interval should be first-class in scheduler plan: {queued}")
+        assert ("PREFETCHB", "15m") in queued, (
+            f"compare active interval should be first-class in scheduler plan: {queued}")
     finally:
-        app._ensure_prefetched = prev_ensure  # type: ignore[method-assign]
-        if prev_fetcher is not None:
-            _data_pkg.DATA_SOURCES[src] = prev_fetcher
-        else:
-            _data_pkg.DATA_SOURCES.pop(src, None)
         app.ticker_var.set(prev_primary_ticker)
         app.compare_ticker_var.set(prev_compare_ticker)
         app.interval_var.set(prev_interval)
         app.compare_var.set(prev_compare_on)
-        app._full_cache = prev_full_cache
-        app._primary = prev_primary
-        app._primary_raw = prev_primary_raw
-        app._compare = prev_compare_data
-        app._compare_raw = prev_compare_raw
-        app.candles = prev_primary
-        app.compare_candles = prev_compare_data
-        app._confirmed_primary_ticker = prev_confirmed_primary
-        app._confirmed_compare_ticker = prev_confirmed_compare
-        _pump(app, 0.05)
-    print("  [OK] companion intervals (5m/1d) queued for primary + compare on _load_data")
+    print("  [OK] scheduler dual intervals (5m/1d) cover primary + compare")
 
 
 def check_d13_watchlist_pinned_subtabs(app) -> None:
@@ -1735,19 +1667,14 @@ def check_d14_theme_overrides(app) -> None:
 
 
 def check_d15_pin_kicks_preload(app) -> None:
-    """Pinning a watchlist with new tickers must trigger background
-    preloads — the table can show live values without an explicit chart
-    load.
+    """Pinning a watchlist with new tickers must re-arm scheduler WL tiers.
 
     Regression guard for: "when a watchlist is pinned, we want to have
     their tickers updated in the table view like the default watchlist".
 
-    Behavioral assertion: rebuilding sub-tabs after a fresh pin submits
-    snapshot fetches for tickers that don't already have ``last`` /
-    ``change_1d`` cached. We assert by calling the worker bodies
-    synchronously through a submit-shim, since real background completion
-    in this smoke harness depends on environment-specific executor
-    behavior already covered by ``check_70``.
+    Behavioral assertion: rebuilding sub-tabs after a fresh pin makes the new
+    tickers visible in the scheduler context. Actual fetch/apply behavior is
+    covered by the prefetch live-seam unit tests and scheduler boot check.
     """
     mgr = app._watchlists
     name = "PinKickProbe"
@@ -1757,86 +1684,35 @@ def check_d15_pin_kicks_preload(app) -> None:
     for t in fresh_tickers:
         app._watchlist_snapshot.pop(t, None)
 
-    submitted_args: list = []
-    orig_submit = app._executor.submit
-
-    def _shim(fn, *a, **kw):
-        submitted_args.append((getattr(fn, "__name__", str(fn)), a))
-        # Run inline so the snapshot is mutated synchronously regardless
-        # of executor thread health in this test harness.
-        try:
-            fn(*a, **kw)
-        except Exception:  # noqa: BLE001
-            pass
-        # Return a real (no-op) future to keep callers happy.
-        return orig_submit(lambda: None)
-
-    app._executor.submit = _shim  # type: ignore[assignment]
+    prev_watchlist = app.watchlist_var.get()
     try:
         mgr.create(name, list(fresh_tickers))
         mgr.pin(name)
         app._rebuild_watchlist_subtabs()
+
+        ctx = app._build_prefetch_context()
+        assert ctx is not None, "pin → kick should leave a buildable scheduler context"
+        combined = set(ctx.focused_watchlist) | set(ctx.other_watchlists)
+        for t in fresh_tickers:
+            assert t in combined, (
+                f"pin → scheduler context must include {t}; "
+                f"focused={ctx.focused_watchlist}, other={ctx.other_watchlists}")
     finally:
-        app._executor.submit = orig_submit  # type: ignore[assignment]
-
-    # Both preload paths must be invoked for each fresh probe ticker.
-    submitted_for: dict = {}
-    for fname, args in submitted_args:
-        if fname in ("_preload_one_last", "_preload_one_daily") and args:
-            submitted_for.setdefault(args[0], set()).add(fname)
-    for t in fresh_tickers:
-        kinds = submitted_for.get(t, set())
-        assert "_preload_one_last" in kinds, (
-            f"pin → kick must submit _preload_one_last for {t}; "
-            f"submitted={submitted_args}")
-        assert "_preload_one_daily" in kinds, (
-            f"pin → kick must submit _preload_one_daily for {t}; "
-            f"submitted={submitted_args}")
-
-    # And the resulting snapshot is populated (synthetic source goes
-    # through the synchronous shim, so this asserts end-to-end wiring).
-    for t in fresh_tickers:
-        snap = app._watchlist_snapshot.get(t) or {}
-        assert "last" in snap, (
-            f"snap['{t}'] should have 'last' after pin-kick; got {snap}")
-
-    # Drain pending `after(0, ...)` callbacks so cache-warming stash
-    # runs on the Tk thread, then verify `_full_cache` was populated.
-    # This is the optimization that makes Space-key cycling fast: the
-    # next ticker's bars are already in memory when `_load_data` runs.
-    try:
-        app.update()
-    except Exception:  # noqa: BLE001
-        pass
-    src = app.source_var.get()
-    itv = app.interval_var.get()
-    for t in fresh_tickers:
-        cache_key_itv = (src, t, itv)
-        cache_key_1d = (src, t, "1d")
-        in_cache = (
-            app._full_cache.get(cache_key_itv) is not None
-            or app._full_cache.get(cache_key_1d) is not None)
-        assert in_cache, (
-            f"pin → kick must warm _full_cache for '{t}' "
-            f"({cache_key_itv} or {cache_key_1d}); "
-            f"keys={list(app._full_cache.keys())}")
-
-    # Cleanup.
-    try:
-        mgr.unpin(name)
-    except Exception:  # noqa: BLE001
-        pass
-    try:
-        mgr.delete(name)
-    except Exception:  # noqa: BLE001
-        pass
-    # Purge probe entries from the warm cache too.
-    for t in fresh_tickers:
-        for itv in ("1m", "5m", "15m", "1h", "1d"):
-            app._full_cache.pop((src, t, itv), None)
-    app._rebuild_watchlist_subtabs()
-    print("  [OK] pin -> background preload submitted + snapshot populated")
-
+        try:
+            mgr.unpin(name)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            mgr.delete(name)
+        except Exception:  # noqa: BLE001
+            pass
+        src = app.source_var.get()
+        for t in fresh_tickers:
+            for itv in ("1m", "5m", "15m", "1h", "1d"):
+                app._full_cache.pop((src, t, itv), None)
+        app.watchlist_var.set(prev_watchlist)
+        app._rebuild_watchlist_subtabs()
+    print("  [OK] pin -> scheduler watchlist context includes new tickers")
 
 def check_d16_startup_defaults(app) -> None:
     """Settings -> 'Startup parameters' merge, validate, persist, reset."""
@@ -4229,7 +4105,6 @@ def check_d34b_compare_toggle_today_drilldown_keeps_primary(app) -> None:
         # this passed in isolation but flaked in the full CI sequence). Re-seed
         # right before the toggle so the cache-hit path reads exactly our
         # compare.
-        app._ensure_compare_prefetched = lambda *a, **k: None  # type: ignore[assignment]
         _reseed()
         app.compare_var.set(True)
         app._on_compare_toggle()
@@ -4258,10 +4133,6 @@ def check_d34b_compare_toggle_today_drilldown_keeps_primary(app) -> None:
         print("  [OK] §d34b compare-today-drilldown-clip: primary candles "
               "survive compare toggle when compare lags a day")
     finally:
-        try:
-            del app._ensure_compare_prefetched
-        except AttributeError:
-            pass
         try:
             del app._cache_is_stale
         except AttributeError:
@@ -5676,9 +5547,8 @@ def check_d91_ticker_switch_default_view_align(app) -> None:
 
 def check_d92_compare_toggle_drilldown_no_extra_bar(app) -> None:
     """Regression: toggling Compare on a drilled 5m day must NOT pull in the
-    NEXT day's first bar, and must NOT force-refetch the compare on a
-    historical view (``remap-window-halfbar-round`` +
-    ``compare-toggle-historical-no-refetch``).
+    NEXT day's first bar. The old reactive compare force-prefetch path was
+    removed in the scheduler cut-over.
 
     Bugs (user-reported on WFC, drilled into May 8th):
     1. Enabling Compare made an extra bar appear on the RIGHT — the first
@@ -5686,17 +5556,10 @@ def check_d92_compare_toggle_drilldown_no_extra_bar(app) -> None:
        xlim ``(lo-0.5, hi+0.5)`` fed ``remap_window_by_time``, whose
        ``round(hi+0.5)`` (banker's rounding) yielded ``hi+1`` for ODD
        ``hi`` → the next day's first bar entered the preserved window.
-    2. Every toggle re-fetched the compare (slow) even though it was
-       cached — ``_apply_compare_toggle`` called
-       ``_ensure_compare_prefetched(force=True)`` unconditionally to catch
-       new ticks, pointless on a PAST drilled day.
-
-    Fixes: ceil/floor in ``remap_window_by_time`` (lands on the visible day
-    exactly, any parity); the force-refresh is skipped when the view is
-    historical. This check drills into a mid day (dense primary + dense
-    compare, so no gap-shift confounds the result) and asserts the visible
-    window shows EXACTLY the drilled day and the force-prefetch was NOT
-    called.
+    Fix: ceil/floor in ``remap_window_by_time`` (lands on the visible day
+    exactly, any parity). This check drills into a mid day (dense primary +
+    dense compare, so no gap-shift confounds the result) and asserts the
+    visible window shows EXACTLY the drilled day.
     """
     from datetime import timedelta
 
@@ -5714,7 +5577,6 @@ def check_d92_compare_toggle_drilldown_no_extra_bar(app) -> None:
     saved_preserve = app._preserve_xlim_on_render
     saved_drill = getattr(app, "_drilldown_day", None)
     saved_stale = app._cache_is_stale
-    saved_prefetch = app._ensure_compare_prefetched
     saved_cache = {
         k: app._full_cache.pop(k, None)
         for k in [(src, primary_t, "1d"), (src, primary_t, "5m"),
@@ -5760,13 +5622,6 @@ def check_d92_compare_toggle_drilldown_no_extra_bar(app) -> None:
         return {c.date.date() for c in cs[lo:hi]
                 if not getattr(c, "is_gap", False)}
 
-    force_calls = {"n": 0}
-
-    def _spy_prefetch(*a, **k):
-        if k.get("force"):
-            force_calls["n"] += 1
-        return saved_prefetch(*a, **k)
-
     try:
         app._cache_is_stale = lambda *a, **k: False  # type: ignore[assignment]
         _reseed()
@@ -5796,7 +5651,6 @@ def check_d92_compare_toggle_drilldown_no_extra_bar(app) -> None:
             f"got {sorted(_visible_days())}")
 
         _reseed()
-        app._ensure_compare_prefetched = _spy_prefetch  # type: ignore[assignment]
         app.compare_var.set(True)
         app._on_compare_toggle()
         _pump_until(app,
@@ -5809,13 +5663,8 @@ def check_d92_compare_toggle_drilldown_no_extra_bar(app) -> None:
         assert after == {drill_day}, (
             f"d92: compare toggle pulled an extra day into the drilled view "
             f"(expected only {drill_day}); visible={sorted(after)}")
-        # THE bug #2: force-refetch on a historical drilled view.
-        assert force_calls["n"] == 0, (
-            f"d92: compare toggle force-refetched the compare on a HISTORICAL "
-            f"drilled view {force_calls['n']} time(s) — should be gated off")
 
     finally:
-        app._ensure_compare_prefetched = saved_prefetch  # type: ignore[assignment]
         try:
             del app._cache_is_stale
         except AttributeError:
@@ -7350,7 +7199,7 @@ def check_d38_drilldown_race_and_coverage(app) -> None:
         Without this anchor, a flat ``_pump(app, 0.05)`` was racing
         against the multi-hop chain
         ``_schedule_reload`` → ``_load_data_async`` →
-        ``_prefetch_companion_intervals`` → executor pickup. On
+        scheduler re-arm → prefetch executor pickup. On
         slow CI or under contention from other tests, slow_fetch
         could be called AFTER the 50ms pump completes, leaving the
         sub-test asserting "in-flight" against a not-yet-started

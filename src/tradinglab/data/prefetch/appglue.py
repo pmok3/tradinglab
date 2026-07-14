@@ -4,8 +4,8 @@ Small, Tk-free helpers that the (flagged) ``ChartApp`` wiring uses so the
 app-coupled surface stays thin and testable:
 
 * :func:`scheduler_enabled` / :func:`scheduler_mode` — the feature flag
-  (``TRADINGLAB_PREFETCH_SCHEDULER`` env var). Default OFF → zero change;
-  ``shadow`` (or any truthy value) → observe-only; ``live`` → drive fetches.
+  (``TRADINGLAB_PREFETCH_SCHEDULER`` env var). Default ON in live mode;
+  ``off``/``0``/``false``/``no`` disable; ``shadow`` → observe-only.
 * :func:`partition_watchlists` — split the pinned watchlists into the focused
   (active sub-tab) tier and the other-visible tier, deduped.
 * :func:`build_context` — normalize app state into a :class:`PrefetchContext`.
@@ -25,7 +25,8 @@ from .buckets import (
 from .tiers import PrefetchContext
 
 _FLAG_ENV = "TRADINGLAB_PREFETCH_SCHEDULER"
-_ENABLED_VALUES = frozenset({"1", "on", "true", "yes", "shadow", "live"})
+_DISABLED_VALUES = frozenset({"0", "off", "false", "no"})
+_SHADOW_VALUES = frozenset({"shadow"})
 
 
 def _flag_value() -> str:
@@ -33,13 +34,13 @@ def _flag_value() -> str:
 
 
 def scheduler_enabled() -> bool:
-    """True when the background prefetch scheduler is enabled (default False)."""
-    return _flag_value() in _ENABLED_VALUES
+    """True when the background prefetch scheduler is enabled (default True)."""
+    return _flag_value() not in _DISABLED_VALUES
 
 
 def scheduler_mode() -> str:
-    """``"live"`` when explicitly requested, else ``"shadow"`` (safe default)."""
-    return "live" if _flag_value() == "live" else "shadow"
+    """``"shadow"`` when requested, else ``"live"`` (cut-over default)."""
+    return "shadow" if _flag_value() in _SHADOW_VALUES else "live"
 
 
 def bucket_registry_for_mode(mode: str) -> SourceBucketRegistry:

@@ -1,6 +1,6 @@
 """Unit tests for ``data.prefetch.appglue`` — pure ChartApp-integration helpers.
 
-The flag readers gate the whole feature (default OFF → zero change); the
+The flag readers gate the whole feature (default live; explicit off disables);
 watchlist partition splits pinned lists into the focused (active sub-tab) tier
 and the other-visible tier; ``build_context`` normalizes app state into a
 ``PrefetchContext``. All pure — no Tk.
@@ -20,9 +20,9 @@ from tradinglab.data.prefetch.tiers import PrefetchContext
 
 
 # --------------------------------------------------------------------- flags
-def test_scheduler_disabled_by_default(monkeypatch):
+def test_scheduler_enabled_by_default(monkeypatch):
     monkeypatch.delenv("TRADINGLAB_PREFETCH_SCHEDULER", raising=False)
-    assert scheduler_enabled() is False
+    assert scheduler_enabled() is True
 
 
 @pytest.mark.parametrize("val", ["1", "on", "true", "yes", "shadow", "live", "SHADOW"])
@@ -31,14 +31,24 @@ def test_scheduler_enabled_values(monkeypatch, val):
     assert scheduler_enabled() is True
 
 
-@pytest.mark.parametrize("val", ["", "0", "off", "false", "no"])
+@pytest.mark.parametrize("val", ["0", "off", "false", "no"])
 def test_scheduler_disabled_values(monkeypatch, val):
     monkeypatch.setenv("TRADINGLAB_PREFETCH_SCHEDULER", val)
     assert scheduler_enabled() is False
 
 
-def test_scheduler_mode_defaults_to_shadow(monkeypatch):
+def test_scheduler_mode_defaults_to_live(monkeypatch):
+    monkeypatch.delenv("TRADINGLAB_PREFETCH_SCHEDULER", raising=False)
+    assert scheduler_mode() == "live"
+
+
+def test_scheduler_mode_truthy_values_are_live(monkeypatch):
     monkeypatch.setenv("TRADINGLAB_PREFETCH_SCHEDULER", "1")
+    assert scheduler_mode() == "live"
+
+
+def test_scheduler_mode_shadow(monkeypatch):
+    monkeypatch.setenv("TRADINGLAB_PREFETCH_SCHEDULER", "shadow")
     assert scheduler_mode() == "shadow"
 
 
