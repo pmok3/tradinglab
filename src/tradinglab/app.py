@@ -2830,10 +2830,10 @@ class ChartApp(
         )
         if intraday is None:
             # No intraday cached → can't synthesize today's bar yet. The
-            # background scheduler's dual-interval policy warms the 5m
-            # companion; the prefetch-arrival handler re-renders when it lands.
-            # ``allow_prefetch`` remains for back-compat with callers that use
-            # it to document "do not self-feed" refresh paths.
+            # scheduler's dual-interval policy warms the 5m companion and its
+            # Tk-thread completion (`gui/prefetch_app._prefetch_submit._on_done`)
+            # calls `_refresh_daily_synth_for_active_view` so the 1d chart
+            # re-renders when the warm lands. ``allow_prefetch`` is back-compat.
             return candles
         return _upsample_daily_with_today(
             candles, intraday_candles=intraday,

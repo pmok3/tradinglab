@@ -26,9 +26,10 @@ class _Bar:
         self.date = datetime.fromtimestamp(ts, timezone.utc)
 
 
-def _job(band_index=0, source="alpaca", symbol="AMD", interval="5m"):
+def _job(band_index=0, source="alpaca", symbol="AMD", interval="5m",
+         tier_rank=10):
     return FetchJob(source=source, symbol=symbol, interval=interval,
-                    band_index=band_index, tier_rank=10, interval_rank=0,
+                    band_index=band_index, tier_rank=tier_rank, interval_rank=0,
                     generation=0)
 
 
@@ -65,11 +66,18 @@ def _fake_app(*, window, policy=CACHE_MEMORY_AND_DISK, submit_ok=True):
         _fetch_svc=SimpleNamespace(
             submit_prefetch=_submit_prefetch,
             apply_prefetch_result=_apply,
+            _prefetch_futures={},
         ),
         _full_cache={},
         _stash_full_cache=lambda k, b: calls["stash"].append((k, len(b))),
         _await_future_on_tk=_await,
         _prefetch_pump=lambda: calls.__setitem__("pump", calls["pump"] + 1),
+        _refresh_daily_synth_for_active_view=(
+            lambda *, prefetched_symbol=None: calls.__setitem__(
+                "synth", calls.get("synth", []) + [prefetched_symbol])),
+        _apply_watchlist_snapshot_from_bars=(
+            lambda t, src, itv, bars: calls.__setitem__(
+                "wl_snap", calls.get("wl_snap", []) + [(t, src, itv, len(bars))])),
     )
     return fake, calls
 
@@ -105,6 +113,26 @@ def test_submit_live_fetch_merges_stashes_completes(monkeypatch):
     assert kw["bars_count"] == 2 and kw["error"] is None
     assert kw["oldest_ts"] == 1000.0
     assert calls["pump"] == 1
+    # active + intraday warm → the daily-synth today-bar re-renders (Issue 1).
+    assert calls.get("synth") == ["AMD"]
+
+
+def test_submit_watchlist_tier_updates_snapshot(monkeypatch):
+    """A watchlist-tier completion repopulates Last/Change via the snapshot seam
+    (end-to-end wiring the reactive preloads used to own)."""
+    from tradinglab.data.prefetch.tiers import TIER_FOCUSED_WL
+    bars = [_Bar(1000.0), _Bar(1300.0), _Bar(1600.0)]
+    monkeypatch.setattr(
+        base, "fetch_page",
+        lambda *a, **k: base.FetchPageResult(bars, "ok"),
+    )
+    # WL tiers are disk-only (no memory stash), so use CACHE_DISK_ONLY.
+    fake, calls = _fake_app(window=_range_window(), policy=CACHE_DISK_ONLY)
+    PrefetchAppMixin._prefetch_submit(
+        fake, _job(band_index=0, symbol="NVDA", tier_rank=TIER_FOCUSED_WL))
+    # the scheduler's WL-tier completion drove the snapshot updater.
+    assert calls.get("wl_snap") == [("NVDA", "alpaca", "5m", 3)]
+    assert calls["stash"] == []                     # disk-only → no memory stash
 
 
 def test_submit_disk_only_deep_band_no_stash(monkeypatch):

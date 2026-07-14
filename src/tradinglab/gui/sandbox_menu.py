@@ -489,9 +489,11 @@ class SandboxMenuMixin:
         except Exception:  # noqa: BLE001
             pass
         # Restore real-world watchlist Last/Change now that the sandbox clock
-        # no longer applies. Clear the sandbox-influenced snapshot fields and
-        # re-arm scheduler watchlist tiers (legacy OHLC workers were removed in
-        # the prefetch-scheduler cut-over).
+        # no longer applies. Clear the sandbox-influenced snapshot fields, then
+        # repair Last/Change synchronously from the already-cached real-world
+        # bars (``_preload_watchlist`` / ``_preload_watchlist_daily`` are now
+        # cache-repair + scheduler-rearm, not reactive fetchers) so the cells
+        # refill immediately instead of waiting for a background warm.
         try:
             snap_map = getattr(self, "_watchlist_snapshot", None)
             if isinstance(snap_map, dict):
@@ -500,7 +502,8 @@ class SandboxMenuMixin:
                         continue
                     for k in ("last", "change_1d", "pct_1d", "chg", "pct"):
                         snap.pop(k, None)
-            self._kick_watchlist_preloads()
+            self._preload_watchlist()
+            self._preload_watchlist_daily()
             self._populate_watchlist_tab()
         except Exception:  # noqa: BLE001
             pass

@@ -70,6 +70,7 @@ class PrefetchAppMixin:
         driver = getattr(self, "_prefetch_driver", None)
         if driver is None:
             return
+        from ..constants import is_intraday
         from ..data.prefetch import CACHE_MEMORY_AND_DISK
         from ..data.prefetch.tiers import TIER_FOCUSED_WL, TIER_OTHER_WL
 
@@ -116,15 +117,22 @@ class PrefetchAppMixin:
             driver.complete(job, bars_count=0)
             return
         try:
-            # Keep the scheduler's active fetch visible to the legacy
-            # drilldown attach-to-inflight seam so a double-click while a
-            # scheduler 5m warm is sleeping does not submit a duplicate fetch.
-            fetch_svc._prefetch_futures[key] = fut
-            fut.add_done_callback(
-                lambda _f, _key=key: fetch_svc._prefetch_futures.pop(
-                    _key, None,
-                ),
-            )
+            # Keep the scheduler's active fetch visible to the legacy drilldown
+            # attach-to-inflight seam so a double-click while a scheduler 5m warm
+            # is sleeping doesn't submit a duplicate fetch. ONLY for non-range
+            # providers: there `fetch_window` uses the same trailing
+            # `DATA_SOURCES[source](symbol, interval)` fetch a direct drilldown
+            # would, so the reused result has identical coverage. Range providers
+            # (Alpaca) fetch a specific band/page here — NOT the drilldown's
+            # targeted day — so they must not be reused (would give wrong bars).
+            from ..data.base import source_supports_range
+            if not source_supports_range(job.source):
+                fetch_svc._prefetch_futures[key] = fut
+                fut.add_done_callback(
+                    lambda _f, _key=key: fetch_svc._prefetch_futures.pop(
+                        _key, None,
+                    ),
+                )
         except Exception:  # noqa: BLE001
             pass
 
@@ -136,6 +144,16 @@ class PrefetchAppMixin:
                     stash(key, merged)
                 except Exception:  # noqa: BLE001
                     pass
+                # Mirror the legacy prefetch-arrival seam: a freshly-warmed
+                # intraday companion for the active/compare symbol must re-render
+                # so the daily-synth today-bar picks it up (else a 1d chart shows
+                # yesterday until the next poll tick). Audit ``daily-today-upsample``.
+                if is_intraday(job.interval):
+                    try:
+                        self._refresh_daily_synth_for_active_view(
+                            prefetched_symbol=job.symbol)
+                    except Exception:  # noqa: BLE001
+                        pass
             if job.tier_rank in (TIER_FOCUSED_WL, TIER_OTHER_WL) and merged:
                 try:
                     self._apply_watchlist_snapshot_from_bars(
