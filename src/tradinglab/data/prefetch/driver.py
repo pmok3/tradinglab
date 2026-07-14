@@ -103,6 +103,7 @@ class PrefetchDriver:
         job: FetchJob,
         *,
         bars: Sequence[Any] | None = None,
+        bars_count: int | None = None,
         oldest_ts: float | None = None,
         error: BaseException | None = None,
         latency_s: float | None = None,
@@ -110,10 +111,18 @@ class PrefetchDriver:
     ) -> None:
         """Route a finished fetch: write to the cache (respecting the job's
         cache policy) on success, then feed the scheduler for
-        deepening/retry/AIMD."""
+        deepening/retry/AIMD.
+
+        Pass ``bars`` (the fetched page) when the driver owns the cache write
+        via ``apply_result``. The **live app seam** instead does the merge+save
+        on the worker thread and passes only ``bars_count`` (the page length) so
+        a large page isn't marshalled back to Tk just for its length; deepening
+        reads the count either way. ``bars`` takes precedence over ``bars_count``
+        when both are given.
+        """
         rows = bars if bars is not None else []
-        count = len(rows)
-        if error is None and count and self._apply_result is not None:
+        count = len(rows) if bars is not None else int(bars_count or 0)
+        if error is None and count and bars is not None and self._apply_result is not None:
             memory_allowed = (
                 self._scheduler.cache_policy_for(job) == CACHE_MEMORY_AND_DISK
             )

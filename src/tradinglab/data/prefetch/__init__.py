@@ -29,6 +29,7 @@ from .buckets import (
 )
 from .driver import PrefetchDriver
 from .intervals import dual_interval
+from .live import fetch_window, oldest_ts
 from .planner import (
     FetchWindow,
     PeriodWindowPlanner,
@@ -36,7 +37,12 @@ from .planner import (
     planner_for,
 )
 from .priority import FOREGROUND_BAND, FetchJob, PriorityKey
-from .scheduler import DispatchDecision, PrefetchScheduler
+from .scheduler import (
+    CACHE_DISK_ONLY,
+    CACHE_MEMORY_AND_DISK,
+    DispatchDecision,
+    PrefetchScheduler,
+)
 from .tiers import (
     PrefetchContext,
     TierProvider,
@@ -53,6 +59,8 @@ __all__ = [
     "global_bucket_registry", "set_global_bucket_registry",
     "unlimited_bucket_registry",
     "DispatchDecision", "PrefetchScheduler", "PrefetchDriver",
+    "CACHE_MEMORY_AND_DISK", "CACHE_DISK_ONLY",
+    "fetch_window", "oldest_ts",
     "scheduler_enabled", "scheduler_mode", "bucket_registry_for_mode",
     "partition_watchlists", "build_context",
 ]

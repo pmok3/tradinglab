@@ -12,7 +12,7 @@ back, staying headless-testable via injected side-effects.
 - `apply_result: (job, bars, memory_allowed) -> None` — cache write.
 - Methods: `set_context(ctx, changed_ranks=None)`, `request_foreground(job, *,
   cancel=None)`, `pump() -> float | None`, `complete(job, *, bars=None,
-  oldest_ts=None, error=None, latency_s=None, retry_after_s=None)`.
+  bars_count=None, oldest_ts=None, error=None, latency_s=None, retry_after_s=None)`.
 - Props: `scheduler`, `shadow`, `shadow_log`.
 
 ## Contract
@@ -23,10 +23,18 @@ back, staying headless-testable via injected side-effects.
   job → `submit`. **Shadow:** each job appended to `shadow_log` + immediately
   `scheduler.complete(bars_count=0)` (band-0 plan only, no fetch/cache side
   effects) — the observation path for the flagged cut-over (Decision 6 revised).
-- `complete` on success (`error is None` and bars) writes via `apply_result`
-  with `memory_allowed = cache_policy_for(job) == CACHE_MEMORY_AND_DISK`
-  (Decision 5), then calls `scheduler.complete(bars_count=len(bars), …)` which
+- `complete` on success (`error is None` and a non-zero count) writes via
+  `apply_result` **only when `bars` is provided** with
+  `memory_allowed = cache_policy_for(job) == CACHE_MEMORY_AND_DISK`
+  (Decision 5), then calls `scheduler.complete(bars_count=…, …)` which
   drives deepening / retry / poison / AIMD. On error it skips the cache write but
+  still runs `scheduler.complete`.
+- **`bars` vs `bars_count`**: pass `bars` (the fetched page) when the driver owns
+  the cache write via `apply_result`. The **live app seam** does the merge+save
+  on the worker thread (`apply_result=None`) and passes only `bars_count` (the
+  page length) so a large page isn't marshalled back to Tk just for its length;
+  deepening reads the count either way. `bars` takes precedence over `bars_count`
+  when both are given; with `apply_result=None`, `apply_result` is never called.
   still feeds the scheduler (retry/poison).
 
 ## Design Decisions

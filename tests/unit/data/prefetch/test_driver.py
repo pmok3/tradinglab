@@ -134,3 +134,29 @@ def test_complete_routes_bars_count_for_deepening():
     drv.complete(job, bars=_candles(50), oldest_ts=1000.0)
     # deepened: band 1 now queued (range provider)
     assert sch.pending_count == 1
+
+
+def test_complete_accepts_explicit_bars_count_without_bars():
+    """The live seam does merge+save on the worker and marshals only the count
+    back to Tk — ``bars_count`` drives deepening without a bars list."""
+    applied = []
+    sch = _scheduler(supports_range=lambda s: s == "a")
+    drv = PrefetchDriver(sch, submit=lambda j: None,
+                         apply_result=lambda *a: applied.append(a))
+    job = _job(source="a", band_index=0)
+    sch.enqueue(job)
+    drv.pump()
+    drv.complete(job, bars_count=50, oldest_ts=1000.0)
+    assert sch.pending_count == 1        # deepened on the count alone
+    assert applied == []                 # no bars list → apply_result not called
+
+
+def test_complete_bars_takes_precedence_over_count():
+    sch = _scheduler()
+    drv = PrefetchDriver(sch, submit=lambda j: None, apply_result=lambda *a: None)
+    job = _job(band_index=0)
+    sch.enqueue(job)
+    drv.pump()
+    # bars given → its len wins; bars_count ignored.
+    drv.complete(job, bars=_candles(3), bars_count=999, oldest_ts=1000.0)
+    assert sch.is_exhausted("a", "AMD", "5m")   # period provider, one band

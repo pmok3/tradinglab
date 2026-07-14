@@ -8,12 +8,16 @@ shadow/live observe logic live here to keep ``app.py`` under its LOC ceiling.
 Gated by the ``TRADINGLAB_PREFETCH_SCHEDULER`` env flag (default OFF →
 ``self._prefetch_driver is None`` → zero behaviour change). In **shadow** mode
 ``_prefetch_observe`` logs how many jobs the scheduler WOULD dispatch with no
-fetch/cache side effects; **live** mode (wired at the cut-over) drives fetches.
-Full design: session ``PREFETCH_SCHEDULER_DESIGN.md``.
+fetch/cache side effects; **live** mode drives real fetches through the
+dedicated prefetch worker pool (worker-side merge/save; Tk-thread stash +
+``complete`` + re-pump). The live paths are reachable only when the flag is
+``live`` — the atomic default flip + reactive-path removal is a separate
+cut-over commit. Full design: session ``PREFETCH_SCHEDULER_DESIGN.md``.
 """
 from __future__ import annotations
 
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -50,16 +54,113 @@ class PrefetchAppMixin:
         return PrefetchDriver(
             scheduler,
             submit=self._prefetch_submit,
-            apply_result=self._prefetch_apply,
+            apply_result=None,  # app owns ALL cache writes (worker-side merge)
             shadow=(mode != "live"),
         )
 
     def _prefetch_submit(self, job) -> None:
-        """Live-mode async fetch submission — wired at the cut-over; unused in
-        shadow mode."""
+        """Live-mode async fetch for one dispatched job (never called in shadow).
 
-    def _prefetch_apply(self, job, bars, memory_allowed) -> None:
-        """Live-mode cache write — wired at the cut-over; unused in shadow mode."""
+        The fetch + disk merge/save run on the DEDICATED prefetch worker pool
+        (`submit_prefetch`) — NOT on the Tk thread (principal-SWE review
+        Must-fix: a deep 10k-bar page merge would jank the UI). The Tk-thread
+        callback only stashes the merged series into the in-memory working set
+        (when the job's cache policy allows), feeds the scheduler via
+        `driver.complete`, then re-pumps so deepening/next jobs keep flowing.
+        """
+        driver = getattr(self, "_prefetch_driver", None)
+        if driver is None:
+            return
+        from ..data.prefetch import CACHE_MEMORY_AND_DISK
+
+        scheduler = driver.scheduler
+        window = scheduler.window_for(job)
+        key = (job.source, job.symbol, job.interval)
+        memory_allowed = scheduler.cache_policy_for(job) == CACHE_MEMORY_AND_DISK
+        stale_guard = job.band_index <= 0
+        if window is None:
+            driver.complete(job, bars_count=0)
+            self._prefetch_pump()
+            return
+
+        fetch_svc = self._fetch_svc
+        full_cache = self._full_cache
+        stash = self._stash_full_cache
+        started = time.monotonic()
+
+        def _work() -> dict:
+            from .. import disk_cache
+            from ..data.prefetch.live import fetch_window, oldest_ts
+            bars, error, retry_after = fetch_window(
+                job.source, job.symbol, job.interval, window,
+            )
+            if error is not None or not bars:
+                return {"count": 0, "merged": None, "oldest_ts": None,
+                        "error": error, "retry_after_s": retry_after}
+            merged = None
+            try:
+                # Worker-side merge + disk save; memory_allowed=False so the
+                # worker never touches the Tk-owned in-memory cache.
+                merged = fetch_svc.apply_prefetch_result(
+                    key, list(bars), full_cache, disk_cache, stash,
+                    memory_allowed=False, stale_guard=stale_guard,
+                )
+            except Exception:  # noqa: BLE001
+                merged = None
+            return {"count": len(bars), "merged": merged,
+                    "oldest_ts": oldest_ts(bars),
+                    "error": None, "retry_after_s": None}
+
+        fut = fetch_svc.submit_prefetch(_work)
+        if fut is None:
+            driver.complete(job, bars_count=0)
+            return
+
+        def _on_done(res) -> None:
+            res = res or {}
+            merged = res.get("merged")
+            if memory_allowed and merged:
+                try:
+                    stash(key, merged)
+                except Exception:  # noqa: BLE001
+                    pass
+            driver.complete(
+                job,
+                bars_count=int(res.get("count", 0)),
+                oldest_ts=res.get("oldest_ts"),
+                error=res.get("error"),
+                latency_s=time.monotonic() - started,
+                retry_after_s=res.get("retry_after_s"),
+            )
+            self._prefetch_pump()
+
+        try:
+            self._await_future_on_tk(fut, _on_done)
+        except Exception:  # noqa: BLE001
+            driver.complete(job, bars_count=0)
+
+    def _prefetch_pump(self) -> None:
+        """Dispatch ready jobs; self-reschedule on the Tk thread while gated.
+
+        `driver.pump()` returns ``None`` (queue empty → idle; a context change or
+        completion will re-pump), ``0.0`` (hit the per-pump bound → more to do
+        now), or a positive ``retry_after_s`` (rate/time-gated). We re-arm a Tk
+        `after` accordingly so the loop never busy-spins yet always drains.
+        """
+        driver = getattr(self, "_prefetch_driver", None)
+        if driver is None:
+            return
+        try:
+            retry_after = driver.pump()
+        except Exception:  # noqa: BLE001
+            retry_after = None
+        if retry_after is None:
+            return
+        delay_ms = 1 if retry_after <= 0 else max(1, int(retry_after * 1000))
+        try:
+            self._track_after(delay_ms, self._prefetch_pump)
+        except Exception:  # noqa: BLE001
+            pass
 
     def _build_prefetch_context(self):
         """Snapshot the current app state into a ``PrefetchContext`` (or None)."""
@@ -112,7 +213,7 @@ class PrefetchAppMixin:
             if ctx is None:
                 return
             driver.set_context(ctx, changed_ranks)
-            driver.pump()
+            self._prefetch_pump()
             if driver.shadow and driver.shadow_log:
                 logger.info(
                     "prefetch-shadow: %d planned jobs for %s %s",
