@@ -1175,6 +1175,10 @@ class ChartApp(
         except Exception:  # noqa: BLE001
             pass
 
+        # Kick off the (flagged) background prefetch scheduler now that the
+        # initial chart has loaded — no-op when the feature is off.
+        self._prefetch_observe_soon()
+
         # Final splash stage + idle-queued close so the first paint
         # of the main window happens BEFORE the splash disappears
         # (avoids the brief "blank screen" gap users would otherwise
@@ -2177,6 +2181,9 @@ class ChartApp(
         list for the toggled ticker.
         """
         compare_on = bool(self.compare_var.get())
+
+        # Re-arm the compare tier of the (flagged) prefetch scheduler.
+        self._prefetch_observe_compare()
 
         # Sandbox branch must precede the regular path's _primary_raw
         # rebuild — that rebuild would clobber the engine-controlled
@@ -3234,6 +3241,9 @@ class ChartApp(
         interval = self.interval_var.get()
         raw_primary = self.ticker_var.get().strip().upper()
         compare_on = bool(self.compare_var.get())
+        # Re-arm the (flagged) prefetch scheduler for the new active context —
+        # deferred off this perf-critical path; no-op when the feature is off.
+        self._prefetch_observe_soon()
         raw_compare = (self.compare_ticker_var.get().strip().upper()
                        if compare_on else "")
         primary_key = ((src, raw_primary, interval)
@@ -6070,7 +6080,6 @@ class ChartApp(
             load_pending=True,
         )
         self._load_data_async()
-        self._prefetch_observe()  # flagged prefetch scheduler (no-op when off)
 
     def _sandbox_handle_interval_change(self) -> None:
         """Route interval-combobox changes through the sandbox controller.

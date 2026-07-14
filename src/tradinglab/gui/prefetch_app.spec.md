@@ -30,9 +30,32 @@ ceiling (§7.24). A pure method-bag mixin: **no `__init__`**.
 - `_build_prefetch_context()` — snapshot source/ticker/interval/compare +
   `partition_watchlists(active sub-tab, pinned)` (universe deferred) into a
   `PrefetchContext` (or `None`).
-- `_prefetch_observe(changed_ranks=None)` — no-op when the driver is `None`;
-  else `set_context` + `_prefetch_pump`; in shadow mode logs the planned-job
-  count with no fetch/cache side effects.
+- `_prefetch_observe(changed_ranks=None)` — no-op when the driver is `None` OR a
+  sandbox session is active (sandbox owns the slots offline); else `set_context`
+  + `_prefetch_pump`; in shadow mode logs the planned-job count with no
+  fetch/cache side effects.
+- `_prefetch_observe_soon(changed_ranks=None)` — defer `_prefetch_observe` to the
+  next Tk idle via `_track_after(0, …)`, keeping the re-arm OFF the perf-critical
+  load path. No timer is scheduled when the feature is off.
+- `_prefetch_observe_compare()` / `_prefetch_observe_watchlists()` — scoped
+  convenience wrappers (`changed_ranks=[TIER_COMPARE]` / `[TIER_FOCUSED_WL,
+  TIER_OTHER_WL]`) so a compare-toggle / subtab / pinned-rebuild re-arms only the
+  affected tiers (the scheduler's enqueue-all rebuild still reassigns ownership
+  shifts; scoping just avoids dropping unchanged tiers' in-flight deep bands).
+
+### Observe-hook coverage (where the scheduler re-arms)
+- **`_load_data_async` chokepoint** (`app.py`, after the sandbox early-return):
+  `self._prefetch_observe_soon()` — the single site covering ticker / watchlist
+  double-click + space-cycle / chart-stack promote / explicit axis change, since
+  they ALL route through `_load_data_async`. Deferred so it never adds to
+  ticker-switch latency.
+- **compare toggle** (`app.py:_on_compare_toggle`): `_prefetch_observe_compare()`.
+  (Compare-*ticker* changes route through `_load_data_async` → covered above.)
+- **watchlist subtab change** (`gui/watchlist_tab.py:_on_watchlist_subtab_changed`)
+  and **pinned rebuild** (`_kick_watchlist_preloads`):
+  `_prefetch_observe_watchlists()`.
+- **startup** (`app.py.__init__`, after the initial `_load_data`):
+  `_prefetch_observe_soon()`.
 
 ## Contract
 - Gated by `TRADINGLAB_PREFETCH_SCHEDULER` (default OFF → `_prefetch_driver is
@@ -47,8 +70,11 @@ ceiling (§7.24). A pure method-bag mixin: **no `__init__`**.
   gets a throwaway `unlimited_bucket_registry()` so dry-run observation never
   spends a real vendor token (review Must-fix).
 - Wired into `ChartApp.__init__` (`self._prefetch_driver =
-  self._maybe_build_prefetch_driver()`) and `_on_explicit_axis_change`
-  (`self._prefetch_observe()`).
+  self._maybe_build_prefetch_driver()` + a startup `_prefetch_observe_soon()`
+  after the initial load), the `_load_data_async` chokepoint (covers ticker /
+  watchlist / chart-stack / axis switches), `_on_compare_toggle`
+  (`_prefetch_observe_compare()`), and the watchlist subtab / pinned-rebuild
+  handlers (`_prefetch_observe_watchlists()`).
 
 ## Testing
 Covered via the flag-on shadow-boot path + the full smoke suite with the flag

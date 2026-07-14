@@ -209,6 +209,11 @@ class PrefetchAppMixin:
         if driver is None:
             return
         try:
+            if self._is_sandbox_active():
+                return  # sandbox owns the slots offline — never background-prefetch
+        except Exception:  # noqa: BLE001
+            pass
+        try:
             ctx = self._build_prefetch_context()
             if ctx is None:
                 return
@@ -222,3 +227,27 @@ class PrefetchAppMixin:
                 driver.shadow_log.clear()
         except Exception:  # noqa: BLE001
             pass
+
+    def _prefetch_observe_soon(self, changed_ranks=None) -> None:
+        """Defer a `_prefetch_observe` to the next Tk idle (via `_track_after`).
+
+        Keeps the re-arm off the perf-critical load path — the chokepoint in
+        `_load_data_async` schedules this so a ticker/watchlist/chart-stack
+        switch re-arms the scheduler without adding to ticker-switch latency.
+        No-op (no timer scheduled) when the feature is off."""
+        if getattr(self, "_prefetch_driver", None) is None:
+            return
+        try:
+            self._track_after(0, self._prefetch_observe, changed_ranks)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _prefetch_observe_compare(self) -> None:
+        """Re-arm only the compare tier (compare toggle / symbol change)."""
+        from ..data.prefetch.tiers import TIER_COMPARE
+        self._prefetch_observe_soon([TIER_COMPARE])
+
+    def _prefetch_observe_watchlists(self) -> None:
+        """Re-arm the focused + other watchlist tiers (subtab / pinned change)."""
+        from ..data.prefetch.tiers import TIER_FOCUSED_WL, TIER_OTHER_WL
+        self._prefetch_observe_soon([TIER_FOCUSED_WL, TIER_OTHER_WL])

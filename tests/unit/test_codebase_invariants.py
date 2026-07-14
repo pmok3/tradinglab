@@ -270,7 +270,14 @@ def test_app_spec_md_mro_matches_real_chartapp_bases():
 #          (self._prefetch_driver = self._maybe_build_prefetch_driver()), and the
 #          _prefetch_observe() hook in _on_explicit_axis_change. Default OFF →
 #          driver is None → zero behaviour change. Feature (prefetch-scheduler).
-_APP_PY_LOC_CEILING = 7548
+#   7557 — prefetch cut-over draft (prefetch-cutover branch): observe-hook
+#          coverage — the _load_data_async chokepoint (_prefetch_observe_soon)
+#          replaces the axis-change hook and covers ticker/watchlist/chart-stack
+#          switches; plus compare-toggle + startup hooks. TEMPORARY high-water
+#          mark: the flip stage removes the reactive prefetch paths
+#          (_ensure_compare_prefetched / _ensure_prefetched / companion-interval
+#          calls), which drops app.py well below this — lower the ceiling then.
+_APP_PY_LOC_CEILING = 7557
 
 # Once a real extraction drops app.py well under the ceiling, lower the
 # constant to lock the reduction in. The band keeps ordinary small edits from

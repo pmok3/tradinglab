@@ -507,6 +507,8 @@ class WatchlistTabMixin:
             self._populate_watchlist_tab(label)
         except Exception:  # noqa: BLE001
             pass
+        # Focused watchlist changed → re-arm the WL tiers (flagged; no-op off).
+        self._prefetch_observe_watchlists()
 
     def _on_add_watchlist_subtab(self) -> None:
         """Pin an existing watchlist via the trailing "+" sub-tab.
@@ -1445,6 +1447,8 @@ class WatchlistTabMixin:
             self._preload_watchlist_signals()
         except Exception:  # noqa: BLE001
             pass
+        # Pinned watchlists changed → re-arm the WL tiers (flagged; no-op off).
+        self._prefetch_observe_watchlists()
 
     def _sandbox_watchlist_clock(self) -> tuple[bool, int | None, object | None]:
         """Return ``(sandbox_active, clock_ts, session_date)``.
