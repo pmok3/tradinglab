@@ -26,7 +26,7 @@ Live-data fetcher backed by yfinance. Thin adapter: pulls a DataFrame via `yf.Ti
 - For intraday calls, the result may contain pre/post bars (with correct session tags) if the ticker has them.
 
 ## Testing
-- Smoke suite uses synthetic source by default; live fetch is exercised manually. `check_c6_bad_ticker` covers the failure path.
+- Test conftest pins startup to `"yfinance"` and stubs the yfinance fetcher with deterministic offline candles, so the smoke suite exercises the registry path without network. Live fetch is exercised manually. `check_c6_bad_ticker` covers the failure path.
 
 ## Known limitations
 - **Asset-class scope** — Tested with US equities and ETFs only (USD-denominated). yfinance accepts crypto / FX / international tickers but our normalisation, session classification, and ET timestamping all assume US-equity conventions. Do not rely on those asset classes.
@@ -35,4 +35,3 @@ Live-data fetcher backed by yfinance. Thin adapter: pulls a DataFrame via `yf.Ti
 - **Single-ticker only** — Batch downloads return a `MultiIndex` columns DataFrame; downstream code does not handle that shape. Use one fetcher call per ticker.
 - yfinance occasionally rate-limits or returns empty frames for transient reasons. No retry; the app-level fallback (disk cache or stale memory cache) papers over this.
 - No `prepost=False` override for users who want to avoid extended-hours bars at fetch time rather than filter-time.
-

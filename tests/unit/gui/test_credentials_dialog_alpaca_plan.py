@@ -53,7 +53,7 @@ def test_tier_is_a_readonly_dropdown_with_free_and_paid():
         displays = list(combo.cget("values"))
         assert len(displays) == 2
         assert any("Free" in d and "200" in d for d in displays)
-        assert any("Paid" in d and "10,000" in d for d in displays)
+        assert any("Paid" in d and "unlimited" in d for d in displays)
 
 
 def test_default_selects_free_and_collects_free(monkeypatch):

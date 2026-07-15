@@ -109,8 +109,16 @@ Also hosts the pure scheduler helpers (only caller is here).
   _ticker_change_should_time_preserve()`) — at the default right-edge
   view the new ticker shows its own default window instead of the
   previous ticker's (audit `ticker-switch-default-view-align`).
+- `_live_updates_delayed_for_source()` — True when the active source
+  can't provide real-time live bars. Alpaca **free** tier streams
+  15-min-delayed IEX data (`data.alpaca_source.is_live_capable()` is
+  False for free / header-auto-detected-free), so live polling must be
+  suppressed — a delayed bar must not masquerade as a live update. Paid
+  Alpaca (SIP) and every other source return False. Never raises.
 - `_schedule_next_bar_fetch()` — arm aligned next-bar timer.
-  No-op in sandbox / while streaming. Retry path: if prev tick
+  No-op in sandbox / while streaming / when
+  `_live_updates_delayed_for_source()` (free-tier Alpaca — 15-min
+  delayed, so no live poll is armed). Retry path: if prev tick
   expected newer bar but fetch didn't advance, schedule retry at
   `_POLL_RETRY_DELAY_MS` until `_POLL_RETRY_MAX` exhausted.
 - `_next_bar_fetch_tick()` — actual fetch. Provider HTTP runs on
@@ -119,7 +127,10 @@ Also hosts the pure scheduler helpers (only caller is here).
   `_prefetched_raw`. `_load_data` invalidates prior visible
   primary/compare indicator entries when it consumes those fresh bars.
   Bumps `_fetch_token` before submission so stale results from a
-  superseding ticker switch can drop. **1d
+  superseding ticker switch can drop. Bails at the top (clearing
+  `_poll_job`) when `_live_updates_delayed_for_source()` — catches a
+  tier auto-downgrade (paid→free) that lands after a poll was already
+  armed, so delayed data never renders live. **1d
   ticks redirect to intraday prefetch** (`_ensure_prefetched(sym,
   "5m", force=True)`) for primary + compare instead of refetching
   daily — the prefetch-arrival handler then re-renders the
@@ -172,6 +183,9 @@ Also hosts the pure scheduler helpers (only caller is here).
   `_silent_tcl` for tearing-down case.
 - Streaming and bar-close polling mutually exclusive:
   `_schedule_next_bar_fetch` is a no-op while `_stream_active`.
+- Free-tier Alpaca (15-min-delayed IEX) never live-polls:
+  `_schedule_next_bar_fetch` and `_next_bar_fetch_tick` both
+  short-circuit on `_live_updates_delayed_for_source()`.
 - Sandbox-active short-circuits both `_schedule_next_bar_fetch`
   and `_next_bar_fetch_tick` (replay engine drives the clock).
 - Retry counter increments only when prev tick declared

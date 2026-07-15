@@ -52,8 +52,9 @@ Fields listed in `_CHOICE_FIELDS` render as a **read-only
 `ttk.Combobox`** instead of a free-text entry, mapping a friendly
 display label ↔ a stored env value; optional muted helper text under
 the control comes from `_CHOICE_HELP`. Today the only choice field is
-**`ALPACA_TIER`** — the "Alpaca data plan" selector (`Free — IEX feed,
-200 req/min` / `Paid — SIP feed, 10,000 req/min`), which **replaced the
+**`ALPACA_TIER`** — the "Alpaca data plan" selector (`Free — IEX feed
+(15-min delayed), 200 req/min` / `Paid — SIP feed (real-time), unlimited
+req/min`), which **replaced the
 old free-text `ALPACA_FEED` field** (tier-UX council decision). Making
 the plan the single control prevents the #1 misconfig — plan/feed
 disagreement (`paid`+`iex` → silently partial volume; `free`+`sip` →

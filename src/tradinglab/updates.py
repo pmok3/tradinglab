@@ -23,8 +23,6 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
-from datetime import time as _time
 from pathlib import Path
 from typing import Any
 
@@ -92,18 +90,15 @@ class UpdateResult:
 
 
 def _is_rth_now() -> bool:
-    """Return ``True`` if the wall clock is inside US regular trading hours."""
-    from .core.timezones import ET
+    """Return ``True`` if the wall clock is inside US regular trading hours.
 
-    if ET is None:
-        return True
-    now = datetime.now(ET)
+    Delegates to :func:`tradinglab.core.session_calendar.is_rth_now` —
+    the single owner of the RTH predicate (Mon–Fri, half-open
+    ``[09:30, 16:00)`` ET; missing tzdata ⇒ conservative ``True``).
+    """
+    from .core.session_calendar import is_rth_now
 
-    if now.weekday() >= 5:  # Saturday / Sunday
-        return False
-    rth_open = _time(9, 30)
-    rth_close = _time(16, 0)
-    return rth_open <= now.time() < rth_close
+    return is_rth_now()
 
 
 # ---------------------------------------------------------------------------

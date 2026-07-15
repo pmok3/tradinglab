@@ -73,6 +73,15 @@ from ..backtest.session import ENGINE_VERSION, SessionResult, SessionSpec
 from ..constants import is_intraday
 from ..core.bars_registry import BarsRegistry
 from ..core.params_key import freeze_params
+from ..core.session_calendar import (
+    RTH_CLOSE_SEC as _RTH_CLOSE_SEC,
+)
+from ..core.session_calendar import (
+    RTH_OPEN_SEC as _RTH_OPEN_SEC,
+)
+from ..core.session_calendar import (
+    is_regular_session as _is_regular_session,
+)
 from ..core.side import Side
 from ..core.timezones import ET
 from ..data.multi_interval_cache import MultiIntervalCache
@@ -215,20 +224,12 @@ def _within_arm_window(strategy: EntryStrategy, et_dt: datetime) -> bool:
     return local_t >= start or local_t <= end
 
 
-# Regular-session boundaries for US equities. Live evaluator treats
-# RTH = 09:30:00–16:00:00 ET, Mon–Fri (holidays not enforced — the
-# strategy tester also runs against arbitrary user-supplied data so we
-# leave holiday filtering to the data layer).
-_RTH_OPEN = time(hour=9, minute=30)
-_RTH_CLOSE = time(hour=16, minute=0)
-
-
-def _is_regular_session(et_dt: datetime) -> bool:
-    """True iff ``et_dt`` is Mon–Fri AND 09:30 ≤ time ≤ 16:00 ET."""
-    if et_dt.weekday() >= 5:  # Saturday=5, Sunday=6
-        return False
-    local_t = et_dt.time()
-    return _RTH_OPEN <= local_t <= _RTH_CLOSE
+# The regular-session boundaries + the ``_is_regular_session`` predicate
+# (Mon–Fri AND 09:30 ≤ ET ≤ 16:00, closed interval) live in
+# ``core.session_calendar`` — imported at the top of this module as the
+# single owner of the RTH predicate. Holidays are not enforced; the
+# strategy tester runs against arbitrary user-supplied data and leaves
+# holiday filtering to the data layer.
 
 
 # ---------------------------------------------------------------------------
@@ -252,8 +253,8 @@ def _is_regular_session(et_dt: datetime) -> bool:
 # ---------------------------------------------------------------------------
 
 _SECONDS_PER_DAY = 86400
-_RTH_OPEN_SEC = 9 * 3600 + 30 * 60  # 34200
-_RTH_CLOSE_SEC = 16 * 3600           # 57600
+# ``_RTH_OPEN_SEC`` / ``_RTH_CLOSE_SEC`` are imported from
+# ``core.session_calendar`` (single owner of the session boundaries).
 # 1970-01-01 was a Thursday (weekday() == 3). Days-since-epoch + 3, mod 7
 # yields the Python-convention weekday (Mon=0 … Sun=6).
 _EPOCH_WEEKDAY_OFFSET = 3

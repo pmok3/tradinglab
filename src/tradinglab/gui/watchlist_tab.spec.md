@@ -181,12 +181,13 @@ larger; pinning makes a list reachable from the main UI.
 
 ### Recurring poll loop
 
-- `_WATCHLIST_POLL_RTH_OPEN_MIN = 570` / `_WATCHLIST_POLL_RTH_CLOSE_MIN
-  = 960` — approximate US regular trading hours in ET (09:30 incl.
-  – 16:00 excl., weekdays). Holidays not handled (worst case: a
-  few extra cache-fresh short-circuit hits on a holiday).
 - `_watchlist_poll_in_rth_now() -> bool` — True iff wall-clock is
-  inside the RTH window above. Conservative fallback (`True`) when
+  inside US regular trading hours (Mon–Fri, 09:30 incl. – 16:00 excl.
+  ET). **Delegates to `core.session_calendar.is_rth_now`** (single
+  owner of the RTH predicate); the old
+  `_WATCHLIST_POLL_RTH_OPEN_MIN`/`_CLOSE_MIN` class constants were
+  removed. Holidays not handled (worst case: a few extra cache-fresh
+  short-circuit hits on a holiday). Conservative fallback (`True`) when
   `zoneinfo` is unavailable so the user sees live-cadence polling
   rather than a silent off-hours slowdown.
 - `_watchlist_poll_effective_delay_ms() -> Optional[int]` — reads

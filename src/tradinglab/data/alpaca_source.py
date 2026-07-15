@@ -40,7 +40,7 @@ from ..models import Candle
 from ._http import MAX_RESPONSE_BYTES, credentialed_opener
 from .credentials import AlpacaCredentials, get_credentials
 from .normalize import candles_from_json_rows
-from .prefetch.buckets import global_bucket_registry
+from .prefetch.buckets import UNLIMITED_RATE, global_bucket_registry
 from .rate_limiter import TokenBucket
 
 LOG = logging.getLogger(__name__)
@@ -79,13 +79,15 @@ _PAGE_PAUSE_S = 0.2
 # --- Account-wide proactive rate limiting ---------------------------------
 #
 # Per-minute request budget by Alpaca plan tier. Free "Basic" = 200/min;
-# paid "Algo Trader Plus" = 10,000/min. A single process-wide token bucket
+# paid "Algo Trader Plus" = effectively unlimited (``UNLIMITED_RATE`` — the
+# same sentinel the prefetch scheduler treats as "no rate cap"). A single
+# process-wide token bucket
 # paces ALL Alpaca requests — interactive fetches AND the universe preloader
 # — because every request funnels through `_http_get_page`. Proactive pacing
 # keeps us under budget so the reactive `Retry-After` handling in
 # `_request_with_retry` is only a rare-overshoot safety net (see the
 # rate-limiting discussion in the spec).
-_ALPACA_RATE_BY_TIER = {"free": 200, "paid": 10000}
+_ALPACA_RATE_BY_TIER = {"free": 200, "paid": UNLIMITED_RATE}
 _DEFAULT_TIER = "free"
 
 # Shared bucket for the single Alpaca account. This IS the process-wide
@@ -112,11 +114,13 @@ _detected_free = False
 _pending_downgrade_notice: str | None = None
 
 
-def _alpaca_rate_per_min(creds: AlpacaCredentials) -> int:
-    """Per-minute request budget for ``creds``'s tier (default free/200).
+def _alpaca_rate_per_min(creds: AlpacaCredentials) -> float:
+    """Per-minute request budget for ``creds``'s tier.
 
-    Capped at the free budget once a header-driven downgrade has been
-    detected, so a persisted ``tier="paid"`` can't re-raise the bucket.
+    ``free`` → 200/min; ``paid`` → :data:`UNLIMITED_RATE` (effectively
+    uncapped). Default / unknown tier → the safe free budget. Capped back at
+    the free budget once a header-driven downgrade has been detected, so a
+    persisted ``tier="paid"`` can't re-raise the bucket.
     """
     tier = (getattr(creds, "tier", None) or _DEFAULT_TIER).lower()
     rate = _ALPACA_RATE_BY_TIER.get(tier, _ALPACA_RATE_BY_TIER[_DEFAULT_TIER])
@@ -133,6 +137,27 @@ def _alpaca_bucket_for(creds: AlpacaCredentials) -> TokenBucket:
         _ALPACA_BUCKET.configure(rate)
         _ALPACA_BUCKET_RATE = rate
     return _ALPACA_BUCKET
+
+
+def is_live_capable(creds: AlpacaCredentials | None = None) -> bool:
+    """Whether Alpaca can drive real-time *live* bar updates for ``creds``.
+
+    The free "Basic" plan's real-time data (the IEX websocket, and the
+    most-recent REST bars) is **delayed 15 minutes**, so it must NOT feed the
+    live bar-close poll — a 15-minute-old bar presented as a live update is
+    misleading. Only the paid "Algo Trader Plus" (SIP) feed is real-time.
+
+    A header-auto-detected free key (``_detected_free``) is treated as delayed
+    even when ``tier="paid"`` was persisted, mirroring the rate-budget clamp.
+    ``creds`` defaults to the current Alpaca credentials. Never raises.
+    """
+    if creds is None:
+        try:
+            creds = get_credentials().alpaca
+        except Exception:  # noqa: BLE001
+            return False
+    tier = (getattr(creds, "tier", None) or _DEFAULT_TIER).lower()
+    return tier == "paid" and not _detected_free
 
 
 def _observe_rate_limit_header(headers: Any) -> None:

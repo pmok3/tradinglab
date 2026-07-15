@@ -85,12 +85,13 @@ def _silent_tcl(*extra_excs: type[BaseException]):
 def _market_window_et(include_extended: bool) -> tuple[_dt.time, _dt.time]:
     """Return (open, close) ET ``time`` pair for a regular weekday.
 
-    Extended hours on NYSE/NASDAQ run 04:00-20:00 ET; regular hours
-    09:30-16:00 ET.
+    Delegates to :func:`tradinglab.core.session_calendar.market_window`
+    (the single owner of the session boundaries). Extended hours on
+    NYSE/NASDAQ run 04:00-20:00 ET; regular hours 09:30-16:00 ET.
     """
-    if include_extended:
-        return _dt.time(4, 0), _dt.time(20, 0)
-    return _dt.time(9, 30), _dt.time(16, 0)
+    from ..core.session_calendar import market_window
+
+    return market_window(include_extended)
 
 
 def _postpone_past_closed_market(target_epoch: float,
@@ -558,6 +559,38 @@ class PollingMixin:
         except Exception:  # noqa: BLE001
             pass
 
+    def _live_updates_delayed_for_source(self) -> bool:
+        """True when the active data source can't provide real-time live bars.
+
+        Alpaca's **free** tier streams 15-minute-delayed IEX data, so arming
+        the live bar-close poll would present stale bars as live. Live polling
+        is suppressed in that case — the chart still loads and refreshes on
+        demand; only the automatic "it's live" cadence is turned off. Paid
+        Alpaca (SIP) and every other source are live-capable.
+
+        ``"Auto"`` is resolved to its effective concrete source first (in
+        practice Auto never resolves to free-Alpaca — yfinance always outranks
+        it — so Auto is live-capable, but this stays correct if the priority
+        ever changes). Never raises.
+        """
+        try:
+            src = self.source_var.get()
+        except Exception:  # noqa: BLE001
+            return False
+        if src == "Auto":
+            try:
+                from ..data.auto_source import resolve_auto_source
+                src = resolve_auto_source()
+            except Exception:  # noqa: BLE001
+                return False
+        if src == "alpaca":
+            try:
+                from ..data.alpaca_source import is_live_capable
+                return not is_live_capable()
+            except Exception:  # noqa: BLE001
+                return False
+        return False
+
     def _schedule_next_bar_fetch(self) -> None:
         """Arm an after() timer aligned to the next bar-close boundary.
 
@@ -584,6 +617,10 @@ class PollingMixin:
                 pass
             self._poll_job = None
         if self._stream_active:
+            return
+        if self._live_updates_delayed_for_source():
+            # Free-tier Alpaca (and any 15-min-delayed feed): don't arm the
+            # live poll — delayed bars must not masquerade as live updates.
             return
 
         interval = self.interval_var.get()
@@ -644,6 +681,11 @@ class PollingMixin:
         ``_schedule_next_bar_fetch``).
         """
         if self._is_sandbox_active():
+            self._poll_job = None
+            return
+        if self._live_updates_delayed_for_source():
+            # A tier auto-downgrade (paid→free) can land after a poll was
+            # already armed; drop the tick so delayed data never renders live.
             self._poll_job = None
             return
         self._poll_job = None

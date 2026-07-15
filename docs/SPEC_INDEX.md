@@ -32,6 +32,7 @@ A one-spec-per-`.py` documentation set. Each spec follows a fixed 9-section layo
 | `core/lru_dict.spec.md` | **`LRUDict[K, V]`** — bounded-capacity `OrderedDict` subclass with LRU eviction on insert + LRU-touch on `.get()` hit. Used at `strategy_tester/warmup.py::_WARMUP_CACHE` (maxsize=256) and `app.py::_events_cache` (maxsize=200). See CLAUDE.md §7.21. |
 | `core/json_collection_store.spec.md` | **`JsonObjectStore[T]`** — generic per-subsystem JSON-collection store collapsing 6 hand-rolled `storage.py` copies. Save/load/delete + `load_all() -> (good, broken)` triage + import/export. Pilot: `entries/storage.py` (294 → 168 LOC). See CLAUDE.md §7.22. |
 | `core/side.spec.md` | **`Side`** — canonical position-direction value type (LONG / SHORT). Unifies the `"long"`/`"short"`/`"buy"`/`"sell"`/`OrderSide.BUY/SELL` vocabularies. Helpers: `sign`, `is_long`, `favorable_price(bar)`, `unfavorable_price(bar)`, `adverse_excursion_price` / `favorable_excursion_price` aliases. Pilot: `strategy_tester/evaluator.py` (~10 sites). Audit #10. |
+| `core/session_calendar.spec.md` | **Session calendar** — single owner of US-equity trading-session boundaries (pre/regular/post) + RTH predicates: `classify_session`/`classify_session_arr` (re-exported by `constants`), `is_regular_session` (closed `[09:30,16:00]`), `is_rth_now` (half-open `[09:30,16:00)`), `market_window(include_extended)`. Collapses ~7 re-hardcodings of the 09:30/16:00 boundaries and the 4-named `include_extended`/`prepost` boolean. |
 
 ## `data/` — fetchers and normalization
 | Spec | Covers |

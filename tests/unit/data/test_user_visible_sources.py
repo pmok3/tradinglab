@@ -115,13 +115,17 @@ def test_plain_reregistration_clears_internal_flag() -> None:
     assert "synthetic" not in user_visible_sources()
 
 
-def test_resolve_source_demotes_internal_value() -> None:
+def test_resolve_source_demotes_internal_value(monkeypatch) -> None:
     """``AppState._resolve_source`` reads ``startup_defaults["source"]``
     from settings.json. An old user might still have ``source="synthetic"``
     persisted from before the UI-hide; the resolver must demote that to
     the first user-visible source rather than honour the internal
     selection."""
     from tradinglab.gui.app_state import AppState
+
+    # Clear the test-suite env pin so the real demotion path is exercised
+    # (the pin, set in tests/conftest.py, would otherwise force "yfinance").
+    monkeypatch.delenv("TRADINGLAB_STARTUP_SOURCE", raising=False)
 
     # Internal source value → demoted to first user-visible.
     assert AppState._resolve_source({"source": "synthetic"}) == "yfinance"

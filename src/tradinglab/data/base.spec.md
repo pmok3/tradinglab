@@ -21,7 +21,7 @@ Defines the `DataFetcher` protocol (a `(ticker, interval) -> Optional[List[Candl
 
 ## Design Decisions
 - **Plain dict, not a class**: the registry is a two-operation surface (add, read). A class would add ceremony without benefit.
-- **Insertion order is public API** (via `next(iter(user_visible_sources()))`): the UI picks the first user-visible registered source as the default. This means `data/__init__.py`'s registration order is not optional — yfinance must be first.
+- **Insertion order is public API** (via `next(iter(user_visible_sources()))`): the UI keeps `yfinance` as the first user-visible source for stable dropdown ordering and fallback demotion from invalid persisted sources. This is separate from the startup default, which is now `"Auto"` via `constants.BUILTIN_STARTUP_DEFAULTS["source"]`.
 - **Idempotent registration**: lets tests monkey-patch. Repeat registrations overwrite the existing entry without error. A re-registration without `internal=True` un-flags the entry (so a test that calls `register_source("synthetic", fake)` un-hides synthetic from the UI). In practice tests stub via `DATA_SOURCES[...] = ...` direct assignment which bypasses the helper, so the flag survives.
 - **`internal` is a parallel set, not a dict-value attribute** (`_INTERNAL_SOURCES: set[str]`): keeps `DATA_SOURCES`'s value type homogeneous (`DataFetcher`) so callers that walk `.values()` don't have to special-case anything. The set is private; check membership via `is_internal_source(name)` or filter via `user_visible_sources()`.
 - **`supports_range` is a parallel set** (`_RANGE_CAPABLE: set[str]`, like `_INTERNAL_SOURCES`) — keeps `DATA_SOURCES`'s value type homogeneous. `fetch_range` returns a `(candles, status)` tuple rather than raising, so the caller (drilldown) can distinguish *unsupported* (fall back to trailing window) from *empty* (provider has no bars in range) from *error*. Only Alpaca is `supports_range=True` today; Polygon/yfinance stay trailing-window until a follow-up.
@@ -31,7 +31,7 @@ Defines the `DataFetcher` protocol (a `(ticker, interval) -> Optional[List[Candl
 ## Invariants
 - After `register_source(n, f)`, `DATA_SOURCES[n]` is a **ratio-aware wrapper** delegating to `f` (see Design Decisions); the raw fetcher is `DATA_SOURCES[n].__wrapped__ is f`. Re-registering an already-wrapped fetcher does not double-wrap (`_tl_ratio_aware` guard).
 - After `register_source(n, f, internal=True)`, `is_internal_source(n) is True` and `n not in user_visible_sources()` but `n in DATA_SOURCES`.
-- `user_visible_sources()` preserves the registration order of the underlying dict (so the first user-visible entry remains the default selection).
+- `user_visible_sources()` preserves the registration order of the underlying dict (so the first user-visible entry remains the stable fallback / first dropdown entry, not the startup default).
 - **Sources MUST NOT propagate raw network errors to callers.** Exceptions are caught at the source layer; failures return `None`/`[]` and log via `_status` or `print`. See `data/yfinance_source.py:45` for the canonical implementation. BYOD local sources (see `data/local_source.spec.md`) obey the same no-exception contract — schema and I/O failures return `None` after a status-bar log.
 - Asset-class scope of the currently registered sources is documented in `data/__init__.spec.md` (US equities / ETFs only).
 
@@ -43,4 +43,3 @@ Defines the `DataFetcher` protocol (a `(ticker, interval) -> Optional[List[Candl
 
 ## Known limitations
 - No "unregister"— tests that stub must remember to restore, or rely on the fact that the next `data/__init__.py` import re-registers defaults (though Python only imports once per session).
-

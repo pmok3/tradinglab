@@ -5,7 +5,8 @@ A small, thread-safe **token-bucket rate limiter** used to *proactively* pace
 outbound vendor API calls so we stay under a per-minute quota instead of
 reactively absorbing HTTP 429s. Currently the shared limiter for Alpaca (wired
 in `alpaca_source._http_get_page`), whose free "Basic" plan allows 200
-requests/min and paid "Algo Trader Plus" allows 10,000/min.
+requests/min and paid "Algo Trader Plus" is treated as effectively unlimited
+(`prefetch.buckets.UNLIMITED_RATE`).
 
 **Why a token bucket, not exponential backoff, for a fixed quota:** a
 per-minute limit has a *knowable* recovery time, so the right primary tool is
@@ -25,7 +26,7 @@ rate-limiting discussion in `alpaca_source.spec.md`.)
 - External: stdlib only (`threading`, `time`, `collections.abc`).
 
 ## Design Decisions
-- **Sizing (safety margin):** sustained refill = `safety` (default 0.9) of the nominal limit; capacity (burst) = the remaining headroom (`round(rate_per_min*(1-safety))`). So the worst-case in any rolling 60 s window — `capacity + refill_per_sec*60` — stays at/under the nominal limit. For 200/min: ~3 tokens/s + a 20-token burst; for 10,000/min: ~150/s + a 1,000-token burst. The `round` avoids float warts (`200*(1-0.9)=19.9999` → a clean 20).
+- **Sizing (safety margin):** sustained refill = `safety` (default 0.9) of the nominal limit; capacity (burst) = the remaining headroom (`round(rate_per_min*(1-safety))`). So the worst-case in any rolling 60 s window — `capacity + refill_per_sec*60` — stays at/under the nominal limit. For 200/min: ~3 tokens/s + a 20-token burst. Alpaca's paid tier configures the bucket to `UNLIMITED_RATE`, which is an intentionally huge sentinel rather than a real vendor quota. The `round` avoids float warts (`200*(1-0.9)=19.9999` → a clean 20).
 - **Continuous (fractional) refill** via `time.monotonic` deltas — no background thread; refill is computed lazily on each acquire under the lock.
 - **Thread-safe** via a single `threading.Lock`; `acquire` is a poll loop over `try_acquire` (releases the lock while sleeping). Correct under concurrency (multiple preload workers + the fetch executor); the shared bucket serialises token accounting.
 - **`try_acquire` is the testable core** (deterministic with a fake clock, no real sleeps); `acquire` is a thin blocking wrapper. This is why the pacing tests inject a clock and exercise `try_acquire`.

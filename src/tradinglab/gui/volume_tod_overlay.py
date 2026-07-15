@@ -86,6 +86,7 @@ from matplotlib.collections import LineCollection, PolyCollection
 from matplotlib.colors import to_rgba
 
 from .. import constants as _constants
+from ..core.session_calendar import RTH_CLOSE_MIN, RTH_OPEN_MIN, RTH_SPAN_MIN
 from ..core.timezones import get_et
 from ..models import Candle
 from ..rendering import _BODY_HALF, darker_shade
@@ -109,10 +110,12 @@ _MEDIAN_TICK_ALPHA = 0.65
 _MEDIAN_TICK_LINEWIDTH = 1.0
 _MEDIAN_TICK_HALF_WIDTH = _BODY_HALF  # matches the bar's x-extent
 
-# RTH window in ET minutes-of-day (09:30 → 16:00 = 390 minutes).
-_RTH_OPEN_MIN = 9 * 60 + 30   # 570
-_RTH_CLOSE_MIN = 16 * 60      # 960
-_RTH_SPAN_MIN = _RTH_CLOSE_MIN - _RTH_OPEN_MIN  # 390
+# RTH window in ET minutes-of-day (09:30 → 16:00 = 390 minutes). The
+# boundaries live in ``core.session_calendar`` (single owner); aliased to
+# the module-private names used throughout this file.
+_RTH_OPEN_MIN = RTH_OPEN_MIN
+_RTH_CLOSE_MIN = RTH_CLOSE_MIN
+_RTH_SPAN_MIN = RTH_SPAN_MIN
 
 
 def _candle_date_key(c: Candle) -> date | None:

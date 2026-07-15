@@ -138,11 +138,12 @@ Flow (all worker steps run on `self._executor`, never touching Tk):
 
 **Window size / round-trip cost.** The window fills ~1 API page
 (`constants.DEFAULT_BARS_PER_PAGE`, empirically **2,000** for the free
-Alpaca IEX feed — not the advertised 10k). Round-trip time is dominated by
-the page COUNT (~0.6s/page), not bar count, so a 1-page window keeps a
-drilldown to ~0.6s/symbol. Sizing to 10k made the 5m window ~179 days = 5
-pages and, fetched for primary + compare sequentially, produced the ~10s
-hang this design + the parallel fetch above replaced. See
+Alpaca IEX feed; paid SIP accounts are rate-unlimited but still use this
+page-sized targeted window). Round-trip time is dominated by the page COUNT
+(~0.6s/page), not bar count, so a 1-page window keeps a drilldown to
+~0.6s/symbol. Sizing the 5m window much larger made it ~179 days = 5 pages
+and, fetched for primary + compare sequentially, produced the ~10s hang this
+design + the parallel fetch above replaced. See
 `constants.spec.md` / `docs/TARGETED_FETCH.md`.
 
 Non-range providers (yfinance) keep the original single-fetcher path

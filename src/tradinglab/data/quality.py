@@ -12,28 +12,25 @@ A small, source-agnostic descriptor layer used in two places:
    caveat: :func:`partial_volume_warning` returns a user-facing string
    when the active source has partial volume.
 
-2. **Sandbox source ranking (perf-review item #7).** Instead of loading
-   a bar-replay session from whatever chart source happens to be active,
-   the sandbox should use the *longest + highest-quality* history the
-   user actually has configured. :func:`best_source` / :func:`preferred_source`
-   rank the registered, user-visible sources by history depth (for the
-   session's interval) then volume quality — so a user with Alpaca
-   configured gets years of replayable intraday days instead of
-   yfinance's ~60-day cap, and Schwab (deep history + full volume) is
-   preferred automatically the moment its fetcher is wired up. No source
-   is hard-coded: the ranking is driven entirely by this metadata, so
-   new providers slot in by adding one row to :data:`_QUALITY`.
+2. **Source-preference metadata for the global ranking.** The volume tier +
+   ``adjusted`` flag feed the owner's fixed, tier-aware **global source
+   priority**, which now lives in its own module :mod:`data.source_ranking`
+   (``alpaca@paid > schwab > … > alpaca@free``). This module keeps the volume
+   metadata + the :func:`partial_volume_warning`; its ``rank_sources`` /
+   ``best_source`` / ``preferred_source`` are now thin **back-compat shims** that
+   delegate to :mod:`data.source_ranking` (the ``interval`` kwarg is accepted but
+   ignored — the global order is interval-independent). New providers slot into
+   the ranking by editing ``source_ranking.GLOBAL_SOURCE_PRIORITY`` and (for the
+   volume warning) adding a row to :data:`_QUALITY`.
 
 The descriptors are deliberately coarse (approximate reach in days /
-years) — they exist to *rank* sources, not to predict exact history
+years) — they exist as source metadata, not to predict exact history
 depth for a given symbol.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-
-from ..constants import is_intraday
 
 # --- Volume-quality tiers -------------------------------------------------
 
@@ -45,16 +42,6 @@ VOLUME_PARTIAL = "partial"
 VOLUME_SYNTHETIC = "synthetic"
 #: Unknown / user-provided (local BYOD) — treated conservatively.
 VOLUME_UNKNOWN = "unknown"
-
-# Higher = better. Used as a secondary ranking key + to order the
-# volume tiers. PARTIAL ranks above SYNTHETIC/UNKNOWN (real market
-# volume, just incomplete) but well below FULL.
-_VOLUME_RANK: dict[str, int] = {
-    VOLUME_FULL: 3,
-    VOLUME_PARTIAL: 1,
-    VOLUME_SYNTHETIC: 0,
-    VOLUME_UNKNOWN: 0,
-}
 
 
 @dataclass(frozen=True)
@@ -90,6 +77,11 @@ _QUALITY: dict[str, SourceQuality] = {
     "schwab": SourceQuality(VOLUME_FULL, intraday_days=3650, daily_years=20, adjusted=True),
     "polygon": SourceQuality(VOLUME_FULL, intraday_days=3650, daily_years=15, adjusted=False),
     "alpaca": SourceQuality(VOLUME_PARTIAL, intraday_days=3650, daily_years=9, adjusted=True),
+    # Composite (yfinance recent + live over Alpaca deep, yfinance winning
+    # overlaps): FULL volume on the visible/recent window (yfinance) — so it
+    # never false-warns for partial volume. Ranking lives in source_ranking
+    # (above plain yfinance). See hybrid_source.
+    "yfinance+alpaca": SourceQuality(VOLUME_FULL, intraday_days=3650, daily_years=30, adjusted=True),
     "synthetic": SourceQuality(VOLUME_SYNTHETIC, intraday_days=60, daily_years=2, adjusted=False),
     "synthetic-stream": SourceQuality(VOLUME_SYNTHETIC, intraday_days=60, daily_years=2, adjusted=False),
 }
@@ -151,81 +143,52 @@ def partial_volume_warning(source_name: str) -> str | None:
     )
 
 
-def _depth_days(q: SourceQuality, *, interval: str) -> int:
-    """Approximate history reach in days for ranking at ``interval``."""
-    return q.intraday_days if is_intraday(interval) else q.daily_years * 365
+# --- Ranking (delegated to data/source_ranking.py) ------------------------
+#
+# The authoritative source order is the fixed, tier-aware GLOBAL priority in
+# ``data/source_ranking.py`` (alpaca@paid > schwab > … > alpaca@free). These
+# thin shims preserve the historical ``quality.*`` import surface (the sandbox
+# calls ``quality.preferred_source(..., interval=…)``); the ``interval`` kwarg
+# is accepted for back-compat but no longer affects the order — the global
+# priority is interval-independent.
 
 
-def rank_sources(candidates: list[str], *, interval: str) -> list[str]:
-    """Return ``candidates`` sorted best-first for ``interval``.
+def rank_sources(candidates: list[str], *, interval: str | None = None) -> list[str]:
+    """Best-first global ranking (delegates to :mod:`data.source_ranking`).
 
-    Ordering key (all descending): (1) history depth for the interval —
-    the sandbox's primary need is the longest replayable window; (2)
-    volume-quality rank — Schwab/yfinance (full) beat Alpaca (partial) at
-    equal depth; (3) split-adjusted; (4) name (stable tiebreak). De-dupes
-    while preserving the ranked order.
+    ``interval`` is accepted for back-compat but ignored (the global order is
+    interval-independent).
     """
-    seen: set[str] = set()
-    uniq: list[str] = []
-    for name in candidates:
-        if name not in seen:
-            seen.add(name)
-            uniq.append(name)
+    from .source_ranking import rank_sources as _rank
 
-    def _key(name: str) -> tuple:
-        q = quality_for(name)
-        return (
-            _depth_days(q, interval=interval),
-            _VOLUME_RANK.get(volume_quality(name), 0),
-            1 if q.adjusted else 0,
-            # Negative-ish stable tiebreak: earlier alphabetically wins on
-            # a full tie (deterministic). We invert via a sort on name at
-            # the end instead of encoding here.
-        )
-
-    # Sort by the numeric key descending, then name ascending for a stable,
-    # deterministic result on exact ties.
-    return sorted(uniq, key=lambda n: (_key(n), _neg_name(n)), reverse=True)
+    return _rank(candidates)
 
 
-def _neg_name(name: str) -> tuple:
-    """Helper so that, on an otherwise-equal key, names sort ASCending even
-    though the outer sort is ``reverse=True`` (invert each char code)."""
-    return tuple(-ord(c) for c in name)
+def best_source(candidates: list[str], *, interval: str | None = None) -> str | None:
+    """Top of the global ranking (delegates to :mod:`data.source_ranking`)."""
+    from .source_ranking import best_source as _best
 
-
-def best_source(candidates: list[str], *, interval: str) -> str | None:
-    """Return the single best source in ``candidates`` for ``interval`` (or None)."""
-    ranked = rank_sources(candidates, interval=interval)
-    return ranked[0] if ranked else None
+    return _best(candidates)
 
 
 def preferred_source(
-    active_source: str, *, interval: str, candidates: list[str] | None = None
+    active_source: str, *, interval: str | None = None, candidates: list[str] | None = None
 ) -> str:
-    """Best real source to load from, respecting explicit non-standard choices.
+    """Best global source to load from, respecting explicit non-standard choices.
 
-    Used by the sandbox to pick the longest/highest-quality history the
-    user has configured. Contract:
+    Delegates to :func:`data.source_ranking.preferred_source`. Contract:
 
-    * If ``active_source`` is NOT among the user-visible candidates (e.g.
-      an internal ``synthetic`` source or a test stub), it is returned
-      unchanged — we never override a deliberate offline/scaffolding
-      choice. This keeps existing tests and offline flows working.
-    * Otherwise the best-ranked candidate (which includes ``active_source``)
-      is returned — an *upgrade among real market sources* only.
+    * If ``active_source`` is NOT among the candidates (an internal
+      ``synthetic`` source, a test stub, an unregistered name), it is returned
+      unchanged — never override a deliberate offline/scaffolding choice.
+    * Otherwise the globally best-ranked candidate is returned.
 
-    ``candidates`` defaults to :func:`data.base.user_visible_sources` (the
-    registered, non-internal sources — yfinance + configured vendors +
-    local BYOD).
+    ``candidates`` defaults to :func:`data.base.user_visible_sources`; the
+    ``interval`` kwarg is accepted for back-compat but ignored.
     """
-    if candidates is None:
-        from .base import user_visible_sources
+    from .source_ranking import preferred_source as _pref
 
-        candidates = user_visible_sources()
-    if active_source not in candidates:
-        return active_source
-    return best_source(candidates, interval=interval) or active_source
+    return _pref(active_source, candidates=candidates)
 
 
 __all__ = [

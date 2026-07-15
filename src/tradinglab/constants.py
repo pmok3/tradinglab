@@ -6,6 +6,14 @@ import colorsys
 from dataclasses import dataclass, field
 from datetime import datetime
 
+# ``classify_session`` / ``classify_session_arr`` live in
+# ``core.session_calendar`` (the single owner of US-equity session
+# boundaries); re-exported here for the many existing importers.
+from .core.session_calendar import (  # noqa: F401
+    classify_session,
+    classify_session_arr,
+)
+
 # Candlestick body / wick colors.
 #
 # Two palettes are available:
@@ -695,7 +703,10 @@ BUILTIN_STARTUP_DEFAULTS: dict = {
     "ticker": "AMD",
     "compare": "SPY",
     "interval": "1d",
-    "source": "yfinance",
+    # "Auto" resolves to the globally best available source at load time
+    # (data/source_ranking + data/auto_source). Registered unconditionally, so
+    # it is always a valid selection.
+    "source": "Auto",
     "theme": "light",
 }
 
@@ -1099,45 +1110,11 @@ def is_intraday(interval: str) -> bool:
     return interval in INTRADAY_INTERVALS
 
 
-# US equity session boundaries (Eastern time). Pre: 04:00–09:30, regular:
-# 09:30–16:00, post: 16:00–20:00. Anything outside is classified as "pre"
-# (overnight counts as next-day pre-market for simplicity).
-def classify_session(hour: int, minute: int) -> str:
-    """Classify a wall-clock time (US Eastern) into pre/regular/post."""
-    minutes = hour * 60 + minute
-    if 9 * 60 + 30 <= minutes < 16 * 60:
-        return "regular"
-    if 16 * 60 <= minutes < 20 * 60:
-        return "post"
-    return "pre"
-
-
-def classify_session_arr(hours, minutes) -> list[str]:
-    """Vectorized :func:`classify_session` over numpy hour + minute arrays.
-
-    Returns a ``list[str]`` of session labels that is **bit-for-bit
-    identical** to calling :func:`classify_session` element-by-element. The
-    minute-of-day thresholds are duplicated here for a single vectorized
-    pass — keep the two functions in lockstep (a change to the boundaries
-    must update BOTH).
-
-    Used by the data normalizers so large intraday fetches (multi-year 1m,
-    intraday universe preloads) don't pay a per-bar Python call. numpy is
-    imported lazily since this is called once per fetch, not per bar.
-    """
-    import numpy as np
-
-    total = np.asarray(hours, dtype=np.int32) * 60 + np.asarray(minutes, dtype=np.int32)
-    # Integer category codes (0=pre, 1=regular, 2=post) computed with two
-    # vectorized masked assignments, then mapped back to THREE shared string
-    # objects. Going via ``codes.tolist()`` (cached small-int refs) + tuple
-    # indexing keeps every label a shared reference — a numpy ``"<U7"`` array
-    # ``.tolist()`` would instead allocate one fresh ``str`` per bar.
-    codes = np.zeros(total.shape, dtype=np.int8)
-    codes[(total >= 9 * 60 + 30) & (total < 16 * 60)] = 1
-    codes[(total >= 16 * 60) & (total < 20 * 60)] = 2
-    _LABELS = ("pre", "regular", "post")
-    return [_LABELS[c] for c in codes.tolist()]
+# ``classify_session`` / ``classify_session_arr`` moved to
+# ``core.session_calendar`` (single owner of US-equity session
+# boundaries). They are imported at the top of this module and
+# re-exported for the many existing ``from .constants import
+# classify_session`` importers.
 
 
 def interval_minutes(interval: str) -> int:

@@ -119,5 +119,7 @@ asserts every OHLCV field plus timestamp is bit-identical.
   export — for a single very large cache entry the whole thing is
   loaded into memory and written. Acceptable for the target use case
   (sharing a few hundred symbol-intervals at a time).
-- **No compression**. Output is plain CSV. Gzip / Parquet support is
-  a future option; deferred because most cache entries are <1MB on disk.
+- **Compression is zip-only today.** The dialog's primary path writes a
+  `ZIP_DEFLATED` archive of canonical CSV members. Individual `write_csv` /
+  `export_entries` programmatic calls still write plain CSV files; gzip /
+  Parquet support remains out of scope.

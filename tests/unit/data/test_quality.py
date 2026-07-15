@@ -52,72 +52,25 @@ def test_unknown_source_is_not_partial():
 
 
 # ---------------------------------------------------------------------------
-# Source ranking (perf item #7)
+# Ranking shims → data/source_ranking (perf item #7 / global priority)
 # ---------------------------------------------------------------------------
 
 
-def test_rank_intraday_prefers_deep_history_then_volume():
-    # Schwab + Polygon (deep + full) beat Alpaca (deep + partial) beat
-    # yfinance (full but 60-day intraday cap). Schwab > Polygon on the
-    # adjusted tiebreak.
-    ranked = q.rank_sources(["yfinance", "alpaca", "schwab", "polygon"], interval="5m")
-    assert ranked == ["schwab", "polygon", "alpaca", "yfinance"]
-
-
-def test_rank_intraday_alpaca_beats_yfinance():
-    # The sandbox's core need: deep replayable intraday history. Alpaca's
-    # years beat yfinance's ~60-day cap even though Alpaca volume is partial.
-    assert q.rank_sources(["yfinance", "alpaca"], interval="5m") == ["alpaca", "yfinance"]
-
-
-def test_rank_daily_prefers_yfinance_depth():
-    # For daily context yfinance's decades win over Alpaca's ~2016 history.
-    assert q.rank_sources(["yfinance", "alpaca", "schwab"], interval="1d")[0] == "yfinance"
-
-
-def test_rank_is_deterministic_and_dedupes():
-    a = q.rank_sources(["alpaca", "yfinance", "alpaca"], interval="5m")
-    b = q.rank_sources(["yfinance", "alpaca"], interval="5m")
-    assert a == b == ["alpaca", "yfinance"]
-
-
-def test_best_source_and_empty():
-    assert q.best_source(["yfinance", "alpaca"], interval="5m") == "alpaca"
+def test_ranking_shims_delegate_to_source_ranking():
+    # quality.* ranking helpers are now thin back-compat shims over the global,
+    # tier-aware ranking in data/source_ranking (full coverage lives in
+    # test_source_ranking.py). They accept ``interval`` for back-compat but it
+    # no longer affects the order (the global priority is interval-independent).
+    assert q.rank_sources(["yfinance", "alpaca"], interval="5m") == (
+        q.rank_sources(["yfinance", "alpaca"], interval="1d"))
+    # Non-candidate active source is returned unchanged (contract preserved).
+    assert q.preferred_source(
+        "synthetic", interval="5m", candidates=["yfinance", "alpaca"]) == "synthetic"
     assert q.best_source([], interval="5m") is None
 
 
-# ---------------------------------------------------------------------------
-# preferred_source contract (perf item #7 wiring)
-# ---------------------------------------------------------------------------
-
-
-def test_preferred_upgrades_among_configured_sources():
-    # Active is a real, user-visible source → upgrade to the best available.
-    assert q.preferred_source(
-        "yfinance", interval="5m", candidates=["yfinance", "alpaca"]
-    ) == "alpaca"
-
-
-def test_preferred_respects_non_candidate_active_source():
-    # Active is NOT a user-visible source (internal 'synthetic' / a test
-    # stub) → returned unchanged so offline/scaffolding flows are untouched.
-    assert q.preferred_source(
-        "synthetic", interval="5m", candidates=["yfinance", "alpaca"]
-    ) == "synthetic"
-
-
-def test_preferred_single_source_is_noop():
-    # The default headless env (only yfinance registered) — no behaviour change.
-    assert q.preferred_source(
-        "yfinance", interval="5m", candidates=["yfinance"]
-    ) == "yfinance"
-
-
-def test_preferred_defaults_candidates_to_user_visible_sources():
-    # With no explicit candidates it consults the live registry. In the test
-    # env yfinance is user-visible, so it upgrades to the best of them.
-    from tradinglab.data import user_visible_sources
-
-    active = "yfinance"
-    expected = q.best_source(user_visible_sources(), interval="5m") or active
-    assert q.preferred_source(active, interval="5m") == expected
+def test_hybrid_volume_is_full():
+    # The visible/recent window is yfinance → full volume, no partial warning.
+    assert q.volume_quality("yfinance+alpaca") == q.VOLUME_FULL
+    assert q.is_partial_volume("yfinance+alpaca") is False
+    assert q.partial_volume_warning("yfinance+alpaca") is None

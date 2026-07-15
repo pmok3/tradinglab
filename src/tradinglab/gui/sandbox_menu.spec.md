@@ -78,13 +78,17 @@ non-menu paths: ticker entry, watchlist, drilldown).
 - **Reference symbol**: `sandbox_reference_symbol` (default `SPY`)
   anchors the master clock. If it can't be fetched, fail fast with a
   status message rather than synthesizing a fallback timeline.
-- **Data source: longest + highest-quality available (perf item #7).**
+- **Data source: highest global priority available (perf item #7 /
+  global source ranking).**
   The reference (and daily-context) fetch uses `_sandbox_src(itv)` =
-  `data.quality.preferred_source(source_var, interval=itv)` — the
-  best-ranked registered/user-visible source for the interval, NOT
-  merely the active chart source. Rationale: a sandbox needs deep
-  replayable history; yfinance's ~60-day intraday cap barely covers two
-  months of eligible days, while Alpaca/Schwab reach years. Respects an
+  `data.quality.preferred_source(source_var, interval=itv)` — which now
+  delegates to the fixed, tier-aware **global priority** in
+  `data/source_ranking.py` (`alpaca@paid > schwab > polygon >
+  yfinance+alpaca > yfinance > alpaca@free`), NOT merely the active chart
+  source or an interval/depth heuristic (`interval` is accepted but ignored). A
+  paid-Alpaca / Schwab user gets full-volume deep history; a free-Alpaca
+  user gets the `yfinance+alpaca` composite (deep tail + full-volume recent)
+  rather than raw free-Alpaca. Respects an
   explicit synthetic/stub choice (returns it unchanged), so the default
   headless env (yfinance-only) is a no-op. When the chosen source differs
   from the active one, a `_status.info` line names it; when it has partial

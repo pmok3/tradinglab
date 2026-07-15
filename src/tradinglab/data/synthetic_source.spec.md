@@ -48,10 +48,9 @@ _gen_daily:
 ```
 
 ## Testing
-- Used as the default source in most smoke checks (no network). `check_90_streaming_dispatch` pairs with the stream bootstrap.
+- Used directly by sandbox/streaming smoke checks and as the synthetic-stream history bootstrap. The main smoke app boots on a stubbed `"yfinance"` source (no network) — `synthetic` is not the app's default source. `check_90_streaming_dispatch` pairs with the stream bootstrap.
 
 ## Known limitations
 - **Tests / demos only** — see Design Decisions above. Synthetic data must never be substituted for real market data in a strategy validation pipeline.
 - No gap-down / gap-up overnight modeling: open of day N+1 is just the RTH continuation of day N's close. Real market gaps aren't simulated.
 - No earnings-announcement surge behavior — but that's outside the scope of a dev-time data source.
-

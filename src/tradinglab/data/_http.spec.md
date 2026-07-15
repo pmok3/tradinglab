@@ -46,8 +46,8 @@ contributing to fixes for **H2**, **M5**).
 ## Callers
 - `data/polygon_source.py::_http_get_aggs` — Bearer Authorization
   header.
-- `data/alpaca_source.py::_http_get_bars` — `APCA-API-KEY-ID` +
-  `APCA-API-SECRET-KEY` headers.
+- `data/alpaca_source.py::_http_get_page` / `_http_get_single_page` —
+  `APCA-API-KEY-ID` + `APCA-API-SECRET-KEY` headers.
 - `data/schwab_auth.py::_post_token` — `Authorization: Basic …`
   for OAuth token refresh.
 - `streaming/schwab.py::fetch_streamer_info` — Bearer for

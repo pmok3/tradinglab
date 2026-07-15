@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import tkinter as tk
 
 from .. import defaults as _defaults
@@ -91,12 +92,19 @@ class AppState:
     def _resolve_source(startup_defaults: dict[str, str]) -> str:
         """Resolve the active data source from persisted startup defaults.
 
-        Demotes to the first user-visible source if the persisted value
-        is missing, unregistered, or flagged internal (e.g. an old
-        settings.json from when synthetic was user-selectable). Final
-        fallback is the literal ``"yfinance"`` so a degenerate
-        DATA_SOURCES (empty in unit tests) doesn't crash app startup.
+        Precedence: the ``TRADINGLAB_STARTUP_SOURCE`` env override (a power-user
+        knob + the test seam that keeps ChartApp-boot tests on a deterministic,
+        network-free source despite the ``"Auto"`` default) wins first, when it
+        names a registered non-internal source. Otherwise the persisted value is
+        used, demoting to the first user-visible source if it is missing,
+        unregistered, or flagged internal (e.g. an old settings.json from when
+        synthetic was user-selectable). Final fallback is the literal
+        ``"yfinance"`` so a degenerate DATA_SOURCES (empty in unit tests) doesn't
+        crash app startup.
         """
+        env_src = os.environ.get("TRADINGLAB_STARTUP_SOURCE", "").strip()
+        if env_src and env_src in DATA_SOURCES and not is_internal_source(env_src):
+            return env_src
         source = startup_defaults.get("source", "")
         if not source or source not in DATA_SOURCES or is_internal_source(source):
             visible = user_visible_sources()

@@ -60,21 +60,24 @@ _FIELDS = [
 # entry. Maps env var → ordered list of (display label, stored value). The
 # Alpaca plan selector is the single source of truth for the feed + rate
 # budget (see data.credentials / data.alpaca_source): ``free`` → IEX + 200
-# req/min, ``paid`` → SIP + 10,000 req/min. Replaces the old free-text
+# req/min (real-time delayed 15 min — no live updates), ``paid`` → SIP +
+# unlimited req/min (real-time). Replaces the old free-text
 # ``ALPACA_FEED`` field so plan and feed can't disagree (the #1 misconfig:
 # paid+iex → silently partial volume; free+sip → 403s). Chosen over a
 # checkbox per the tier-UX council.
 _CHOICE_FIELDS: dict[str, list[tuple[str, str]]] = {
     "ALPACA_TIER": [
-        ("Free — IEX feed, 200 req/min", "free"),
-        ("Paid — SIP feed, 10,000 req/min", "paid"),
+        ("Free — IEX feed (15-min delayed), 200 req/min", "free"),
+        ("Paid — SIP feed (real-time), unlimited req/min", "paid"),
     ],
 }
 
 # Muted helper text rendered under a choice field.
 _CHOICE_HELP: dict[str, str] = {
     "ALPACA_TIER": (
-        "Paid uses full-volume SIP data. Free uses IEX only, so volume "
+        "Paid uses full-volume real-time SIP data with unlimited requests. "
+        "Free uses IEX only (200 req/min) and its real-time data is delayed "
+        "15 minutes — so the chart won't live-update on Free, and volume "
         "indicators (RVOL/RRVOL) may be understated."
     ),
 }

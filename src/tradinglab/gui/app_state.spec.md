@@ -29,7 +29,8 @@ Constructs and owns these Tk variables:
 ## Invariants
 - `compare_enabled` is an alias of `compare`.
 - `compare_label` is blank when compare mode is off.
-- Invalid, empty, unregistered, or internal startup `source` values fall back to the first user-visible data source, then to literal `"yfinance"`.
+- The `TRADINGLAB_STARTUP_SOURCE` env var overrides the active startup source ahead of everything (a power-user knob + the test seam that keeps ChartApp-boot tests network-free despite the `"Auto"` default), when it names a registered non-internal source.
+- Otherwise: invalid, empty, unregistered, or internal startup `source` values fall back to the first user-visible data source, then to literal `"yfinance"`. A valid persisted value (including the `"Auto"` default) is honoured.
 
 ## Testing
 - Covered indirectly by the `ChartApp` initialization and smoke tests that read/write the aliased vars.

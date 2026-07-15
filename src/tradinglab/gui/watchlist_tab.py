@@ -1953,31 +1953,21 @@ class WatchlistTabMixin:
     # weekdays). Holidays not handled — at worst we poll at the live
     # cadence on a holiday, costing a few extra cache-fresh
     # short-circuit hits.
-    _WATCHLIST_POLL_RTH_OPEN_MIN = 9 * 60 + 30
-    _WATCHLIST_POLL_RTH_CLOSE_MIN = 16 * 60
-
     def _watchlist_poll_in_rth_now(self) -> bool:
         """True when current wall-clock is inside US RTH (09:30–16:00
         ET, Mon–Fri). Used by :meth:`_watchlist_poll_effective_delay_ms`
         to decide between live-cadence and off-hours intervals.
 
-        On hosts where ``zoneinfo`` is unavailable (rare; bundled in
-        Python 3.9+), conservatively returns ``True`` so the user
-        sees live-cadence polling rather than a silent off-hours
-        slowdown.
+        Delegates to
+        :func:`tradinglab.core.session_calendar.is_rth_now` — the single
+        owner of the RTH predicate. On hosts where ``zoneinfo`` is
+        unavailable (rare; bundled in Python 3.9+), it conservatively
+        returns ``True`` so the user sees live-cadence polling rather
+        than a silent off-hours slowdown.
         """
-        from datetime import datetime
+        from ..core.session_calendar import is_rth_now
 
-        from ..core.timezones import ET
-        if ET is None:
-            return True
-        et = datetime.now(ET)
-        if et.weekday() >= 5:  # Sat/Sun
-            return False
-        minutes = et.hour * 60 + et.minute
-        return (self._WATCHLIST_POLL_RTH_OPEN_MIN
-                <= minutes
-                < self._WATCHLIST_POLL_RTH_CLOSE_MIN)
+        return is_rth_now()
 
     def _watchlist_poll_effective_delay_ms(self) -> int | None:
         """Resolve the next poll-tick delay in milliseconds.

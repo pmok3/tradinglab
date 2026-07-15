@@ -68,8 +68,9 @@ class AlpacaCredentials:
     # Validated at request time by ``alpaca_source._resolve_adjustment``.
     adjustment: str = "split"
     # Alpaca plan tier — the SINGLE SOURCE OF TRUTH for the request budget
-    # AND the default feed. ``free`` → IEX feed + 200 req/min; ``paid``
-    # (Algo Trader Plus) → SIP feed + 10,000 req/min. Derives ``feed`` in
+    # AND the default feed. ``free`` → IEX feed (real-time delayed 15 min) +
+    # 200 req/min; ``paid`` (Algo Trader Plus) → SIP feed (real-time) +
+    # unlimited req/min. Derives ``feed`` in
     # ``get_credentials`` unless ``ALPACA_FEED`` is set explicitly (advanced
     # override). Drives the shared token bucket in ``alpaca_source``.
     tier: str = "free"

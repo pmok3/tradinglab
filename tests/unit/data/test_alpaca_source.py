@@ -18,9 +18,11 @@ from tradinglab.data.alpaca_source import (
     _retry_after_seconds,
     _to_alpaca_symbol,
     candles_from_alpaca_response,
+    is_live_capable,
     pop_pending_downgrade_notice,
 )
 from tradinglab.data.credentials import AlpacaCredentials
+from tradinglab.data.prefetch.buckets import UNLIMITED_RATE
 
 
 def _bar(ts, o, h, low, c, v):
@@ -309,7 +311,7 @@ def test_request_with_retry_gives_up_after_max_retries():
 
 def test_alpaca_rate_per_min_by_tier():
     assert _alpaca_rate_per_min(AlpacaCredentials(tier="free")) == 200
-    assert _alpaca_rate_per_min(AlpacaCredentials(tier="paid")) == 10000
+    assert _alpaca_rate_per_min(AlpacaCredentials(tier="paid")) == UNLIMITED_RATE
     # Default + unknown tier → safe free budget.
     assert _alpaca_rate_per_min(AlpacaCredentials()) == 200
     assert _alpaca_rate_per_min(AlpacaCredentials(tier="bogus")) == 200
@@ -322,7 +324,7 @@ def test_alpaca_bucket_reconfigures_on_tier_change():
         assert b_free.rate_per_min == 200
         b_paid = _alpaca_bucket_for(AlpacaCredentials(tier="paid"))
         assert b_paid is b_free  # same shared instance
-        assert b_paid.rate_per_min == 10000
+        assert b_paid.rate_per_min == UNLIMITED_RATE  # paid → unlimited
     finally:
         # Restore the module-global bucket to the safe free rate so this
         # process-wide state doesn't leak into other tests.
@@ -336,9 +338,9 @@ def test_alpaca_bucket_reconfigures_on_tier_change():
 
 def test_observe_free_header_downgrades_a_paid_config():
     try:
-        _alpaca_bucket_for(AlpacaCredentials(tier="paid"))  # bucket → 10000
+        _alpaca_bucket_for(AlpacaCredentials(tier="paid"))  # bucket → unlimited
         paid = AlpacaCredentials(tier="paid")
-        assert _alpaca_rate_per_min(paid) == 10000
+        assert _alpaca_rate_per_min(paid) == UNLIMITED_RATE
         _observe_rate_limit_header({"X-RateLimit-Limit": "200"})
         # Downgraded: even a persisted paid tier is now capped at the free
         # budget, and a one-shot notice is queued for the popup.
@@ -366,7 +368,7 @@ def test_observe_paid_header_does_not_downgrade():
     try:
         _alpaca_bucket_for(AlpacaCredentials(tier="paid"))
         _observe_rate_limit_header({"X-RateLimit-Limit": "10000"})
-        assert _alpaca_rate_per_min(AlpacaCredentials(tier="paid")) == 10000
+        assert _alpaca_rate_per_min(AlpacaCredentials(tier="paid")) == UNLIMITED_RATE
         assert pop_pending_downgrade_notice() is None
     finally:
         _reset_tier_detection()
@@ -388,7 +390,38 @@ def test_observe_ignores_missing_or_garbage_header():
         for headers in (None, {}, {"X-RateLimit-Limit": "soon"},
                         {"X-RateLimit-Limit": "0"}):
             _observe_rate_limit_header(headers)
-        assert _alpaca_rate_per_min(AlpacaCredentials(tier="paid")) == 10000
+        assert _alpaca_rate_per_min(AlpacaCredentials(tier="paid")) == UNLIMITED_RATE
         assert pop_pending_downgrade_notice() is None
+    finally:
+        _reset_tier_detection()
+
+
+# ---------------------------------------------------------------------------
+# is_live_capable — free tier is 15-min delayed, must not drive live updates
+# ---------------------------------------------------------------------------
+
+
+def test_is_live_capable_paid_is_real_time():
+    # Paid (SIP) is real-time → live-capable.
+    assert is_live_capable(AlpacaCredentials(tier="paid")) is True
+
+
+def test_is_live_capable_free_is_delayed():
+    # Free (IEX) real-time data is delayed 15 min → NOT live-capable.
+    assert is_live_capable(AlpacaCredentials(tier="free")) is False
+    # Default + unknown tier fall back to the delayed (safe) answer.
+    assert is_live_capable(AlpacaCredentials()) is False
+    assert is_live_capable(AlpacaCredentials(tier="bogus")) is False
+
+
+def test_is_live_capable_false_after_free_autodetect_downgrade():
+    # A header-auto-detected free key is delayed even if 'paid' was persisted,
+    # mirroring the rate-budget clamp — so live polling stays suppressed.
+    try:
+        _alpaca_bucket_for(AlpacaCredentials(tier="paid"))
+        paid = AlpacaCredentials(tier="paid")
+        assert is_live_capable(paid) is True
+        _observe_rate_limit_header({"X-RateLimit-Limit": "200"})
+        assert is_live_capable(paid) is False
     finally:
         _reset_tier_detection()

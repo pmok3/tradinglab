@@ -10,6 +10,7 @@ from __future__ import annotations
 from tradinglab.data.alpaca_source import _alpaca_bucket_for, _reset_tier_detection
 from tradinglab.data.credentials import AlpacaCredentials
 from tradinglab.data.prefetch.buckets import (
+    UNLIMITED_RATE,
     global_bucket_registry,
     set_global_bucket_registry,
 )
@@ -30,7 +31,7 @@ def test_alpaca_bucket_is_the_global_registry_bucket():
 def test_registry_rate_reflects_alpaca_tier_reconfigure():
     try:
         _alpaca_bucket_for(AlpacaCredentials(tier="paid"))
-        assert global_bucket_registry().rate_for("alpaca") == 10000
+        assert global_bucket_registry().rate_for("alpaca") == UNLIMITED_RATE
     finally:
         _alpaca_bucket_for(AlpacaCredentials(tier="free"))
         _reset_tier_detection()

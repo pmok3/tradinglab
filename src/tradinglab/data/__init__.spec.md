@@ -6,15 +6,18 @@ Aggregates the data-source plugins (yfinance, synthetic, synthetic-stream bootst
 ## Public API
 - `DATA_SOURCES: Dict[str, DataFetcher]` — the registry, re-exported from `.base`. Holds EVERY registered source including internal ones (synthetic / synthetic-stream). Smoke tests and sandbox replay dispatch through it directly.
 - `DataController`, `FetchService` — controller/service classes re-exported from `.controller` and `.fetch_service`.
-- `user_visible_sources() -> list[str]` — re-exported from `.base`; the subset of `DATA_SOURCES` keys safe to show in user UI surfaces (toolbar combobox, Settings → Startup parameters dropdown). Excludes synthetic / synthetic-stream (registered with `internal=True`). First entry remains the default.
+- `user_visible_sources() -> list[str]` — re-exported from `.base`; the subset of `DATA_SOURCES` keys safe to show in user UI surfaces (toolbar combobox, Settings → Startup parameters dropdown). Excludes synthetic / synthetic-stream (registered with `internal=True`). First entry remains the stable fallback / first dropdown entry; the startup default is `"Auto"` via `BUILTIN_STARTUP_DEFAULTS`.
 - `is_internal_source(name) -> bool` — re-exported from `.base`; True for `"synthetic"` and `"synthetic-stream"`.
 - `DataFetcher` — type alias `Callable[..., Optional[List[Candle]]]`; range-capable sources also accept kw-only `start` / `end`.
 - `register_source(name, fetcher, *, internal=False, supports_range=False, page_fetcher=None)` — imperative registration. Pass `internal=True` to keep the source out of every user-facing dropdown; `supports_range=True` for fetchers that accept kw-only `start` / `end`; `page_fetcher` for a `(ticker, interval, *, end, limit)` one-request page callable (the prefetch scheduler's deepening primitive).
 - `source_supports_range(name) -> bool` and `fetch_range(source, ticker, interval, start_ts, end_ts) -> (Optional[List[Candle]], status)` — targeted range-fetch helpers re-exported from `.base`.
 - `source_supports_page(name) -> bool`, `fetch_page(source, ticker, interval, *, end_ts=None, limit=10_000) -> FetchPageResult`, and `FetchPageResult` — the newest-`limit`-bars-before-`end` page primitive re-exported from `.base` (Alpaca registers `fetch_alpaca_page`).
 - `fetch_live_data` (yfinance), `fetch_synthetic_data`, `fetch_synthetic_stream_bootstrap` — the three deterministically-registered built-in fetchers. **Synthetic sources are registered with `internal=True`** so the end user never sees an option meant for offline testing / sandbox replay.
+- `fetch_auto_data`, `AUTO_SOURCE_NAME` (`"Auto"`) — the always-registered **"Auto"** pseudo-source (see `auto_source.spec.md`): resolves to the globally best available source per `data/source_ranking` and delegates to it. Registered **right after yfinance** so `user_visible_sources()[0]` stays `"yfinance"`; it is the **startup default** (`constants.BUILTIN_STARTUP_DEFAULTS["source"] = "Auto"`).
 - `fetch_schwab_data`, `fetch_alpaca_data`, `fetch_polygon_data` — vendor adapters. `"alpaca"` and `"polygon"` are registered when their respective credentials are available, else inert. **`"schwab"` is currently NOT registered** even when credentials are configured — `schwab_source._http_get_pricehistory` is still a `NotImplementedError` stub, so the registration line in `data/__init__.py` is commented out to keep a broken option out of the source-selector dropdown. Re-enable once the REST GET lands. Each adapter builds requests against the vendor's REST endpoint and routes the response through `candles_from_json_rows` for normalization.
 - `candles_from_schwab_response`, `candles_from_alpaca_response`, `candles_from_polygon_response` — vendor-specific response-shape adapters that call `candles_from_json_rows` and return `List[Candle]`. Exported for unit-testing parity with the live adapters.
+- `fetch_hybrid_data`, `HYBRID_SOURCE_NAME` (`"yfinance+alpaca"`) — the **composite** source (see `hybrid_source.spec.md`): yfinance (recent + live, full volume) stitched over Alpaca (deep IEX history), yfinance winning every overlapping bar. Registered **only when Alpaca is configured** (yfinance is always available), period-style (no `supports_range`). It is ranked by `data/source_ranking.py` above plain yfinance and below the full-volume deep vendors (`alpaca@paid`, `schwab`, `polygon`).
+- `GLOBAL_SOURCE_PRIORITY`, `global_rank`, `rank_sources`, `best_source`, `preferred_source` — re-exported from `.source_ranking`, the authoritative **global, tier-aware source priority** (`alpaca@paid > schwab > … > alpaca@free`; see `source_ranking.spec.md`). `data.quality`'s ranking helpers are thin shims delegating here.
 - `candles_from_dataframe`, `candles_from_json_rows`, `CandleArrays`, `pop_prebuilt_arrays`, `stash_arrays` — normalization surface (see `data/normalize.spec.md`).
 - `fetch_chunks_parallel` — I/O-parallel fetch helper (for providers that expose chunked APIs).
 - `Credentials`, `SchwabCredentials`, `AlpacaCredentials`, `PolygonCredentials`, `get_credentials` — re-exported from `.credentials` (see `data/credentials.spec.md`).
@@ -27,14 +30,14 @@ Aggregates the data-source plugins (yfinance, synthetic, synthetic-stream bootst
   in the Configure Local Data dialog.
 - `make_local_fetcher`, `discover_subsources` — re-exported from
   `.local_source` (see `data/local_source.spec.md`).
-- `RATIO_DELIMITER`, `parse_ratio_symbol`, `is_ratio_symbol`, `canonical_ratio_symbol`, `ratio_display_label`, `compute_ratio_candles`, `fetch_ratio` — re-exported from `.ratio_source` (see `data/ratio_source.spec.md`). Ratio pseudo-symbols use the general `NUM/DEN` form only (e.g. `AMD/NVDA`). NOT a `DATA_SOURCES` entry — resolution is hooked into `fetch_live_data`, so a ratio symbol is a typed *ticker*, not a selectable *source*. Never persisted to disk (see `disk_cache.spec.md`).
+- `RATIO_DELIMITER`, `parse_ratio_symbol`, `is_ratio_symbol`, `canonical_ratio_symbol`, `ratio_display_label`, `compute_ratio_candles`, `fetch_ratio` — re-exported from `.ratio_source` (see `data/ratio_source.spec.md`). Ratio pseudo-symbols use the general `NUM/DEN` form only (e.g. `AMD/NVDA`). NOT a `DATA_SOURCES` entry — resolution is installed by `base.register_source`'s ratio-aware wrapper (with yfinance retaining its direct-import hook), so a ratio symbol is a typed *ticker*, not a selectable *source*. Never persisted to disk (see `disk_cache.spec.md`).
 
 ## Dependencies
 - Internal: all data submodules.
 - External: transitive (numpy, yfinance-lazy).
 
 ## Design Decisions
-- **Registration order matters**: `yfinance` registers first so the UI's default source combobox selection keys off it (`next(iter(DATA_SOURCES))`). Order: yfinance → synthetic → synthetic-stream → credentialed vendors (alpaca, polygon) → BYOD local sources.
+- **Registration order matters**: `yfinance` registers first so `next(iter(DATA_SOURCES))` (and `user_visible_sources()[0]`) stays `"yfinance"`. Order: yfinance → **Auto** → synthetic → synthetic-stream → credentialed vendors (alpaca, then the `yfinance+alpaca` composite, polygon) → BYOD local sources. Auto is second (visible, but not first) — it is the startup *default* via `BUILTIN_STARTUP_DEFAULTS`, not via first-visible.
 - Re-export everything at `tradinglab.data.*` so the split from the old `tradinglab.data_sources` module is backward-compatible; no caller code needs to change import paths.
 - **BYOD sources register last** so the source-selector combobox shows
   built-in vendors first; BYOD entries appear at the bottom of the
@@ -52,7 +55,7 @@ Aggregates the data-source plugins (yfinance, synthetic, synthetic-stream bootst
 
 ## Invariants
 - `next(iter(user_visible_sources()))` is `"yfinance"` on fresh package load (synthetic sources are filtered out by their `internal=True` flag).
-- `next(iter(DATA_SOURCES))` is also `"yfinance"` on fresh package load (registration order: yfinance → synthetic → synthetic-stream → credentialed vendors → BYOD).
+- `next(iter(DATA_SOURCES))` is also `"yfinance"` on fresh package load (registration order: yfinance → Auto → synthetic → synthetic-stream → credentialed vendors → BYOD).
 - `"synthetic" in DATA_SOURCES` and `"synthetic-stream" in DATA_SOURCES` are True at runtime (smoke tests and sandbox replay dispatch through the registry directly).
 - `"synthetic" not in user_visible_sources()` and `"synthetic-stream" not in user_visible_sources()` — they never appear in the toolbar combobox or Settings → Startup parameters source dropdown.
 - `fetch_live_data`, `fetch_synthetic_data`, `fetch_synthetic_stream_bootstrap` all match the `DataFetcher` shape.

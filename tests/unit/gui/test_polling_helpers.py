@@ -884,3 +884,62 @@ class TestDrainStreamQueue:
         h._drain_stream_queue()
         # Rollover applied, append-refresh attempted.
         assert h.refresh_after_append_calls == ["primary"]
+
+
+# ---------------------------------------------------------------------------
+# 8. PollingMixin — live-update gate for 15-min-delayed sources (Alpaca free)
+# ---------------------------------------------------------------------------
+
+
+class _Var:
+    """Minimal Tk-var stand-in exposing ``.get()``."""
+
+    def __init__(self, value: Any) -> None:
+        self._v = value
+
+    def get(self) -> Any:
+        return self._v
+
+
+class TestLiveUpdatesDelayedForSource:
+    def test_non_alpaca_source_is_never_delayed(self):
+        h = _PollingHarness()
+        h.source_var = _Var("yfinance")
+        assert h._live_updates_delayed_for_source() is False
+
+    def test_alpaca_paid_is_live(self, monkeypatch):
+        h = _PollingHarness()
+        h.source_var = _Var("alpaca")
+        monkeypatch.setattr(
+            "tradinglab.data.alpaca_source.is_live_capable", lambda: True)
+        assert h._live_updates_delayed_for_source() is False
+
+    def test_alpaca_free_is_delayed(self, monkeypatch):
+        h = _PollingHarness()
+        h.source_var = _Var("alpaca")
+        monkeypatch.setattr(
+            "tradinglab.data.alpaca_source.is_live_capable", lambda: False)
+        assert h._live_updates_delayed_for_source() is True
+
+    def test_source_var_error_is_safe(self):
+        h = _PollingHarness()
+
+        class _Boom:
+            def get(self):
+                raise RuntimeError("no tk")
+
+        h.source_var = _Boom()
+        assert h._live_updates_delayed_for_source() is False
+
+    def test_schedule_next_bar_fetch_skips_delayed_source(self, monkeypatch):
+        # Free-tier Alpaca (15-min delayed) must NOT arm a live poll.
+        h = _PollingHarness()
+        h._is_sandbox_active = lambda: False
+        h._poll_job = None
+        h._stream_active = False
+        h.source_var = _Var("alpaca")
+        monkeypatch.setattr(
+            "tradinglab.data.alpaca_source.is_live_capable", lambda: False)
+        h._schedule_next_bar_fetch()
+        assert h._fake.scheduled == []  # no poll armed
+        assert h._poll_job is None

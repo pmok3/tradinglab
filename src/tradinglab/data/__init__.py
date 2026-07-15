@@ -26,6 +26,7 @@ from .alpaca_source import (
     fetch_alpaca_data,
     fetch_alpaca_page,
 )
+from .auto_source import AUTO_SOURCE_NAME, fetch_auto_data
 from .base import (
     DATA_SOURCES,
     DataFetcher,
@@ -47,6 +48,7 @@ from .credentials import (
     get_credentials,
 )
 from .fetch_service import FetchService
+from .hybrid_source import HYBRID_SOURCE_NAME, fetch_hybrid_data
 from .local_source import discover_subsources, make_local_fetcher
 from .normalize import (
     CandleArrays,
@@ -67,6 +69,13 @@ from .ratio_source import (
     ratio_display_label,
 )
 from .schwab_source import candles_from_schwab_response, fetch_schwab_data
+from .source_ranking import (
+    GLOBAL_SOURCE_PRIORITY,
+    best_source,
+    global_rank,
+    preferred_source,
+    rank_sources,
+)
 from .synthetic_source import fetch_synthetic_data, fetch_synthetic_stream_bootstrap
 from .yfinance_source import fetch_live_data
 
@@ -79,6 +88,10 @@ from .yfinance_source import fetch_live_data
 # combobox and the Settings → Startup parameters source dropdown so
 # the end user never sees an option meant for internal use.
 register_source("yfinance", fetch_live_data)
+# "Auto" (registered right after yfinance so yfinance stays first-visible)
+# resolves to the globally best available source per data/source_ranking. It is
+# the startup default (constants.BUILTIN_STARTUP_DEFAULTS["source"] = "Auto").
+register_source(AUTO_SOURCE_NAME, fetch_auto_data)
 register_source("synthetic", fetch_synthetic_data, internal=True)
 register_source("synthetic-stream", fetch_synthetic_stream_bootstrap, internal=True)
 
@@ -99,6 +112,12 @@ _creds = get_credentials()
 if _creds.alpaca.is_configured():
     register_source("alpaca", fetch_alpaca_data, supports_range=True,
                     page_fetcher=fetch_alpaca_page)
+    # Composite: yfinance (recent + live, full volume) stitched over Alpaca
+    # (deep IEX history), yfinance winning every overlapping bar. Available
+    # only when Alpaca is configured (yfinance is always registered). Period-
+    # style (no supports_range): the trailing fetch returns the full merged
+    # series; the live poll refetches only the yfinance leg (see hybrid_source).
+    register_source(HYBRID_SOURCE_NAME, fetch_hybrid_data)
 if _creds.polygon.is_configured():
     register_source("polygon", fetch_polygon_data)
 
@@ -175,6 +194,15 @@ __all__ = [
     "make_local_fetcher",
     "discover_subsources",
     "fetch_live_data",
+    "fetch_auto_data",
+    "AUTO_SOURCE_NAME",
+    "fetch_hybrid_data",
+    "HYBRID_SOURCE_NAME",
+    "GLOBAL_SOURCE_PRIORITY",
+    "global_rank",
+    "rank_sources",
+    "best_source",
+    "preferred_source",
     "fetch_synthetic_data",
     "fetch_synthetic_stream_bootstrap",
     "fetch_schwab_data",

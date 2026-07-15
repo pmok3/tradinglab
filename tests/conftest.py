@@ -16,6 +16,12 @@ import os
 
 os.environ.setdefault("MPLBACKEND", "Agg")
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+# Pin the ChartApp startup source to yfinance for the whole test suite. The
+# production default is "Auto" (resolves to the globally best source, which can
+# be the yfinance+alpaca hybrid → a real Alpaca fetch on boot). Tests must stay
+# deterministic + network-free, so honour the same TRADINGLAB_STARTUP_SOURCE
+# seam AppState._resolve_source reads (setdefault so a dev can still override).
+os.environ.setdefault("TRADINGLAB_STARTUP_SOURCE", "yfinance")
 
 
 import tkinter as tk
