@@ -12,7 +12,7 @@ its vectorized twin to "keep the two functions in lockstep". The
 
 This module gives every caller one place to import from — the direct
 analogue of :mod:`tradinglab.core.timezones` (which consolidated the
-scattered ``ZoneInfo("America/New_York")`` construction) and
+scattered Eastern-time ``ZoneInfo`` construction) and
 :mod:`tradinglab.core.view_intent` (which consolidated the scattered
 render-preservation booleans).
 
