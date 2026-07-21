@@ -60,17 +60,33 @@ user sits on the 1d chart, so a recent day — including **today** — may
 be missing even though a manual 5m toggle would load it. The fix:
 
 - `_day_within_intraday_fetch_window(day, interval="5m")` returns True
-  when `day` is reachable for the active source. **Two regimes:**
+  when `day` is reachable for the active source. **Two regimes**, judged by
+  the **resolved** provider (see the `"Auto"` note below):
   - **Range-capable providers** (Alpaca — `data.source_supports_range`)
     fetch any historical day on demand, so reachability is gated on the
     learned coverage `data_start` watermark
     (`data.coverage.data_start`): unknown → always reachable; known →
     `day >= data_start − 7d`. No trailing-window cap applies.
   - **Trailing-window providers** (yfinance) use the provider-aware
-    intraday window `constants.provider_lookback_days(source_var.get(),
+    intraday window `constants.provider_lookback_days(fetch_src,
     interval)` (yfinance capped at ~60d for 5m), measured against
     `date.today()` with a generous 7-day buffer. Called with `self=None`
-    the `source_var` read is caught → the yfinance windows.
+    the `source_var` read is caught → `src=""` → the yfinance windows.
+- **`"Auto"` resolves to its concrete provider.** `"Auto"` is a
+  period-style *delegating* pseudo-source (`data.auto_source`) that
+  dispatches to the globally best real source at fetch time, so its
+  range-fetch **capability** and intraday reach are those of the resolved
+  provider — NOT the literal `"Auto"` registry entry (registered
+  period-style, which would wrongly apply the yfinance ~60d trailing cap).
+  The module-level helper `_effective_fetch_source(src)` maps
+  `"Auto" → resolve_auto_source()` (else returns `src` unchanged, falling
+  back to the raw name on error) and is applied at **exactly three
+  capability/fetch points**: `source_supports_range` + `provider_lookback_days`
+  in this gate, the `range_capable` decision in `_maybe_deferred_drilldown`,
+  and the `fetch_range` network call in `_targeted_range_fetch`. **Every
+  cache / coverage / stash key stays under the raw `src` (`"Auto"`)** — the
+  app-wide convention — so the chart still finds the drilled bars. Mirrors
+  `gui/polling.py`'s Auto resolution for live-capability.
 - **Day inside the window** → fall through to the fetch path (branch 3 /
   `_drilldown_sync_fetch`), identical to a cold cache miss. The fetch
   uses the same `DATA_SOURCES` fetcher a manual toggle uses;
@@ -83,14 +99,23 @@ be missing even though a manual 5m toggle would load it. The fix:
 
 This fixed the reported bug where drilling into today / a recent day (or
 any gap in a stale cache) errored "only available from … onward" even
-though the day was well within yfinance's reach. Pinned by
-`tests/unit/gui/test_drilldown_fetch_window.py` (window logic) and
+though the day was well within yfinance's reach. A second, related bug is
+also fixed: in **Auto** mode a drill into an older day (e.g. ~6 months back,
+well within Alpaca's reach) wrongly no-opped with the same warning, because
+the literal `"Auto"` registry entry is period-style — the
+`_effective_fetch_source` resolution above judges reachability by the
+provider Auto actually delegates to. Pinned by
+`tests/unit/gui/test_drilldown_fetch_window.py` (window logic, incl.
+`test_auto_resolving_to_alpaca_reaches_old_days`,
+`test_auto_coverage_stays_keyed_under_raw_auto`,
+`test_auto_resolving_to_yfinance_keeps_trailing_cap`) and
 `test_smoke_full.py::check_d38…` sub-tests B (out-of-window → WARN) and
 B2 (in-window-but-uncovered → fetch).
 
 ## Targeted intraday fetch (range-capable providers)
 
-For providers where `data.source_supports_range(src)` is True (Alpaca),
+For providers where `data.source_supports_range(_effective_fetch_source(src))`
+is True (Alpaca — including `"Auto"` when it resolves to Alpaca),
 `_drilldown_sync_fetch` no longer bulk-loads a trailing window. Instead it
 pulls **just the clicked day's ~1-API-page window** on demand, so drilling
 into an arbitrarily old day is fast and stays within the sync-UI deadline.
@@ -107,17 +132,20 @@ Flow (all worker steps run on `self._executor`, never touching Tk):
    the worker must never read a Tk variable.
 3. **Worker: `_targeted_range_fetch(src, sym, interval, day, now_ts, *,
    merge_to_disk)`** —
-   - loads/bootstraps the `coverage` sidecar, reads `data_start`, and
+   - loads/bootstraps the `coverage` sidecar under the raw `src` (so `"Auto"`
+     coverage/disk stay keyed under `"Auto"`), reads `data_start`, and
      computes `constants.targeted_window(interval, day_ts, now_ts=…,
      data_start_ts=…)` centered on the clicked day (clamped to now / the
      provider data-start);
    - if the window is already `coverage.covered(…)`, returns the on-disk
      series (no network) so the caller's merge still finds the day;
-   - else `data.fetch_range(…)` → on `ok` records coverage
-     (`record_fetch`, learning `data_start` when bars start materially
-     later than requested) and returns the bars; on `empty` records the
-     attempt and returns `[]`; on `unsupported`/`error` degrades to the
-     plain trailing-window `_trailing_fetch`.
+   - else `data.fetch_range(_effective_fetch_source(src), …)` (resolving
+     `"Auto"` → the concrete provider for the network call **only**) → on
+     `ok` records coverage (`record_fetch`, under the raw `src`, learning
+     `data_start` when bars start materially later than requested) and
+     returns the bars; on `empty` records the attempt and returns `[]`; on
+     `unsupported`/`error` degrades to the plain trailing-window
+     `_trailing_fetch`.
    - `merge_to_disk=False` for the **primary** (whose result
      `_on_drilldown_fetch_done` merges into `_full_cache` + disk itself);
      `merge_to_disk=True` for the **compare** symbol (persisted here since

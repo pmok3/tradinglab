@@ -45,6 +45,7 @@ from typing import Any
 from .. import disk_cache
 from ..constants import provider_lookback_days, targeted_window
 from ..data import DATA_SOURCES, coverage, fetch_range, source_supports_range
+from ..data.auto_source import AUTO_SOURCE_NAME, resolve_auto_source
 from ..models import Candle
 
 
@@ -59,6 +60,37 @@ def _day_to_ts(day) -> int:
     return int(
         _datetime_t(day.year, day.month, day.day, tzinfo=_timezone.utc).timestamp()
     )
+
+
+def _effective_fetch_source(src: str) -> str:
+    """Resolve the concrete provider a fetch will actually hit.
+
+    ``"Auto"`` is a period-style *delegating* pseudo-source
+    (:mod:`tradinglab.data.auto_source`) that dispatches to the globally best
+    real source at fetch time. Its range-fetch **capability** and intraday
+    reach are therefore those of the resolved provider — e.g. range-capable
+    Alpaca with deep history — NOT the literal ``"Auto"`` registry entry, which
+    is registered period-style and would otherwise be judged a yfinance-style
+    ~60-day trailing window. That mismatch made an Auto-mode drill into an older
+    day (well within Alpaca's reach) wrongly no-op with "5m data only available
+    from … onward", even though the same day drills fine with Alpaca selected
+    directly.
+
+    Used ONLY for capability decisions (:func:`source_supports_range`,
+    :func:`provider_lookback_days`) and the targeted :func:`fetch_range` network
+    call. Every cache / coverage / stash key stays under the raw ``"Auto"`` name
+    (the app-wide convention — cache keys, drilldown, prefetch and persistence
+    all key off ``source_var``), so the chart still finds the drilled bars.
+    Falls back to the raw name on any resolution error. Mirrors
+    ``gui/polling.py``'s Auto resolution for live-capability.
+    """
+    try:
+        if src == AUTO_SOURCE_NAME:
+            return resolve_auto_source()
+    except Exception:  # noqa: BLE001
+        pass
+    return src
+
 
 # --- drill-down request tracking ----------------------------------------
 
@@ -281,13 +313,19 @@ class DrilldownMixin:
             src = self.source_var.get()
         except Exception:  # noqa: BLE001
             src = ""
+        # "Auto" delegates to the best real source at fetch time, so judge
+        # reachability by the RESOLVED provider's capability — not the
+        # period-style "Auto" registry entry (which would wrongly apply the
+        # yfinance ~60-day trailing cap even when Auto resolves to deep-history
+        # Alpaca). Cache/coverage keys stay under the raw ``src`` ("Auto").
+        fetch_src = _effective_fetch_source(src)
         # Range-capable providers (Alpaca) fetch any historical day on
         # demand — the reachable set is not a trailing window but "any day
         # at or after the provider's data start". Use the learned coverage
         # watermark when we have one; otherwise assume reachable and let the
         # fetch itself discover the true floor (record_fetch then learns it).
         try:
-            range_capable = source_supports_range(src)
+            range_capable = source_supports_range(fetch_src)
         except Exception:  # noqa: BLE001
             range_capable = False
         if range_capable:
@@ -305,7 +343,7 @@ class DrilldownMixin:
                 return True
             # One-week buffer mirrors the trailing-window generosity below.
             return day_ts >= ds - 7 * 86400
-        window_days = provider_lookback_days(src, interval)
+        window_days = provider_lookback_days(fetch_src, interval)
         cutoff = _date_t.today() - timedelta(days=window_days + 7)
         return day >= cutoff
 
@@ -417,7 +455,8 @@ class DrilldownMixin:
         # day — do NOT attach to one. Instead fetch a targeted page-span
         # window centered on req.day.
         try:
-            range_capable = source_supports_range(req.src)
+            range_capable = source_supports_range(
+                _effective_fetch_source(req.src))
         except Exception:  # noqa: BLE001
             range_capable = False
         existing_fut = None if range_capable else self._prefetch_futures.get(key)
@@ -587,7 +626,12 @@ class DrilldownMixin:
             except Exception:  # noqa: BLE001
                 return []
         try:
-            bars, status = fetch_range(src, sym, interval, start_ts, end_ts)
+            # Resolve "Auto" → concrete provider for the network call only;
+            # coverage / disk stay keyed under the raw ``src`` (see
+            # ``_effective_fetch_source``).
+            bars, status = fetch_range(
+                _effective_fetch_source(src), sym, interval,
+                start_ts, end_ts)
         except Exception:  # noqa: BLE001
             bars, status = None, "error"
         if status == "ok" and bars:

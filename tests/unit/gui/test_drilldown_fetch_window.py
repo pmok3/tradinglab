@@ -161,3 +161,71 @@ def test_yfinance_source_keeps_sixty_day_5m_window() -> None:
     # An explicit yfinance source is still capped at ~60d for 5m.
     assert _f(_self("yfinance"), date.today() - timedelta(days=30), "5m") is True
     assert _f(_self("yfinance"), date.today() - timedelta(days=120), "5m") is False
+
+
+# --- "Auto" resolves to its concrete provider ------------------------------
+#
+# Pins the bug where an Auto-mode drill into an older day (e.g. 2026-01-21,
+# ~6 months back) wrongly no-opped with "5m data only available from … onward",
+# even though the very same day drilled fine with Alpaca selected directly.
+# "Auto" is a period-style *delegating* pseudo-source: its reach is that of the
+# resolved provider, not the literal "Auto" registry entry (which would
+# otherwise be judged a yfinance ~60-day trailing window). The gate now resolves
+# "Auto" → concrete via ``_effective_fetch_source`` for the capability decision
+# while leaving cache / coverage keys under the raw "Auto".
+
+
+def test_auto_resolving_to_alpaca_reaches_old_days(monkeypatch) -> None:
+    # Auto → Alpaca (range-capable) with no learned data-start: an old day far
+    # beyond yfinance's ~60d cap is reachable on demand. Previously False
+    # because "Auto" is registered period-style (not range-capable).
+    from tradinglab.gui import drilldown as _dd
+
+    monkeypatch.setattr(_dd, "resolve_auto_source", lambda *a, **k: "alpaca")
+    # Hermetic: no learned watermark regardless of on-disk sidecars.
+    monkeypatch.setattr(
+        _dd.coverage, "load",
+        lambda *a, **k: _dd.coverage.CoverageRecord(data_start_ts=None))
+    slf = SimpleNamespace(
+        source_var=SimpleNamespace(get=lambda: "Auto"),
+        ticker_var=SimpleNamespace(get=lambda: "AMD"),
+    )
+    for n in (60, 110, 181, 400):
+        assert _f(slf, date.today() - timedelta(days=n), "5m") is True, n
+
+
+def test_auto_coverage_stays_keyed_under_raw_auto(monkeypatch) -> None:
+    # The coverage watermark is loaded under the raw "Auto" src (app-wide cache
+    # convention), NOT the resolved provider — even though capability is judged
+    # against the resolved provider. Assert coverage.load sees "Auto".
+    from tradinglab.gui import drilldown as _dd
+
+    monkeypatch.setattr(_dd, "resolve_auto_source", lambda *a, **k: "alpaca")
+    seen: dict[str, str] = {}
+
+    def _spy_load(src, sym, interval):
+        seen["src"] = src
+        return _dd.coverage.CoverageRecord(data_start_ts=None)
+
+    monkeypatch.setattr(_dd.coverage, "load", _spy_load)
+    slf = SimpleNamespace(
+        source_var=SimpleNamespace(get=lambda: "Auto"),
+        ticker_var=SimpleNamespace(get=lambda: "AMD"),
+    )
+    assert _f(slf, date.today() - timedelta(days=181), "5m") is True
+    assert seen["src"] == "Auto"
+
+
+def test_auto_resolving_to_yfinance_keeps_trailing_cap(monkeypatch) -> None:
+    # If Auto resolves to a trailing-window provider (yfinance — e.g. no Alpaca
+    # creds configured), the ~60d 5m cap still applies: a recent day is
+    # reachable, an old one is not.
+    from tradinglab.gui import drilldown as _dd
+
+    monkeypatch.setattr(_dd, "resolve_auto_source", lambda *a, **k: "yfinance")
+    slf = SimpleNamespace(
+        source_var=SimpleNamespace(get=lambda: "Auto"),
+        ticker_var=SimpleNamespace(get=lambda: "AMD"),
+    )
+    assert _f(slf, date.today() - timedelta(days=30), "5m") is True
+    assert _f(slf, date.today() - timedelta(days=181), "5m") is False

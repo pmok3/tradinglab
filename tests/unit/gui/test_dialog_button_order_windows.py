@@ -106,12 +106,41 @@ def test_sandbox_dialog_footer_order_windows():
 
 def test_sandbox_review_dialog_footer_order_windows():
     """``sandbox_review_dialog`` OK/Cancel pair must be
-    ``[OK] [Cancel]``."""
+    ``[OK] [Cancel]``.
+
+    ``sandbox_review_dialog.py`` hosts three dialogs
+    (``DecisionLogDialog``, ``PostTradeReviewDialog`` and
+    ``TagsEditorDialog``); only ``TagsEditorDialog`` uses the OK/Cancel
+    pair, so restrict the scan to its slice — otherwise the
+    ``DecisionLogDialog`` Cancel button cross-matches and the whole-file
+    scan sees a spurious second Cancel (same reasoning as the
+    ``_SettingsDialog`` slice below).
+    """
     src = _read_source("sandbox_review_dialog.py")
-    order = _pack_order(src, ["OK", "Cancel"])
+    start = src.find("class TagsEditorDialog")
+    body = src[start:] if start != -1 else src
+    order = _pack_order(body, ["OK", "Cancel"])
     assert order == ["OK", "Cancel"], (
         f"sandbox_review_dialog OK/Cancel order is {order!r}; "
         "expected Windows convention [OK] [Cancel].")
+
+
+def test_decision_log_dialog_footer_order_windows():
+    """``DecisionLogDialog`` footer must be ``[Log decision] [Cancel]``.
+
+    The opt-in decision-logging dialog (added alongside blind-replay
+    decision logging) shares ``sandbox_review_dialog.py`` with the
+    OK/Cancel ``TagsEditorDialog``; restrict the scan to its class slice
+    so the two dialogs' Cancel buttons don't cross-match.
+    """
+    src = _read_source("sandbox_review_dialog.py")
+    start = src.find("class DecisionLogDialog")
+    end = src.find("class PostTradeReviewDialog", start)
+    body = src[start:end] if start != -1 and end != -1 else src
+    order = _pack_order(body, ["Log decision", "Cancel"])
+    assert order == ["Log decision", "Cancel"], (
+        f"DecisionLogDialog footer order is {order!r}; expected Windows "
+        "convention [Log decision] [Cancel].")
 
 
 def test_pre_trade_dialog_footer_order_windows():
