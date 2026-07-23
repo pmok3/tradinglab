@@ -23,8 +23,13 @@ ceiling (§7.24). A pure method-bag mixin: **no `__init__`**.
   CACHE_MEMORY_AND_DISK`, calls `driver.complete(bars_count=…, oldest_ts=…,
   error=…, retry_after_s=…)` (only the count is marshalled back, not the page),
   updates Watchlist Last/Change via
-  `_apply_watchlist_snapshot_from_bars` for focused/other watchlist tier jobs
-  when merged bars exist,   and — for a memory-tier **intraday** warm — calls
+  `_apply_watchlist_snapshot_from_bars` for any completed job whose symbol is a
+  pinned watchlist member (membership via `_job_symbol_is_watchlisted`, NOT the
+  job's tier — `expand_all` dedups a symbol to its highest tier, so the
+  active/compare symbol that is also pinned, e.g. the default AMD, lands under
+  TIER_ACTIVE/COMPARE and a tier-only gate left its row blank on launch;
+  `qw-active-overlap-snapshot`) when merged bars exist,   and — for a memory-tier
+  **intraday** warm — calls
   `_refresh_daily_synth_for_active_view(prefetched_symbol=job.symbol)` so a 1d
   chart's synthetic today-bar re-renders when its 5m companion lands (mirrors the
   legacy prefetch-arrival seam; else the today-bar lagged a poll interval), then

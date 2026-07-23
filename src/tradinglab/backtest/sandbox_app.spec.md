@@ -27,6 +27,7 @@
 - **Mid-session fetches use the sandbox's preferred source (perf item #7).** `register_compare` and `register_and_focus` derive `src` via `_sandbox_preferred_src(app, interval)` = `data.quality.preferred_source(app.source_var, interval=interval)`, which now delegates to the global tier-aware priority in `data/source_ranking.py` (paid Alpaca / Schwab / Polygon / yfinance+Alpaca / yfinance / free Alpaca). The `interval` kwarg is accepted for back-compat but does not change the ranking. Compare/focus symbols added mid-session therefore follow the same global source policy instead of silently pulling from a different active-chart source. Falls back to the active source on any error.
 - `ChartApp` also keeps legacy sandbox attribute names via property-backed aliases so existing callers and tests can continue reading/writing `app._sandbox`, `app._sandbox_panel`, and related fields.
 - Complex UI work still flows through `ChartApp` callbacks/attributes (`_render`, `_set_data_state`, `_status`, `_toolbar`, Tk vars).
+- `build_spec` carries the start-dialog's `decision_logging_enabled` opt-in into `SessionSpec`; missing payload keys default to `False`.
 
 ## Non-goals
 - No engine logic duplication.

@@ -242,52 +242,59 @@ class SandboxStartDialog(BaseModalDialog):
             command=self._on_blind_toggle,
         ).grid(row=4, column=0, columnspan=3, sticky="w", **pad)
 
+        self._decision_logging_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            frame,
+            text="Enable manual decision logging (optional; no prompts)",
+            variable=self._decision_logging_var,
+        ).grid(row=5, column=0, columnspan=3, sticky="w", **pad)
+
         ttk.Label(frame, text="Intraday lookback (days):").grid(
-            row=5, column=0, sticky="e", **pad)
+            row=6, column=0, sticky="e", **pad)
         self._lookback_var = tk.StringVar(value="1")
         ttk.Entry(frame, textvariable=self._lookback_var, width=6).grid(
-            row=5, column=1, sticky="w", **pad)
+            row=6, column=1, sticky="w", **pad)
 
         ttk.Label(frame, text="Daily context (bars):").grid(
-            row=6, column=0, sticky="e", **pad)
+            row=7, column=0, sticky="e", **pad)
         self._daily_bars_var = tk.StringVar(value="100")
         ttk.Entry(frame, textvariable=self._daily_bars_var, width=6).grid(
-            row=6, column=1, sticky="w", **pad)
+            row=7, column=1, sticky="w", **pad)
         ttk.Label(
             frame,
             text=("Daily view shows completed sessions only "
                   "(current day omitted)."),
             foreground="grey",
-        ).grid(row=6, column=2, sticky="w", **pad)
+        ).grid(row=7, column=2, sticky="w", **pad)
 
         ttk.Label(frame, text="Starting cash ($):").grid(
-            row=7, column=0, sticky="e", **pad)
+            row=8, column=0, sticky="e", **pad)
         self._cash_var = tk.StringVar(value="100000")
         ttk.Entry(frame, textvariable=self._cash_var, width=12).grid(
-            row=7, column=1, sticky="w", **pad)
-
-        ttk.Label(frame, text="Slippage (bps):").grid(
-            row=8, column=0, sticky="e", **pad)
-        self._slip_var = tk.StringVar(value="5")
-        ttk.Entry(frame, textvariable=self._slip_var, width=12).grid(
             row=8, column=1, sticky="w", **pad)
 
-        ttk.Label(frame, text="Commission ($/trade):").grid(
+        ttk.Label(frame, text="Slippage (bps):").grid(
             row=9, column=0, sticky="e", **pad)
-        self._comm_var = tk.StringVar(value="0")
-        ttk.Entry(frame, textvariable=self._comm_var, width=12).grid(
+        self._slip_var = tk.StringVar(value="5")
+        ttk.Entry(frame, textvariable=self._slip_var, width=12).grid(
             row=9, column=1, sticky="w", **pad)
 
-        ttk.Label(frame, text="Deck seed (int):").grid(
+        ttk.Label(frame, text="Commission ($/trade):").grid(
             row=10, column=0, sticky="e", **pad)
+        self._comm_var = tk.StringVar(value="0")
+        ttk.Entry(frame, textvariable=self._comm_var, width=12).grid(
+            row=10, column=1, sticky="w", **pad)
+
+        ttk.Label(frame, text="Deck seed (int):").grid(
+            row=11, column=0, sticky="e", **pad)
         self._seed_var = tk.StringVar(value="0")
         ttk.Entry(frame, textvariable=self._seed_var, width=12).grid(
-            row=10, column=1, sticky="w", **pad)
+            row=11, column=1, sticky="w", **pad)
 
         self._error_var = tk.StringVar(value="")
         ttk.Label(frame, textvariable=self._error_var,
                   foreground="red").grid(
-            row=11, column=0, columnspan=3, sticky="w", **pad)
+            row=12, column=0, columnspan=3, sticky="w", **pad)
 
         # ---- Universe / strict-offline group ------------------------
         # Decoupled preload: the user runs Sandbox \u2192 Prepare Universe
@@ -295,7 +302,7 @@ class SandboxStartDialog(BaseModalDialog):
         # manifests. "(none)" preserves the legacy unrestricted flow.
         uni_box = ttk.LabelFrame(frame, text="Universe (optional)",
                                  padding=6)
-        uni_box.grid(row=12, column=0, columnspan=3, sticky="ew", **pad)
+        uni_box.grid(row=13, column=0, columnspan=3, sticky="ew", **pad)
         uni_box.columnconfigure(1, weight=1)
 
         ttk.Label(uni_box, text="Prepared:").grid(
@@ -332,7 +339,7 @@ class SandboxStartDialog(BaseModalDialog):
         self._refresh_coverage()
 
         btns = ttk.Frame(frame)
-        btns.grid(row=13, column=0, columnspan=3, sticky="ew", **pad)
+        btns.grid(row=14, column=0, columnspan=3, sticky="ew", **pad)
         # Windows dialog convention (audit ``button-order-windows``):
         # visual order ``[Start] [Cancel]`` with the dismiss action
         # rightmost. ``side=tk.RIGHT`` reverses pack order, so pack
@@ -773,6 +780,8 @@ class SandboxStartDialog(BaseModalDialog):
             "universe_id": universe_id,
             "universe_symbols": universe_symbols,
             "strict_offline": strict_offline,
+            "decision_logging_enabled": bool(
+                self._decision_logging_var.get()),
         }
         try:
             self.grab_release()

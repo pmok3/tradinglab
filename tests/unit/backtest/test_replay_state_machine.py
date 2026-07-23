@@ -165,8 +165,12 @@ class _FakeChartApp:
         self.reset_compare_calls += 1
 
 
-def _make_session_spec(*, deck_seed: int = 42,
-                      tickers: tuple = ("SPY",)) -> SessionSpec:
+def _make_session_spec(
+    *,
+    deck_seed: int = 42,
+    tickers: tuple = ("SPY",),
+    decision_logging_enabled: bool = False,
+) -> SessionSpec:
     return SessionSpec(
         deck_seed=deck_seed,
         tickers=tickers,
@@ -178,6 +182,7 @@ def _make_session_spec(*, deck_seed: int = 42,
         starting_cash=100_000.0,
         include_extended=False,
         auto_cycle=False,
+        decision_logging_enabled=decision_logging_enabled,
     )
 
 
@@ -723,3 +728,94 @@ class TestDayNotes:
         ctl.set_day_note("ignored")
         assert ctl.current_day_note() == ""
         assert ctl.current_day_ordinal() == 1
+
+
+# ---------------------------------------------------------------------------
+# 11. Optional discretionary decision logging
+# ---------------------------------------------------------------------------
+
+
+class TestDecisionLogging:
+    def test_disabled_by_default_and_never_infers_passes(self):
+        ctl, _, _ = _ctl_and_start()
+        assert ctl.decision_logging_enabled() is False
+        assert ctl.decisions_snapshot() == []
+        ctl.next_bar()
+        assert ctl.result().decisions == []
+        with pytest.raises(RuntimeError, match="not enabled"):
+            ctl.log_decision(
+                action="pass",
+                setup_tag="breakout",
+                confidence=3,
+            )
+
+    def test_enabled_capture_is_controller_owned_and_persisted(self):
+        spec = _make_session_spec(decision_logging_enabled=True)
+        ctl, _, _ = _ctl_and_start(spec=spec)
+        ts = ctl.clock_ts()
+        record = ctl.log_decision(
+            action=" Long ",
+            setup_tag="  pullback ",
+            confidence=4,
+            note="  waited for confirmation  ",
+        )
+        assert record.ts == ts
+        assert record.symbol == "SPY"
+        assert record.action == "long"
+        assert record.setup_tag == "pullback"
+        assert record.confidence == 4
+        assert record.note == "waited for confirmation"
+        assert ctl.result().decisions == [record]
+        assert ctl.decisions_snapshot() == [record]
+
+    @pytest.mark.parametrize("action", ["", "buy", "flat"])
+    def test_rejects_unknown_action(self, action):
+        spec = _make_session_spec(decision_logging_enabled=True)
+        ctl, _, _ = _ctl_and_start(spec=spec)
+        with pytest.raises(ValueError, match="action"):
+            ctl.log_decision(
+                action=action,
+                setup_tag="breakout",
+                confidence=3,
+            )
+
+    def test_rejects_empty_setup_tag(self):
+        spec = _make_session_spec(decision_logging_enabled=True)
+        ctl, _, _ = _ctl_and_start(spec=spec)
+        with pytest.raises(ValueError, match="setup_tag"):
+            ctl.log_decision(
+                action="watch",
+                setup_tag="  ",
+                confidence=3,
+            )
+
+    @pytest.mark.parametrize("confidence", [0, 6])
+    def test_rejects_confidence_outside_one_to_five(self, confidence):
+        spec = _make_session_spec(decision_logging_enabled=True)
+        ctl, _, _ = _ctl_and_start(spec=spec)
+        with pytest.raises(ValueError, match="1 to 5"):
+            ctl.log_decision(
+                action="watch",
+                setup_tag="breakout",
+                confidence=confidence,
+            )
+
+    def test_decisions_survive_multi_cycle_result_merge(self):
+        spec = _make_session_spec(decision_logging_enabled=True)
+        ctl, _, _ = _ctl_and_start(spec=spec)
+        record = ctl.log_decision(
+            action="pass",
+            setup_tag="failed breakout",
+            confidence=5,
+        )
+        ctl._archived_pre_trades = [object()]
+        assert ctl.result().decisions == [record]
+
+    def test_inactive_controller_rejects_capture(self):
+        ctl = SandboxController(app=_FakeChartApp(), tag_store=TagStore())
+        with pytest.raises(RuntimeError, match="no active"):
+            ctl.log_decision(
+                action="watch",
+                setup_tag="breakout",
+                confidence=3,
+            )

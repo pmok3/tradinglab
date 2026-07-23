@@ -29,6 +29,7 @@ monkeypatching once again resolves to ``tmp_path`` cleanly.
 from __future__ import annotations
 
 import gc
+import os
 
 import pytest
 
@@ -58,6 +59,28 @@ import pytest
 # ``test_strategy_tab_async_export`` still apply locally around their
 # daemon-thread hot spots.
 gc.set_threshold(50000, 100, 100)
+
+# ---------------------------------------------------------------------
+# Live prefetch scheduler OFF for unit tests (companion to the §7.5 fix)
+# ---------------------------------------------------------------------
+# The background prefetch scheduler defaults to *live*, which spawns a
+# dedicated pool of worker threads that fetch through the smoke
+# ``fake_fetch`` stub — allocating ``Candle`` objects on WORKER threads
+# exactly like the regular fetch executor above. With the scheduler live,
+# a real-``ChartApp`` fixture (``test_tick_blit``/``test_indicator_live_pane``)
+# runs *multiple* concurrent Candle-allocating workers during ``_pump``,
+# which re-widens the cross-thread cyclic-GC crash window the
+# ``gc.set_threshold`` bump above was calibrated to close — reproducing the
+# ``Windows fatal exception: code 0x80000003`` even on local ARM64 dev.
+# Unit tests never assert on live prefetch (its logic is covered by
+# ``tests/unit/data/prefetch/*`` + ``test_prefetch_app_live.py`` via fakes,
+# and end-to-end by the smoke suite); disabling it here removes the extra
+# worker-thread allocation churn and restores the documented safety margin.
+# ``setdefault`` so an explicit ``TRADINGLAB_PREFETCH_SCHEDULER`` override
+# still wins, and ``test_appglue`` (which monkeypatches the flag per-test)
+# is unaffected. Set at import time so it lands BEFORE any (possibly
+# module-scoped) ``ChartApp()`` fixture reads it.
+os.environ.setdefault("TRADINGLAB_PREFETCH_SCHEDULER", "off")
 
 
 @pytest.fixture(autouse=True)

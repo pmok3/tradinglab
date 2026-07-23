@@ -33,8 +33,10 @@ def _job(band_index=0, source="alpaca", symbol="AMD", interval="5m",
                     generation=0)
 
 
-def _fake_app(*, window, policy=CACHE_MEMORY_AND_DISK, submit_ok=True):
+def _fake_app(*, window, policy=CACHE_MEMORY_AND_DISK, submit_ok=True,
+              watchlist=()):
     calls: dict = {"complete": [], "stash": [], "pump": 0, "apply": None}
+    wl_set = {str(s).strip().upper() for s in watchlist}
 
     def _submit_prefetch(fn):
         if not submit_ok:
@@ -78,6 +80,8 @@ def _fake_app(*, window, policy=CACHE_MEMORY_AND_DISK, submit_ok=True):
         _apply_watchlist_snapshot_from_bars=(
             lambda t, src, itv, bars: calls.__setitem__(
                 "wl_snap", calls.get("wl_snap", []) + [(t, src, itv, len(bars))])),
+        _job_symbol_is_watchlisted=(
+            lambda sym: str(sym or "").strip().upper() in wl_set),
     )
     return fake, calls
 
@@ -127,12 +131,53 @@ def test_submit_watchlist_tier_updates_snapshot(monkeypatch):
         lambda *a, **k: base.FetchPageResult(bars, "ok"),
     )
     # WL tiers are disk-only (no memory stash), so use CACHE_DISK_ONLY.
-    fake, calls = _fake_app(window=_range_window(), policy=CACHE_DISK_ONLY)
+    fake, calls = _fake_app(window=_range_window(), policy=CACHE_DISK_ONLY,
+                            watchlist=("NVDA",))
     PrefetchAppMixin._prefetch_submit(
         fake, _job(band_index=0, symbol="NVDA", tier_rank=TIER_FOCUSED_WL))
     # the scheduler's WL-tier completion drove the snapshot updater.
     assert calls.get("wl_snap") == [("NVDA", "alpaca", "5m", 3)]
     assert calls["stash"] == []                     # disk-only → no memory stash
+
+
+def test_submit_active_tier_pinned_symbol_updates_snapshot(monkeypatch):
+    """Regression (qw-active-overlap-snapshot): the active/compare symbol that is
+    ALSO a pinned watchlist member must still populate its Last/Change row.
+
+    ``expand_all`` dedups AMD (the default startup chart symbol AND the first
+    Default-watchlist row) to TIER_ACTIVE, so no watchlist-tier job is ever
+    emitted for it. The completion handler must gate on watchlist MEMBERSHIP,
+    not tier — else AMD's row is blank on launch while NVDA/INTC/… populate.
+    """
+    from tradinglab.data.prefetch.tiers import TIER_ACTIVE
+    bars = [_Bar(1000.0), _Bar(1300.0), _Bar(1600.0)]
+    monkeypatch.setattr(
+        base, "fetch_page",
+        lambda *a, **k: base.FetchPageResult(bars, "ok"),
+    )
+    fake, calls = _fake_app(window=_range_window(), policy=CACHE_MEMORY_AND_DISK,
+                            watchlist=("AMD",))
+    PrefetchAppMixin._prefetch_submit(
+        fake, _job(band_index=0, symbol="AMD", tier_rank=TIER_ACTIVE))
+    # active-tier completion for a pinned symbol still drives the snapshot.
+    assert calls.get("wl_snap") == [("AMD", "alpaca", "5m", 3)]
+
+
+def test_submit_active_tier_unpinned_symbol_skips_snapshot(monkeypatch):
+    """A non-watchlisted active symbol must NOT touch the watchlist snapshot —
+    the membership gate guards against spraying a row for every fetched symbol.
+    """
+    from tradinglab.data.prefetch.tiers import TIER_ACTIVE
+    bars = [_Bar(1000.0), _Bar(1300.0)]
+    monkeypatch.setattr(
+        base, "fetch_page",
+        lambda *a, **k: base.FetchPageResult(bars, "ok"),
+    )
+    fake, calls = _fake_app(window=_range_window(), policy=CACHE_MEMORY_AND_DISK,
+                            watchlist=("AMD",))
+    PrefetchAppMixin._prefetch_submit(
+        fake, _job(band_index=0, symbol="TSLA", tier_rank=TIER_ACTIVE))
+    assert calls.get("wl_snap") is None
 
 
 def test_submit_disk_only_deep_band_no_stash(monkeypatch):

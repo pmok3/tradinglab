@@ -122,21 +122,42 @@ class SandboxPanel(ttk.Frame):
                    command=lambda: self._on_trade_button("sell")) \
             .pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
 
+        # Explicit session opt-in. No button and no prompts when disabled.
+        self._decision_btn: ttk.Button | None = None
+        self._decision_count_var: tk.StringVar | None = None
+        enabled_fn = getattr(self.controller, "decision_logging_enabled", None)
+        if callable(enabled_fn) and bool(enabled_fn()):
+            decision_row = ttk.Frame(self)
+            decision_row.grid(row=7, column=0, sticky="ew", **pad)
+            self._decision_btn = ttk.Button(
+                decision_row,
+                text="Log decision…",
+                command=self._on_log_decision,
+            )
+            self._decision_btn.pack(
+                side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+            self._decision_count_var = tk.StringVar(value="none logged")
+            ttk.Label(
+                decision_row,
+                textvariable=self._decision_count_var,
+                foreground="grey",
+            ).pack(side=tk.LEFT, padx=(6, 0))
+
         # Positions table.
-        ttk.Label(self, text="Positions:").grid(row=7, column=0, sticky="w", **pad)
+        ttk.Label(self, text="Positions:").grid(row=8, column=0, sticky="w", **pad)
         cols = ("symbol", "qty", "avg")
         self._pos_tree = ttk.Treeview(self, columns=cols, show="headings", height=5)
         for c, w in (("symbol", 60), ("qty", 60), ("avg", 70)):
             self._pos_tree.heading(c, text=c.title())
             self._pos_tree.column(c, width=w, anchor="w")
-        self._pos_tree.grid(row=8, column=0, sticky="ew", **pad)
+        self._pos_tree.grid(row=9, column=0, sticky="ew", **pad)
 
         # Watch notes — day-by-day pre-trade observations. Blind-safe:
         # the frame label shows "Replay Day N" (never the date) while
         # the session is blind. Committed to the controller's day-note
         # map and surfaced in the Performance View's daily-journal pane.
         self._notes_frame = ttk.LabelFrame(self, text="Watch notes")
-        self._notes_frame.grid(row=9, column=0, sticky="ew", **pad)
+        self._notes_frame.grid(row=10, column=0, sticky="ew", **pad)
         self._notes_text = tk.Text(self._notes_frame, height=4, width=22,
                                    wrap="word", undo=True)
         self._notes_text.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
@@ -146,7 +167,7 @@ class SandboxPanel(ttk.Frame):
 
         # End session.
         ttk.Button(self, text="End session", command=self._on_end_session) \
-            .grid(row=10, column=0, sticky="ew", **pad)
+            .grid(row=11, column=0, sticky="ew", **pad)
 
         # Bind Right-arrow globally (only fires when sandbox active —
         # controller checks ``is_active``). Migrated from the legacy
@@ -295,6 +316,7 @@ class SandboxPanel(ttk.Frame):
         # Watch-notes box: reload only on a day roll (never clobbers
         # in-progress typing on the current day).
         self._refresh_day_notes(ctl, blind)
+        self._refresh_decision_count()
 
     def _on_next_bar(self) -> None:
         ctl = self.controller
@@ -336,6 +358,46 @@ class SandboxPanel(ttk.Frame):
             return
         sym = self._focus_lb.get(sel[0])
         ctl.set_focus(sym)
+
+    def _on_log_decision(self) -> None:
+        from .sandbox_review_dialog import DecisionLogDialog
+
+        ctl = self.controller
+        if ctl is None or not ctl.is_active() or not ctl.focus_symbol:
+            return
+        try:
+            tags = ctl.tag_store.list()
+        except AttributeError:
+            tags = []
+        dlg = DecisionLogDialog(
+            self.app,
+            symbol=ctl.focus_symbol,
+            setup_tags=tags,
+        )
+        self.app.wait_window(dlg)
+        if dlg.result is None:
+            return
+        try:
+            record = ctl.log_decision(**dlg.result)
+        except (RuntimeError, TypeError, ValueError) as exc:
+            try:
+                self.app._status.warn(f"Decision rejected: {exc}")
+            except (AttributeError, tk.TclError):
+                pass
+            return
+        self._refresh_decision_count()
+        try:
+            self.app._status.info(
+                f"Logged {record.action} decision for {record.symbol}")
+        except (AttributeError, tk.TclError):
+            pass
+
+    def _refresh_decision_count(self) -> None:
+        if self._decision_count_var is None:
+            return
+        count = len(self.controller.decisions_snapshot())
+        self._decision_count_var.set(
+            f"{count} logged" if count else "none logged")
 
     def _on_trade_button(self, side: str) -> None:
         from .sandbox_dialog import PreTradeFormDialog

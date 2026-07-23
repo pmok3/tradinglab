@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .actions import CashAdjustment, QuantityAdjustment
-from .journal import PostTradeReview, PreTradeEntry
+from .journal import DecisionRecord, PostTradeReview, PreTradeEntry
 from .orders import Fill, Side
 
 ENGINE_VERSION: str = "sandbox-1d"
@@ -82,6 +82,9 @@ class SessionSpec:
     universe_id: str = ""
     universe_symbols: tuple[str, ...] = ()
     strict_offline: bool = False
+    # Optional manual pattern-recognition journal. The controller and UI
+    # expose decision capture only when this is enabled for the session.
+    decision_logging_enabled: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -96,6 +99,7 @@ class SessionSpec:
             "commission_per_share": float(self.commission_per_share),
             "include_extended": bool(self.include_extended),
             "auto_cycle": bool(self.auto_cycle),
+            "decision_logging_enabled": bool(self.decision_logging_enabled),
             "cycle_dates": list(self.cycle_dates),
             "universe_id": str(self.universe_id),
             "universe_symbols": list(self.universe_symbols),
@@ -116,6 +120,8 @@ class SessionSpec:
             commission_per_share=float(d.get("commission_per_share", 0.0)),
             include_extended=bool(d.get("include_extended", False)),
             auto_cycle=bool(d.get("auto_cycle", False)),
+            decision_logging_enabled=bool(
+                d.get("decision_logging_enabled", False)),
             cycle_dates=tuple(d.get("cycle_dates") or ()),
             universe_id=str(d.get("universe_id", "")),
             universe_symbols=tuple(d.get("universe_symbols") or ()),
@@ -151,6 +157,9 @@ class SessionResult:
     # reproducibility is unaffected. Additive default-empty so existing
     # ``sandbox-1d`` saves load cleanly (no ``ENGINE_VERSION`` bump).
     day_notes: dict[str, str] = field(default_factory=dict)
+    # Optional controller-owned recognition decisions. Unlogged bars are
+    # deliberately absent; they must never be inferred as passes.
+    decisions: list[DecisionRecord] = field(default_factory=list)
 
     # ---- serialisation -------------------------------------------------
 
@@ -165,6 +174,7 @@ class SessionResult:
             "cash_adjustments": [_cash_adj_to_dict(a) for a in self.cash_adjustments],
             "quantity_adjustments": [_qty_adj_to_dict(a) for a in self.quantity_adjustments],
             "day_notes": {str(k): str(v) for k, v in self.day_notes.items()},
+            "decisions": [_decision_to_dict(x) for x in self.decisions],
         }
 
     @classmethod
@@ -179,6 +189,8 @@ class SessionResult:
             cash_adjustments=[_cash_adj_from_dict(x) for x in d.get("cash_adjustments") or ()],
             quantity_adjustments=[_qty_adj_from_dict(x) for x in d.get("quantity_adjustments") or ()],
             day_notes={str(k): str(v) for k, v in (d.get("day_notes") or {}).items()},
+            decisions=[
+                _decision_from_dict(x) for x in d.get("decisions") or ()],
         )
 
 
@@ -292,6 +304,28 @@ def _post_from_dict(d: dict[str, Any]) -> PostTradeReview:
         mfe_pct=float(d["mfe_pct"]),
         ref_pre_trade_id=(None if ref is None else str(ref)),
         user_review=str(d.get("user_review", "")),
+    )
+
+
+def _decision_to_dict(d: DecisionRecord) -> dict[str, Any]:
+    return {
+        "ts": int(d.ts),
+        "symbol": str(d.symbol),
+        "action": str(d.action),
+        "setup_tag": str(d.setup_tag),
+        "confidence": int(d.confidence),
+        "note": str(d.note),
+    }
+
+
+def _decision_from_dict(d: dict[str, Any]) -> DecisionRecord:
+    return DecisionRecord(
+        ts=int(d["ts"]),
+        symbol=str(d["symbol"]),
+        action=str(d["action"]),
+        setup_tag=str(d.get("setup_tag", "")),
+        confidence=int(d.get("confidence", 0)),
+        note=str(d.get("note", "")),
     )
 
 

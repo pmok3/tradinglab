@@ -147,6 +147,7 @@ def test_session_spec_to_from_dict_round_trip():
         universe_id="watchlist:Mega Caps",
         universe_symbols=("AAPL", "MSFT", "NVDA", "GOOGL", "AMZN"),
         strict_offline=True,
+        decision_logging_enabled=True,
     )
 
     # to_dict → from_dict → asdict byte-equal (every field round-tripped).
@@ -168,3 +169,8 @@ def test_session_spec_to_from_dict_round_trip():
     # Belt-and-braces: dumping the same spec twice is also byte-identical
     # (catches accidental introduction of e.g. set-iteration order).
     assert json.dumps(spec.to_dict(), sort_keys=False) == dump_orig
+
+    legacy_payload = spec.to_dict()
+    del legacy_payload["decision_logging_enabled"]
+    assert SessionSpec.from_dict(
+        legacy_payload).decision_logging_enabled is False

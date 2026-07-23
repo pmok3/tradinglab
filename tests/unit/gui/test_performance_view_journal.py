@@ -16,8 +16,9 @@ import pytest
 pytest.importorskip("tkinter")
 import tkinter as tk  # noqa: E402
 
-from tradinglab.backtest.journal import PostTradeReview
+from tradinglab.backtest.journal import DecisionRecord, PostTradeReview
 from tradinglab.backtest.session import SessionResult, SessionSpec
+from tradinglab.gui import performance_view as performance_view_module
 from tradinglab.gui.performance_view import PerformanceView
 
 
@@ -48,6 +49,16 @@ def _result_with_days() -> SessionResult:
             "2025-04-29": "SPY pulling back, NVDA holding RS",
             "2025-05-01": "watched all day, stood aside",
         },
+        decisions=[
+            DecisionRecord(
+                ts=_ts(2025, 4, 29, 14, 25),
+                symbol="AMD",
+                action="watch",
+                setup_tag="opening range",
+                confidence=4,
+                note="waiting for confirmation",
+            ),
+        ],
     )
 
 
@@ -75,9 +86,15 @@ def test_journal_pane_groups_days_and_trades(root):
         assert "Day 1" in first_text
         # Header's detail column carries the note.
         assert "NVDA holding RS" in tree.item(day_nodes[0], "values")[1]
-        # 04-29 has one nested trade child; the flat 05-01 day has none.
-        assert len(tree.get_children(day_nodes[0])) == 1
+        # 04-29 has a decision followed by a trade; flat 05-01 has none.
+        first_children = tree.get_children(day_nodes[0])
+        assert len(first_children) == 2
+        assert "DECISION · WATCH" in tree.item(
+            first_children[0], "values")[1]
+        assert "TRADE" in tree.item(first_children[1], "values")[1]
         assert len(tree.get_children(day_nodes[2])) == 0
+        assert "1 logged decision(s) (logged decisions only)" in (
+            win._summary_var.get())
     finally:
         with contextlib.suppress(tk.TclError):
             win.destroy()
@@ -92,6 +109,51 @@ def test_journal_blind_toggle_hides_dates(root):
         labels = [tree.item(n, "text") for n in tree.get_children("")]
         assert labels[0] == "Replay Day 1"
         assert all("2025" not in lbl for lbl in labels)
+    finally:
+        with contextlib.suppress(tk.TclError):
+            win.destroy()
+
+
+def test_decision_only_session_can_export_decisions(
+    root, tmp_path, monkeypatch,
+):
+    result = SessionResult(
+        spec=SessionSpec(
+            deck_seed=1,
+            tickers=("AMD",),
+            start_clock_iso="",
+            slippage_bps=0.0,
+            commission=0.0,
+            decision_logging_enabled=True,
+        ),
+        decisions=[
+            DecisionRecord(
+                ts=_ts(2025, 5, 1, 15, 5),
+                symbol="AMD",
+                action="pass",
+                setup_tag="failed breakout",
+                confidence=5,
+                note="No volume confirmation",
+            ),
+        ],
+    )
+    win = PerformanceView(root, result, title="test")
+    try:
+        assert str(win._export_btn["state"]) == "disabled"
+        assert str(win._copy_btn["state"]) == "disabled"
+        assert str(win._decision_export_btn["state"]) == "normal"
+        assert len(win._journal_tree.get_children("")) == 1
+
+        target = tmp_path / "decisions.csv"
+        monkeypatch.setattr(
+            performance_view_module.filedialog,
+            "asksaveasfilename",
+            lambda **_kwargs: str(target),
+        )
+        win._on_export_decisions_csv()
+        assert target.is_file()
+        assert "AMD,pass,failed breakout,5,No volume confirmation" in (
+            target.read_text(encoding="utf-8"))
     finally:
         with contextlib.suppress(tk.TclError):
             win.destroy()

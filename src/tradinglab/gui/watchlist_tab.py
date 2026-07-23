@@ -1135,6 +1135,29 @@ class WatchlistTabMixin:
                     seen.append(t)
         return seen
 
+    def _job_symbol_is_watchlisted(self, symbol: str) -> bool:
+        """Return whether ``symbol`` belongs to any pinned watchlist.
+
+        The prefetch completion handler (:meth:`_prefetch_submit`) uses
+        membership — NOT the completed job's tier — to decide whether to
+        derive a Last/Change snapshot. ``expand_all`` dedups a symbol to
+        its highest-priority tier, so a pinned ticker that is also the
+        active or compare symbol (e.g. the default ``AMD``, which is both
+        the startup chart symbol and the first Default-watchlist row) is
+        emitted under ``TIER_ACTIVE`` / ``TIER_COMPARE`` and never under a
+        watchlist tier. A tier-only check therefore left that row blank on
+        launch; membership is the correct predicate. Comparison is
+        upper-cased to match the scheduler's normalized job symbols.
+        """
+        sym = str(symbol or "").strip().upper()
+        if not sym:
+            return False
+        try:
+            return any(sym == str(t).strip().upper()
+                       for t in self._pinned_ticker_union())
+        except Exception:  # noqa: BLE001
+            return False
+
     # ---- event handlers ----------------------------------------------
     def _ensure_active_watchlist_for_cycle(self) -> str | None:
         """Guarantee a non-empty active pinned watchlist for Space-cycle.
@@ -1934,12 +1957,14 @@ class WatchlistTabMixin:
 
     # ---- recurring poll loop -----------------------------------------
     #
-    # The chart-load preload path (``_preload_watchlist`` /
-    # ``_preload_watchlist_daily``, fired from ``_load_data``) only
-    # runs when the user switches ticker / interval / source. If
-    # INTC's first fetch transiently fails (yfinance rate-limit,
-    # quota, network blip), the snapshot row stays empty until the
-    # user manually loads INTC into the chart — visibly broken.
+    # After the scheduler cut-over the prefetch completion handler
+    # (``_prefetch_submit._on_done``) owns Watchlist Last/Change: it
+    # derives each pinned row's snapshot as that symbol's tier job
+    # lands (membership-gated, so the active/compare symbol that is
+    # also pinned is covered too). If a ticker's first fetch
+    # transiently fails (yfinance rate-limit, quota, network blip),
+    # that row stays empty until something re-warms it — visibly
+    # broken.
     #
     # The poll loop here re-runs the preload pipeline every
     # ``watchlist_poll_interval_sec`` seconds so transient failures

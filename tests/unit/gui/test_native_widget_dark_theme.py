@@ -64,6 +64,14 @@ class _FakeTagStore:
         return ["Gap", "Pullback"]
 
 
+class _FakeDecisionSandboxController(_FakeSandboxController):
+    def decision_logging_enabled(self) -> bool:
+        return True
+
+    def decisions_snapshot(self) -> list:
+        return []
+
+
 @pytest.fixture()
 def dark_root(root: tk.Toplevel):
     root._theme_ctrl = SimpleNamespace(theme=DARK_THEME)  # type: ignore[attr-defined]
@@ -119,6 +127,17 @@ def test_sandbox_panel_focus_listbox_uses_dark_theme(dark_root: tk.Toplevel) -> 
     panel = sandbox_panel.SandboxPanel(dark_root, _FakeSandboxController())
     try:
         _assert_dark_listbox(panel._focus_lb)
+        assert panel._decision_btn is None
+    finally:
+        panel.destroy()
+
+
+def test_sandbox_panel_decision_control_is_opt_in(dark_root: tk.Toplevel) -> None:
+    panel = sandbox_panel.SandboxPanel(
+        dark_root, _FakeDecisionSandboxController())
+    try:
+        assert panel._decision_btn is not None
+        assert panel._decision_count_var.get() == "none logged"
     finally:
         panel.destroy()
 
@@ -144,6 +163,37 @@ def test_post_trade_review_text_uses_dark_theme(dark_root: tk.Toplevel) -> None:
         _assert_dark_text(dlg._review_text)
     finally:
         dlg.destroy()
+
+
+def test_decision_log_note_uses_dark_theme(dark_root: tk.Toplevel) -> None:
+    dlg = sandbox_review_dialog.DecisionLogDialog(
+        dark_root, "AAPL", setup_tags=["Gap"])
+    try:
+        _assert_dark_text(dlg._note_text)
+    finally:
+        dlg.destroy()
+
+
+def test_decision_log_validates_and_returns_payload(dark_root: tk.Toplevel) -> None:
+    dlg = sandbox_review_dialog.DecisionLogDialog(
+        dark_root, "AAPL", setup_tags=["Gap"])
+    try:
+        dlg._on_submit()
+        assert dlg.result is None
+        assert "Choose" in dlg._error_var.get()
+        dlg._action_var.set("Pass")
+        dlg._confidence_var.set(5)
+        dlg._note_text.insert("1.0", "Breakout lacked volume")
+        dlg._on_submit()
+        assert dlg.result == {
+            "action": "pass",
+            "setup_tag": "Gap",
+            "confidence": 5,
+            "note": "Breakout lacked volume",
+        }
+    finally:
+        with contextlib.suppress(tk.TclError):
+            dlg.destroy()
 
 
 def test_tags_editor_listbox_uses_dark_theme(dark_root: tk.Toplevel) -> None:
@@ -353,6 +403,11 @@ def _build_post_trade_review(dark_root, _monkeypatch):
     return sandbox_review_dialog.PostTradeReviewDialog(dark_root, post)
 
 
+def _build_decision_log(dark_root, _monkeypatch):
+    return sandbox_review_dialog.DecisionLogDialog(
+        dark_root, "AAPL", setup_tags=["Gap"])
+
+
 def _build_tags_editor(dark_root, _monkeypatch):
     return sandbox_review_dialog.TagsEditorDialog(dark_root, _FakeTagStore())
 
@@ -377,6 +432,7 @@ _DARK_WINDOWS = {
     "WatchlistDialog": _build_watchlist,
     "ExitsDialog": _build_exits,
     "SandboxPanel": _build_sandbox_panel,
+    "DecisionLogDialog": _build_decision_log,
     "PostTradeReviewDialog": _build_post_trade_review,
     "TagsEditorDialog": _build_tags_editor,
     "LoadScanDialog": _build_load_scan,

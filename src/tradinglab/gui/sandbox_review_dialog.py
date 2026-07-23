@@ -1,5 +1,7 @@
-"""Phase 1c sandbox dialogs: post-trade review + tag taxonomy editor.
+"""Sandbox journaling dialogs: decisions, post-trade review, and tags.
 
+* :class:`DecisionLogDialog` — optional manual pattern-recognition
+  capture, independent of orders and never shown automatically.
 * :class:`PostTradeReviewDialog` — modal that pops every time a
   sandbox position closes. Mandatory free-form review text; cannot be
   dismissed without typing at least one character (per the locked
@@ -15,9 +17,136 @@ from datetime import datetime, timezone
 from tkinter import ttk
 from typing import Any
 
+from ..backtest.journal import DECISION_ACTIONS
 from ._modal_base import BaseModalDialog, protect_combobox_wheel
 from .colors import down_red, up_green
 from .native_theme import apply_listbox_theme, apply_text_theme, current_theme
+
+
+class DecisionLogDialog(BaseModalDialog):
+    """Modal form for one explicit discretionary replay decision."""
+
+    def __init__(self, app: Any, symbol: str, *, setup_tags=()):
+        super().__init__(
+            app,
+            title=f"Log Decision — {symbol}",
+            geometry_key="dlg.decision_log",
+            default_geometry="440x380",
+            resizable=(False, False),
+        )
+        self.app = app
+        self.symbol = str(symbol)
+        self.setup_tags = tuple(str(t) for t in setup_tags)
+        self.result: dict[str, Any] | None = None
+
+        self._build()
+        self._action_combo.focus_set()
+        protect_combobox_wheel(self)
+        self._finalize_modal(
+            primary=self._on_submit,
+            cancel=self._on_cancel,
+        )
+
+    def _build(self) -> None:
+        pad = {"padx": 8, "pady": 4}
+        frame = ttk.Frame(self)
+        frame.grid(row=0, column=0, sticky="nsew", **pad)
+
+        ttk.Label(
+            frame,
+            text=f"{self.symbol} — log only when you choose to",
+            font=("TkDefaultFont", 11, "bold"),
+        ).grid(row=0, column=0, columnspan=2, sticky="w", **pad)
+        ttk.Label(
+            frame,
+            text="Unlogged bars are not treated as passes.",
+            foreground="grey",
+        ).grid(row=1, column=0, columnspan=2, sticky="w", **pad)
+
+        ttk.Label(frame, text="Action:").grid(
+            row=2, column=0, sticky="e", **pad)
+        self._action_var = tk.StringVar(value="")
+        self._action_combo = ttk.Combobox(
+            frame,
+            textvariable=self._action_var,
+            values=tuple(a.title() for a in DECISION_ACTIONS),
+            state="readonly",
+            width=18,
+        )
+        self._action_combo.grid(row=2, column=1, sticky="w", **pad)
+
+        ttk.Label(frame, text="Setup tag:").grid(
+            row=3, column=0, sticky="e", **pad)
+        self._setup_var = tk.StringVar(
+            value=self.setup_tags[0] if self.setup_tags else "")
+        self._setup_combo = ttk.Combobox(
+            frame,
+            textvariable=self._setup_var,
+            values=self.setup_tags,
+            state="normal",
+            width=28,
+        )
+        self._setup_combo.grid(row=3, column=1, sticky="w", **pad)
+
+        ttk.Label(frame, text="Confidence:").grid(
+            row=4, column=0, sticky="e", **pad)
+        confidence_row = ttk.Frame(frame)
+        confidence_row.grid(row=4, column=1, sticky="w", **pad)
+        self._confidence_var = tk.IntVar(value=3)
+        ttk.Spinbox(
+            confidence_row,
+            from_=1,
+            to=5,
+            increment=1,
+            textvariable=self._confidence_var,
+            state="readonly",
+            width=4,
+        ).pack(side=tk.LEFT)
+        ttk.Label(confidence_row, text="1 = low, 5 = high").pack(
+            side=tk.LEFT, padx=(6, 0))
+
+        ttk.Label(frame, text="Note (optional):").grid(
+            row=5, column=0, columnspan=2, sticky="w", **pad)
+        self._note_text = tk.Text(frame, width=45, height=5)
+        apply_text_theme(self._note_text, current_theme(self.app))
+        self._note_text.grid(
+            row=6, column=0, columnspan=2, sticky="ew", **pad)
+
+        self._error_var = tk.StringVar(value="")
+        ttk.Label(frame, textvariable=self._error_var, foreground="red").grid(
+            row=7, column=0, columnspan=2, sticky="w", **pad)
+
+        buttons = ttk.Frame(frame)
+        buttons.grid(row=8, column=0, columnspan=2, sticky="ew", **pad)
+        ttk.Button(buttons, text="Cancel", command=self._on_cancel).pack(
+            side=tk.RIGHT, padx=4)
+        ttk.Button(buttons, text="Log decision", command=self._on_submit).pack(
+            side=tk.RIGHT, padx=4)
+
+    def _on_submit(self) -> None:
+        action = self._action_var.get().strip().lower()
+        if action not in DECISION_ACTIONS:
+            self._error_var.set("Choose Long, Short, Pass, or Watch.")
+            return
+        setup_tag = self._setup_var.get().strip()
+        if not setup_tag:
+            self._error_var.set("Enter or choose a setup tag.")
+            return
+        confidence = int(self._confidence_var.get())
+        if not 1 <= confidence <= 5:
+            self._error_var.set("Confidence must be from 1 to 5.")
+            return
+        self.result = {
+            "action": action,
+            "setup_tag": setup_tag,
+            "confidence": confidence,
+            "note": self._note_text.get("1.0", "end").strip(),
+        }
+        self.destroy()
+
+    def _on_cancel(self) -> None:
+        self.result = None
+        self.destroy()
 
 
 class PostTradeReviewDialog(BaseModalDialog):
@@ -241,4 +370,8 @@ class TagsEditorDialog(BaseModalDialog):
         self.destroy()
 
 
-__all__ = ("PostTradeReviewDialog", "TagsEditorDialog")
+__all__ = (
+    "DecisionLogDialog",
+    "PostTradeReviewDialog",
+    "TagsEditorDialog",
+)

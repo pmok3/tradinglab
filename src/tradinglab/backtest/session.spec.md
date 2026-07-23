@@ -5,11 +5,11 @@ Reproducibility-grade record types for the sandbox kernel: `SessionSpec` is ever
 
 ## Public API
 - `ENGINE_VERSION: str = "sandbox-1d"` — bumped intentionally on schema breaks.
-- `@dataclass(frozen=True) class SessionSpec` — `deck_seed`, `tickers`, `start_clock_iso`, `slippage_bps`, `commission`, `engine_version` (default `ENGINE_VERSION`), `setup_tags`, `starting_cash` (default 100_000), `commission_per_share` (default 0.0), `include_extended` (default False), `auto_cycle` (default False), `cycle_dates` (default `()`), `universe_id` (default `""`), `universe_symbols` (default `()`), `strict_offline` (default False). `to_dict` / `from_dict` with stable key order.
-- `@dataclass class SessionResult` — `spec`, `fills`, `pre_trades`, `post_trades`, `equity_curve: List[Tuple[int, float]]`, `final_cash`, `cash_adjustments: List[CashAdjustment]` (default empty), `quantity_adjustments: List[QuantityAdjustment]` (default empty), `day_notes: Dict[str, str]` (default empty). `to_dict` / `from_dict` round-trip both adjustment lists via `_cash_adj_to_dict` / `_qty_adj_to_dict` and their `_from_dict` inverses; legacy JSON without these keys hydrates with empty lists / empty dict (additive default).
+- `@dataclass(frozen=True) class SessionSpec` — `deck_seed`, `tickers`, `start_clock_iso`, `slippage_bps`, `commission`, `engine_version` (default `ENGINE_VERSION`), `setup_tags`, `starting_cash` (default 100_000), `commission_per_share` (default 0.0), `include_extended` (default False), `auto_cycle` (default False), `cycle_dates` (default `()`), `universe_id` (default `""`), `universe_symbols` (default `()`), `strict_offline` (default False), `decision_logging_enabled` (default False). `to_dict` / `from_dict` with stable key order.
+- `@dataclass class SessionResult` — `spec`, `fills`, `pre_trades`, `post_trades`, `equity_curve: List[Tuple[int, float]]`, `final_cash`, `cash_adjustments: List[CashAdjustment]` (default empty), `quantity_adjustments: List[QuantityAdjustment]` (default empty), `day_notes: Dict[str, str]` (default empty), `decisions: List[DecisionRecord]` (default empty). Legacy JSON without additive keys hydrates safe empty values.
 
 ## Dependencies
-- Internal: `.journal.PostTradeReview`, `.journal.PreTradeEntry`, `.orders.Fill`, `.orders.Side`.
+- Internal: `.journal.DecisionRecord`, `.journal.PostTradeReview`, `.journal.PreTradeEntry`, `.orders.Fill`, `.orders.Side`.
 
 ## Design Decisions
 - **Phase 1d defaults are back-compat optional in JSON**: `include_extended`, `auto_cycle`, `cycle_dates` all default to safe values in `from_dict` when absent, so a Phase 1c saved session loads cleanly.
@@ -24,6 +24,7 @@ Reproducibility-grade record types for the sandbox kernel: `SessionSpec` is ever
 - **`starting_cash` (default $100k USD) is the only buying-power constraint** — no margin, no leverage, no PDT model. The engine does not pre-check cash before filling: orders that breach cash fill anyway and `Portfolio.cash` is allowed to go negative. No reject, no clip, no log. Sizing is the caller's responsibility.
 - **`commission_per_share` is additive on top of flat `commission`** — total per-fill commission is `commission + commission_per_share * abs(quantity)`. Default-zero preserves back-compat: existing `sandbox-1d` saves load cleanly without bumping `ENGINE_VERSION` per the additive-fields decision. Introduced for the Strategy Tester to model brokers like Interactive Brokers ($0.005 / share).
 - **`day_notes` are controller-populated, not engine-emitted** — the map holds the trader's per-day free-text "watch notes" captured during (blind) replay, keyed by the **UTC session date** (`YYYY-MM-DD`, equal to the ET date for regular-hours replay). The engine emits an empty map; the controller folds its buffer in via `SandboxController.result()`, exactly mirroring how `PostTradeReview.user_review` is attached post-hoc. So engine-level reproducibility (`check_f1`) is unaffected — two raw engine runs both carry `{}`. Additive default-empty; old saves hydrate `{}`. Consumed by `performance.build_day_groups`.
+- **Decision logging is additive and opt-in** — `decision_logging_enabled=False` preserves existing sessions. `SessionResult.decisions` contains only manual captures from the controller; unlogged bars are not represented and must never be interpreted as passes. Both fields default safely when absent, so `ENGINE_VERSION` remains unchanged.
 
 ## Invariants
 - `SessionSpec.to_dict() → from_dict → to_dict` round-trips byte-identically.

@@ -36,6 +36,7 @@ from tests.smoke.test_smoke_full import (
     check_b37_sandbox_compare_survives_focus_swap,
     check_b38_sandbox_compare_change_routing,
     check_b40_sandbox_watchlist_uses_replay_clock,
+    check_b40a_sandbox_optional_decision_logging,
     check_f0_backtest_kernel,
     check_f1_session_reproducibility,
     check_g0_sandbox_replay_integration,
@@ -81,6 +82,7 @@ _CHECKS = [
     check_b37_sandbox_compare_survives_focus_swap,
     check_b38_sandbox_compare_change_routing,
     check_b40_sandbox_watchlist_uses_replay_clock,
+    check_b40a_sandbox_optional_decision_logging,
     check_f0_backtest_kernel,
     check_f1_session_reproducibility,
 ]

@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..core.timezones import ET as _ET
-from .journal import PostTradeReview, PreTradeEntry
+from .journal import DecisionRecord, PostTradeReview, PreTradeEntry
 from .session import SessionResult
 
 
@@ -127,7 +127,7 @@ class ProximityAggregate:
 
 @dataclass(frozen=True)
 class DayGroup:
-    """One replay session-day: its watch note joined with that day's trades.
+    """One replay day with its watch note, trades, and logged decisions.
 
     ``date_iso`` is the UTC session date (``YYYY-MM-DD``). ``ordinal`` is
     the 1-based chronological rank of the day within the session, used
@@ -143,6 +143,7 @@ class DayGroup:
     total_pnl: float
     wins: int
     losses: int
+    decisions: tuple[DecisionRecord, ...] = ()
 
 
 def build_trade_rows(result: SessionResult) -> list[TradeRow]:
@@ -285,25 +286,27 @@ def _utc_date_iso(ts: int) -> str:
 
 
 def build_day_groups(result: SessionResult) -> list[DayGroup]:
-    """Group closed trades by session day and attach that day's watch note.
+    """Group trades and logged decisions by replay session day.
 
-    Days are the union of (a) every distinct UTC session date a closed
-    trade entered on and (b) every date carrying a
-    :attr:`SessionResult.day_notes` entry — so a "flat" day the trader
-    watched but took no trade on still appears (with its note and no
-    child rows). Output is chronological; ``ordinal`` is the 1-based
-    chronological rank (used for the blind-mode "Replay Day N" label so
-    the report can stay hindsight-safe). Trades within a day are ordered
-    by entry timestamp.
+    A decision-only day appears even when it has no trade or watch note.
+    Output is chronological; trades and decisions within each group are
+    independently timestamp-ordered for deterministic UI interleaving.
     """
     rows = build_trade_rows(result)
     by_day: dict[str, list[TradeRow]] = {}
     for r in rows:
         by_day.setdefault(_utc_date_iso(r.post.entry_ts), []).append(r)
+    by_decision_day: dict[str, list[DecisionRecord]] = {}
+    for decision in getattr(result, "decisions", ()) or ():
+        by_decision_day.setdefault(
+            _utc_date_iso(decision.ts), []).append(decision)
     notes = {str(k): str(v) for k, v in (getattr(result, "day_notes", {}) or {}).items()}
     out: list[DayGroup] = []
-    for i, key in enumerate(sorted(set(by_day) | set(notes)), start=1):
+    day_keys = set(by_day) | set(by_decision_day) | set(notes)
+    for i, key in enumerate(sorted(day_keys), start=1):
         day_rows = sorted(by_day.get(key, []), key=lambda r: int(r.post.entry_ts))
+        decisions = sorted(
+            by_decision_day.get(key, []), key=lambda d: int(d.ts))
         out.append(DayGroup(
             date_iso=key,
             ordinal=i,
@@ -312,6 +315,7 @@ def build_day_groups(result: SessionResult) -> list[DayGroup]:
             total_pnl=sum(float(r.post.pnl) for r in day_rows),
             wins=sum(1 for r in day_rows if r.is_win),
             losses=sum(1 for r in day_rows if r.is_loss),
+            decisions=tuple(decisions),
         ))
     return out
 
@@ -330,7 +334,10 @@ __all__ = (
     "trade_row_to_csv_record",
     "trade_rows_to_tsv",
     "write_trade_rows_csv",
+    "decision_to_csv_record",
+    "write_decisions_csv",
     "CSV_COLUMNS",
+    "DECISION_CSV_COLUMNS",
 )
 
 
@@ -459,6 +466,27 @@ CSV_COLUMNS: tuple[str, ...] = (
     "pre_screenshot", "post_screenshot",
 )
 
+DECISION_CSV_COLUMNS: tuple[str, ...] = (
+    "timestamp",
+    "symbol",
+    "action",
+    "setup_tag",
+    "confidence",
+    "note",
+)
+
+
+def decision_to_csv_record(decision: DecisionRecord) -> dict[str, str]:
+    """Render one logged decision as a string-valued CSV record."""
+    return {
+        "timestamp": _iso_utc(decision.ts),
+        "symbol": str(decision.symbol),
+        "action": str(decision.action),
+        "setup_tag": str(decision.setup_tag),
+        "confidence": str(int(decision.confidence)),
+        "note": str(decision.note).replace("\r\n", " ").replace("\n", " "),
+    }
+
 
 def trade_row_to_csv_record(
     row: TradeRow, *, index: int,
@@ -579,4 +607,21 @@ def write_trade_rows_csv(
         writer.writeheader()
         for rec in records:
             writer.writerow(rec)
+    return csv_path
+
+
+def write_decisions_csv(
+    decisions: list[DecisionRecord],
+    *,
+    csv_path: Path,
+) -> Path:
+    """Write explicit logged decisions to a standalone UTF-8 CSV."""
+    csv_path = Path(csv_path)
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    with csv_path.open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.DictWriter(
+            fh, fieldnames=list(DECISION_CSV_COLUMNS))
+        writer.writeheader()
+        for decision in decisions:
+            writer.writerow(decision_to_csv_record(decision))
     return csv_path

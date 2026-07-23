@@ -52,6 +52,7 @@ from ..backtest.performance import (
     build_trade_rows,
     realized_pnl_curve,
     trade_rows_to_tsv,
+    write_decisions_csv,
     write_trade_rows_csv,
 )
 from ..backtest.session import SessionResult
@@ -145,6 +146,7 @@ class PerformanceView(BaseModalDialog):
         self._screenshot_dir: Path | None = (
             Path(screenshot_dir) if screenshot_dir is not None else None)
         self._rows: list[TradeRow] = build_trade_rows(result)
+        self._decisions = list(getattr(result, "decisions", ()) or ())
         self._aggs: list[SetupAggregate] = build_setup_aggregates(self._rows)
         # Per-proximity-tag rollup (plan.md decision 14). One row per
         # non-empty ``earnings_proximity_tag`` / ``dividend_proximity_tag``
@@ -289,7 +291,7 @@ class PerformanceView(BaseModalDialog):
         self._journal_tree = ttk.Treeview(
             journal_frame, columns=("pl", "detail"),
             show="tree headings", height=8)
-        self._journal_tree.heading("#0", text="Day / Trade")
+        self._journal_tree.heading("#0", text="Day / Event")
         self._journal_tree.heading("pl", text="P/L")
         self._journal_tree.heading("detail", text="Note / Setup")
         self._journal_tree.column("#0", width=210, anchor="w", stretch=False)
@@ -310,12 +312,20 @@ class PerformanceView(BaseModalDialog):
             bar, text="Export CSV…",
             command=self._on_export_csv, state=export_state)
         self._export_btn.grid(row=0, column=1, padx=(0, 6))
+        decision_export_state = "normal" if self._decisions else "disabled"
+        self._decision_export_btn = ttk.Button(
+            bar,
+            text="Export decisions CSV…",
+            command=self._on_export_decisions_csv,
+            state=decision_export_state,
+        )
+        self._decision_export_btn.grid(row=0, column=2, padx=(0, 6))
         self._copy_btn = ttk.Button(
             bar, text="Copy to clipboard",
             command=self._on_copy_clipboard, state=export_state)
-        self._copy_btn.grid(row=0, column=2, padx=(0, 6))
+        self._copy_btn.grid(row=0, column=3, padx=(0, 6))
         ttk.Button(bar, text="Close",
-                   command=self.destroy).grid(row=0, column=3)
+                   command=self.destroy).grid(row=0, column=4)
 
     # ----------------------------------------------------------- equity chart
     def _build_equity_chart(self, parent: ttk.Frame) -> None:
@@ -433,6 +443,27 @@ class PerformanceView(BaseModalDialog):
         self._status_info(
             f"Copied {len(self._rows)} trade(s) to clipboard (TSV).")
 
+    def _on_export_decisions_csv(self) -> None:
+        if not self._decisions:
+            return
+        path_str = filedialog.asksaveasfilename(
+            parent=self,
+            title="Export logged decisions as CSV",
+            defaultextension=".csv",
+            filetypes=[("CSV file", "*.csv"), ("All files", "*.*")],
+        )
+        if not path_str:
+            return
+        try:
+            written = write_decisions_csv(
+                self._decisions, csv_path=Path(path_str))
+        except Exception as exc:  # noqa: BLE001
+            self._status_warn(f"Decision export failed: {exc}")
+            return
+        self._status_info(
+            f"Exported {len(self._decisions)} logged decision(s) "
+            f"to {written.name}")
+
     def _status_info(self, msg: str) -> None:
         if self._status is not None:
             try:
@@ -526,7 +557,7 @@ class PerformanceView(BaseModalDialog):
                         values=self._prox_values(a))
 
     def _populate_journal(self) -> None:
-        """Render each replay day's watch note with its trades nested.
+        """Render each day's note with trades and decisions interleaved.
 
         Day nodes are expanded by default so the report reads top-to-
         bottom: the day's note (header) sits *ahead of* the trades taken
@@ -550,19 +581,54 @@ class PerformanceView(BaseModalDialog):
             parent = tree.insert(
                 "", "end", text=day_label, open=True,
                 values=(pl_str, note_line))
-            for r in g.rows:
-                setup = r.setup_tag or "(unattributed)"
-                detail = f"{r.post.side} · {setup}"
-                if r.thesis:
-                    detail += f" · {_truncate(r.thesis, 50)}"
+            events = (
+                [(int(r.post.entry_ts), 1, r) for r in g.rows]
+                + [(int(d.ts), 0, d) for d in g.decisions]
+            )
+            for _ts, kind, event in sorted(
+                events, key=lambda item: (item[0], item[1])
+            ):
+                if kind == 0:
+                    setup = event.setup_tag or "(no setup)"
+                    detail = (
+                        f"DECISION · {event.action.upper()} · {setup} · "
+                        f"confidence {event.confidence}/5"
+                    )
+                    if event.note:
+                        detail += f" · {_truncate(event.note, 50)}"
+                    tree.insert(
+                        parent,
+                        "end",
+                        text=(
+                            f"    {_fmt_ts(event.ts)[11:]}  "
+                            f"{event.symbol}"
+                        ),
+                        values=("", detail),
+                    )
+                    continue
+                setup = event.setup_tag or "(unattributed)"
+                detail = f"TRADE · {event.post.side} · {setup}"
+                if event.thesis:
+                    detail += f" · {_truncate(event.thesis, 50)}"
                 tree.insert(
-                    parent, "end", text=f"    {r.post.symbol}",
-                    values=(f"{float(r.post.pnl):+,.2f}", detail))
+                    parent,
+                    "end",
+                    text=(
+                        f"    {_fmt_ts(event.post.entry_ts)[11:]}  "
+                        f"{event.post.symbol}"
+                    ),
+                    values=(f"{float(event.post.pnl):+,.2f}", detail),
+                )
 
     def _populate_summary(self) -> None:
         n = len(self._rows)
+        decision_note = (
+            f"{len(self._decisions)} logged decision(s) "
+            "(logged decisions only)"
+        )
         if n == 0:
-            self._summary_var.set("No closed trades in this session.")
+            self._summary_var.set(
+                f"No closed trades in this session. {decision_note}.")
             return
         wins = sum(1 for r in self._rows if r.is_win)
         total = sum(float(r.post.pnl) for r in self._rows)
@@ -570,7 +636,7 @@ class PerformanceView(BaseModalDialog):
         self._summary_var.set(
             f"{n} trade(s) — {wins} win(s), "
             f"win rate {win_rate * 100:.1f}%, "
-            f"total P/L ${total:+,.2f}"
+            f"total P/L ${total:+,.2f}; {decision_note}"
         )
 
     # ----------------------------------------------------------------- sort

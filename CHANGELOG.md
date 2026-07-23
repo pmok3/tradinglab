@@ -1,5 +1,53 @@
 # Changelog
 
+## [0.6.0] - 2026-07-23
+
+Major release aggregating the background-data prefetch rewrite, the "Auto"
+data-source selection work, the sandbox decision-logging + performance-review
+journal, and a batch of chart view-preservation and UI fixes.
+
+### Added
+- **Background prefetch scheduler.** Data prefetching has been rebuilt around a
+  dedicated scheduler with its own executor, isolated from foreground chart
+  loads so keeping the watchlist and compare tickers warm never stalls the bar
+  you're looking at. It has an explicit planner (interval/priority/tier model),
+  AIMD retry with poison-handling for flaky providers, and preserves watchlist
+  snapshots across ticker/interval switches. Drill-downs and repeat views now
+  reuse the scheduler's warm data instead of firing one-off reactive fetches.
+- **"Auto" data source + provider ranking.** A new delegating data source picks
+  the best available provider at fetch time, backed by a consolidated market
+  session-calendar and provider ranking/hybrid selection.
+- **Sandbox decision logging.** Bar-replay sessions can opt in to an explicit
+  decision journal — log a **long / short / pass / watch** call at the current
+  bar with a setup tag, a 1–5 confidence, and an optional note, via a new **Log
+  decision** control. It is explicit-only: advancing a bar never fabricates a
+  "pass", so an unlogged bar stays unknown rather than being counted.
+- **Performance View daily journal + decision export.** The review window now
+  groups closed trades, logged decisions, and day notes per replay day
+  (interleaved by time) under each day's watch note, and can export a standalone
+  logged-decisions CSV independently of the trades export.
+
+### Changed
+- **Prefetch is now live by default** and the older reactive per-context warm
+  fetches have been retired in favour of the scheduler above.
+
+### Fixed
+- **Removing Compare no longer moves the chart.** After drilling into a session
+  — including the most recent one — toggling Compare **off** kept the primary
+  chart on the same visible window instead of snapping ~a month back to a
+  default view. (Toggling Compare on/off repeatedly on a drilled or panned
+  historical view also no longer lets candles creep in from the left.)
+- **Drill-down reach under "Auto".** Drilling into an older intraday day while
+  the source is **Auto** now honours the reach of the provider Auto actually
+  resolves to, instead of wrongly applying yfinance's ~60-day intraday cap and
+  refusing the drill.
+- **Active symbol's watchlist row is populated on launch.** The chart's
+  active/compare ticker that is also a pinned watchlist row (e.g. the default
+  AMD) no longer renders blank until the first refresh.
+- **Dark mode for sandbox & performance dialogs.** Classic Tk widgets
+  (list/text/canvas) in the sandbox and performance-review dialogs now follow
+  the dark theme instead of staying bright white.
+
 ## [0.5.5] - 2026-07-13
 
 ### Fixed

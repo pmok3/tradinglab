@@ -72,7 +72,6 @@ class PrefetchAppMixin:
             return
         from ..constants import is_intraday
         from ..data.prefetch import CACHE_MEMORY_AND_DISK
-        from ..data.prefetch.tiers import TIER_FOCUSED_WL, TIER_OTHER_WL
 
         scheduler = driver.scheduler
         window = scheduler.window_for(job)
@@ -135,7 +134,15 @@ class PrefetchAppMixin:
                             prefetched_symbol=job.symbol)
                     except Exception:  # noqa: BLE001
                         pass
-            if job.tier_rank in (TIER_FOCUSED_WL, TIER_OTHER_WL) and merged:
+            # Derive the Watchlist Last/Change snapshot for ANY completed job
+            # whose symbol is a pinned watchlist member — NOT only watchlist-tier
+            # jobs. ``expand_all`` dedups a symbol to its highest-priority tier,
+            # so a pinned ticker that is also the active/compare symbol (e.g. the
+            # default AMD, both the startup chart symbol and the first Default
+            # watchlist row) is emitted under TIER_ACTIVE/COMPARE and never a WL
+            # tier; the old tier-only gate left its row blank on launch. Audit
+            # ``qw-active-overlap-snapshot``.
+            if merged and self._job_symbol_is_watchlisted(job.symbol):
                 try:
                     self._apply_watchlist_snapshot_from_bars(
                         job.symbol, job.source, job.interval, merged)

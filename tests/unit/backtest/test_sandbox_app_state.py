@@ -209,6 +209,7 @@ class TestBuildSpec:
             "universe_id": "u-1",
             "universe_symbols": ["SPY", "QQQ"],
             "strict_offline": True,
+            "decision_logging_enabled": True,
         })
         assert result.deck_seed == 42
         assert result.tickers == ("SPY", "QQQ")
@@ -218,6 +219,7 @@ class TestBuildSpec:
         assert result.universe_id == "u-1"
         assert result.universe_symbols == ("SPY", "QQQ")
         assert result.strict_offline is True
+        assert result.decision_logging_enabled is True
         # ISO date round-trip.
         assert result.start_clock_iso == "2025-04-29"
 
@@ -233,6 +235,7 @@ class TestBuildSpec:
         })
         assert result.start_clock_iso == ""
         assert result.tickers == ()
+        assert result.decision_logging_enabled is False
 
     def test_includes_setup_tags_from_store(self):
         ctl = SandboxAppController()

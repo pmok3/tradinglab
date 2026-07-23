@@ -136,6 +136,14 @@ larger; pinning makes a list reachable from the main UI.
   first-pinned, then first-existing.
 - `_pinned_ticker_union() -> List[str]` — deduped union across
   all pinned (preserves first-seen order).
+- `_job_symbol_is_watchlisted(symbol) -> bool` — upper-cased membership test
+  against `_pinned_ticker_union()`. The scheduler completion handler
+  (`prefetch_app._prefetch_submit._on_done`) uses THIS — not the completed
+  job's tier — to gate `_apply_watchlist_snapshot_from_bars`, because
+  `expand_all` dedups a symbol to its highest tier, so a pinned ticker that is
+  also the active/compare symbol (e.g. the default AMD) is emitted under
+  TIER_ACTIVE/COMPARE and would never populate its Last/Change row under a
+  tier-only gate (`qw-active-overlap-snapshot`).
 
 ### Preload
 

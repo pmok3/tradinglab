@@ -138,6 +138,8 @@ class SandboxAppController:
             universe_id=str(dlg_result.get("universe_id", "") or ""),
             universe_symbols=tuple(dlg_result.get("universe_symbols", ()) or ()),
             strict_offline=bool(dlg_result.get("strict_offline", False)),
+            decision_logging_enabled=bool(
+                dlg_result.get("decision_logging_enabled", False)),
         )
 
     def current_result(self):

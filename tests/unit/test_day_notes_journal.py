@@ -16,8 +16,12 @@ from __future__ import annotations
 
 import datetime as _dt
 
-from tradinglab.backtest.journal import PostTradeReview
-from tradinglab.backtest.performance import DayGroup, build_day_groups
+from tradinglab.backtest.journal import DecisionRecord, PostTradeReview
+from tradinglab.backtest.performance import (
+    DayGroup,
+    build_day_groups,
+    write_decisions_csv,
+)
 from tradinglab.backtest.session import SessionResult, SessionSpec
 
 
@@ -72,6 +76,22 @@ def test_day_notes_back_compat_when_key_absent():
 
 def test_day_notes_default_is_empty_dict():
     assert SessionResult(spec=_spec()).day_notes == {}
+
+
+def test_decisions_round_trip_and_legacy_default():
+    decision = DecisionRecord(
+        ts=_ts(2025, 4, 29, 15, 5),
+        symbol="AAPL",
+        action="watch",
+        setup_tag="vwap reclaim",
+        confidence=4,
+        note="waiting for volume",
+    )
+    result = SessionResult(spec=_spec(), decisions=[decision])
+    payload = result.to_dict()
+    assert SessionResult.from_dict(payload).decisions == [decision]
+    del payload["decisions"]
+    assert SessionResult.from_dict(payload).decisions == []
 
 
 # ------------------------------------------------------------- build_day_groups
@@ -159,3 +179,43 @@ def test_rows_within_a_day_are_entry_ordered():
     (group,) = build_day_groups(r)
     assert [row.post.ref_pre_trade_id for row in group.rows] == ["early", "late"]
     assert isinstance(group, DayGroup)
+
+
+def test_decision_only_day_appears_and_decisions_are_ordered():
+    late = DecisionRecord(
+        ts=_ts(2025, 5, 1, 15, 45),
+        symbol="AAPL",
+        action="pass",
+        setup_tag="late breakout",
+        confidence=2,
+    )
+    early = DecisionRecord(
+        ts=_ts(2025, 5, 1, 14, 35),
+        symbol="AAPL",
+        action="watch",
+        setup_tag="opening range",
+        confidence=4,
+    )
+    (group,) = build_day_groups(
+        SessionResult(spec=_spec(), decisions=[late, early]))
+    assert group.date_iso == "2025-05-01"
+    assert group.rows == ()
+    assert group.decisions == (early, late)
+
+
+def test_decisions_csv_is_auditable_and_human_readable(tmp_path):
+    decision = DecisionRecord(
+        ts=_ts(2025, 4, 29, 15, 5),
+        symbol="AAPL",
+        action="long",
+        setup_tag="vwap reclaim",
+        confidence=5,
+        note="line one\nline two",
+    )
+    path = write_decisions_csv(
+        [decision], csv_path=tmp_path / "decisions.csv")
+    text = path.read_text(encoding="utf-8")
+    assert "timestamp,symbol,action,setup_tag,confidence,note" in text
+    assert "2025-04-29T15:05:00+00:00" in text
+    assert "AAPL,long,vwap reclaim,5,line one line two" in text
+    assert str(decision.ts) not in text

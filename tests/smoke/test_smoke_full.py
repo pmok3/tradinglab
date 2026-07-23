@@ -543,6 +543,22 @@ def check_c0_watchlist_tab(app) -> None:
         f"§18.4 AMD row (change +2.5) should have 'bull' tag, got {found.get('AMD')}")
     assert "bear" in (found.get("NVDA") or ()), (
         f"§18.4 NVDA row (change -1.5) should have 'bear' tag, got {found.get('NVDA')}")
+    # qw-active-overlap-snapshot: the scheduler completion handler derives a
+    # row's Last/Change from a completed job when the symbol is a pinned member
+    # (membership — NOT the job's tier — because expand_all dedups the
+    # active/compare symbol to its highest tier). The default AMD is BOTH the
+    # startup chart symbol and the first Default-watchlist row, so a tier-only
+    # gate left its row blank on launch. Validate the predicate the fix relies
+    # on against the REAL pinned union.
+    assert hasattr(app, "_job_symbol_is_watchlisted"), (
+        "§18.4 missing _job_symbol_is_watchlisted membership gate")
+    assert not app._job_symbol_is_watchlisted("ZZZZ_NOT_PINNED"), (
+        "§18.4 non-member must not be treated as watchlisted")
+    pinned_union = app._pinned_ticker_union()
+    if pinned_union:
+        member = pinned_union[0]
+        assert app._job_symbol_is_watchlisted(member.lower()), (
+            "§18.4 pinned member must be recognised case-insensitively")
     # Debouncer: schedule sets the job; running callback clears it.
     assert hasattr(app, "_schedule_watchlist_tab_refresh"), (
         "§18.4 missing _schedule_watchlist_tab_refresh debouncer")
@@ -556,7 +572,7 @@ def check_c0_watchlist_tab(app) -> None:
         lambda: app._watchlist_tab_refresh_job != scheduled_job,
         timeout=0.5,
     ), "§18.4 scheduled refresh callback should run"
-    print("  [OK] §18.4 watchlist tab 4-col + bull/bear tags + debouncer")
+    print("  [OK] §18.4 watchlist tab 4-col + bull/bear tags + membership gate + debouncer")
 
 
 def check_c5_notebook(app) -> None:
@@ -4809,6 +4825,13 @@ def check_d88_compare_toggle_repeated_no_creep(app) -> None:
     toggles Compare on/off 4x, asserting the ON-state window width and the
     leftmost visible day are STABLE across every cycle (no monotonic
     growth, no drift).
+
+    Latest-day variant (user-reported): enable Compare first, drill into the
+    compare chart's newest daily candle, then disable Compare. A formal
+    drilldown is an explicit calendar-window selection even when it reaches
+    the primary's right edge; removing alignment gaps must keep that newest
+    day in view rather than reinterpreting the stale aligned indices against
+    the shorter primary-only series.
     """
     from datetime import timedelta
 
@@ -4861,17 +4884,25 @@ def check_d88_compare_toggle_repeated_no_creep(app) -> None:
         app._full_cache[(src, compare_t, "1d")] = make_1d(100)
         app._full_cache[(src, compare_t, "5m")] = make_5m(100)  # dense
 
-    def _on_state():
+    def _visible_days():
         ps = app._panel_state.get("primary") or {}
         ax = ps.get("price_ax")
         cs = ps.get("candles") or []
         if ax is None or not cs:
-            return None
+            return set()
         xlo, xhi = ax.get_xlim()
         lo = max(0, int(np.ceil(xlo - 1e-6)))
         hi = min(len(cs), int(np.floor(xhi + 1e-6)) + 1)
-        days = sorted({c.date.date() for c in cs[lo:hi]
-                       if not getattr(c, "is_gap", False)})
+        return {c.date.date() for c in cs[lo:hi]
+                if not getattr(c, "is_gap", False)}
+
+    def _on_state():
+        ps = app._panel_state.get("primary") or {}
+        ax = ps.get("price_ax")
+        if ax is None:
+            return None
+        xlo, xhi = ax.get_xlim()
+        days = sorted(_visible_days())
         return (round(xhi - xlo, 1), days[0] if days else None)
 
     try:
@@ -4927,6 +4958,44 @@ def check_d88_compare_toggle_repeated_no_creep(app) -> None:
             f"d88: leftmost visible day drifted across toggles: {left_days} "
             f"(expected all {drill_day})")
 
+        # Exact reported order: primary loaded → Compare on → drill into the
+        # newest day while Compare is active → Compare off. The dense compare
+        # inserts many timestamps the sparse primary lacks, so stale INDEX
+        # preservation on the off transition lands far back in history.
+        app.interval_var.set("1d")
+        app._drilldown_day = None
+        app._preserve_xlim_on_render = False
+        _reseed()
+        app._load_data()
+        _pump(app, 0.05)
+        _reseed()
+        app.compare_var.set(True)
+        app._on_compare_toggle()
+        _pump_until(app,
+            lambda: (app._panel_state.get("compare") or {}).get("price_ax")
+            is not None,
+            timeout=0.8)
+        _reseed()
+
+        latest_day = datetime(2026, 2, 3).date()
+        ok = app._zoom_5m_for_date(latest_day)
+        if not ok:
+            raise AssertionError(
+                f"d88: latest-day compare-first drill to {latest_day} failed")
+        _pump_until(app, lambda: app.interval_var.get() == "5m", timeout=0.6)
+        assert _visible_days() == {latest_day}, (
+            f"d88 latest-day precondition: expected only {latest_day}; "
+            f"visible={sorted(_visible_days())}")
+
+        app.compare_var.set(False)
+        app._on_compare_toggle()
+        _pump(app, 0.05)
+        after_off = _visible_days()
+        assert after_off == {latest_day}, (
+            f"d88: removing Compare after a latest-day compare-first drill "
+            f"moved the primary view; expected only {latest_day}, "
+            f"visible={sorted(after_off)}")
+
     finally:
         try:
             del app._cache_is_stale
@@ -4964,8 +5033,8 @@ def check_d88_compare_toggle_repeated_no_creep(app) -> None:
             pass
         _pump(app, 0.3)
 
-    print("  [OK] §d88 repeated compare toggle on a drilled day does not "
-          "creep candles in from the left (width + left-edge stable)")
+    print("  [OK] §d88 compare toggles preserve historical and latest-day "
+          "drilldowns (no creep or stale-index jump)")
 
 
 def check_d89_compare_toggle_manual_pan_no_creep(app) -> None:
@@ -17156,6 +17225,95 @@ def check_b40_sandbox_watchlist_uses_replay_clock(app) -> None:
           "(no look-ahead from today's live values)")
 
 
+def check_b40a_sandbox_optional_decision_logging(app) -> None:
+    """Opt-in panel control logs one explicit decision and nothing else."""
+    import tkinter as tk
+
+    from tradinglab.backtest.replay import SandboxController
+    from tradinglab.gui import sandbox_review_dialog
+    from tradinglab.gui.sandbox_dialog import SandboxStartDialog
+    from tradinglab.gui.sandbox_panel import SandboxPanel
+
+    bars, days = _b1x_make_bars(0.0, n_days=4, n_per_day=12)
+    start_dialog = SandboxStartDialog(
+        app,
+        reference_symbol="REF",
+        intervals=["5m"],
+        eligible_dates_provider=lambda _itv: list(days),
+        fetch_provider=None,
+        default_interval="5m",
+    )
+    assert start_dialog._decision_logging_var.get() is False, (
+        "decision logging must default off")
+    start_dialog._date_var.set(days[2].isoformat())
+    start_dialog._decision_logging_var.set(True)
+    start_dialog._on_start()
+    assert start_dialog.result is not None
+    assert start_dialog.result["decision_logging_enabled"] is True
+    spec = app._build_sandbox_spec(start_dialog.result)
+    assert spec.decision_logging_enabled is True
+    ctl = SandboxController(app=app)
+    host = None
+    original_dialog = sandbox_review_dialog.DecisionLogDialog
+    prior_sandbox = app._sandbox
+
+    class _DecisionDialogStub:
+        def __init__(self, _parent, symbol, *, setup_tags=()):
+            assert symbol == "REF"
+            self.result = {
+                "action": "watch",
+                "setup_tag": "opening range",
+                "confidence": 4,
+                "note": "waiting for confirmation",
+            }
+
+    try:
+        ctl.start_session(
+            spec=spec,
+            session_date=days[2],
+            interval="5m",
+            reference_symbol="REF",
+            reference_candles=bars,
+            lookback_days=1,
+            include_extended=False,
+            display_intervals=["5m"],
+        )
+        app._sandbox = ctl
+        host = tk.Toplevel(app)
+        panel = SandboxPanel(host, controller=ctl)
+        assert panel._decision_btn is not None, (
+            "opted-in session must expose Log decision")
+        sandbox_review_dialog.DecisionLogDialog = _DecisionDialogStub
+        host.wait_window = lambda _dlg: None  # type: ignore[method-assign]
+        panel._decision_btn.invoke()
+
+        decisions = ctl.decisions_snapshot()
+        assert len(decisions) == 1
+        assert decisions[0].action == "watch"
+        assert decisions[0].setup_tag == "opening range"
+        assert decisions[0].confidence == 4
+        assert decisions[0].note == "waiting for confirmation"
+        assert ctl.result().decisions == decisions
+
+        ctl.next_bar()
+        assert ctl.decisions_snapshot() == decisions, (
+            "advancing a bar must not infer an implicit pass")
+    finally:
+        sandbox_review_dialog.DecisionLogDialog = original_dialog
+        try:
+            ctl.end_session()
+        except Exception:  # noqa: BLE001
+            pass
+        app._sandbox = prior_sandbox
+        if host is not None:
+            try:
+                host.destroy()
+            except tk.TclError:
+                pass
+
+    print("  [OK] b40a optional decision logging is explicit and session-scoped")
+
+
 def check_b41_indicator_intervals_per_instance(app) -> None:
     """Per-indicator-instance per-interval visibility checkboxes (b41).
 
@@ -23093,6 +23251,7 @@ def _run_all_checks(app) -> None:
     check_b37_sandbox_compare_survives_focus_swap(app)
     check_b38_sandbox_compare_change_routing(app)
     check_b40_sandbox_watchlist_uses_replay_clock(app)
+    check_b40a_sandbox_optional_decision_logging(app)
     check_b41_indicator_intervals_per_instance(app)
     check_b42_indicator_color_palette(app)
     check_d85_bollinger_band_visibility(app)
@@ -23469,6 +23628,8 @@ def _build_check_sequence():
          check_b38_sandbox_compare_change_routing),
         ("check_b40_sandbox_watchlist_uses_replay_clock",
          check_b40_sandbox_watchlist_uses_replay_clock),
+        ("check_b40a_sandbox_optional_decision_logging",
+         check_b40a_sandbox_optional_decision_logging),
         ("check_b41_indicator_intervals_per_instance",
          check_b41_indicator_intervals_per_instance),
         ("check_b42_indicator_color_palette", check_b42_indicator_color_palette),

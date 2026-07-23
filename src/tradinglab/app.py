@@ -2232,23 +2232,20 @@ class ChartApp(
         # lands on the same calendar minutes regardless of direction, so the
         # framed window stays put exactly.
         #
-        # Gate = HISTORICAL intraday view (``vis[2]``) AND one of:
-        #   • ``in_drilldown`` — a formal double-click drilldown (the drilled
-        #     day is loaded; deep-history compare gaps are handled by
-        #     ``keep_window`` + background-fill below), OR
-        #   • ``compare_covers`` — the compare cache reaches at/before the
-        #     window's left edge, so the re-align won't DROP the framed bars
-        #     and the TIME-remap can land the same calendar window. This is
-        #     the manual pan/zoom-into-history case (``_drilldown_day`` is
-        #     None) — the still-reproducing half of the creep bug, where a
-        #     grid-density mismatch shifts indices under a COVERED window.
-        # A right-edge / today view (``vis[2]`` False) keeps the fast
-        # index-preserve — nothing drifts there. The coverage gate is what
-        # protects ``check_d52`` (recent interior zoom whose compare cache is
-        # short / non-overlapping → NOT covered → stays on index-preserve,
-        # instead of a TIME-remap that would reset the view to the data
-        # extent). Audit ``compare-toggle-drilldown-preserve`` (pinned by
+        # Gate = any formal intraday drilldown (including the newest session,
+        # whose right edge equals the series end) OR a HISTORICAL manual view
+        # whose compare cache covers the window. A drilldown is an explicit
+        # calendar-window selection regardless of ``vis[2]``; preserving its
+        # stale aligned indices while removing Compare can otherwise reinterpret
+        # the window against a much shorter primary-only list and jump weeks
+        # left. The coverage requirement remains for manual pan/zoom so a short
+        # or non-overlapping compare cache does not reset that view to the data
+        # extent (``check_d52``). A non-drilled right-edge view keeps the fast
+        # index-preserve. Audit ``compare-toggle-drilldown-preserve`` (pinned by
         # check_d87/d88 for drilldown, check_d89 for manual-pan).
+        is_historical = bool(
+            intraday_view and vis is not None and vis[2]
+        )
         compare_covers = bool(
             intraday_view
             and vis is not None
@@ -2256,8 +2253,8 @@ class ChartApp(
         )
         use_time_preserve = bool(
             intraday_view
-            and vis is not None and vis[2]  # historical view (not right edge)
-            and (in_drilldown or compare_covers)
+            and vis is not None
+            and (in_drilldown or (is_historical and compare_covers))
         )
         # keep_window + background-fill ALSO engage when compare is being
         # turned ON and the compare cache does NOT COVER the viewed window —
@@ -2268,7 +2265,8 @@ class ChartApp(
         # a ~1-page targeted fetch of just the viewed day. Audit
         # ``compare-toggle-targeted-first-load``.
         compare_lacks = bool(
-            use_time_preserve
+            is_historical
+            and use_time_preserve
             and compare_on
             and not self._compare_cache_covers(vis[0])  # compare misses it
         )

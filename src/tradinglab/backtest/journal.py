@@ -4,6 +4,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+DECISION_ACTIONS: tuple[str, ...] = ("long", "short", "pass", "watch")
+
+
+@dataclass(frozen=True)
+class DecisionRecord:
+    """A discretionary recognition decision logged during replay.
+
+    Unlike an order journal entry, a decision may be ``pass`` or
+    ``watch`` and has no required relationship to a trade.
+    """
+    ts: int
+    symbol: str
+    action: str
+    setup_tag: str
+    confidence: int
+    note: str = ""
+
 
 @dataclass(frozen=True)
 class PreTradeEntry:

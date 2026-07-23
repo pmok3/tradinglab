@@ -55,7 +55,12 @@ from .aggregation import divides_evenly, interval_minutes
 from .bars import from_candles
 from .deck import filter_candles_to_session
 from .engine import SandboxEngine
-from .journal import PostTradeReview, PreTradeEntry
+from .journal import (
+    DECISION_ACTIONS,
+    DecisionRecord,
+    PostTradeReview,
+    PreTradeEntry,
+)
 from .orders import Order, Side
 from .replay_events import EventsControllerMixin
 from .session import SessionResult, SessionSpec
@@ -257,6 +262,7 @@ class SandboxController(EventsControllerMixin):
     # "Replay Day N" panel label (never leaks the calendar date).
     _day_notes: dict[str, str] = field(default_factory=dict)
     _day_ordinal: int = 1
+    _decisions: list[DecisionRecord] = field(default_factory=list)
 
     # Events feature: per-symbol raw event bundles fetched at session
     # start / register_ticker time. Stored as opaque ``Any`` because
@@ -437,6 +443,7 @@ class SandboxController(EventsControllerMixin):
         self._archived_equity = []
         self._archived_cash_adjustments = []
         self._archived_quantity_adjustments = []
+        self._decisions = []
         self._cycle_index = 0
         self._raw_full_candles = {reference_symbol: list(reference_candles)}
         # Reset daily-context state. Display interval defaults to the
@@ -707,6 +714,7 @@ class SandboxController(EventsControllerMixin):
                 or self._archived_cash_adjustments
                 or self._archived_quantity_adjustments):
             cur.day_notes = dict(self._day_notes)
+            cur.decisions = list(self._decisions)
             return cur
         return SessionResult(
             spec=cur.spec,
@@ -723,6 +731,7 @@ class SandboxController(EventsControllerMixin):
             quantity_adjustments=list(self._archived_quantity_adjustments)
                                  + list(cur.quantity_adjustments),
             day_notes=dict(self._day_notes),
+            decisions=list(self._decisions),
         )
 
     def cycle_to_next(self) -> bool:
@@ -1338,6 +1347,60 @@ class SandboxController(EventsControllerMixin):
 
     def tickers(self) -> list[str]:
         return list(self.full_candles_by_symbol.keys())
+
+    def decision_logging_enabled(self) -> bool:
+        """Whether this session opted into manual decision capture."""
+        return bool(
+            self.spec is not None and self.spec.decision_logging_enabled)
+
+    def decisions_snapshot(self) -> list[DecisionRecord]:
+        """Return a copy of the decisions logged so far."""
+        return list(self._decisions)
+
+    def log_decision(
+        self,
+        *,
+        action: str,
+        setup_tag: str,
+        confidence: int,
+        note: str = "",
+    ) -> DecisionRecord:
+        """Capture an explicit discretionary decision at the replay clock.
+
+        Unlogged bars remain absent. In particular, merely advancing the
+        replay never creates an implicit ``pass`` decision.
+        """
+        if not self.active or self.engine is None:
+            raise RuntimeError("no active sandbox session")
+        if not self.decision_logging_enabled():
+            raise RuntimeError("decision logging is not enabled")
+        ts = self.clock_ts()
+        if ts is None:
+            raise RuntimeError("sandbox clock is not available")
+        symbol = str(self.focus_symbol or "").strip()
+        if not symbol:
+            raise RuntimeError("no focused sandbox symbol")
+        normalized_action = str(action or "").strip().lower()
+        if normalized_action not in DECISION_ACTIONS:
+            allowed = ", ".join(DECISION_ACTIONS)
+            raise ValueError(f"action must be one of: {allowed}")
+        normalized_setup = str(setup_tag or "").strip()
+        if not normalized_setup:
+            raise ValueError("setup_tag must be non-empty")
+        if isinstance(confidence, bool) or not isinstance(confidence, int):
+            raise TypeError("confidence must be an integer from 1 to 5")
+        if not 1 <= confidence <= 5:
+            raise ValueError("confidence must be from 1 to 5")
+        record = DecisionRecord(
+            ts=ts,
+            symbol=symbol,
+            action=normalized_action,
+            setup_tag=normalized_setup,
+            confidence=confidence,
+            note=str(note or "").strip(),
+        )
+        self._decisions.append(record)
+        return record
 
     # ------------------------------------------------------------------
     # Daily-context (multi-timeframe) helpers
