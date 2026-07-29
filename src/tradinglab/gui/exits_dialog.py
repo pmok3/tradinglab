@@ -68,8 +68,12 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-from ._modal_base import BaseModalDialog, make_scrollable_form, protect_combobox_wheel  # noqa: E402
-from .colors import ERROR_RED, MUTED_GREY  # noqa: E402
+from ._modal_base import (  # noqa: E402
+    BaseEditorDialog,
+    make_scrollable_form,
+    protect_combobox_wheel,
+)
+from .colors import MUTED_GREY  # noqa: E402
 from .exits_dialog_widgets import (  # noqa: E402
     _OCO_CANCEL_ON_CHOICES,
     _BracketDialog,
@@ -187,7 +191,7 @@ def make_bracket_strategy(
 # ---------------------------------------------------------------------------
 
 
-class ExitsDialog(BaseModalDialog):
+class ExitsDialog(BaseEditorDialog):
     """The Edit Exit Strategies window.
 
     Migrated from raw ``tk.Toplevel`` to :class:`BaseModalDialog` —
@@ -414,21 +418,18 @@ class ExitsDialog(BaseModalDialog):
         )
         self._add_oco_btn.pack(side="left")
 
-        # Footer
-        footer = ttk.Frame(editor_outer)
+        # Footer — shared builder from BaseEditorDialog. This dialog keeps
+        # its own wording ([Validate] [Save] [Close]) via the *_text
+        # overrides; only the ordering convention is shared.
+        footer = self._build_editor_footer(
+            editor_outer,
+            on_validate=self._on_validate,
+            on_save_close=self._on_save,
+            on_cancel=self._on_cancel,
+            save_close_text="Save",
+            cancel_text="Close",
+        )
         footer.pack(fill="x", padx=4, pady=(2, 4))
-        self._status_var = tk.StringVar(value="")
-        self._status_lbl = ttk.Label(footer, textvariable=self._status_var, foreground=ERROR_RED)
-        self._status_lbl.pack(side="left", fill="x", expand=True)
-        # Footer buttons: Windows dialog convention (audit
-        # ``button-order-windows``) — visual order left→right
-        # ``[Validate] [Save] [Close]`` with the dismiss action
-        # (Close) rightmost. ``side="right"`` reverses pack order,
-        # so pack Close first (lands rightmost), then Save, then
-        # Validate.
-        ttk.Button(footer, text="Close",    command=self._on_cancel).pack(side="right", padx=(2, 0))
-        ttk.Button(footer, text="Save",     command=self._on_save).pack(side="right", padx=(2, 0))
-        ttk.Button(footer, text="Validate", command=self._on_validate).pack(side="right", padx=(2, 0))
 
     # ----- Library -----
 

@@ -71,28 +71,93 @@ def _pack_order(src: str, button_labels: list[str]) -> list[str]:
     return visual_left_to_right
 
 
+def _attr_pack_order(src: str, attr_names: list[str]) -> list[str]:
+    """Return the visual left→right order of ``self.<attr>`` buttons.
+
+    Variant of :func:`_pack_order` for the shared
+    ``BaseEditorDialog._build_editor_footer``, whose button labels are
+    now caller-supplied parameters (``cancel_text`` etc.) rather than
+    literals — so scanning for ``text="Cancel"`` no longer works there.
+    The ORDER is still what the audit cares about, and it is still
+    statically visible in the assignment/pack sequence.
+    """
+    found: list[tuple[int, str]] = []
+    for attr in attr_names:
+        pattern = re.compile(
+            rf'self\.{re.escape(attr)}\s*=\s*ttk\.Button'
+            r'[\s\S]{0,400}?'
+            r'\.pack\s*\([\s\S]{0,200}?'
+            r'side\s*=\s*(?:"right"|\'right\'|tk\.RIGHT)',
+            re.MULTILINE,
+        )
+        for m in pattern.finditer(src):
+            found.append((m.start(), attr))
+    found.sort()
+    return [attr for _, attr in reversed(found)]
+
+
+def _delegates_to_shared_footer(src: str) -> bool:
+    """True when a dialog builds its footer via the shared builder."""
+    return "_build_editor_footer(" in src
+
+
+def _hand_rolls_footer_buttons(src: str, labels: list[str]) -> list[str]:
+    """Return footer labels the module still packs by hand.
+
+    Guards against a dialog adopting the shared builder and then
+    *also* re-adding a bespoke right-packed footer button, which would
+    silently reintroduce the ordering drift the audit fixed.
+    """
+    return _pack_order(src, labels)
+
+
 # ---------------------------------------------------------------------------
 # Individual dialogs
 # ---------------------------------------------------------------------------
 
 def test_entries_dialog_footer_order_windows():
-    """``entries_dialog`` editor footer must be
-    ``[Validate] [Apply] [Save & Close] [Cancel]``."""
+    """``entries_dialog`` must inherit the audited footer order.
+
+    It used to hand-roll ``[Validate] [Apply] [Save & Close] [Cancel]``
+    inline. It now delegates to
+    ``BaseEditorDialog._build_editor_footer``, so the order contract is
+    enforced by ``test_modal_base_editor_footer_order_windows`` (plus the
+    live-widget geometry check in ``test_modal_base.py``). What this test
+    pins is that the delegation is real and that no bespoke right-packed
+    footer button was added alongside it.
+    """
     src = _read_source("entries_dialog.py")
-    order = _pack_order(src, ["Validate", "Apply", "Save & Close", "Cancel"])
-    assert order == ["Validate", "Apply", "Save & Close", "Cancel"], (
-        f"entries_dialog footer order is {order!r}; expected Windows "
-        "convention [Validate] [Apply] [Save & Close] [Cancel].")
+    assert _delegates_to_shared_footer(src), (
+        "entries_dialog must build its footer via "
+        "BaseEditorDialog._build_editor_footer so the "
+        "button-order-windows convention has a single definition.")
+    leftovers = _hand_rolls_footer_buttons(
+        src, ["Validate", "Apply", "Save & Close", "Cancel"],
+    )
+    assert leftovers == [], (
+        f"entries_dialog delegates to the shared editor footer but ALSO "
+        f"hand-packs {leftovers!r}; that reintroduces the drift the "
+        "button-order-windows audit fixed.")
 
 
 def test_exits_dialog_footer_order_windows():
-    """``exits_dialog`` editor footer must be
-    ``[Validate] [Save] [Close]``."""
+    """``exits_dialog`` must inherit the audited footer order.
+
+    It keeps its own wording (``[Validate] [Save] [Close]``) via the
+    ``*_text`` overrides on the shared builder — only the ordering is
+    shared, so the user-visible labels are unchanged.
+    """
     src = _read_source("exits_dialog.py")
-    order = _pack_order(src, ["Validate", "Save", "Close"])
-    assert order == ["Validate", "Save", "Close"], (
-        f"exits_dialog footer order is {order!r}; expected Windows "
-        "convention [Validate] [Save] [Close].")
+    assert _delegates_to_shared_footer(src), (
+        "exits_dialog must build its footer via "
+        "BaseEditorDialog._build_editor_footer.")
+    assert 'save_close_text="Save"' in src and 'cancel_text="Close"' in src, (
+        "exits_dialog must keep its [Validate] [Save] [Close] wording via "
+        "the shared builder's *_text overrides.")
+    leftovers = _hand_rolls_footer_buttons(src, ["Validate", "Save", "Close"])
+    assert leftovers == [], (
+        f"exits_dialog delegates to the shared editor footer but ALSO "
+        f"hand-packs {leftovers!r}.")
 
 
 def test_sandbox_dialog_footer_order_windows():
@@ -187,15 +252,26 @@ def test_credentials_dialog_save_cancel_order_windows():
 
 def test_modal_base_editor_footer_order_windows():
     """``BaseEditorDialog._build_editor_footer`` must pack Cancel
-    FIRST so it lands rightmost (Windows convention)."""
+    FIRST so it lands rightmost (Windows convention).
+
+    This is now the single definition of the footer order for every
+    dialog that delegates to it, so it carries the whole contract.
+    Button labels are caller-supplied parameters (``cancel_text`` etc.)
+    so that adopting dialogs can keep their own wording; the scan
+    therefore keys on the ``self.btn_*`` assignments rather than on
+    literal label text. The live-widget geometry counterpart is
+    ``tests/unit/gui/test_modal_base.py``.
+    """
     src = _read_source("_modal_base.py")
     # Restrict to the body of _build_editor_footer.
     start = src.find("def _build_editor_footer(")
     assert start != -1, "BaseEditorDialog._build_editor_footer disappeared"
-    end = src.find("def ", start + 10)
+    end = src.find("\n    def ", start + 10)
     body = src[start:end] if end != -1 else src[start:]
-    order = _pack_order(body, ["Validate", "Apply", "Save & Close", "Cancel"])
-    assert order == ["Validate", "Apply", "Save & Close", "Cancel"], (
+    order = _attr_pack_order(
+        body, ["btn_validate", "btn_apply", "btn_save_close", "btn_cancel"],
+    )
+    assert order == ["btn_validate", "btn_apply", "btn_save_close", "btn_cancel"], (
         f"BaseEditorDialog editor footer order is {order!r}; expected "
         "Windows convention [Validate] [Apply] [Save & Close] [Cancel].")
 
@@ -208,8 +284,10 @@ def test_modal_base_editor_footer_order_windows():
 @pytest.mark.parametrize(
     "module_name, primary_label",
     [
-        ("entries_dialog.py", "Save & Close"),
-        ("exits_dialog.py", "Save"),
+        # entries_dialog / exits_dialog now delegate to
+        # BaseEditorDialog._build_editor_footer and are covered by
+        # test_{entries,exits}_dialog_footer_order_windows plus
+        # test_modal_base_editor_footer_order_windows.
         ("sandbox_dialog.py", "Start"),
         ("sandbox_review_dialog.py", "OK"),
         ("pre_trade_dialog.py", "Submit"),
@@ -218,15 +296,13 @@ def test_modal_base_editor_footer_order_windows():
     ],
 )
 def test_cancel_packed_before_primary(module_name: str, primary_label: str):
-    """Across every multi-button dialog, the source-order line
-    number of the ``Cancel`` (or ``Close`` for ``exits_dialog``)
-    ``ttk.Button(...).pack(side="right")`` must be SMALLER than
-    that of the affirmative action — because pack-first means
-    rightmost, the Cancel-rightmost rule reduces to "Cancel-first
-    in source"."""
+    """Across every multi-button dialog that still hand-rolls its
+    footer, the source-order line number of the ``Cancel``
+    ``ttk.Button(...).pack(side="right")`` must be SMALLER than that of
+    the affirmative action — because pack-first means rightmost, the
+    Cancel-rightmost rule reduces to "Cancel-first in source"."""
     src = _read_source(module_name)
-    cancel_label = "Close" if module_name == "exits_dialog.py" else "Cancel"
-    cancel_pos = _pack_order(src, [cancel_label, primary_label])
-    assert cancel_pos[-1] == cancel_label, (
-        f"{module_name}: {cancel_label!r} must be the rightmost button "
+    cancel_pos = _pack_order(src, ["Cancel", primary_label])
+    assert cancel_pos[-1] == "Cancel", (
+        f"{module_name}: 'Cancel' must be the rightmost button "
         f"in its row but the actual order is {cancel_pos!r}.")

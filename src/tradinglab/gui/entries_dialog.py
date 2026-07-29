@@ -53,7 +53,11 @@ from ..entries.model import (
 )
 from ..exits.model import ExitStrategy
 from ..scanner.model import Group as ConditionGroup
-from ._modal_base import BaseModalDialog, make_scrollable_form, protect_combobox_wheel
+from ._modal_base import (
+    BaseEditorDialog,
+    make_scrollable_form,
+    protect_combobox_wheel,
+)
 from ._trigger_field_renderer import _FieldSpec, render_kind_params
 from .colors import ERROR_RED, MUTED_GREY
 from .scanner_block_editor import BlockEditor
@@ -152,7 +156,7 @@ _ENTRY_TRIGGER_SPECS: dict[TriggerKind, tuple[_FieldSpec, ...]] = {
 # ---------------------------------------------------------------------------
 
 
-class EntriesDialog(BaseModalDialog):
+class EntriesDialog(BaseEditorDialog):
     """Modal-ish editor for a single :class:`EntryStrategy`.
 
     Migrated to :class:`BaseModalDialog` (audit item #4): the base
@@ -286,30 +290,17 @@ class EntriesDialog(BaseModalDialog):
             inner.pack(fill="both", expand=True)
             self._section_frames[title] = lf
 
-        # Footer
-        footer = ttk.Frame(outer)
-        footer.pack(fill="x", pady=(6, 0))
-        self._status_var = tk.StringVar(value="")
-        self._status_lbl = ttk.Label(
-            footer, textvariable=self._status_var, foreground=ERROR_RED,
+        # Footer — shared builder from BaseEditorDialog. Owns the
+        # ``button-order-windows`` convention and the status label, so
+        # the order/labels live in exactly one place.
+        footer = self._build_editor_footer(
+            outer,
+            on_validate=self._on_validate,
+            on_apply=lambda: self._on_save_clicked(close=False),
+            on_save_close=lambda: self._on_save_clicked(close=True),
+            on_cancel=self._on_cancel_clicked,
         )
-        self._status_lbl.pack(side="left", fill="x", expand=True)
-        # Footer buttons: Windows dialog convention (audit
-        # ``button-order-windows``) — visual order left→right
-        # ``[Validate] [Apply] [Save & Close] [Cancel]`` with the
-        # dismiss action rightmost. ``side="right"`` reverses pack
-        # order, so pack Cancel first (lands rightmost), then
-        # Save & Close, Apply, Validate.
-        ttk.Button(footer, text="Cancel", command=self._on_cancel_clicked).pack(
-            side="right", padx=(2, 0))
-        ttk.Button(footer, text="Save & Close",
-                   command=lambda: self._on_save_clicked(close=True)).pack(
-            side="right", padx=(2, 0))
-        ttk.Button(footer, text="Apply",
-                   command=lambda: self._on_save_clicked(close=False)).pack(
-            side="right", padx=(2, 0))
-        ttk.Button(footer, text="Validate", command=self._on_validate).pack(
-            side="right", padx=(2, 0))
+        footer.pack(fill="x", pady=(6, 0))
 
     def _err_label(self, parent: tk.Misc, key: str) -> ttk.Label:
         var = tk.StringVar(value="")

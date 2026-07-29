@@ -259,6 +259,10 @@ class BaseEditorDialog(BaseModalDialog):
         on_apply: Callable[[], None] | None = None,
         on_save_close: Callable[[], None] | None = None,
         status_foreground: str = ERROR_RED,
+        validate_text: str = "Validate",
+        apply_text: str = "Apply",
+        save_close_text: str = "Save & Close",
+        cancel_text: str = "Cancel",
     ) -> ttk.Frame:
         """Build the canonical 4-button editor footer.
 
@@ -268,6 +272,14 @@ class BaseEditorDialog(BaseModalDialog):
         (Cancel) rightmost. Status label fills the remaining space
         on the left. Pass ``None`` for any callback to suppress its
         button.
+
+        The four ``*_text`` overrides exist because the adopting dialogs
+        genuinely disagree on wording — ``ExitsDialog`` uses
+        ``[Validate] [Save] [Close]`` where ``EntriesDialog`` uses
+        ``[Validate] [Apply] [Save & Close] [Cancel]``. The overrides let
+        both share this builder without either changing its user-visible
+        labels; the ORDER (the thing the ``button-order-windows`` audit
+        actually fixed) is enforced here for every caller.
 
         Returns the footer frame so the caller can ``pack`` /
         ``grid`` it inside their layout. Caller is expected to
@@ -290,22 +302,22 @@ class BaseEditorDialog(BaseModalDialog):
         # Save & Close, Apply, Validate from there leftward.
         if on_cancel is not None:
             self.btn_cancel = ttk.Button(
-                footer, text="Cancel", command=on_cancel,
+                footer, text=cancel_text, command=on_cancel,
             )
             self.btn_cancel.pack(side="right", padx=(2, 0))
         if on_save_close is not None:
             self.btn_save_close = ttk.Button(
-                footer, text="Save & Close", command=on_save_close,
+                footer, text=save_close_text, command=on_save_close,
             )
             self.btn_save_close.pack(side="right", padx=(2, 0))
         if on_apply is not None:
             self.btn_apply = ttk.Button(
-                footer, text="Apply", command=on_apply,
+                footer, text=apply_text, command=on_apply,
             )
             self.btn_apply.pack(side="right", padx=(2, 0))
         if on_validate is not None:
             self.btn_validate = ttk.Button(
-                footer, text="Validate", command=on_validate,
+                footer, text=validate_text, command=on_validate,
             )
             self.btn_validate.pack(side="right", padx=(2, 0))
 
