@@ -1900,6 +1900,39 @@ reads from there.
   Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
   ```
 
+### Branching and landing work — NO PULL REQUESTS
+
+**pmok3 is the only contributor. Work lands directly on `main`.**
+
+- **Do not open pull requests.** Not for large changes, not for "review",
+  not "so CI can validate it". A PR on a single-contributor repo is pure
+  ceremony — it adds a merge round-trip and a stale branch for zero review
+  value. The git history is linear and every commit on `main` was pushed
+  straight there; keep it that way.
+- Agent sessions run in a worktree on their own branch. That is a
+  workspace-isolation detail, **not** a review workflow: when the work is
+  done, fast-forward it onto `main` and push.
+
+  ```powershell
+  $env:PATH = $env:PATH + ';C:\Program Files\Git\cmd'
+  git fetch origin
+  git rebase origin/main          # keep history linear
+  git push origin HEAD:main
+  ```
+
+- **Because there is no PR gate, validate BEFORE you push.** `main` is what
+  gets built and released, so a red `main` is a real problem rather than a
+  red PR check. Minimum bar for anything non-trivial:
+
+  ```powershell
+  python -m ruff check src tests
+  python -m pytest tests/unit tests/data -q     # the release gate
+  python -m pytest tests/smoke -q               # if you touched GUI/app wiring
+  ```
+
+  CI still runs on `main` afterwards as a backstop, not as the gate.
+- Push with the **`pmok3`** credential. An agent session may be authenticated
+  as a different account with read-only access; see §3.
 ### Style
 - `ruff check src tests` must pass (config in `pyproject.toml`).
 - Line length 110.
@@ -2044,7 +2077,10 @@ guessing — recent checkpoints include:
 
 ---
 
-*Last updated: 2026-05-29. If you change the build/test/release flow,
+*Last updated: 2026-07-29. **Work lands directly on `main` — do NOT open pull
+requests (§9); validate locally before pushing since there is no PR gate.***
+
+*Previously updated 2026-05-29. If you change the build/test/release flow,
 update §3 / §4 / §8 in the same PR. Strategy Tester landmines are in
 §7.7–§7.10 — read those before touching `strategy_tester/`. Indicator
 hot-path / kernel conventions are in §7.27–§7.28. Dark-mode native-widget
