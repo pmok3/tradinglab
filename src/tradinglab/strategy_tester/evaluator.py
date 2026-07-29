@@ -1314,6 +1314,59 @@ def _build_dependency_registry(
     return BarsRegistry(cache)
 
 
+def _synthesize_eod_flatten_fills(
+    *,
+    ctx: EvalContext,
+    engine: Any,
+    bars: Any,
+    idx: int,
+    symbol: str,
+    cost_model: CostModel,
+) -> None:
+    """Flatten the open position at ``bars`` index ``idx`` (market-on-close).
+
+    Shared by BOTH ``eod_kill_switch`` sites — the per-ET-day rollover kill
+    and the end-of-run kill. ``idx`` must already be the result of
+    :func:`_find_last_rth_bar_at_or_before`, so the fill lands on a
+    regular-session bar (never a postmarket print) per the RTH-only
+    contract in ``evaluator.spec.md``.
+
+    The fill price is that bar's **close** — the documented
+    "market-on-close at 15:55 ET" behaviour. Both kill paths use the same
+    convention; they previously diverged (per-day used close, end-of-run
+    used open) purely because the block was copy-pasted.
+
+    Routes through :func:`backtest.fills.apply_fills` so the cost model's
+    slippage + commission are honoured, then applies each fill directly via
+    ``_apply_fill_with_tracking`` (the tick loop is either mid-rollover or
+    exhausted, so a queued order would never fill).
+    """
+    from ..backtest.fills import apply_fills  # local import — avoid cycle
+
+    bar_ts = int(bars.ts[idx])
+    bar_close = float(bars.close[idx])
+    exit_side = Side.from_str(ctx.position_side).opposite().as_order_side()
+    synth_fills = apply_fills(
+        orders=[
+            Order(
+                order_id=ctx.mint_order_id(),
+                symbol=symbol,
+                side=exit_side,
+                quantity=float(ctx.position_qty),
+                submitted_ts=bar_ts,
+            )
+        ],
+        next_bar_opens={symbol: bar_close},
+        next_bar_ts=bar_ts,
+        slippage_bps=float(cost_model.slippage_bps),
+        commission=float(cost_model.commission_per_trade),
+        commission_per_share=float(cost_model.commission_per_share),
+    )
+    for f in synth_fills:
+        engine._apply_fill_with_tracking(f)
+        engine.fills.append(f)
+
+
 def evaluate_symbol(
     *,
     symbol: str,
@@ -1503,31 +1556,14 @@ def evaluate_symbol(
                     bars, i - 1, rth_mask=rth_mask,
                 )) >= 0
             ):
-                prior_ts = int(bars.ts[prior_idx])
-                prior_close = float(bars.close[prior_idx])
-                exit_side = Side.from_str(ctx.position_side).opposite().as_order_side()
-                # Use ``apply_fills`` to honour the cost model (slippage
-                # + commission) — same shape as the end-of-run kill.
-                from ..backtest.fills import apply_fills as _apply_fills
-                synth_fills = _apply_fills(
-                    orders=[
-                        Order(
-                            order_id=ctx.mint_order_id(),
-                            symbol=symbol,
-                            side=exit_side,
-                            quantity=float(ctx.position_qty),
-                            submitted_ts=prior_ts,
-                        )
-                    ],
-                    next_bar_opens={symbol: prior_close},
-                    next_bar_ts=prior_ts,
-                    slippage_bps=float(cost_model.slippage_bps),
-                    commission=float(cost_model.commission_per_trade),
-                    commission_per_share=float(cost_model.commission_per_share),
+                _synthesize_eod_flatten_fills(
+                    ctx=ctx,
+                    engine=engine,
+                    bars=bars,
+                    idx=prior_idx,
+                    symbol=symbol,
+                    cost_model=cost_model,
                 )
-                for f in synth_fills:
-                    engine._apply_fill_with_tracking(f)
-                    engine.fills.append(f)
                 # Re-sync ctx so the position-state reflects the flatten
                 # before the new day's processing begins.
                 _sync_position_state_from_engine(ctx, engine, symbol)
@@ -1616,35 +1652,17 @@ def evaluate_symbol(
             bars, n - 1, rth_mask=rth_mask,
         )) >= 0
     ):
-        last_ts = int(bars.ts[last_idx])
-        exit_side = Side.from_str(ctx.position_side).opposite().as_order_side()
-        # Append a synthetic fill at the last bar's close so the position
-        # is closed in the result; the engine has no further ticks so a
-        # queued order would never fill. We use the engine's last-bar-flush
-        # path via run_to_completion's flush helper if available; otherwise
-        # the SessionResult will show the position as still open which is
-        # acceptable for PR 1 (banner-tagged "open at end").
-        from ..backtest.fills import apply_fills  # local import — avoid cycle
-        last_open = float(bars.open[last_idx])
-        synth_fill = apply_fills(
-            orders=[
-                Order(
-                    order_id=ctx.mint_order_id(),
-                    symbol=symbol,
-                    side=exit_side,
-                    quantity=float(ctx.position_qty),
-                    submitted_ts=last_ts,
-                )
-            ],
-            next_bar_opens={symbol: last_open},
-            next_bar_ts=last_ts,
-            slippage_bps=float(cost_model.slippage_bps),
-            commission=float(cost_model.commission_per_trade),
-            commission_per_share=float(cost_model.commission_per_share),
+        # Synthetic flatten at the last RTH bar's close (market-on-close) —
+        # the engine has no further ticks, so a queued order would never
+        # fill. Same helper + same price convention as the per-day kill.
+        _synthesize_eod_flatten_fills(
+            ctx=ctx,
+            engine=engine,
+            bars=bars,
+            idx=last_idx,
+            symbol=symbol,
+            cost_model=cost_model,
         )
-        for f in synth_fill:
-            engine._apply_fill_with_tracking(f)
-            engine.fills.append(f)
 
     final_result = engine.result()
     # Warmup-period equity points are noise (no trades possible during

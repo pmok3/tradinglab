@@ -23,13 +23,14 @@ JSON round-trip is provided via :meth:`ExitStrategy.to_dict` /
 
 from __future__ import annotations
 
-import time
-import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from ..core.ids import new_id_hex
+from ..core.model_meta import CreatedWith as _SharedCreatedWith
+from ..core.timezones import utc_now_iso
 from ..scanner.model import Group as ConditionGroup
 
 __all__ = [
@@ -107,11 +108,11 @@ class OrderSide(str, Enum):
 
 
 def _new_id() -> str:
-    return uuid.uuid4().hex
+    return new_id_hex()
 
 
 def _utcnow_iso() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    return utc_now_iso()
 
 
 # ---------------------------------------------------------------------------
@@ -359,16 +360,13 @@ class OCOGroup:
 
 
 @dataclass
-class CreatedWith:
-    app: str = "tradinglab"
-    version: str = "0.0.0"
+class CreatedWith(_SharedCreatedWith):
+    """Provenance metadata. See :mod:`tradinglab.core.model_meta`.
 
-    def to_dict(self) -> dict[str, str]:
-        return {"app": self.app, "version": self.version}
-
-    @classmethod
-    def from_dict(cls, d: Mapping[str, Any]) -> CreatedWith:
-        return cls(app=str(d.get("app", "tradinglab")), version=str(d.get("version", "0.0.0")))
+    Previously a local copy WITHOUT the ``template`` field, which silently
+    dropped the ``"template": true`` marker carried by every shipped exit
+    template on load. Sharing the definition fixes that round-trip loss.
+    """
 
 
 @dataclass

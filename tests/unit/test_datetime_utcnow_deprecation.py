@@ -217,9 +217,18 @@ class TestSyntheticEventsTodayMs:
 class TestMockedClockOutput:
     """When the system clock is monkeypatched, the migrated helpers should
     reflect the patched value — proves we read from datetime.now() rather
-    than caching."""
+    than caching.
+
+    The clock is now read inside ``core.timezones.utc_now_naive_iso``; the
+    per-module ``_now_iso`` / ``now_iso`` helpers delegate to it (the five
+    hand-rolled UTC-timestamp helpers were consolidated there). These tests
+    therefore patch ``core.timezones._dt`` and still call through the
+    original per-module entry points, so both the delegation and the
+    call-time clock read stay pinned.
+    """
 
     def test_drawings_store_now_iso_reflects_patched_clock(self, monkeypatch):
+        from tradinglab.core import timezones as _tz
         from tradinglab.drawings import store as _store
 
         fixed_utc = _dt.datetime(2030, 6, 15, 12, 34, 56, 789, tzinfo=_dt.timezone.utc)
@@ -231,13 +240,14 @@ class TestMockedClockOutput:
                     return fixed_utc.replace(tzinfo=None)
                 return fixed_utc.astimezone(tz)
 
-        monkeypatch.setattr(_store._dt, "datetime", _FrozenDT)
+        monkeypatch.setattr(_tz._dt, "datetime", _FrozenDT)
         out = _store._now_iso()
         # microsecond=0 dropped, tzinfo=None dropped.
         assert out == "2030-06-15T12:34:56"
 
     def test_sandbox_resume_now_iso_reflects_patched_clock(self, monkeypatch):
         from tradinglab.backtest import sandbox_resume as _sr
+        from tradinglab.core import timezones as _tz
 
         fixed_utc = _dt.datetime(2030, 6, 15, 12, 34, 56, 789, tzinfo=_dt.timezone.utc)
 
@@ -248,9 +258,26 @@ class TestMockedClockOutput:
                     return fixed_utc.replace(tzinfo=None)
                 return fixed_utc.astimezone(tz)
 
-        monkeypatch.setattr(_sr._dt, "datetime", _FrozenDT)
+        monkeypatch.setattr(_tz._dt, "datetime", _FrozenDT)
         out = _sr.now_iso()
         assert out == "2030-06-15T12:34:56"
+
+    def test_utc_now_iso_reflects_patched_clock(self, monkeypatch):
+        """The Z-suffixed variant shares the same call-time clock read."""
+        from tradinglab.core import timezones as _tz
+
+        fixed_utc = _dt.datetime(2030, 6, 15, 12, 34, 56, 789, tzinfo=_dt.timezone.utc)
+
+        class _FrozenDT(_dt.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                if tz is None:
+                    return fixed_utc.replace(tzinfo=None)
+                return fixed_utc.astimezone(tz)
+
+        monkeypatch.setattr(_tz._dt, "datetime", _FrozenDT)
+        assert _tz.utc_now_iso() == "2030-06-15T12:34:56Z"
+        assert _tz.utc_now_compact() == "20300615T123456Z"
 
 
 if __name__ == "__main__":  # pragma: no cover

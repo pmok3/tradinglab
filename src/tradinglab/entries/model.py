@@ -26,13 +26,14 @@ load, and arming all call ``validate_strategy`` to refuse invalid state.
 
 from __future__ import annotations
 
-import time
-import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from ..core.ids import new_id_hex
+from ..core.model_meta import CreatedWith as _SharedCreatedWith
+from ..core.timezones import utc_now_iso
 from ..scanner.model import Group as ConditionGroup
 
 __all__ = [
@@ -146,11 +147,11 @@ class PositionAlreadyOpenPolicy(str, Enum):
 
 
 def _new_id() -> str:
-    return uuid.uuid4().hex
+    return new_id_hex()
 
 
 def _utcnow_iso() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    return utc_now_iso()
 
 
 def _as_float_opt(v: Any) -> float | None:
@@ -369,24 +370,13 @@ class EntryTrigger:
 
 
 @dataclass
-class CreatedWith:
-    app: str = "tradinglab"
-    version: str = "0.0.0"
-    template: bool = False  # True for prepackaged templates
+class CreatedWith(_SharedCreatedWith):
+    """Provenance metadata. See :mod:`tradinglab.core.model_meta`.
 
-    def to_dict(self) -> dict[str, Any]:
-        out: dict[str, Any] = {"app": self.app, "version": self.version}
-        if self.template:
-            out["template"] = True
-        return out
-
-    @classmethod
-    def from_dict(cls, d: Mapping[str, Any]) -> CreatedWith:
-        return cls(
-            app=str(d.get("app", "tradinglab")),
-            version=str(d.get("version", "0.0.0")),
-            template=bool(d.get("template", False)),
-        )
+    Re-exported here so ``from tradinglab.entries.model import CreatedWith``
+    keeps working; the definition (including the ``template`` flag and its
+    omit-when-False serialization) is shared.
+    """
 
 
 @dataclass

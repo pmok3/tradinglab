@@ -28,12 +28,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-import time
-import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, ClassVar
+
+from ..core.ids import new_id_hex
+from ..core.timezones import utc_now_iso
 
 __all__ = [
     "CURRENT_SCHEMA_VERSION",
@@ -105,11 +106,11 @@ class DatePreset(str, Enum):
 
 
 def _new_id() -> str:
-    return uuid.uuid4().hex
+    return new_id_hex()
 
 
 def _utcnow_iso() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    return utc_now_iso()
 
 
 def _as_str_opt(v: Any) -> str | None:

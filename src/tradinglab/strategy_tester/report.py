@@ -60,6 +60,7 @@ from ..backtest.performance import (
     TradeRow,
     build_setup_aggregates,
     build_trade_rows,
+    summarize_trade_rows,
     write_trade_rows_csv,
 )
 from ..backtest.session import SessionResult
@@ -328,19 +329,15 @@ def expectancy(rows: list[TradeRow]) -> float:
     """Discretionary-trader expectancy: ``win_rate * avg_win + loss_rate * avg_loss``.
 
     Returns 0.0 on an empty row list.
+
+    Delegates to :func:`backtest.performance.summarize_trade_rows` so this
+    formula has exactly one definition. It was previously a fourth
+    independent transcription (alongside the two in
+    ``build_setup_aggregates`` / ``build_proximity_aggregates`` and the
+    inline one in :func:`compute_aggregate`); all four agreed, but nothing
+    forced them to.
     """
-    if not rows:
-        return 0.0
-    wins_list = [float(r.post.pnl) for r in rows if r.is_win]
-    losses_list = [float(r.post.pnl) for r in rows if r.is_loss]
-    n = len(rows)
-    n_wins = len(wins_list)
-    n_losses = len(losses_list)
-    win_rate = n_wins / n
-    loss_rate = n_losses / n
-    avg_win = (sum(wins_list) / n_wins) if n_wins else 0.0
-    avg_loss = (sum(losses_list) / n_losses) if n_losses else 0.0
-    return win_rate * avg_win + loss_rate * avg_loss
+    return summarize_trade_rows(rows).expectancy
 
 
 def bootstrap_ci(
@@ -508,14 +505,15 @@ def _per_symbol_stats(
     out: list[PerSymbolStats] = []
     for sym in sorted(rows_by_symbol.keys()):
         rows = rows_by_symbol[sym]
-        n = len(rows)
-        wins = sum(1 for r in rows if r.is_win)
-        losses = sum(1 for r in rows if r.is_loss)
-        gross = sum(float(r.post.pnl) for r in rows)
+        stats = summarize_trade_rows(rows)
+        n = stats.count
+        wins = stats.wins
+        losses = stats.losses
+        gross = stats.total_pnl
         # PR 3 does not yet model commissions separately; net == gross
         # until the runner threads commission deductions through.
         net = gross
-        avg = net / n if n else 0.0
+        avg = stats.avg_pnl
         pf_raw = profit_factor(rows)
         pf = pf_raw if math.isfinite(pf_raw) else 1e9
         # Build a symbol-local equity curve to derive max drawdown.

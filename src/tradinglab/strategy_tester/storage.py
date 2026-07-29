@@ -30,13 +30,13 @@ the directory layout here.
 from __future__ import annotations
 
 import json
-import time
 from collections.abc import Mapping
 from pathlib import Path
 
 from .. import disk_cache
 from ..backtest.session import SessionResult
 from ..core.io_helpers import atomic_write_json
+from ..core.timezones import utc_now_compact
 from .model import TestConfig, TestRun
 
 __all__ = [
@@ -70,7 +70,7 @@ def runs_dir() -> Path:
 
 def _safe_iso() -> str:
     """Filename-safe UTC timestamp suffix."""
-    return time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    return utc_now_compact()
 
 
 def run_dir_for(run_id: str, *, started_iso: str = "") -> Path:

@@ -12,13 +12,14 @@ are awkward to round-trip through versions).
 """
 from __future__ import annotations
 
-import datetime as _dt
 import math
 import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from dataclasses import replace as _dc_replace
 from typing import Any
+
+from ..core.timezones import utc_now_naive_iso
 
 DEFAULT_COLOR = "#2962ff"
 """TradingView's signature blue.
@@ -476,7 +477,7 @@ def make_hline_drawing(
     # UUIDv4 hex on empty input. Audit ``drawing-empty-id``.
     drawing_id = _coerce_id(drawing_id)
     if not created_at:
-        created_at = _dt.datetime.now(_dt.timezone.utc).replace(microsecond=0, tzinfo=None).isoformat()
+        created_at = utc_now_naive_iso()
     return Drawing(
         kind=DRAWING_KIND_HLINE,
         id=drawing_id,

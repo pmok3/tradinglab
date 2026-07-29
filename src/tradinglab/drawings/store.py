@@ -16,7 +16,6 @@ File location: ``<app_data_dir>/drawings.json``, alongside
 from __future__ import annotations
 
 import builtins
-import datetime as _dt
 import json
 import os
 import tempfile
@@ -26,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from ..core.thread_guard import require_tk_thread
+from ..core.timezones import utc_now_naive_iso
 from .model import Drawing, normalize_ticker
 
 DRAWINGS_FILE_FORMAT = "tradinglab-drawings"
@@ -68,7 +68,7 @@ def drawings_file_path() -> Path:
 
 
 def _now_iso() -> str:
-    return _dt.datetime.now(_dt.timezone.utc).replace(microsecond=0, tzinfo=None).isoformat()
+    return utc_now_naive_iso()
 
 
 def read_drawings() -> dict[str, list[Drawing]]:

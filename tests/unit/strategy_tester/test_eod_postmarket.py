@@ -321,3 +321,86 @@ def test_time_of_day_exit_fires_in_postmarket_data_unchanged() -> None:
         f"TIME_OF_DAY exit fired at {hh:02d}:{mm:02d} ET; "
         "expected at/after 18:00 ET cutoff (postmarket)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Test 6: both kill paths flatten at the last RTH bar's CLOSE (market-on-close)
+# ---------------------------------------------------------------------------
+
+
+def _last_rth_candle(candles: list[Candle]) -> Candle:
+    """Return the last candle at or before 16:00 ET on a weekday."""
+    rth = [
+        c for c in candles
+        if c.date.weekday() < 5 and (9, 30) <= (c.date.hour, c.date.minute) <= (16, 0)
+    ]
+    assert rth, "fixture has no RTH candles"
+    return rth[-1]
+
+
+def test_end_of_run_eod_kill_fills_at_rth_close_not_open() -> None:
+    """The end-of-run kill must price the flatten at the last RTH bar's CLOSE.
+
+    Regression pin for the copy-paste divergence between the two
+    ``eod_kill_switch`` sites: the per-day rollover kill used the bar close
+    while the end-of-run kill used the bar OPEN. Both now route through
+    ``evaluator._synthesize_eod_flatten_fills`` and use the close, matching
+    the documented "market-on-close at 15:55 ET" behaviour.
+
+    Slippage is zeroed so the fill price is exactly the bar close; with the
+    default 5 bps the open/close gap (0.10) and the slippage (~0.05) are too
+    close to distinguish.
+    """
+    monday = datetime(2026, 1, 5)
+    candles = _build_candles(day=monday, start_time=time(9, 30), end_time=time(19, 55))
+    last_rth = _last_rth_candle(candles)
+    assert last_rth.open != last_rth.close, "fixture must distinguish open from close"
+
+    result = evaluate_symbol(
+        symbol="TEST",
+        candles=candles,
+        interval="5m",
+        entry_strategy=_market_long_strategy(),
+        exit_strategy=_eod_only_exit(),
+        starting_cash=1_000_000.0,
+        cost_model=CostModel(slippage_bps=0.0),
+    )
+    sells = [f for f in result.fills if f.side.value == "sell"]
+    assert len(sells) == 1, f"expected exactly 1 end-of-run SELL, got {len(sells)}"
+
+    fill_price = float(sells[0].fill_price)
+    assert fill_price == last_rth.close, (
+        f"end-of-run EOD kill filled at {fill_price}; expected the last RTH "
+        f"bar's close {last_rth.close} (got its open {last_rth.open}?)"
+    )
+
+
+def test_per_day_eod_kill_fills_at_rth_close_not_open() -> None:
+    """The per-day rollover kill prices the flatten at the prior RTH close."""
+    monday = datetime(2026, 1, 5)
+    tuesday = datetime(2026, 1, 6)
+    monday_candles = _build_candles(
+        day=monday, start_time=time(9, 30), end_time=time(19, 55),
+    )
+    candles = monday_candles + _build_candles(
+        day=tuesday, start_time=time(9, 30), end_time=time(11, 0),
+    )
+    monday_last_rth = _last_rth_candle(monday_candles)
+
+    result = evaluate_symbol(
+        symbol="TEST",
+        candles=candles,
+        interval="5m",
+        entry_strategy=_market_long_strategy(),
+        exit_strategy=_eod_only_exit(),
+        starting_cash=1_000_000.0,
+        cost_model=CostModel(slippage_bps=0.0),
+    )
+    sells = [f for f in result.fills if f.side.value == "sell"]
+    assert sells, "expected at least one EOD-kill SELL fill"
+
+    fill_price = float(sells[0].fill_price)
+    assert fill_price == monday_last_rth.close, (
+        f"per-day EOD kill filled at {fill_price}; expected Monday's last RTH "
+        f"close {monday_last_rth.close}"
+    )

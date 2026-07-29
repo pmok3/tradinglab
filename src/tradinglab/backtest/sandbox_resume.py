@@ -35,13 +35,14 @@ cache rebuilds.
 """
 from __future__ import annotations
 
-import datetime as _dt
 import json
 import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from ..core.timezones import utc_now_naive_iso
 
 RESUME_FILE_FORMAT = "tradinglab-sandbox-resume"
 RESUME_FILE_VERSION = 1
@@ -144,7 +145,7 @@ def now_iso() -> str:
     Uses UTC + microsecond=0 for stable string output (matches the
     sister :mod:`tradinglab.backtest.persistence` module's format).
     """
-    return _dt.datetime.now(_dt.timezone.utc).replace(microsecond=0, tzinfo=None).isoformat()
+    return utc_now_naive_iso()
 
 
 def resume_metadata_path() -> Path:

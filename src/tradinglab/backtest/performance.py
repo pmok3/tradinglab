@@ -27,6 +27,7 @@ from __future__ import annotations
 import csv
 import datetime as _dt
 import shutil
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -75,6 +76,28 @@ class TradeRow:
     @property
     def target(self) -> float | None:
         return None if self.pre is None else self.pre.target
+
+
+@dataclass(frozen=True)
+class TradeStats:
+    """Summary statistics for one bucket of :class:`TradeRow`.
+
+    The shared output of :func:`summarize_trade_rows`, consumed by
+    :class:`SetupAggregate` and :class:`ProximityAggregate` (which add
+    their own tag field). Carries ``loss_rate`` in addition to the fields
+    the two aggregates expose, since it is needed to derive
+    ``expectancy`` and is cheap to keep.
+    """
+    count: int
+    wins: int
+    losses: int
+    win_rate: float
+    loss_rate: float
+    avg_pnl: float
+    total_pnl: float
+    avg_win: float
+    avg_loss: float
+    expectancy: float
 
 
 @dataclass(frozen=True)
@@ -168,6 +191,47 @@ def build_trade_rows(result: SessionResult) -> list[TradeRow]:
     return rows
 
 
+def summarize_trade_rows(rows: Sequence[TradeRow]) -> TradeStats:
+    """Reduce a bucket of :class:`TradeRow` to its summary statistics.
+
+    Single source of truth for the win/loss/expectancy reduction. It was
+    previously inlined verbatim in both :func:`build_setup_aggregates` and
+    :func:`build_proximity_aggregates` (byte-identical 12-line blocks), with
+    the expectancy formula independently re-derived again in
+    ``strategy_tester/report.py``. Two copies of a P&L formula is a
+    correctness hazard, not just noise: a change to one definition (say,
+    counting breakevens, or netting commissions) would silently fail to
+    propagate to the others.
+
+    Breakeven trades (``pnl == 0``) count toward ``count`` but toward
+    neither ``wins`` nor ``losses`` — so ``win_rate + loss_rate <= 1.0``.
+    That is the pre-existing behaviour and is preserved deliberately.
+    """
+    n = len(rows)
+    wins_list = [float(r.post.pnl) for r in rows if r.is_win]
+    losses_list = [float(r.post.pnl) for r in rows if r.is_loss]
+    n_wins = len(wins_list)
+    n_losses = len(losses_list)
+    total_pnl = sum(float(r.post.pnl) for r in rows)
+    avg_pnl = total_pnl / n if n else 0.0
+    avg_win = (sum(wins_list) / n_wins) if n_wins else 0.0
+    avg_loss = (sum(losses_list) / n_losses) if n_losses else 0.0
+    win_rate = (n_wins / n) if n else 0.0
+    loss_rate = (n_losses / n) if n else 0.0
+    return TradeStats(
+        count=n,
+        wins=n_wins,
+        losses=n_losses,
+        win_rate=win_rate,
+        loss_rate=loss_rate,
+        avg_pnl=avg_pnl,
+        total_pnl=total_pnl,
+        avg_win=avg_win,
+        avg_loss=avg_loss,
+        expectancy=win_rate * avg_win + loss_rate * avg_loss,
+    )
+
+
 def build_setup_aggregates(rows: list[TradeRow]) -> list[SetupAggregate]:
     """Group ``rows`` by setup tag and compute per-group stats.
 
@@ -184,29 +248,18 @@ def build_setup_aggregates(rows: list[TradeRow]) -> list[SetupAggregate]:
 
     out: list[SetupAggregate] = []
     for tag, group in by_tag.items():
-        n = len(group)
-        wins_list = [float(r.post.pnl) for r in group if r.is_win]
-        losses_list = [float(r.post.pnl) for r in group if r.is_loss]
-        n_wins = len(wins_list)
-        n_losses = len(losses_list)
-        total_pnl = sum(float(r.post.pnl) for r in group)
-        avg_pnl = total_pnl / n if n else 0.0
-        avg_win = (sum(wins_list) / n_wins) if n_wins else 0.0
-        avg_loss = (sum(losses_list) / n_losses) if n_losses else 0.0
-        win_rate = (n_wins / n) if n else 0.0
-        loss_rate = (n_losses / n) if n else 0.0
-        expectancy = win_rate * avg_win + loss_rate * avg_loss
+        s = summarize_trade_rows(group)
         out.append(SetupAggregate(
             setup_tag=tag,
-            count=n,
-            wins=n_wins,
-            losses=n_losses,
-            win_rate=win_rate,
-            avg_pnl=avg_pnl,
-            total_pnl=total_pnl,
-            avg_win=avg_win,
-            avg_loss=avg_loss,
-            expectancy=expectancy,
+            count=s.count,
+            wins=s.wins,
+            losses=s.losses,
+            win_rate=s.win_rate,
+            avg_pnl=s.avg_pnl,
+            total_pnl=s.total_pnl,
+            avg_win=s.avg_win,
+            avg_loss=s.avg_loss,
+            expectancy=s.expectancy,
         ))
     out.sort(key=lambda a: (-a.count, a.setup_tag))
     return out
@@ -241,29 +294,18 @@ def build_proximity_aggregates(rows: list[TradeRow]) -> list[ProximityAggregate]
 
     out: list[ProximityAggregate] = []
     for tag, group in by_tag.items():
-        n = len(group)
-        wins_list = [float(r.post.pnl) for r in group if r.is_win]
-        losses_list = [float(r.post.pnl) for r in group if r.is_loss]
-        n_wins = len(wins_list)
-        n_losses = len(losses_list)
-        total_pnl = sum(float(r.post.pnl) for r in group)
-        avg_pnl = total_pnl / n if n else 0.0
-        avg_win = (sum(wins_list) / n_wins) if n_wins else 0.0
-        avg_loss = (sum(losses_list) / n_losses) if n_losses else 0.0
-        win_rate = (n_wins / n) if n else 0.0
-        loss_rate = (n_losses / n) if n else 0.0
-        expectancy = win_rate * avg_win + loss_rate * avg_loss
+        s = summarize_trade_rows(group)
         out.append(ProximityAggregate(
             proximity_tag=tag,
-            count=n,
-            wins=n_wins,
-            losses=n_losses,
-            win_rate=win_rate,
-            avg_pnl=avg_pnl,
-            total_pnl=total_pnl,
-            avg_win=avg_win,
-            avg_loss=avg_loss,
-            expectancy=expectancy,
+            count=s.count,
+            wins=s.wins,
+            losses=s.losses,
+            win_rate=s.win_rate,
+            avg_pnl=s.avg_pnl,
+            total_pnl=s.total_pnl,
+            avg_win=s.avg_win,
+            avg_loss=s.avg_loss,
+            expectancy=s.expectancy,
         ))
     out.sort(key=lambda a: (-a.count, a.proximity_tag))
     return out
@@ -322,10 +364,12 @@ def build_day_groups(result: SessionResult) -> list[DayGroup]:
 
 __all__ = (
     "TradeRow",
+    "TradeStats",
     "SetupAggregate",
     "ProximityAggregate",
     "DayGroup",
     "build_trade_rows",
+    "summarize_trade_rows",
     "build_setup_aggregates",
     "build_proximity_aggregates",
     "build_day_groups",

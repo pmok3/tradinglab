@@ -24,6 +24,17 @@ primitives.
   to an ET-aware datetime. Falls back to UTC-aware when tzdata is
   missing.
 
+### UTC timestamp minting
+- `UTC_ISO_FORMAT` / `UTC_COMPACT_FORMAT` — the two strftime patterns.
+- `utc_now_iso() -> str` — `YYYY-MM-DDTHH:MM:SSZ`. On-disk
+  `created_at` / `updated_at` / `finished_at` for the entries, exits,
+  scanner and strategy_tester models.
+- `utc_now_compact() -> str` — `YYYYMMDDTHHMMSSZ`. Filesystem-safe (no
+  colons); strategy-tester run-directory names.
+- `utc_now_naive_iso() -> str` — naive `YYYY-MM-DDTHH:MM:SS`, no offset
+  suffix, no microseconds. On-disk format for `drawings` records and
+  sandbox-resume checkpoints.
+
 ## Dependencies
 - Internal: `core.lru_dict.LRUDict` for the generic timezone cache.
 - External: `zoneinfo` (stdlib, Python 3.9+); `datetime` (stdlib).
@@ -56,6 +67,23 @@ primitives.
   `strategy_tester/evaluator.py::_compute_et_arrays` because they're
   vectorized via numpy (CLAUDE.md §7.14). This module is the
   "give me ET" layer, not the "compute things in ET" layer.
+- **Three UTC-minting formats are named, not unified.** Eight sites
+  across five subsystems hand-rolled "UTC now, as a string", landing on
+  three different on-disk formats via two different implementations
+  (`time.strftime(..., time.gmtime())` in the entries / exits /
+  strategy_tester models; `datetime.now(timezone.utc).strftime(...)` in
+  the scanner model). All three formats are load-bearing — existing
+  saved strategies, scans, runs, drawings and resume checkpoints depend
+  on their exact shape — so this module exposes each one under its own
+  name rather than collapsing them. What was removed is the repeated
+  *implementation*, not the format divergence.
+- **The minting helpers resolve `_dt.datetime` at CALL time.** They use
+  `import datetime as _dt` + attribute lookup instead of a module-level
+  `from datetime import datetime` binding, because
+  `tests/unit/test_datetime_utcnow_deprecation.py::TestMockedClockOutput`
+  freezes the clock by patching the `datetime` attribute on the stdlib
+  module object. An import-time binding would capture the real class and
+  silently ignore that patch.
 
 ## Invariants
 - `ET is get_et()` after the module has been imported (the eager
@@ -68,6 +96,17 @@ primitives.
   directly.
 - `to_et(0).tzinfo is not None` is True when tzdata is installed.
 
+## Consumers (UTC minting)
+- `utc_now_iso` — `entries/model.py::_utcnow_iso`,
+  `exits/model.py::_utcnow_iso`, `scanner/model.py::_utcnow_iso`,
+  `strategy_tester/model.py::_utcnow_iso`,
+  `strategy_tester/runner.py` (`finished_at`, 3 sites).
+- `utc_now_compact` — `strategy_tester/storage.py::_run_dir_stamp`,
+  `strategy_tester/runner.py` (`started_iso`, 2 sites).
+- `utc_now_naive_iso` — `drawings/store.py::_now_iso`,
+  `drawings/model.py::make_hline_drawing`,
+  `backtest/sandbox_resume.py::now_iso`.
+
 ## Testing
 - `tests/core/test_timezones.py` — cover: ET non-None when tzdata
   installed; cached identity across calls; now_et returns tz-aware
@@ -75,3 +114,7 @@ primitives.
   roundtrip; graceful behaviour when ZoneInfo raises (simulate via
   monkeypatch); source invariant that production ZoneInfo imports stay
   centralized here.
+- `tests/unit/test_datetime_utcnow_deprecation.py` — pins the three
+  on-disk minting formats and the call-time clock read (patches
+  `core.timezones._dt.datetime` and asserts through the per-module
+  `_now_iso` / `now_iso` delegators).

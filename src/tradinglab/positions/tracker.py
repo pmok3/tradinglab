@@ -35,11 +35,11 @@ bypass via :func:`tradinglab.core.thread_guard.tk_thread_check_disabled`.
 from __future__ import annotations
 
 import logging
-import uuid
 from collections import deque
 from collections.abc import Callable
 from datetime import datetime, timezone
 
+from ..core.ids import new_id_dashed
 from ..core.thread_guard import require_tk_thread
 from .model import (
     Position,
@@ -446,7 +446,7 @@ class PositionTracker:
 
 
 def _new_id() -> str:
-    return str(uuid.uuid4())
+    return new_id_dashed()
 
 
 def _now() -> datetime:

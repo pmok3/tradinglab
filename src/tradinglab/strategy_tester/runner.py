@@ -40,7 +40,6 @@ from __future__ import annotations
 import datetime as _dt
 import logging
 import os
-import time
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -55,6 +54,7 @@ from ..backtest.session import ENGINE_VERSION
 from ..constants import is_intraday
 from ..core.lru_dict import LRUDict
 from ..core.params_key import freeze_params
+from ..core.timezones import utc_now_compact, utc_now_iso
 from ..entries.model import EntryStrategy
 from ..exits.model import ExitStrategy
 from ..models import Candle
@@ -770,7 +770,7 @@ def run(
         exit_strategy = exit_loader(cfg.exit_strategy_id)
     except (FileNotFoundError, ValueError) as exc:
         run_id_fail = make_run_id(cfg, engine_version=ENGINE_VERSION)
-        started_iso = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+        started_iso = utc_now_compact()
         run_dir = storage.run_dir_for(run_id_fail, started_iso=started_iso)
         storage.save_config(run_dir, cfg)
         bad_run = TestRun(
@@ -784,7 +784,7 @@ def run(
             app_version=_app_version(),
             engine_version=ENGINE_VERSION,
         )
-        bad_run.finished_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        bad_run.finished_at = utc_now_iso()
         storage.save_manifest(run_dir, bad_run)
         return RunResult(
             test_run=bad_run, run_dir=run_dir, universe=universe, outcomes=[]
@@ -792,7 +792,7 @@ def run(
 
     # 3) Open the per-run directory and seed the manifest.
     run_id = make_run_id(cfg, engine_version=ENGINE_VERSION)
-    started_iso = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    started_iso = utc_now_compact()
     run_dir = storage.run_dir_for(run_id, started_iso=started_iso)
     storage.save_config(run_dir, cfg)
 
@@ -854,7 +854,7 @@ def run(
     outcomes: list[_SymbolOutcome] = []
     if not universe.symbols:
         test_run.status = RunStatus.DONE
-        test_run.finished_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        test_run.finished_at = utc_now_iso()
         storage.save_manifest(run_dir, test_run)
         return RunResult(
             test_run=test_run, run_dir=run_dir, universe=universe, outcomes=outcomes
@@ -927,7 +927,7 @@ def run(
             test_run.status = RunStatus.DONE
     else:
         test_run.status = RunStatus.DONE
-    test_run.finished_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    test_run.finished_at = utc_now_iso()
     storage.save_manifest(run_dir, test_run)
 
     # 6) Aggregate report + trades CSV. Run even on partial (CANCELLED)

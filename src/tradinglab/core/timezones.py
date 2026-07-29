@@ -33,6 +33,7 @@ Concrete adoption sites:
 
 from __future__ import annotations
 
+import datetime as _dt
 from datetime import datetime, tzinfo
 
 from .lru_dict import LRUDict
@@ -132,3 +133,59 @@ def to_et(epoch_seconds: float) -> datetime:
         return datetime.fromtimestamp(epoch_seconds, et)
     from datetime import timezone
     return datetime.fromtimestamp(epoch_seconds, timezone.utc)
+
+
+# ---------------------------------------------------------------------------
+# UTC timestamp minting
+# ---------------------------------------------------------------------------
+#
+# Eight sites across five subsystems hand-rolled "UTC now, as a string",
+# landing on THREE different on-disk formats via TWO different
+# implementations (``time.strftime(..., time.gmtime())`` in the entries /
+# exits / strategy_tester models, ``datetime.now(timezone.utc).strftime(...)``
+# in the scanner model). All three formats below are load-bearing on disk,
+# so this section names each one rather than collapsing them.
+#
+# NOTE: these deliberately resolve ``_dt.datetime`` at CALL time instead of
+# binding ``datetime`` at import time. ``tests/unit/
+# test_datetime_utcnow_deprecation.py::TestMockedClockOutput`` freezes the
+# clock by patching the ``datetime`` attribute on the stdlib module object;
+# a module-level ``from datetime import datetime`` binding would capture the
+# real class and silently ignore that patch.
+
+#: ``YYYY-MM-DDTHH:MM:SSZ`` — Z-suffixed UTC, second resolution.
+UTC_ISO_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+#: ``YYYYMMDDTHHMMSSZ`` — filesystem-safe (no colons); used for run-dir names.
+UTC_COMPACT_FORMAT = "%Y%m%dT%H%M%SZ"
+
+
+def utc_now_iso() -> str:
+    """Return the current UTC time as ``YYYY-MM-DDTHH:MM:SSZ``.
+
+    On-disk format for ``created_at`` / ``updated_at`` / ``finished_at`` in
+    the entries, exits, scanner and strategy_tester models.
+    """
+    return _dt.datetime.now(_dt.timezone.utc).strftime(UTC_ISO_FORMAT)
+
+
+def utc_now_compact() -> str:
+    """Return the current UTC time as ``YYYYMMDDTHHMMSSZ``.
+
+    Filesystem-safe variant used for strategy-tester run-directory names.
+    """
+    return _dt.datetime.now(_dt.timezone.utc).strftime(UTC_COMPACT_FORMAT)
+
+
+def utc_now_naive_iso() -> str:
+    """Return the current UTC time as naive ``YYYY-MM-DDTHH:MM:SS``.
+
+    No offset suffix and no microseconds — the on-disk format for
+    ``drawings`` records and sandbox-resume checkpoints. Existing saved
+    files depend on this exact shape, so it is NOT unified with
+    :func:`utc_now_iso`.
+    """
+    return (
+        _dt.datetime.now(_dt.timezone.utc)
+        .replace(microsecond=0, tzinfo=None)
+        .isoformat()
+    )

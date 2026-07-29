@@ -58,12 +58,14 @@ through JSON without losing information.
 
 from __future__ import annotations
 
-import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from dataclasses import field as dc_field
-from datetime import datetime, timezone
 from typing import Any, ClassVar
+
+from ..core.ids import new_id_dashed
+from ..core.model_meta import CreatedWith as _SharedCreatedWith
+from ..core.timezones import utc_now_iso
 
 # Indicator kind_id migrations live in the indicator base module so they
 # stay co-located with the registry. Imported lazily inside FieldRef.from_dict
@@ -718,7 +720,7 @@ def _deserialize_param_value(v: Any) -> ParamValue:
 
 def _new_id() -> str:
     """Return a fresh UUID4 string. Centralized so tests can monkeypatch."""
-    return str(uuid.uuid4())
+    return new_id_dashed()
 
 
 @dataclass
@@ -1071,18 +1073,15 @@ RANK_DIR_ASC  = "asc"
 
 
 @dataclass
-class CreatedWith:
-    """Audit metadata identifying the build that created/edited the scan."""
-    app: str = "tradinglab"
+class CreatedWith(_SharedCreatedWith):
+    """Audit metadata identifying the build that created/edited the scan.
+
+    See :mod:`tradinglab.core.model_meta`. Scans historically defaulted
+    ``version`` to the empty string rather than ``"0.0.0"``; that default is
+    preserved here so existing saved scans keep their on-disk shape.
+    """
+
     version: str = ""
-
-    def to_dict(self) -> dict[str, Any]:
-        return {"app": self.app, "version": self.version}
-
-    @classmethod
-    def from_dict(cls, d: Mapping[str, Any]) -> CreatedWith:
-        return cls(app=str(d.get("app", "tradinglab")),
-                   version=str(d.get("version", "")))
 
 
 @dataclass
@@ -1220,4 +1219,4 @@ def migrate(d: Mapping[str, Any], from_version: int) -> dict[str, Any]:
 
 def _utcnow_iso() -> str:
     """ISO-8601 UTC timestamp, second-resolution, with trailing ``Z``."""
-    return datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return utc_now_iso()
