@@ -43,3 +43,50 @@ Alpaca Market Data v2 → `List[Candle]`. Two-layer module: a pure response-mapp
 
 ## Testing
 - `tests/unit/data/test_alpaca_source.py` — offline: the pure mapper (envelope + bare-list + empty + non-finite-drop + ET-localized timestamps/session labels + daily-date preservation) and the `_accumulate_bars` pagination loop (single page, multi-page token walk, non-dict stop, empty-token stop, `max_pages` cap, accumulate→map round-trip). Live fetch (`_http_get_page`) is `# pragma: no cover` (network).
+
+## Credential verification — `verify_alpaca`
+
+Registered as the `alpaca` verifier (see `data/verify.spec.md`). Answers
+"will these keys actually work?", which `is_configured()` cannot.
+
+**Probe**: one `GET /v2/stocks/AAPL/bars?timeframe=1Day&limit=1&feed=<configured>`.
+
+Chosen over Alpaca''s `/v2/account` because that endpoint lives on a
+different host (`api.alpaca.markets`) and validates the *trading* scope,
+which this app never uses — a key can pass it and still 403 on market data.
+The bars endpoint verifies the exact capability the chart needs: this key,
+on this feed, with this adjustment, through the real `credentialed_opener`.
+
+**No retry ladder.** The probe deliberately bypasses `_request_with_retry`:
+a user waiting on a "Test connection" button wants an answer now, not up to
+three exponential backoffs. It *does* spend one rate-limiter token per HTTP
+attempt (the module''s "token = 1 request" rule), so repeated clicks cannot
+blow the shared budget.
+
+**SIP→IEX disambiguation.** A 403 while requesting `feed=sip` is ambiguous:
+bad key, or a valid key on a Free account? The probe resolves it with ONE
+extra `feed=iex` request:
+
+- iex succeeds → `forbidden`, "Keys are valid, but this account is not
+  entitled to the SIP feed", with the remediation naming the plan dropdown.
+  Entitlements carry `requested_feed="sip"`, `feed="iex"`, `plan="free"`.
+- iex also fails → report the ORIGINAL 403. We could not prove the key
+  works, so we must not claim it does.
+
+This converts the module''s most common misconfiguration — previously only
+caught reactively mid-session by `_observe_rate_limit_header` →
+`pop_pending_downgrade_notice` — into a save-time fix.
+
+**Entitlement reporting.** A 200 response''s `X-RateLimit-Limit` reveals the
+true plan (≤200 = free, else paid). When the user selected Paid but the
+header says Free, the result is still `ok` but `detail` warns that every SIP
+request would fail. The header is observed on error responses too, so the
+existing process-wide free-tier latch (`_detected_free`) still applies and a
+later probe requests IEX even if the credential object says `sip`.
+
+Never raises — every outcome becomes a `VerifyResult`.
+
+Tests: `tests/unit/data/test_alpaca_verify.py` (offline; opener injected via
+the `opener=` seam) — not-configured short-circuit, free/paid success and
+entitlements, 401/403/429/network mapping, the one-request no-retry
+guarantee, secret redaction, and all four SIP-downgrade branches.

@@ -37,6 +37,7 @@ from typing import Any
 from ..constants import provider_lookback_days
 from ..core.timezones import ET
 from ..models import Candle
+from . import verify as _verify
 from ._http import MAX_RESPONSE_BYTES, credentialed_opener
 from .credentials import AlpacaCredentials, get_credentials
 from .normalize import candles_from_json_rows
@@ -569,3 +570,233 @@ def fetch_alpaca_page(
     candles = candles_from_alpaca_response(payload, interval=interval)
     candles.sort(key=lambda c: c.date)  # sort=desc → return ascending
     return candles
+
+
+# ---------------------------------------------------------------------------
+# Credential verification ("Test connection")
+# ---------------------------------------------------------------------------
+
+#: Symbol used by the verification probe. A large, always-listed NYSE/NASDAQ
+#: name so a valid key can never fail the probe because of a delisted or
+#: entitlement-restricted ticker.
+_VERIFY_SYMBOL = "AAPL"
+
+#: Probing ``1Day`` (not an intraday timeframe) keeps the request cheap and
+#: outside the free plan's recent-SIP restriction window.
+_VERIFY_TIMEFRAME = "1Day"
+
+
+def _verify_probe_once(
+    creds: AlpacaCredentials, feed: str, *,
+    timeout: float, opener: Any | None,
+) -> tuple[dict[str, Any], Any]:
+    """ONE unauthenticated-retry-free bars request. Returns ``(payload, headers)``.
+
+    Deliberately bypasses :func:`_request_with_retry`: a user waiting on a
+    "Test connection" button wants an answer now, not up to 3 exponential
+    backoffs. It DOES spend a rate-limiter token (one token = one HTTP
+    request, per the module's accounting rule) so repeated clicks cannot
+    blow the shared budget. Raises ``urllib.error.HTTPError`` on any error
+    status so the caller can classify it.
+    """
+    params = {
+        "timeframe": _VERIFY_TIMEFRAME,
+        "limit": "1",
+        "adjustment": _resolve_adjustment(creds),
+        "feed": feed,
+    }
+    url = f"{_ALPACA_BASE}/v2/stocks/{urllib.parse.quote(_VERIFY_SYMBOL)}/bars?" + \
+        urllib.parse.urlencode(params)
+    req = urllib.request.Request(url, headers={
+        "APCA-API-KEY-ID": creds.api_key_id or "",
+        "APCA-API-SECRET-KEY": creds.api_secret_key or "",
+        "Accept": "application/json",
+    })
+    _alpaca_bucket_for(creds).acquire()
+    open_fn = (opener or credentialed_opener()).open
+    try:
+        with open_fn(req, timeout=timeout) as resp:
+            _observe_rate_limit_header(resp.headers)
+            payload = json.loads(resp.read(MAX_RESPONSE_BYTES).decode("utf-8"))
+            return payload, resp.headers
+    except urllib.error.HTTPError as exc:
+        # Observe the tier header even on error — a free key sending
+        # feed=sip 403s, and that 403 still reveals the true plan.
+        _observe_rate_limit_header(getattr(exc, "headers", None))
+        raise
+
+
+def _plan_limit_from_headers(headers: Any) -> int | None:
+    """Alpaca's ``X-RateLimit-Limit`` as an int, or ``None`` if absent/odd."""
+    if headers is None:
+        return None
+    try:
+        raw = headers.get("X-RateLimit-Limit")
+    except Exception:  # noqa: BLE001
+        return None
+    if raw is None:
+        return None
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def verify_alpaca(
+    creds: AlpacaCredentials | None = None, *,
+    timeout: float = _verify.DEFAULT_TIMEOUT_S,
+    opener: Any | None = None,
+) -> _verify.VerifyResult:
+    """Probe Alpaca with ``creds`` and report whether the data API is usable.
+
+    Registered as the ``alpaca`` verifier (see :func:`verify.verify_vendor`).
+    ``creds=None`` reads the process-wide credentials; the credentials dialog
+    passes the values the user has *typed* so they can iterate before saving.
+
+    Why ``/v2/stocks/{sym}/bars`` and not ``/v2/account``
+    ----------------------------------------------------
+    The account endpoint lives on a different host (``api.alpaca.markets``)
+    and validates the *trading* scope, which this app never uses — a key can
+    pass it and still 403 on market data. Probing the bars endpoint verifies
+    the exact capability the chart needs: this key, on this feed, with this
+    adjustment.
+
+    Plan-mismatch disambiguation
+    ----------------------------
+    A 403 on ``feed=sip`` is ambiguous: bad key, or a valid key on a Free
+    plan? The probe resolves it by re-requesting once with ``feed=iex``. If
+    that succeeds the key is provably valid and the *plan setting* is wrong
+    — reported as ``forbidden`` with the exact remediation, turning this
+    repo's most common misconfiguration (see ``_observe_rate_limit_header``)
+    from a reactive mid-session popup into a save-time fix.
+    """
+    creds = creds if creds is not None else get_credentials().alpaca
+    secrets = (creds.api_key_id, creds.api_secret_key)
+    if not creds.is_configured():
+        return _verify.not_configured(
+            "alpaca",
+            detail="Both the API Key ID and the API Secret Key are required.",
+        )
+
+    requested_feed = "iex" if _detected_free else (creds.feed or "iex")
+    sw = _verify.stopwatch()
+    try:
+        with sw:
+            payload, headers = _verify_probe_once(
+                creds, requested_feed, timeout=timeout, opener=opener)
+    except urllib.error.HTTPError as exc:
+        code = getattr(exc, "code", None)
+        if code == 403 and requested_feed != "iex":
+            return _verify_after_sip_rejection(
+                creds, secrets, timeout=timeout, opener=opener,
+                elapsed_ms=sw.elapsed_ms, original=exc,
+            )
+        return _verify.result_from_exception(
+            exc, vendor="alpaca", secrets=secrets, latency_ms=sw.elapsed_ms)
+    except Exception as exc:  # noqa: BLE001 — network/parse
+        return _verify.result_from_exception(
+            exc, vendor="alpaca", secrets=secrets, latency_ms=sw.elapsed_ms)
+
+    return _verify_success(
+        creds, payload, headers, requested_feed, sw.elapsed_ms)
+
+
+def _verify_after_sip_rejection(
+    creds: AlpacaCredentials, secrets: tuple[str | None, ...], *,
+    timeout: float, opener: Any | None, elapsed_ms: float,
+    original: urllib.error.HTTPError,
+) -> _verify.VerifyResult:
+    """Second probe on ``feed=iex`` after SIP returned 403.
+
+    Success proves the credentials are valid and isolates the fault to the
+    plan setting. Failure means the key itself is bad — report the ORIGINAL
+    403 so the user isn't told a confusing story about a feed they didn't
+    pick.
+    """
+    try:
+        payload, headers = _verify_probe_once(
+            creds, "iex", timeout=timeout, opener=opener)
+    except Exception:  # noqa: BLE001 — the key really is bad
+        return _verify.result_from_exception(
+            original, vendor="alpaca", secrets=secrets, latency_ms=elapsed_ms)
+    limit = _plan_limit_from_headers(headers)
+    ents: dict[str, Any] = {
+        "feed": "iex", "requested_feed": "sip", "plan": "free",
+        "configured_tier": creds.tier,
+    }
+    if limit is not None:
+        ents["requests_per_min"] = limit
+    if not isinstance(payload, dict) or "bars" not in payload:
+        ents["warning"] = "unexpected payload shape"
+    return _verify.VerifyResult(
+        status=_verify.STATUS_FORBIDDEN, vendor="alpaca",
+        summary=(
+            "Keys are valid, but this account is not entitled to the SIP "
+            "feed — Alpaca reports a Free plan."
+        ),
+        detail=(
+            "Set \u201cAlpaca data plan\u201d to Free above (IEX feed, 200 "
+            "req/min), or upgrade your Alpaca subscription to Algo Trader "
+            "Plus for real-time SIP data. Leaving it on Paid makes every "
+            "request fail."
+        ),
+        entitlements=ents, latency_ms=elapsed_ms, http_status=403,
+    )
+
+
+def _verify_success(
+    creds: AlpacaCredentials, payload: Any, headers: Any,
+    feed: str, elapsed_ms: float,
+) -> _verify.VerifyResult:
+    """Build the ``ok`` (or near-ok) result from a 200 probe response."""
+    limit = _plan_limit_from_headers(headers)
+    ents: dict[str, Any] = {
+        "feed": feed,
+        "configured_tier": creds.tier,
+        "adjustment": _resolve_adjustment(creds),
+    }
+    if limit is not None:
+        ents["requests_per_min"] = limit
+        ents["plan"] = (
+            "free" if limit <= _ALPACA_RATE_BY_TIER["free"] else "paid")
+
+    if not isinstance(payload, dict) or "bars" not in payload:
+        return _verify.VerifyResult(
+            status=_verify.STATUS_ERROR, vendor="alpaca",
+            summary=(
+                "Authenticated, but the response did not look like market "
+                "data. The provider may be having an incident."
+            ),
+            entitlements=ents, latency_ms=elapsed_ms, http_status=200,
+        )
+
+    feed_label = feed.upper()
+    plan = ents.get("plan")
+    summary = f"Ready \u2014 {feed_label} feed"
+    if plan == "free":
+        summary += f", Free plan ({limit} req/min)"
+    elif plan == "paid":
+        summary += ", Paid plan (unlimited req/min)"
+
+    detail = ""
+    # The key works, but the user selected Paid while Alpaca reports Free.
+    # Registration would succeed and every SIP request would then 403 —
+    # surface it now rather than mid-session.
+    if plan == "free" and (creds.tier or "").lower() == "paid":
+        detail = (
+            "Note: the data plan is set to Paid but Alpaca reports a Free "
+            "account. Set it to Free to avoid failed requests."
+        )
+    elif plan == "free":
+        detail = (
+            "Free-plan data is IEX-only and delayed 15 minutes, so the chart "
+            "will not live-update and volume indicators may be understated."
+        )
+    return _verify.VerifyResult(
+        status=_verify.STATUS_OK, vendor="alpaca", summary=summary,
+        detail=detail, entitlements=ents, latency_ms=elapsed_ms,
+        http_status=200,
+    )
+
+
+_verify.register_verifier("alpaca", verify_alpaca)

@@ -32,3 +32,25 @@ Stdlib-only loader for broker / data-vendor credentials from environment, `.env`
 ## Testing
 - `tests/unit/test_credentials.py` — dotenv parser + resolve/precedence, plus the plaintext-file parser (`_parse_credential_txt`: labels/aliases/env-passthrough/quotes/bare-two-lines), `_load_credential_txt_files` (tmp-dir), and `reload()` integration (`alpaca.txt` configures Alpaca; `os.environ` > txt > `.env`). The autouse fixture points `_candidate_credential_dirs` at nothing so a real repo-root `alpaca.txt` never leaks into the hermetic assertions.
 
+
+## `build_credentials(get)`
+
+The single place where raw credential values become typed vendor objects,
+including the Alpaca `tier` → `feed` derivation (`paid` → `sip`, otherwise
+`iex`, unless an explicit `ALPACA_FEED` overrides).
+
+`get` is a `name -> value | None` lookup. `_load_now` passes the
+env/dotenv/txt resolver; the credentials dialog passes `form_values.get` so
+its "Test connection" button can verify values the user has **typed but not
+yet saved**.
+
+Sharing this path is load-bearing: if the dialog re-derived the feed
+independently it could probe a different feed than the app will actually
+request, and green-light a configuration that then fails on every fetch.
+
+## Presence vs. validity
+
+`is_configured()` is a **presence** check (non-empty required fields). It
+deliberately says nothing about whether the credentials work — that is
+answered separately by `data/verify.py` (`verify_vendor`). Registration
+gating stays on presence so startup never depends on the network.

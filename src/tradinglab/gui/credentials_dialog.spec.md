@@ -130,3 +130,137 @@ geometry is bounded below by `minsize` (the WM clamps a stale-small saved size
 cancel=self._on_cancel)`. ESC dismisses, Return commits, and built
 combobox / spinbox descendants are guarded against wheel-driven
 value changes.
+
+## "Test connection" — credential verification
+
+Each vendor section with a registered verifier (Alpaca, Polygon today; not
+Schwab, which has none) gets a `[Test connection]` button plus a status line
+and a wrapped remediation line. The button answers the question a new user
+actually has after pasting a key: *is this thing going to work?*
+
+### Verifies what is TYPED, not what is saved
+
+`_vendor_credentials_from_form(vendor)` builds the vendor credential object
+from the current entry contents via
+`data.credentials.build_credentials(form_values.get)` — it does **not** read
+`os.environ` or `get_credentials()`. The user must be able to paste a key,
+test it, fix a typo and re-test without committing a bad blob to the DPAPI
+store. Going through the shared builder also guarantees the probe derives
+the same `tier` → `feed` mapping the app will actually request.
+
+Empty required fields short-circuit to `not_configured` with no thread and
+no network.
+
+### Worker thread + Tk polling (NOT cross-thread `after(0, ...)`)
+
+`_begin_verify` starts a daemon thread that writes only into a local
+handoff dict (`_verify_boxes[vendor]`), then schedules
+`_poll_verify` every `_VERIFY_POLL_MS` (100 ms) on the Tk thread.
+
+**Do not "simplify" this into `self.after(0, ...)` from the worker.** Stock
+CPython on Windows ships a non-threaded Tcl; a cross-thread `after` raises
+`RuntimeError("main thread is not in main loop")` and the callback is
+silently dropped, leaving the button stuck on "Testing…" forever. Same
+contract as the strategy-tester background export (see
+`gui/strategy_tab.spec.md` and CLAUDE.md §7.15). A source-grep test pins it.
+
+While in flight the button is disabled and relabelled; re-entrant clicks are
+ignored. A worker that dies without publishing a result is detected via
+`thread.is_alive()` and reported as `error` rather than hanging the UI.
+`<Destroy>` cancels pending poll jobs; the daemon threads touch nothing that
+outlives the dialog, so they are safe to abandon.
+
+### Result rendering
+
+`_STATUS_STYLE` maps every `verify.ALL_STATUSES` member to a (glyph, colour)
+pair — a test asserts total coverage so a new status cannot fall through to
+a silent muted dash.
+
+`forbidden` / `rate_limited` / `network_error` render **amber, not red**: in
+all three the credentials may be perfectly fine, and a red ✗ would send the
+user off re-copying a key that was never the problem. Only
+`invalid_credentials` and `error` are red.
+
+### Stale-verdict invalidation
+
+Every credential field''s `textvariable` is traced; any change resets that
+vendor''s line to "Not tested yet.". A lingering green "✓ Ready" next to a
+changed key is the single most misleading state this dialog could show.
+
+Traced rather than `<KeyRelease>`-bound on purpose: a keyboard binding
+misses right-click → Paste (no key event fires at all), which is exactly how
+a user swaps in a key copied off a vendor dashboard. A `_populating` flag
+suppresses the trace during the initial pre-fill.
+
+**Two Tk lifetime hazards, both load-bearing:**
+
+1. Every field's `StringVar` is retained in `_field_vars`. A ttk widget
+   stores only the Tcl variable *name*; if the Python `StringVar` is
+   collected, `Variable.__del__` unsets the Tcl variable and silently
+   destroys every trace on it. Invalidation would then stop firing at an
+   unpredictable GC boundary — a stale green checkmark that appears only
+   sometimes. Pinned by `test_field_vars_survive_garbage_collection`,
+   which asserts `trace info variable` is non-empty after `gc.collect()`.
+2. All Tk variables are constructed with an explicit `master=self`. Without
+   it they bind to `tkinter._default_root`, and traces can attach to a stale
+   interpreter when more than one root exists in a process.
+
+### Save applies immediately — no restart
+
+`_close_and_refresh()` does four things in order: `credentials.reload()`,
+`verify.clear_results()` (cached verdicts described the *previous*
+credentials), `data.register_vendor_sources()`, then the `on_changed`
+callback (wired by `help_menu` to `_refresh_data_source_combobox`).
+
+If the set of user-visible sources changed, a dialog names the entries that
+just became — or stopped being — available, pointing at the toolbar source
+dropdown. That is the concrete "your data source is ready for use" signal.
+It is silent when nothing changed, so a no-op save never nags.
+
+### Sizing
+
+The added test rows push the dialog past the small-screen safe height, so
+the form body is wrapped in `make_scrollable_form` and
+`protect_combobox_wheel` receives the canvas as `scroll_target` (§7.11 — the
+form both scrolls and contains a Combobox).
+
+Tests: `tests/unit/gui/test_credentials_dialog_verify.py`.
+## Removing credentials is symmetric with adding
+
+`_apply_to_environment(values)` both **sets** present values and **removes**
+managed names absent from `values`.
+
+The removal half is the non-obvious part. `_collect()` only reports
+non-empty fields, and `credentials._resolve` consults `os.environ` before
+any file — so without an explicit `os.environ.pop`, a key the user just
+deleted keeps resolving from the stale environment entry for the rest of the
+session. The source stays in the dropdown and keeps making authenticated
+requests with a credential the user believes they revoked. Only names in
+`_managed_env_names()` (the `_FIELDS` keys) are touched; unrelated
+environment variables are never modified.
+
+`_has_credential_values(values)` ignores `_CHOICE_FIELDS` when deciding
+whether the form is "empty". `ALPACA_TIER` is a readonly combobox that
+*always* reports a value, so the older `if not values` test could never be
+true and the "this clears your saved credentials" confirmation was dead
+code.
+
+### When a file still supplies a "deleted" key
+
+`_populate_from_environment` reads `os.environ` only — it does not see a
+plaintext `alpaca.txt` / `credentials.txt` or a dev `.env`. For a user whose
+credential lives in such a file the fields render blank, and this dialog
+cannot clear that layer.
+
+`_warn_if_file_backed()` therefore fires only when a field that **had
+content at open** is now empty *and* the vendor still resolves as
+configured. That is precisely the confusing case ("I deleted it and the
+source is still there"), and the message names the file mechanism plus
+Help → Reveal Data Folder. A setup that opened blank is the steady state for
+file-backed users and is left silent — warning on every save would be noise.
+`_initial_values` is the open-time snapshot that distinguishes the two.
+
+**Test hygiene:** `tests/unit/gui/test_credentials_dialog_verify.py` stubs
+`showinfo` / `showwarning` / `showerror` in an autouse fixture. A real modal
+opened from a test blocks until a human clicks it — the pytest timeout is
+the only thing that ends the run.

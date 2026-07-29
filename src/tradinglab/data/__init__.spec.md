@@ -66,3 +66,42 @@ Aggregates the data-source plugins (yfinance, synthetic, synthetic-stream bootst
 ## Known limitations
 - Currently registered sources are scoped to USD-denominated US equities and ETFs. Crypto, FX, futures, and international equities are not tested.
 - If a source import fails (e.g. yfinance missing), its `register_source` call will not execute but the others still register. The fetcher itself returns `None` on import failure, which the app handles gracefully.
+
+## `register_vendor_sources()`
+
+Credential-gated vendor registration, extracted from module-level import
+code into a callable that mirrors `register_local_sources()`.
+
+**Why it exists.** The block used to run at package-import time *only*. A
+user who pasted a working Alpaca key into the credentials dialog saw
+nothing change until they restarted the app, and nothing in the UI said a
+restart was needed. That made any "your credentials are valid" signal
+actively misleading, so the verification feature could not ship without
+this.
+
+Called from two places:
+
+1. Module import (unchanged startup behaviour).
+2. `gui/credentials_dialog._close_and_refresh()`, after
+   `credentials.reload()` — so newly-entered keys light up their source
+   immediately. `on_changed` then refreshes the toolbar combobox.
+
+**Gating is on presence, never a network probe.** `is_configured()` only
+checks that required fields are non-empty. Making registration depend on
+connectivity would break offline configuration and add latency to every
+launch. Whether the keys actually *work* is a separate, explicit question
+answered by `data/verify.py`. A test asserts this function never calls
+`verify_vendor`.
+
+**Removal on clear.** `_VENDOR_SOURCE_KEYS` (`schwab`, `alpaca`, `polygon`,
+`yfinance+alpaca`) lists the keys this function owns. Any key not
+re-registered on a given call is dropped via `base.unregister_source`,
+which also clears the range / page / internal side-tables. Without this a
+stale vendor entry would linger in the dropdown and fail every fetch.
+
+`yfinance+alpaca` (hybrid) is registered only alongside Alpaca — it stitches
+yfinance over an Alpaca leg and is meaningless without it.
+
+Returns the list of registered keys. Idempotent.
+
+Tests: `tests/unit/data/test_vendor_registration.py`.

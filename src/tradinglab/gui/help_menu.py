@@ -731,15 +731,23 @@ class HelpMenuMixin:
                 parent=self,
             )
             return
+        def _on_changed() -> None:
+            # Newly-configured vendors (alpaca / yfinance+alpaca / polygon)
+            # were just registered by the dialog — surface them in the
+            # toolbar dropdown immediately instead of after a restart.
+            try:
+                self._refresh_data_source_combobox()
+            except Exception:  # noqa: BLE001
+                pass
+
         try:
-            open_credentials_dialog(self)
+            open_credentials_dialog(self, on_changed=_on_changed)
         except Exception as e:  # noqa: BLE001
             messagebox.showerror(
                 "Credentials",
                 f"Could not open credentials dialog: {e}",
                 parent=self,
             )
-
     # ---- Connect to Schwab (interactive OAuth sign-in) ----------------
 
     def _on_help_connect_schwab(self) -> None:

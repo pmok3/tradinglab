@@ -59,6 +59,21 @@ def test_warn_amber_distinct_from_up_down() -> None:
     assert colors.WARN_AMBER != colors.DOWN_RED
 
 
+def test_ok_green_is_the_semantic_counterpart_to_error_red() -> None:
+    """Success and failure states must read differently, and neither may
+    borrow a sentiment hue — a verified-credentials checkmark is not a
+    gain and an auth failure is not a loss."""
+    assert colors.OK_GREEN != colors.ERROR_RED
+    assert colors.OK_GREEN != colors.UP_GREEN
+
+
+def test_ok_green_does_not_follow_the_colour_blind_toggle() -> None:
+    """Unlike ``up_green()``, ``OK_GREEN`` is a fixed status token: a
+    success checkmark must stay green regardless of the Okabe-Ito candle
+    palette (where BULL_COLOR becomes orange)."""
+    assert colors.OK_GREEN != constants.BULL_COLOR
+
+
 def test_muted_grey_is_chromatic_neutral() -> None:
     """`MUTED_GREY` must be grayscale (R == G == B). Catches an
     accidental tint that would visually pull hint text toward warm or
@@ -79,5 +94,6 @@ def test_public_api_only_contains_documented_tokens() -> None:
         "INFO_BLUE",
         "CAUTION_YELLOW",
         "ERROR_RED",
+        "OK_GREEN",
         "MUTED_GREY",
     ])

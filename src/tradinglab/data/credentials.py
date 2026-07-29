@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -403,35 +403,55 @@ def _load_now() -> Credentials:
     # dev ``.env`` but are still beaten by a real ``os.environ`` export /
     # DPAPI-primed value (``_resolve`` consults ``os.environ`` first).
     f.update(_load_credential_txt_files())
-    schwab = SchwabCredentials(
-        app_key=_resolve("SCHWAB_APP_KEY", f),
-        app_secret=_resolve("SCHWAB_APP_SECRET", f),
-        redirect_uri=_resolve("SCHWAB_REDIRECT_URI", f),
-    )
-    # Plan tier is the source of truth for the feed (and the rate budget in
-    # alpaca_source). An explicit ALPACA_FEED still overrides — an advanced
-    # escape hatch (e.g. a paid user who deliberately wants IEX). Default
-    # tier ``free`` → feed ``iex`` (unchanged behaviour for existing setups).
-    _alpaca_tier = (_resolve("ALPACA_TIER", f) or "free").lower()
-    _alpaca_feed_explicit = _resolve("ALPACA_FEED", f)
-    _alpaca_feed = (
-        _alpaca_feed_explicit.lower() if _alpaca_feed_explicit
-        else ("sip" if _alpaca_tier == "paid" else "iex")
-    )
-    alpaca = AlpacaCredentials(
-        api_key_id=_resolve("ALPACA_API_KEY_ID", f),
-        api_secret_key=_resolve("ALPACA_API_SECRET_KEY", f),
-        feed=_alpaca_feed,
-        adjustment=(_resolve("ALPACA_ADJUSTMENT", f) or "split").lower(),
-        tier=_alpaca_tier,
-    )
-    polygon = PolygonCredentials(
-        api_key=_resolve("POLYGON_API_KEY", f),
-    )
-    creds = Credentials(schwab=schwab, alpaca=alpaca, polygon=polygon)
+    creds = build_credentials(lambda name: _resolve(name, f))
     if creds.configured_vendors():
         LOG.info("credentials: configured vendors: %s",
                  ", ".join(creds.configured_vendors()))
     else:
         LOG.debug("credentials: no vendors configured (all empty)")
     return creds
+
+
+def build_credentials(get: Callable[[str], str | None]) -> Credentials:
+    """Assemble a :class:`Credentials` from a ``name -> value`` lookup.
+
+    The **single** place where raw credential values become typed vendor
+    objects. Extracted from :func:`_load_now` so the credentials dialog's
+    "Test connection" button can verify values the user has *typed but not
+    yet saved* — it passes ``form_values.get`` — while going through the
+    exact same derivation the process-wide loader uses.
+
+    That shared path matters most for the Alpaca ``tier`` → ``feed`` rule
+    below: if the dialog re-derived it independently, a "Test connection"
+    could probe a different feed than the one the app will actually request,
+    and green-light a configuration that then fails on every fetch.
+
+    ``get`` returns ``None`` (or ``""``) for an unset name.
+    """
+    # Plan tier is the source of truth for the feed (and the rate budget in
+    # alpaca_source). An explicit ALPACA_FEED still overrides — an advanced
+    # escape hatch (e.g. a paid user who deliberately wants IEX). Default
+    # tier ``free`` → feed ``iex`` (unchanged behaviour for existing setups).
+    _alpaca_tier = (get("ALPACA_TIER") or "free").lower()
+    _alpaca_feed_explicit = get("ALPACA_FEED")
+    _alpaca_feed = (
+        _alpaca_feed_explicit.lower() if _alpaca_feed_explicit
+        else ("sip" if _alpaca_tier == "paid" else "iex")
+    )
+    return Credentials(
+        schwab=SchwabCredentials(
+            app_key=get("SCHWAB_APP_KEY"),
+            app_secret=get("SCHWAB_APP_SECRET"),
+            redirect_uri=get("SCHWAB_REDIRECT_URI"),
+        ),
+        alpaca=AlpacaCredentials(
+            api_key_id=get("ALPACA_API_KEY_ID"),
+            api_secret_key=get("ALPACA_API_SECRET_KEY"),
+            feed=_alpaca_feed,
+            adjustment=(get("ALPACA_ADJUSTMENT") or "split").lower(),
+            tier=_alpaca_tier,
+        ),
+        polygon=PolygonCredentials(
+            api_key=get("POLYGON_API_KEY"),
+        ),
+    )

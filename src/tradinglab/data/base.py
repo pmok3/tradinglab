@@ -146,10 +146,31 @@ def register_source(
         _PAGE_FETCHERS.pop(name, None)
 
 
+def unregister_source(name: str) -> bool:
+    """Remove ``name`` from the registry **and every capability side-table**.
+
+    Returns ``True`` if the source was present. Used by the credential-gated
+    vendor registration path (:func:`tradinglab.data.register_vendor_sources`)
+    when a user clears their keys: leaving a stale entry in
+    :data:`DATA_SOURCES` would keep a dead option in the source dropdown that
+    fails every fetch.
+
+    Clearing :data:`_INTERNAL_SOURCES` / :data:`_RANGE_CAPABLE` /
+    :data:`_PAGE_FETCHERS` alongside the main dict is the point of this
+    helper — a bare ``DATA_SOURCES.pop(name)`` would leave
+    :func:`source_supports_range` reporting ``True`` for a source that is no
+    longer dispatchable.
+    """
+    existed = DATA_SOURCES.pop(name, None) is not None
+    _INTERNAL_SOURCES.discard(name)
+    _RANGE_CAPABLE.discard(name)
+    _PAGE_FETCHERS.pop(name, None)
+    return existed
+
+
 def source_supports_range(name: str) -> bool:
     """True if ``name``'s fetcher accepts kw-only ``start`` / ``end`` datetimes."""
     return name in _RANGE_CAPABLE
-
 
 def source_supports_page(name: str) -> bool:
     """True if ``name`` registered a ``(ticker, interval, *, end, limit)`` page

@@ -37,6 +37,7 @@ from .base import (
     register_source,
     source_supports_page,
     source_supports_range,
+    unregister_source,
     user_visible_sources,
 )
 from .controller import DataController
@@ -77,6 +78,12 @@ from .source_ranking import (
     rank_sources,
 )
 from .synthetic_source import fetch_synthetic_data, fetch_synthetic_stream_bootstrap
+from .verify import (
+    VerifyResult,
+    last_result,
+    verifiable_vendors,
+    verify_vendor,
+)
 from .yfinance_source import fetch_live_data
 
 # Register the built-ins in the same order the old flat module did — the
@@ -100,26 +107,75 @@ register_source("synthetic-stream", fetch_synthetic_stream_bootstrap, internal=T
 # configured a subset. Toggling registration this way is a deliberate
 # UX choice — surfacing a "schwab" entry that fails on every fetch
 # would be worse than not showing it at all.
-_creds = get_credentials()
-# Schwab REST `_http_get_pricehistory` is not yet implemented — see
-# ``schwab_source._http_get_pricehistory``. Registration is gated off
-# even when credentials are configured so the source-selector dropdown
-# never offers a "schwab" option that would silently return no data.
-# Re-enable the registration line below once the price-history GET is
-# wired up (and remove this comment block).
-# if _creds.schwab.is_configured():
-#     register_source("schwab", fetch_schwab_data)
-if _creds.alpaca.is_configured():
-    register_source("alpaca", fetch_alpaca_data, supports_range=True,
-                    page_fetcher=fetch_alpaca_page)
-    # Composite: yfinance (recent + live, full volume) stitched over Alpaca
-    # (deep IEX history), yfinance winning every overlapping bar. Available
-    # only when Alpaca is configured (yfinance is always registered). Period-
-    # style (no supports_range): the trailing fetch returns the full merged
-    # series; the live poll refetches only the yfinance leg (see hybrid_source).
-    register_source(HYBRID_SOURCE_NAME, fetch_hybrid_data)
-if _creds.polygon.is_configured():
-    register_source("polygon", fetch_polygon_data)
+
+#: Source keys owned by the credential-gated vendor block. Listed
+#: explicitly so :func:`register_vendor_sources` can drop a source whose
+#: credentials the user just cleared without touching yfinance / Auto /
+#: synthetic / BYOD entries.
+_VENDOR_SOURCE_KEYS: tuple[str, ...] = (
+    "schwab", "alpaca", "polygon", HYBRID_SOURCE_NAME,
+)
+
+
+def register_vendor_sources() -> list[str]:
+    """(Re-)register every credential-gated vendor source. Returns the keys.
+
+    Mirrors :func:`register_local_sources`: called once at import time
+    below, **and** again from the Configure Credentials dialog after a save,
+    so newly-entered keys light up their source without an app restart.
+
+    Before this was extracted, the block ran at package-import time only —
+    a user who pasted a working Alpaca key had to restart before ``alpaca``
+    appeared in the source dropdown, and nothing in the UI said so. That
+    made any "your credentials are valid" signal actively misleading.
+
+    Gating stays on the **presence** check (``is_configured()``), never on a
+    network probe: startup must not depend on connectivity, and a user
+    configuring on a plane should still get their source registered.
+    Whether the keys actually *work* is answered separately and explicitly
+    by :func:`tradinglab.data.verify.verify_vendor` (the dialog's "Test
+    connection" button).
+
+    Vendors whose credentials are now absent are removed via
+    :func:`unregister_source` so a stale entry can't linger in the dropdown
+    and fail every fetch.
+    """
+    creds = get_credentials()
+    registered: list[str] = []
+
+    # Schwab REST `_http_get_pricehistory` is not yet implemented — see
+    # ``schwab_source._http_get_pricehistory``. Registration is gated off
+    # even when credentials are configured so the source-selector dropdown
+    # never offers a "schwab" option that would silently return no data.
+    # Re-enable the block below once the price-history GET is wired up.
+    # if creds.schwab.is_configured():
+    #     register_source("schwab", fetch_schwab_data)
+    #     registered.append("schwab")
+
+    if creds.alpaca.is_configured():
+        register_source("alpaca", fetch_alpaca_data, supports_range=True,
+                        page_fetcher=fetch_alpaca_page)
+        registered.append("alpaca")
+        # Composite: yfinance (recent + live, full volume) stitched over
+        # Alpaca (deep IEX history), yfinance winning every overlapping bar.
+        # Available only when Alpaca is configured (yfinance is always
+        # registered). Period-style (no supports_range): the trailing fetch
+        # returns the full merged series; the live poll refetches only the
+        # yfinance leg (see hybrid_source).
+        register_source(HYBRID_SOURCE_NAME, fetch_hybrid_data)
+        registered.append(HYBRID_SOURCE_NAME)
+
+    if creds.polygon.is_configured():
+        register_source("polygon", fetch_polygon_data)
+        registered.append("polygon")
+
+    for key in _VENDOR_SOURCE_KEYS:
+        if key not in registered:
+            unregister_source(key)
+    return registered
+
+
+register_vendor_sources()
 
 
 def register_local_sources() -> list[str]:
@@ -183,6 +239,7 @@ __all__ = [
     "DataController",
     "FetchService",
     "register_source",
+    "unregister_source",
     "is_internal_source",
     "user_visible_sources",
     "source_supports_range",
@@ -191,6 +248,11 @@ __all__ = [
     "fetch_page",
     "FetchPageResult",
     "register_local_sources",
+    "register_vendor_sources",
+    "VerifyResult",
+    "verify_vendor",
+    "verifiable_vendors",
+    "last_result",
     "make_local_fetcher",
     "discover_subsources",
     "fetch_live_data",

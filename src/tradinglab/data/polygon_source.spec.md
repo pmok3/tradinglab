@@ -40,3 +40,24 @@ Polygon.io Aggregates v2 → `List[Candle]`. Two-layer module: a pure response-m
 ## Testing
 - Covered indirectly via integration smoke tests. The pure mapper `candles_from_polygon_response` is offline-testable with a sample payload (key-mapper parity check sits in `tests/unit/data/`).
 
+
+## Credential verification — `verify_polygon`
+
+Registered as the `polygon` verifier (see `data/verify.spec.md`). Proves the
+verification abstraction is genuinely provider-agnostic rather than an
+Alpaca-shaped hook.
+
+**Probe**: `GET /v2/aggs/ticker/AAPL/prev?adjusted=true` — same auth and
+response family as the real fetcher, but a fixed single-bar endpoint with no
+date range, so probe cost is independent of the configured lookback. Uses
+the same bearer-header auth as `_http_get_aggs` (never the `apiKey` query
+param, which leaks into `URLError` reprs and thus into diagnostic bundles).
+
+**Two failure shapes.** Polygon signals an unentitled key with HTTP 403 —
+mapped by the shared `status_for_http_code` to `forbidden` (key valid, plan
+insufficient) rather than `invalid_credentials`, so the dialog tells the
+user to check their plan instead of re-copying a correct key. Polygon *also*
+returns **HTTP 200 with `{"status": "NOT_AUTHORIZED" | "ERROR"}`** for some
+plan failures; that body is explicitly treated as `forbidden`, not `ok`.
+
+Never raises. The API key is redacted out of any surfaced vendor message.
