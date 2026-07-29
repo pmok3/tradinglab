@@ -1766,6 +1766,7 @@ Tests: `tests/unit/data/test_verify.py`,
 `tests/unit/data/test_alpaca_verify.py`,
 `tests/unit/data/test_vendor_registration.py`,
 `tests/unit/gui/test_credentials_dialog_verify.py`.
+
 ---
 
 ## 8. Build & release flow
@@ -1890,7 +1891,8 @@ These files are **never** committed to git. Use them for working memory.
 | PyInstaller spec | `TradingLab.spec` |
 | Build wrapper | `tools/build_exe.ps1` |
 | Credential verification ("Test connection") | `src/tradinglab/data/verify.py` (`register_verifier`, `verify_vendor`, `VerifyResult`); see §7.32 |
-| Credentials dialog + vendor re-registration | `src/tradinglab/gui/credentials_dialog.py`, `data/__init__.py:register_vendor_sources` || Onboarding docs | `docs/ONBOARDING.md` |
+| Credentials dialog + vendor re-registration | `src/tradinglab/gui/credentials_dialog.py`, `data/__init__.py:register_vendor_sources` |
+| Onboarding docs | `docs/ONBOARDING.md` |
 | Build docs | `docs/BUILDING_EXE.md` |
 | Paint-pipeline refactor scope | `docs/PAINT_PIPELINE_REFACTOR.md` (multi-week, requires user-design session) |
 
@@ -1952,7 +1954,8 @@ guessing — recent checkpoints include:
   (SIP→IEX disambiguation) + `verify_polygon`; per-vendor "Test connection"
   button in the credentials dialog on a worker thread with `after(100)`
   polling; `register_vendor_sources()` extracted so a saved key lights up its
-  source with NO app restart.- Dark-mode native-widget theming: classic `tk.Listbox`/`tk.Text`/
+  source with NO app restart.
+- Dark-mode native-widget theming: classic `tk.Listbox`/`tk.Text`/
   `tk.Canvas` widgets (not reached by the ttk `ThemeController` sweep)
   now themed via shared `gui/native_theme.py` helpers across 7 dialogs +
   the Custom Indicator Builder (own inline themer); pinned by
