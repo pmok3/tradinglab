@@ -247,6 +247,59 @@ the form body is wrapped in `make_scrollable_form` and
 form both scrolls and contains a Combobox).
 
 Tests: `tests/unit/gui/test_credentials_dialog_verify.py`.
+## Vendor header — state chip, provenance, Remove
+
+Each vendor section opens with a header that answers the three questions the
+old flat form could not: **am I configured, is it working, and where is it
+coming from?**
+
+* **State chip** — `_vendor_state_text` prefers a *verdict* over mere
+  presence, because "configured" is not the same as "works" (the entire
+  reason `data/verify.py` exists). Reads `verify.known_status`, so a verdict
+  persisted in a previous session shows immediately at launch with no network
+  call. Falls back to "Configured, not tested" and then "Not configured".
+  Timestamps render through `_format_age`, deliberately coarse — the only
+  decision the number drives is "recent enough to trust, or re-test?"
+* **Provenance line** — `credentials.vendor_origin(vendor).describe()`, plus
+  "(this app cannot clear it)" when the origin is not the store. Naming the
+  source is what turns the old mystery into a fixable situation.
+* **Remove** — disabled when nothing is configured. For a store-backed vendor
+  it confirms, then calls `credential_store.clear_vendor`, drops the verdict,
+  blanks that vendor's form fields and reloads. For an env- or file-backed
+  vendor it **refuses and explains**, naming the source: silently
+  "succeeding" would be the original dead end again.
+
+`_STATUS_LABELS` mirrors `_STATUS_STYLE` and must cover every
+`verify.ALL_STATUSES` member; a test pins both so a new status cannot fall
+through to a blank chip.
+
+## Empty state
+
+`_add_intro` renders a short "TradingLab runs on free yfinance data — connect
+a provider for better intraday coverage" block with a one-line blurb per
+vendor (`_VENDOR_BLURB`). Suppressed as soon as any vendor is configured, so
+it never becomes noise for the steady state.
+
+Without it a new user opens this dialog to eight unlabelled text boxes and no
+reason to fill any of them in — the app works out of the box on yfinance and
+never mentions that better data is one paste away.
+
+## Securing plaintext credentials
+
+`_warn_if_file_backed` fires whenever `credentials.plaintext_credential_files()`
+reports a file currently supplying values — **not** only when the user just
+cleared a field. The old trigger missed the common case entirely: a
+file-backed setup opens with blank boxes, so nothing was ever "cleared".
+
+It now offers the fix rather than only naming the problem:
+`_migrate_plaintext_files` imports the values into the encrypted store and
+deletes the plaintext, upgrading at-rest protection from "cleartext in a
+folder" to DPAPI. **Import first, delete second, and only delete after a
+successful store write** — losing the only copy of a key because the store
+write failed would be far worse than leaving a cleartext file one more
+session. Files that cannot be deleted are listed for the user to remove by
+hand.
+
 ## Removing credentials is symmetric with adding
 
 Two paths, because there are two storage backends.

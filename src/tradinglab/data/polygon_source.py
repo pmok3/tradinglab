@@ -112,6 +112,9 @@ def fetch_polygon_data(
         payload = _http_get_aggs(ticker, tf, start.isoformat(), end.isoformat(), creds)
     except Exception as exc:  # pragma: no cover - network path
         LOG.warning("polygon: fetch failed for %s %s: %s", ticker, interval, exc)
+        # See alpaca_source: a credential problem must not masquerade as a
+        # generic data outage.
+        _verify.note_runtime_failure("polygon", exc, secrets=(creds.api_key,))
         return None
     return candles_from_polygon_response(payload, interval=interval)
 

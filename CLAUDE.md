@@ -1769,6 +1769,85 @@ Tests: `tests/unit/data/test_verify.py`,
 
 ---
 
+### 7.33 Credential management: the store is the source of truth, and secrets never touch `os.environ`
+
+The Stage-1..3 redesign that followed §7.32. Five coupled rules; breaking any
+one of them re-opens a bug this sprint closed.
+
+**1. Secrets are NOT written to `os.environ`. Ever.**
+Every data source (`alpaca_source`, `polygon_source`, `schwab_source`) reads
+through `credentials.get_credentials()`; **none** reads `os.environ`. The old
+startup step that decrypted the blob and injected it into the environment was
+pure transport, and it left every key in the process environment block —
+reachable by crash dumps, child processes, and any library that logs
+`os.environ`. `credentials._build_layers` now resolves the store as its own
+layer. `prime_environment_from_dpapi` is gone; `check_credential_store()`
+returns the same diagnostic sentinels and injects nothing.
+
+**Precedence is `os.environ` > store > `alpaca.txt`/`credentials.txt` >
+`.env`** — identical to before, because priming never overwrote existing
+entries. Do not "simplify" the store to the top: a real shell export is the
+documented power-user/CI escape hatch.
+
+**2. Storage is per-vendor and versioned** (`data/credential_store.py`).
+`{version: 2, vendors: {name: {fields, saved_at, last_verified}}}`, one DPAPI
+file. v1 flat blobs are read transparently and migrated on first launch;
+unprefixed keys are preserved under `_unassigned` rather than dropped. Use
+`save_vendor` / `clear_vendor`, never a whole-blob rewrite — that is what made
+"clear Alpaca" able to take out Polygon.
+
+`_dpapi.load_secrets_dict` **stringifies values** and would flatten the
+nesting. Structured payloads must use `save_json_object` / `load_json_object`.
+
+**3. Persisted verdicts carry no key material.** `VerificationRecord` is
+`status` + `checked_at` + the already-redacted summary. That restraint is the
+only reason it is safe to store a verdict beside the secrets — and it is what
+lets the UI show credential health at launch with no network call.
+`save_vendor` drops the verdict when new key material lands (a stale
+"verified" is worse than none); `clear_vendor` drops it with the fields.
+
+**4. Provenance drives every "can I clear this?" decision.**
+`credentials.describe()` / `origin_of` / `vendor_origin` report *which layer*
+supplied a value and *where it lives* — **never the value**.
+`FieldOrigin.clearable` is true only for the store. The app must never offer
+to remove a shell export or a file it does not own; it can only name them.
+This is the root fix for the old dead end, where the dialog pre-filled from
+`os.environ` alone, so a file-backed credential rendered as an empty box that
+could not be cleared and warned only *after* a failed save.
+
+Consequence: `_populate_fields` pre-fills from `credentials.effective_values()`,
+not `os.environ`. Reading the environment was correct only while the store was
+primed into it.
+
+**5. A credential failure must not masquerade as a data outage.**
+`verify.note_runtime_failure(vendor, exc)` classifies a *live fetch* failure
+through the same taxonomy the Test-connection button uses and records it only
+when the status is in `CREDENTIAL_PROBLEM_STATUSES`. A revoked key otherwise
+shows up as an empty chart with nothing pointing at the credentials, because
+`is_configured()` still reports `True`. **Transient failures (429, 5xx,
+timeouts, parse errors) return `None` and are deliberately not recorded** —
+they say nothing about the key, and poisoning the status with them trains the
+user to ignore the indicator.
+
+**Frozen-build hardening.** `_candidate_credential_dirs()` searches **only the
+app-data dir** when `sys.frozen`. In a packaged `.exe`, `Path.cwd()` is
+whatever folder the user double-clicked from, so an unrelated
+`credentials.txt` in Downloads would be read as their API keys. Dotenv was
+already disabled when frozen for exactly this threat model. Don't re-add the
+cwd / next-to-exe entries.
+
+**Every vendor has a verifier**, including Schwab — whose `verify_schwab`
+answers `unsupported` **without a network call**, because OAuth has not
+shipped and a fabricated `ok` would be a lie. Leaving one vendor with no
+button was itself a bug: silence reads as "probably fine".
+
+Tests: `tests/unit/data/test_credential_store.py`,
+`test_credential_provenance.py`, `test_credential_health.py`,
+`tests/unit/gui/test_credentials_vendor_header.py`,
+`test_credentials_dialog_priming.py`. `tests/conftest.py` points the store at
+a throwaway dir for the whole session so no test reads the developer's real
+keys.
+
 ## 8. Build & release flow
 
 The full guide is `docs/BUILDING_EXE.md`. Quick reference:
@@ -1890,7 +1969,9 @@ These files are **never** committed to git. Use them for working memory.
 | Backtest engine (post-trade records) | `src/tradinglab/backtest/engine.py` |
 | PyInstaller spec | `TradingLab.spec` |
 | Build wrapper | `tools/build_exe.ps1` |
-| Credential verification ("Test connection") | `src/tradinglab/data/verify.py` (`register_verifier`, `verify_vendor`, `VerifyResult`); see §7.32 |
+| Credential verification ("Test connection") | `src/tradinglab/data/verify.py` (`register_verifier`, `verify_vendor`, `note_runtime_failure`); see §7.32–§7.33 |
+| Encrypted credential store (v2, per-vendor) | `src/tradinglab/data/credential_store.py`; see §7.33 |
+| Credential provenance (which layer supplied a key) | `src/tradinglab/data/credentials.py` (`describe`, `origin_of`, `vendor_origin`); see §7.33 |
 | Credentials dialog + vendor re-registration | `src/tradinglab/gui/credentials_dialog.py`, `data/__init__.py:register_vendor_sources` |
 | Onboarding docs | `docs/ONBOARDING.md` |
 | Build docs | `docs/BUILDING_EXE.md` |
@@ -1967,7 +2048,9 @@ guessing — recent checkpoints include:
 update §3 / §4 / §8 in the same PR. Strategy Tester landmines are in
 §7.7–§7.10 — read those before touching `strategy_tester/`. Indicator
 hot-path / kernel conventions are in §7.27–§7.28. Dark-mode native-widget
-theming convention is in §7.31. Credential verification + no-restart
+theming convention is in §7.31. Credential storage / provenance /
+no-env-broadcast rules are in §7.33 — read them before touching
+`data/credentials.py` or `data/credential_store.py`. Credential verification + no-restart
 vendor registration are in §7.32. App.py
 mixin extraction conventions are in §7.24; if you extract a new mixin,
 also update the §2 layout tree, the §11 cheatsheet, the §12 prior

@@ -7,6 +7,8 @@ it pre-filled from ``os.environ`` alone.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from tradinglab.data import credentials as creds_mod
@@ -261,3 +263,44 @@ def test_broken_store_does_not_break_resolution(monkeypatch):
     monkeypatch.setenv("POLYGON_API_KEY", "still_works")
 
     assert creds_mod.reload().polygon.api_key == "still_works"
+
+
+# ---------------------------------------------------------------------------
+# Frozen-build hardening
+# ---------------------------------------------------------------------------
+
+
+class TestFrozenBuildDirRestriction:
+    """A packaged .exe must not read credential files from arbitrary dirs.
+
+    ``Path.cwd()`` in a frozen build is whatever folder the user double-clicked
+    from, so an unrelated ``credentials.txt`` in Downloads would be picked up
+    and treated as their API keys. Dotenv discovery is already disabled when
+    frozen for exactly this threat model; the .txt layer now matches.
+    """
+
+    def test_source_build_searches_repo_root_and_cwd(self, monkeypatch):
+        monkeypatch.delattr(creds_mod.sys, "frozen", raising=False)
+        dirs = creds_mod._candidate_credential_dirs()
+        assert len(dirs) > 1, "a dev checkout keeps the convenience dirs"
+        assert any(d == Path.cwd() for d in dirs)
+
+    def test_frozen_build_searches_only_the_app_data_dir(self, monkeypatch):
+        from tradinglab import paths
+
+        monkeypatch.setattr(creds_mod.sys, "frozen", True, raising=False)
+        dirs = creds_mod._candidate_credential_dirs()
+        assert dirs == [paths.app_data_dir()]
+
+    def test_frozen_build_does_not_search_cwd(self, monkeypatch):
+        monkeypatch.setattr(creds_mod.sys, "frozen", True, raising=False)
+        assert Path.cwd() not in creds_mod._candidate_credential_dirs()
+
+    def test_frozen_build_does_not_search_next_to_the_exe(self, monkeypatch):
+        """Also dropped: a file beside the .exe is writable by any installer."""
+        monkeypatch.setattr(creds_mod.sys, "frozen", True, raising=False)
+        monkeypatch.setattr(creds_mod.sys, "executable",
+                            r"C:\Program Files\TradingLab\TradingLab.exe",
+                            raising=False)
+        dirs = creds_mod._candidate_credential_dirs()
+        assert all("Program Files" not in str(d) for d in dirs)

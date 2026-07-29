@@ -7,6 +7,27 @@ Charles Schwab Market Data API (`/pricehistory`) → `List[Candle]`. Two-layer m
 - `candles_from_schwab_response(payload: dict, *, interval: str) -> List[Candle]` — pure mapper. Tolerates both the standard `{"candles": [...]}` envelope and a bare list (some streaming-adjacent endpoints). Honors `empty: true` (returns `[]`). Uses `candles_from_json_rows` with `ts_unit="ms"` **and `tz=core.timezones.ET`** (ms-epoch UTC → US-Eastern wall-clock, matching yfinance / Alpaca; else the intraday session is shifted +5h).
 - `fetch_schwab_data(ticker="AAPL", interval="1d") -> Optional[List[Candle]]` — `DataFetcher`-compatible. Returns `None` on missing credentials, missing/expired refresh token, network error, or unsupported interval. **Never raises.**
 - `SCHWAB_REGISTRATION_ENABLED: bool = False` — registry/UI gate kept false until `_http_get_pricehistory` is implemented and the `"schwab"` source is actually registered.
+- `verify_schwab(creds=None, *, timeout, opener) -> VerifyResult` — registered as the `schwab` verifier so the credentials dialog renders a "Test connection" button for this section like every other vendor.
+
+## Credential verification without a probe
+
+`verify_schwab` makes **no network call**. `_http_get_pricehistory` still
+raises `NotImplementedError` and the OAuth flow has not shipped, so there is
+nothing to probe — a fabricated request would either fail for the wrong
+reason or, worse, return `ok` for a provider that cannot fetch a bar.
+
+It answers the two questions that *are* decidable locally: empty fields →
+`not_configured` (same as every other vendor); fields present →
+`unsupported`, with remediation naming the missing piece. `unsupported`
+renders muted rather than red, because nothing is wrong with the key.
+
+Registering it at all is the point. Leaving Schwab as the one vendor with no
+button was itself a UX bug — the user cannot distinguish "this provider has
+no check" from "the check is missing", and silence reads as "probably fine".
+
+When OAuth lands, replace the `unsupported` branch with a real probe (token
+refresh + a one-symbol price-history call) and flip
+`SCHWAB_REGISTRATION_ENABLED`; the dialog needs no change.
 
 ## Dependencies
 - Internal: `..models.Candle`, `.credentials.SchwabCredentials`, `.credentials.get_credentials`, `.normalize.candles_from_json_rows`, `.schwab_auth.get_access_token`.
@@ -26,4 +47,5 @@ Charles Schwab Market Data API (`/pricehistory`) → `List[Candle]`. Two-layer m
 
 ## Testing
 - Covered indirectly via integration smoke tests. Pure mapper is offline-testable with a fixture payload; recommended placement `tests/unit/data/test_schwab_response.py`.
+- `tests/unit/data/test_credential_health.py` pins `verify_schwab`: `not_configured` when empty, `unsupported` when configured, and **no network call** either way.
 

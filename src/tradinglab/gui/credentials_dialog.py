@@ -34,8 +34,10 @@ from __future__ import annotations
 import os
 import sys
 import threading
+import time
 import tkinter as tk
 from collections.abc import Callable
+from pathlib import Path
 from tkinter import messagebox, ttk
 from typing import Any
 
@@ -117,6 +119,20 @@ _STATUS_STYLE: dict[str, tuple[str, str]] = {
     verify.STATUS_ERROR:               ("\u2717", ERROR_RED),
 }
 
+#: Terse chip wording per status. Deliberately shorter than the full
+#: ``verify`` summary, which still renders on the Test-connection row — the
+#: chip has to fit beside the section heading.
+_STATUS_LABELS: dict[str, str] = {
+    verify.STATUS_OK:                  "Verified",
+    verify.STATUS_NOT_CONFIGURED:      "Not configured",
+    verify.STATUS_INVALID_CREDENTIALS: "Rejected",
+    verify.STATUS_FORBIDDEN:           "Plan not entitled",
+    verify.STATUS_RATE_LIMITED:        "Rate limited",
+    verify.STATUS_NETWORK_ERROR:       "Unreachable",
+    verify.STATUS_UNSUPPORTED:         "No test available",
+    verify.STATUS_ERROR:               "Error",
+}
+
 #: Tk poll interval for the verification worker, in ms. Mirrors the
 #: strategy-tester export poll. See :meth:`CredentialsDialog._poll_verify`
 #: for why we poll instead of calling ``after(0, ...)`` from the worker.
@@ -136,11 +152,43 @@ def _managed_env_names() -> tuple[str, ...]:
 
     Used to **clear** the variables a user emptied. ``_collect`` only reports
     non-empty fields, so without an explicit managed list a cleared field
-    would leave its stale `os.environ` entry behind — and since
-    ``credentials._resolve`` consults `os.environ` first, the deleted key
-    would keep resolving for the rest of the session.
+    would leave its stale `os.environ` entry behind — and since ``os.environ``
+    is the highest-precedence resolution layer, the deleted key would keep
+    resolving for the rest of the session.
     """
     return tuple(env_name for env_name, _label, _secret in _FIELDS)
+
+
+#: One-line "what does connecting this buy me?" blurb per vendor, shown in the
+#: empty state. A new user opening the dialog otherwise sees eight unexplained
+#: text boxes and no reason to fill any of them in.
+_VENDOR_BLURB: dict[str, str] = {
+    "alpaca": ("Alpaca — intraday bars. The paid plan adds the real-time SIP "
+               "feed with full volume; the free plan is IEX-only and delayed "
+               "15 minutes."),
+    "polygon": "Polygon — deep historical intraday history.",
+    "schwab": "Schwab — brokerage integration (OAuth flow not shipped yet).",
+}
+
+
+def _format_age(seconds: float) -> str:
+    """Coarse 'how long ago' for a verification timestamp.
+
+    Deliberately coarse: the exact second is noise, and the only decision the
+    number drives is "is this recent enough to trust, or should I re-test?"
+    """
+    if seconds < 90:
+        return "just now"
+    minutes = seconds / 60.0
+    if minutes < 60:
+        return f"{int(minutes)}m ago"
+    hours = minutes / 60.0
+    if hours < 24:
+        return f"{int(hours)}h ago"
+    days = hours / 24.0
+    if days < 30:
+        return f"{int(days)}d ago"
+    return "over a month ago"
 
 
 def _has_credential_values(values: dict[str, str]) -> bool:
@@ -297,6 +345,11 @@ class CredentialsDialog(BaseModalDialog):
         self._verify_boxes: dict[str, dict[str, Any]] = {}
         self._verify_threads: dict[str, threading.Thread] = {}
         self._verify_jobs: dict[str, str] = {}
+        # Per-vendor header: state chip, provenance line, Remove button.
+        self._vendor_state_vars: dict[str, tk.StringVar] = {}
+        self._vendor_state_labels: dict[str, ttk.Label] = {}
+        self._vendor_origin_vars: dict[str, tk.StringVar] = {}
+        self._vendor_remove_buttons: dict[str, ttk.Button] = {}
         # Set while pre-filling entries so the textvariable traces don't
         # read a programmatic populate as a user edit.
         self._populating = False
@@ -347,6 +400,7 @@ class CredentialsDialog(BaseModalDialog):
         section_for_prefix = {p: s for p, s, _v in _SECTIONS}
         last_section = None
         row = 0
+        row = self._add_intro(frm, row)
         for env_name, label, is_secret in _visible_fields():
             section = next((v for k, v in section_for_prefix.items()
                             if env_name.startswith(k)), "")
@@ -363,6 +417,7 @@ class CredentialsDialog(BaseModalDialog):
                           ).grid(row=row, column=0, columnspan=3,
                                  sticky="w", pady=(2, 4))
                 row += 1
+                row = self._add_vendor_header(frm, row, section)
                 last_section = section
 
             ttk.Label(frm, text=label + ":").grid(
@@ -432,6 +487,31 @@ class CredentialsDialog(BaseModalDialog):
         ttk.Button(btn_frame, text="Save & Close", command=self._on_save
                    ).pack(side="right")
 
+    def _add_intro(self, frm: ttk.Frame, row: int) -> int:
+        """Explain what connecting a vendor buys you, when nothing is set up.
+
+        A new user otherwise opens this dialog to eight unlabelled text boxes
+        and no reason to fill any of them in — the app runs on yfinance and
+        never mentions that better data is one paste away. Suppressed once a
+        vendor is configured, so it never becomes noise for the steady state.
+        """
+        try:
+            from ..data import credentials as _creds
+            if _creds.get_credentials().configured_vendors():
+                return row
+        except Exception:  # noqa: BLE001
+            return row
+
+        blurbs = [_VENDOR_BLURB[v] for _p, _s, v in _SECTIONS
+                  if v in _VENDOR_BLURB]
+        text = ("TradingLab runs on free yfinance data out of the box. "
+                "Connect a provider below for better intraday coverage:\n  \u2022 "
+                + "\n  \u2022 ".join(blurbs))
+        ttk.Label(frm, text=text, foreground=MUTED_GREY, wraplength=520,
+                  justify="left").grid(row=row, column=0, columnspan=3,
+                                       sticky="w", pady=(0, 10))
+        return row + 1
+
     def _initial_status_text(self) -> str:
         if sys.platform == "win32":
             try:
@@ -443,6 +523,181 @@ class CredentialsDialog(BaseModalDialog):
                 pass
         return ("Persistent credential storage is only implemented on Windows. "
                 "Values are kept in-process only.")
+
+    # ---- vendor header (state chip + provenance + remove) ---------------
+
+    def _add_vendor_header(self, frm: ttk.Frame, row: int, section: str) -> int:
+        """Render the state chip / provenance line / Remove button for a vendor.
+
+        This is the answer to "am I configured, is it working, and where is it
+        coming from?" — three questions the old flat form could not answer at
+        all. Without it the user's only feedback was eight text boxes and a
+        Save button.
+        """
+        vendor = next((v for _p, s, v in _SECTIONS if s == section), None)
+        if vendor is None:
+            return row
+
+        bar = ttk.Frame(frm)
+        bar.grid(row=row, column=0, columnspan=3, sticky="we", pady=(0, 2))
+
+        state_var = tk.StringVar(master=self, value="")
+        state_lbl = ttk.Label(bar, textvariable=state_var)
+        state_lbl.pack(side="left")
+        self._vendor_state_vars[vendor] = state_var
+        self._vendor_state_labels[vendor] = state_lbl
+
+        remove_btn = ttk.Button(
+            bar, text="Remove", width=9,
+            command=lambda v=vendor: self._on_remove_vendor(v))
+        remove_btn.pack(side="right")
+        self._vendor_remove_buttons[vendor] = remove_btn
+        row += 1
+
+        origin_var = tk.StringVar(master=self, value="")
+        origin_lbl = ttk.Label(frm, textvariable=origin_var,
+                               foreground=MUTED_GREY, wraplength=520,
+                               justify="left")
+        origin_lbl.grid(row=row, column=0, columnspan=3, sticky="w",
+                        pady=(0, 4))
+        self._vendor_origin_vars[vendor] = origin_var
+        row += 1
+
+        self._refresh_vendor_header(vendor)
+        return row
+
+    def _vendor_state_text(self, vendor: str) -> tuple[str, str]:
+        """``(text, colour)`` for the vendor chip.
+
+        Precedence mirrors what the user cares about: a verdict beats mere
+        presence, because "configured" is not the same as "works" — the whole
+        reason `data/verify.py` exists.
+        """
+        from ..data import credentials as _creds
+
+        creds = _creds.get_credentials()
+        vendor_creds = getattr(creds, vendor, None)
+        configured = bool(vendor_creds is not None
+                          and vendor_creds.is_configured())
+
+        verdict = verify.known_status(vendor)
+        if verdict is not None:
+            status, checked_at, _summary = verdict
+            glyph, colour = _STATUS_STYLE.get(
+                status, ("\u2014", MUTED_GREY))
+            label = _STATUS_LABELS.get(status, status)
+            if checked_at:
+                age = _format_age(max(0.0, time.time() - checked_at))
+                return f"{glyph} {label} \u00b7 checked {age}", colour
+            return f"{glyph} {label}", colour
+
+        if configured:
+            return "\u2014 Configured, not tested", MUTED_GREY
+        return "\u2014 Not configured", MUTED_GREY
+
+    def _refresh_vendor_header(self, vendor: str) -> None:
+        """Repaint one vendor's chip + provenance line. Safe after teardown."""
+        from ..data import credentials as _creds
+
+        state_var = self._vendor_state_vars.get(vendor)
+        if state_var is None:
+            return
+        try:
+            text, colour = self._vendor_state_text(vendor)
+            state_var.set(text)
+            lbl = self._vendor_state_labels.get(vendor)
+            if lbl is not None and lbl.winfo_exists():
+                lbl.configure(foreground=colour)
+        except tk.TclError:
+            return
+        except Exception:  # noqa: BLE001 - a chip must never break the dialog
+            return
+
+        origin_var = self._vendor_origin_vars.get(vendor)
+        if origin_var is None:
+            return
+        try:
+            origin = _creds.vendor_origin(vendor)
+        except Exception:  # noqa: BLE001
+            return
+        if not origin.present:
+            origin_var.set("")
+        else:
+            suffix = "" if origin.clearable else "  (this app cannot clear it)"
+            origin_var.set(f"Source: {origin.describe()}{suffix}")
+
+        btn = self._vendor_remove_buttons.get(vendor)
+        if btn is not None and btn.winfo_exists():
+            btn.configure(state="normal" if origin.present else "disabled")
+
+    def _refresh_all_vendor_headers(self) -> None:
+        for _p, _s, vendor in _SECTIONS:
+            self._refresh_vendor_header(vendor)
+
+    def _on_remove_vendor(self, vendor: str) -> None:
+        """Delete one vendor's credentials, or explain why we cannot.
+
+        The app only owns the encrypted store. A key supplied by a shell
+        export or a plaintext file cannot be removed from here, and silently
+        "succeeding" would be the old dead end again — so we name the source
+        and point at it instead.
+        """
+        from ..data import credentials as _creds
+
+        try:
+            origin = _creds.vendor_origin(vendor)
+        except Exception:  # noqa: BLE001
+            return
+        label = next((s for _p, s, v in _SECTIONS if v == vendor), vendor)
+
+        if not origin.present:
+            return
+
+        if not origin.clearable:
+            messagebox.showinfo(
+                "Configure Credentials",
+                f"{label} credentials come from {origin.describe()}, which "
+                "this app does not manage.\n\n"
+                "To remove them, delete or edit that source and restart "
+                "TradingLab.",
+                parent=self,
+            )
+            return
+
+        if not messagebox.askyesno(
+            "Configure Credentials",
+            f"Remove the saved {label} credentials from the encrypted store?",
+            parent=self,
+        ):
+            return
+
+        try:
+            from ..data import credential_store
+            credential_store.clear_vendor(vendor)
+        except Exception as e:  # noqa: BLE001
+            messagebox.showerror("Configure Credentials",
+                                 f"Could not remove {label} credentials:\n{e}",
+                                 parent=self)
+            return
+
+        # Drop the in-process verdict too, then blank the form fields so the
+        # dialog does not still show a key the store no longer holds.
+        verify.clear_results()
+        prefix = next((p for p, _s, v in _SECTIONS if v == vendor), None)
+        if prefix:
+            for name, entry in self._entries.items():
+                if not name.startswith(prefix) or name in _CHOICE_FIELDS:
+                    continue
+                try:
+                    entry.delete(0, tk.END)
+                except tk.TclError:
+                    pass
+        try:
+            _creds.reload()
+        except Exception:  # noqa: BLE001
+            pass
+        self._set_verify_text(vendor, "Not tested yet.", MUTED_GREY, "")
+        self._refresh_vendor_header(vendor)
 
     # ---- verification ("Test connection") ------------------------------
 
@@ -631,6 +886,8 @@ class CredentialsDialog(BaseModalDialog):
         if result is not None:
             verify.record_result(result)
             self._render_verify_result(vendor, result)
+            # The chip reads the recorded verdict, so refresh after it lands.
+            self._refresh_vendor_header(vendor)
 
     def _render_verify_result(
         self, vendor: str, result: verify.VerifyResult,
@@ -866,56 +1123,107 @@ class CredentialsDialog(BaseModalDialog):
             pass
 
     def _warn_if_file_backed(self) -> None:
-        """Explain a credential the user just cleared that is STILL active.
+        """Offer to migrate plaintext credentials into the encrypted store.
 
         ``credentials`` resolves from ``os.environ`` first, then a plaintext
         ``alpaca.txt`` / ``credentials.txt``, then a dev ``.env``. This dialog
-        owns only the environment layer (and the DPAPI blob that primes it),
-        so clearing a field cannot remove a key that a *file* is supplying.
+        owns the encrypted store and the environment layer, so a key supplied
+        by a *file* cannot be removed from here.
 
-        Without this message the user deletes the key, saves, and the source
-        stubbornly remains — with no way to discover why. Naming the
-        mechanism turns a mystery into a one-step fix.
+        Rather than only naming the problem (the old behaviour, which left the
+        user at a dead end), offer the one-click fix: import the file's values
+        into the encrypted store and delete the plaintext. That also upgrades
+        the at-rest protection from "cleartext in a folder" to DPAPI.
 
-        Fires **only when the user actually emptied a field that had
-        content**. A setup where the fields were already blank at open
-        (because the credential lives in a file, which
-        ``_populate_from_environment`` does not read) is the steady state for
-        those users — nagging them on every save would be noise.
+        Fires when a plaintext file is currently supplying values, whether or
+        not the user just tried to clear a field — a packaged user who never
+        touches the form still benefits from being told their keys are sitting
+        in the clear.
         """
+        from ..data import credentials as _creds
+
         try:
-            from ..data.credentials import get_credentials
-            creds = get_credentials()
+            files = _creds.plaintext_credential_files()
         except Exception:  # noqa: BLE001
             return
-        stuck: list[str] = []
-        for prefix, section, vendor in _SECTIONS:
-            fields = [n for n in self._entries if n.startswith(prefix)
-                      and n not in _CHOICE_FIELDS]
-            if not fields:
-                continue
-            if any(self._entries[n].get().strip() for n in fields):
-                continue  # still populated — nothing was removed
-            cleared = any(self._initial_values.get(n, "") for n in fields)
-            if not cleared:
-                continue  # already blank when the dialog opened
-            vendor_creds = getattr(creds, vendor, None)
-            if vendor_creds is not None and vendor_creds.is_configured():
-                stuck.append(section)
-        if not stuck:
+        if not files:
             return
+
+        listing = "\n  \u2022 ".join(str(p) for p in files)
+        secure = messagebox.askyesno(
+            "Configure Credentials",
+            "These credentials are stored in plain text:\n  \u2022 "
+            + listing
+            + "\n\nThey override anything saved here, so clearing a field "
+            "above cannot remove them.\n\n"
+            "Import them into the encrypted store and delete the plaintext "
+            "file(s)?",
+            parent=self,
+        )
+        if not secure:
+            return
+        self._migrate_plaintext_files(files)
+
+    def _migrate_plaintext_files(self, files: list[Path]) -> None:
+        """Import plaintext credential files into the store, then delete them.
+
+        Import first, delete second, and only delete files that were fully
+        imported — losing a key because the store write failed would be far
+        worse than leaving a cleartext file on disk one more session.
+        """
+        from ..data import credential_store
+        from ..data import credentials as _creds
+
         try:
-            messagebox.showwarning(
+            values = _creds._load_credential_txt_files()
+        except Exception as e:  # noqa: BLE001
+            messagebox.showerror("Configure Credentials",
+                                 f"Could not read the credential file(s):\n{e}",
+                                 parent=self)
+            return
+        if not values:
+            return
+
+        try:
+            for prefix, _section, vendor in _SECTIONS:
+                subset = {n: v for n, v in values.items() if n.startswith(prefix)}
+                if any(n not in _CHOICE_FIELDS and v for n, v in subset.items()):
+                    existing = credential_store.get_vendor(vendor).fields
+                    merged = {**existing, **subset}
+                    credential_store.save_vendor(vendor, merged)
+        except Exception as e:  # noqa: BLE001
+            messagebox.showerror(
                 "Configure Credentials",
-                "These credentials are still active even though you cleared "
-                "the fields:\n  \u2022 " + "\n  \u2022 ".join(stuck) + "\n\n"
-                "They are being supplied by a file or a system environment "
-                "variable, which this dialog cannot clear. Check for an "
-                "alpaca.txt / credentials.txt next to the app or in the "
-                "TradingLab data folder (Help \u2192 Reveal Data Folder), or "
-                "an exported environment variable.",
-                parent=self,
-            )
+                f"Could not save to the encrypted store:\n{e}\n\n"
+                "Your plaintext file(s) were left untouched.",
+                parent=self)
+            return
+
+        removed: list[str] = []
+        failed: list[str] = []
+        for path in files:
+            try:
+                Path(path).unlink()
+                removed.append(str(path))
+            except OSError as e:
+                failed.append(f"{path} ({e})")
+
+        try:
+            _creds.reload()
+        except Exception:  # noqa: BLE001
+            pass
+        self._refresh_all_vendor_headers()
+
+        parts = ["Credentials are now stored encrypted with your Windows "
+                 "user account."]
+        if removed:
+            parts.append("Deleted:\n  \u2022 " + "\n  \u2022 ".join(removed))
+        if failed:
+            parts.append("Could NOT delete (remove these by hand):\n  \u2022 "
+                         + "\n  \u2022 ".join(failed))
+        try:
+            messagebox.showinfo("Configure Credentials", "\n\n".join(parts),
+                                parent=self)
         except tk.TclError:
             pass
 

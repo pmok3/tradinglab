@@ -166,10 +166,23 @@ def _unconfigured_creds():
 
 class TestVerifyRowPresence:
     def test_only_vendors_with_a_verifier_get_a_button(self, dialog):
-        assert set(dialog._verify_buttons) == {"alpaca", "polygon"}
-        # Schwab has no registered verifier — offering a button that can
-        # never answer would be worse than offering none.
-        assert "schwab" not in dialog._verify_buttons
+        # Every vendor now registers a verifier, so every section gets a
+        # button. Schwab's answers "unsupported" without a network call
+        # rather than staying silent — the user cannot otherwise tell
+        # "no check exists" from "the check is missing", and silence reads
+        # as "probably fine".
+        assert set(dialog._verify_buttons) == {"alpaca", "polygon", "schwab"}
+
+    def test_button_is_omitted_for_a_vendor_without_a_verifier(
+            self, root, monkeypatch):
+        """The gate still exists — prove it by removing Schwab's verifier."""
+        monkeypatch.setattr(verify, "has_verifier",
+                            lambda v: v in {"alpaca", "polygon"})
+        dlg = cd.CredentialsDialog(root)
+        try:
+            assert "schwab" not in dlg._verify_buttons
+        finally:
+            dlg.destroy()
 
     def test_status_and_detail_vars_exist_per_vendor(self, dialog):
         for vendor in ("alpaca", "polygon"):
@@ -180,6 +193,10 @@ class TestVerifyRowPresence:
     def test_every_status_has_a_render_style(self):
         # A status with no style would silently render as a muted dash.
         assert set(cd._STATUS_STYLE) == set(verify.ALL_STATUSES)
+
+    def test_every_status_has_a_chip_label(self):
+        # Same contract for the vendor-header chip.
+        assert set(cd._STATUS_LABELS) == set(verify.ALL_STATUSES)
 
     def test_vendor_for_env(self):
         assert cd._vendor_for_env("ALPACA_API_KEY_ID") == "alpaca"
@@ -734,63 +751,133 @@ class TestEmptyConfirmation:
 
 
 class TestFileBackedWarning:
-    """A cleared key that a file still supplies must be explained.
+    """Plaintext credential files must be surfaced *and* fixable.
 
-    ``_populate_from_environment`` reads ``os.environ`` only, so a user whose
-    key lives in ``alpaca.txt`` sees blank fields. Clearing "nothing" must
-    not nag them; clearing a real value that then fails to take effect must.
+    The old behaviour only warned, and only when the user had just cleared a
+    field that still resolved — which missed the common case entirely (a
+    file-backed setup opens with blank boxes, so nothing was "cleared"). It
+    also left the user at a dead end: named the problem, offered no fix.
+
+    Now the trigger is simply "is a plaintext file supplying values?", and the
+    prompt offers to import them into the encrypted store and delete the file.
     """
 
-    def _warned(self, dlg, monkeypatch):
+    def _prompted(self, dlg, monkeypatch, answer=False):
         seen = []
-        monkeypatch.setattr(cd.messagebox, "showwarning",
-                            lambda t, m, **k: seen.append(m))
+
+        def _ask(_title, message, **_kw):
+            seen.append(message)
+            return answer
+
+        monkeypatch.setattr(cd.messagebox, "askyesno", _ask)
+        monkeypatch.setattr(cd.messagebox, "showinfo", lambda *a, **k: None)
         dlg._warn_if_file_backed()
         return seen
 
-    def test_silent_when_fields_opened_blank(self, root, monkeypatch):
-        # Steady state for a file-backed setup — must not nag on every save.
+    def test_silent_when_no_plaintext_file_exists(self, root, monkeypatch):
+        monkeypatch.setattr(
+            "tradinglab.data.credentials.plaintext_credential_files",
+            lambda: [])
+        dlg = cd.CredentialsDialog(root)
+        try:
+            assert self._prompted(dlg, monkeypatch) == []
+        finally:
+            dlg.destroy()
+
+    def test_offers_migration_when_a_plaintext_file_supplies_values(
+            self, root, monkeypatch, tmp_path):
+        path = tmp_path / "alpaca.txt"
+        path.write_text("Key: K\nSecret: S\n", encoding="utf-8")
+        monkeypatch.setattr(
+            "tradinglab.data.credentials.plaintext_credential_files",
+            lambda: [path])
+        dlg = cd.CredentialsDialog(root)
+        try:
+            msgs = self._prompted(dlg, monkeypatch)
+            assert msgs and "alpaca.txt" in msgs[0]
+            assert "plain text" in msgs[0]
+        finally:
+            dlg.destroy()
+
+    def test_fires_even_when_the_form_opened_blank(self, root, monkeypatch,
+                                                   tmp_path):
+        """The case the old 'did you clear something?' trigger always missed."""
+        path = tmp_path / "credentials.txt"
+        path.write_text("Key: K\nSecret: S\n", encoding="utf-8")
+        monkeypatch.setattr(
+            "tradinglab.data.credentials.plaintext_credential_files",
+            lambda: [path])
         monkeypatch.delenv("ALPACA_API_KEY_ID", raising=False)
-        monkeypatch.delenv("ALPACA_API_SECRET_KEY", raising=False)
         dlg = cd.CredentialsDialog(root)
         try:
-            monkeypatch.setattr(
-                "tradinglab.data.credentials.get_credentials",
-                lambda: _configured_creds())
-            assert self._warned(dlg, monkeypatch) == []
+            assert self._prompted(dlg, monkeypatch) != []
         finally:
             dlg.destroy()
 
-    def test_warns_when_a_real_value_was_cleared_but_still_resolves(
-            self, root, monkeypatch):
-        monkeypatch.setenv("ALPACA_API_KEY_ID", "FROM_ENV")
-        monkeypatch.setenv("ALPACA_API_SECRET_KEY", "FROM_ENV_SECRET")
+    def test_declining_leaves_the_file_alone(self, root, monkeypatch, tmp_path):
+        path = tmp_path / "alpaca.txt"
+        path.write_text("Key: K\nSecret: S\n", encoding="utf-8")
+        monkeypatch.setattr(
+            "tradinglab.data.credentials.plaintext_credential_files",
+            lambda: [path])
         dlg = cd.CredentialsDialog(root)
         try:
-            dlg._entries["ALPACA_API_KEY_ID"].delete(0, tk.END)
-            dlg._entries["ALPACA_API_SECRET_KEY"].delete(0, tk.END)
-            monkeypatch.setattr(
-                "tradinglab.data.credentials.get_credentials",
-                lambda: _configured_creds())
-            msgs = self._warned(dlg, monkeypatch)
-            assert msgs and "Alpaca" in msgs[0]
-            assert "alpaca.txt" in msgs[0]
+            self._prompted(dlg, monkeypatch, answer=False)
+        finally:
+            dlg.destroy()
+        assert path.is_file()
+
+    def test_accepting_imports_then_deletes(self, root, monkeypatch, tmp_path):
+        path = tmp_path / "alpaca.txt"
+        path.write_text("Key: KID\nSecret: SEC\n", encoding="utf-8")
+        monkeypatch.setattr(
+            "tradinglab.data.credentials.plaintext_credential_files",
+            lambda: [path])
+        monkeypatch.setattr(
+            "tradinglab.data.credentials._load_credential_txt_files",
+            lambda: {"ALPACA_API_KEY_ID": "KID", "ALPACA_API_SECRET_KEY": "SEC"})
+        saved: dict[str, dict] = {}
+        monkeypatch.setattr(cs, "save_vendor",
+                            lambda v, f, **k: saved.__setitem__(v, f))
+        monkeypatch.setattr(cs, "get_vendor",
+                            lambda v, **k: cs.VendorRecord(vendor=v))
+
+        dlg = cd.CredentialsDialog(root)
+        try:
+            self._prompted(dlg, monkeypatch, answer=True)
         finally:
             dlg.destroy()
 
-    def test_silent_when_the_clear_actually_worked(self, root, monkeypatch):
-        monkeypatch.setenv("ALPACA_API_KEY_ID", "FROM_ENV")
-        monkeypatch.setenv("ALPACA_API_SECRET_KEY", "FROM_ENV_SECRET")
+        assert saved["alpaca"]["ALPACA_API_KEY_ID"] == "KID"
+        assert not path.exists(), "plaintext file must be deleted after import"
+
+    def test_store_failure_leaves_the_plaintext_intact(self, root, monkeypatch,
+                                                       tmp_path):
+        """Never delete the only copy of a key because the store write failed."""
+        path = tmp_path / "alpaca.txt"
+        path.write_text("Key: KID\nSecret: SEC\n", encoding="utf-8")
+        monkeypatch.setattr(
+            "tradinglab.data.credentials.plaintext_credential_files",
+            lambda: [path])
+        monkeypatch.setattr(
+            "tradinglab.data.credentials._load_credential_txt_files",
+            lambda: {"ALPACA_API_KEY_ID": "KID", "ALPACA_API_SECRET_KEY": "SEC"})
+        monkeypatch.setattr(cs, "get_vendor",
+                            lambda v, **k: cs.VendorRecord(vendor=v))
+
+        def _boom(*_a, **_k):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(cs, "save_vendor", _boom)
+        monkeypatch.setattr(cd.messagebox, "showerror", lambda *a, **k: None)
+
         dlg = cd.CredentialsDialog(root)
         try:
-            dlg._entries["ALPACA_API_KEY_ID"].delete(0, tk.END)
-            dlg._entries["ALPACA_API_SECRET_KEY"].delete(0, tk.END)
-            monkeypatch.setattr(
-                "tradinglab.data.credentials.get_credentials",
-                lambda: _unconfigured_creds())
-            assert self._warned(dlg, monkeypatch) == []
+            self._prompted(dlg, monkeypatch, answer=True)
         finally:
             dlg.destroy()
+
+        assert path.is_file()
 
 
 class TestTeardown:
