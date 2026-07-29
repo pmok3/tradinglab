@@ -19,11 +19,19 @@ at zero.
   personal credentials. Raises `DpapiError` on failure.
 - `unprotect(ciphertext: bytes) -> bytes` — decrypt. Raises `DpapiError` on
   tamper / wrong user / wrong machine / wrong entropy.
-- `save_secrets_dict(path, mapping)` — JSON + DPAPI + atomic write
-  (`mkstemp` in dest dir + `os.replace`).
-- `load_secrets_dict(path) -> Optional[Dict[str, str]]` — `None` for missing,
-  `{}` for empty blob, dict on success. Raises `DpapiError` on decrypt /
-  parse failure.
+- `save_json_object(path, obj)` — JSON + DPAPI + atomic write
+  (`mkstemp` in dest dir + `os.replace`). Values are written **verbatim**,
+  so nesting and numbers survive the round trip. This is what the versioned
+  credential store (`data/credential_store.py`) uses.
+- `load_json_object(path) -> Optional[Dict[str, Any]]` — `None` for missing,
+  `{}` for empty blob, the decoded object on success. **No value coercion.**
+  Raises `DpapiError` on decrypt / parse failure or a non-object payload.
+- `save_secrets_dict(path, mapping)` — flat `str -> str` convenience wrapper
+  over `save_json_object`. Retained as the v1 credential-blob writer.
+- `load_secrets_dict(path) -> Optional[Dict[str, str]]` — as above but
+  **stringifies every value** to match the env-var contract. Do not use it
+  for structured payloads: a nested dict would come back as its `repr`,
+  which is exactly why `load_json_object` exists.
 - `DpapiError` — raised on encrypt / decrypt failure.
 
 ## Entropy threading (security audit M1)
@@ -47,7 +55,7 @@ knowledge of the descriptor. The fix threads the same bytes through
 
 **Version bump v1 → v2:** any blob written by the old code can NOT
 be decrypted by the new code (the entropy on disk is now actively
-checked). `gui/credentials_dialog.prime_environment_from_dpapi`
+checked). `gui/credentials_dialog.check_credential_store`
 returns the `decrypt_error` sentinel; `app.py::main` surfaces a
 status-bar warning; the user re-enters credentials once. After that
 single re-entry, the v2 blob is durable.

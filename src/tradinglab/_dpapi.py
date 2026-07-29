@@ -48,6 +48,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any
 
 
 class DpapiError(RuntimeError):
@@ -229,10 +230,15 @@ def unprotect(ciphertext: bytes) -> bytes:
 # ---------------------------------------------------------------------------
 
 
-def save_secrets_dict(path: Path, mapping: dict[str, str]) -> None:
-    """JSON-encode + DPAPI-encrypt ``mapping`` and atomically write to ``path``.
+def save_json_object(path: Path, obj: dict[str, Any]) -> None:
+    """JSON-encode + DPAPI-encrypt ``obj`` and atomically write to ``path``.
 
-    Atomic semantics: writes to ``<path>.tmp`` then ``os.replace``s
+    The general form of :func:`save_secrets_dict`: ``obj`` may nest
+    (the versioned credential store keeps a per-vendor mapping with
+    metadata). Values are written verbatim, so round-tripping through
+    :func:`load_json_object` preserves ints / floats / nested dicts.
+
+    Atomic semantics: writes to a sibling tempfile then ``os.replace``s
     over the destination. A crash mid-save leaves the prior blob (if
     any) intact.
 
@@ -241,7 +247,7 @@ def save_secrets_dict(path: Path, mapping: dict[str, str]) -> None:
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps(mapping, sort_keys=True).encode("utf-8")
+    payload = json.dumps(obj, sort_keys=True).encode("utf-8")
     ciphertext = protect(payload)
     # Use NamedTemporaryFile in the same directory so ``os.replace``
     # is a true atomic rename (cross-device renames are not atomic).
@@ -260,17 +266,30 @@ def save_secrets_dict(path: Path, mapping: dict[str, str]) -> None:
         raise
 
 
-def load_secrets_dict(path: Path) -> dict[str, str] | None:
-    """Read + DPAPI-decrypt + JSON-decode the blob at ``path``.
+def save_secrets_dict(path: Path, mapping: dict[str, str]) -> None:
+    """Persist a flat ``name -> value`` secrets mapping.
+
+    Thin wrapper over :func:`save_json_object`, kept as the v1 credential
+    blob writer and for callers that only ever store flat string maps.
+    """
+    save_json_object(path, dict(mapping))
+
+
+def load_json_object(path: Path) -> dict[str, Any] | None:
+    """Read + DPAPI-decrypt + JSON-decode the blob at ``path``, verbatim.
+
+    Unlike :func:`load_secrets_dict` this does **not** coerce values to
+    ``str`` — nested objects and numbers survive the round trip, which is
+    what the versioned credential store needs.
 
     Returns:
         * ``None`` if the file does not exist (first run).
-        * A ``dict[str, str]`` on success.
+        * ``{}`` if the file exists but is empty.
+        * The decoded object otherwise.
 
     Raises:
-        :class:`DpapiError` on decrypt failure (corrupt / wrong user
-        / wrong machine / OS too old). Callers typically catch and
-        fall back to prompting the user via the credentials dialog.
+        :class:`DpapiError` on decrypt failure (corrupt / wrong user /
+        wrong machine / OS too old) or if the payload is not a JSON object.
     """
     path = Path(path)
     if not path.is_file():
@@ -285,6 +304,24 @@ def load_secrets_dict(path: Path) -> dict[str, str] | None:
         raise DpapiError(f"decrypted blob is not valid JSON: {e}") from e
     if not isinstance(loaded, dict):
         raise DpapiError("decrypted blob is not a JSON object")
+    return loaded
+
+
+def load_secrets_dict(path: Path) -> dict[str, str] | None:
+    """Read the blob at ``path`` as a flat ``name -> value`` mapping.
+
+    Returns:
+        * ``None`` if the file does not exist (first run).
+        * A ``dict[str, str]`` on success.
+
+    Raises:
+        :class:`DpapiError` on decrypt failure (corrupt / wrong user
+        / wrong machine / OS too old). Callers typically catch and
+        fall back to prompting the user via the credentials dialog.
+    """
+    loaded = load_json_object(path)
+    if loaded is None:
+        return None
     # Coerce all values to str to match the env-var contract.
     return {str(k): str(v) for k, v in loaded.items()}
 
@@ -294,6 +331,8 @@ __all__ = [
     "is_available",
     "protect",
     "unprotect",
+    "save_json_object",
+    "load_json_object",
     "save_secrets_dict",
     "load_secrets_dict",
 ]

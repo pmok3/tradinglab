@@ -25,6 +25,7 @@ os.environ.setdefault("TRADINGLAB_STARTUP_SOURCE", "yfinance")
 
 
 import tkinter as tk
+from pathlib import Path
 
 import pytest
 
@@ -80,6 +81,34 @@ def _tk_root():
         r.destroy()
     except Exception:  # noqa: BLE001
         pass
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _isolate_credential_store(tmp_path_factory):
+    """Point the encrypted credential store at a throwaway directory.
+
+    ``data.credentials`` resolves the store as a real layer now, so without
+    this the whole suite would read the *developer's own* saved API keys —
+    making credential tests pass or fail depending on whose machine they run
+    on, and risking a real key reaching an assertion message or log capture.
+
+    Session-scoped and autouse so no individual test can forget.
+    """
+    sandbox = tmp_path_factory.mktemp("credential-store")
+    try:
+        from tradinglab.data import credential_store
+    except Exception:  # noqa: BLE001 - suite must still run if imports move
+        yield
+        return
+    original = credential_store.store_path
+    credential_store.store_path = (  # type: ignore[assignment]
+        lambda root=None: (Path(root) if root is not None else sandbox)
+        / "credentials.dat"
+    )
+    try:
+        yield
+    finally:
+        credential_store.store_path = original  # type: ignore[assignment]
 
 
 @pytest.fixture

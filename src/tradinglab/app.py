@@ -7384,14 +7384,15 @@ def main() -> int:
     except Exception:  # noqa: BLE001
         pass
 
-    # Inject DPAPI-encrypted credentials (if any) into ``os.environ``
-    # before vendor modules read credentials. No-op on non-Windows or
-    # when no blob exists yet. New users hit the credentials dialog
-    # via Help \u2192 Configure Credentials….
+    # Probe the encrypted credential store (and migrate a v1 blob) before
+    # vendor modules read credentials. Nothing is injected into
+    # ``os.environ`` any more — ``data.credentials`` resolves the store as
+    # its own layer. No-op on non-Windows or when no blob exists yet. New
+    # users hit the credentials dialog via Help \u2192 Configure Credentials….
     _dpapi_prime_result: Optional[str] = None
     try:
-        from .gui.credentials_dialog import prime_environment_from_dpapi
-        _dpapi_prime_result = prime_environment_from_dpapi()
+        from .gui.credentials_dialog import check_credential_store
+        _dpapi_prime_result = check_credential_store()
     except Exception:  # noqa: BLE001
         pass
 

@@ -180,40 +180,39 @@ def _credentials_path():
 # ---------------------------------------------------------------------------
 
 
-def prime_environment_from_dpapi() -> str:
-    """Load DPAPI-stored credentials into :data:`os.environ`. No-op on non-Windows.
+def check_credential_store() -> str:
+    """Report the health of the encrypted credential store. Injects nothing.
 
-    Called from :func:`tradinglab.app.main` after the GUI mainloop
-    starts up but BEFORE any vendor module reads credentials. Existing
-    ``os.environ`` values are NOT overwritten — a shell ``$env:`` set
-    in front of the launcher still wins, mirroring the dotenv contract.
+    Called from :func:`tradinglab.app.main` at startup. Before v2 this
+    function was ``prime_environment_from_dpapi`` and its job was to decrypt
+    the blob and push every value into ``os.environ`` so that
+    ``data.credentials`` — which only knew how to read the environment —
+    could see them.
 
-    Returns a string sentinel describing the outcome so the caller
-    can distinguish "boring miss" (first launch, no blob yet) from
-    "suspicious" (blob is on disk but failed to decrypt — possibly
-    tampered with or copied from a different machine):
+    That indirection is gone: ``credentials._build_layers`` reads the store
+    as its own resolution layer, ranked below a real shell export and above
+    the plaintext files, which is exactly where priming placed it. Removing
+    the injection keeps secrets out of the process environment, where they
+    were reachable by crash dumps, subprocesses and any library that logs
+    ``os.environ``.
 
-    * ``"loaded"`` — blob decrypted and at least one env var was
-      injected. Steady-state on every subsequent launch.
-    * ``"missing"`` — no blob on disk yet. Normal on first launch
-      and after the user clears credentials.
-    * ``"dpapi_unavailable"`` — running on a platform without DPAPI
-      (macOS / Linux). The user falls back to env-var-only mode.
-    * ``"decrypt_error"`` — blob is present on disk but
-      :func:`_dpapi.unprotect` rejected it. This is suspicious and
-      the caller should surface it on the status bar.
-    * ``"io_error"`` — could not read the blob file (permission /
-      transient disk error). Treated like ``decrypt_error`` for
-      reporting purposes.
-    * ``"import_error"`` — :mod:`tradinglab._dpapi` could not be
-      imported. Shouldn't happen in a packaged build but kept for
-      defense in depth.
+    What remains is the *diagnostic*, which the caller still needs in order
+    to distinguish a boring miss from a suspicious one:
 
-    Note: The pre-refactor signature returned ``bool``; tests that
-    relied on truthy / falsy still work because every value except
-    ``"loaded"`` is falsy via string truthiness only when compared
-    to an empty string, and ``"loaded" == "loaded"`` is the explicit
-    success check. Update tests accordingly.
+    * ``"loaded"`` — store decrypted and holds at least one credential.
+    * ``"missing"`` — no blob yet (first launch, or after a clear).
+    * ``"dpapi_unavailable"`` — platform without DPAPI (macOS / Linux); the
+      user falls back to environment-variable-only mode.
+    * ``"decrypt_error"`` — blob present but :func:`_dpapi.unprotect`
+      rejected it. Suspicious (tampered, or copied from another machine);
+      the caller surfaces this on the status bar.
+    * ``"io_error"`` — could not read the blob (permissions / transient
+      disk error). Reported like ``decrypt_error``.
+    * ``"import_error"`` — :mod:`tradinglab._dpapi` would not import.
+      Shouldn't happen in a packaged build; kept for defence in depth.
+
+    Also performs the one-time v1 → v2 schema migration, which is the only
+    write this function makes.
     """
     try:
         from .. import _dpapi
@@ -221,30 +220,23 @@ def prime_environment_from_dpapi() -> str:
         return "import_error"
     if not _dpapi.is_available():
         return "dpapi_unavailable"
+    from ..data import credential_store
     try:
-        data = _dpapi.load_secrets_dict(_credentials_path())
+        raw = _dpapi.load_json_object(credential_store.store_path())
     except _dpapi.DpapiError:
         return "decrypt_error"
     except OSError:
         return "io_error"
-    if data is None:
-        # ``load_secrets_dict`` returns ``None`` when the blob file
-        # does not exist (first launch). An empty ``{}`` means the
-        # file is present but encoded an empty mapping — treat that
-        # the same as "no work to do" since nothing actionable is
-        # there to inject.
+    if not raw:
+        # ``None`` (no file) and ``{}`` (present but empty) are both
+        # "nothing actionable here".
         return "missing"
-    if not data:
-        return "missing"
-    injected = 0
-    for env_name, value in data.items():
-        if not isinstance(env_name, str) or not env_name:
-            continue
-        if env_name in os.environ and os.environ.get(env_name):
-            continue
-        os.environ[env_name] = str(value)
-        injected += 1
-    return "loaded" if injected > 0 else "missing"
+    try:
+        credential_store.migrate_if_needed()
+    except Exception:  # noqa: BLE001 - migration is best-effort
+        pass
+    records = credential_store.load_all()
+    return "loaded" if any(r.has_values() for r in records.values()) else "missing"
 
 
 # ---------------------------------------------------------------------------
@@ -687,17 +679,26 @@ class CredentialsDialog(BaseModalDialog):
         }
 
     def _populate_fields(self) -> None:
+        """Pre-fill from the resolved credential layers, not ``os.environ``.
+
+        The environment is now just one layer among four. Reading it directly
+        would render a stored (or file-backed) credential as an empty box —
+        the "my keys vanished" failure that made clearing feel broken.
+        """
+        from ..data import credentials as _creds
+
+        resolved = _creds.effective_values()
         for env_name, entry in self._entries.items():
             if env_name in self._choice_value_by_display:
                 # Dropdown: map the stored env value → its display; default to
                 # the first (safe) choice when unset/unrecognised.
-                current = (os.environ.get(env_name, "") or "").lower()
+                current = (resolved.get(env_name, "") or "").lower()
                 display = self._choice_display_by_value[env_name].get(current)
                 if display is None:
                     display = next(iter(self._choice_value_by_display[env_name]))
                 entry.set(display)  # ttk.Combobox
                 continue
-            current = os.environ.get(env_name, "")
+            current = resolved.get(env_name, "")
             if current:
                 entry.delete(0, tk.END)
                 entry.insert(0, current)
@@ -715,22 +716,56 @@ class CredentialsDialog(BaseModalDialog):
 
     # ---- actions -------------------------------------------------------
 
-    def _apply_to_environment(self, values: dict[str, str]) -> None:
-        """Push ``values`` into ``os.environ`` **and remove what was cleared**.
+    def _persist_to_store(self, values: dict[str, str]) -> None:
+        """Write ``values`` into the encrypted per-vendor store.
 
-        The removal half is essential and easy to miss: ``_collect`` only
-        reports non-empty fields, and
-        :func:`tradinglab.data.credentials._resolve` consults ``os.environ``
-        before any file. So a key the user just deleted would keep resolving
-        from the stale environment entry for the rest of the session — the
-        source would stay in the dropdown and keep making authenticated
-        requests with a credential the user believes they revoked.
+        Replaces the old "push everything into ``os.environ``" step. Every
+        data source resolves through ``credentials.get_credentials()``, and
+        ``credentials._build_layers`` now reads the store as its own layer —
+        so nothing needs the secrets to be in the process environment, and
+        keeping them out of it removes a process-wide leak surface (crash
+        dumps, subprocesses, any library that logs ``os.environ``).
+
+        A vendor whose *credential* fields (everything except the read-only
+        choice combos, which always report a value) are all empty is cleared
+        outright rather than left as a metadata-only husk.
+        """
+        from ..data import credential_store
+
+        for prefix, _section, vendor in _SECTIONS:
+            subset = {n: v for n, v in values.items() if n.startswith(prefix)}
+            has_secret = any(n not in _CHOICE_FIELDS and v
+                             for n, v in subset.items())
+            if has_secret:
+                credential_store.save_vendor(vendor, subset)
+            else:
+                credential_store.clear_vendor(vendor)
+
+    def _apply_session_only(self, values: dict[str, str]) -> None:
+        """Fallback for platforms without DPAPI: values live in this process.
+
+        Also the cleanup path for an upgrade — a pre-v2 build primed the blob
+        into ``os.environ``, so a name the user just cleared must be popped or
+        it would keep resolving from the stale entry for the rest of the
+        session (``credentials`` consults ``os.environ`` first).
         """
         for name in _managed_env_names():
             if name in values:
                 os.environ[name] = values[name]
             else:
                 os.environ.pop(name, None)
+
+    def _clear_primed_environment(self, values: dict[str, str]) -> None:
+        """Drop managed names this process primed in a pre-v2 session.
+
+        Only removes names the user did **not** just supply, and only ones
+        that are absent from the store — a real shell export is left alone
+        because we cannot distinguish it here, and it is documented to win.
+        """
+        for name in _managed_env_names():
+            if name in values:
+                continue
+            os.environ.pop(name, None)
 
     def _on_save(self) -> None:
         values = self._collect()
@@ -753,7 +788,7 @@ class CredentialsDialog(BaseModalDialog):
                 "session only (no on-disk persistence).",
                 parent=self,
             )
-            self._apply_to_environment(values)
+            self._apply_session_only(values)
             self._close_and_refresh()
             return
         try:
@@ -772,7 +807,7 @@ class CredentialsDialog(BaseModalDialog):
             return
 
         try:
-            _dpapi.save_secrets_dict(_credentials_path(), values)
+            self._persist_to_store(values)
         except _dpapi.DpapiError as e:
             messagebox.showerror(
                 "Configure Credentials",
@@ -788,9 +823,10 @@ class CredentialsDialog(BaseModalDialog):
             )
             return
 
-        # Apply to current process too so the user doesn't have to
-        # restart for the new values to take effect.
-        self._apply_to_environment(values)
+        # Secrets are NOT pushed into os.environ any more; the store is its
+        # own resolution layer. Still drop anything a pre-v2 session primed,
+        # or a cleared key would keep resolving from the stale entry.
+        self._clear_primed_environment(values)
         self._close_and_refresh()
 
     def _current_sources(self) -> tuple[str, ...]:
@@ -952,6 +988,6 @@ def open_credentials_dialog(
 
 __all__ = [
     "CredentialsDialog",
+    "check_credential_store",
     "open_credentials_dialog",
-    "prime_environment_from_dpapi",
 ]

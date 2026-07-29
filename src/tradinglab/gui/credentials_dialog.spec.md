@@ -15,15 +15,25 @@ for this iteration) — the dialog still works but values live only
 in the current `os.environ`.
 
 ## Public API
-- `prime_environment_from_dpapi() -> str` — read the DPAPI blob,
-  decrypt, and inject every `KEY=VALUE` into `os.environ` (without
-  overwriting pre-existing values). Called from `app.main()`
-  immediately after `_enable_high_dpi_awareness()` and BEFORE
-  `ChartApp()` so the very first vendor-credential read sees the
-  values. Returns a **string sentinel** indicating outcome:
-  - `"loaded"` — at least one env var was injected from the blob.
-  - `"missing"` — no blob file, or empty blob, or every key in the
-    blob was already present in `os.environ`.
+- `check_credential_store() -> str` — probe the encrypted credential
+  store and perform the one-time v1 → v2 schema migration. Called from
+  `app.main()` immediately after `_enable_high_dpi_awareness()` and
+  BEFORE `ChartApp()`.
+
+  **It injects nothing.** This function used to be
+  `prime_environment_from_dpapi`, whose job was to decrypt the blob and
+  push every `KEY=VALUE` into `os.environ` so that `data.credentials` —
+  which only knew how to read the environment — could see them.
+  `credentials._build_layers` now resolves the store as its own layer,
+  ranked below a real shell export and above the plaintext files, which
+  is exactly where priming placed it. Dropping the injection keeps
+  secrets out of the process environment, where they were reachable by
+  crash dumps, subprocesses, and any library that logs `os.environ`.
+
+  What remains is the diagnostic sentinel `app.main()` needs to tell a
+  boring miss from a suspicious one:
+  - `"loaded"` — store decrypted and holds at least one credential.
+  - `"missing"` — no blob file, empty blob, or records with no values.
   - `"dpapi_unavailable"` — `_dpapi.is_available()` is `False`
     (non-Windows host).
   - `"decrypt_error"` — blob exists but `_dpapi.unprotect()`
@@ -79,33 +89,45 @@ credentials UI is just persistence, so saving Schwab keys on a
 build that hasn't shipped the OAuth flow yet is harmless (the
 values sit in the DPAPI blob until the source starts reading them).
 
-Existing DPAPI-stored Schwab keys are NOT erased between launches —
-`prime_environment_from_dpapi` always injects them into
-`os.environ` on next launch so a future `SCHWAB_REGISTRATION_ENABLED
-= True` flip picks them straight up without the user having to
-re-enter anything.
+Existing stored Schwab keys are NOT erased between launches — they stay
+in the encrypted store and `data.credentials` resolves them on every
+launch, so a future `SCHWAB_REGISTRATION_ENABLED = True` flip picks them
+straight up without the user having to re-enter anything.
 
 ## Save semantics
-- Empty form + Save → confirm dialog → write empty blob (clears
-  prior config).
-- Non-empty form + Save → DPAPI-encrypt + atomic-write blob to
-  `%LOCALAPPDATA%\TradingLab\credentials.dat`. Apply to current
-  `os.environ`. Call `data.credentials.reload()` to refresh the
-  in-process cache.
+- Empty form + Save → confirm dialog → the affected vendors are cleared
+  from the store.
+- Non-empty form + Save → `_persist_to_store(values)` writes **per
+  vendor** via `credential_store.save_vendor`, leaving other vendors
+  untouched. A vendor whose credential fields are all empty is cleared
+  outright rather than left as a metadata-only husk — note the readonly
+  plan combo always reports a value, so "is there a secret?" is judged
+  excluding `_CHOICE_FIELDS`. Then `_clear_primed_environment` pops any
+  managed name a **pre-v2** session injected, and
+  `data.credentials.reload()` refreshes the in-process cache.
+- Non-Windows (no DPAPI) → `_apply_session_only(values)` writes
+  `os.environ` for this process only, and says so in a message box.
 - Cancel → no on-disk change; `os.environ` also untouched.
 
 ## Atomic write
-Delegates to `_dpapi.save_secrets_dict` which writes a sibling
-`<file>.<rand>.tmp` and `os.replace`s. A crash mid-save leaves the
-prior blob intact.
+Delegates to `_dpapi.save_json_object` (via `credential_store`) which
+writes a sibling `<file>.<rand>.tmp` and `os.replace`s. A crash
+mid-save leaves the prior blob intact.
+
+## Pre-fill reads the resolved layers, not `os.environ`
+`_populate_fields` calls `credentials.effective_values()`. Reading the
+environment directly was correct only while the store was primed into
+it; once priming stopped, an environment read rendered every stored
+credential as an empty box — the "my keys vanished" failure. The
+environment is now just one of four layers.
 
 ## Threat model
 DPAPI binds the cipher to the current Windows user account. A
 copied `credentials.dat` cannot be decrypted on a different
-machine or by a different user. The plaintext exists in
-`os.environ` while the process runs — a crash dump that captures
-the environment can leak the secret, but that's a property of
-every Python program that holds secrets in env vars.
+machine or by a different user. **Secrets are no longer written into
+`os.environ`** — the process still holds them in memory (unavoidable),
+but they are out of the environment block that crash dumps and child
+processes inherit.
 
 ## Sizing (resizable + content-derived `minsize`)
 Opens at `default_geometry="600x660"`, `resizable=(True, True)`, and after
@@ -227,17 +249,26 @@ form both scrolls and contains a Combobox).
 Tests: `tests/unit/gui/test_credentials_dialog_verify.py`.
 ## Removing credentials is symmetric with adding
 
-`_apply_to_environment(values)` both **sets** present values and **removes**
-managed names absent from `values`.
+Two paths, because there are two storage backends.
 
-The removal half is the non-obvious part. `_collect()` only reports
-non-empty fields, and `credentials._resolve` consults `os.environ` before
-any file — so without an explicit `os.environ.pop`, a key the user just
-deleted keeps resolving from the stale environment entry for the rest of the
-session. The source stays in the dropdown and keeps making authenticated
-requests with a credential the user believes they revoked. Only names in
-`_managed_env_names()` (the `_FIELDS` keys) are touched; unrelated
-environment variables are never modified.
+`_persist_to_store(values)` is the real one on Windows. It walks
+`_SECTIONS` and either saves that vendor's subset or calls
+`credential_store.clear_vendor`. A vendor is cleared when **no
+credential field** survives — judged excluding `_CHOICE_FIELDS`, since
+`ALPACA_TIER` is a readonly combobox that always reports a value and
+would otherwise keep a husk record alive forever.
+
+`_apply_session_only(values)` is the non-DPAPI fallback: it both **sets**
+present values and **removes** managed names absent from `values`.
+`_clear_primed_environment(values)` is the same removal half applied
+after a successful store write, to undo what a **pre-v2** session
+injected — without it a key the user just deleted would keep resolving
+from the stale environment entry (which outranks the store) for the rest
+of the session, and the source would stay in the dropdown making
+authenticated requests with a credential the user believes they revoked.
+
+Only names in `_managed_env_names()` (the `_FIELDS` keys) are ever
+touched; unrelated environment variables are never modified.
 
 `_has_credential_values(values)` ignores `_CHOICE_FIELDS` when deciding
 whether the form is "empty". `ALPACA_TIER` is a readonly combobox that

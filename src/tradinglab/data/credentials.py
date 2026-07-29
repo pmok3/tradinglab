@@ -1,4 +1,4 @@
-"""Load broker / data-vendor credentials from `.env`.
+"""Load broker / data-vendor credentials from every supported layer.
 
 Stdlib-only: no `python-dotenv` dependency. The parser intentionally
 only handles the small subset of dotenv we need (``KEY=VALUE`` lines,
@@ -8,9 +8,30 @@ you need those, paste real values into the file.
 
 Lookup order (highest → lowest):
 
-1. ``os.environ`` — already-exported shell env wins over the file.
-2. ``<repo_root>/.env`` — the canonical project-local file.
-3. ``<repo_root>/.env.local`` — optional override for personal tweaks.
+1. ``os.environ`` — a real shell export always wins (power-user / CI
+   escape hatch).
+2. The **encrypted credential store** (:mod:`tradinglab.data.credential_store`),
+   which is what the in-app dialog writes.
+3. ``alpaca.txt`` / ``credentials.txt`` — plaintext convenience files.
+4. ``<repo_root>/.env`` / ``.env.local`` — developer-only, skipped in
+   frozen builds.
+
+This order preserves the pre-v2 behaviour exactly. The store used to be
+*primed into* ``os.environ`` at startup without overwriting existing
+values, which made it rank below a real export and above the files —
+resolving it directly as its own layer reproduces that precedence
+without pushing secrets into the process environment (see
+``credential_store.spec.md`` and the provenance section below).
+
+Provenance
+----------
+
+:func:`describe` reports, per field, **which layer supplied the active
+value** and the path it came from — never the value itself. Without it
+the UI cannot answer "why is Alpaca still configured after I cleared
+it?", which is precisely the dead end the old dialog hit: it pre-filled
+from ``os.environ`` only, so a file-backed credential rendered as an
+empty box that could not be cleared.
 
 The first call to :func:`get_credentials` populates an in-process
 cache. Subsequent calls are O(1). Environment changes after first
@@ -35,10 +56,97 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 LOG = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Provenance
+# ---------------------------------------------------------------------------
+
+#: A real ``os.environ`` export — outranks everything, and this app cannot
+#: clear it (only the shell / OS that set it can).
+ORIGIN_ENVIRON = "environ"
+#: The DPAPI-encrypted store written by the credentials dialog. Managed:
+#: fully readable, writable and clearable from the UI.
+ORIGIN_STORE = "store"
+#: A plaintext ``alpaca.txt`` / ``credentials.txt``. Clearable only by
+#: deleting/editing the file — the dialog offers to do exactly that.
+ORIGIN_FILE = "file"
+#: A developer ``.env`` / ``.env.local``. Never read in frozen builds.
+ORIGIN_DOTENV = "dotenv"
+#: No layer supplied a value.
+ORIGIN_UNSET = "unset"
+
+#: Origins the app can remove on the user's behalf.
+MANAGED_ORIGINS: frozenset[str] = frozenset({ORIGIN_STORE})
+
+ALL_ORIGINS: tuple[str, ...] = (
+    ORIGIN_ENVIRON, ORIGIN_STORE, ORIGIN_FILE, ORIGIN_DOTENV, ORIGIN_UNSET,
+)
+
+#: Every env-var name the model knows about. The single source of truth for
+#: "which fields are credentials"; the dialog renders labels for these.
+MANAGED_FIELDS: tuple[str, ...] = (
+    "SCHWAB_APP_KEY",
+    "SCHWAB_APP_SECRET",
+    "SCHWAB_REDIRECT_URI",
+    "ALPACA_API_KEY_ID",
+    "ALPACA_API_SECRET_KEY",
+    "ALPACA_TIER",
+    "ALPACA_FEED",
+    "ALPACA_ADJUSTMENT",
+    "POLYGON_API_KEY",
+)
+
+
+@dataclass(frozen=True)
+class FieldOrigin:
+    """Where the active value for one credential field came from.
+
+    Deliberately carries **no value** — this object is built for display and
+    logging, and a provenance record that leaked the secret would defeat the
+    point of encrypting it.
+    """
+
+    name: str
+    origin: str = ORIGIN_UNSET
+    path: str = ""
+
+    @property
+    def present(self) -> bool:
+        return self.origin != ORIGIN_UNSET
+
+    @property
+    def clearable(self) -> bool:
+        """True when the app itself can remove this value."""
+        return self.origin in MANAGED_ORIGINS
+
+    def describe(self) -> str:
+        """Short human phrase for the dialog's provenance line."""
+        if self.origin == ORIGIN_UNSET:
+            return "not set"
+        if self.origin == ORIGIN_ENVIRON:
+            return f"environment variable {self.name}"
+        if self.origin == ORIGIN_STORE:
+            return "encrypted store"
+        if self.origin == ORIGIN_FILE:
+            return f"file {self.path}" if self.path else "file"
+        if self.origin == ORIGIN_DOTENV:
+            return f".env {self.path}" if self.path else ".env"
+        return self.origin
+
+
+@dataclass(frozen=True)
+class _Layer:
+    """One resolution layer: an origin tag, its values, and where they live."""
+
+    origin: str
+    values: dict[str, str] = field(default_factory=dict)
+    path: str = ""
+
 
 
 # ---------------------------------------------------------------------------
@@ -186,6 +294,17 @@ def _candidate_dotenv_paths() -> Iterable[Path]:
     yield cwd / ".env.local"
 
 
+def _dotenv_path_hint() -> str:
+    """Highest-precedence dotenv file that exists, for provenance display."""
+    try:
+        for path in reversed(list(_candidate_dotenv_paths())):
+            if path.is_file():
+                return str(path)
+    except OSError:
+        pass
+    return ""
+
+
 def _load_dotenv_files() -> dict[str, str]:
     """Merge all known dotenv files. Later files override earlier."""
     merged: dict[str, str] = {}
@@ -330,13 +449,13 @@ def _candidate_credential_dirs() -> list[Path]:
     return dirs
 
 
-def _load_credential_txt_files() -> dict[str, str]:
-    """Merge all discoverable ``alpaca.txt`` / ``credentials.txt`` files.
+def _credential_txt_layers() -> list[_Layer]:
+    """One layer per discoverable ``alpaca.txt`` / ``credentials.txt``.
 
-    Later directories override earlier. Only file names + field counts are
+    In increasing-precedence order. Only file names + field counts are
     logged — **never** the secret values.
     """
-    merged: dict[str, str] = {}
+    layers: list[_Layer] = []
     seen: set[str] = set()
     for d in _candidate_credential_dirs():
         for name in _CRED_TXT_NAMES:
@@ -357,14 +476,40 @@ def _load_credential_txt_files() -> dict[str, str]:
                 continue
             parsed = _parse_credential_txt(text)
             if parsed:
-                merged.update(parsed)
+                layers.append(_Layer(ORIGIN_FILE, parsed, str(path)))
                 LOG.info("credentials: loaded %d field(s) from %s",
                          len(parsed), path.name)
+    return layers
+
+
+def _load_credential_txt_files() -> dict[str, str]:
+    """Merge all discoverable ``alpaca.txt`` / ``credentials.txt`` files.
+
+    Later directories override earlier.
+    """
+    merged: dict[str, str] = {}
+    for layer in _credential_txt_layers():
+        merged.update(layer.values)
     return merged
 
 
+def plaintext_credential_files() -> list[Path]:
+    """Paths of plaintext credential files currently supplying values.
+
+    Powers the "these credentials live in cleartext — secure them?" migration
+    offer in the credentials dialog. Returns only files that actually parsed
+    to at least one field, so an empty or comment-only file is not reported.
+    """
+    return [Path(layer.path) for layer in _credential_txt_layers() if layer.path]
+
+
 def _resolve(name: str, file_values: dict[str, str]) -> str | None:
-    """``os.environ`` wins over the file. Empty strings → None."""
+    """``os.environ`` wins over the file. Empty strings → None.
+
+    Retained for callers that already hold a merged file map (and for the
+    dialog's typed-value path). Layer-aware resolution lives in
+    :func:`_resolve_layers`.
+    """
     val = os.environ.get(name)
     if val is None:
         val = file_values.get(name)
@@ -374,12 +519,70 @@ def _resolve(name: str, file_values: dict[str, str]) -> str | None:
     return val or None
 
 
+def _build_layers() -> list[_Layer]:
+    """Resolution layers in **decreasing** precedence order.
+
+    ``os.environ`` first (a real export is the documented escape hatch), then
+    the encrypted store, then plaintext files, then dotenv. This reproduces
+    the pre-v2 ordering, where the store was primed into ``os.environ``
+    without overwriting existing entries.
+
+    The merged ``_load_credential_txt_files`` / ``_load_dotenv_files``
+    helpers remain the monkeypatch seams the loader tests use; the per-file
+    layer walk only adds path attribution on top of the same data.
+    """
+    layers: list[_Layer] = [
+        _Layer(ORIGIN_ENVIRON,
+               {n: os.environ[n] for n in MANAGED_FIELDS if n in os.environ}),
+        _Layer(ORIGIN_STORE, _store_fields(), _store_path_str()),
+    ]
+    # Collected in increasing precedence, so reverse into this list.
+    layers.extend(reversed(_credential_txt_layers()))
+    dotenv_values = _load_dotenv_files()
+    if dotenv_values:
+        layers.append(_Layer(ORIGIN_DOTENV, dotenv_values, _dotenv_path_hint()))
+    return layers
+
+
+def _store_fields() -> dict[str, str]:
+    """Fields from the encrypted store. Never raises — a broken store is
+    'nothing configured', not a failed boot."""
+    try:
+        from . import credential_store
+        return credential_store.flat_fields()
+    except Exception as e:  # noqa: BLE001 - store must never break resolution
+        LOG.warning("credentials: cannot read encrypted store: %s", e)
+        return {}
+
+
+def _store_path_str() -> str:
+    try:
+        from . import credential_store
+        return str(credential_store.store_path())
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _resolve_layers(name: str, layers: list[_Layer]) -> tuple[str | None, FieldOrigin]:
+    """First layer with a non-empty value wins. Returns ``(value, origin)``."""
+    for layer in layers:
+        raw = layer.values.get(name)
+        if raw is None:
+            continue
+        val = str(raw).strip()
+        if not val:
+            continue
+        return val, FieldOrigin(name=name, origin=layer.origin, path=layer.path)
+    return None, FieldOrigin(name=name)
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
 
 _cache: Credentials | None = None
+_origins_cache: dict[str, FieldOrigin] | None = None
 
 
 def get_credentials() -> Credentials:
@@ -397,19 +600,100 @@ def reload() -> Credentials:
     return _cache
 
 
+def describe() -> dict[str, FieldOrigin]:
+    """Per-field provenance for the currently-resolved credentials.
+
+    Maps every name in :data:`MANAGED_FIELDS` to the layer that supplied its
+    active value. **Contains no secret values** — this feeds the credentials
+    dialog's "where did this come from?" line and the log, both of which must
+    stay safe to screenshot.
+
+    Populated as a side effect of loading, so it always agrees with what
+    :func:`get_credentials` returned rather than re-resolving independently.
+    """
+    if _origins_cache is None:
+        get_credentials()
+    return dict(_origins_cache or {})
+
+
+def origin_of(name: str) -> FieldOrigin:
+    """Provenance for a single field (``ORIGIN_UNSET`` when absent)."""
+    return describe().get(name, FieldOrigin(name=name))
+
+
+def effective_values() -> dict[str, str]:
+    """Active value for every managed field that resolves to something.
+
+    **Returns secrets.** The credentials dialog needs them to pre-fill its
+    form; nothing else should call this. Everything that merely wants to know
+    *whether* or *from where* a credential is set wants :func:`describe`.
+
+    This replaced reading ``os.environ`` directly in the dialog. Once the
+    store stopped being primed into the environment, an environment read
+    showed blank boxes for stored credentials — the exact "my keys vanished"
+    failure the provenance work exists to prevent.
+    """
+    layers = _build_layers()
+    out: dict[str, str] = {}
+    for name in MANAGED_FIELDS:
+        value, _origin = _resolve_layers(name, layers)
+        if value:
+            out[name] = value
+    return out
+
+
+def vendor_origin(vendor: str) -> FieldOrigin:
+    """Provenance for a vendor, taken from its highest-precedence set field.
+
+    A vendor's key and secret virtually always arrive together from one
+    layer; when they do not, the winning layer is the one that matters for
+    "can I clear this?", so report the strongest.
+    """
+    return vendor_origin_from(describe(), vendor)
+
+
 def _load_now() -> Credentials:
-    f = _load_dotenv_files()
-    # Plaintext credential files (alpaca.txt / credentials.txt) override a
-    # dev ``.env`` but are still beaten by a real ``os.environ`` export /
-    # DPAPI-primed value (``_resolve`` consults ``os.environ`` first).
-    f.update(_load_credential_txt_files())
-    creds = build_credentials(lambda name: _resolve(name, f))
+    global _origins_cache
+    layers = _build_layers()
+    origins: dict[str, FieldOrigin] = {}
+
+    def get(name: str) -> str | None:
+        value, origin = _resolve_layers(name, layers)
+        origins[name] = origin
+        return value
+
+    creds = build_credentials(get)
+    # ``build_credentials`` only asks for the names it needs; record the rest
+    # so ``describe()`` covers every managed field.
+    for name in MANAGED_FIELDS:
+        if name not in origins:
+            _, origin = _resolve_layers(name, layers)
+            origins[name] = origin
+    _origins_cache = origins
+
     if creds.configured_vendors():
         LOG.info("credentials: configured vendors: %s",
                  ", ".join(creds.configured_vendors()))
+        for vendor in creds.configured_vendors():
+            LOG.debug("credentials: %s supplied by %s",
+                      vendor, vendor_origin_from(origins, vendor).describe())
     else:
         LOG.debug("credentials: no vendors configured (all empty)")
     return creds
+
+
+def vendor_origin_from(origins: dict[str, FieldOrigin], vendor: str) -> FieldOrigin:
+    """:func:`vendor_origin` against an explicit origins map (no cache read)."""
+    from .credential_store import vendor_for_field
+
+    ranked = {o: i for i, o in enumerate(ALL_ORIGINS)}
+    best: FieldOrigin | None = None
+    for name, org in origins.items():
+        if not org.present or vendor_for_field(name) != vendor:
+            continue
+        if best is None or ranked[org.origin] < ranked[best.origin]:
+            best = org
+    return best or FieldOrigin(name=vendor)
 
 
 def build_credentials(get: Callable[[str], str | None]) -> Credentials:

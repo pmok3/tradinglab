@@ -465,7 +465,7 @@ main():
 
     # Security audit M1 / L5 — DPAPI prime BEFORE ChartApp construction
     # so vendor-credential reads see env vars on the first attempt.
-    _dpapi_prime_result = prime_environment_from_dpapi()
+    _dpapi_prime_result = check_credential_store()
     # Returns one of: "loaded" / "missing" / "dpapi_unavailable" /
     # "decrypt_error" / "io_error" / "import_error". Never raises.
 
