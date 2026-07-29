@@ -41,6 +41,7 @@ A one-spec-per-`.py` documentation set. Each spec follows a fixed 9-section layo
 | `data/_http.spec.md` | Shared credential-safe HTTP opener — `credentialed_opener()` strips auth on cross-host 30x; `MAX_RESPONSE_BYTES = 8 MB`. |
 | `data/base.spec.md` | `DataFetcher` protocol. |
 | `data/verify.spec.md` | Credential verification ("Test connection") — vendor-agnostic `VerifyResult` + status taxonomy + `register_verifier` / `verify_vendor`. |
+| `data/credential_store.spec.md` | Versioned per-vendor DPAPI credential store — v2 schema, v1 auto-migration, persisted verification verdicts (status + timestamp only). |
 | `data/coverage.spec.md` | Per-`(source,ticker,interval)` fetch-coverage sidecar — merged fetched range segments + data-start watermark; underpins the targeted intraday fetch. See [`TARGETED_FETCH.md`](TARGETED_FETCH.md). |
 | `data/normalize.spec.md` | `candles_from_dataframe` + `_PREBUILT_ARRAYS` side-channel (identity-paired). |
 | `data/parallel.spec.md` | Parallel multi-ticker fetch helper. |

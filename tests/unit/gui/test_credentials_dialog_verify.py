@@ -23,6 +23,7 @@ import tkinter as tk
 import pytest
 
 import tradinglab.data as tld
+from tradinglab.data import credential_store as cs
 from tradinglab.data import verify
 from tradinglab.gui import credentials_dialog as cd
 
@@ -549,41 +550,123 @@ class TestSaveRefreshesRegistration:
 class TestCredentialRemoval:
     """Deleting a key must remove its source, symmetrically with adding.
 
-    ``_collect`` only reports non-empty fields, and
-    ``credentials._resolve`` reads ``os.environ`` before any file — so
-    without an explicit clear, a deleted key keeps resolving from a stale
-    environment entry and the source stays in the dropdown, still making
-    authenticated requests with a credential the user believes is gone.
+    ``_collect`` only reports non-empty fields, so without an explicit clear
+    a deleted key keeps resolving and the source stays in the dropdown, still
+    making authenticated requests with a credential the user believes is gone.
+
+    Two paths do this now. ``_persist_to_store`` is the real one on Windows:
+    it clears the vendor outright when no credential field survives.
+    ``_apply_session_only`` is the non-DPAPI fallback (and the upgrade cleanup
+    path) and still writes/pops ``os.environ``.
     """
 
-    def test_apply_clears_emptied_fields(self, root, monkeypatch):
+    # -- store path ------------------------------------------------------
+
+    def test_persist_clears_vendor_when_fields_emptied(self, root, monkeypatch,
+                                                       tmp_path):
+        saved: dict[str, dict] = {}
+        cleared: list[str] = []
+        monkeypatch.setattr(cs, "save_vendor",
+                            lambda v, f, **k: saved.__setitem__(v, f))
+        monkeypatch.setattr(cs, "clear_vendor",
+                            lambda v, **k: cleared.append(v) or True)
+
+        dlg = cd.CredentialsDialog(root)
+        try:
+            dlg._entries["ALPACA_API_KEY_ID"].delete(0, tk.END)
+            dlg._entries["ALPACA_API_SECRET_KEY"].delete(0, tk.END)
+            dlg._persist_to_store(dlg._collect())
+        finally:
+            dlg.destroy()
+
+        assert "alpaca" in cleared
+        assert "alpaca" not in saved
+
+    def test_persist_saves_present_values_per_vendor(self, root, monkeypatch):
+        saved: dict[str, dict] = {}
+        monkeypatch.setattr(cs, "save_vendor",
+                            lambda v, f, **k: saved.__setitem__(v, f))
+        monkeypatch.setattr(cs, "clear_vendor", lambda v, **k: False)
+
+        dlg = cd.CredentialsDialog(root)
+        try:
+            dlg._entries["ALPACA_API_KEY_ID"].delete(0, tk.END)
+            dlg._entries["ALPACA_API_KEY_ID"].insert(0, "NEW_KEY")
+            dlg._persist_to_store(dlg._collect())
+        finally:
+            dlg.destroy()
+
+        assert saved["alpaca"]["ALPACA_API_KEY_ID"] == "NEW_KEY"
+        # Polygon was untouched, so it must not have been written.
+        assert "polygon" not in saved
+
+    def test_persist_never_writes_secrets_to_environ(self, root, monkeypatch):
+        """The whole point of v2: saving must not export anything."""
+        monkeypatch.setattr(cs, "save_vendor", lambda *a, **k: None)
+        monkeypatch.setattr(cs, "clear_vendor", lambda *a, **k: False)
+        monkeypatch.delenv("POLYGON_API_KEY", raising=False)
+
+        dlg = cd.CredentialsDialog(root)
+        try:
+            dlg._entries["POLYGON_API_KEY"].delete(0, tk.END)
+            dlg._entries["POLYGON_API_KEY"].insert(0, "SECRET_PG")
+            dlg._persist_to_store(dlg._collect())
+        finally:
+            dlg.destroy()
+
+        assert "POLYGON_API_KEY" not in os.environ
+
+    def test_tier_alone_does_not_keep_a_vendor_record(self, root, monkeypatch):
+        """The readonly plan combo always reports a value; it is not a secret."""
+        saved: dict[str, dict] = {}
+        cleared: list[str] = []
+        monkeypatch.setattr(cs, "save_vendor",
+                            lambda v, f, **k: saved.__setitem__(v, f))
+        monkeypatch.setattr(cs, "clear_vendor",
+                            lambda v, **k: cleared.append(v) or True)
+
+        dlg = cd.CredentialsDialog(root)
+        try:
+            dlg._entries["ALPACA_API_KEY_ID"].delete(0, tk.END)
+            dlg._entries["ALPACA_API_SECRET_KEY"].delete(0, tk.END)
+            collected = dlg._collect()
+            assert "ALPACA_TIER" in collected  # combo still contributes
+            dlg._persist_to_store(collected)
+        finally:
+            dlg.destroy()
+
+        assert "alpaca" in cleared
+
+    # -- session-only fallback -------------------------------------------
+
+    def test_session_only_clears_emptied_fields(self, root, monkeypatch):
         monkeypatch.setenv("ALPACA_API_KEY_ID", "OLD_KEY")
         monkeypatch.setenv("ALPACA_API_SECRET_KEY", "OLD_SECRET")
         dlg = cd.CredentialsDialog(root)
         try:
             dlg._entries["ALPACA_API_KEY_ID"].delete(0, tk.END)
             dlg._entries["ALPACA_API_SECRET_KEY"].delete(0, tk.END)
-            dlg._apply_to_environment(dlg._collect())
+            dlg._apply_session_only(dlg._collect())
         finally:
             dlg.destroy()
         assert "ALPACA_API_KEY_ID" not in os.environ
         assert "ALPACA_API_SECRET_KEY" not in os.environ
 
-    def test_apply_sets_present_values(self, root, monkeypatch):
+    def test_session_only_sets_present_values(self, root, monkeypatch):
         monkeypatch.delenv("ALPACA_API_KEY_ID", raising=False)
         dlg = cd.CredentialsDialog(root)
         try:
             dlg._entries["ALPACA_API_KEY_ID"].insert(0, "NEW_KEY")
-            dlg._apply_to_environment(dlg._collect())
+            dlg._apply_session_only(dlg._collect())
         finally:
             dlg.destroy()
         assert os.environ["ALPACA_API_KEY_ID"] == "NEW_KEY"
 
-    def test_apply_never_touches_unmanaged_vars(self, root, monkeypatch):
+    def test_session_only_never_touches_unmanaged_vars(self, root, monkeypatch):
         monkeypatch.setenv("SOME_UNRELATED_VAR", "keep me")
         dlg = cd.CredentialsDialog(root)
         try:
-            dlg._apply_to_environment({})
+            dlg._apply_session_only({})
         finally:
             dlg.destroy()
         assert os.environ["SOME_UNRELATED_VAR"] == "keep me"
@@ -597,10 +680,21 @@ class TestCredentialRemoval:
         dlg = cd.CredentialsDialog(root)
         try:
             dlg._entries["ALPACA_API_SECRET_KEY"].delete(0, tk.END)
-            dlg._apply_to_environment(dlg._collect())
+            dlg._apply_session_only(dlg._collect())
         finally:
             dlg.destroy()
         assert os.environ["ALPACA_API_KEY_ID"] == "KEEP_KEY"
+        assert "ALPACA_API_SECRET_KEY" not in os.environ
+
+    def test_clear_primed_environment_drops_stale_upgrade_values(
+            self, root, monkeypatch):
+        """A pre-v2 session primed the blob into environ; saving must undo it."""
+        monkeypatch.setenv("ALPACA_API_SECRET_KEY", "PRIMED_BY_OLD_BUILD")
+        dlg = cd.CredentialsDialog(root)
+        try:
+            dlg._clear_primed_environment({"ALPACA_API_KEY_ID": "kept"})
+        finally:
+            dlg.destroy()
         assert "ALPACA_API_SECRET_KEY" not in os.environ
 
 
