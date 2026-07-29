@@ -54,8 +54,9 @@ from ..entries.model import TriggerKind as EntryTriggerKind
 from ..exits.model import ExitStrategy
 from ..exits.model import TriggerKind as ExitTriggerKind
 from ..scanner.model import Condition as _ScannerCondition
-from ..scanner.model import FieldRef as _ScannerFieldRef
 from ..scanner.model import Group as _ScannerGroup
+from ..scanner.model import iter_conditions as _iter_conditions
+from ..scanner.model import iter_field_refs as _iter_field_refs
 
 __all__ = [
     "DEFAULT_WARMUP_BARS",
@@ -264,16 +265,10 @@ def _walk_field_kinds(
     first element; callers that don't care can ignore it.
     """
     out: list[tuple[str, str, dict[str, Any]]] = []
-    if node is None:
-        return out
-    if isinstance(node, _ScannerCondition):
-        for ref in (node.left, *list((node.params or {}).values())):
-            if isinstance(ref, _ScannerFieldRef) and ref.kind == "indicator" and ref.id:
+    for cond in _iter_conditions(node):
+        for ref in _iter_field_refs(cond):
+            if ref.kind == "indicator" and ref.id:
                 out.append((str(ref.symbol or ""), str(ref.id), dict(ref.params or {})))
-        return out
-    # Group: recurse into children.
-    for child in node.children:
-        out.extend(_walk_field_kinds(child))
     return out
 
 

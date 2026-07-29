@@ -139,6 +139,9 @@ from ..scanner.model import Condition as _ScannerCondition
 from ..scanner.model import FieldRef as _ScannerFieldRef
 from ..scanner.model import Group as _ScannerGroup
 from ..scanner.model import ScanDefinition as _ScanDefinition
+from ..scanner.model import iter_conditions as _iter_conditions
+from ..scanner.model import iter_field_refs as _iter_field_refs
+from ..scanner.model import iter_tree_field_refs as _iter_tree_field_refs
 from .model import CostModel
 
 LOG = logging.getLogger(__name__)
@@ -546,18 +549,12 @@ def _walk_authored_intervals(
     duplicates are preserved (deduplication is the caller's job).
     """
     out: list[str] = []
-    if isinstance(node, _ScannerCondition):
-        if node.interval is not None:
-            out.append(str(node.interval))
-        if node.left is not None and getattr(node.left, "interval", None):
-            out.append(str(node.left.interval))
-        for v in (node.params or {}).values():
-            iv = getattr(v, "interval", None)
-            if iv:
-                out.append(str(iv))
-        return out
-    for child in node.children:
-        out.extend(_walk_authored_intervals(child))
+    for cond in _iter_conditions(node):
+        if cond.interval is not None:
+            out.append(str(cond.interval))
+        for ref in _iter_field_refs(cond):
+            if getattr(ref, "interval", None):
+                out.append(str(ref.interval))
     return out
 
 
@@ -566,17 +563,10 @@ def _walk_field_symbols(
 ) -> list[str]:
     """Yield every non-active ``FieldRef.symbol`` in a condition tree."""
     out: list[str] = []
-    if isinstance(node, _ScannerCondition):
-        refs = [node.left, *list((node.params or {}).values())]
-        for ref in refs:
-            if not isinstance(ref, _ScannerFieldRef):
-                continue
-            sym = str(ref.symbol or "").strip().upper()
-            if sym:
-                out.append(sym)
-        return out
-    for child in node.children:
-        out.extend(_walk_field_symbols(child))
+    for ref in _iter_tree_field_refs(node):
+        sym = str(ref.symbol or "").strip().upper()
+        if sym:
+            out.append(sym)
     return out
 
 
@@ -621,20 +611,10 @@ def _walk_indicator_field_refs(
     node: _ScannerGroup | _ScannerCondition,
 ) -> list[_ScannerFieldRef]:
     """Yield indicator FieldRefs from a scanner condition tree."""
-    out: list[_ScannerFieldRef] = []
-    if isinstance(node, _ScannerCondition):
-        refs = [node.left, *list((node.params or {}).values())]
-        for ref in refs:
-            if (
-                isinstance(ref, _ScannerFieldRef)
-                and ref.kind == "indicator"
-                and ref.id
-            ):
-                out.append(ref)
-        return out
-    for child in node.children:
-        out.extend(_walk_indicator_field_refs(child))
-    return out
+    return [
+        ref for ref in _iter_tree_field_refs(node)
+        if ref.kind == "indicator" and ref.id
+    ]
 
 
 def _prewarm_indicator_memos(

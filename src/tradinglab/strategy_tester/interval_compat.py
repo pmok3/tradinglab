@@ -41,7 +41,7 @@ from __future__ import annotations
 from ..entries.model import EntryStrategy
 from ..exits.model import ExitStrategy
 from ..indicators.base import factory_by_kind_id, factory_is_available_for
-from ..scanner.model import Condition, FieldRef, Group
+from ..scanner.model import Condition, Group, iter_conditions, iter_field_refs
 from .warmup import collect_referenced_indicator_kinds
 
 __all__ = [
@@ -122,16 +122,17 @@ def _walk_condition_tree(
     ``(kind_id, params, resolved_interval)`` for every ``kind="indicator"``
     field, where the resolved interval is ``field.interval`` if overridden
     else the condition's interval.
+
+    ``parent_interval`` is inherited unchanged all the way down, so this is
+    a flat collection over the leaf Conditions — it uses the shared
+    :func:`scanner.model.iter_conditions` traversal rather than its own
+    recursion.
     """
-    if node is None:
-        return
-    if isinstance(node, Condition):
-        cond_interval = node.interval or parent_interval
+    for cond in iter_conditions(node):
+        cond_interval = cond.interval or parent_interval
         if cond_interval:
             intervals.add(cond_interval)
-        for ref in (node.left, *(node.params or {}).values()):
-            if not isinstance(ref, FieldRef):
-                continue
+        for ref in iter_field_refs(cond):
             if ref.interval:
                 intervals.add(ref.interval)
             if ref.kind == "indicator" and ref.id:
@@ -139,13 +140,6 @@ def _walk_condition_tree(
                 indicator_refs.append(
                     (str(ref.id), dict(ref.params or {}), resolved)
                 )
-        return
-    if isinstance(node, Group):
-        for child in node.children:
-            _walk_condition_tree(
-                child, parent_interval,
-                intervals=intervals, indicator_refs=indicator_refs,
-            )
 
 
 def incompatible_arming_problems(

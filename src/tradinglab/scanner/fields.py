@@ -974,25 +974,18 @@ def field_ref_resets_daily(ref: FieldRef) -> bool:
 def condition_uses_daily_reset_field(node) -> bool:  # noqa: ANN001 — accepts Condition or Group
     """Return True if any FieldRef in ``node`` (Condition or Group) resets daily.
 
-    Recursively walks Group → children. For each Condition, inspects its
-    ``left`` plus every :class:`FieldRef`-typed entry in ``params``.
-    Used by the within-last-N-bars walk to decide whether to clamp the
-    look-back window to the current session-open index.
+    Walks the tree via the shared :func:`scanner.model.iter_tree_field_refs`
+    traversal and checks each referenced field. Used by the
+    within-last-N-bars walk to decide whether to clamp the look-back
+    window to the current session-open index.
     """
     # Imported lazily to avoid a top-of-module circular import on
     # ``model.MatchEvidence`` etc.
-    from .model import Condition, Group  # noqa: WPS433
+    from .model import Condition, Group, iter_tree_field_refs  # noqa: WPS433
 
-    if isinstance(node, Group):
-        return any(condition_uses_daily_reset_field(c) for c in node.children)
-    if isinstance(node, Condition):
-        if field_ref_resets_daily(node.left):
-            return True
-        for v in node.params.values():
-            if isinstance(v, FieldRef) and field_ref_resets_daily(v):
-                return True
+    if not isinstance(node, Group | Condition):
         return False
-    return False
+    return any(field_ref_resets_daily(ref) for ref in iter_tree_field_refs(node))
 
 
 __all__ = [

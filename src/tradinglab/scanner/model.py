@@ -58,7 +58,7 @@ through JSON without losing information.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, replace
 from dataclasses import field as dc_field
 from typing import Any, ClassVar
@@ -1179,11 +1179,70 @@ class ScanDefinition:
 
 
 def _walk_conditions(node: Condition | Group, out: list[Condition]) -> None:
-    if isinstance(node, Condition):
-        out.append(node)
+    out.extend(iter_conditions(node))
+
+
+# ---------------------------------------------------------------------------
+# Shared tree traversal
+# ---------------------------------------------------------------------------
+#
+# The Group/Condition tree was being walked by ~14 independent hand-rolled
+# recursions spread across scanner/, strategy_tester/ and gui/ — each
+# re-implementing the same `isinstance(node, Condition) ... else recurse into
+# node.children` skeleton, and most of them ALSO re-deriving "the FieldRefs of
+# a Condition" as `left` + the FieldRef-valued entries of `params`.
+#
+# strategy_tester's `_ScannerGroup` / `_ScannerCondition` / `_ScannerFieldRef`
+# are plain import aliases of these very types, so every one of those walkers
+# traverses the identical structure. These two generators are the shared
+# primitives; the evaluating walkers (`_evaluate_group_at`, `_group_masks_vec`,
+# `_normalize_node`) deliberately keep their own recursion because they carry
+# Kleene-combination / rebuild payload rather than just collecting.
+
+
+def iter_nodes(root: Condition | Group | None) -> Iterator[Condition | Group]:
+    """Yield every node in the tree, pre-order (parents before children).
+
+    ``None`` yields nothing, so callers holding an optional condition tree
+    (the common case — ``EntryTrigger.condition`` is nullable) can pass it
+    straight through without a guard.
+    """
+    if root is None:
         return
-    for c in node.children:
-        _walk_conditions(c, out)
+    yield root
+    if isinstance(root, Group):
+        for child in root.children:
+            yield from iter_nodes(child)
+
+
+def iter_conditions(root: Condition | Group | None) -> Iterator[Condition]:
+    """Yield every leaf :class:`Condition` under ``root``, in tree order."""
+    for node in iter_nodes(root):
+        if isinstance(node, Condition):
+            yield node
+
+
+def iter_field_refs(cond: Condition) -> Iterator[FieldRef]:
+    """Yield the :class:`FieldRef` values a single Condition references.
+
+    Order is ``left`` first, then each :class:`FieldRef`-valued entry of
+    ``params`` in insertion order. Scalar params (numbers, strings) are
+    skipped, and a ``None`` ``left`` (ops such as ``inside_bar`` that take
+    no LHS) is skipped rather than yielded.
+    """
+    left = getattr(cond, "left", None)
+    if isinstance(left, FieldRef):
+        yield left
+    for value in (getattr(cond, "params", None) or {}).values():
+        if isinstance(value, FieldRef):
+            yield value
+
+
+def iter_tree_field_refs(root: Condition | Group | None) -> Iterator[FieldRef]:
+    """Yield every :class:`FieldRef` under ``root`` — the common composition
+    of :func:`iter_conditions` and :func:`iter_field_refs`."""
+    for cond in iter_conditions(root):
+        yield from iter_field_refs(cond)
 
 
 # ---------------------------------------------------------------------------

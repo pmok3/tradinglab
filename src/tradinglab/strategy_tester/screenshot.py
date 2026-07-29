@@ -69,6 +69,7 @@ from ..rendering import (
 from ..scanner.model import Condition as _ScannerCondition
 from ..scanner.model import FieldRef as _FieldRef
 from ..scanner.model import Group as _ScannerGroup
+from ..scanner.model import iter_tree_field_refs as _iter_tree_field_refs
 
 __all__ = [
     "CandleTimestampIndex",
@@ -541,24 +542,15 @@ def _walk_field_refs(node: object) -> list[_FieldRef]:
     Walks both :class:`Group` (with arbitrarily nested children) and
     :class:`Condition` (which contributes its ``left`` FieldRef plus
     any FieldRef-valued operator params, e.g. the right-hand operand
-    of an ``ema_cross`` comparison). Mirrors the traversal style used
-    by :func:`tradinglab.strategy_tester.evaluator._walk_authored_intervals`.
+    of an ``ema_cross`` comparison).
+
+    Delegates to the shared traversal in
+    :func:`tradinglab.scanner.model.iter_tree_field_refs` — this was one of
+    ~14 hand-rolled walkers over the same tree.
     """
-    out: list[_FieldRef] = []
-    if node is None:
-        return out
-    if isinstance(node, _ScannerGroup):
-        for child in node.children:
-            out.extend(_walk_field_refs(child))
-        return out
-    if isinstance(node, _ScannerCondition):
-        if node.left is not None and isinstance(node.left, _FieldRef):
-            out.append(node.left)
-        for v in (node.params or {}).values():
-            if isinstance(v, _FieldRef):
-                out.append(v)
-        return out
-    return out
+    if node is not None and not isinstance(node, _ScannerGroup | _ScannerCondition):
+        return []
+    return list(_iter_tree_field_refs(node))
 
 
 def _collect_overlay_indicators(
