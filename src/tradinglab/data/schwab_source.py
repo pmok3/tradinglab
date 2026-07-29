@@ -54,6 +54,7 @@ from typing import Any
 
 from ..core.timezones import ET
 from ..models import Candle
+from . import verify as _verify
 from .credentials import SchwabCredentials, get_credentials
 from .normalize import candles_from_json_rows
 
@@ -168,6 +169,58 @@ def _maybe_get_access_token(creds: SchwabCredentials) -> str | None:
 # lands, flip this to ``True`` AND uncomment the registration
 # line in :mod:`tradinglab.data.__init__` in the same change.
 SCHWAB_REGISTRATION_ENABLED: bool = False
+
+
+def verify_schwab(
+    creds: SchwabCredentials | None = None, *,
+    timeout: float = _verify.DEFAULT_TIMEOUT_S,
+    opener: Any | None = None,
+) -> _verify.VerifyResult:
+    """Report what can honestly be said about Schwab credentials today.
+
+    Registered as the ``schwab`` verifier so the section gets a "Test
+    connection" button like Alpaca and Polygon. Leaving Schwab as the one
+    vendor with no button was itself a UX bug: the user cannot tell "this
+    provider has no check" from "the check is missing", and silence reads as
+    "probably fine".
+
+    This deliberately makes **no network call**. :func:`_http_get_pricehistory`
+    still raises ``NotImplementedError`` and the OAuth flow has not shipped
+    (see :data:`SCHWAB_REGISTRATION_ENABLED`), so there is nothing to probe —
+    a fabricated request would either fail for the wrong reason or, worse,
+    return ``ok`` for a provider that cannot actually fetch a bar.
+
+    Instead it answers the two questions that *are* decidable locally:
+
+    * fields empty → ``not_configured``, same as every other vendor.
+    * fields present → ``unsupported``, with remediation naming the missing
+      piece. ``unsupported`` renders muted rather than red, because nothing
+      is wrong with the key.
+
+    When OAuth lands, replace the ``unsupported`` branch with a real probe
+    (token refresh + a one-symbol price-history call) and flip
+    ``SCHWAB_REGISTRATION_ENABLED``; the dialog needs no change.
+    """
+    creds = creds if creds is not None else get_credentials().schwab
+    if not creds.is_configured():
+        return _verify.not_configured(
+            "schwab", detail="An app key and app secret are required.")
+
+    return _verify.VerifyResult(
+        status=_verify.STATUS_UNSUPPORTED,
+        vendor="schwab",
+        summary="Saved. Schwab sign-in is not available in this build yet.",
+        detail=(
+            "Your app key and secret are stored, but Schwab needs a one-time "
+            "browser sign-in (OAuth) that this build does not ship yet, so "
+            "the connection cannot be tested. Nothing is wrong with your "
+            "credentials — they will be used automatically once the sign-in "
+            "flow lands."
+        ),
+    )
+
+
+_verify.register_verifier("schwab", verify_schwab)
 
 
 def _http_get_pricehistory(

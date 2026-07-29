@@ -115,11 +115,49 @@ verify_vendor(vendor, creds=None, *, timeout=DEFAULT_TIMEOUT_S, opener=None)
 
 ## Result cache
 
-`record_result` / `last_result` / `clear_results` — in-process only, keyed
-by vendor. Lets the credentials dialog (and future status-bar surfaces)
-answer "is Alpaca ready?" without re-probing. `clear_results()` is called
-when credentials change, so a stale "verified" can never outlive the keys
-it was measured against.
+`record_result` / `last_result` / `clear_results` — in-process, keyed by
+vendor. Lets the credentials dialog (and the vendor-header chips) answer "is
+Alpaca ready?" without re-probing. `clear_results()` is called when
+credentials change, so a stale "verified" can never outlive the keys it was
+measured against.
+
+### Persisted verdicts
+
+`record_result` also writes `(status, checked_at, summary)` into the
+credential store via `credential_store.record_verification` (pass
+`persist=False` to opt out). Persistence is what lets the app render a
+vendor's health **at launch with no network call** — previously every restart
+started from "unknown" and the user had to open a dialog and click Test to
+learn anything.
+
+Only those three inert fields are stored, never key material. That restraint
+is the whole reason it is safe to keep a verdict beside the secrets.
+
+`persisted_result(vendor)` reads it back; `known_status(vendor)` returns the
+in-process verdict when there is one (it was measured against the credentials
+currently loaded) and otherwise falls back to the persisted one.
+
+Invalidation happens at the storage layer, not here:
+`credential_store.save_vendor` drops the verdict when new key material lands,
+and `clear_vendor` drops it with the fields.
+
+## Runtime failure routing
+
+`note_runtime_failure(vendor, exc, secrets=...)` classifies a **live fetch**
+failure through the same taxonomy the explicit Test-connection button uses,
+and records it when — and only when — the status is in
+`CREDENTIAL_PROBLEM_STATUSES`.
+
+A revoked key or a downgraded plan does not announce itself. Without this the
+only symptom is an empty chart and a generic "no data", and nothing points at
+the credentials: `is_configured()` still reports `True`, because presence
+never stopped being true. Now a mid-session 401 flips the vendor to
+`invalid_credentials` and a 403 to `forbidden`.
+
+Transient failures (429, 5xx, timeouts, parse errors) return `None` and are
+**not** recorded — they say nothing about the key, and letting them poison a
+vendor's status would train the user to ignore the indicator. Called from
+`alpaca_source.fetch_alpaca_data` and `polygon_source.fetch_polygon_data`.
 
 ## Non-goals
 
@@ -128,13 +166,17 @@ it was measured against.
   configuration and add latency to every launch.
 * **Not automatic.** Probes are user-initiated (or explicitly triggered).
   No background polling — a credentials dialog that silently makes network
-  requests on open would be a surprise.
+  requests on open would be a surprise. `note_runtime_failure` is not a
+  probe: it only classifies a request the app was making anyway.
 
 ## Tests
 
 `tests/unit/data/test_verify.py` — taxonomy mapping, redaction, exception
 translation, registry dispatch and isolation, the secret-free field-set
 invariant, result cache.
+`tests/unit/data/test_credential_health.py` — verdict persistence +
+`known_status` precedence, runtime-failure routing (credential vs transient),
+redaction on the runtime path, and the Schwab verifier.
 
 ## See also
 

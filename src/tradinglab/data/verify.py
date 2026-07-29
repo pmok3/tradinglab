@@ -406,28 +406,108 @@ def verify_vendor(
 
 # --- Last-known-result cache ----------------------------------------------
 #
-# In-process only, and secret-free by construction (a VerifyResult never
-# holds credential values). Lets the Help menu / status bar answer "is
-# Alpaca ready?" without re-probing on every repaint.
+# Secret-free by construction (a VerifyResult never holds credential values),
+# which is what lets the verdict be *persisted* alongside the encrypted
+# credentials as well as cached in-process. Lets the Help menu / status bar /
+# vendor cards answer "is Alpaca ready?" without re-probing on every repaint —
+# and, thanks to the persisted half, without a network call at launch.
 
 _LAST: dict[str, VerifyResult] = {}
 
 
-def record_result(result: VerifyResult) -> VerifyResult:
-    """Cache ``result`` as the latest verdict for its vendor. Returns it."""
+def record_result(result: VerifyResult, *, persist: bool = True) -> VerifyResult:
+    """Cache ``result`` as the latest verdict for its vendor. Returns it.
+
+    Also writes ``(status, checked_at, summary)`` into the credential store
+    unless ``persist=False``, so the verdict survives a restart. Only those
+    three inert fields are stored — never key material.
+
+    Persistence is best-effort: a store that cannot be written must not break
+    the verification the user just ran. They still see the live result.
+    """
     _LAST[result.vendor] = result
     LOG.info("verify: %s", result.as_log_line())
+    if persist:
+        try:
+            from .credential_store import record_verification
+            record_verification(result.vendor, result.status,
+                                summary=result.summary)
+        except Exception as e:  # noqa: BLE001 - never break the live flow
+            LOG.debug("verify: could not persist verdict for %s: %s",
+                      result.vendor, e)
     return result
 
 
 def last_result(vendor: str) -> VerifyResult | None:
-    """Most recent :class:`VerifyResult` for ``vendor``, if any."""
+    """Most recent in-process :class:`VerifyResult` for ``vendor``, if any."""
     return _LAST.get(vendor)
 
 
+def persisted_result(vendor: str) -> tuple[str, float, str] | None:
+    """Last persisted verdict as ``(status, checked_at, summary)``.
+
+    Read at launch so the UI can render a vendor's health immediately instead
+    of showing "unknown" until the user opens a dialog and clicks Test. Falls
+    back to ``None`` when nothing was ever recorded or the store is
+    unreadable.
+    """
+    try:
+        from .credential_store import get_vendor
+        rec = get_vendor(vendor).last_verified
+    except Exception:  # noqa: BLE001
+        return None
+    if rec is None:
+        return None
+    return rec.status, rec.checked_at, rec.summary
+
+
+def known_status(vendor: str) -> tuple[str, float | None, str] | None:
+    """Best available verdict: this session's if any, else the persisted one.
+
+    ``(status, checked_at_or_None, summary)``. The in-process result wins
+    because it was measured against the credentials currently loaded.
+    """
+    live = last_result(vendor)
+    if live is not None:
+        return live.status, None, live.summary
+    return persisted_result(vendor)
+
+
 def clear_results() -> None:
-    """Drop every cached verdict (called when credentials change)."""
+    """Drop every cached verdict (called when credentials change).
+
+    In-process only. The persisted verdict is invalidated at its own layer:
+    ``credential_store.save_vendor`` drops it when new key material lands, and
+    ``clear_vendor`` drops it with the fields.
+    """
     _LAST.clear()
+
+
+def note_runtime_failure(vendor: str, exc: BaseException, *,
+                         secrets: object = ()) -> VerifyResult | None:
+    """Classify a live-fetch failure and record it if it is a credential problem.
+
+    A revoked or downgraded key does not announce itself. Without this the
+    only symptom is an empty chart and a generic "no data" message, and the
+    user has no reason to suspect their credentials — `is_configured()` still
+    reports `True`, because presence never stopped being true.
+
+    Routes the exception through the same taxonomy the explicit "Test
+    connection" button uses, so a mid-session 401 lands on the vendor as
+    ``invalid_credentials`` and a 403 as ``forbidden`` (key fine, plan
+    insufficient) rather than being flattened into one useless failure.
+
+    Returns the recorded :class:`VerifyResult`, or ``None`` when the failure
+    was **not** credential-related — a timeout or a parse error must not
+    poison a vendor's status, since those say nothing about the key.
+    """
+    try:
+        result = result_from_exception(exc, vendor=vendor, secrets=secrets)
+    except Exception:  # noqa: BLE001 - classification must never raise
+        return None
+    if result.status not in CREDENTIAL_PROBLEM_STATUSES:
+        return None
+    return record_result(result)
 
 
 __all__ = [
@@ -447,8 +527,10 @@ __all__ = [
     "Verifier",
     "clear_results",
     "has_verifier",
+    "known_status",
     "last_result",
     "not_configured",
+    "persisted_result",
     "read_error_body",
     "record_result",
     "redact",

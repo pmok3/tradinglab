@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -277,8 +278,7 @@ def _candidate_dotenv_paths() -> Iterable[Path]:
     convenience for developers running ``pip install -e .`` from a
     checkout — that path still works because ``sys.frozen`` is unset.
     """
-    import sys as _sys
-    if getattr(_sys, "frozen", False):
+    if getattr(sys, "frozen", False):
         return
 
     here = Path(__file__).resolve()
@@ -422,21 +422,32 @@ def _parse_credential_txt(text: str) -> dict[str, str]:
 def _candidate_credential_dirs() -> list[Path]:
     """Directories searched for the plaintext credential files.
 
+    **Frozen builds search only the app-data directory.**
+
+    In a source checkout the search also covers the repo root and the current
+    working directory, which is a genuine convenience for a developer. In a
+    packaged ``.exe`` those same entries are a liability: ``Path.cwd()`` is
+    whatever directory the user happened to double-click from, so an unrelated
+    ``credentials.txt`` sitting in Downloads would be picked up and silently
+    treated as the user's API keys. Dotenv discovery is already disabled when
+    frozen for exactly this threat model (see ``_candidate_dotenv_paths``);
+    this closes the same hole for the ``.txt`` layer.
+
+    The app-data directory survives because it is the app's own private
+    location — the user must deliberately put a file there — and it is the
+    documented drop-spot for a packaged user with no repo checkout.
+
     Order (low → high precedence when the same env name appears twice):
-    app-data dir, frozen-exe dir, repo root (dev checkout), cwd.
+    app-data dir, then (source builds only) repo root, cwd.
     """
-    import sys as _sys
     dirs: list[Path] = []
     try:
         from .. import paths as _paths
         dirs.append(_paths.app_data_dir())
     except Exception:  # noqa: BLE001
         pass
-    if getattr(_sys, "frozen", False):
-        try:
-            dirs.append(Path(_sys.executable).resolve().parent)
-        except Exception:  # noqa: BLE001
-            pass
+    if getattr(sys, "frozen", False):
+        return dirs
     here = Path(__file__).resolve()
     for parent in [here, *here.parents][:8]:
         if (parent / "pyproject.toml").exists():

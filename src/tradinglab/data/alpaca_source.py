@@ -412,6 +412,13 @@ def fetch_alpaca_data(
         )
     except Exception as exc:  # pragma: no cover - network path
         LOG.warning("alpaca: fetch failed for %s %s: %s", ticker, interval, exc)
+        # A revoked key or a downgraded plan surfaces here as a plain fetch
+        # failure — an empty chart with no hint that the credentials are the
+        # cause. Route it through the verify taxonomy so the vendor's status
+        # flips to `invalid_credentials` / `forbidden` instead.
+        _verify.note_runtime_failure(
+            "alpaca", exc,
+            secrets=(creds.api_key_id, creds.api_secret_key))
         return None
     return candles_from_alpaca_response(payload, interval=interval)
 
