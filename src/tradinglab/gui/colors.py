@@ -77,6 +77,14 @@ ERROR_RED: str = "#a33333"
 footers. Distinct from ``DOWN_RED`` (which is the candle-bear hue) so
 "loss" vs "error" stay visually separated."""
 
+OK_GREEN: str = "#2d7a2d"
+"""Success-state green — validation passed, credential probe verified.
+The semantic counterpart to :data:`ERROR_RED`. Distinct from
+``UP_GREEN`` (the candle-bull hue) so "verified" never reads as a P/L
+sign, and — unlike :func:`up_green` — it does NOT flip to orange when
+the Okabe-Ito color-blind palette is active: a success checkmark should
+stay green regardless of the candle palette."""
+
 MUTED_GREY: str = "#666666"
 """Help / hint / secondary-label text. Lower contrast than the
 foreground theme color so it reads as deprioritized but stays legible
@@ -92,5 +100,6 @@ __all__ = [
     "INFO_BLUE",
     "CAUTION_YELLOW",
     "ERROR_RED",
+    "OK_GREEN",
     "MUTED_GREY",
 ]

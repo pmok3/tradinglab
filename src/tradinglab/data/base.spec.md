@@ -43,3 +43,19 @@ Defines the `DataFetcher` protocol (a `(ticker, interval) -> Optional[List[Candl
 
 ## Known limitations
 - No "unregister"— tests that stub must remember to restore, or rely on the fact that the next `data/__init__.py` import re-registers defaults (though Python only imports once per session).
+
+## Unregistering a source
+
+`unregister_source(name) -> bool` removes `name` from `DATA_SOURCES` **and
+from every capability side-table** (`_INTERNAL_SOURCES`, `_RANGE_CAPABLE`,
+`_PAGE_FETCHERS`). Returns whether the source was present.
+
+The side-table sweep is the whole point: a bare `DATA_SOURCES.pop(name)`
+would leave `source_supports_range(name)` / `source_supports_page(name)`
+reporting `True` for a source that can no longer be dispatched.
+
+Used by `data.register_vendor_sources()` when a user clears their
+credentials — a stale vendor entry left in the registry would keep a dead
+option in the source dropdown that fails every fetch.
+
+Tests: `tests/unit/data/test_vendor_registration.py::TestUnregisterSource`.

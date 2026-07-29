@@ -33,11 +33,19 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 import tkinter as tk
+from collections.abc import Callable
 from tkinter import messagebox, ttk
+from typing import Any
 
-from ._modal_base import BaseModalDialog, protect_combobox_wheel
-from .colors import MUTED_GREY
+from ..data import verify
+from ._modal_base import (
+    BaseModalDialog,
+    make_scrollable_form,
+    protect_combobox_wheel,
+)
+from .colors import ERROR_RED, MUTED_GREY, OK_GREEN, WARN_AMBER
 
 # Map (env_var -> dialog field). The label is what the user sees;
 # ``is_secret`` controls whether the entry uses ``show="*"``.
@@ -81,6 +89,68 @@ _CHOICE_HELP: dict[str, str] = {
         "indicators (RVOL/RRVOL) may be understated."
     ),
 }
+
+
+# Dialog sections: ``(env-var prefix, section heading, vendor key)``.
+# Single source of truth for the section headers, for which sections get a
+# "Test connection" row, and for the field-edit → invalidate-stale-result
+# binding. The vendor key must match the name a source registers with
+# :func:`tradinglab.data.verify.register_verifier`.
+_SECTIONS: tuple[tuple[str, str, str], ...] = (
+    ("SCHWAB_",  "Schwab",  "schwab"),
+    ("ALPACA_",  "Alpaca",  "alpaca"),
+    ("POLYGON_", "Polygon", "polygon"),
+)
+
+#: Verification status → (glyph, colour) for the result line. ``forbidden``
+#: / ``rate_limited`` / ``network_error`` render **amber, not red**: in all
+#: three the credentials themselves may be perfectly fine, and a red ✗ would
+#: send the user off re-copying a key that was never the problem.
+_STATUS_STYLE: dict[str, tuple[str, str]] = {
+    verify.STATUS_OK:                  ("\u2713", OK_GREEN),
+    verify.STATUS_NOT_CONFIGURED:      ("\u2014", MUTED_GREY),
+    verify.STATUS_INVALID_CREDENTIALS: ("\u2717", ERROR_RED),
+    verify.STATUS_FORBIDDEN:           ("\u26a0", WARN_AMBER),
+    verify.STATUS_RATE_LIMITED:        ("\u26a0", WARN_AMBER),
+    verify.STATUS_NETWORK_ERROR:       ("\u26a0", WARN_AMBER),
+    verify.STATUS_UNSUPPORTED:         ("\u2014", MUTED_GREY),
+    verify.STATUS_ERROR:               ("\u2717", ERROR_RED),
+}
+
+#: Tk poll interval for the verification worker, in ms. Mirrors the
+#: strategy-tester export poll. See :meth:`CredentialsDialog._poll_verify`
+#: for why we poll instead of calling ``after(0, ...)`` from the worker.
+_VERIFY_POLL_MS = 100
+
+
+def _vendor_for_env(env_name: str) -> str | None:
+    """Vendor key owning ``env_name`` (``"ALPACA_API_KEY_ID"`` → ``"alpaca"``)."""
+    for prefix, _section, vendor in _SECTIONS:
+        if env_name.startswith(prefix):
+            return vendor
+    return None
+
+
+def _managed_env_names() -> tuple[str, ...]:
+    """Every env var this dialog owns.
+
+    Used to **clear** the variables a user emptied. ``_collect`` only reports
+    non-empty fields, so without an explicit managed list a cleared field
+    would leave its stale `os.environ` entry behind — and since
+    ``credentials._resolve`` consults `os.environ` first, the deleted key
+    would keep resolving for the rest of the session.
+    """
+    return tuple(env_name for env_name, _label, _secret in _FIELDS)
+
+
+def _has_credential_values(values: dict[str, str]) -> bool:
+    """True if ``values`` holds any real credential (not just a dropdown).
+
+    Choice fields (`ALPACA_TIER`) are read-only combos that ALWAYS report a
+    value, so a plain ``if not values`` emptiness test can never be true and
+    the "this clears your saved credentials" confirmation would never fire.
+    """
+    return any(k not in _CHOICE_FIELDS for k in values)
 
 
 def _visible_fields() -> list[tuple[str, str, bool]]:
@@ -202,23 +272,52 @@ class CredentialsDialog(BaseModalDialog):
         └──────────────────────────────────────────────┘
     """
 
-    def __init__(self, parent: tk.Misc) -> None:
+    def __init__(
+        self, parent: tk.Misc,
+        on_changed: Callable[[], None] | None = None,
+    ) -> None:
         super().__init__(
             parent,
             title="Configure Credentials",
             geometry_key="dlg.credentials",
-            default_geometry="600x660",
+            default_geometry="600x760",
             resizable=(True, True),
         )
 
+        self._on_changed = on_changed
         self._entries: dict[str, tk.Entry] = {}
+        # Field textvariables MUST be kept referenced. A ttk widget stores
+        # only the Tcl variable *name*; if the Python ``StringVar`` is
+        # collected, ``Variable.__del__`` unsets the Tcl variable and
+        # silently destroys every trace on it — so the stale-verdict
+        # invalidation would stop firing at an unpredictable GC boundary.
+        self._field_vars: dict[str, tk.StringVar] = {}
         self._show_vars: dict[str, tk.BooleanVar] = {}
         # For dropdown (choice) fields: display↔stored-value maps.
         self._choice_value_by_display: dict[str, dict[str, str]] = {}
         self._choice_display_by_value: dict[str, dict[str, str]] = {}
+        # Per-vendor "Test connection" state. ``_verify_boxes`` holds the
+        # worker→Tk handoff dict for each in-flight probe (see _begin_verify).
+        self._verify_buttons: dict[str, ttk.Button] = {}
+        self._verify_status_vars: dict[str, tk.StringVar] = {}
+        self._verify_status_labels: dict[str, ttk.Label] = {}
+        self._verify_detail_vars: dict[str, tk.StringVar] = {}
+        self._verify_boxes: dict[str, dict[str, Any]] = {}
+        self._verify_threads: dict[str, threading.Thread] = {}
+        self._verify_jobs: dict[str, str] = {}
+        # Set while pre-filling entries so the textvariable traces don't
+        # read a programmatic populate as a user edit.
+        self._populating = False
+        self._initial_values: dict[str, str] = {}
+        self._form_canvas: tk.Canvas | None = None
+        self._sources_before: tuple[str, ...] = self._current_sources()
         self._build_widgets()
         self._populate_from_environment()
-        protect_combobox_wheel(self)
+        # §7.11: the form scrolls AND contains a Combobox, so wheel events
+        # must be forwarded to the canvas instead of silently rotating the
+        # Alpaca plan selector under the cursor.
+        protect_combobox_wheel(self, scroll_target=self._form_canvas)
+        self.bind("<Destroy>", self._on_destroy, add="+")
         # Guarantee the window can never open smaller than its content. The
         # dialog packs three sections (8 fields + a dropdown-with-help + a
         # multi-line status line + buttons) that overflowed the old fixed
@@ -240,16 +339,20 @@ class CredentialsDialog(BaseModalDialog):
         self._finalize_modal(primary=self._on_save, cancel=self._on_cancel)
 
     def _build_widgets(self) -> None:
-        frm = ttk.Frame(self, padding=12)
-        frm.pack(fill="both", expand=True)
+        # Scrollable body. Three vendor sections plus the per-vendor
+        # "Test connection" rows push the dialog past the small-laptop
+        # safe height, so the form must scroll rather than clip its Save
+        # button off-screen (pinned by tests/unit/gui/
+        # test_dialog_scrollable_meta.py). The button row grids INSIDE the
+        # scrollable frame, matching universe_prepare_dialog.
+        container = ttk.Frame(self)
+        container.pack(fill="both", expand=True)
+        frm, self._form_canvas = make_scrollable_form(container)
+        frm.configure(padding=12)
 
         # Section headers keyed by env-var prefix so we don't hardcode
         # the section boundary positions.
-        section_for_prefix = {
-            "SCHWAB_":  "Schwab",
-            "ALPACA_":  "Alpaca",
-            "POLYGON_": "Polygon",
-        }
+        section_for_prefix = {p: s for p, s, _v in _SECTIONS}
         last_section = None
         row = 0
         for env_name, label, is_secret in _visible_fields():
@@ -257,6 +360,10 @@ class CredentialsDialog(BaseModalDialog):
                             if env_name.startswith(k)), "")
             if section != last_section:
                 if last_section is not None:
+                    # Close out the previous vendor with its test row before
+                    # the separator, so the control sits under the fields it
+                    # actually verifies.
+                    row = self._add_verify_row(frm, row, last_section)
                     ttk.Separator(frm, orient="horizontal").grid(
                         row=row, column=0, columnspan=3, sticky="ew", pady=(6, 6))
                     row += 1
@@ -273,10 +380,12 @@ class CredentialsDialog(BaseModalDialog):
             choices = _CHOICE_FIELDS.get(env_name)
             if choices:
                 displays = [d for d, _v in choices]
+                var = tk.StringVar(master=self)
                 combo = ttk.Combobox(frm, width=40, values=displays,
-                                     state="readonly")
+                                     state="readonly", textvariable=var)
                 combo.grid(row=row, column=1, columnspan=2, sticky="we", pady=2)
                 self._entries[env_name] = combo
+                self._bind_invalidate(env_name, var)
                 self._choice_value_by_display[env_name] = {
                     d: v for d, v in choices}
                 self._choice_display_by_value[env_name] = {
@@ -291,14 +400,16 @@ class CredentialsDialog(BaseModalDialog):
                     row += 1
                 continue
 
-            entry = ttk.Entry(frm, width=42)
+            var = tk.StringVar(master=self)
+            entry = ttk.Entry(frm, width=42, textvariable=var)
             if is_secret:
                 entry.configure(show="*")
             entry.grid(row=row, column=1, sticky="we", pady=2)
             self._entries[env_name] = entry
+            self._bind_invalidate(env_name, var)
 
             if is_secret:
-                show_var = tk.BooleanVar(value=False)
+                show_var = tk.BooleanVar(master=self, value=False)
                 self._show_vars[env_name] = show_var
                 def _toggle(_e=entry, _v=show_var):
                     _e.configure(show="" if _v.get() else "*")
@@ -308,9 +419,14 @@ class CredentialsDialog(BaseModalDialog):
                                     padx=(6, 0), pady=2)
             row += 1
 
+        # Test row for the final section (the loop only closes a section
+        # when the NEXT one starts).
+        row = self._add_verify_row(frm, row, last_section)
+
         # Status label.
-        self._status_var = tk.StringVar(value=self._initial_status_text())
-        ttk.Label(frm, textvariable=self._status_var, foreground=MUTED_GREY
+        self._status_var = tk.StringVar(master=self, value=self._initial_status_text())
+        ttk.Label(frm, textvariable=self._status_var, foreground=MUTED_GREY,
+                  wraplength=520, justify="left"
                   ).grid(row=row, column=0, columnspan=3, sticky="w",
                          pady=(8, 4))
         row += 1
@@ -336,10 +452,241 @@ class CredentialsDialog(BaseModalDialog):
         return ("Persistent credential storage is only implemented on Windows. "
                 "Values are kept in-process only.")
 
+    # ---- verification ("Test connection") ------------------------------
+
+    def _add_verify_row(
+        self, frm: ttk.Frame, row: int, section: str | None,
+    ) -> int:
+        """Append ``section``'s "Test connection" block. Returns the next row.
+
+        No-op for a vendor without a registered verifier (Schwab today), so
+        the dialog never offers a button that cannot answer.
+        """
+        vendor = next(
+            (v for _p, s, v in _SECTIONS if s == section), None)
+        if vendor is None or not verify.has_verifier(vendor):
+            return row
+
+        bar = ttk.Frame(frm)
+        bar.grid(row=row, column=0, columnspan=3, sticky="we", pady=(4, 0))
+        btn = ttk.Button(bar, text="Test connection",
+                         command=lambda v=vendor: self._begin_verify(v))
+        btn.pack(side="left")
+        self._verify_buttons[vendor] = btn
+
+        status_var = tk.StringVar(master=self, value="Not tested yet.")
+        status_lbl = ttk.Label(bar, textvariable=status_var,
+                               foreground=MUTED_GREY, wraplength=380,
+                               justify="left")
+        status_lbl.pack(side="left", padx=(8, 0))
+        self._verify_status_vars[vendor] = status_var
+        self._verify_status_labels[vendor] = status_lbl
+        row += 1
+
+        detail_var = tk.StringVar(master=self, value="")
+        ttk.Label(frm, textvariable=detail_var, foreground=MUTED_GREY,
+                  wraplength=520, justify="left").grid(
+                      row=row, column=0, columnspan=3, sticky="w",
+                      padx=(4, 0), pady=(0, 2))
+        self._verify_detail_vars[vendor] = detail_var
+        row += 1
+        return row
+
+    def _bind_invalidate(self, env_name: str, var: tk.StringVar) -> None:
+        """Reset a vendor's verdict whenever one of its fields changes.
+
+        Without this, a green "✓ Ready" would linger after the user pastes a
+        different key — the single most misleading state this dialog could
+        show.
+
+        Traces the field's ``textvariable`` rather than binding
+        ``<KeyRelease>``: a keyboard binding misses right-click → Paste (no
+        key event fires at all) and programmatic updates, which is exactly
+        how a user swaps in a fresh key copied off a vendor dashboard.
+
+        The variable is retained in ``_field_vars`` for ALL fields, not just
+        traced ones — see the note in ``__init__`` on GC destroying traces.
+        """
+        self._field_vars[env_name] = var
+        vendor = _vendor_for_env(env_name)
+        if vendor is None:
+            return
+        var.trace_add(
+            "write", lambda *_a, v=vendor: self._invalidate_verify(v))
+
+    def _invalidate_verify(self, vendor: str) -> None:
+        """Drop a stale verdict after an edit (no-op while a probe is live)."""
+        if self._populating:
+            return
+        if self._verify_boxes.get(vendor, {}).get("inflight"):
+            return
+        if vendor not in self._verify_status_vars:
+            return
+        self._set_verify_text(vendor, "Not tested yet.", MUTED_GREY, "")
+
+    def _set_verify_text(
+        self, vendor: str, text: str, color: str, detail: str,
+    ) -> None:
+        """Write the status + detail lines for ``vendor`` (Tk thread only)."""
+        var = self._verify_status_vars.get(vendor)
+        if var is not None:
+            var.set(text)
+        lbl = self._verify_status_labels.get(vendor)
+        if lbl is not None:
+            try:
+                lbl.configure(foreground=color)
+            except tk.TclError:
+                pass
+        detail_var = self._verify_detail_vars.get(vendor)
+        if detail_var is not None:
+            detail_var.set(detail)
+
+    def _vendor_credentials_from_form(self, vendor: str) -> Any:
+        """Build ``vendor``'s credential object from what is TYPED right now.
+
+        Deliberately not ``get_credentials()``: the user must be able to
+        paste a key, test it, fix a typo and re-test **without** committing
+        anything to the DPAPI blob or mutating ``os.environ``. Goes through
+        the shared :func:`~tradinglab.data.credentials.build_credentials`
+        so the probe can't derive a different feed than the app will use.
+        """
+        from ..data.credentials import build_credentials
+        values = self._collect()
+        return getattr(build_credentials(values.get), vendor, None)
+
+    def _begin_verify(self, vendor: str) -> None:
+        """Kick off ``vendor``'s probe on a worker thread."""
+        box = self._verify_boxes.get(vendor)
+        if box is not None and box.get("inflight"):
+            return
+
+        creds = self._vendor_credentials_from_form(vendor)
+        if creds is None:
+            self._set_verify_text(
+                vendor, "\u2014 No test available.", MUTED_GREY, "")
+            return
+        if not creds.is_configured():
+            result = verify.not_configured(vendor)
+            self._render_verify_result(vendor, result)
+            return
+
+        box = {"inflight": True, "done": False, "result": None}
+        self._verify_boxes[vendor] = box
+        btn = self._verify_buttons.get(vendor)
+        if btn is not None:
+            try:
+                btn.configure(state="disabled", text="Testing…")
+            except tk.TclError:
+                pass
+        self._set_verify_text(vendor, "Testing…", MUTED_GREY, "")
+
+        def _work() -> None:
+            # Runs OFF the Tk thread: touches nothing but the local box.
+            try:
+                box["result"] = verify.verify_vendor(vendor, creds)
+            except BaseException as exc:  # noqa: BLE001 — never lose the box
+                box["result"] = verify.result_from_exception(
+                    exc, vendor=vendor)
+            finally:
+                box["done"] = True
+
+        thread = threading.Thread(
+            target=_work, name=f"CredVerify{vendor.title()}", daemon=True)
+        self._verify_threads[vendor] = thread
+        thread.start()
+        self._schedule_verify_poll(vendor)
+
+    def _schedule_verify_poll(self, vendor: str) -> None:
+        try:
+            self._verify_jobs[vendor] = self.after(
+                _VERIFY_POLL_MS, lambda v=vendor: self._poll_verify(v))
+        except tk.TclError:  # dialog already tearing down
+            pass
+
+    def _poll_verify(self, vendor: str) -> None:
+        """Tk-thread poll for a finished probe.
+
+        **Do not** replace this with ``self.after(0, ...)`` from the worker.
+        Stock CPython on Windows ships a non-threaded Tcl; a cross-thread
+        ``after`` raises ``RuntimeError("main thread is not in main loop")``
+        and the callback is silently dropped, leaving the button stuck on
+        "Testing…" forever. Same contract as the strategy-tester export
+        poll — see ``gui/strategy_tab.py``.
+        """
+        self._verify_jobs.pop(vendor, None)
+        try:
+            if not self.winfo_exists():
+                return
+        except tk.TclError:
+            return
+
+        box = self._verify_boxes.get(vendor)
+        if box is None:
+            return
+        if not box.get("done"):
+            thread = self._verify_threads.get(vendor)
+            if thread is not None and thread.is_alive():
+                self._schedule_verify_poll(vendor)
+                return
+            # Worker vanished without publishing a result — don't hang the UI.
+            box["result"] = verify.VerifyResult(
+                status=verify.STATUS_ERROR, vendor=vendor,
+                summary="The connection test stopped unexpectedly.")
+            box["done"] = True
+
+        box["inflight"] = False
+        result = box.get("result")
+        if result is not None:
+            verify.record_result(result)
+            self._render_verify_result(vendor, result)
+
+    def _render_verify_result(
+        self, vendor: str, result: verify.VerifyResult,
+    ) -> None:
+        """Paint a :class:`VerifyResult` into the vendor's status rows."""
+        btn = self._verify_buttons.get(vendor)
+        if btn is not None:
+            try:
+                btn.configure(state="normal", text="Test connection")
+            except tk.TclError:
+                pass
+        glyph, color = _STATUS_STYLE.get(
+            result.status, ("\u2014", MUTED_GREY))
+        text = f"{glyph} {result.summary}"
+        if result.latency_ms is not None and result.ok:
+            text += f"  ({result.latency_ms:.0f} ms)"
+        self._set_verify_text(vendor, text, color, result.detail)
+
+    def _on_destroy(self, event: object = None) -> None:
+        """Cancel pending poll jobs so a mid-probe close doesn't TclError.
+
+        The worker threads are daemons writing only to their own dict, so
+        they are safe to abandon — nothing they touch outlives this dialog.
+        """
+        if getattr(event, "widget", self) is not self:
+            return  # child-widget <Destroy> bubbling up
+        for job in list(self._verify_jobs.values()):
+            try:
+                self.after_cancel(job)
+            except (tk.TclError, ValueError):
+                pass
+        self._verify_jobs.clear()
+
     # ---- helpers -------------------------------------------------------
 
     def _populate_from_environment(self) -> None:
         """Pre-fill entries from current ``os.environ`` so existing values are visible."""
+        self._populating = True
+        try:
+            self._populate_fields()
+        finally:
+            self._populating = False
+        # Snapshot so we can tell "user cleared this" from "it opened blank".
+        self._initial_values = {
+            name: entry.get().strip() for name, entry in self._entries.items()
+        }
+
+    def _populate_fields(self) -> None:
         for env_name, entry in self._entries.items():
             if env_name in self._choice_value_by_display:
                 # Dropdown: map the stored env value → its display; default to
@@ -368,13 +715,31 @@ class CredentialsDialog(BaseModalDialog):
 
     # ---- actions -------------------------------------------------------
 
+    def _apply_to_environment(self, values: dict[str, str]) -> None:
+        """Push ``values`` into ``os.environ`` **and remove what was cleared**.
+
+        The removal half is essential and easy to miss: ``_collect`` only
+        reports non-empty fields, and
+        :func:`tradinglab.data.credentials._resolve` consults ``os.environ``
+        before any file. So a key the user just deleted would keep resolving
+        from the stale environment entry for the rest of the session — the
+        source would stay in the dropdown and keep making authenticated
+        requests with a credential the user believes they revoked.
+        """
+        for name in _managed_env_names():
+            if name in values:
+                os.environ[name] = values[name]
+            else:
+                os.environ.pop(name, None)
+
     def _on_save(self) -> None:
         values = self._collect()
-        if not values:
+        if not _has_credential_values(values):
             confirm = messagebox.askyesno(
                 "Configure Credentials",
-                "All fields are empty. Save an empty configuration "
-                "(this clears any previously-saved credentials)?",
+                "All credential fields are empty. Save an empty "
+                "configuration (this clears any previously-saved "
+                "credentials and removes their data sources)?",
                 parent=self,
             )
             if not confirm:
@@ -388,11 +753,9 @@ class CredentialsDialog(BaseModalDialog):
                 "session only (no on-disk persistence).",
                 parent=self,
             )
-            for k, v in values.items():
-                os.environ[k] = v
+            self._apply_to_environment(values)
             self._close_and_refresh()
             return
-
         try:
             from .. import _dpapi
         except ImportError as e:
@@ -427,32 +790,160 @@ class CredentialsDialog(BaseModalDialog):
 
         # Apply to current process too so the user doesn't have to
         # restart for the new values to take effect.
-        for k, v in values.items():
-            os.environ[k] = v
+        self._apply_to_environment(values)
         self._close_and_refresh()
 
+    def _current_sources(self) -> tuple[str, ...]:
+        """User-visible source keys right now (``()`` if the registry errors)."""
+        try:
+            from ..data import user_visible_sources
+            return tuple(user_visible_sources())
+        except Exception:  # noqa: BLE001
+            return ()
+
+    def _report_source_changes(
+        self, gained: list[str], lost: list[str],
+    ) -> None:
+        """Name the sources that just became (un)available. Silent if none.
+
+        This is the concrete "your data source is ready for use" signal: it
+        names the exact entries that just appeared in the toolbar's
+        source dropdown, so the user knows the keys took effect AND where to
+        go next. Only fires on a real change, so a no-op save never nags.
+        """
+        if not gained and not lost:
+            return
+        parts: list[str] = []
+        if gained:
+            parts.append(
+                "These data sources are now ready to use — pick one from "
+                "the source dropdown in the toolbar:\n  \u2022 "
+                + "\n  \u2022 ".join(gained))
+        if lost:
+            parts.append(
+                "No longer available (credentials were cleared):\n  \u2022 "
+                + "\n  \u2022 ".join(lost))
+        try:
+            messagebox.showinfo(
+                "Configure Credentials", "\n\n".join(parts), parent=self)
+        except tk.TclError:
+            pass
+
+    def _warn_if_file_backed(self) -> None:
+        """Explain a credential the user just cleared that is STILL active.
+
+        ``credentials`` resolves from ``os.environ`` first, then a plaintext
+        ``alpaca.txt`` / ``credentials.txt``, then a dev ``.env``. This dialog
+        owns only the environment layer (and the DPAPI blob that primes it),
+        so clearing a field cannot remove a key that a *file* is supplying.
+
+        Without this message the user deletes the key, saves, and the source
+        stubbornly remains — with no way to discover why. Naming the
+        mechanism turns a mystery into a one-step fix.
+
+        Fires **only when the user actually emptied a field that had
+        content**. A setup where the fields were already blank at open
+        (because the credential lives in a file, which
+        ``_populate_from_environment`` does not read) is the steady state for
+        those users — nagging them on every save would be noise.
+        """
+        try:
+            from ..data.credentials import get_credentials
+            creds = get_credentials()
+        except Exception:  # noqa: BLE001
+            return
+        stuck: list[str] = []
+        for prefix, section, vendor in _SECTIONS:
+            fields = [n for n in self._entries if n.startswith(prefix)
+                      and n not in _CHOICE_FIELDS]
+            if not fields:
+                continue
+            if any(self._entries[n].get().strip() for n in fields):
+                continue  # still populated — nothing was removed
+            cleared = any(self._initial_values.get(n, "") for n in fields)
+            if not cleared:
+                continue  # already blank when the dialog opened
+            vendor_creds = getattr(creds, vendor, None)
+            if vendor_creds is not None and vendor_creds.is_configured():
+                stuck.append(section)
+        if not stuck:
+            return
+        try:
+            messagebox.showwarning(
+                "Configure Credentials",
+                "These credentials are still active even though you cleared "
+                "the fields:\n  \u2022 " + "\n  \u2022 ".join(stuck) + "\n\n"
+                "They are being supplied by a file or a system environment "
+                "variable, which this dialog cannot clear. Check for an "
+                "alpaca.txt / credentials.txt next to the app or in the "
+                "TradingLab data folder (Help \u2192 Reveal Data Folder), or "
+                "an exported environment variable.",
+                parent=self,
+            )
+        except tk.TclError:
+            pass
+
     def _close_and_refresh(self) -> None:
-        """Refresh the in-process credentials cache and dismiss."""
+        """Reload credentials, re-register vendor sources, then dismiss.
+
+        The re-registration is the difference between "we saved your keys"
+        and "your data source is ready to use". Vendor sources are gated on
+        ``is_configured()`` inside ``tradinglab.data``, which historically
+        ran at package-import time **only** — so a user who pasted a working
+        Alpaca key saw nothing change until they restarted the app, with
+        nothing in the UI hinting that a restart was required. Calling
+        :func:`~tradinglab.data.register_vendor_sources` here closes that
+        gap; ``on_changed`` then refreshes the toolbar combobox.
+        """
         try:
             from ..data import credentials as _creds
             _creds.reload()
         except Exception:  # noqa: BLE001
             pass
+        # Cached verdicts describe the PREVIOUS credentials — drop them so a
+        # stale "verified" can't outlive the keys it was measured against.
+        try:
+            verify.clear_results()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            from ..data import register_vendor_sources
+            register_vendor_sources()
+        except Exception:  # noqa: BLE001
+            pass
+
+        after = self._current_sources()
+        gained = [s for s in after if s not in self._sources_before]
+        lost = [s for s in self._sources_before if s not in after]
+        self._report_source_changes(gained, lost)
+        self._warn_if_file_backed()
+        if self._on_changed is not None:
+            try:
+                self._on_changed()
+            except Exception:  # noqa: BLE001
+                pass
         self.destroy()
 
     def _on_cancel(self) -> None:
         self.destroy()
 
 
-def open_credentials_dialog(parent: tk.Misc) -> CredentialsDialog | None:
+def open_credentials_dialog(
+    parent: tk.Misc, on_changed: Callable[[], None] | None = None,
+) -> CredentialsDialog | None:
     """Open the credentials dialog as a modal child of ``parent``.
+
+    ``on_changed`` is invoked (on the Tk thread, after vendor sources have
+    been re-registered) when the user saves, so the caller can refresh the
+    toolbar source combobox — mirroring ``open_local_data_dialog``. Without
+    it a newly-configured vendor would stay invisible until restart.
 
     Returns the :class:`CredentialsDialog` instance (or ``None`` if
     Tk is not available). The dialog blocks the parent via
     ``grab_set`` and destroys itself on Save / Cancel.
     """
     try:
-        dlg = CredentialsDialog(parent)
+        dlg = CredentialsDialog(parent, on_changed=on_changed)
         parent.wait_window(dlg)
         return dlg
     except tk.TclError:

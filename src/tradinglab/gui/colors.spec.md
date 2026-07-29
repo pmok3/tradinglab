@@ -17,6 +17,8 @@ consistency doesn't drift as new surfaces are added.
   ex-div today) (`"#d4a017"`). Brighter than `WARN_AMBER` so it
   surfaces above per-card stroke colors.
 - `ERROR_RED: str` — error / validation-failure text (`"#a33333"`).
+- `OK_GREEN: str` — success / verified state (`"#2d7a2d"`). Semantic
+  counterpart to `ERROR_RED`.
 - `MUTED_GREY: str` — help / hint / secondary-label text
   (`"#666666"`).
 
@@ -30,6 +32,10 @@ consistency doesn't drift as new surfaces are added.
   P/L badges + %-change without a relaunch (audit `color-blind-palette-audit`).
 - `ERROR_RED` is distinct from `DOWN_RED` so "loss" and "error" don't
   conflate. `ERROR_RED` is desaturated (`#a33333`) for inline form errors.
+- `OK_GREEN` is distinct from `UP_GREEN` for the mirror-image reason: a
+  "credentials verified" checkmark is not a gain. It is also a **fixed**
+  token, not a `*_green()` accessor — a success glyph must stay green even
+  when the Okabe-Ito toggle recolours `BULL_COLOR` to orange.
 - `WARN_AMBER` (`#a36b00`) picked as the most muted of the pre-existing amber
   variants — warnings read informational, not alarming.
 - `MUTED_GREY = #666666` is the median of pre-centralization values; `#888`

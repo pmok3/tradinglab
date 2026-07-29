@@ -37,6 +37,7 @@ from typing import Any
 from ..constants import provider_lookback_days
 from ..core.timezones import ET
 from ..models import Candle
+from . import verify as _verify
 from ._http import MAX_RESPONSE_BYTES, credentialed_opener
 from .credentials import PolygonCredentials, get_credentials
 from .normalize import candles_from_json_rows
@@ -139,3 +140,95 @@ def _http_get_aggs(
     })
     with credentialed_opener().open(req, timeout=15) as resp:
         return json.loads(resp.read(MAX_RESPONSE_BYTES).decode("utf-8"))
+
+
+# ---------------------------------------------------------------------------
+# Credential verification ("Test connection")
+# ---------------------------------------------------------------------------
+
+#: Probe symbol + timeframe. A previous-day aggregate on a large-cap name is
+#: the cheapest request that still proves the key is entitled to equity data.
+_VERIFY_SYMBOL = "AAPL"
+
+
+def verify_polygon(
+    creds: PolygonCredentials | None = None, *,
+    timeout: float = _verify.DEFAULT_TIMEOUT_S,
+    opener: Any | None = None,
+) -> _verify.VerifyResult:
+    """Probe Polygon with ``creds`` and report whether the aggs API is usable.
+
+    Registered as the ``polygon`` verifier (see :func:`verify.verify_vendor`).
+    ``creds=None`` reads the process-wide credentials; the credentials dialog
+    passes the value the user has *typed* so they can iterate before saving.
+
+    Uses ``/v2/aggs/ticker/{sym}/prev`` — the same auth + response family the
+    real fetcher uses, but a fixed single-bar endpoint with no date range, so
+    the probe cost is independent of the configured lookback.
+
+    Polygon signals an unentitled key with **HTTP 403** and a ``NOT_AUTHORIZED``
+    body, which :func:`verify.status_for_http_code` already maps to
+    ``forbidden`` (key valid, plan insufficient) rather than
+    ``invalid_credentials`` — the distinction that lets the dialog tell the
+    user to upgrade instead of re-copying a key that is already correct.
+    """
+    creds = creds if creds is not None else get_credentials().polygon
+    if not creds.is_configured():
+        return _verify.not_configured(
+            "polygon", detail="An API key is required.")
+
+    url = (
+        f"{_POLYGON_BASE}/v2/aggs/ticker/"
+        f"{urllib.parse.quote(_VERIFY_SYMBOL)}/prev?"
+        + urllib.parse.urlencode({"adjusted": "true"})
+    )
+    # Header auth, never the apiKey query param — see _http_get_aggs.
+    req = urllib.request.Request(url, headers={
+        "Authorization": "Bearer " + (creds.api_key or ""),
+        "Accept": "application/json",
+    })
+    sw = _verify.stopwatch()
+    try:
+        with sw:
+            open_fn = (opener or credentialed_opener()).open
+            with open_fn(req, timeout=timeout) as resp:
+                payload = json.loads(
+                    resp.read(MAX_RESPONSE_BYTES).decode("utf-8"))
+    except Exception as exc:  # noqa: BLE001 — network/parse
+        return _verify.result_from_exception(
+            exc, vendor="polygon", secrets=(creds.api_key,),
+            latency_ms=sw.elapsed_ms,
+        )
+
+    if not isinstance(payload, dict):
+        return _verify.VerifyResult(
+            status=_verify.STATUS_ERROR, vendor="polygon",
+            summary="Authenticated, but the response was not readable.",
+            latency_ms=sw.elapsed_ms, http_status=200,
+        )
+    # Polygon returns 200 with {"status": "ERROR"|"NOT_AUTHORIZED", ...} for
+    # some plan failures instead of a 4xx — treat that as forbidden, not ok.
+    api_status = str(payload.get("status", "")).upper()
+    if api_status in ("NOT_AUTHORIZED", "ERROR"):
+        msg = _verify.redact(
+            str(payload.get("message") or payload.get("error") or ""),
+            (creds.api_key,),
+        )
+        return _verify.VerifyResult(
+            status=_verify.STATUS_FORBIDDEN, vendor="polygon",
+            summary=f"Authenticated, but not entitled. {msg}".strip(),
+            detail=(
+                "Your Polygon plan does not cover this data. Check the plan "
+                "on your Polygon dashboard."
+            ),
+            latency_ms=sw.elapsed_ms, http_status=200,
+        )
+    return _verify.VerifyResult(
+        status=_verify.STATUS_OK, vendor="polygon",
+        summary="Ready \u2014 aggregates API reachable.",
+        entitlements={"results": int(payload.get("resultsCount") or 0)},
+        latency_ms=sw.elapsed_ms, http_status=200,
+    )
+
+
+_verify.register_verifier("polygon", verify_polygon)

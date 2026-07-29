@@ -1758,6 +1758,59 @@ facecolor). Both coexist; that's intentional and tested
 force-fitting it onto the shared helper — you'd drop the figure-facecolor
 re-theme.
 
+### 7.32 Credential verification is a registry capability — and vendor sources re-register without a restart
+
+Two coupled facts about the "enable a new data source" flow
+(`data/verify.py`, `data/__init__.py`, `gui/credentials_dialog.py`).
+
+**1. `is_configured()` is presence, `verify_vendor()` is validity.**
+`AlpacaCredentials.is_configured()` only checks that the fields are
+non-empty. That is the correct gate for *registration* — startup must never
+depend on the network — but it proves nothing about the keys. The separate,
+explicit answer lives in `data/verify.py`:
+
+- `register_verifier(vendor, fn)` / `verify_vendor(vendor, creds)`, a side
+  table mirroring `_PAGE_FETCHERS` / `_RANGE_CAPABLE` in `data/base.py`.
+- **When you add a new vendor source, register a verifier too.** The
+  credentials dialog renders a "Test connection" button for exactly those
+  vendors with one; no verifier = no button (Schwab today).
+- The `VerifyResult.status` taxonomy is load-bearing. **HTTP 403 maps to
+  `forbidden`, NOT `invalid_credentials`** — on most vendors a 403 means the
+  key is valid and the *plan* is insufficient, so telling the user to
+  re-copy a correct key sends them down the wrong path. `forbidden` /
+  `rate_limited` / `network_error` render amber, not red.
+- `verify_alpaca` re-probes once with `feed=iex` after a `feed=sip` 403 to
+  prove the key works and blame the plan setting instead. Don't remove that
+  second request — it converts the §7.14 free-tier mismatch from a reactive
+  mid-session popup into a save-time fix.
+- Probes deliberately skip the retry ladder (one HTTP attempt) but still
+  spend a rate-limiter token.
+
+**2. Vendor sources MUST be re-registered after a credential save.**
+`data.register_vendor_sources()` (mirroring `register_local_sources()`) is
+called at package import **and** from
+`CredentialsDialog._close_and_refresh()`. Before it was extracted, the
+gating block ran at import time only — a user who pasted a working Alpaca
+key had to restart before `alpaca` appeared in the source dropdown, with
+nothing in the UI saying so. Any "credentials verified" signal is a lie
+without this. Cleared credentials are dropped via `base.unregister_source`,
+which also clears the range / page / internal side-tables.
+
+**3. Tk `StringVar` lifetime (bit us here, applies to every dialog).**
+A ttk widget stores only the Tcl variable *name*. If the Python
+`StringVar` is garbage-collected, `Variable.__del__` unsets the Tcl variable
+and **silently destroys every `trace_add` on it**. Symptom: reactive form
+behaviour that works in isolation and stops firing at an unpredictable GC
+boundary (and tests that pass for the wrong reason). Always retain the var
+(e.g. `self._field_vars[name] = var`) AND construct it with `master=self`
+so it doesn't bind to `tkinter._default_root`. Pinned by
+`tests/unit/gui/test_credentials_dialog_verify.py::
+test_field_vars_survive_garbage_collection`.
+
+Tests: `tests/unit/data/test_verify.py`,
+`tests/unit/data/test_alpaca_verify.py`,
+`tests/unit/data/test_vendor_registration.py`,
+`tests/unit/gui/test_credentials_dialog_verify.py`.
 ---
 
 ## 8. Build & release flow
@@ -1881,7 +1934,8 @@ These files are **never** committed to git. Use them for working memory.
 | Backtest engine (post-trade records) | `src/tradinglab/backtest/engine.py` |
 | PyInstaller spec | `TradingLab.spec` |
 | Build wrapper | `tools/build_exe.ps1` |
-| Onboarding docs | `docs/ONBOARDING.md` |
+| Credential verification ("Test connection") | `src/tradinglab/data/verify.py` (`register_verifier`, `verify_vendor`, `VerifyResult`); see §7.32 |
+| Credentials dialog + vendor re-registration | `src/tradinglab/gui/credentials_dialog.py`, `data/__init__.py:register_vendor_sources` || Onboarding docs | `docs/ONBOARDING.md` |
 | Build docs | `docs/BUILDING_EXE.md` |
 | Paint-pipeline refactor scope | `docs/PAINT_PIPELINE_REFACTOR.md` (multi-week, requires user-design session) |
 
@@ -1938,7 +1992,12 @@ guessing — recent checkpoints include:
   (methodology in §7.30). Most files came back accurate; surgical fixes
   applied where refactors (`_palette`, `BaseIndicator.compute()`,
   `BaseModalDialog`, `read_json`/`JsonObjectStore`) had outrun their specs.
-- Dark-mode native-widget theming: classic `tk.Listbox`/`tk.Text`/
+- Credential verification flow (§7.32): vendor-agnostic `data/verify.py`
+  (`register_verifier` / `verify_vendor` / status taxonomy) + `verify_alpaca`
+  (SIP→IEX disambiguation) + `verify_polygon`; per-vendor "Test connection"
+  button in the credentials dialog on a worker thread with `after(100)`
+  polling; `register_vendor_sources()` extracted so a saved key lights up its
+  source with NO app restart.- Dark-mode native-widget theming: classic `tk.Listbox`/`tk.Text`/
   `tk.Canvas` widgets (not reached by the ttk `ThemeController` sweep)
   now themed via shared `gui/native_theme.py` helpers across 7 dialogs +
   the Custom Indicator Builder (own inline themer); pinned by
@@ -1951,7 +2010,8 @@ in sync** (see §0). If you change the build/test/release flow,
 update §3 / §4 / §8 in the same PR. Strategy Tester landmines are in
 §7.7–§7.10 — read those before touching `strategy_tester/`. Indicator
 hot-path / kernel conventions are in §7.27–§7.28. Dark-mode native-widget
-theming convention is in §7.31. App.py
+theming convention is in §7.31. Credential verification + no-restart
+vendor registration are in §7.32. App.py
 mixin extraction conventions are in §7.24; if you extract a new mixin,
 also update the §2 layout tree, the §11 cheatsheet, the §12 prior
 context, and add a colocated `.spec.md`.*
