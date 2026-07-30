@@ -317,6 +317,7 @@ def _base_price_for(ticker: str) -> float:
 @functools.cache
 def _simulate_1m(
     ticker: str, scenario: str, days: int, start: date, seed: int,
+    tz_aware: bool,
 ) -> tuple[Candle, ...]:
     """Simulate ``days`` sessions of 1-minute candles. Cached and immutable."""
     sc = scenario_for(scenario)
@@ -401,11 +402,9 @@ def _simulate_1m(
         for i in range(n):
             m = int(mins[i])
             ts = datetime(day.year, day.month, day.day) + timedelta(minutes=m)
-            if sc.tz_aware:
-                # Localise through the app's OWN Eastern tzinfo so the
-                # DST offset flip is the same one the application sees.
-                # ``fold=0`` resolves the ambiguous 01:00-02:00 hour on the
-                # fall-back day deterministically.
+            if tz_aware:
+                # Localise through the app's OWN Eastern tzinfo so the DST
+                # offset flip is exactly the one the application sees.
                 ts = ts.replace(tzinfo=_ET) if _ET is not None else ts
             out.append(
                 Candle(
@@ -507,15 +506,26 @@ def candles(
     days: int = 8,
     start: date | None = None,
     seed: int = 0,
+    tz_aware: bool | None = None,
 ) -> list[Candle]:
     """Return deterministic, structurally-realistic candles.
 
     ``1d`` aggregates the regular-session bars of each simulated day; every
     intraday interval aggregates the same underlying 1-minute series, so
     ``aggregate(5m) == fetch(15m)`` holds by construction.
+
+    ``tz_aware`` overrides the scenario default. **Pass ``True`` for anything
+    that routes through an ET conversion** — notably
+    ``strategy_tester.runner._filter_rth_only`` and the evaluator's
+    ``_compute_et_arrays``, which call ``Candle.date.timestamp()``. On a
+    tz-naive datetime that is interpreted as *local* time, so naive 09:30-16:00
+    bars are silently shifted out of the RTH window on any machine that is not
+    in US/Eastern.
     """
     base = _simulate_1m(ticker.upper(), scenario, int(days),
-                        start or _DEFAULT_START, int(seed))
+                        start or _DEFAULT_START, int(seed),
+                        bool(scenario_for(scenario).tz_aware)
+                        if tz_aware is None else bool(tz_aware))
     if interval in ("1d", "1wk", "1mo"):
         return _aggregate_daily(base)
     step = interval_minutes(interval)
@@ -527,6 +537,7 @@ def candles(
 def fetcher(
     *, scenario: str = "normal", days: int = 8,
     start: date | None = None, seed: int = 0,
+    tz_aware: bool | None = None,
 ):
     """Build a ``DATA_SOURCES``-compatible ``(ticker, interval) -> candles``.
 
@@ -541,5 +552,5 @@ def fetcher(
     """
     def _fetch(ticker: str, interval: str):
         return candles(ticker, interval, scenario=scenario, days=days,
-                       start=start, seed=seed)
+                       start=start, seed=seed, tz_aware=tz_aware)
     return _fetch

@@ -79,10 +79,13 @@ python_files = ["test_*.py"]
 # test instead of stalling the entire CI job (which previously stuck on
 # macOS for the runner's 6-hour default). `--timeout-method=thread`
 # survives the GIL in case the hang is in C-extension matplotlib code.
-addopts = "-ra --strict-markers --timeout=120 --timeout-method=thread -m 'not perf'"
+addopts = "-ra --strict-markers --timeout=120 --timeout-method=thread -m 'not perf and not longhaul'"
 markers = [
     "smoke: end-to-end smoke tests (slow, headless GUI)",
     "perf: indicator perf-budget regression gates (opt-in via `-m perf`; never run in default test session)",
+    "oracle: differential / metamorphic oracles (deterministic, headless, fast)",
+    "property: Hypothesis-driven property tests (deterministic CI profile)",
+    "longhaul: multi-session soak tests (opt-in; excluded from the default session)",
 ]
 
 # Coverage is a VISIBILITY tool, not a gate. There is deliberately no
