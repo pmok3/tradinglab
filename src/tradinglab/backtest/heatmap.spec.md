@@ -53,7 +53,7 @@ model it returns. See [`docs/SANDBOX_HEATMAP.md`](../../../docs/SANDBOX_HEATMAP.
   — luminance-based label-color chooser.
 
 ## Dependencies
-- Internal: [`models`](../models.spec.md) (`Candle`).
+- Internal: [`models`](../models.spec.md) (`Candle`), [`core/timezones`](../core/timezones.spec.md) (`normalize_epoch_to_seconds`).
 - External: `dataclasses`, `math`, `collections` (stdlib only). No numpy, Tk, or matplotlib — the layout math is pure Python.
 
 ## Design Decisions
@@ -67,7 +67,9 @@ model it returns. See [`docs/SANDBOX_HEATMAP.md`](../../../docs/SANDBOX_HEATMAP.
   of its inputs. The single clock-aware utility is
   `price_at_or_before(candles, as_of_ts)` — a pure, testable lookup that
   enforces the no-future-leakage boundary at the price-fetch site (never
-  returns a close after the clock; normalizes ms→s by magnitude). The
+  returns a close after the clock; normalizes ms→s by magnitude via the
+  shared `core.timezones.normalize_epoch_to_seconds`, so the `1e12` ms/s
+  threshold lives in exactly one place). The
   caller composes it into `size_by_symbol` / `pct_by_symbol`.
 - **Historically-scaled cap, not current cap** (decision 3). `size` is
   `scaled_cap(shares_at_session, session_reference_price)` so tile area

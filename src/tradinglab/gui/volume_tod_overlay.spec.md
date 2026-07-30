@@ -32,8 +32,12 @@ wall-clock.
 - `draw_volume_tod_patches(ax_v, patches, *, offset, theme,
   dark_mode, show_median_tick=True) -> VolumeTodArtists` —
   projects patches onto the volume axes.
-- `clear_volume_tod_artists(artists)` — iterates `.remove()`,
-  swallows exceptions (axes may already be torn down).
+- `clear_volume_tod_artists(artists)` — delegates to
+  `tradinglab.rendering.safe_remove_all`, which calls `.remove()` on
+  each artist and swallows exceptions (axes may already be torn down).
+  Idempotent — safe on an already-cleared list. Behavior unchanged; the
+  docstring previously described itself as a mirror of
+  `events_overlay.clear_event_glyph_artists`.
 - `patches_should_suppress_default_fill(patches) -> Dict[int, bool]`
   — bar indices whose default `draw_volume` fill must be hidden.
 

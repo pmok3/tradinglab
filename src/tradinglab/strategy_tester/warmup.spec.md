@@ -40,7 +40,11 @@ be fully hydrated by Day 1 of the active backtest period.
 - `_walk_field_kinds(node) -> list[tuple[str, str, dict]]` — internal
   tree walker. Emits `(symbol, kind_id, params)` triples; the leading
   `symbol` slot is `""` for active-symbol refs and the pinned ticker
-  for cross-symbol refs.
+  for cross-symbol refs. Uses the shared
+  `scanner.model.iter_conditions` + `iter_field_refs` traversal (one of
+  ~14 hand-rolled recursions now consolidated into `scanner.model`)
+  rather than its own recursion; behavior unchanged — still returns
+  `[]` for `None` and still skips literal / builtin refs.
 - `bars_to_calendar_days(bars, interval) -> int` — converts bars at
   the given interval to a calendar-day window for the fetch range:
   - intraday (`1m`/`5m`/`15m`/`30m`/`1h`): `ceil(bars / bars_per_RTH_day) × 1.5`

@@ -22,7 +22,7 @@ half-validated continuously; final validation runs on Save via
 ## Public API
 
 ```python
-class EntriesDialog(BaseModalDialog):
+class EntriesDialog(BaseEditorDialog):
     def __init__(self, master, *, strategy: EntryStrategy | None = None,
                  exit_strategies: Sequence[ExitStrategy] = (),
                  on_save: Callable[[EntryStrategy], None] | None = None,
@@ -47,9 +47,10 @@ class EntriesDialog(BaseModalDialog):
     def _on_primary(self) -> None         # BaseModalDialog Return hook
 ```
 
-## Modal plumbing (BaseModalDialog)
+## Modal plumbing (BaseEditorDialog)
 
-Subclasses :class:`gui._modal_base.BaseModalDialog` (audit item #4).
+Subclasses :class:`gui._modal_base.BaseEditorDialog` (audit item #4;
+was ``BaseModalDialog``).
 The base owns ``title`` / ``transient`` / ``grab_set`` / geometry
 persistence (``geometry_key="dlg.entries"``, default ``1400x780``) /
 ESC + Return bindings. ``__init__`` calls :meth:`_finalize_modal`
@@ -59,6 +60,19 @@ ESC + Return bindings. ``__init__`` calls :meth:`_finalize_modal`
 WM_DELETE invoke the cancel handler. Overrides of :meth:`_on_cancel` / :meth:`_on_primary`
 forward to the same handlers (belt-and-suspenders for any code
 path that bypasses the explicit `_finalize_modal` arguments).
+
+The footer is built by the base's shared
+``self._build_editor_footer(outer, on_validate=…, on_apply=…,
+on_save_close=…, on_cancel=…)`` rather than constructing the four
+``ttk.Button``s and the ``_status_var`` / ``_status_lbl`` inline.
+``_status_var`` is created by ``BaseEditorDialog.__init__`` (which runs
+before ``_build_layout()``), so it is available when the footer is
+built. No user-visible change — same ``[Validate] [Apply]
+[Save & Close] [Cancel]`` buttons, labels, order, and callbacks. Pinned
+by ``tests/unit/gui/test_dialog_button_order_windows.py::test_entries_dialog_footer_order_windows``,
+which now asserts the dialog delegates to the shared builder (and does
+not hand-pack a competing footer button) rather than scanning this file
+for literal button labels.
 
 Caller callbacks are stored as ``self._on_save_cb`` /
 ``self._on_cancel_cb`` — the ``_cb`` suffix avoids the

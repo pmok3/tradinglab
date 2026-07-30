@@ -22,7 +22,7 @@ composes these into `size_by_symbol` / membership for the pure
 - `shares_at_from_series(series, ts) -> (float | None, bool)` — snap to
   `ts`: exact most-recent ≤ `ts`; **carry back** the earliest known
   count (flagged `True`) when `ts` precedes the series; `(None, True)`
-  when empty. ms→s normalized.
+  when empty. ms→s normalized via `core.timezones.normalize_epoch_to_seconds`.
 - `class HeatmapProvider` (dataclass) — `meta` / `shares_fetcher` /
   `cache_dir`.
   - `symbols()`, `classification() -> {sym: Classification}`,
@@ -33,6 +33,7 @@ composes these into `size_by_symbol` / membership for the pure
 
 ## Dependencies
 - Internal: [`heatmap`](heatmap.spec.md) (`Classification`),
+  [`core/timezones`](../core/timezones.spec.md) (`normalize_epoch_to_seconds`),
   `.._resources.resource_path`, `..paths.app_data_dir`.
 - External: `csv`, `json`, `os`, `datetime` (stdlib); `yfinance` only in
   the default fetcher (imported lazily, failure-tolerant).

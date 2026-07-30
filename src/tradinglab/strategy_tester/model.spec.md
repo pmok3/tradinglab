@@ -16,7 +16,8 @@ Tk-free, side-effect-free pure-data model for the Strategy Tester feature. Owns 
 - `make_run_id(cfg, *, engine_version) -> str` — 12-hex-char prefix of SHA-256(canonical_json + "|" + engine_version).
 
 ## Dependencies
-- `hashlib`, `json`, `time`, `uuid`, `dataclasses`, `enum`, `typing` (stdlib only).
+- `hashlib`, `json`, `dataclasses`, `enum`, `typing`, `collections.abc.Mapping` (stdlib).
+- `core.ids.new_id_hex` (id minting) + `core.timezones.utc_now_iso` (timestamps) — the shared DRY helpers; neither is Tk-coupled.
 - Does NOT import any Tk-coupled or app-side module — safe to import from worker threads.
 
 ## Design Decisions

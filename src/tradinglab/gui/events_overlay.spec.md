@@ -12,7 +12,7 @@ axes-fraction Y).
 
 - `EventGlyphArtists` — dataclass: `artists` (list of matplotlib artists), `hit_meta` (list of `(x_data, glyph_kind, tooltip)` for hover), `forward_badge_tooltip` (str, empty when no right-edge badge).
 - `draw_event_glyphs(ax, glyphs, *, offset, theme=None, show_earnings=True, show_dividends=True, show_upcoming=True) -> EventGlyphArtists` — pure side-effecting; returns the artist refs the caller must hold for teardown.
-- `clear_event_glyph_artists(artists)` — iterates `.remove()`, swallowing exceptions (axes may already be torn down).
+- `clear_event_glyph_artists(artists)` — best-effort teardown; delegates to `tradinglab.rendering.safe_remove_all`, which calls `.remove()` on each artist and swallows exceptions (axes may already be torn down). Behavior unchanged — the docstring previously described itself as a mirror of `tradinglab.app._safe_remove`; that mirror is now a real delegation.
 
 ## Inputs
 

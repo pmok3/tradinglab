@@ -38,6 +38,21 @@ to `manifest.json`. The Strategy tab's Report view reads this file
 - Stat primitives: `wilson_score_ci`, `bootstrap_ci`,
   `profit_factor`, `expectancy`, `max_drawdown`, `daily_sharpe`,
   `daily_sortino`.
+- `expectancy(rows)` and the per-symbol rollup (`_per_symbol_stats`,
+  which feeds the `per_symbol` breakout) both derive their trade
+  counts / win-loss split / averages / expectancy from
+  `backtest.performance.summarize_trade_rows(rows)` (a `TradeStats`
+  frozen dataclass) rather than separate inline comprehensions.
+  `expectancy` was previously a **fourth** independent transcription of
+  `win_rate * avg_win + loss_rate * avg_loss` — alongside the two inside
+  `build_setup_aggregates` / `build_proximity_aggregates` and the inline
+  one in `compute_aggregate`; all four agreed numerically but nothing
+  forced them to, so a change to one definition (counting breakevens,
+  netting commissions) would silently not propagate. Behavior unchanged:
+  `expectancy` still returns `0.0` for an empty list, per-symbol
+  `net == gross` (commissions not modelled separately yet), and breakeven
+  trades (`pnl == 0`) count toward `count` but neither `wins` nor
+  `losses` (so `win_rate + loss_rate <= 1.0`).
 
 ## Statistics recipe (per plan.md §Stats & methodology)
 - **Win rate CI**: Wilson score interval (closed form, no scipy
@@ -159,4 +174,4 @@ to `manifest.json`. The Strategy tab's Report view reads this file
 - [screenshot](screenshot.spec.md) — sibling per-trade artifact.
 - `backtest/performance.spec.md` — reused `TradeRow` /
   `build_trade_rows` / `build_setup_aggregates` /
-  `write_trade_rows_csv` primitives.
+  `summarize_trade_rows` / `write_trade_rows_csv` primitives.

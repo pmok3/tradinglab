@@ -60,7 +60,9 @@ def snap_price_to_grid(price, *, visible_range=None) -> float: ...
 - **`extra`** is the v2 seam. A future `kind="trend"` will use
   `extra["anchors"]` rather than appending positional fields.
 - **`make_hline_drawing`** auto-generates UUIDv4 hex `id` + ISO-8601
-  UTC `created_at` when callers don't provide them.
+  UTC `created_at` (minted via `core.timezones.utc_now_naive_iso()` —
+  naive `YYYY-MM-DDTHH:MM:SS`, format unchanged) when callers don't
+  provide them.
 - **id always non-empty.** `_coerce_id` strips whitespace and
   generates a fresh UUIDv4 on empty input at factory/`from_dict`.
   `replace(id="")` preserves the current id (empty would collide on

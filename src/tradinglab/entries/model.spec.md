@@ -44,7 +44,8 @@ EntryStrategy
   position_already_open_policy, arm_window_start, arm_window_end,
   require_market_open, schema_version, created_with, created_at,
   updated_at, extra)`.
-- `@dataclass CreatedWith(app, version, template)` — provenance.
+- `@dataclass CreatedWith(app, version, template)` — provenance;
+  subclass of the shared `core.model_meta.CreatedWith` (see its spec).
 - `validate_strategy(strategy) -> List[str]` — human-readable errors
   (empty = valid). Storage and arming both call this.
 - `migrate(d, *, from_version) -> Dict[str, Any]` — forward-only.
@@ -53,7 +54,9 @@ EntryStrategy
 ## Dependencies
 
 - `scanner.model.Group` (for `EntryTrigger.condition`).
-- `re`, `uuid`, `time`, `dataclasses`, `enum`, `typing`.
+- `core.ids.new_id_hex` (id minting), `core.model_meta.CreatedWith`
+  (shared provenance base), `core.timezones.utc_now_iso` (timestamps).
+- `dataclasses`, `enum`, `typing`, `collections.abc.Mapping`.
 
 ## Design Decisions
 

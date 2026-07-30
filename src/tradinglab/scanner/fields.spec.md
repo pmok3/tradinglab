@@ -242,9 +242,12 @@ only; new code should call `scannable_indicators()` /
   bars_since_open, cumulative RVOL, session-anchored VWAP, …). Used by
   engine/runner to decide whether a condition's cached prefix needs
   re-evaluation at session boundaries.
-- `condition_uses_daily_reset_field(node) -> bool` — recursive walk of
-  `Condition`/`Group`; mirrors daily-reset awareness up to the group
-  level for conservative prefix-cache pruning.
+- `condition_uses_daily_reset_field(node) -> bool` — walks a
+  `Condition`/`Group` tree via the shared
+  `scanner.model.iter_tree_field_refs` traversal (True iff any referenced
+  field resets daily; non-`Group`/`Condition` input returns False);
+  mirrors daily-reset awareness up to the group level for conservative
+  prefix-cache pruning.
 
 ## What we *don't* do here
 

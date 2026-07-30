@@ -14,9 +14,11 @@ Pure-Python aggregates over a [`SessionResult`](session.spec.md) feeding Phase 1
 
 ## Public API
 - `@dataclass(frozen=True) class TradeRow` — `post: PostTradeReview`, `pre: Optional[PreTradeEntry]`. Properties: `setup_tag` (lowercase or `""`), `is_win`, `is_loss`, `thesis`, `conviction`, `target`.
+- `@dataclass(frozen=True) class TradeStats` — shared win/loss/expectancy reduction output: `count`, `wins`, `losses`, `win_rate`, `loss_rate`, `avg_pnl`, `total_pnl`, `avg_win`, `avg_loss`, `expectancy`. Carries `loss_rate` (which `SetupAggregate` / `ProximityAggregate` omit) because `expectancy` derives from it.
 - `@dataclass(frozen=True) class SetupAggregate` — `setup_tag`, `count`, `wins`, `losses`, `win_rate`, `avg_pnl`, `total_pnl`, `avg_win`, `avg_loss`, `expectancy`.
 - `@dataclass(frozen=True) class ProximityAggregate` — `proximity_tag`, `count`, `wins`, `losses`, `win_rate`, `avg_pnl`, `total_pnl`, `avg_win`, `avg_loss`, `expectancy`.
 - `build_trade_rows(result) -> List[TradeRow]` — join post-trades with pre-trades on `ref_pre_trade_id == order_id`. Preserves `result.post_trades` order (close-time order).
+- `summarize_trade_rows(rows: Sequence[TradeRow]) -> TradeStats` — single source of truth for the win/loss/expectancy reduction. `build_setup_aggregates` and `build_proximity_aggregates` both delegate to it (they previously inlined byte-identical 12-line blocks), as does `strategy_tester/report.py` (previously a fourth transcription of the expectancy formula).
 - `build_setup_aggregates(rows) -> List[SetupAggregate]` — group by `setup_tag`, sort `(-count, setup_tag)`.
 - `build_proximity_aggregates(rows) -> List[ProximityAggregate]` — group by non-empty `earnings_proximity_tag` / `dividend_proximity_tag`; rows with neither tag go under `""`. A row with both tags contributes to both groups. Sorts `(-count, proximity_tag)`.
 - `@dataclass(frozen=True) class DayGroup` — `date_iso` (UTC `YYYY-MM-DD`), `ordinal` (1-based chronological rank), `note`, `rows: Tuple[TradeRow, ...]` (entry-ordered), `decisions: Tuple[DecisionRecord, ...]` (timestamp-ordered), `total_pnl`, `wins`, `losses`.
@@ -31,10 +33,11 @@ Pure-Python aggregates over a [`SessionResult`](session.spec.md) feeding Phase 1
 
 ## Dependencies
 - Internal: [`journal`](journal.spec.md), [`session`](session.spec.md), [`core/timezones`](../core/timezones.spec.md).
-- Stdlib: `csv`, `shutil`, `datetime`.
+- Stdlib: `csv`, `shutil`, `datetime`, `collections.abc` (`Sequence`).
 
 ## Design Decisions
 - **Expectancy = `win_rate × avg_win + loss_rate × avg_loss`** (`avg_loss` signed-negative). Matches discretionary-trader convention; equivalent to `avg_pnl` only when no break-evens.
+- **`summarize_trade_rows` is the one definition of the win/loss/expectancy reduction.** `build_setup_aggregates`, `build_proximity_aggregates`, and `strategy_tester/report.py` all delegate to it instead of each carrying a byte-identical copy of the formula, so a change to the definition (counting break-evens, netting commissions) can't silently skip one call site. Break-even trades (`pnl == 0`) count toward `count` but toward neither `wins` nor `losses` (pre-existing, deliberate).
 - **R-multiple intentionally omitted** — MVP doesn't model stops.
 - **`build_day_groups` keys by UTC session date** (matching `SandboxController.current_session_date`). Days are the union of trade-entry dates, decision timestamps, and `day_notes` keys, so note-only and decision-only days remain reviewable. Trades and decisions are independently ordered; the GUI interleaves them by timestamp.
 - **Unattributed rows bucketed under `setup_tag = ""`** when `post.ref_pre_trade_id` missing or no matching pre-trade. UI renders as `"(unattributed)"`.
@@ -47,6 +50,7 @@ Pure-Python aggregates over a [`SessionResult`](session.spec.md) feeding Phase 1
 - `len(build_trade_rows(r)) == len(r.post_trades)` (1:1, in order).
 - A `TradeRow` whose `pre is None` has `setup_tag == ""`, `thesis == ""`, `conviction == 0`, `target is None`.
 - For each `SetupAggregate`, `wins + losses + (count - wins - losses) == count` (residual = break-evens).
+- `TradeStats.win_rate + TradeStats.loss_rate <= 1.0`, equal to `1.0` iff the bucket has no break-even trades.
 - `build_setup_aggregates([])` and `build_proximity_aggregates([])` return `[]`.
 - `build_day_groups` returns one `DayGroup` per distinct day (union of trade-entry UTC dates, decision UTC dates, and `day_notes` keys), chronologically ordered with `ordinal` 1..N; a result with none of those records returns `[]`.
 - `write_decisions_csv` writes only explicit `SessionResult.decisions`; it never synthesizes rows for unlogged bars.

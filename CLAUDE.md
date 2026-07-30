@@ -1332,13 +1332,34 @@ to bite.
 `gui/watchlist_tab.py::_watchlist_poll_in_rth_now`,
 `gui/sandbox_panel.py::_get_tz_for_label`.
 
-**Deferred** (have bespoke `_get_et()`/`_et_zoneinfo()` helpers
-that wrap try/except in slightly different ways — followup
-migration sprint):
-`data/today_upsample.py`, `strategy_tester/evaluator.py`,
+**Migration COMPLETE.** The five sites previously listed here as
+deferred (`data/today_upsample.py`, `strategy_tester/evaluator.py`,
 `strategy_tester/screenshot.py`, `backtest/performance.py`,
-`gui/volume_tod_overlay.py`. Each of these should also be
-collapsed into `core.timezones` eventually.
+`gui/volume_tod_overlay.py`) have all been migrated.
+`core/timezones.py` is now the ONLY module under `src/` that
+constructs `ZoneInfo("America/New_York")` — verify with
+`rg 'ZoneInfo\("America/New_York"\)' src` (one hit, at
+`core/timezones.py:68`).
+
+**`core/timezones.py` also owns UTC minting + epoch normalization**
+(each previously duplicated across the tree):
+- `utc_now_iso()` → `YYYY-MM-DDTHH:MM:SSZ` — `created_at` /
+  `updated_at` / `finished_at` for the entries / exits / scanner /
+  strategy_tester models.
+- `utc_now_compact()` → `YYYYMMDDTHHMMSSZ` — filesystem-safe, used for
+  strategy-tester run-directory names.
+- `utc_now_naive_iso()` → naive `YYYY-MM-DDTHH:MM:SS`, no offset suffix
+  — drawings records and sandbox-resume checkpoints.
+- `normalize_epoch_to_seconds(ts)` + `MS_EPOCH_THRESHOLD` — the §7.7
+  ms-vs-epoch-seconds heuristic, previously copied 4× (twice inside
+  `strategy_tester/screenshot.py` alone).
+
+All three minting helpers deliberately resolve `_dt.datetime` at CALL
+time (`import datetime as _dt` + attribute lookup, NOT
+`from datetime import datetime`) so the clock-freezing seam in
+`tests/unit/test_datetime_utcnow_deprecation.py::TestMockedClockOutput`
+— which patches the `datetime` attribute on the stdlib module object —
+still reaches them.
 
 **When you need ET:** use `from .core.timezones import ET` (and
 branch on `ET is None` for the missing-tzdata path). DO NOT
@@ -1848,6 +1869,92 @@ Tests: `tests/unit/data/test_credential_store.py`,
 a throwaway dir for the whole session so no test reads the developer's real
 keys.
 
+---
+
+### 7.34 Consolidated primitives — use them, don't re-copy them
+
+A DRY audit found ~2,500 LOC of duplicated logic. The items below were
+consolidated; the failure mode each one already caused is recorded so the
+copy doesn't come back.
+
+**`core/ids.py` — `new_id_hex()` / `new_id_dashed()`.** Five subsystems
+shipped their own `_new_id()`, and the copies had drifted into **two
+incompatible on-disk ID formats**: `entries` / `exits` /
+`strategy_tester` emit dash-less `uuid4().hex` (32 chars) while `scanner`
+/ `positions` emit dashed `str(uuid4())` (36 chars). Both spellings are
+load-bearing in saved files, so BOTH are exposed as named helpers — the
+duplication removed is the implementation, not the format. Never add an
+unqualified `new_id()`; a new call site must pick a format explicitly.
+Each module keeps a thin `_new_id` delegator so existing monkeypatch
+seams (`scanner.model._new_id` documents itself as patchable) survive.
+
+**`core/model_meta.py` — the one `CreatedWith`.** The three copies had
+drifted, and it was **not cosmetic**: `exits.CreatedWith` lacked the
+`template` field that `entries` had, so
+`ExitStrategy.from_dict(raw).to_dict()` silently dropped the
+`"template": true` marker on all 20 shipped exit templates — load-then-save
+demoted a template to a user strategy. `template` serializes ONLY when
+True, so records that never set it are byte-identical to before.
+`scanner` overrides `version: str = ""` (entries/exits use `"0.0.0"`)
+because the default is what lands on disk. `from_dict` reads its defaults
+from `cls()` for exactly that reason.
+
+**`scanner/model.py` — the tree visitor.** `iter_nodes` (pre-order,
+None-tolerant), `iter_conditions`, `iter_field_refs` (`left` first, then
+FieldRef-valued `params`; scalars and a `None` left skipped), and
+`iter_tree_field_refs`. These replaced ~14 hand-rolled recursions over
+the SAME tree — `strategy_tester`'s `_ScannerGroup` / `_ScannerCondition`
+/ `_ScannerFieldRef` are plain import aliases of the scanner types, so
+every one of those walkers traversed identical structure. **The three
+EVALUATING walkers keep their own recursion on purpose**
+(`engine._evaluate_group_at`, `engine._group_masks_vec`,
+`evaluator._normalize_node`): they carry Kleene-combination / tree-rebuild
+payload, so folding them in would hide logic rather than remove copies.
+
+**`backtest/performance.py` — `summarize_trade_rows() -> TradeStats`.**
+`build_setup_aggregates` and `build_proximity_aggregates` held
+byte-identical 12-line reductions and `strategy_tester/report.py` held a
+fourth transcription of the expectancy formula. All four agreed, but
+nothing forced them to — changing one definition (counting breakevens,
+netting commissions) would silently not propagate. Breakeven trades
+(`pnl == 0`) count toward `count` but toward neither `wins` nor `losses`,
+so `win_rate + loss_rate <= 1.0`; that is deliberate.
+
+**`gui/_modal_base.py` — `BaseEditorDialog` finally has subclasses.** It
+shipped a complete `[Validate][Apply][Save & Close][Cancel]` footer and
+had **zero** subclasses; every editor re-built the footer by hand, which
+is why the labels drifted ("Save & Close" / "Save and Close" / "Save").
+`_build_editor_footer` now takes `validate_text` / `apply_text` /
+`save_close_text` / `cancel_text` overrides so a dialog can share the
+builder without changing its wording — `ExitsDialog` keeps
+`[Validate] [Save] [Close]`. Only the ORDER is enforced for everyone.
+**If you adopt it in another dialog, update
+`tests/unit/gui/test_dialog_button_order_windows.py`** — those tests scan
+SOURCE TEXT (per §7.24 rule 5), so a delegating dialog must be moved from
+the literal-label scan to the delegation assertion.
+
+**`rendering.safe_remove_all(artists)`.** Batch form of `safe_remove`.
+Two overlays had grown their own `for a in artists: try: a.remove()
+except: pass` loop and both *documented themselves as mirrors* of another
+copy — a docstring claiming to mirror another function is a DRY bug
+report; fix it rather than propagate it.
+
+**`scanner/operators.py` — `_binary_cmp(operator.gt)`.** The six scalar
+comparisons were byte-identical bodies differing only in the final
+operator. The Kleene rule (either side `None` ⇒ result `None`, never
+`False`) is now stated once. Windowed/stateful operators are untouched.
+
+**Also unified: the EOD kill-switch flatten** (see §7.12). The per-day
+rollover kill and the end-of-run kill were copy-pasted and had drifted to
+**different fill prices** — close vs open — with the end-of-run comment
+claiming "close" while the code took the open. Both now call
+`evaluator._synthesize_eod_flatten_fills` and use the last RTH bar's
+**close** (market-on-close). Pinned by
+`tests/unit/strategy_tester/test_eod_postmarket.py` →
+`test_end_of_run_eod_kill_fills_at_rth_close_not_open` and
+`test_per_day_eod_kill_fills_at_rth_close_not_open` (both run with
+`slippage_bps=0.0` so the fill price is exactly the bar close).
+
 ## 8. Build & release flow
 
 The full guide is `docs/BUILDING_EXE.md`. Quick reference:
@@ -1985,6 +2092,13 @@ These files are **never** committed to git. Use them for working memory.
 | Data source registry + `internal` flag | `src/tradinglab/data/base.py` (see §7.25 — `register_source(..., internal=True)`, `user_visible_sources()`) |
 | Polling / next-bar tick | `src/tradinglab/gui/polling.py` |
 | Dialogs (Settings, Watchlist, Credentials) | `src/tradinglab/gui/dialogs.py`, `gui/credentials_dialog.py`, `gui/watchlist_dialog.py` |
+| Record-ID minting (`new_id_hex` / `new_id_dashed`) | `src/tradinglab/core/ids.py`; see §7.34 |
+| Shared `CreatedWith` provenance dataclass | `src/tradinglab/core/model_meta.py`; see §7.34 |
+| UTC timestamp minting + epoch ms→s normalize | `src/tradinglab/core/timezones.py` (`utc_now_iso`, `utc_now_compact`, `utc_now_naive_iso`, `normalize_epoch_to_seconds`); see §7.23 |
+| Group/Condition tree traversal (shared visitor) | `src/tradinglab/scanner/model.py` (`iter_nodes`, `iter_conditions`, `iter_field_refs`, `iter_tree_field_refs`); see §7.34 |
+| Trade-stats reduction (win rate / expectancy) | `src/tradinglab/backtest/performance.py` (`TradeStats`, `summarize_trade_rows`); see §7.34 |
+| Shared editor-dialog footer | `src/tradinglab/gui/_modal_base.py` (`BaseEditorDialog._build_editor_footer`); see §7.34 |
+| Batch matplotlib artist removal | `src/tradinglab/rendering.py` (`safe_remove`, `safe_remove_all`) |
 | Classic Tk dark-theme helpers | `src/tradinglab/gui/native_theme.py` (`current_theme`, `apply_listbox_theme`, `apply_text_theme`, `apply_canvas_theme`); see §7.31 |
 | Menus | `src/tradinglab/gui/help_menu.py`, `gui/file_menu.py`, etc. |
 | Indicators | `src/tradinglab/indicators/` (one file per indicator + tests) |
@@ -2074,6 +2188,17 @@ guessing — recent checkpoints include:
   now themed via shared `gui/native_theme.py` helpers across 7 dialogs +
   the Custom Indicator Builder (own inline themer); pinned by
   `tests/unit/gui/test_native_widget_dark_theme.py` (see §7.31).
+- DRY-audit remediation sprint (see §7.34): retired duplication that had
+  already DRIFTED — the EOD kill-switch flatten (two copies, two fill
+  prices, one wrong comment), `_new_id` (5 copies / 2 on-disk ID formats),
+  `_utcnow_iso` (8 sites / 3 formats / 2 impls), `CreatedWith` (3 copies;
+  the exits copy silently dropped `template` on every load→save of a
+  shipped exit template — real data loss), and the byte-identical
+  trade-stats reductions. Then: `BaseEditorDialog` finally adopted (it had
+  ZERO subclasses), a shared Group/Condition tree visitor replacing ~14
+  hand-rolled walkers, and Tier-3 routing of `safe_remove_all` /
+  `normalize_epoch_to_seconds` / the six scalar comparison operators.
+  New shared modules: `core/ids.py`, `core/model_meta.py`.
 
 ---
 

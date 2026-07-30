@@ -35,6 +35,12 @@ primitives.
   suffix, no microseconds. On-disk format for `drawings` records and
   sandbox-resume checkpoints.
 
+### Epoch normalization
+- `MS_EPOCH_THRESHOLD = 1e12` — any epoch value at or above this is
+  unambiguously milliseconds (as seconds it would be year 33,658).
+- `normalize_epoch_to_seconds(ts) -> float` — ms-or-seconds in, seconds
+  out, decided by magnitude.
+
 ## Dependencies
 - Internal: `core.lru_dict.LRUDict` for the generic timezone cache.
 - External: `zoneinfo` (stdlib, Python 3.9+); `datetime` (stdlib).
@@ -84,6 +90,14 @@ primitives.
   freezes the clock by patching the `datetime` attribute on the stdlib
   module object. An import-time binding would capture the real class and
   silently ignore that patch.
+- **`normalize_epoch_to_seconds` lives here, not in `strategy_tester`.**
+  The ms-vs-seconds heuristic had four copies (twice in
+  `strategy_tester/screenshot.py`, plus `backtest/heatmap.py` and
+  `backtest/heatmap_provider.py`), each carrying its own bare `1e12`
+  literal. It is the heuristic behind the "every trade screenshot renders
+  the same window" bug (CLAUDE.md §7.7), so four independently-editable
+  thresholds was the highest-risk of the remaining duplicates. Placed in
+  this module because it is timestamp-domain and dependency-free.
 
 ## Invariants
 - `ET is get_et()` after the module has been imported (the eager
@@ -106,6 +120,10 @@ primitives.
 - `utc_now_naive_iso` — `drawings/store.py::_now_iso`,
   `drawings/model.py::make_hline_drawing`,
   `backtest/sandbox_resume.py::now_iso`.
+- `normalize_epoch_to_seconds` —
+  `strategy_tester/screenshot.py::_normalize_ts_to_seconds` and
+  `::_format_et_timestamp_from_ms`, `backtest/heatmap.py::_to_seconds`,
+  `backtest/heatmap_provider.py::_to_seconds`.
 
 ## Testing
 - `tests/core/test_timezones.py` — cover: ET non-None when tzdata

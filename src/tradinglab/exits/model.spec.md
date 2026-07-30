@@ -53,6 +53,14 @@ Schema history:
 - **v1** — 7 trigger kinds (no chandelier).
 - **v2** — adds `chandelier` + four chandelier-only fields. Purely additive — v1 strategies load cleanly (new fields fall back to defaults).
 
+## Provenance metadata (`created_with`)
+
+`ExitStrategy.created_with` is a `CreatedWith(app, version, template)` record, now a subclass of the shared `core.model_meta.CreatedWith` (single definition — see its spec).
+
+**Round-trip data-loss fix.** The previous local `CreatedWith` had NO `template` field, so `ExitStrategy.from_dict(raw).to_dict()` silently dropped the `"template": true` marker carried by all 20 shipped exit templates under `data/exit_strategy_templates/` — loading then re-saving a template demoted it to a non-template. The shared base carries `template`, so the flag now round-trips. Records that never set it still serialize byte-identically (`template` is omitted from `to_dict()` when `False`).
+
+`id` is minted by `core.ids.new_id_hex()` (32-char dash-less); `created_at` / `updated_at` come from `core.timezones.utc_now_iso()`. Both on-disk formats are unchanged.
+
 ## Validation
 
 `validate_strategy(strategy) -> List[str]` returns human-readable errors (empty = valid). Storage refuses to save invalid strategies; GUI surfaces them as inline red borders.

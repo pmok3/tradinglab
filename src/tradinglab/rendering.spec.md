@@ -19,6 +19,13 @@ Collections without rebuilding formatters/locators.
   `ChartApp.set_use_colorblind_palette` + `_render()` repaints with the new
   palette without a relaunch. Audit `color-blind-palette`.
 - `safe_remove(artist)` — `artist.remove()` wrapped in try/except.
+- `safe_remove_all(artists)` — batch form of `safe_remove`: tolerates
+  `None` / empty, iterates a **copy** of the sequence, and calls
+  `safe_remove` per artist (already-detached artists are silently
+  skipped). Consolidates the per-module
+  `for a in artists: try: a.remove() except ...` teardown loops that
+  `gui/events_overlay` and `gui/volume_tod_overlay` had each grown (both
+  had documented themselves as "mirrors" of the other copy).
 - `draw_candlesticks(ax, candles, x_offset=0, start=0, end=None, hollow_indices=None, flat_overlay=None, body_half=None) -> (wicks, bodies)`
   Builds `LineCollection` (wicks) + `PolyCollection` (bodies) for the slice.
   X coordinate is `global_index + x_offset` (stable across slice refills).

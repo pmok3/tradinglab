@@ -22,7 +22,7 @@ def make_bracket_strategy(*, target_unit: str, target_value: float,
                           name: str = "Bracket") -> ExitStrategy
     """Helper used by the '+ Bracket' template button."""
 
-class ExitsDialog(BaseModalDialog):
+class ExitsDialog(BaseEditorDialog):
     def __init__(self, master, *,
                  on_library_changed: Callable[[], None] | None = None) -> None
     @property
@@ -47,12 +47,21 @@ class ExitsDialog(BaseModalDialog):
 
 ## Modal plumbing
 
-`ExitsDialog` subclasses :class:`gui._modal_base.BaseModalDialog`
-(geometry key ``"dlg.exits"``, default ``1400x780``). The base
-class owns ``title`` / ``transient`` / ``grab_set`` / ESC+Return
-bindings / WM_DELETE / persistent geometry; the constructor just
-builds widgets + calls ``self._finalize_modal(primary=self._on_save,
-cancel=self._on_cancel)`` at the end.
+`ExitsDialog` subclasses :class:`gui._modal_base.BaseEditorDialog`
+(audit item #4; was ``BaseModalDialog``. Geometry key ``"dlg.exits"``,
+default ``1400x780``). The base class owns ``title`` / ``transient`` /
+``grab_set`` / ESC+Return bindings / WM_DELETE / persistent geometry
+**and the shared editor footer**; the constructor just builds widgets +
+calls ``self._finalize_modal(primary=self._on_save,
+cancel=self._on_cancel)`` at the end. The footer is built via
+``self._build_editor_footer(editor_outer, on_validate=…,
+on_save_close=self._on_save, on_cancel=self._on_cancel,
+save_close_text="Save", cancel_text="Close")`` — this dialog keeps its
+``[Validate] [Save] [Close]`` wording (no Apply button: ``on_apply`` is
+not passed, so that slot is suppressed) and the same order, so the
+migration is not user-visible. ``_status_var`` / ``_status_lbl`` now come
+from the shared base / footer builder rather than being constructed
+inline.
 
 `_on_cancel` simply destroys the window — edits live in
 ``self._draft`` (a deep clone via dict round-trip) and are never

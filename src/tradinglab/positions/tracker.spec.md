@@ -21,8 +21,8 @@ The tracker is the single source of truth for manual / sandbox open positions du
     - `clear() -> None` — drop everything; clears the pending-event queue too.
 
 ## Dependencies
-- Internal: `..core.thread_guard.require_tk_thread`, `.model.{Position, PositionEvent, PositionEventKind, PositionSide, PositionSource}`.
-- External: stdlib (`logging`, `uuid`, `collections.deque`, `datetime`).
+- Internal: `..core.ids.new_id_dashed` (id minting), `..core.thread_guard.require_tk_thread`, `.model.{Position, PositionEvent, PositionEventKind, PositionSide, PositionSource}`.
+- External: stdlib (`logging`, `collections.deque`, `datetime`).
 
 ## Design Decisions
 - **Tk-thread-owned mutators**: every mutator carries `@require_tk_thread`. Stream-source / worker threads must marshal via `app._stream_queue` → `_drain_stream_queue`; the Tk main thread is the sole writer of position state. Tests bypass via `core.thread_guard.tk_thread_check_disabled()`.

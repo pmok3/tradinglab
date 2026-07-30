@@ -24,16 +24,31 @@ helpers.
   - `_on_primary()` — default Enter / primary handler (destroys);
     subclasses override to commit + close.
 
-- `class BaseEditorDialog(BaseModalDialog)` — adds editor footer:
+- `class BaseEditorDialog(BaseModalDialog)` — adds editor footer.
+  Adopted by `gui.entries_dialog.EntriesDialog` and
+  `gui.exits_dialog.ExitsDialog` (audit item #4; the class previously
+  had **zero** subclasses — written but never adopted). Members:
   - `_status_var: tk.StringVar` — left-aligned status slot.
   - `btn_validate`, `btn_cancel`, `btn_apply`, `btn_save_close`
     — set by `_build_editor_footer`; exposed for per-dialog disable.
   - `_build_editor_footer(parent, *, on_validate=None,
     on_cancel=None, on_apply=None, on_save_close=None,
-    status_foreground=ERROR_RED) -> ttk.Frame` — builds
+    status_foreground=ERROR_RED, validate_text="Validate",
+    apply_text="Apply", save_close_text="Save & Close",
+    cancel_text="Cancel") -> ttk.Frame` — builds
     `[Validate] [Apply] [Save & Close] [Cancel]` (Windows
     convention: affirmative left, Cancel rightmost). Pass `None`
-    for buttons not needed. Caller packs the frame.
+    for buttons not needed. The four `*_text` overrides let an
+    adopting dialog with different wording share the builder without
+    changing its user-visible labels (e.g. `ExitsDialog` passes
+    `save_close_text="Save"`, `cancel_text="Close"`, and omits
+    `on_apply` for `[Validate] [Save] [Close]`); the pack **order** is
+    unchanged. Caller packs the frame. Order is pinned by
+    `tests/unit/gui/test_dialog_button_order_windows.py::test_modal_base_editor_footer_order_windows`
+    (which now scans the `self.btn_*` assignment/pack sequence, since the
+    labels are parameters now) and by the unchanged live-widget geometry
+    check in `tests/unit/gui/test_modal_base.py` (the strongest ordering
+    guard).
   - `set_status(msg, *, level="error"|"info"|"ok")` — surface
     validation message; empty msg clears. Level selects color
     (`ERROR_RED` / `MUTED_GREY` / `SUCCESS_GREEN` fallback).

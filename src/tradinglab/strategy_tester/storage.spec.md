@@ -30,10 +30,11 @@ On-disk persistence for Strategy Tester Runs. Atomic writes only — no in-fligh
 ## Dependencies
 - `disk_cache` (only for `_cache_dir()`)
 - `core.io_helpers.atomic_write_json`
+- `core.timezones.utc_now_compact` — filename-safe UTC run-dir timestamp suffix (via `_safe_iso()`).
 - `backtest.session.SessionResult` (round-trip)
 
 ## Design Decisions
-- **Directory name = `<run_id>-<iso_ts>`** — the `<run_id>` is a config fingerprint (so fingerprint-identical configs coexist as separate dirs) and the `<iso_ts>` suffix makes every re-run a distinct directory (per the user's "always new Run" decision). **Recent runs are ordered by the manifest `started_at`, not by directory name** — the fingerprint prefix is not chronological, so a dir-name sort would scramble the timeline; the directory name is used only as a deterministic tiebreaker for equal `started_at`.
+- **Directory name = `<run_id>-<iso_ts>`** — the `<run_id>` is a config fingerprint (so fingerprint-identical configs coexist as separate dirs) and the `<iso_ts>` suffix makes every re-run a distinct directory (per the user's "always new Run" decision). The `<iso_ts>` suffix is minted by `_safe_iso()` = `core.timezones.utc_now_compact()` (`YYYYMMDDTHHMMSSZ`; format unchanged from the previous inline `time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())`). **Recent runs are ordered by the manifest `started_at`, not by directory name** — the fingerprint prefix is not chronological, so a dir-name sort would scramble the timeline; the directory name is used only as a deterministic tiebreaker for equal `started_at`.
 - **Atomic JSON writes via `atomic_write_json`** — protects against crashes mid-write. Pretty-printed (`indent=2`) because humans occasionally read these.
 - **`per_symbol/<SYMBOL>.json` mirrors existing Sandbox post-mortem format** — Strategy Tester results reuse the live `SessionResult.to_dict` schema so the same renderer can display both.
 - **`load_manifest` swallows JSONDecodeError** — a half-written manifest (crashed mid-run) shows up as "missing" in `list_runs` rather than breaking the sidebar.

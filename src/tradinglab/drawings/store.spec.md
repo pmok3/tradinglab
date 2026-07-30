@@ -73,6 +73,9 @@ Location: `<app_data_dir>/drawings.json`, next to `settings.json`,
 `watchlists.json`, `sandbox_last.json`. **Not** inside `cache/` —
 drawings survive a candle-cache wipe.
 
+The `saved_at` timestamp is minted via `core.timezones.utc_now_naive_iso()`
+(naive `YYYY-MM-DDTHH:MM:SS` — unchanged on-disk shape).
+
 ## Subscriber events
 
 | event           | ticker         | drawing  | when                              |

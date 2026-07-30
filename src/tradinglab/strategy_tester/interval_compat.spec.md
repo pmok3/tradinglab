@@ -63,7 +63,13 @@ Audit `intraday-interval-guard`.
 
 - `indicators.base.factory_by_kind_id` / `factory_is_available_for`
 - `strategy_tester.warmup.collect_referenced_indicator_kinds`
-- `scanner.model.{Group, Condition, FieldRef}` (the per-reference walk)
+- `scanner.model.{Group, Condition, iter_conditions, iter_field_refs}` —
+  `_walk_condition_tree` now uses the shared `iter_conditions` +
+  `iter_field_refs` traversal rather than its own recursion. Safe because
+  `parent_interval` is inherited unchanged all the way down, making the
+  walk a flat collection over leaf Conditions; outputs (`intervals` set,
+  `indicator_refs` list of `(kind_id, params, resolved_interval)`) are
+  unchanged.
 - `entries.model.EntryStrategy`, `exits.model.ExitStrategy` (types only)
 
 ## Consumers

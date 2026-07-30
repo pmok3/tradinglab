@@ -37,6 +37,9 @@ def build_metadata_from_session(*, session_id, ticker, interval, bars_processed,
 def now_iso() -> str
 ```
 
+`now_iso()` delegates to `core.timezones.utc_now_naive_iso()` (naive
+`YYYY-MM-DDTHH:MM:SS` — unchanged on-disk format for `saved_at`).
+
 ## On-disk format
 
 ```json

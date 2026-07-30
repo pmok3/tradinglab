@@ -19,10 +19,25 @@ correctness against the registry.
 - `UniverseFilter(kind: "all"|"watchlist"|"symbols", name, symbols)` — symbol-set restriction.
 - `OutputColumn(kind: "condition_value"|"field", ...)` — Treeview column descriptor.
 - `ScanOptions(show_insufficient_data_rows, default_view: "new"|"active", new_view_capacity, extra)`.
-- `CreatedWith(app, version)` — audit metadata.
+- `CreatedWith(app, version)` — audit metadata; subclass of the shared `core.model_meta.CreatedWith`, overriding the `version` default to `""` (scanner's historical default, vs `"0.0.0"` for entries / exits).
 - `ScanDefinition(name, root, primary_interval, universe_filter, output_columns, options, rank_by, rank_dir, rank_interval, schema_version, id, created_with, created_at, updated_at)`.
 - `MatchEvidence(symbol, ts, primary_value, by_condition, by_field)` — per-match audit; `to_dict`/`from_dict`.
 - `operator_param_schema(op) -> Tuple[Tuple[str, str], ...]` — lookup from `OPERATOR_PARAM_SCHEMA`. Used by `Condition.__post_init__` and the block-editor GUI.
+
+## Tree traversal
+
+Four generators are the single definition of how the `Group` / `Condition` tree is walked (they replaced ~14 hand-rolled recursions across `scanner/`, `strategy_tester/` and `gui/`):
+
+- `iter_nodes(root) -> Iterator[Condition | Group]` — pre-order (parents before children); a `None` root yields nothing.
+- `iter_conditions(root) -> Iterator[Condition]` — leaf `Condition`s in tree order.
+- `iter_field_refs(cond) -> Iterator[FieldRef]` — `left` first, then each `FieldRef`-valued entry of `params` in insertion order; scalar params are skipped, and a `None` `left` (ops like `inside_bar` that take no LHS) is skipped.
+- `iter_tree_field_refs(root) -> Iterator[FieldRef]` — the composition of the two.
+
+`_walk_conditions` is now a thin wrapper over `iter_conditions`.
+
+The three *evaluating* walkers (`engine._evaluate_group_at`, `engine._group_masks_vec`, `strategy_tester.evaluator._normalize_node`) deliberately keep their own recursion because they carry Kleene-combination / tree-rebuild payload rather than merely collecting.
+
+Tests: `tests/unit/scanner/test_tree_traversal.py` (20 cases).
 
 ## Operator schemas
 
@@ -50,7 +65,9 @@ drift).
 ## Stable IDs
 
 Every `Condition`, `Group`, `OutputColumn`, `ScanDefinition` has a
-UUID4 `id` minted at construction. Persisted so Treeview columns
+UUID4 `id` minted at construction (via `core.ids.new_id_dashed()` — the
+dashed 36-char spelling, deliberately distinct from the dash-less hex used
+by entries / exits / strategy_tester). Persisted so Treeview columns
 survive rename / operator-swap, `MatchHistory` rings key on stable
 ids, and reorder/duplicate doesn't break references.
 

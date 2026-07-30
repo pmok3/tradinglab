@@ -179,6 +179,19 @@ holds.
   list is not scanned twice per PNG. Direct calls without a cache build
   a temporary cache internally. `_index_of_ts` remains as the
   back-compat helper and delegates to the same cache implementation.
+- *Shared tree + timestamp helpers (DRY consolidation)* — the FieldRef
+  walk behind indicator-overlay discovery (`_walk_field_refs`) delegates
+  to `scanner.model.iter_tree_field_refs` (one of ~14 hand-rolled
+  recursions over the Group/Condition tree now consolidated into
+  `scanner.model`); it still returns `[]` for `None` and for objects
+  that are neither `Group` nor `Condition`. The ms-vs-seconds timestamp
+  heuristic (CLAUDE.md §7.7) used by `_normalize_ts_to_seconds`
+  (entry/exit candle lookup) and `_format_et_timestamp_from_ms` (title
+  datetime) now resolves through
+  `core.timezones.normalize_epoch_to_seconds` (threshold
+  `MS_EPOCH_THRESHOLD = 1e12`) so the seconds-vs-milliseconds boundary
+  has a single definition instead of one `ts >= 1e12` literal per call
+  site. Heuristic and output unchanged.
 - *Volume y-axis on zero-volume windows* — `setup_volume_axes`
   doesn't set `ylim`; matplotlib autoscales from the
   `PolyCollection` vertices the `draw_volume` adds. When every
