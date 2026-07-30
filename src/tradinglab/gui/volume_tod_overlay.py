@@ -89,7 +89,7 @@ from .. import constants as _constants
 from ..core.session_calendar import RTH_CLOSE_MIN, RTH_OPEN_MIN, RTH_SPAN_MIN
 from ..core.timezones import get_et
 from ..models import Candle
-from ..rendering import _BODY_HALF, darker_shade
+from ..rendering import _BODY_HALF, darker_shade, safe_remove_all
 
 # Z-order: just above the volume bars (zorder 2 in rendering.draw_volume)
 # but below the volume-pane grid spine (5). Outline frame at 2.6 sits
@@ -244,14 +244,10 @@ class VolumeTodArtists:
 def clear_volume_tod_artists(artists: Sequence[Any]) -> None:
     """Remove each artist from its axes; ignore detached / removed ones.
 
-    Mirrors :func:`tradinglab.gui.events_overlay.clear_event_glyph_artists`.
+    Delegates to :func:`tradinglab.rendering.safe_remove_all`.
     Idempotent — safe to call on an already-cleared list.
     """
-    for a in artists:
-        try:
-            a.remove()
-        except Exception:  # noqa: BLE001
-            pass
+    safe_remove_all(artists)
 
 
 def _group_intraday_by_et_date(

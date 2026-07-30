@@ -50,6 +50,7 @@ from ..events.render import (
     GLYPH_SPLIT,
     EventGlyph,
 )
+from ..rendering import safe_remove_all
 
 _FALLBACK_TEXT_COLOR = "#111111"
 _FALLBACK_BBOX_FACE = "#ffffff"
@@ -114,17 +115,13 @@ def _theme_color(theme: Any, keys: tuple[str, ...], fallback: str) -> str:
 def clear_event_glyph_artists(artists: Sequence[Any]) -> None:
     """Remove each artist from its axes.
 
-    Mirrors :func:`tradinglab.app._safe_remove` semantics — any
+    Delegates to :func:`tradinglab.rendering.safe_remove_all` — any
     artist whose ``.remove()`` raises is silently dropped (the most
     common reason is the axes was already cleared by ``fig.clear()``,
     in which case the artist is already detached and there's nothing
     to do).
     """
-    for a in artists:
-        try:
-            a.remove()
-        except Exception:  # noqa: BLE001
-            pass
+    safe_remove_all(artists)
 
 
 def draw_event_glyphs(

@@ -152,6 +152,22 @@ def safe_remove(artist) -> None:
     except Exception:  # noqa: BLE001 - best-effort; mpl may already have detached it
         pass
 
+
+def safe_remove_all(artists) -> None:
+    """Remove every artist in ``artists``, ignoring already-detached ones.
+
+    The batch form of :func:`safe_remove`. Several modules had grown their
+    own ``for a in artists: try: a.remove() except Exception: pass`` loop —
+    two of them (``gui/events_overlay.clear_event_glyph_artists`` and
+    ``gui/volume_tod_overlay.clear_volume_tod_artists``) even documented
+    themselves as "mirrors" of another copy. ``None`` is tolerated so
+    callers can pass an optional list without a guard.
+    """
+    if not artists:
+        return
+    for artist in list(artists):
+        safe_remove(artist)
+
 # Alpha applied to pre-market and post-market bars so the user can see at a
 # glance which bars are from extended-hours sessions. RTH bars render at
 # full opacity.

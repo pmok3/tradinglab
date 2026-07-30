@@ -46,6 +46,7 @@ Add a new operator by:
 
 from __future__ import annotations
 
+import operator
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -111,52 +112,31 @@ class OpHandler:
 # ---------------------------------------------------------------------------
 
 
-def _eval_gt(cond, ctx, i):
-    l = _ef(cond.left, ctx, i)
-    r = _ef(cond.params["right"], ctx, i)
-    if l is None or r is None:
-        return None
-    return l > r
+def _binary_cmp(compare):
+    """Build a scalar comparison evaluator from an ``operator`` function.
+
+    The six scalar comparisons (``> < >= <= == !=``) were six byte-identical
+    functions differing only in the final operator. Kleene semantics are
+    shared: either side resolving to ``None`` (missing bar, unhydrated
+    indicator, unresolvable cross-symbol ref) makes the whole comparison
+    ``None`` rather than False.
+    """
+    def _evaluate(cond, ctx, i):
+        left = _ef(cond.left, ctx, i)
+        right = _ef(cond.params["right"], ctx, i)
+        if left is None or right is None:
+            return None
+        return compare(left, right)
+
+    return _evaluate
 
 
-def _eval_lt(cond, ctx, i):
-    l = _ef(cond.left, ctx, i)
-    r = _ef(cond.params["right"], ctx, i)
-    if l is None or r is None:
-        return None
-    return l < r
-
-
-def _eval_ge(cond, ctx, i):
-    l = _ef(cond.left, ctx, i)
-    r = _ef(cond.params["right"], ctx, i)
-    if l is None or r is None:
-        return None
-    return l >= r
-
-
-def _eval_le(cond, ctx, i):
-    l = _ef(cond.left, ctx, i)
-    r = _ef(cond.params["right"], ctx, i)
-    if l is None or r is None:
-        return None
-    return l <= r
-
-
-def _eval_eq(cond, ctx, i):
-    l = _ef(cond.left, ctx, i)
-    r = _ef(cond.params["right"], ctx, i)
-    if l is None or r is None:
-        return None
-    return l == r
-
-
-def _eval_ne(cond, ctx, i):
-    l = _ef(cond.left, ctx, i)
-    r = _ef(cond.params["right"], ctx, i)
-    if l is None or r is None:
-        return None
-    return l != r
+_eval_gt = _binary_cmp(operator.gt)
+_eval_lt = _binary_cmp(operator.lt)
+_eval_ge = _binary_cmp(operator.ge)
+_eval_le = _binary_cmp(operator.le)
+_eval_eq = _binary_cmp(operator.eq)
+_eval_ne = _binary_cmp(operator.ne)
 
 
 def _eval_between(cond, ctx, i):

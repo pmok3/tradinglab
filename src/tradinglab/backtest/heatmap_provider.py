@@ -28,18 +28,18 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from ..core.timezones import normalize_epoch_to_seconds
 from .heatmap import Classification
 
 #: One symbol's historical shares series: ascending ``(epoch_seconds, shares)``.
 SharesSeries = list[tuple[int, float]]
 SharesFetcher = Callable[[str], SharesSeries]
 
-_MS_THRESHOLD = 1e12
+# Epoch ms/s normalization lives in core.timezones (single definition).
 
 
 def _to_seconds(ts: float) -> float:
-    t = float(ts)
-    return t / 1000.0 if t >= _MS_THRESHOLD else t
+    return normalize_epoch_to_seconds(ts)
 
 
 # ---------------------------------------------------------------------------

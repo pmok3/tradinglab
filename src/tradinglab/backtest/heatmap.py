@@ -18,6 +18,7 @@ from collections import OrderedDict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 
+from ..core.timezones import normalize_epoch_to_seconds
 from ..models import Candle
 
 __all__ = (
@@ -59,10 +60,9 @@ _GREEN_HEX = "#30cc5f"
 #: Fixed number of color buckets per side (Finviz shows ~+-1/+-2/+-3 steps).
 _BUCKETS_PER_SIDE = 3
 
-# Timestamps at or beyond this are milliseconds, not seconds (year ~33658
-# in seconds), so divide by 1000 — mirrors CLAUDE.md 7.7's normalizer.
-_MS_THRESHOLD = 1e12
-
+# Timestamps at or beyond ~1e12 are milliseconds, not seconds; the
+# normalization lives in core.timezones so all four former copies of the
+# heuristic share one definition (CLAUDE.md 7.7).
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -530,5 +530,4 @@ def _lerp_hex(a: str, b: str, t: float) -> str:
 
 def _to_seconds(ts: float) -> float:
     """Normalize an epoch timestamp to seconds (ms -> s by magnitude)."""
-    t = float(ts)
-    return t / 1000.0 if t >= _MS_THRESHOLD else t
+    return normalize_epoch_to_seconds(ts)

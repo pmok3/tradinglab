@@ -189,3 +189,32 @@ def utc_now_naive_iso() -> str:
         .replace(microsecond=0, tzinfo=None)
         .isoformat()
     )
+
+
+#: Any epoch timestamp at or above this is unambiguously milliseconds — as
+#: seconds it would be the year 33,658.
+MS_EPOCH_THRESHOLD = 1e12
+
+
+def normalize_epoch_to_seconds(ts: int | float) -> float:
+    """Normalize an epoch timestamp to **seconds**, given ms or s.
+
+    Heuristic by magnitude: ``ts >= MS_EPOCH_THRESHOLD`` is milliseconds
+    (divide by 1000); anything smaller is already seconds.
+
+    This bridges two conventions that genuinely coexist in the codebase:
+    ``PostTradeReview.entry_ts`` / ``Fill.fill_ts`` from the
+    strategy_tester evaluator are epoch **seconds**, while
+    ``Candle.date.timestamp() * 1000.0`` and some legacy live-journal
+    records are **milliseconds**. Mixing them silently is what produced
+    the "every trade screenshot renders the same first window" bug: an
+    exact-match lookup never hit, and the nearest-neighbour fallback
+    always chose the earliest candle.
+
+    Four copies of this heuristic existed (twice in
+    ``strategy_tester/screenshot.py`` alone, plus ``backtest/heatmap.py``
+    and ``backtest/heatmap_provider.py``), each with its own ``1e12``
+    literal.
+    """
+    t = float(ts)
+    return t / 1000.0 if t >= MS_EPOCH_THRESHOLD else t

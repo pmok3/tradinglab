@@ -55,6 +55,7 @@ from matplotlib.ticker import FuncFormatter, MaxNLocator
 from ..backtest.performance import TradeRow
 from ..constants import sentiment_recolor as _sentiment_recolor
 from ..core.timezones import ET as _ET
+from ..core.timezones import normalize_epoch_to_seconds
 from ..entries.model import EntryStrategy
 from ..exits.model import ExitStrategy
 from ..models import Candle
@@ -458,7 +459,7 @@ def _normalize_ts_to_seconds(ts: int | float) -> float:
     is minimised at the smallest ``c_ms``). Every trade rendered the
     same first window of the dataset.
     """
-    return float(ts) / 1000.0 if float(ts) >= 1e12 else float(ts)
+    return normalize_epoch_to_seconds(ts)
 
 
 def _index_of_ts(candles: list[Candle], ts: int) -> int:
@@ -1067,7 +1068,7 @@ def _format_et_timestamp_from_ms(ts: int) -> str:
     auto-detects by magnitude (``ts >= 1e12`` → ms). See the
     ``_index_of_ts`` docstring above for the same landmine.
     """
-    ts_seconds = float(ts) / 1000.0 if float(ts) >= 1e12 else float(ts)
+    ts_seconds = normalize_epoch_to_seconds(ts)
     dt = datetime.fromtimestamp(ts_seconds, tz=timezone.utc)
     return _format_et_timestamp(dt)
 
