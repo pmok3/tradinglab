@@ -2000,6 +2000,124 @@ claiming "close" while the code took the open. Both now call
 `test_per_day_eod_kill_fills_at_rth_close_not_open` (both run with
 `slippage_bps=0.0` so the fill price is exactly the bar close).
 
+---
+
+### 7.35 Test-suite depth: oracles, the market generator, and the soak suite
+
+The suite's historic weakness was **depth**, not breadth. Measured on
+`tests/smoke/test_smoke_full.py` (176 checks, 2,119 asserts, 21,419 lines):
+~520 asserts (25%) were existence-shaped (`is not None` / `in` / `hasattr` /
+bare truthy), `pytest.approx` appeared **zero** times, 161 of 176 checks
+undo themselves in a `finally` block, and only 51 bar-advance calls exist in
+the whole file.
+
+The root cause was the fixture. `tests/smoke/_helpers._fake_candles` emits a
+**two-state oscillator**: exactly 2 distinct closes (100.0 / 100.2), True
+Range pinned at **1.0** (so ATR is constant), RSI(14) pinned at **50**,
+monotonically-rising volume, and 150 bars on a **single continuous 12.4-hour
+day with no session boundary**.
+
+**A measured experiment settles how much that matters.** Globally repointing
+the fixture at structurally-realistic multi-session data — a ~200× increase in
+richness (2 → 463 distinct closes, 1 → 178 True-Range values, 1.15× → 26×
+volume dispersion, 0 → 9.0 excess kurtosis) — changed **only 2 of 372 test
+outcomes**. That null result is the finding: assertions that shallow cannot
+distinguish a two-state oscillator from a real market. **Do not "fix" the
+smoke suite by swapping its fixture** — only 80 of 176 checks inherit the
+global fixture and they hold just 21 numeric asserts between them; the 96
+checks that do real math build their own inline data.
+
+The two that did break are instructive and both remain open/known:
+
+* `check_d28_data_readout_strip` — picks a bar from `_primary` without
+  respecting `render_start`/`render_end`. `_update_readout` clamps to the
+  rendered window and falls back to the latest bar, which is documented
+  behaviour; the check only ever passed because 150 bars all fit in the
+  window *and* every bar looked identical.
+* `check_d6_intraday_uniform_gaps` — **a real, open app bug.** Its docstring
+  claims tick gaps are uniform "INCLUDING across day boundaries", but the
+  x-axis locator emits spacings of **30 and 48 bars** in the same view
+  (78 bars/RTH day at 5m). That assertion could never fail for its entire
+  life because the fixture contained exactly one day. It is also
+  order-dependent: it passes when `test_smoke_full.py` runs alone.
+
+#### Where depth actually lives now
+
+| Suite | Marker | Runs | Purpose |
+|---|---|---|---|
+| `tests/oracles/` | `oracle` | every push/PR (~2 s) | two routes to the same truth must agree |
+| `tests/longhaul/` | `longhaul` | nightly only | state that ACCUMULATES |
+| `tests/smoke/` | `smoke` | unchanged | GUI wiring reachability |
+
+`longhaul` is excluded from the default session via `addopts`.
+
+#### `tests/_fixtures/market_sim.py` — the opt-in generator
+
+Deterministic per `(ticker, interval, scenario, days, seed)`. **Opt-in**: a
+check injects it with the existing `DATA_SOURCES[src] = fetcher(...)` pattern
+inside a `try/finally`; the flat default stays. Three load-bearing rules:
+
+1. **Session semantics are delegated, never reimplemented.** It imports
+   `classify_session` / the boundary constants from
+   `core/session_calendar.py` and `ET` from `core/timezones.py`. A generator
+   carrying its own `09:30`/`16:00` would make the RTH and DST tests validate
+   *the generator* instead of the app.
+2. **Simulate once at 1m, aggregate up.** So `aggregate(1m) == fetch(5m) ==
+   fetch(15m)` holds *by construction*, satisfying the `check_b29` contract.
+3. **`tz_aware=True` is REQUIRED for anything that converts to ET.**
+   `strategy_tester.runner._filter_rth_only` (and `_compute_et_arrays`) go via
+   `Candle.date.timestamp()`, which interprets a **naive** datetime as *local*
+   time — so naive 09:30–16:00 bars silently shift out of the RTH window on
+   any machine not in US/Eastern.
+
+Scenarios: `normal`, `extended`, `trend`, `chop`, `earnings_gap`, `gap_down`,
+`half_day`, `halt`, `illiquid`, `dst_spring`, `dst_fall`. Note `illiquid`
+models zero volume as **contiguous runs**, not iid dropouts — independent
+per-minute zeroing vanishes under aggregation (five 1m bars summing to 5m are
+almost never all zero) and would never reach the zero-denominator branches in
+`rvol`/`vwap` that the scenario exists to exercise.
+
+#### The causality oracle (the highest-value gap)
+
+`f(B[:k]) == f(B)[:k]` — an indicator's value at bar *i* must not change when
+bars after *i* are removed. Nothing tested this before: the 184
+vectorisation-equivalence tests (§7.27) pin *vectorised == scalar* over a
+**whole** series and cannot detect lookahead, because both implementations
+would peek identically. 13 indicators are now verified causal, with the NaN
+mask compared exactly so a warmup window that shortens once future bars exist
+is also caught.
+
+**One documented exemption** lives in `_NON_CAUSAL`: `PriorDayHLC` writes NaN
+at the last bar of every session *except the final one* (`prior_day.py`
+L193–207) to break the matplotlib line between sessions. That is safe **only**
+because it declares no `scannable_outputs` and so can never gate a trade.
+Both halves of that argument are pinned — if it is ever made scannable the
+test fails loudly, because a `close > PDH` condition would otherwise silently
+fail to evaluate on the 15:55 closing bar.
+
+#### Anti-vacuity is mandatory
+
+An oracle on quiet data asserts `[] == []` and passes while testing nothing.
+Every oracle carries a **min-activity floor**, and the causality suite carries
+a **mutation canary** that injects a known-lookahead indicator and fails if
+the oracle does not catch it. Use a *global-normalisation* lookahead
+(`close / max(close)`) for such canaries — a centred moving average is a poor
+choice because it only diverges at the final bar, which the NaN mask already
+covers.
+
+**Coverage cannot measure assertion depth** (line coverage was already high
+while 25% of asserts were existence checks). The mutation canary is the real
+"do these tests mean anything?" signal.
+
+#### Resource assertions need an absolute floor, not just a ratio
+
+The soak's `tracemalloc` check requires growth to exceed **both** a relative
+threshold **and** ~4 MB. The steady-state traced heap between collections is
+only a few kilobytes, so ordinary allocator jitter reads as a triple-digit
+percentage — the first draft failed on 4 KB of noise. Same spirit as the
+min-of-N rule for perf budgets in §7.26.
+
+
 ## 8. Build & release flow
 
 The full guide is `docs/BUILDING_EXE.md`. Quick reference:
@@ -2152,6 +2270,10 @@ These files are **never** committed to git. Use them for working memory.
 | Scanner | `src/tradinglab/scanner/` (`fields.py`, `tab.py`) |
 | Synthetic test events | `src/tradinglab/events/synthetic_events.py` |
 | Helpers used by smoke | `tests/smoke/_helpers.py` |
+| Synthetic market generator (opt-in) | `tests/_fixtures/market_sim.py`; see §7.35 |
+| Committed real-market snapshot | `tests/_fixtures/market_data/` (5m, 5 days, 6 tickers) |
+| Causality / metamorphic oracles | `tests/oracles/`; marker `oracle`; see §7.35 |
+| Long-horizon soak (no state restore) | `tests/longhaul/`; marker `longhaul`, nightly only |
 | Mega smoke test | `tests/smoke/test_smoke_full.py` |
 | Strategy Tester GUI | `src/tradinglab/gui/strategy_tab.py` |
 | Strategy Tester runner | `src/tradinglab/strategy_tester/runner.py` |
@@ -2228,6 +2350,15 @@ guessing — recent checkpoints include:
   button in the credentials dialog on a worker thread with `after(100)`
   polling; `register_vendor_sources()` extracted so a saved key lights up its
   source with NO app restart.
+- Test-suite depth upgrade (§7.35): measured that a ~200x richer fixture
+  changed only 2 of 372 smoke outcomes, proving the assertions - not the
+  data - were the limit. Added `tests/_fixtures/market_sim.py` (opt-in,
+  delegates session semantics to `core/session_calendar.py`), the
+  `tests/oracles/` causality + metamorphic suites (13 indicators verified
+  no-lookahead for the first time), and the `tests/longhaul/` no-restore
+  soak. Surfaced one open app bug (`check_d6` x-axis locator, non-uniform
+  tick spacing across day boundaries) and one documented non-causality
+  (`PriorDayHLC`, chart-only).
 - Dark-mode native-widget theming: classic `tk.Listbox`/`tk.Text`/
   `tk.Canvas` widgets (not reached by the ttk `ThemeController` sweep)
   now themed via shared `gui/native_theme.py` helpers across 7 dialogs +
