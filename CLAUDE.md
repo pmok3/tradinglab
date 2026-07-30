@@ -2064,6 +2064,40 @@ covers.
 while 25% of asserts were existence checks). The mutation canary is the real
 "do these tests mean anything?" signal.
 
+#### Defending §7.34's consolidated primitives
+
+`tests/oracles/test_consolidated_primitives.py` pins the *laws* the primitives
+consolidated in §7.34 must satisfy. Consolidation removed today's drift; it
+does not prevent tomorrow's, and every one of those primitives had **already
+drifted once in production** before it was unified.
+
+What is pinned, and the failure mode each targets:
+
+* **`core/ids.py`** — that `new_id_hex()` stays 32 dash-less chars and
+  `new_id_dashed()` stays a 36-char dashed UUID, that each subsystem's
+  `_new_id` alias still mints the format *its own saved files use*, and that
+  an ID survives a store round-trip byte-for-byte. Both spellings are
+  load-bearing on disk; "normalising" them would orphan every saved strategy,
+  scan, run and open-position blob.
+* **`scanner/model.py` visitors** — the composition laws. `iter_conditions`
+  must equal the `Condition` subset of `iter_nodes`; `iter_tree_field_refs`
+  must equal `iter_conditions ∘ iter_field_refs`; scalar params must be
+  skipped while a **cross-symbol pinned** ref survives; `None` must be
+  accepted without a guard; `iter_nodes` must stay pre-order. With seven
+  hand-rolled walkers a divergence was at least visible in the diff — with
+  one visitor plus derived helpers it is silent.
+* **`backtest/performance.summarize_trade_rows`** — that breakeven trades
+  count toward `count` but toward **neither** wins nor losses (so
+  `win_rate + loss_rate <= 1.0`), that the reduction is order-invariant and
+  conserves total P&L, and that `expectancy` still equals
+  `win_rate*avg_win + loss_rate*avg_loss`. The breakeven policy is
+  deliberate, pre-existing, and very easy to "fix" by accident.
+* **`rendering.safe_remove_all`** — that one raising artist does not abort
+  the batch, which is the entire point of the `safe_` prefix.
+
+**When you consolidate the next duplicated primitive, add its law here.** A
+single definition is only as safe as the test that says what it must mean.
+
 #### Resource assertions need an absolute floor, not just a ratio
 
 The soak's `tracemalloc` check requires growth to exceed **both** a relative
