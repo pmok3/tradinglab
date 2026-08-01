@@ -1,13 +1,13 @@
 """Structural tests for the mega-test parametrisation.
 
 The mega ``test_smoke_full`` was historically a single pytest function
-that called 154 ``check_*`` functions in sequence. Behaviour: one
+that called the full ordered ``check_*`` sequence. Behaviour: one
 flake on any check failed the entire test, so the report showed
-``test_smoke_full FAILED`` with the other 153 checks invisible.
+``test_smoke_full FAILED`` with every other check invisible.
 
 The sprint replaces this with ``@pytest.mark.parametrize`` over the
 canonical sequence so each check becomes its own test case. A flake
-on one check fails ONE test, not all 154.
+on one check fails ONE test, not the whole sequence.
 
 These tests pin the contract: the parametrised mega-test must
 preserve the canonical sequence's order and cover every defined

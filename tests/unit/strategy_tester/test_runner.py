@@ -1,4 +1,13 @@
-"""Unit tests for strategy_tester.runner."""
+"""Unit tests for strategy_tester.runner.
+
+Landmine: this file's legacy ``_ramp`` helper intentionally still starts at
+``datetime(2024, 6, 1, 9, 30)`` (a Saturday) and is tz-naive. It is suitable for
+runner orchestration tests that do not assert real fills, but RTH-gated
+strategies with ``require_market_open=True`` produce zero trades from it. Tests
+that need actual fills should use a Monday, tz-aware ET series (for example
+``_rth_candles`` below or ``tests._fixtures.candles.ramp``) or explicitly turn
+off the market-open gate.
+"""
 
 from __future__ import annotations
 

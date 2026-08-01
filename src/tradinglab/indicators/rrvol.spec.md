@@ -43,7 +43,11 @@ Single output key `"rvol"` (matches RVOL). Raw ratio when
 
 1. Compute `RVOL(mode=…)` on the primary bars (numerator).
 2. Resolve `compare_symbol` (uppercased): `core.reference_data.get_reference_bars(source, compare_symbol, interval)`. If absent, schedule a background fetch and return all-NaN; the ChartApp on-arrival callback fires an indicator redraw, and because `set_reference_bars` bumps `core.reference_data.generation()` — which `IndicatorCache.config_hash` folds into RRVOL's cache key — the RRVOL pane (and only it) recomputes and repaints when the comparison bars land.
-3. Compute the same `RVOL(mode=…)` on the comparison bars.
+3. Compute the same `RVOL(mode=…)` on the comparison bars. For
+   `mode="time_of_day"` / `"cumulative"`, this inherits RVOL's
+   exchange-local `HH:MM` slot semantics and partial-warmup rule: values
+   may appear once `_MIN_WARMUP_SESSIONS` prior sessions exist, even
+   before the full `length`-session window is populated.
 4. For each primary timestamp, look up the matching comparison index via a
    sorted-`searchsorted` vectorized join. Unmatched bars → NaN.
 5. Divide numerator by denominator. `denom == 0.0` → emit `0.0` (no

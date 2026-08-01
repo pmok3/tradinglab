@@ -155,10 +155,10 @@ value changes.
 
 ## "Test connection" — credential verification
 
-Each vendor section with a registered verifier (Alpaca, Polygon today; not
-Schwab, which has none) gets a `[Test connection]` button plus a status line
-and a wrapped remediation line. The button answers the question a new user
-actually has after pasting a key: *is this thing going to work?*
+Each vendor section with a registered verifier (Alpaca, Polygon, Schwab)
+gets a `[Test connection]` button plus a status line and a wrapped remediation
+line. The button answers the question a new user actually has after pasting a
+key: *is this thing going to work?*
 
 ### Verifies what is TYPED, not what is saved
 

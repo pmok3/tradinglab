@@ -52,9 +52,10 @@ def import_strategy(src_path, *,
 ## Dependencies
 
 - `..core.json_collection_store.JsonObjectStore` — used as a helper for
-  `path_for` / `load` (via `_STORE.delete`, `_STORE.export_to_path`,
-  `_STORE.path_for`). Does **not** drive the `save` / `load_all` paths
-  (see Design Decisions).
+  `path_for`, `delete` and `export_to_path` (via `_STORE.path_for`,
+  `_STORE.delete`, `_STORE.export_to_path`). Does **not** drive the
+  `save`, `load`, `load_all` or `import_strategy` paths (see Design
+  Decisions).
 - `..core.io_helpers.atomic_write_json` — direct use in `save` to avoid
   the index side-effect of `JsonObjectStore.save`.
 - `..disk_cache._cache_dir`.

@@ -110,6 +110,19 @@ primitives.
   directly.
 - `to_et(0).tzinfo is not None` is True when tzdata is installed.
 
+## Verification
+
+Plain `rg 'ZoneInfo\("America/New_York"\)' src` is intentionally noisy:
+docstrings may mention the old pattern. To distinguish code from prose,
+parse `src/tradinglab/**/*.py` with `ast` and flag only call nodes shaped
+as `ZoneInfo("America/New_York")`. The expected production-code hit set is
+`{"core/timezones.py"}`.
+
+`tests/unit/test_codebase_invariants.py` also keeps a source-grep guard for
+the literal outside `core/timezones.py`, with explicit exemptions, so stale
+prose/exemption entries stay visible even though they are not executable
+constructions.
+
 ## Consumers (UTC minting)
 - `utc_now_iso` — `entries/model.py::_utcnow_iso`,
   `exits/model.py::_utcnow_iso`, `scanner/model.py::_utcnow_iso`,

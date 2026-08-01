@@ -312,11 +312,14 @@ flip back to inline ONLY when
 `inline_estimate < available - _HYSTERESIS_PX`. Prevents
 flip-flopping during a slow drag at the fit boundary.
 
-**Fallback when toplevel not realized**: `_get_available_width()`
-returns `_DEFAULT_DIALOG_WIDTH_PX = 1200` so the classifier is
-deterministic during the initial build before the WM has mapped
-the window. The first real `<Configure>` triggers a
-reclassification against the actual width.
+**Available-width source**: `_get_available_width()` walks to the
+nearest `BlockEditor` ancestor and uses `winfo_width() - 20`; if that
+is not realized, it falls back to the Toplevel width minus 80 px
+(floor 400). If neither is realized it returns 0, and
+`_classify_layout()` treats any width `< 100` as
+`_DEFAULT_DIALOG_WIDTH_PX = 1200` so the initial build is deterministic.
+The first real `<Configure>` triggers a reclassification against the
+actual width.
 
 **`_estimate_condition_inline_width(cond)`** sums:
 
@@ -406,15 +409,16 @@ Change handlers and their fire/re-layout responsibilities:
 
 | Handler                  | Re-classify? | Rebuild params? | `_fire()`s        |
 |--------------------------|--------------|-----------------|-------------------|
-| `_on_left_change`        | yes          | only if flipped | once (twice on flip — extra for wheel guard) |
+| `_on_left_change`        | yes          | only if flipped | once, after any flip/rebuild |
 | `_on_op_change`          | yes (always rebuilds; op-change always changes the schema) | yes | once |
 | `_on_param_field_change` | yes          | only if flipped | once (twice on flip) |
 | `_on_toplevel_resize`    | yes (debounced 100 ms) | only if flipped | zero (one on flip — wheel-guard re-apply) |
 
-The extra `_fire()` on flip is what lets the consumer's
-wheel-guard idempotently re-apply on the brand-new picker
-widgets. See `_relayout_if_needed() -> bool` — returns True
-when a flip happened.
+The extra `_fire()` on param-field / resize flips is what lets the
+consumer's wheel-guard idempotently re-apply on brand-new picker
+widgets. `_on_left_change` performs the relayout before its single
+`_fire()`, so that one callback already observes the rebuilt widgets.
+See `_relayout_if_needed() -> bool` — returns True when a flip happened.
 
 Every layout flip also calls `picker.set_layout_hint(layout)`
 on the LEFT picker and on every field-kind per-op param picker,

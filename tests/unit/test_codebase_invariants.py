@@ -33,6 +33,14 @@ Contracts in this file:
    is uniform.
 
 Audit ``codebase-invariants``.
+
+Spec-drift workflow
+-------------------
+This file enforces only structural completeness: every non-``__init__`` module
+under ``src/tradinglab`` has a sibling ``.spec.md``, and no sibling spec is
+orphaned. Content drift is still a manual audit: compare module/spec git
+timestamps as a noisy candidate list, trace real drift to cross-cutting
+refactors, and make surgical spec edits only where facts are missing or wrong.
 """
 from __future__ import annotations
 

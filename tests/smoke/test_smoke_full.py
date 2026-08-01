@@ -10,7 +10,7 @@ Run as: MPLBACKEND=Agg PYTHONIOENCODING=utf-8 python _smoke_full.py
 
 Architecture notes
 ------------------
-The 128 ``check_*`` functions defined below are the canonical per-feature
+The 176 ``check_*`` functions defined below are the canonical per-feature
 acceptance checks. They are imported by the **per-feature subset files**
 (``test_smoke_drilldown.py``, ``test_smoke_indicators.py``, etc.) so a
 developer can run a single feature group in seconds while iterating, and
@@ -20,6 +20,17 @@ Module-level helpers (``_pump``, ``_press``, ``_stub_yfinance``, …) live
 in ``tests/smoke/_helpers.py`` so both this file and the per-feature
 files share one source of truth. The session-scoped ``app`` fixture
 lives in ``tests/smoke/conftest.py``.
+
+Depth contract
+--------------
+This file is a GUI-wiring reachability suite, not the numeric oracle layer.
+A measured experiment that repointed the global smoke fetcher from
+``_fake_candles`` to structurally-realistic multi-session data changed only
+two outcomes, proving that the right fix is not to swap the global fixture.
+The high-entropy market data lives in ``tests/_fixtures/market_sim.py`` and is
+opted into by oracle / soak tests or by individual smoke checks. That experiment
+also exposed the d6 day-boundary gap blind spot: the default global fixture has
+one continuous day, so any day-boundary spacing claim needs its own fixture.
 """
 from __future__ import annotations
 

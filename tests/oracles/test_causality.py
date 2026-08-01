@@ -23,6 +23,12 @@ Nothing in the repository tested the causal property until now.
 Deliberate exclusions live in :data:`_NON_CAUSAL`, each with the reason it is
 legitimately non-causal. The default expectation is causality; an entry there
 is a deliberate statement, not a convenience.
+
+Anti-vacuity matters as much as the relation itself. The suite keeps a
+minimum-activity floor (enough indicators must actually be checked) and a
+mutation canary that injects a known global-normalisation lookahead. A quiet
+oracle that only proves ``[] == []`` is worse than no oracle because it trains
+maintainers to trust a green result that cannot fail.
 """
 from __future__ import annotations
 

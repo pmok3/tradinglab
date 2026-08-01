@@ -8,6 +8,13 @@ from here so there is exactly one source of truth.
 The ``app`` fixture lives in ``conftest.py``; helpers here are pure
 functions that take an already-built ``ChartApp`` and pump events,
 synthesize matplotlib events, etc.
+
+State-pollution caveat: smoke checks often replace ``DATA_SOURCES`` with
+short-lived fetcher stubs and then restore them in ``finally``. A worker future
+submitted before that restore can still complete afterwards and write stale
+stub bars into ``_primary`` / ``_full_cache``. Checks waiting for fresh data
+must clear stale state first and use predicates that exclude known leftovers
+(for example the 30-bar flat ``close=100.5`` stubs from d10/d12).
 """
 from __future__ import annotations
 

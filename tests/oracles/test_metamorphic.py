@@ -28,6 +28,11 @@ Each relation here targets a drift surface that exists in this codebase:
 ``scale invariance``
     Price-proportional indicators must commute with a change of units;
     bounded oscillators must ignore it entirely.
+
+Each relation carries an anti-vacuity assertion: the overlapping finite set,
+filtered bar count, or output variance must be large enough that the equality
+could have failed. These tests are here because coverage cannot tell whether
+the assertions carry market information.
 """
 from __future__ import annotations
 

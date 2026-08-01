@@ -50,3 +50,8 @@ chunked-cumsum kernel — zero new dependencies, identical float64 output.
 - `ma_kernels.ema` (→ MACD, Keltner EMA paths, MA indicator).
 - `smi._ema_with_nan` (×5 per SMI compute).
 - `lrsi.compute_arr` (4-stage Laguerre cascade via sequential `iir_tail`).
+- Indirect consumers through `ma_kernels.apply_ma`: MACD fast/slow/signal
+  MAs, Keltner basis/band MAs, and Chandelier ATR when `ma_type="EMA"`.
+  Wilder/RMA consumers use `wilder._wilder_iir_vec` instead; the
+  no-per-bar-loop rule is shared, but the canonical kernel lives in
+  `wilder.py` for `alpha = 1/n`.

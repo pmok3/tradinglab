@@ -68,6 +68,11 @@ helpers.
   mutating the operator combobox and the corrupted strategy was
   persisted on Save. Regression test:
   `tests/unit/gui/test_combobox_wheel_guard.py`.
+  The codebase-wide invariant is pinned by
+  `tests/unit/gui/test_modal_invariants.py`: every concrete
+  `BaseModalDialog` / `BaseEditorDialog` subclass must call
+  `protect_combobox_wheel(...)` unless it is explicitly exempted
+  because it has no `ttk.Combobox` / `ttk.Spinbox`.
 
 - `make_scrollable_form(parent, *, horizontal=False,
   bind_mousewheel=True) -> tuple[ttk.Frame, tk.Canvas]` — builds a

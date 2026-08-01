@@ -21,6 +21,11 @@ Centralizes dark/light theming for classic Tk widgets that are not reached by th
 
 - **Master-chain walk-up** (audit `color-picker-theme-walks-master-chain`): the historical `current_theme` only inspected `owner._theme_ctrl` directly. Dialogs that are themselves Toplevels (e.g. `IndicatorDialog`) do NOT carry a `_theme_ctrl` attribute — only ChartApp does. Opening the color picker from such an intermediate dialog produced a stuck-light picker even when the app was in dark mode, because the picker's parent (the IndicatorDialog) had no `_theme_ctrl` and the lookup fell back to `LIGHT_THEME`. The walk-up fixes this without requiring every intermediate dialog to re-expose `_theme_ctrl`.
 - **`winfo_toplevel` fallback** — when a node's `master` is `None` (it's a root) but the node IS NOT the ChartApp root (e.g. an embedded Toplevel), try `winfo_toplevel()` to jump straight to the real top. Some Tk hierarchies break the `master` chain at the Toplevel boundary; `winfo_toplevel()` handles them. Guarded with a `visited` set so cycles cannot loop forever.
+- **Convention for classic Tk widgets**: any new or edited dialog that embeds
+  `tk.Listbox`, `tk.Text`, or `tk.Canvas` must resolve `theme = current_theme(owner)`
+  and call the matching `apply_*_theme` helper after the widget is built. If the
+  dialog can stay open while the app theme changes, register a `winfo_exists`-
+  guarded `ThemeController.on_change` callback to re-apply the helper.
 
 ## Tests
 

@@ -121,3 +121,16 @@ warmup_bars_for_kind("chandelier", {"lookback": 22, "atr_period": 22})          
 warmup_bars_for_kind("some_user_plugin", {})                                     # empirical detection
 warmup_bars_for_kind("does_not_exist", {})                                       # 100 (DEFAULT_WARMUP_BARS)
 ```
+
+## Testing
+
+- `tests/unit/strategy_tester/test_warmup.py` — real-indicator end-to-end
+  values, explicit-attribute vs empirical resolution, caching,
+  fallback, tree walking, and `bars_to_calendar_days`.
+- `tests/unit/strategy_tester/test_warmup_plugin_compat.py` — user
+  plugin indicators use empirical detection without registry edits.
+- `tests/unit/strategy_tester/test_warmup_integration.py` — evaluator
+  gate, runner extended-fetch, back-compat, and override semantics.
+- `tests/unit/strategy_tester/test_runner.py::
+  test_run_uses_per_symbol_warmup_windows_for_dependencies` —
+  cross-symbol dependency fetch windows use their per-symbol warmup.

@@ -1,7 +1,10 @@
 # data/credentials.py — Spec
 
 ## Purpose
-Stdlib-only loader for broker / data-vendor credentials from environment, `.env` files, and plaintext `alpaca.txt` / `credentials.txt` files. One typed dataclass per vendor with an `is_configured()` predicate so callers can branch cleanly on availability.
+Stdlib-only loader for broker / data-vendor credentials from environment,
+the encrypted store, `.env` files, and plaintext `alpaca.txt` /
+`credentials.txt` files. One typed dataclass per vendor with an
+`is_configured()` predicate so callers can branch cleanly on availability.
 
 ## Public API
 - `@dataclass(frozen=True) SchwabCredentials(app_key, app_secret, redirect_uri)` — `is_configured()` requires `app_key + app_secret`.
@@ -25,8 +28,24 @@ Stdlib-only loader for broker / data-vendor credentials from environment, `.env`
 - **No `python-dotenv` dependency**: minimal in-house parser covers `KEY=VALUE`, `#` comments, blank lines, optional quoted values. No interpolation, no multi-line, no escape sequences. Malformed lines log WARNING and are skipped — never raise.
 - **Lookup precedence: `os.environ` > encrypted store > `alpaca.txt`/`credentials.txt` > `.env.local` > `.env`.** Shell-exported vars always win (the documented power-user / CI escape hatch); `.env.local` overrides the base project `.env` for developer-local tweaks.
 - **The store is a real layer, not an environment prime.** Before v2, `gui/credentials_dialog.prime_environment_from_dpapi` decrypted the blob at startup and injected it into `os.environ` *without overwriting existing entries* — which put it below a real export and above the files. `_build_layers` resolves the store directly at exactly that rank, so precedence is unchanged while secrets stay out of the process environment (they were previously reachable by crash dumps, subprocesses, and any library that logs `os.environ`). Verified precondition: every data source reads through `get_credentials()`; none reads `os.environ`.
-- **Frozen-build skip (dotenv only)**: when `sys.frozen` is truthy (PyInstaller/redistributable) **dotenv** discovery is disabled entirely — a packaged exe must never silently load a `.env` from cwd. Packaged users configure via the encrypted store, real env vars, or a plaintext credential file (below).
-- **Plaintext credential files (`alpaca.txt` / `credentials.txt`)**: a single-user desktop convenience. `_credential_txt_layers()` reads these from `_candidate_credential_dirs()` — the app-data dir, the frozen-exe dir, the repo root (dev checkout), and cwd — one layer per file so provenance can name the exact path. Unlike dotenv, these **ARE** read in the frozen `.exe` (the packaged user has no repo checkout); the filenames are specific + user-created (low accidental-collision risk vs a generic `.env`) and git-ignored (`[Aa]lpaca.txt` / `[Cc]redentials.txt`) so a real key never lands in version control. `_parse_credential_txt` accepts friendly `Label: value` lines (`Key:` / `Secret:` / `Feed:` → `ALPACA_*`, aliases normalized), verbatim `ENV_NAME=value` passthrough (e.g. `SCHWAB_APP_KEY=…`), and a bare two-line `keyid`/`secret` fallback; quotes stripped, `#`/blank lines ignored. Only file names + field counts are logged, never the secret values.
+- **Frozen-build search hardening**: when `sys.frozen` is truthy
+  (PyInstaller/redistributable), dotenv discovery is disabled entirely AND
+  plaintext credential files are searched only in the app-data directory. A
+  packaged exe must never silently load `.env` or `credentials.txt` from the
+  double-click cwd or next-to-exe folder.
+- **Plaintext credential files (`alpaca.txt` / `credentials.txt`)**: a
+  single-user desktop convenience. `_credential_txt_layers()` reads these
+  from `_candidate_credential_dirs()` — app-data dir in frozen builds; app-data
+  dir, repo root (dev checkout), and cwd in source builds — one layer per file
+  so provenance can name the exact path. The filenames are specific +
+  user-created (low accidental-collision risk vs a generic `.env`) and
+  git-ignored (`[Aa]lpaca.txt` / `[Cc]redentials.txt`) so a real key never
+  lands in version control. `_parse_credential_txt` accepts friendly
+  `Label: value` lines (`Key:` / `Secret:` / `Feed:` → `ALPACA_*`, aliases
+  normalized), verbatim `ENV_NAME=value` passthrough (e.g.
+  `SCHWAB_APP_KEY=…`), and a bare two-line `keyid`/`secret` fallback; quotes
+  stripped, `#`/blank lines ignored. Only file names + field counts are logged,
+  never the secret values.
 - **`_load_dotenv_files()` / `_load_credential_txt_files()` are preserved as monkeypatch seams.** The loader tests patch them; the per-file layer walk adds path attribution over the same data rather than replacing the seam.
 - **Per-vendor dataclasses, not a flat dict**: each vendor has a different "configured?" predicate (Schwab key+secret; Polygon key only; Alpaca key+secret+feed). Keeping that typed is the documentation.
 - **Empty strings → None** at the resolver boundary so `is_configured()` doesn't get fooled by `SCHWAB_APP_KEY=`. An empty value in one layer **falls through** to the next rather than masking it.

@@ -31,6 +31,14 @@ NaN until both the rolling window AND the ATR kernel are warm. No SMA-of-TR prox
 Pure function on `np.ndarray`; no state, no IO, no locks. Identical inputs → identical outputs (window ops are sums-of-max, no reorder).
 
 ## Performance
+Classic (unanchored) rolling highs/lows use NumPy `sliding_window_view`
+over the small `lookback` windows this app exposes. The Camp-B anchored
+exit-rule variant is intentionally a simple bounded Python loop because
+the window expands from `anchor_idx` and is not the dominant indicator
+cost. Do not replace these tiny-window paths with a hand-rolled Python
+monotonic deque: interpreter overhead beats the theoretical O(n) win at
+the current lookbacks, and it does not apply to the recurrence/IIR costs.
+
 The ratchet helpers (`_ratchet_long` / `_ratchet_short`) are loop-free:
 the NaN-aware running max/min is a cumulative `np.maximum.accumulate` /
 `np.minimum.accumulate` over the finite-compressed series, with

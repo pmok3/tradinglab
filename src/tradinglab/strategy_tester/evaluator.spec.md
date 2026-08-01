@@ -154,6 +154,13 @@ Multi-leg OCO is reduced to first-leg-to-fire. Proper OCO semantics are still de
 ## Design Decisions
 - **Position-state mirror, not duplicate state** — `EvalContext` carries strategy-level flags (fires_total, fires_by_symbol, initial_stop_price) but the actual open-position quantity / avg_cost comes from `engine.portfolio.positions[sym]`. Single source of truth, prevents drift.
 - **Decision price = bar `i` close** (resolved before any new orders are submitted). Fill price = bar `i+1` open ± slippage. This matches the live evaluator's "decide at close, fill next open" canonical contract.
+- **No mechanical `PreTradeEntry` records** — the evaluator calls
+  `engine.submit_order(order)` without a `pre_trade` argument, so
+  `SessionResult.pre_trades` is empty and `build_trade_rows(result)`
+  returns rows whose `pre is None`. Consumers that need a stable
+  per-trade id must fall back from `row.pre.order_id` to
+  `row.post.ref_pre_trade_id` and then to `entry_ts` (the runner's
+  screenshot filename path does this).
 - **Sizing capped at starting_cash for FIXED_NOTIONAL** — opinionated; prevents accidental 10x leverage from a misconfigured strategy. `FIXED_QTY` is honored verbatim.
 - **Exit checks run before entry checks on the same bar** — an open position must clear before re-entry on the same bar. Matches live evaluator.
 - **EOD kill-switch is a synthetic fill via direct `_apply_fill_with_tracking`** — bypasses the tick loop (mid-rollover for the per-day kill; exhausted for the end-of-run kill). Both kill paths share one helper, `_synthesize_eod_flatten_fills(ctx, engine, bars, idx, symbol, cost_model)`, and both use the **last RTH bar's close** as the fill price (walk-back via `_find_last_rth_bar_at_or_before`), slippage included. The two sites previously diverged — the per-day kill used the bar close while the end-of-run kill used the bar **open** — purely because the block was copy-pasted; they are now unified on close, matching the documented "market-on-close at 15:55 ET" behaviour. If no RTH bar exists in the window the kill is silently skipped (position stays "open at end" in `SessionResult`).
@@ -172,6 +179,13 @@ Multi-leg OCO is reduced to first-leg-to-fire. Proper OCO semantics are still de
 ## Testing
 - `tests/unit/strategy_tester/test_evaluator.py` — entry MARKET fires on first bar; LIMIT entry fires when bar.low touches; STOP entry fires when bar.high touches; FIXED_NOTIONAL sizing rounds DOWN; position open blocks re-entry; exit STOP closes on touch; EOD kill-switch flattens at end; defensive `UnsupportedTriggerKind` fallback (via registry-pop test); INDICATOR entry fires when `close > threshold` becomes true; INDICATOR entry never fires for an unreachable threshold; INDICATOR with `condition=None` silently doesn't fire; INDICATOR exit closes the position when its condition triggers; active and dependency indicator prewarm deduplicates repeated refs; **TRAILING_STOP percent fires on retrace, no fire on uninterrupted uptrend, dollar unit honoured**; **TIME_OF_DAY fires at/after cutoff (ET), no fire before, malformed string = no fire**; **CHANDELIER fires after ATR warm-up, no fire during warm-up window**; **SCANNER_ALERT fires on edge False → True, no fire when already matching, missing scanner ID = silent no-fire**; **`max_fires_per_session_per_symbol` resets on ET-date roll** (STACK + max=1 + 5-day timeline → 5 BUYs); **`arm_window` blocks bars outside 09:35-15:30 ET**; **blank arm_window strings disable the gate**; **`require_market_open=True` blocks Saturday bars**; **`require_market_open=False` allows weekends**; **`cooldown_secs=600` throttles fires to every other 5m bar**; **`cooldown_secs=0` allows every bar**; **per-day `eod_kill_switch=True` flattens overnight positions** (BLOCK + 3-day trending timeline + no intraday stop → 3 BUYs + 3 SELLs).
 - `tests/unit/strategy_tester/test_eod_postmarket.py` — RTH-only walk-back for both kill paths, the no-RTH skip path, RTH-only backwards compat, TIME_OF_DAY trigger isolation, and **both kill paths filling at the last RTH bar's close** (`test_end_of_run_eod_kill_fills_at_rth_close_not_open`, `test_per_day_eod_kill_fills_at_rth_close_not_open` — run with `slippage_bps=0.0` so the fill price is exactly the bar close).
+- `tests/unit/strategy_tester/test_cancel_responsiveness.py` —
+  cancel-token polling every 256 bars, no-token parity, never-trip
+  parity, and broken-token safe-default behaviour.
+- `tests/unit/strategy_tester/test_vectorized_et_arrays.py` —
+  `_compute_et_arrays` parity with the slow ET/RTH reference across
+  DST transitions, RTH boundaries, weekends, empty input, and
+  ET-midnight session-roll detection.
 - `tests/smoke/test_smoke_strategy.py::check_st0_kernel_only` — 3 synthetic tickers + MARKET entry + STOP exit, validates `SessionResult` has ≥1 fill and per-symbol JSON parses.
 
 ## See also

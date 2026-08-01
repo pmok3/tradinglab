@@ -24,8 +24,8 @@ Verification is a **per-vendor capability in a side table**, registered via
 `register_verifier(vendor, fn)` — deliberately mirroring the
 `_PAGE_FETCHERS` / `_RANGE_CAPABLE` idiom in `data/base.py`. Consumers (the
 credentials dialog today; a status bar or CLI diagnostic tomorrow) go
-through `verify_vendor(vendor, creds)` and never branch per vendor. Adding
-Schwab or a future provider is one registration line, not a new UI branch.
+through `verify_vendor(vendor, creds)` and never branch per vendor. Adding a
+future provider is one registration line, not a new UI branch.
 
 ## Status taxonomy
 

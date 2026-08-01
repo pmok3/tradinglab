@@ -74,9 +74,10 @@ auto-registers the indicator via the existing loader.
 - `warmup_for_conditions(group_dict) -> int` — companion helper that
   returns the max warmup bars across every indicator referenced in the
   tree, computed via `strategy_tester.warmup._walk_field_kinds` +
-  `warmup_bars_for_kind`. Used both by the dialog's Validate step
-  ("Warmup: N bars") and by the generated module's `warmup_bars`
-  property.
+  `warmup_bars_for_kind`. The Custom Indicator Builder calls it during
+  Validate to force the tree through the warmup walker and during
+  Preview to gate warmup bars. Generated Conditions modules embed the
+  same walker logic for their `warmup_bars` property.
 - `python_mode_wrapper(name=, body=, ..., scannable=False)` — alternate generator for
   user-authored Python bodies; prepends the header verbatim (including
   the `scannable` field for round-trip). Python-mode users are
@@ -85,6 +86,12 @@ auto-registers the indicator via the existing loader.
 - `safe_indicator_filename(name) -> str` — validates name is
   `[A-Za-z_][A-Za-z0-9_]{0,31}` and not a built-in kind_id (`sma`,
   `ema`, `rsi`, `bbands`, `macd`, ...).
+
+`highest(series, n)` / `lowest(series, n)` use NumPy
+`sliding_window_view` for the small rolling-extrema windows the DSL
+exposes. Do not replace them with a Python monotonic deque unless a
+measured long-window hotspot appears; the current vectorized O(n·L) path
+beats Python per-element overhead at the app's normal lookbacks.
 
 ## Whitelist
 

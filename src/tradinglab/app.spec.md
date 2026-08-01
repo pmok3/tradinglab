@@ -64,12 +64,24 @@ A depth counter `_defer_indicator_render` (init `0`) is checked at the top of `_
 
 ### Composition: mixins, not inheritance chains
 Mixins have **no `__init__`** and **no `super()`** — `ChartApp.__init__` is the single point where state is initialized. Lets every attribute be found in one file and keeps MRO flat.
+`tk.Tk` stays the final base. The exact `class ChartApp(...)` base list
+above is not illustrative: `tests/unit/test_codebase_invariants.py`
+compares it against the real `ChartApp.__bases__`, rejects mixin
+`__init__` methods, enforces `tk.Tk` last, and pins the ratcheting
+`app.py` LOC ceiling. `tests/unit/test_mixin_isolation.py` additionally
+keeps mixin modules from importing other mixin modules; mixins coordinate
+through `self.<attr>` state owned by `ChartApp`, not direct mixin imports.
 
 File structure:
 - `app.py` — class body (lifecycle, rendering, data load, sandbox bridge, themes, menus).
 - `gui/polling.py` — `PollingMixin` + scheduler helpers (`_market_window_et`, `_postpone_past_closed_market`, `_next_daily_close_epoch`, `_compute_fetch_delay_ms`); owns `_track_after`, stream-queue / worker-inbox drains, `_schedule_reload`, `_schedule_next_bar_fetch`.
 - `gui/x_axis_locator.py` — `_AdaptiveXLocator` + `_make_x_formatter`.
 - `gui/{drilldown,interaction,workers,watchlist_tab,indicator_menu,sandbox_menu,entries_app,exits_app,help_menu,banner,config_menu,anchor_pick_app,chartstack_app,drawings_app,events_app,live_price_overlay_app,recent_menus,scanner_app,snapshot,update_check}.py` and `backtest/{sandbox_app_aliases,sandbox_app_methods}.py` — other mixins (`AnchorPickAppMixin` in `gui/anchor_pick_app.py` — the AVWAP "Pick Anchor…" click flow; `ChartStackAppMixin` in `gui/chartstack_app.py` — the ChartStack sidebar toggle/promote/sash glue; `EventsAppMixin` in `gui/events_app.py` — historical event-glyph fetch + overlay; `ScannerAppMixin` in `gui/scanner_app.py`; `SandboxAppMixin` in `backtest/sandbox_app_methods.py`).
+
+`app.py` keeps module-level imports such as `filedialog` when they are
+test patch seams, even if moved behavior no longer uses the name in this
+file. Do not remove these re-exports without updating the tests that
+patch `tradinglab.app.<name>`.
 
 ### Two-phase data load (`_load_data_async` → `_load_data`)
 1. `_load_data_async` probes `_full_cache`; on cold/stale sides it submits a worker that calls the source fetcher, preloads disk-cache rows, and pre-merges/pre-saves fresh bars. Cache-hit-only paths call `_load_data` directly so its deferred-render branch still applies.
