@@ -18,6 +18,7 @@ pre-sandbox app-state snapshot restored on `end_session`.
 - `register_ticker(symbol, candles) -> List[Any]` — add a symbol mid-session; returns the per-symbol *visible* candle list (stable identity for the session).
 - `register_daily_for(symbol, daily_candles)` — lazy-attach a per-symbol raw daily series for 1d-context display.
 - `next_bar() -> bool` — advance one tick; sync visibles, invalidate focused caches, redraw, drive post-trade callbacks + screenshots.
+- `skip_to_next_day() -> SkipDayOutcome` — fast-forward past the remainder of the current session day, run the end-of-day kill switch, and land on the next day's first bar.
 - `set_focus(symbol)` — swap primary chart; honours `display_interval`.
 - `set_display_interval(interval) -> bool` — toggle between primary, any other entry in `display_intervals`, or `"1d"`. Other values rejected.
 - `aggregated_visible_for(symbol, target_interval) -> List[Candle]` — re-aggregate the per-symbol primary visible list.
@@ -36,6 +37,9 @@ pre-sandbox app-state snapshot restored on `end_session`.
 - `current_day_ordinal() -> int` — blind-safe 1-based count of distinct session days visited so far (drives the panel's "Replay Day N" label without leaking the calendar date).
 - `daily_visible_for(symbol) -> List[Any]` — daily slice strictly before `current_session_date()`, capped to `daily_lookback_bars`.
 - Inspection helpers: `is_active`, `positions_snapshot`, `cash`, `clock_ts`, `tickers`.
+
+### `SkipDayOutcome`
+Frozen result record returned by `skip_to_next_day`. Fields: `bars_advanced` (master-clock ticks consumed, including the boundary-crossing one), `positions_flattened` (positions closed by the end-of-day kill switch), `day_changed`, `exhausted` (no further bar was available — end of replay, or no eligible dates left under auto-cycle). `__bool__` is true when either counter is non-zero, so callers can write `if not outcome:` for the "nothing to skip" case.
 - Public attributes: `engine`, `spec`, `interval`, `focus_symbol`, `visible_candles_by_symbol`, `tag_store`, `session_id`, `screenshot_dir`, `include_extended`, `auto_cycle`, `blind`, `display_interval`, `display_intervals`, `daily_lookback_bars`.
 
 ### `SandboxMemento`
@@ -63,6 +67,13 @@ pre-sandbox app-state snapshot restored on `end_session`.
 - **Per-day watch notes**: `_day_notes` (dict keyed by UTC session date) buffers the trader's free-text pre-trade observations captured during replay via `set_day_note`; `_day_ordinal` counts distinct session days visited (incremented on each `next_bar` day-boundary cross, reset to 1 in `start_session`). `result()` folds `_day_notes` into `SessionResult.day_notes` on BOTH the single-cycle fast path and the auto-cycle merge path, so they persist through `save_session` and surface in the Performance View daily-journal pane. Engine-independent (like the post-trade review text) so reproducibility is unaffected.
 - **Optional decision capture**: `_decisions` is controller-owned, reset on each fresh start, and folded into both `result()` paths without per-cycle archiving. `log_decision` records the current clock and focused symbol only after explicit user invocation. `next_bar` never creates an implicit record, so unlogged bars remain unknown rather than `pass`.
 - **Auto-cycle**: `next_bar` past end-of-data calls `cycle_to_next`, which auto-flattens (synthetic fills at last close), archives, draws the next eligible date (deterministic round-robin on seeded shuffle), rebuilds with cash carried forward, ticks + fast-forwards. Compare slot is force-cleared each cycle.
+- **Day fast-forward (`skip_to_next_day`)**: ergonomic escape hatch for a boring day, or a trader who only works the open — one action instead of ~78 `next_bar` presses. Deliberately NOT a playback clock: the replay stays untimed (unlimited deliberation per bar is a design goal, not an omission), so this only collapses bars the user has already decided not to trade. Four steps:
+  1. Tick to the LAST bar of the current session day with `_defer_render` set. That flag suppresses **only** the matplotlib redraw and `panel.refresh()`; engine ticks, visible-list growth, `_invalidate_focused`, the post-trade review flow and every `_refresh_*_for_sandbox` hook still run per bar, so a skip is semantically identical to holding down "next bar". `_pending_day_changed` accumulates the day-rollover flag across the suppressed ticks.
+  2. Render once via `_install_focus_for_display` (the same chokepoint `set_focus` / `cycle_to_next` use).
+  3. Run the end-of-day kill switch — `_flatten_open_at_clock` closes every open position at that bar's close (synthetic fills, no slippage / commission, `order_id_prefix="eod-flat"`), then `_handle_new_post_trades` drives the mandatory review modal. **Rendering before this step is deliberate**: the review modal and its `<ref>_post.png` screenshot must show the bar the position actually closed on, not the stale pre-skip view.
+  4. Advance one more fully-rendered `next_bar`. Free mode lands on the next day's first bar; under `auto_cycle` the engine is exhausted so `cycle_to_next` rolls the deck — its own flatten is a no-op by then, so a position is never double-closed.
+  - `_bars_left_in_day(day)` counts remaining master-timeline bars whose **UTC** session date matches `day` (consistent with `current_session_date` and the `next_bar` day-cross tracking), so the batched loop can never over-run the boundary and trigger an unintended cycle.
+  - Guards: inactive controller or unstarted clock → falsy `SkipDayOutcome`; the kill switch still runs when the replay ends mid-day, so an open position is never stranded.
 - **Multi-timeframe daily context**: `daily_full_by_symbol` stores raw daily candles per symbol; `daily_visible_for(symbol)` derives the slice live. Visibility rule: bar's session date **strictly less than** current — the in-progress day is omitted. Capped at `daily_lookback_bars`.
 - **Daily-context refresh on day-boundary cross only**: `next_bar` tracks `_last_clock_session_date`; per-intraday-tick refreshes skipped while `display_interval == "1d"`. On a cross the daily slice is re-installed.
 - **Full-session xlim pre-allocation**: mechanics live in `app.spec.md`; `replay.py` computes `full_display_length_for(symbol)` and passes it to `app._install_sandbox_primary_series(..., full_session_length=...)`.

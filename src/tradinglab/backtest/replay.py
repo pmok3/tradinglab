@@ -170,6 +170,30 @@ class SandboxMemento:
             app._render()
 
 
+@dataclass(frozen=True)
+class SkipDayOutcome:
+    """Result of a :meth:`SandboxController.skip_to_next_day` call.
+
+    ``bars_advanced`` counts master-clock ticks consumed (including the
+    one that crossed into the new day). ``positions_flattened`` is the
+    number of open positions closed by the end-of-day kill switch at the
+    skipped day's final bar. ``day_changed`` is True when the clock
+    actually landed on a new session date — False when the replay ran
+    out of bars first. ``exhausted`` is True when no further bar was
+    available (end of replay, or no eligible dates left in auto-cycle).
+
+    Truthy when anything at all happened, so callers can write
+    ``if not outcome:`` for the "nothing to skip" case.
+    """
+    bars_advanced: int = 0
+    positions_flattened: int = 0
+    day_changed: bool = False
+    exhausted: bool = False
+
+    def __bool__(self) -> bool:
+        return bool(self.bars_advanced or self.positions_flattened)
+
+
 @dataclass
 class SandboxController(EventsControllerMixin):
     """Active-session orchestrator. One instance per :class:`ChartApp`."""
@@ -263,6 +287,19 @@ class SandboxController(EventsControllerMixin):
     _day_notes: dict[str, str] = field(default_factory=dict)
     _day_ordinal: int = 1
     _decisions: list[DecisionRecord] = field(default_factory=list)
+
+    # Batched fast-forward (:meth:`skip_to_next_day`). While
+    # ``_defer_render`` is set, :meth:`next_bar` suppresses ONLY the
+    # matplotlib redraw + panel refresh — every other per-tick effect
+    # (engine tick, visible-list growth, indicator-cache invalidation,
+    # post-trade review modals, watchlist / scanner / entries / exits
+    # hooks, card subscribers) still runs, so a skip is semantically
+    # identical to holding down "next bar". ``_pending_day_changed``
+    # accumulates the day-rollover flag across the suppressed ticks so
+    # the single terminal render knows to re-install the daily-context
+    # series.
+    _defer_render: bool = False
+    _pending_day_changed: bool = False
 
     # Events feature: per-symbol raw event bundles fetched at session
     # start / register_ticker time. Stored as opaque ``Any`` because
@@ -947,8 +984,15 @@ class SandboxController(EventsControllerMixin):
                        and prev_day != cur_day)
         if day_changed:
             self._day_ordinal += 1
+            if self._defer_render:
+                self._pending_day_changed = True
 
-        if self.display_interval == "1d":
+        if self._defer_render:
+            # Batched fast-forward (skip_to_next_day): suppress the
+            # per-tick redraw. The terminal render re-installs the
+            # focused series exactly once via _install_focus_for_display.
+            pass
+        elif self.display_interval == "1d":
             # Daily display: skip the per-intraday-tick chart refresh
             # entirely (daily series did not change). On day-boundary
             # crossings, re-install the now-extended daily-visible
@@ -1021,7 +1065,7 @@ class SandboxController(EventsControllerMixin):
         self._handle_new_post_trades()
 
         panel = getattr(self.app, "_sandbox_panel", None)
-        if panel is not None:
+        if panel is not None and not self._defer_render:
             with _silent_tcl():
                 panel.refresh()
         # Watchlist Last/Change must follow the replay clock. Day-only
@@ -1080,6 +1124,151 @@ class SandboxController(EventsControllerMixin):
         # observed the new bar. Subscribers see fully-settled state.
         self._fire_card_subscribers()
         return True
+
+    # ---- fast-forward ----------------------------------------------------
+
+    def _bars_left_in_day(self, day: _dt.date) -> int:
+        """Ticks needed to land on the LAST master-clock bar of ``day``.
+
+        Zero when the clock already sits on that bar. Counts only bars
+        whose UTC session date matches ``day``, so it stops at the day
+        boundary even in free-mode (unbounded, multi-day) timelines.
+        """
+        if self.engine is None:
+            return 0
+        clock = self.engine.clock
+        timeline = clock.timeline
+        n = int(timeline.shape[0])
+        count = 0
+        i = int(clock.index) + 1
+        while i < n:
+            d = _dt.datetime.fromtimestamp(
+                int(timeline[i]), tz=_dt.timezone.utc).date()
+            if d != day:
+                break
+            count += 1
+            i += 1
+        return count
+
+    def _flatten_open_at_clock(self, *, order_id_prefix: str = "eod-flat") -> int:
+        """End-of-day kill switch: close every open position at this bar.
+
+        Prices come from each symbol's close at the current master-clock
+        timestamp; symbols with no bar there fall back to ``avg_cost``
+        inside :meth:`SandboxEngine.flatten_all_at_close`. Synthetic
+        system fills — no slippage, no commission — mirroring the
+        auto-cycle flatten. Returns the number of positions closed.
+        """
+        eng = self.engine
+        if eng is None:
+            return 0
+        has_open = any(
+            p is not None and p.quantity != 0.0
+            for p in eng.portfolio.positions.values()
+        )
+        if not has_open:
+            return 0
+        ts = int(eng.clock.now_ts)
+        prices: dict[str, float] = {}
+        for sym, bs in eng.bars_by_symbol.items():
+            i = bs.index_for_ts(ts)
+            if i is not None:
+                prices[sym] = float(bs.close[i])
+        fills = eng.flatten_all_at_close(
+            last_bar_ts=ts, prices=prices, order_id_prefix=order_id_prefix)
+        return len(fills)
+
+    def skip_to_next_day(self) -> SkipDayOutcome:
+        """Fast-forward to the first bar of the next session day.
+
+        The ergonomic escape hatch for a boring day, or for a trader who
+        only works the first hour: one keystroke instead of pressing
+        "next bar" seventy-eight times. Deliberately NOT a clock — the
+        replay stays untimed (see ``docs/spec.md``); this only collapses
+        bars the user has already decided not to trade.
+
+        Sequence:
+
+        1. Tick to the LAST bar of the current session day with the
+           chart redraw suppressed (``_defer_render``). Every other
+           per-tick effect still runs — engine fills, MAE/MFE, indicator
+           cache invalidation, watchlist / scanner / entries / exits
+           hooks, card subscribers — so skipping is semantically
+           identical to holding down "next bar".
+        2. Render once, so the chart shows the day's closing bar.
+        3. Run the **end-of-day kill switch**: flatten any still-open
+           position at that bar's close, then drive the resulting
+           :class:`PostTradeReview` records through the normal
+           (mandatory) review flow. Rendering *before* this step is
+           deliberate — the review modal and its screenshot must show
+           the bar the position was actually closed on, not the stale
+           pre-skip view.
+        4. Advance one more fully-rendered bar. In free mode that lands
+           on the next day's first bar; under ``auto_cycle`` the engine
+           is exhausted, so :meth:`next_bar` rolls the deck via
+           :meth:`cycle_to_next` (whose own flatten is a no-op by then,
+           every position having already been closed in step 3).
+
+        Returns a :class:`SkipDayOutcome`; falsy when nothing happened.
+        """
+        if not self.active or self.engine is None:
+            return SkipDayOutcome(exhausted=True)
+
+        # Clock not started yet — the first tick just reveals bar 0,
+        # there is no day to skip past.
+        if self.engine.clock.index < 0:
+            advanced = 1 if self.next_bar() else 0
+            return SkipDayOutcome(
+                bars_advanced=advanced, exhausted=advanced == 0)
+
+        start_day = self.current_session_date()
+        if start_day is None:
+            advanced = 1 if self.next_bar() else 0
+            return SkipDayOutcome(
+                bars_advanced=advanced, exhausted=advanced == 0)
+
+        bars = 0
+        remaining = self._bars_left_in_day(start_day)
+        prev_defer = self._defer_render
+        self._defer_render = True
+        self._pending_day_changed = False
+        try:
+            for _ in range(remaining):
+                if not self.next_bar():
+                    break
+                bars += 1
+        finally:
+            self._defer_render = prev_defer
+
+        # Terminal render for the batched segment (step 2). Skipped when
+        # no bar was consumed — the view is already current.
+        if bars and self.focus_symbol:
+            self._install_focus_for_display(self.focus_symbol)
+        self._pending_day_changed = False
+
+        # Step 3: EOD kill switch + mandatory review flow.
+        flattened = self._flatten_open_at_clock()
+        if flattened:
+            self._handle_new_post_trades()
+
+        # Step 4: cross the day boundary with a normal, rendered tick.
+        crossed = self.next_bar()
+        if crossed:
+            bars += 1
+        day_changed = bool(
+            crossed and self.current_session_date() != start_day)
+
+        panel = getattr(self.app, "_sandbox_panel", None)
+        if panel is not None:
+            with _silent_tcl():
+                panel.refresh()
+
+        return SkipDayOutcome(
+            bars_advanced=bars,
+            positions_flattened=flattened,
+            day_changed=day_changed,
+            exhausted=not crossed,
+        )
 
     def set_focus(self, symbol: str) -> None:
         """Swap the primary chart to ``symbol`` at the current clock.

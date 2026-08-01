@@ -102,8 +102,13 @@ class SandboxPanel(ttk.Frame):
         ttk.Label(self, textvariable=self._cash_var) \
             .grid(row=2, column=0, sticky="w", **pad)
 
-        ttk.Button(self, text="Next bar (\u2192)", command=self._on_next_bar) \
-            .grid(row=3, column=0, sticky="ew", **pad)
+        nav = ttk.Frame(self)
+        nav.grid(row=3, column=0, sticky="ew", **pad)
+        ttk.Button(nav, text="Next bar (\u2192)", command=self._on_next_bar) \
+            .pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+        ttk.Button(nav, text="Skip day (\u21e7\u2192)",
+                   command=self._on_skip_day) \
+            .pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
 
         # Focus list — pick which ticker is on the primary chart.
         ttk.Label(self, text="Focus ticker:").grid(row=4, column=0, sticky="w", **pad)
@@ -174,6 +179,8 @@ class SandboxPanel(ttk.Frame):
         # KeyPress-N binding which interfered with typing tickers.
         try:
             self.app.bind_all("<KeyPress-Right>", self._on_right_key, add="+")
+            self.app.bind_all(
+                "<Shift-KeyPress-Right>", self._on_shift_right_key, add="+")
         except tk.TclError:
             pass
 
@@ -331,6 +338,47 @@ class SandboxPanel(ttk.Frame):
             except Exception:  # noqa: BLE001
                 pass
 
+    def _on_skip_day(self) -> None:
+        """Fast-forward past the rest of the current session day.
+
+        Ergonomic shortcut for a boring day (or a trader who only works
+        the open): collapses the remaining bars into one action and runs
+        the end-of-day kill switch so nothing carries into the next day
+        unreviewed. Every closed position still raises the mandatory
+        post-trade modal — skipping never skips journaling.
+        """
+        ctl = self.controller
+        if ctl is None or not ctl.is_active():
+            return
+        skip = getattr(ctl, "skip_to_next_day", None)
+        if skip is None:  # controller predates the fast-forward
+            self._on_next_bar()
+            return
+        # Persist the current day's watch note before the clock rolls.
+        self._commit_day_note()
+        outcome = skip()
+        self._status_for_skip(outcome)
+
+    def _status_for_skip(self, outcome) -> None:
+        """Summarise a skip in the status line. Never raises."""
+        try:
+            if not outcome:
+                self.app._status.info("Sandbox: end of replay reached")
+                return
+            parts = [f"skipped {outcome.bars_advanced} bar"
+                     f"{'' if outcome.bars_advanced == 1 else 's'}"]
+            if outcome.positions_flattened:
+                n = outcome.positions_flattened
+                parts.append(
+                    f"flattened {n} position{'' if n == 1 else 's'} at the close")
+            if outcome.exhausted:
+                parts.append("end of replay reached")
+            elif not outcome.day_changed:
+                parts.append("still on the same session day")
+            self.app._status.info("Sandbox: " + "; ".join(parts))
+        except Exception:  # noqa: BLE001
+            pass
+
     def _on_right_key(self, _event=None) -> None:
         # Suppress while a Text/Entry/Combobox has focus so the user can
         # use Right-arrow for normal cursor navigation inside form fields
@@ -348,6 +396,24 @@ class SandboxPanel(ttk.Frame):
         if ctl is None or not ctl.is_active():
             return
         self._on_next_bar()
+
+    def _on_shift_right_key(self, _event=None) -> None:
+        """Shift+Right → skip the rest of the day.
+
+        Same focus-suppression rule as :meth:`_on_right_key` so
+        Shift+Right keeps its normal select-to-the-right behaviour
+        inside text fields (notably the pre-trade thesis box).
+        """
+        try:
+            w = self.app.focus_get()
+        except tk.TclError:
+            w = None
+        if isinstance(w, (tk.Entry, tk.Text, ttk.Entry, ttk.Combobox)):
+            return
+        ctl = self.controller
+        if ctl is None or not ctl.is_active():
+            return
+        self._on_skip_day()
 
     def _on_focus_select(self, _event=None) -> None:
         ctl = self.controller
