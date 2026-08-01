@@ -1,9 +1,10 @@
 name: Release
 
 # Triggered by pushing a tag of the form ``vX.Y.Z`` (matching the
-# version bump produced by ``tools/bump_version.py``). Builds Windows
-# redistributables IN PARALLEL on x64 (windows-latest) and ARM64
-# (windows-11-arm — public-repo GA since 2025-08), then a single
+# version bump produced by ``tools/bump_version.py``) or a pre-release
+# tag ``vX.Y.Z-<suffix>`` (``v0.6.1-beta``, ``v1.0.0-rc1``). Builds
+# Windows redistributables IN PARALLEL on x64 (windows-latest) and
+# ARM64 (windows-11-arm — public-repo GA since 2025-08), then a single
 # publish job collects both zips and uploads them to a GitHub Release.
 #
 # Manual ``workflow_dispatch`` runs are also supported so a
@@ -14,6 +15,11 @@ on:
   push:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
+      # Pre-release tags. ``__version__`` stays strict MAJOR.MINOR.PATCH
+      # (pinned by tests/unit/test_versioning.py and required by the
+      # Win32 VERSIONINFO tuple in tools/build_exe.ps1), so a beta is
+      # expressed in the TAG rather than in the version literal.
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
   workflow_dispatch:
     inputs:
       publish_release:
@@ -214,16 +220,21 @@ jobs:
         # release body so the changelog is VISIBLE in the GitHub release
         # notes. ``generate_release_notes: true`` below still appends the
         # auto "What's Changed" commit list underneath the changelog.
+        # A pre-release tag (``v0.6.1-beta``) documents itself under its
+        # BASE version's section, because the changelog is keyed on
+        # ``__version__`` (pinned to MAJOR.MINOR.PATCH) — so strip the
+        # suffix before looking the section up.
         # On a manual ``workflow_dispatch`` (ref is a branch, not a
         # ``vX.Y.Z`` tag) there's no matching section — fall back to an
         # empty body so only the auto-notes show.
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          if python3 tools/extract_changelog.py "$VERSION" CHANGELOG.md release_notes.md; then
-            echo "Using CHANGELOG section for $VERSION:"
+          BASE_VERSION="${VERSION%%-*}"
+          if python3 tools/extract_changelog.py "$BASE_VERSION" CHANGELOG.md release_notes.md; then
+            echo "Using CHANGELOG section for $BASE_VERSION:"
             cat release_notes.md
           else
-            echo "No CHANGELOG section for '$VERSION' — auto-generated notes only."
+            echo "No CHANGELOG section for '$BASE_VERSION' — auto-generated notes only."
             : > release_notes.md
           fi
 
@@ -234,3 +245,8 @@ jobs:
           body_path: release_notes.md
           generate_release_notes: true
           fail_on_unmatched_files: true
+          # A dash in the tag marks a pre-release (``v0.6.1-beta``).
+          # GitHub then keeps it out of ``/releases/latest``, which is
+          # exactly the endpoint ``tradinglab.updates`` polls — so a beta
+          # is never advertised to users running a stable build.
+          prerelease: ${{ contains(github.ref_name, '-') }}

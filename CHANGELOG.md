@@ -1,5 +1,55 @@
 # Changelog
 
+## [0.6.1] - 2026-07-31
+
+Credential-handling release: your API keys now live in a proper encrypted,
+per-vendor store, the app can tell you whether they actually work, and a
+newly-saved key enables its data source without a restart. Plus a round of
+internal de-duplication that fixed two real data bugs, and a much deeper
+test suite.
+
+### Added
+- **"Test connection" per vendor.** The Configure Credentials dialog can now
+  probe each provider and tell you *specifically* what is wrong — bad key vs.
+  a plan that doesn't cover the feed you asked for vs. a network blip. For
+  Alpaca, a rejected SIP request is re-probed on IEX so a free-tier account is
+  reported as a plan/feed mismatch instead of "invalid credentials".
+- **Vendor status cards.** Each provider shows its credential health at launch
+  from a stored verdict — no network call needed — including where the key came
+  from (encrypted store, environment variable, or a plaintext file) and whether
+  the app is able to clear it for you.
+- **Newly-saved keys work immediately.** Saving credentials now re-registers the
+  matching data sources, so a freshly-pasted Alpaca key adds `alpaca` and
+  `yfinance+alpaca` to the Source dropdown without restarting the app.
+- **Credential failures are reported as credential failures.** A revoked or
+  downgraded key surfaces against the vendor instead of looking like an empty
+  chart. Transient errors (rate limits, server errors, timeouts) are deliberately
+  *not* recorded against your key.
+
+### Changed
+- **Credentials are stored per vendor and versioned.** Existing single-blob
+  stores are migrated on first launch, and clearing one vendor can no longer
+  disturb another. Secrets are never copied into the process environment.
+- **Packaged builds only read credentials from the app data folder.** A
+  `credentials.txt` sitting in whatever folder you launched the `.exe` from is
+  no longer picked up as your API keys.
+
+### Fixed
+- **Exit-strategy templates stayed templates.** Opening one of the 20 shipped
+  exit templates and saving it silently demoted it to an ordinary user strategy.
+- **End-of-day flatten used the wrong price.** In the strategy tester, the
+  end-of-run kill switch filled at the bar's *open* while the per-day kill
+  filled at the *close*; both now fill at the last regular-session bar's close
+  (market-on-close), as documented.
+
+### Internal
+- Retired ~2,500 lines of duplicated logic behind single definitions (ID
+  minting, provenance metadata, condition-tree traversal, trade-statistics
+  reduction, the shared editor-dialog footer).
+- New test layers: property/metamorphic and causality oracles, a deterministic
+  structurally-realistic market generator fixture, and a long-haul soak suite,
+  all wired into CI.
+
 ## [0.6.0] - 2026-07-23
 
 Major release aggregating the background-data prefetch rewrite, the "Auto"
