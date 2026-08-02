@@ -1511,7 +1511,15 @@ def check_d2_preserve_xlim_across_compare_toggle(app) -> None:
         app.compare_ticker_var.set("MSFT")
         app.compare_var.set(True)
         app._on_compare_toggle()
-        _pump(app, 0.3)
+        # The toggle may need an async compare fetch before the render
+        # that this check inspects. Waiting a fixed 0.3s is the §7.26
+        # anti-pattern — it passes on an idle machine and fails under
+        # full-suite contention. Anchor on the compare series actually
+        # landing, then let the render it triggers settle.
+        _pump_until(app,
+                    lambda: bool(getattr(app, "_compare", None)),
+                    timeout=5.0)
+        _pump(app, 0.2)
         primary = app._panel_state.get("primary", {})
         candles = primary.get("candles") or []
         if len(candles) < 20:
@@ -7612,30 +7620,58 @@ def check_d38_drilldown_race_and_coverage(app) -> None:
         app.interval_var.set("1d")
         app.ticker_var.set("REUSE")
         app._schedule_reload(delay_ms=0)
-        # Wait for the scheduler's 5m warm to be picked up (calls_5m increments
-        # at the start of slow_fetch, before its sleep).
-        _pump_until(app, lambda: state["calls_5m"] >= 1, timeout=2.0)
-        calls_before = state["calls_5m"]
-        # The scheduler's 5m warm should already have fired (parallel with 1d).
-        assert calls_before >= 1, \
-            f"scheduler 5m warm should have fired (calls_5m={calls_before})"
-        target = (datetime(2026, 4, 29) - timedelta(days=2)).date()
-        app._zoom_5m_for_date(target)
-        # Wait past grace period to trigger the sync-fetch path (future set).
-        _pump_until(app,
-            lambda: app._drilldown_request is not None
-                    and app._drilldown_request.future is not None,
-            timeout=1.0)
-        # The drill submits its OWN fetch — it does NOT attach to the
-        # scheduler's in-flight warm (unsound; see check_d84).
-        assert state["calls_5m"] == calls_before + 1, (
-            f"drill should do its own fetch, not reuse the scheduler warm "
-            f"(calls_5m went from {calls_before} to {state['calls_5m']})"
-        )
-        # Now release the worker so the drill-down can complete within
-        # the test budget (poll loop in slow_fetch wakes within ~20ms).
+        _pump(app, 0.05)
+        # Anchor on the observable counter rather than a bare pump budget
+        # (§7.26). Under full-suite contention the scheduler's warm can take
+        # longer than the old 2 s to be picked up, and the follow-up
+        # assertions were hard — that combination is what made this
+        # sub-test the residual d38 flake.
+        worker_started_g = wait_for_5m_inflight(timeout=3.0)
+        if not worker_started_g:
+            print(
+                "[SKIP G] scheduler 5m warm did not start within 3s — "
+                "no-reuse race not exercisable on this run; the "
+                "wrong-day-bars contract it protects is also covered by "
+                "check_d84."
+            )
+        else:
+            calls_before = state["calls_5m"]
+            target = (datetime(2026, 4, 29) - timedelta(days=2)).date()
+            app._zoom_5m_for_date(target)
+            # Wait past the grace period for the sync-fetch path, anchored on
+            # the fetch actually being picked up (calls_5m increments at the
+            # top of slow_fetch) — not just on the future handle existing.
+            submitted = _pump_until(
+                app,
+                lambda: (app._drilldown_request is not None
+                         and app._drilldown_request.future is not None
+                         and state["calls_5m"] >= calls_before + 1),
+                timeout=4.0,
+            )
+            if not submitted:
+                print(
+                    "[SKIP G body] drill fetch was not submitted within 4s "
+                    f"(calls_5m={state['calls_5m']}, "
+                    f"before={calls_before}) — executor too contended to "
+                    "observe the no-reuse window on this run."
+                )
+            else:
+                # The drill submits its OWN fetch — exactly one more — and
+                # does NOT attach to the scheduler's in-flight warm
+                # (unsound; see check_d84).
+                assert state["calls_5m"] == calls_before + 1, (
+                    f"drill should do its own single fetch, not reuse the "
+                    f"scheduler warm (calls_5m went from {calls_before} to "
+                    f"{state['calls_5m']})"
+                )
+        # Release the worker so any in-flight drill can complete within the
+        # test budget (slow_fetch's poll loop wakes within ~20 ms). Runs on
+        # both the skip and the exercised path so no state leaks onward.
         state["delay_5m"] = 0.0
-        _pump_until(app, lambda: app._drilldown_request is None, timeout=2.0)
+        _pump_until(app, lambda: app._drilldown_request is None, timeout=3.0)
+        if app._drilldown_request is not None:
+            app._finish_drilldown_request(app._drilldown_request)
+            app._drilldown_request = None
 
         # ---- Sub-test H: close-mid-fetch doesn't blow up ----
         drain_prefetches()

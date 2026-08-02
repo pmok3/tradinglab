@@ -47,6 +47,20 @@ crossings (day → month → year).
   `id(candles)` median bar-second.
 - `_last_period: tuple` — read by formatter.
 - `_TARGET: int = 12`.
+- `_session_starts(cs) -> list[int]` — index of each session's first
+  bar (index 0 always counts). Cached per `id(candles)`.
+- `_bars_per_day(cs) -> int | None` — **modal** bar count between
+  session starts; `None` when fewer than two complete sessions exist
+  (a single continuous run, e.g. the smoke fixture). Mode rather than
+  mean so half-days and holidays don't drag the stride off-grid.
+- `_step_candidates(bpd) -> list[int]` — allowed bar strides,
+  ascending: divisors of `bars_per_day` plus whole-session multiples
+  when known, else a generic nice-number ladder.
+- `_period_for_seconds(secs) -> tuple` — nearest `_X_PERIODS` entry;
+  sets `_last_period` so the formatter still picks a sane label format.
+- `_uniform_intraday_ticks(cs, lo, hi) -> list[int]` — the intraday
+  tick path (see Design Decisions). `[]` when the window is too narrow,
+  which makes the caller fall through to the calendar-bucket path.
 
 ## Dependencies
 
@@ -56,6 +70,28 @@ crossings (day → month → year).
 
 ## Design Decisions
 
+- **Intraday ticks step by BARS, not by wall clock.** The x-axis is
+  bar-index space, but the market is shut overnight and sessions open
+  at 09:30 — not on an hour boundary. So equal wall-clock periods cover
+  *unequal* bar counts, and the calendar-bucket path produced visibly
+  ragged axes: on RTH 5m data an hourly tick set gives gaps of
+  `{6, 12}` bars within a day (the 09:30→10:00 stub is half an hour)
+  and `{30, 48}` across an overnight gap. `_uniform_intraday_ticks`
+  replaces it for `is_intraday(interval)` with a fixed bar stride, so
+  spacing is uniform *by construction*.
+  - Stride selection honours the tick budget first — the **densest**
+    candidate yielding `3 ≤ ticks ≤ _TARGET`. Choosing the stride
+    merely closest to `span / _TARGET` fails when `bars_per_day` has
+    few divisors (26 at 15m divides only by 1, 2, 13, 26; "closest"
+    lands on 2 and paints 26 ticks).
+  - Preferring divisors of `bars_per_day` and anchoring on the last
+    session start at-or-before the view keeps ticks at the same times
+    of day, so the formatter's day-crossing upgrade still lands on each
+    session's opening bar and reads `Apr 21` there.
+  - On a half-day the stride keeps its spacing and the times drift for
+    that session. Uniform spacing is the property worth preserving;
+    a ragged axis is the thing users see.
+  - Non-intraday intervals keep the calendar-bucket path unchanged.
 - **Single cached locator class** vs redefined-per-render: class
   body doesn't depend on per-render state.
 - **Back-ref to `ChartApp`, not snapshot inputs**: locator reads

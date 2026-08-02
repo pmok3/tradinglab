@@ -206,6 +206,140 @@ def _make_adaptive_x_locator_class():
                 self._cache[key] = b
             return b
 
+        def _session_starts(self, cs) -> list:
+            """Indices of the first bar of each calendar session.
+
+            Index 0 always counts as a start. Cached per ``id(cs)``
+            alongside the bucket-boundary cache.
+            """
+            key = (id(cs), "session_starts")
+            s = self._cache.get(key)
+            if s is None:
+                out = [0] if cs else []
+                prev_day = None
+                for i, c in enumerate(cs):
+                    d = getattr(c.date, "date", None)
+                    day = d() if callable(d) else None
+                    if day is None:
+                        continue
+                    if prev_day is not None and day != prev_day:
+                        out.append(i)
+                    prev_day = day
+                s = out
+                self._cache[key] = s
+            return s
+
+        def _bars_per_day(self, cs):
+            """Modal bar count per session, or ``None`` if undetectable.
+
+            Needs at least two complete sessions; a single continuous
+            run (the smoke fixture) yields ``None`` and the caller falls
+            back to a plain nice-number stride.
+            """
+            key = (id(cs), "bars_per_day")
+            if key in self._cache:
+                return self._cache[key]
+            starts = self._session_starts(cs)
+            bpd = None
+            if len(starts) >= 3:
+                diffs = [starts[i + 1] - starts[i]
+                         for i in range(len(starts) - 1)]
+                if diffs:
+                    # Mode, not mean: half-days and holidays are outliers
+                    # that must not drag the stride off the regular grid.
+                    counts: dict = {}
+                    for d in diffs:
+                        counts[d] = counts.get(d, 0) + 1
+                    bpd = max(counts, key=lambda k: (counts[k], k))
+                    if bpd <= 1:
+                        bpd = None
+            self._cache[key] = bpd
+            return bpd
+
+        @staticmethod
+        def _step_candidates(bpd) -> list:
+            """Allowed bar strides, ascending.
+
+            With a known bars-per-day, strides are its divisors (so ticks
+            recur at the same times each session) plus whole-session
+            multiples for wide views. Without one, a generic nice-number
+            ladder.
+            """
+            if bpd and bpd > 1:
+                divisors = [d for d in range(1, bpd + 1) if bpd % d == 0]
+                multiples = [bpd * k for k in (2, 3, 4, 5, 7, 10, 14, 21, 30)]
+                return divisors + multiples
+            return [1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 24, 30, 40, 48,
+                    60, 78, 96, 120, 156, 240, 390, 780, 1560]
+
+        @staticmethod
+        def _period_for_seconds(secs: float) -> tuple:
+            """Closest ``_X_PERIODS`` entry — drives the label format."""
+            best = _X_PERIODS[0]
+            best_d = abs(_X_PERIODS[0][2] - secs)
+            for p in _X_PERIODS[1:]:
+                d = abs(p[2] - secs)
+                if d < best_d:
+                    best, best_d = p, d
+            return best
+
+        def _uniform_intraday_ticks(self, cs, lo: int, hi: int) -> list:
+            """Evenly-spaced ticks in BAR space for intraday charts.
+
+            The bucket-boundary path below places ticks on wall-clock
+            boundaries, but the x-axis is bar-index space and the market
+            is shut overnight — so equal wall-clock periods cover unequal
+            bar counts. At 5m the 09:30 open leaves a 6-bar stub before
+            10:00 while every later hour is 12 bars, and the overnight
+            gap compounds it: an hourly tick set on RTH data yields gaps
+            of {6, 12} within a day and {30, 48} across one.
+
+            Stepping by a fixed number of BARS makes the spacing uniform
+            by construction. Anchoring on a session start and preferring
+            strides that divide bars-per-day also keeps ticks on the same
+            times of day, so the formatter's day-crossing upgrade still
+            lands on each session's opening bar. Returns ``[]`` when the
+            window is too small to tick sensibly (caller falls back).
+            """
+            span = hi - lo
+            if span < 4:
+                return []
+            bpd = self._bars_per_day(cs)
+            cands = self._step_candidates(bpd)
+            # Densest stride that still fits the tick budget. Picking the
+            # stride merely *closest* to span/TARGET goes badly when
+            # bars-per-day has few divisors (26 at 15m divides only by 1,
+            # 2, 13, 26 — "closest" lands on 2 and paints 26 ticks), so
+            # honour the budget first and maximise density within it.
+            step = None
+            for cand in cands:
+                cnt = span // cand + 1
+                if 3 <= cnt <= self._TARGET:
+                    step = cand
+                    break
+            if step is None:
+                # Nothing fits: fall back to the coarsest stride that
+                # still yields a usable number of ticks.
+                usable = [c for c in cands if span // c + 1 >= 3]
+                step = usable[-1] if usable else max(1, span // 4)
+
+            starts = self._session_starts(cs)
+            anchor = 0
+            for s in starts:
+                if s <= lo:
+                    anchor = s
+                else:
+                    break
+            first = anchor + ((lo - anchor + step - 1) // step) * step
+            if first < lo:
+                first = lo
+            ticks = list(range(first, hi + 1, step))
+            if len(ticks) < 2:
+                return []
+            self._last_period = self._period_for_seconds(
+                step * self._bar_seconds(cs))
+            return ticks
+
         def _current(self):
             state = self._app._panel_state.get(self._slot, {})
             cs = state.get("candles") or []
@@ -219,6 +353,9 @@ def _make_adaptive_x_locator_class():
                 return []
             is_intra = is_intraday(self._interval)
             if is_intra:
+                uniform = self._uniform_intraday_ticks(cs, lo, hi)
+                if uniform:
+                    return uniform
                 bar_secs = self._bar_seconds(cs)
                 effective_span = (hi - lo) * bar_secs
             else:
