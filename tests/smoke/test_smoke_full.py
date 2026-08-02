@@ -21552,6 +21552,26 @@ def check_d28_data_readout_strip(app) -> None:
     - The pct text is bull-coloured on a green bar (close > prev close)
       and bear-coloured on a red bar; the rest of the line stays in the
       theme's neutral text colour.
+
+    Two disciplines this check has to observe, both learned the hard way
+    (see AGENTS.md §7.2):
+
+    1. **Assert against the rendered series, not ``_primary``.**
+       ``_update_readout`` resolves bars from ``_ax_candle_map[ax]``.
+       Those are normally the same list, but a late in-flight future
+       from an earlier check can re-render stale stub bars after this
+       one replaced ``_primary`` — and then bar-i-from-``_primary`` is
+       compared against a readout built from entirely different data.
+       That produced a CI failure whose message ("expected O 101.00, got
+       O 100.00 H 101.00 L 99.00 C 100.50") was pure nonsense until you
+       recognised those numbers as d10/d12's 30-bar flat stub. The
+       ``_pump_until`` below now waits for the rendered list to BE the
+       fresh ``_primary``, and the check reads candles from the map.
+    2. **Only probe indices inside ``[render_start, render_end)``.**
+       For an index outside the window ``_update_readout`` deliberately
+       falls back to the latest non-gap bar, so asserting bar-i's OHLC
+       there tests the fallback rather than the lookup — and passes or
+       fails on whether the window happened to cover the whole series.
     """
     app.compare_var.set(False)
     app.interval_var.set("5m")
@@ -21569,12 +21589,31 @@ def check_d28_data_readout_strip(app) -> None:
     app._primary_raw = []
     app.ticker_var.set("READOUT_TEST")
     app._schedule_reload(delay_ms=0)
-    # Wait until the 5m bars land + the readout artist exists.
-    _pump_until(app,
-        lambda: getattr(app, "_primary", None) and len(app._primary) >= 50
-                and getattr(app, "_readout_artists", None)
-                and app._ax_price in app._readout_artists,
-        timeout=5.0)
+
+    # Wait until the 5m bars land, the readout artist exists, AND the
+    # render has actually consumed the fresh series.
+    #
+    # That last clause is load-bearing. ``_update_readout`` resolves its
+    # bars from ``_ax_candle_map[ax]`` — the *rendered* series — not from
+    # ``_primary``. A late in-flight future from an earlier check (d10
+    # TESTPOLL / d12 PREFETCHA, both 30 flat bars O=100 H=101 L=99
+    # C=100.5 vol=1000) can re-render with stub data *after* this reload
+    # replaced ``_primary``, leaving the two pointing at different lists.
+    # Every OHLC assertion below then compares a fresh ``_primary`` bar
+    # against a stale readout and fails with values that look nonsensical
+    # (§7.2 state pollution). Waiting for identity between the two closes
+    # the race rather than papering over it.
+    def _fresh_render_landed() -> bool:
+        prim = getattr(app, "_primary", None)
+        if not prim or len(prim) < 50:
+            return False
+        boxes = getattr(app, "_readout_artists", None)
+        if not boxes or app._ax_price not in boxes:
+            return False
+        entry = app._ax_candle_map.get(app._ax_price)
+        return entry is not None and entry[0] is prim
+
+    _pump_until(app, _fresh_render_landed, timeout=8.0)
 
     ax_p = app._ax_price
     ax_v = app._ax_volume
@@ -21595,11 +21634,31 @@ def check_d28_data_readout_strip(app) -> None:
         f"readout main text missing OHLCV tokens: {main!r}")
 
     # Pick a known bar with a deterministic direction and update.
-    candles = app._primary
+    # Read the candle list from ``_ax_candle_map`` — the SAME source
+    # ``_update_readout`` resolves against. Using ``app._primary`` here
+    # is what made this check compare two different lists whenever a
+    # stale render was in play.
+    entry = app._ax_candle_map.get(ax_p)
+    assert entry is not None, "no candle-map entry for the price axes"
+    candles, _kind, offset = entry
+    assert candles is app._primary, (
+        "rendered series is not the fresh _primary — a stale render is "
+        f"still installed (rendered={len(candles)} bars, "
+        f"_primary={len(app._primary)} bars). The _pump_until above "
+        "should have waited for this; suspect §7.2 stub pollution.")
     assert len(candles) >= 5, "need a few bars to test"
     from tradinglab.constants import BEAR_COLOR, BULL_COLOR
 
-    offset = app._ax_candle_map[ax_p][2]
+    # Only bars INSIDE the rendered window are addressable: for an index
+    # outside it ``_update_readout`` deliberately falls back to the
+    # latest non-gap bar (documented behaviour), so asserting bar-i's
+    # OHLC there would be testing the fallback, not the lookup.
+    ps = app._panel_state["primary"]
+    win_start = max(0, ps.get("render_start", 0))
+    win_end = min(ps.get("render_end", len(candles)), len(candles))
+    assert win_end - win_start >= 3, (
+        f"rendered window too small to test: [{win_start},{win_end}) "
+        f"of {len(candles)} bars")
 
     def _prev_non_gap_close(i):
         for k in range(i - 1, -1, -1):
@@ -21609,7 +21668,7 @@ def check_d28_data_readout_strip(app) -> None:
 
     # Pick any non-gap bar with a measurable pct (prev exists, prev != close).
     test_idx = None
-    for i in range(2, min(len(candles), 60)):
+    for i in range(max(2, win_start), win_end):
         if candles[i].is_gap:
             continue
         pc = _prev_non_gap_close(i)
@@ -21619,16 +21678,20 @@ def check_d28_data_readout_strip(app) -> None:
         break
     if test_idx is None:
         diag = [(i, candles[i].is_gap, candles[i].close)
-                for i in range(min(15, len(candles)))]
+                for i in range(win_start, min(win_start + 15, win_end))]
         raise AssertionError(f"could not find a bar with non-zero pct; "
-                             f"len={len(candles)} first15={diag}")
+                             f"len={len(candles)} window=[{win_start},"
+                             f"{win_end}) first15={diag}")
 
     app._update_readout(test_idx + offset)
     c = candles[test_idx]
     main = box._main_text.get_text()
     assert (f"O {c.open:.2f}" in main and f"H {c.high:.2f}" in main
             and f"L {c.low:.2f}" in main and f"C {c.close:.2f}" in main), (
-        f"readout did not match candle OHLC at idx={test_idx}: {main!r}")
+        f"readout did not match candle OHLC at idx={test_idx} "
+        f"(window=[{win_start},{win_end}) of {len(candles)} bars, "
+        f"offset={offset}): expected O {c.open:.2f} H {c.high:.2f} "
+        f"L {c.low:.2f} C {c.close:.2f}; got {main!r}")
     pct_str = box._pct_text.get_text()
     assert pct_str.strip().startswith(("+", "-")) and pct_str.strip().endswith("%"), (
         f"pct text malformed: {pct_str!r}")
@@ -21641,11 +21704,10 @@ def check_d28_data_readout_strip(app) -> None:
 
     # --- off-chart: fallback to latest non-gap bar --------------------
     app._update_readout(None)
-    # Latest non-gap bar within rendered window.
-    ps = app._panel_state["primary"]
-    rs, re_ = ps.get("render_start", 0), ps.get("render_end", len(candles))
+    # Latest non-gap bar within the rendered window (same window the
+    # lookup above used, so the two halves can't disagree).
     expected_idx = None
-    for j in range(min(re_, len(candles)) - 1, max(0, rs) - 1, -1):
+    for j in range(win_end - 1, win_start - 1, -1):
         if not candles[j].is_gap:
             expected_idx = j
             break
