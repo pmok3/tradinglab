@@ -69,6 +69,19 @@ class SandboxMenuMixin:
         except Exception:  # noqa: BLE001
             _ref_raw = "SPY"
         reference_symbol = (str(_ref_raw or "").strip().upper() or "SPY")
+        # Data-source choice (audit ``sandbox-data-source``). The user
+        # picks in the dialog; the last choice is remembered here.
+        # Empty = Auto, i.e. defer to the global tier-aware ranking.
+        try:
+            _src_pref = str(_defaults_mod.get("sandbox_data_source") or "").strip()
+        except Exception:  # noqa: BLE001
+            _src_pref = ""
+        try:
+            from ..data.base import user_visible_sources
+
+            source_choices = list(user_visible_sources())
+        except Exception:  # noqa: BLE001
+            source_choices = sorted(DATA_SOURCES)
         # Restrict dialog to intervals the engine + chart cope with
         # cleanly. Daily-and-above are excluded — the master clock is
         # an *intraday* concept and a daily-bar replay degenerates
@@ -76,27 +89,30 @@ class SandboxMenuMixin:
         # for. (Could be lifted in Phase 2.)
         sandbox_intervals = ["1m", "2m", "5m", "15m", "30m", "1h"]
 
-        def _sandbox_src(itv: str) -> str:
-            """Best available data source for a sandbox load at ``itv``.
+        def _sandbox_src(itv: str, chosen: str = "") -> str:
+            """Data source for a sandbox load at ``itv``.
 
-            Prefers the longest/highest-quality registered source the user
-            has configured (perf item #7) — a sandbox needs deep replayable
-            history — while respecting an explicit synthetic/stub choice and
-            falling back to the active source on any error.
+            An explicit ``chosen`` wins outright — the point of the
+            picker is that the trader knows which vendor's depth /
+            volume quality suits the session. Empty falls back to the
+            longest/highest-quality registered source (perf item #7),
+            and any error to the active chart source.
             """
+            if chosen:
+                return chosen
             try:
                 return _quality.preferred_source(
                     self.source_var.get(), interval=itv)
             except Exception:  # noqa: BLE001
                 return self.source_var.get()
 
-        def _eligible_dates_at(itv: str) -> list[Any]:
+        def _eligible_dates_at(itv: str, chosen: str = "") -> list[Any]:
             """Eligibility provider for the dialog. Cache-only — no fetch.
 
-            Returns empty list if SPY isn't cached at this interval; the
-            dialog will display a "Start will sync-fetch" hint and the
-            user can either Random-pick (after caching by switching
-            interval back) or type a date manually.
+            Returns empty list if SPY isn't cached at this interval for
+            the selected source; the dialog will display a "Start will
+            sync-fetch" hint and the user can either Random-pick (after
+            caching by switching interval back) or type a date manually.
 
             ``regular_only`` is keyed off the live pre/post toggle: if
             the user has pre/post OFF in their regular session, days
@@ -106,7 +122,7 @@ class SandboxMenuMixin:
             empty chart).
             """
             from ..backtest.deck import build_eligible_dates
-            src = _sandbox_src(itv)
+            src = _sandbox_src(itv, chosen)
             cached = self._full_cache.get((src, reference_symbol, itv))
             if not cached:
                 return []
@@ -115,16 +131,16 @@ class SandboxMenuMixin:
             return build_eligible_dates(
                 cached, regular_only=not include_ext)
 
-        def _fetch_reference_at(itv: str) -> bool:
+        def _fetch_reference_at(itv: str, chosen: str = "") -> bool:
             """Sync-fetch ``reference_symbol`` at ``itv`` into ``_full_cache``.
 
             Returns True on success (and the next call to
             ``_eligible_dates_at(itv)`` will report a populated list).
             Used by the start dialog to lazily warm the cache when the
             user lands on, or switches to, an interval SPY hasn't been
-            loaded at yet.
+            loaded at yet — or switches data source.
             """
-            src = _sandbox_src(itv)
+            src = _sandbox_src(itv, chosen)
             fetcher = DATA_SOURCES.get(src)
             if fetcher is None:
                 return False
@@ -167,30 +183,51 @@ class SandboxMenuMixin:
             fetch_provider=_fetch_reference_at,
             default_interval=default_itv,
             manifest_provider=_manifest_provider,
+            sources=source_choices,
+            default_source=_src_pref,
         )
         self.wait_window(dlg)
         if dlg.result is None:
             return
 
         chosen_itv = dlg.result["interval"]
+        chosen_source = str(dlg.result.get("data_source") or "")
+        # Remember the choice for next time. Best-effort: a settings
+        # write must never block starting a session. ``defaults.get``
+        # serves from a cache built on first read, so the write is
+        # invisible to this process without an explicit reload — which
+        # would silently strand both the dialog pre-selection and the
+        # Prepare-Universe source resolution on the stale value.
+        try:
+            from .. import settings as _settings_mod
+
+            if _settings_mod.get("sandbox_data_source", "") != chosen_source:
+                _settings_mod.set("sandbox_data_source", chosen_source)
+                _defaults_mod.reload()
+        except Exception:  # noqa: BLE001
+            pass
         display_intervals = list(
             dlg.result.get("display_intervals") or [chosen_itv])
         session_date = dlg.result["session_date"]
         lookback_days = dlg.result["lookback_days"]
         daily_lookback_bars = int(dlg.result.get("daily_lookback_bars", 100))
 
-        # Sync-fetch SPY if not cached at the chosen interval. Prefer the
-        # longest/highest-quality source the user has configured (perf item
-        # #7) over whatever chart source is active — a sandbox needs deep
-        # replayable history (yfinance's ~60-day intraday cap barely covers
-        # two months of eligible days; Alpaca/Schwab reach years).
+        # Sync-fetch SPY if not cached at the chosen interval. The source
+        # is whatever the user pinned in the dialog; when they left it on
+        # Auto we still prefer the longest/highest-quality source they
+        # have configured (perf item #7) over the active chart source —
+        # a sandbox needs deep replayable history (yfinance's ~60-day
+        # intraday cap barely covers two months of eligible days;
+        # Alpaca/Schwab reach years).
         active_src = self.source_var.get()
-        src = _sandbox_src(chosen_itv)
+        src = _sandbox_src(chosen_itv, chosen_source)
         if src != active_src:
+            reason = ("your pinned sandbox source" if chosen_source
+                      else "the longest/highest-quality history available")
             try:
                 self._status.info(
-                    f"Sandbox: using '{src}' for the longest/highest-quality "
-                    f"history available (chart source is '{active_src}')")
+                    f"Sandbox: using '{src}' — {reason} "
+                    f"(chart source is '{active_src}')")
             except Exception:  # noqa: BLE001
                 pass
         _vol_warn = _quality.partial_volume_warning(src)
@@ -317,6 +354,7 @@ class SandboxMenuMixin:
                 daily_lookback_bars=daily_lookback_bars,
                 daily_reference_candles=list(daily_ref_candles),
                 display_intervals=display_intervals,
+                data_source=src,
             )
             sid = self._sandbox.session_id
             if sid:
@@ -667,7 +705,20 @@ class SandboxMenuMixin:
             except Exception:  # noqa: BLE001
                 pass
             return
+        # Preload with the SAME source the sandbox will replay from.
+        # Using the chart source here meant a universe could be cached
+        # under 'yfinance' while the session (and the heatmap) read from
+        # 'alpaca', so every preloaded symbol looked uncached. Empty
+        # setting = Auto → the global ranking, as before.
         src = self.source_var.get()
+        try:
+            from .. import defaults as _defaults_mod
+            from ..data import quality as _q
+
+            pinned = str(_defaults_mod.get("sandbox_data_source") or "").strip()
+            src = pinned or _q.preferred_source(src)
+        except Exception:  # noqa: BLE001
+            src = self.source_var.get()
         fetcher = DATA_SOURCES.get(src)
         if fetcher is None:
             try:

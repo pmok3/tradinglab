@@ -13,6 +13,7 @@ design rationale (the eleven v1 decisions).
 
 from __future__ import annotations
 
+import datetime as _dt
 import math
 from collections import OrderedDict
 from collections.abc import Iterable, Mapping, Sequence
@@ -32,6 +33,8 @@ __all__ = (
     "compute_1d_pct",
     "scaled_cap",
     "price_at_or_before",
+    "session_date_of",
+    "completed_session_closes",
     "squarify",
     "finviz_hex",
     "relative_luminance",
@@ -334,6 +337,14 @@ def price_at_or_before(candles: Sequence[Candle], as_of_ts: int) -> float | None
     never returns a close from a candle after the clock. ``candles`` are
     assumed ascending by ``date``; NaN-close (gap) bars are skipped.
     ``as_of_ts`` is normalized (ms -> s) so callers may pass either unit.
+
+    .. warning::
+       **Intraday series only.** A bar is timestamped at its *open*, so
+       on a ``1d`` series the in-progress session's bar satisfies
+       ``ts <= clock`` from the opening print onward and this returns
+       that session's **settled close** — the future. Use
+       :func:`completed_session_closes` for any daily-bar lookup
+       (Invariant 6).
     """
     cutoff = _to_seconds(as_of_ts)
     last: float | None = None
@@ -349,6 +360,56 @@ def price_at_or_before(candles: Sequence[Candle], as_of_ts: int) -> float | None
             continue
         last = float(close)
     return last
+
+
+def session_date_of(as_of_ts: int | float) -> _dt.date:
+    """UTC session date of an epoch timestamp (ms or s).
+
+    Matches ``SandboxController.current_session_date()`` exactly, so the
+    heatmap's notion of "which day is in progress" is the same one the
+    replay engine gates daily-bar visibility with.
+    """
+    return _dt.datetime.fromtimestamp(
+        int(_to_seconds(as_of_ts)), tz=_dt.timezone.utc
+    ).date()
+
+
+def completed_session_closes(
+    daily_candles: Sequence[Candle], as_of_ts: int, *, count: int = 1
+) -> tuple[float, ...]:
+    """Closes of the last ``count`` **completed** daily sessions.
+
+    A daily bar is included only when its session date is *strictly
+    before* the clock's session date — the same rule
+    ``SandboxController.daily_visible_for`` applies. The in-progress
+    day's bar is therefore never read, which is what keeps 1-Day % from
+    leaking the settled close into a mid-session replay clock
+    (Invariant 6).
+
+    Returns up to ``count`` closes **oldest-first**; a short (or empty)
+    tuple means the history doesn't reach that far and the caller must
+    degrade to ``None``, never to a partial guess. NaN-close bars are
+    skipped. ``daily_candles`` is assumed ascending by ``date``.
+    """
+    if count <= 0:
+        return ()
+    cutoff = session_date_of(as_of_ts)
+    out: list[float] = []
+    for c in daily_candles:
+        d = getattr(c, "date", None)
+        if d is None:
+            continue
+        cd = d.date() if isinstance(d, _dt.datetime) else d
+        try:
+            if cd >= cutoff:
+                break
+        except TypeError:
+            continue
+        close = c.close
+        if close is None or (isinstance(close, float) and math.isnan(close)):
+            continue
+        out.append(float(close))
+    return tuple(out[-count:])
 
 
 # ---------------------------------------------------------------------------

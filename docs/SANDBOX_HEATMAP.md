@@ -8,13 +8,11 @@ reflects the market *at that historical moment*. Finviz is real-time;
 this is the same glance-read experience rewound to any point in the
 tape, for maximum fidelity to what you would have seen live.
 
-> **Status: design spec — v1 not yet implemented.** This document and
-> the two colocated specs
+> **Status: v1 implemented.** This document and the two colocated specs
 > ([`backtest/heatmap.spec.md`](../src/tradinglab/backtest/heatmap.spec.md),
 > [`gui/sandbox_heatmap.spec.md`](../src/tradinglab/gui/sandbox_heatmap.spec.md))
-> capture the finalized design ahead of code, per the repo's
-> spec-driven convention. The eleven decisions below were settled with
-> the owner in a design consultation.
+> capture the design, per the repo's spec-driven convention. The eleven
+> decisions below were settled with the owner in a design consultation.
 
 ---
 
@@ -33,8 +31,8 @@ onto the primary chart and drill into the daily + intraday confluence.
 
 | # | Decision | Choice |
 |---|---|---|
-| 1 | Universe | **S&P 500** map (Finviz default), preloaded for the replay window; **point-in-time membership** via the `Date added` filter (look-ahead removed) + coverage label |
-| 2 | Data source | **yfinance** → sector / industry (`.info`) + **historical shares series** (`get_shares_full`); cached + refresh updater (no scraping) |
+| 1 | Universe | **S&P 500** map (Finviz default), preloaded for the replay window; **point-in-time membership** via the `Date added` filter (look-ahead removed) + coverage label; narrowed to the session's prepared universe when one is set |
+| 2 | Data source | **The session's own source** — pinned at Sandbox Start (`sandbox_data_source`, default Auto) and read off `SandboxController.data_source`, so the map is priced from the same tape the replay runs on; sector / industry + historical shares series are cached (no scraping) |
 | 3 | Tile size | **Historically-scaled cap** = `shares(t) × price(t)`, split-consistent; `shares(t)` from `get_shares_full` snapped to clock; pre-series → carry back earliest-known (flagged approximate) |
 | 4 | Color metric | **Raw 1-Day % change** (pure Finviz); RS / vs-SPY deferred, seam kept clean |
 | 5 | Timeframe | **1-Day only** in v1; 1W / 1M / 3M / 6M / 1Y / YTD in v2 |
@@ -84,10 +82,28 @@ display:
 ## Metric definitions
 
 - **Color — 1-Day % change (as of the replay clock):**
-  `(price_at_or_before(clock) − prior_session_close) / prior_session_close`.
-  `prior_session_close` is the close of the session before the current
-  replay session; it requires prior-day data to be preloaded for every
-  universe symbol.
+  `(intraday_price_at(clock) − prior_session_close) / prior_session_close`.
+  The two legs deliberately use **different** clock rules:
+  - the **price** leg is the close of the last *intraday* bar at or
+    before the clock, within the clock's own session. Intraday bars are
+    point-in-time, so a bar at/before the clock is information the
+    trader genuinely had.
+  - the **base** leg is the close of the last **completed** daily
+    session (`completed_session_closes`, strictly-before rule — the same
+    one `SandboxController.daily_visible_for` uses for the daily chart).
+
+  **Why the split matters (this was a real bug):** a daily bar is
+  timestamped at its *open* but carries the session's *settled close*.
+  A single "last bar whose timestamp ≤ clock" lookup therefore admits
+  the in-progress day's daily bar and returns the finished day's price
+  from the opening print onward — the map showed the answer for the
+  whole replay, and since both legs were then constant it never changed
+  intraday either. Daily bars must never go through the at-or-before
+  rule.
+
+  When a symbol has no intraday coverage for the session, the map falls
+  back to the last **two completed** daily sessions (still leak-free,
+  just a session stale) and says so in the footer + tooltip.
 - **Size — historically-scaled market cap:** `shares(t) × price(t)`,
   both on the **same split basis** (raw price × raw shares, so a split
   is a wash). `shares(t)` is the historical share count snapped to the
@@ -105,11 +121,14 @@ display:
   ~34% via buybacks. Multiplying split-adjusted price × raw shares
   over-sizes by the split ratio — hence the raw × raw rule.
 - **No future leakage (hard invariant):** every value derives only from
-  candles at or before `SandboxController.clock_ts()`. The pure layer
-  consumes caller-supplied prices; the window derives them exclusively
-  from `visible_candles_by_symbol` (which is already clock-bounded).
-  `clock_ts()` is **UTC epoch seconds** — normalize before comparing
-  against millisecond candle timestamps.
+  candles at or before `SandboxController.clock_ts()`, and daily bars
+  only from *completed* sessions. Enforced in
+  `heatmap.price_at_or_before` / `heatmap.completed_session_closes` and
+  in `SessionPriceSource`, and pinned by
+  `tests/unit/gui/test_heatmap_no_lookahead.py` — including a
+  **metamorphic** property: deleting every bar after the clock must not
+  change a single value. `clock_ts()` is **UTC epoch seconds** —
+  normalize before comparing against millisecond candle timestamps.
 
 ---
 

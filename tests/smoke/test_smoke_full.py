@@ -12440,12 +12440,12 @@ def check_b8_sandbox_dialog_lazy_fetch(app) -> None:
 
     cache: dict[str, list[_date]] = {"5m": []}
 
-    def provider(itv: str) -> list[_date]:
+    def provider(itv: str, _source: str = "") -> list[_date]:
         return list(cache.get(itv, []))
 
     fetch_calls: list[str] = []
 
-    def fetcher(itv: str) -> bool:
+    def fetcher(itv: str, _source: str = "") -> bool:
         fetch_calls.append(itv)
         # Simulate a successful sync-fetch: populate the eligibility
         # cache with five contiguous business days. The dialog's
@@ -12496,7 +12496,7 @@ def check_b8_sandbox_dialog_lazy_fetch(app) -> None:
     # 2) Without fetch_provider: empty cache -> ensure() returns False.
     cache2 = {"5m": []}
 
-    def provider2(itv: str) -> list[_date]:
+    def provider2(itv: str, _source: str = "") -> list[_date]:
         return list(cache2.get(itv, []))
 
     dlg2 = SandboxStartDialog(
@@ -14119,7 +14119,7 @@ def check_b25_sandbox_blind_random_seed(app) -> None:
     from tradinglab.gui.sandbox_dialog import SandboxStartDialog
     eligible = [_date_mod.date(2024, 6, d) for d in (3, 4, 5, 6, 7, 10, 11, 12)]
 
-    def provider(itv: str):
+    def provider(itv: str, _source: str = ""):
         return list(eligible)
 
     # ---- A. blind + seed=0 → fresh non-zero seed ------------------
@@ -17286,7 +17286,7 @@ def check_b40a_sandbox_optional_decision_logging(app) -> None:
         app,
         reference_symbol="REF",
         intervals=["5m"],
-        eligible_dates_provider=lambda _itv: list(days),
+        eligible_dates_provider=lambda _itv, _source="": list(days),
         fetch_provider=None,
         default_interval="5m",
     )

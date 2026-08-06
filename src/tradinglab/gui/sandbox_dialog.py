@@ -58,7 +58,18 @@ class SandboxStartDialog(BaseModalDialog):
             instead of ``intervals[0]``. Useful so the dialog opens
             on the same interval the user is already charting (the
             cache is most likely populated for that one).
+        sources: selectable data-source names, best-first. The dialog
+            always prepends an "Auto" entry meaning "let the app rank
+            them". Sources differ in intraday depth and volume quality
+            (yfinance ~60 days but full consolidated volume; Alpaca
+            years but IEX-only volume on the free feed), and only the
+            trader knows which trade-off suits the session they want —
+            so this is an explicit choice, not an inference.
+        default_source: pre-select this source; ``""`` selects Auto.
     """
+
+    #: Combobox label for "let the app pick the best-ranked source".
+    AUTO_SOURCE_LABEL = "Auto (best available)"
 
     def __init__(
         self,
@@ -66,11 +77,13 @@ class SandboxStartDialog(BaseModalDialog):
         *,
         reference_symbol: str,
         intervals: list[str],
-        eligible_dates_provider: Callable[[str], list[_dt.date]],
-        fetch_provider: Callable[[str], bool] | None = None,
+        eligible_dates_provider: Callable[[str, str], list[_dt.date]],
+        fetch_provider: Callable[[str, str], bool] | None = None,
         default_interval: str | None = None,
         default_selected_intervals: list[str] | None = None,
         manifest_provider: Callable[[], list[Any]] | None = None,
+        sources: list[str] | None = None,
+        default_source: str = "",
     ):
         super().__init__(
             app,
@@ -84,6 +97,11 @@ class SandboxStartDialog(BaseModalDialog):
         self._intervals = list(intervals) or ["5m"]
         self._eligible_provider = eligible_dates_provider
         self._fetch_provider = fetch_provider
+        # Data source. The list is caller-supplied (registered,
+        # user-visible sources) and the leading "Auto" entry maps to the
+        # empty string, i.e. "use the app's ranking".
+        self._sources = [s for s in (sources or []) if s]
+        self._initial_source = default_source if default_source in self._sources else ""
         # Phase: sandbox universe / strict-offline. ``manifest_provider``
         # returns the prepared :class:`UniverseManifest` list (most
         # recent first). Sentinel ``None`` is permitted for callers
@@ -120,6 +138,7 @@ class SandboxStartDialog(BaseModalDialog):
         self.result: dict[str, Any] | None = None
 
         self._build()
+        self._source_hint_var.set(self._source_hint())
         self._refresh_eligible_count()
         # If the primary interval has no cache, kick off a lazy fetch
         # right after the dialog renders so Random / Blind paths work
@@ -161,17 +180,44 @@ class SandboxStartDialog(BaseModalDialog):
         frame = ttk.Frame(self)
         frame.grid(row=0, column=0, sticky="nsew", **pad)
 
+        header = ttk.Frame(frame)
+        header.grid(row=0, column=0, columnspan=3, sticky="ew", **pad)
+        header.columnconfigure(1, weight=1)
+
         ttk.Label(
-            frame,
+            header,
             text=(f"Open-universe replay anchored on "
                   f"{self.reference_symbol}.\n"
                   "Tickers are loaded during the session — none here."),
             justify="left",
-        ).grid(row=0, column=0, columnspan=3, sticky="w", **pad)
+        ).grid(row=0, column=0, columnspan=3, sticky="w")
+
+        # Data source. Deliberately the FIRST control: it decides what
+        # history exists at all, so eligibility, the reference fetch and
+        # every mid-session load below are resolved against it. Changing
+        # it re-runs the eligibility probe for the current interval.
+        ttk.Label(header, text="Data source:").grid(
+            row=1, column=0, sticky="w", pady=(8, 0))
+        self._source_var = tk.StringVar(
+            value=self._initial_source or self.AUTO_SOURCE_LABEL)
+        self._source_combo = ttk.Combobox(
+            header,
+            textvariable=self._source_var,
+            state="readonly",
+            values=[self.AUTO_SOURCE_LABEL, *self._sources],
+            width=24,
+        )
+        self._source_combo.grid(row=1, column=1, sticky="w",
+                                padx=(6, 0), pady=(8, 0))
+        self._source_combo.bind(
+            "<<ComboboxSelected>>", lambda _e: self._on_source_change())
+        self._source_hint_var = tk.StringVar(value="")
+        ttk.Label(header, textvariable=self._source_hint_var,
+                  foreground="grey", justify="left").grid(
+            row=2, column=0, columnspan=3, sticky="w", pady=(2, 0))
 
         ttk.Label(frame, text="Intervals:").grid(
             row=1, column=0, sticky="ne", **pad)
-        # Phase 1d-multitf-2: multi-select interval checkboxes. The
         # smallest checked interval is implicitly the primary tick
         # interval. Larger checked intervals are upscaled from primary
         # at session time (e.g. {5m, 15m, 1h}: tick is 5m, 15m and 1h
@@ -350,6 +396,59 @@ class SandboxStartDialog(BaseModalDialog):
             btns, text="Start", command=self._on_start)
         self._start_btn.pack(side=tk.RIGHT, padx=4)
 
+    def _selected_source(self) -> str:
+        """Resolved source name; ``""`` means Auto (caller ranks)."""
+        value = (self._source_var.get() or "").strip()
+        if not value or value == self.AUTO_SOURCE_LABEL:
+            return ""
+        return value if value in self._sources else ""
+
+    def _source_hint(self) -> str:
+        """One-line capability summary for the selected source.
+
+        Reach and volume tier are what actually decide whether a source
+        can serve the session the trader has in mind, so state them
+        rather than making them look up ``data/quality.py``.
+        """
+        chosen = self._selected_source()
+        if not chosen:
+            return ("Auto ranks your configured sources by volume tier and "
+                    "history depth.")
+        try:
+            from ..data import quality as _quality
+
+            q = _quality.quality_for(chosen)
+            vol = _quality.volume_quality(chosen)
+        except Exception:  # noqa: BLE001
+            return ""
+        vol_text = {
+            "full": "full consolidated volume",
+            "partial": "PARTIAL volume (IEX only, ~2–3% of the tape)",
+            "synthetic": "synthetic volume",
+        }.get(vol, "unknown volume quality")
+        return (f"{chosen}: ~{q.intraday_days}d intraday, ~{q.daily_years}y "
+                f"daily, {vol_text}.")
+
+    def _on_source_change(self) -> None:
+        """Re-probe eligibility against the newly selected source.
+
+        Depth differs per vendor, so the eligible-date pool genuinely
+        changes with the source — showing the previous source's count
+        would invite a Start that immediately fails to anchor.
+        """
+        self._source_hint_var.set(self._source_hint())
+        self._error_var.set("")
+        self._refresh_eligible_count()
+        if self._fetch_provider is None:
+            return
+        itv = self._primary_interval()
+        try:
+            dates = list(self._eligible_provider(itv, self._selected_source()))
+        except Exception:  # noqa: BLE001
+            dates = []
+        if not dates:
+            self._ensure_cached_for_interval(itv)
+
     def _selected_intervals(self) -> list[str]:
         """Return checked intervals sorted ascending by minute count.
 
@@ -514,7 +613,7 @@ class SandboxStartDialog(BaseModalDialog):
         if self._fetch_provider is None:
             return
         try:
-            dates = list(self._eligible_provider(primary_itv))
+            dates = list(self._eligible_provider(primary_itv, self._selected_source()))
         except Exception:  # noqa: BLE001
             dates = []
         if dates:
@@ -534,7 +633,7 @@ class SandboxStartDialog(BaseModalDialog):
         user understands the brief UI freeze.
         """
         try:
-            dates = list(self._eligible_provider(itv))
+            dates = list(self._eligible_provider(itv, self._selected_source()))
         except Exception:  # noqa: BLE001
             dates = []
         if dates or self._fetch_provider is None:
@@ -549,7 +648,7 @@ class SandboxStartDialog(BaseModalDialog):
             pass
         ok = False
         try:
-            ok = bool(self._fetch_provider(itv))
+            ok = bool(self._fetch_provider(itv, self._selected_source()))
         except Exception as exc:  # noqa: BLE001
             self._error_var.set(
                 f"Fetch of {self.reference_symbol} {itv} failed: {exc}")
@@ -562,7 +661,7 @@ class SandboxStartDialog(BaseModalDialog):
         # Cache now warm \u2014 recompute the readout against fresh data.
         self._refresh_eligible_count()
         try:
-            return bool(list(self._eligible_provider(itv)))
+            return bool(list(self._eligible_provider(itv, self._selected_source())))
         except Exception:  # noqa: BLE001
             return False
 
@@ -581,6 +680,14 @@ class SandboxStartDialog(BaseModalDialog):
                 widget.configure(state=state)
             except tk.TclError:
                 pass
+        # The source decides what the fetch even targets — swapping it
+        # mid-flight would land bars under a different cache key than
+        # the one being probed.
+        try:
+            self._source_combo.configure(
+                state="disabled" if busy else "readonly")
+        except tk.TclError:
+            pass
 
     def _on_blind_toggle(self) -> None:
         """Lock / unlock the date controls based on the blind checkbox."""
@@ -611,7 +718,7 @@ class SandboxStartDialog(BaseModalDialog):
         sees the effect).
         """
         try:
-            dates = list(self._eligible_provider(self._primary_interval()))
+            dates = list(self._eligible_provider(self._primary_interval(), self._selected_source()))
         except Exception:  # noqa: BLE001
             return []
         try:
@@ -630,7 +737,7 @@ class SandboxStartDialog(BaseModalDialog):
         trim so the user sees what's actually drawable.
         """
         try:
-            raw_dates = list(self._eligible_provider(self._primary_interval()))
+            raw_dates = list(self._eligible_provider(self._primary_interval(), self._selected_source()))
         except Exception as exc:  # noqa: BLE001
             self._eligible_count_var.set(
                 f"(eligibility unavailable: {exc})")
@@ -767,6 +874,7 @@ class SandboxStartDialog(BaseModalDialog):
         self.result = {
             "session_date": session_date,
             "interval": primary,
+            "data_source": self._selected_source(),
             "display_intervals": list(selected_intervals),
             "lookback_days": lookback,
             "daily_lookback_bars": daily_bars,

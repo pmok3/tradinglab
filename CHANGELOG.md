@@ -1,5 +1,43 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **The sandbox Market Heatmap was showing you the answer.** It read the
+  1-Day % from *daily* bars, and a daily bar is timestamped at its open
+  while carrying the session's settled close — so from the very first
+  bar of a replay the map was colored by how the day *finished*. It also
+  meant the map never changed intraday (both legs were constant all
+  day). Prices now come from intraday bars at or before the replay
+  clock, with the base leg from the last **completed** daily session.
+  A metamorphic test pins it: deleting every bar after the clock must
+  not change a single value on the map.
+- **The heatmap no longer freezes the app while you step bars.** It was
+  re-reading and re-parsing every symbol's cache file, for every tile,
+  four times a second on the UI thread, then rebuilding all ~500
+  rectangles and labels. Bars are now parsed once per session on the
+  background thread and a recolor just updates the existing tiles.
+- **The heatmap works on any data source.** It was hardcoded to
+  yfinance daily bars, so Schwab / Alpaca / local users got a silently
+  blank grey map. It now prices from the session's own source and
+  interval.
+- Heatmap clock reads in exchange time (ET) instead of UTC, the map is
+  scoped to the session's prepared universe when there is one, and the
+  footer now counts what is actually priced instead of stating a fixed
+  caveat.
+
+### Added
+- **Pick your data source before starting a sandbox session.** The Start
+  Sandbox dialog leads with a Data source selector — Auto (best
+  available) or a specific vendor — with a hint line stating that
+  source's intraday reach, daily reach, and volume quality. Vendors are
+  not interchangeable for replay: yfinance caps intraday at ~60 days but
+  reports full consolidated volume, Alpaca's free feed reaches years
+  with IEX-only volume (~2–3% of the tape). Which trade-off is right
+  depends on the practice you're doing, so it's your call. The choice is
+  remembered (`sandbox_data_source`), pinned for the session, and used
+  by mid-session ticker loads, Prepare Universe Data, and the heatmap —
+  so one session can't silently mix vendors.
 ## [0.6.1] - 2026-07-31
 
 Credential-handling release: your API keys now live in a proper encrypted,

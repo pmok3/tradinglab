@@ -163,3 +163,82 @@ def test_window_empty_when_no_clock(root, tmp_path):
     root.update()
     assert win._tiles == ()
     win.close()
+
+
+# ---------------------------------------------------------------------------
+# Per-tick fast path — everything the old full redraw refreshed implicitly
+# must be refreshed explicitly (see _update_colors).
+# ---------------------------------------------------------------------------
+
+
+def test_focus_outline_moves_instead_of_accumulating(root, tmp_path):
+    """Focus changes mid-session via click-to-chart, without a relayout.
+
+    The fast path sets the highlight but must also clear it from the
+    previously-focused tile, or every clicked tile stays ringed as
+    "currently on the chart".
+    """
+    win, ctl = _make_window(root, tmp_path)
+    try:
+        assert ctl.focus_symbol == "AAA"
+        win.on_replay_tick()
+        root.update()
+        assert win._patches["AAA"].get_linewidth() == pytest.approx(2.0)
+        ctl.focus_symbol = "BBB"
+        win.on_replay_tick()
+        root.update()
+        assert win._patches["BBB"].get_linewidth() == pytest.approx(2.0)
+        assert win._patches["AAA"].get_linewidth() == pytest.approx(0.4), (
+            "the previously-focused tile must lose its outline"
+        )
+    finally:
+        win.close()
+
+
+def test_position_badges_track_the_portfolio_within_a_session(root, tmp_path):
+    """Opening / closing a position mid-session doesn't relayout.
+
+    Badges therefore have to be re-read on the fast path; otherwise a
+    new position shows nothing and a closed one leaves a stale L/S until
+    the next session roll.
+    """
+    win, ctl = _make_window(root, tmp_path)
+    try:
+        win.on_replay_tick()
+        root.update()
+        assert win._badges["AAA"].get_text() == "L"
+        assert win._badges["BBB"].get_text() == ""
+        # Flip: close AAA, open a short in BBB.
+        ctl.positions_snapshot = lambda: [
+            {"symbol": "BBB", "quantity": -50.0, "avg_cost": 20.0}
+        ]
+        win.on_replay_tick()
+        root.update()
+        assert win._badges["AAA"].get_text() == ""
+        assert win._badges["BBB"].get_text() == "S"
+    finally:
+        win.close()
+
+
+def test_session_roll_requeues_a_prime_that_arrived_mid_flight(root, tmp_path):
+    """A roll during a running prime must not be dropped.
+
+    Parsing a universe takes seconds; an auto-cycle roll landing in that
+    window used to be discarded, leaving the new session with a snapshot
+    that answers nothing — a neutral, equal-sliver map until the *next*
+    roll.
+    """
+    win, _ctl = _make_window(root, tmp_path)
+    try:
+        started: list[bool] = []
+        win._start_prime = (  # type: ignore[method-assign]
+            lambda members, clock, force=False: started.append(force)
+        )
+        win._priming = True
+        win._prime_done = True
+        win._pending_prime = (["AAA"], 123)
+        win._poll_prime()
+        assert started == [True], "the queued rebuild must be re-issued"
+        assert win._pending_prime is None
+    finally:
+        win.close()

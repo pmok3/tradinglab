@@ -78,10 +78,13 @@ non-menu paths: ticker entry, watchlist, drilldown).
 - **Reference symbol**: `sandbox_reference_symbol` (default `SPY`)
   anchors the master clock. If it can't be fetched, fail fast with a
   status message rather than synthesizing a fallback timeline.
-- **Data source: highest global priority available (perf item #7 /
-  global source ranking).**
-  The reference (and daily-context) fetch uses `_sandbox_src(itv)` =
-  `data.quality.preferred_source(source_var, interval=itv)` — which now
+- **Data source: the trader chooses; Auto falls back to the global
+  priority (perf item #7 / global source ranking).**
+  The Start dialog's first control is a source picker (audit
+  `sandbox-data-source`), seeded from the `sandbox_data_source` setting
+  and written back on Start. `_sandbox_src(itv, chosen)` returns
+  `chosen` outright when the user pinned one; otherwise it falls back to
+  `data.quality.preferred_source(source_var, interval=itv)` — which
   delegates to the fixed, tier-aware **global priority** in
   `data/source_ranking.py` (`alpaca@paid > schwab > polygon >
   yfinance+alpaca > yfinance > alpaca@free`), NOT merely the active chart
@@ -90,12 +93,21 @@ non-menu paths: ticker entry, watchlist, drilldown).
   user gets the `yfinance+alpaca` composite (deep tail + full-volume recent)
   rather than raw free-Alpaca. Respects an
   explicit synthetic/stub choice (returns it unchanged), so the default
-  headless env (yfinance-only) is a no-op. When the chosen source differs
-  from the active one, a `_status.info` line names it; when it has partial
+  headless env (yfinance-only) is a no-op. Ranking is a reasonable
+  default but not a correct answer for every session: reach and volume
+  tier trade off against each other (yfinance's ~60-day intraday cap vs
+  Alpaca's years of IEX-only volume), and which one matters depends on
+  the practice being done — hence the explicit choice. When the chosen
+  source differs from the active one, a `_status.info` line names it and
+  says whether it came from the pin or the ranking; when it has partial
   (IEX) volume, `_status.warn(partial_volume_warning(...))` fires (perf
   item #1). All three source-selection sites (`_eligible_dates_at`,
   `_fetch_reference_at`, the start-flow fetch) share `_sandbox_src` so the
-  `_full_cache` keys stay consistent.
+  `_full_cache` keys stay consistent, the resolved name is passed to
+  `start_session(data_source=…)` so the controller pins it for the
+  session, and **Prepare Universe Data uses the same resolution** — a
+  universe cached under one vendor while the session replays from
+  another looks entirely uncached.
 - **Sandbox intervals**: `["1m", "2m", "5m", "15m", "30m", "1h"]`
   only (master clock is intraday).
 - **Daily reference fetch** (`daily_lookback_bars > 0`): degrades

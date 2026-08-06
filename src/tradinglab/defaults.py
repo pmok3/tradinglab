@@ -276,6 +276,24 @@ TUNABLES: tuple[Tunable, ...] = (
             "from your selected data source (SPY/QQQ for US equities, "
             "ES=F for futures, EURUSD=X for FX).",
             _v_str(allow_empty=False)),
+    # Which vendor a replay session's bars come from. Empty = "Auto",
+    # i.e. the global tier-aware ranking in ``data/source_ranking.py``.
+    # Sources differ in what they can even offer a sandbox — yfinance
+    # caps intraday at ~60 days, Alpaca reaches years but reports only
+    # IEX volume on the free feed, Schwab/Polygon go deep with full
+    # volume — so the honest default is to let the trader pin the one
+    # that suits the practice they're doing rather than silently
+    # ranking for them. Chosen in the Start Sandbox dialog, which
+    # writes the last choice back here. Audit ``sandbox-data-source``.
+    Tunable("sandbox_data_source", "", "str",
+            "Data source used for sandbox replay sessions (reference "
+            "timeline, mid-session ticker loads, and the Market "
+            "Heatmap). Empty = Auto: pick the highest-ranked source "
+            "you have configured. Set to a source name (e.g. "
+            "'yfinance', 'alpaca') to pin it — history depth and "
+            "volume quality differ per vendor, so the right choice "
+            "depends on how far back you want to replay.",
+            _v_str(allow_empty=True)),
     Tunable("sandbox_skip_detailed_journal", False, "bool",
             "Skip the mandatory pre-trade journal AND the mandatory "
             "post-trade review modals during sandbox replay. Submitted "

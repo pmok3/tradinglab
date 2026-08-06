@@ -44,8 +44,18 @@ model it returns. See [`docs/SANDBOX_HEATMAP.md`](../../../docs/SANDBOX_HEATMAP.
   splits self-cancel (see Invariant 7).
 - `price_at_or_before(candles, as_of_ts) -> float | None` — close of the
   last candle at/before `as_of_ts` (no-future-leakage lookup; ms→s
-  normalized; ascending candles; NaN-close bars skipped). The caller's
-  building block for `size_by_symbol` / `pct_by_symbol`.
+  normalized; ascending candles; NaN-close bars skipped). **Intraday
+  series only** — see Invariant 6.
+- `session_date_of(as_of_ts) -> date` — UTC session date of an epoch
+  timestamp (ms or s), identical to
+  `SandboxController.current_session_date()`.
+- `completed_session_closes(daily_candles, as_of_ts, *, count=1) -> tuple[float, ...]`
+  — closes of the last `count` **completed** daily sessions, oldest-first.
+  A daily bar counts only when its session date is *strictly before* the
+  clock's session date — the same rule
+  `SandboxController.daily_visible_for` applies. Short/empty tuple when
+  history doesn't reach; the caller degrades to `None`, never a partial
+  guess. The building block for a leak-free 1-Day % base leg.
 - `squarify(values, x, y, w, h) -> list[tuple[float, float, float, float]]`
   — vendored squarified-treemap rectangle packer.
 - `finviz_hex(pct, clip_pct=3.0) -> str` — % → bucketed red/green hex.
@@ -61,16 +71,24 @@ model it returns. See [`docs/SANDBOX_HEATMAP.md`](../../../docs/SANDBOX_HEATMAP.
   (geometry, expensive squarify) is separated from `apply_colors`
   (per-tile fill, cheap) so the window can relayout per session and
   recolor per bar (decision 8) without re-running squarify each tick.
-- **Geometry/color core never reads the clock; one clock-aware helper.**
+- **Geometry/color core never reads the clock; two clock-aware helpers.**
   `build_layout` / `apply_colors` consume caller-supplied
   `size_by_symbol` / `pct_by_symbol`, so the geometry is a pure function
-  of its inputs. The single clock-aware utility is
-  `price_at_or_before(candles, as_of_ts)` — a pure, testable lookup that
-  enforces the no-future-leakage boundary at the price-fetch site (never
-  returns a close after the clock; normalizes ms→s by magnitude via the
-  shared `core.timezones.normalize_epoch_to_seconds`, so the `1e12` ms/s
-  threshold lives in exactly one place). The
-  caller composes it into `size_by_symbol` / `pct_by_symbol`.
+  of its inputs. The clock-aware utilities are
+  `price_at_or_before(candles, as_of_ts)` (intraday) and
+  `completed_session_closes(daily, as_of_ts)` (daily) — pure, testable
+  lookups that enforce the no-future-leakage boundary at the price-fetch
+  site. They are deliberately **two** functions because the two bar
+  kinds need opposite rules: an intraday bar at/before the clock is
+  information the trader had, whereas a *daily* bar is timestamped at
+  its open but carries the settled close, so "at/before the clock"
+  admits the in-progress session's final print. Using the intraday rule
+  on daily bars is exactly the leak that made the map show the finished
+  day's move from the opening bar onward (and, since both legs were then
+  constant all day, never change intraday). ms→s normalization comes
+  from the shared `core.timezones.normalize_epoch_to_seconds`, so the
+  `1e12` ms/s threshold lives in exactly one place. The caller composes
+  them into `size_by_symbol` / `pct_by_symbol`.
 - **Historically-scaled cap, not current cap** (decision 3). `size` is
   `scaled_cap(shares_at_session, session_reference_price)` so tile area
   reflects the historical moment. `shares_at_session` is the caller's
@@ -115,8 +133,15 @@ model it returns. See [`docs/SANDBOX_HEATMAP.md`](../../../docs/SANDBOX_HEATMAP.
 5. Color is symmetric about 0 and clipped to `[−clip_pct, +clip_pct]`;
    `pct is None` (missing data) maps to the neutral fill, never a
    red/green extreme.
-6. No value is read from any candle beyond `as_of_ts` — enforced by the
-   caller supplying only clock-bounded prices (documented contract).
+6. No value is read from any candle beyond `as_of_ts`. Enforced at the
+   two lookup helpers: `price_at_or_before` stops at the clock, and
+   `completed_session_closes` admits a daily bar only when its session
+   date is strictly before the clock's. **A daily bar's timestamp is its
+   open but its close is the session's last print**, so daily bars must
+   never go through the at-or-before rule. Pinned by
+   `tests/unit/gui/test_heatmap_no_lookahead.py`, including a
+   metamorphic case: deleting every bar after the clock must not change
+   a single value.
 7. **Split-consistency:** tile `size` multiplies price and shares on the
    same split basis (raw price × raw shares, so a split is a wash);
    split-adjusted price is never multiplied by raw as-reported shares.
@@ -138,7 +163,9 @@ layout  = build_layout(symbols, sizes, classification)
   └─ squarify symbols within each industry rect  → tile x/y/w/h
 
 # per bar:
-pcts  = {sym: compute_1d_pct(price_at_clock[sym], prior_close[sym]) ...}
+price = price_at_or_before(intraday[sym], clock)          # bar AT the clock
+base  = completed_session_closes(daily[sym], clock)[-1]   # last COMPLETED day
+pcts  = {sym: compute_1d_pct(price, base) ...}
 model = apply_colors(layout, pct_by_symbol=pcts, as_of_ts=clock)
   └─ tile.fill = finviz_hex(pct, clip_pct); tile.pct = pct
 ```
@@ -173,6 +200,11 @@ model = apply_colors(layout, pct_by_symbol=pcts, as_of_ts=clock)
   history per symbol).
 
 ## Recent history
+- Added `session_date_of` + `completed_session_closes` and documented
+  `price_at_or_before` as intraday-only, closing the daily-bar
+  look-ahead leak in the heatmap's 1-Day % base leg (Invariant 6 is now
+  enforced in code and pinned by a metamorphic test, not just a
+  documented caller contract).
 - Pure layer implemented (`heatmap.py`) + `tests/unit/backtest/test_heatmap.py`.
   Adds `price_at_or_before` as the one clock-aware helper and optional
   `timeframe` / `universe_id` on `apply_colors`; layout math is pure

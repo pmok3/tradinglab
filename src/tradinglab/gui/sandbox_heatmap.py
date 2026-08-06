@@ -13,10 +13,11 @@ See ``gui/sandbox_heatmap.spec.md`` and ``docs/SANDBOX_HEATMAP.md``.
 
 from __future__ import annotations
 
+import bisect
+import datetime as _dt
 import threading
 import tkinter as tk
-from collections.abc import Callable
-from datetime import datetime, timezone
+from collections.abc import Callable, Iterable
 from tkinter import ttk
 from typing import Any
 
@@ -24,16 +25,22 @@ from ..backtest.heatmap import (
     HeatmapTile,
     apply_colors,
     build_layout,
+    completed_session_closes,
     compute_1d_pct,
     members_asof,
     scaled_cap,
+    session_date_of,
     text_color_for,
 )
 from ..backtest.heatmap_provider import HeatmapProvider
+from ..core.timezones import normalize_epoch_to_seconds, to_et
 from .native_theme import apply_toplevel_theme, current_theme
 
 # A price source resolves ``(price_at_clock, prior_close)`` for a symbol.
 PriceSource = Callable[[str, int], "tuple[float | None, float | None]"]
+
+#: Anchor for epoch-day arithmetic in :class:`SessionPriceSource`.
+_EPOCH_DATE = _dt.date(1970, 1, 1)
 
 # Minimum normalized tile side (of the unit square) to draw a text label.
 _LABEL_W = 0.045
@@ -91,44 +98,249 @@ def compute_size_pct(
     return size_by, pct_by, approx
 
 
+def _finite(value: Any) -> float | None:
+    """Return ``value`` as a finite float, or ``None``."""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if f != f else f
+
+
+def _candle_epoch(candle: Any) -> float | None:
+    """Epoch seconds for a candle, treating a naive date as **UTC**.
+
+    Must match ``backtest.bars._candle_ts_epoch``, which is what builds
+    the replay clock these timestamps are compared against. Bare
+    ``datetime.timestamp()`` on a tz-naive date resolves through the
+    *machine's* local zone, so on a box east of UTC the series shifts
+    earlier and the bisect can return a bar from after the clock — a
+    look-ahead leak reintroduced by the machine's locale.
+    """
+    dt = getattr(candle, "date", None)
+    if dt is None:
+        return None
+    try:
+        if getattr(dt, "tzinfo", None) is None:
+            dt = dt.replace(tzinfo=_dt.timezone.utc)
+        return float(dt.timestamp())
+    except (AttributeError, ValueError, OverflowError, OSError, TypeError):
+        return None
+
+
+class SessionPriceSource:
+    """Clock-bounded ``(price, prior_close)`` provider for the heatmap.
+
+    Two legs, two different rules — this split is the whole point of the
+    class:
+
+    * **price** — the close of the last *intraday* bar at or before the
+      replay clock, restricted to the clock's own session. Intraday bars
+      are point-in-time, so a bar at/before the clock is information the
+      trader genuinely had.
+    * **prior close** — the close of the last **completed** daily
+      session (``completed_session_closes``, strictly-before rule). The
+      in-progress day's daily bar is never read: it is timestamped at
+      the open but carries the settled close, so consulting it at 10:30
+      ET hands the replay tomorrow's answer.
+
+    When a symbol has no intraday coverage for the clock's session, the
+    source degrades to the last **two completed** daily sessions — still
+    leak-free, just a session stale — and reports the symbol via
+    :meth:`stale_symbols` so the window can label the map honestly.
+
+    Parsing happens in :meth:`build` (call it off the Tk thread, once per
+    session roll); ``__call__`` is a bisect over the session's bars, so
+    the per-tick recolor is cheap regardless of universe size.
+    """
+
+    def __init__(
+        self,
+        *,
+        source: str,
+        interval: str,
+        loader: Callable[[str, str, str], list[Any] | None] | None = None,
+    ) -> None:
+        self.source = source
+        self.interval = interval
+        self._loader = loader
+        # Full-series compact caches (parse once per symbol per window).
+        # ``(ts, close)`` pairs rather than Candle objects: a preloaded
+        # 500-name universe at 5m would otherwise pin millions of
+        # dataclass instances for two floats each.
+        self._intraday: dict[str, tuple[list[float], list[float]]] = {}
+        self._daily: dict[str, list[tuple[_dt.date, float]]] = {}
+        # Per-session snapshot, rebuilt by ``build``.
+        self._session_date: _dt.date | None = None
+        self._day_lo: float = 0.0
+        self._day_hi: float = 0.0
+        self._snapshot: dict[str, tuple[list[float], list[float], float | None]] = {}
+        self._stale: set[str] = set()
+        self._covered: set[str] = set()
+
+    # -- loading (background thread) --
+
+    def _load(self, symbol: str, interval: str) -> list[Any]:
+        loader = self._loader
+        if loader is None:
+            from .. import disk_cache
+
+            loader = disk_cache.load
+        try:
+            return list(loader(self.source, symbol, interval) or [])
+        except Exception:
+            return []
+
+    def _intraday_series(self, symbol: str) -> tuple[list[float], list[float]]:
+        cached = self._intraday.get(symbol)
+        if cached is not None:
+            return cached
+        ts: list[float] = []
+        closes: list[float] = []
+        for c in self._load(symbol, self.interval):
+            cts = _candle_epoch(c)
+            if cts is None:
+                continue
+            close = _finite(c.close)
+            if close is None:
+                continue
+            ts.append(cts)
+            closes.append(close)
+        pair = (ts, closes)
+        self._intraday[symbol] = pair
+        return pair
+
+    def _daily_series(self, symbol: str) -> list[tuple[_dt.date, float]]:
+        cached = self._daily.get(symbol)
+        if cached is not None:
+            return cached
+        out: list[tuple[_dt.date, float]] = []
+        for c in self._load(symbol, "1d"):
+            d = getattr(c, "date", None)
+            close = _finite(getattr(c, "close", None))
+            if d is None or close is None:
+                continue
+            out.append((d.date() if isinstance(d, _dt.datetime) else d, close))
+        self._daily[symbol] = out
+        return out
+
+    def build(self, symbols: Iterable[str], as_of_ts: int) -> None:
+        """Snapshot every symbol's current session. Safe off the Tk thread.
+
+        Idempotent per session date: re-calling with the same clock day
+        only fills in symbols added since the last build.
+        """
+        day = session_date_of(as_of_ts)
+        if day != self._session_date:
+            # Invalidate BEFORE publishing the new bounds. ``__call__``
+            # runs on the Tk thread; if it interleaved between the new
+            # ``_day_hi`` store and the ``_snapshot`` clear it would pass
+            # the guard for the new session while reading the old
+            # session's entries — and auto-cycle draws a *random* date,
+            # so the old session can be in the new one's future.
+            self._day_lo = self._day_hi = 0.0
+            self._snapshot = {}
+            self._stale = set()
+            self._covered = set()
+            epoch_day = (day - _EPOCH_DATE).days
+            self._session_date = day
+            self._day_lo = float(epoch_day * 86400)
+            self._day_hi = float((epoch_day + 1) * 86400)
+        for sym in symbols:
+            if sym in self._snapshot:
+                continue
+            self._snapshot[sym] = self._build_one(sym, day, as_of_ts)
+
+    def _build_one(
+        self, symbol: str, day: _dt.date, as_of_ts: int
+    ) -> tuple[list[float], list[float], float | None]:
+        daily = self._daily_series(symbol)
+        # Reuse the pure primitive so the strictly-before rule has one
+        # definition; it wants Candle-likes, and a (date, close) pair
+        # duck-types cleanly through a tiny shim.
+        completed = completed_session_closes(
+            [_DailyBar(d, c) for d, c in daily], as_of_ts, count=2
+        )
+        ts_all, close_all = self._intraday_series(symbol)
+        # Session window as epoch-day arithmetic. ``session_date_of`` is
+        # ``fromtimestamp(ts, utc).date()``, which is exactly
+        # ``floor(ts / 86400)`` — deriving the bounds the same way keeps
+        # the slice self-consistent for tz-naive and tz-aware bars alike
+        # (no second timezone interpretation sneaks in here).
+        epoch_day = (day - _EPOCH_DATE).days
+        lo = bisect.bisect_left(ts_all, float(epoch_day * 86400))
+        hi = bisect.bisect_left(ts_all, float((epoch_day + 1) * 86400))
+        session_ts = ts_all[lo:hi]
+        session_closes = close_all[lo:hi]
+        if session_ts:
+            self._covered.add(symbol)
+            prior = completed[-1] if completed else None
+            return (session_ts, session_closes, prior)
+        # No intraday bars for this session — fall back to the last two
+        # COMPLETED daily sessions. Never the in-progress bar.
+        self._stale.add(symbol)
+        if len(completed) >= 2:
+            self._covered.add(symbol)
+            return ([], [completed[-1]], completed[-2])
+        return ([], [], None)
+
+    # -- lookup (Tk thread, per tick) --
+
+    def __call__(self, symbol: str, clock_ts: int) -> tuple[float | None, float | None]:
+        cutoff = normalize_epoch_to_seconds(clock_ts)
+        # A snapshot is only valid for the session it was built for.
+        # Serving yesterday's snapshot into today's clock (the window
+        # ticks while the background rebuild is still running) would
+        # paint a stale map that looks live.
+        if not (self._day_lo <= cutoff < self._day_hi):
+            return (None, None)
+        entry = self._snapshot.get(symbol)
+        if entry is None:
+            return (None, None)
+        session_ts, session_closes, prior = entry
+        if not session_ts:
+            # Daily fallback: a single settled close, clock-independent
+            # within the session.
+            return (session_closes[0] if session_closes else None, prior)
+        idx = bisect.bisect_right(session_ts, cutoff) - 1
+        if idx < 0:
+            return (None, prior)
+        return (session_closes[idx], prior)
+
+    # -- coverage reporting --
+
+    def stale_symbols(self) -> set[str]:
+        """Symbols whose % came from completed daily bars, not intraday."""
+        return set(self._stale)
+
+    def covered_symbols(self) -> set[str]:
+        """Symbols the snapshot can price at all (intraday or daily)."""
+        return set(self._covered)
+
+
+class _DailyBar:
+    """Minimal Candle-like for :func:`completed_session_closes`."""
+
+    __slots__ = ("date", "close")
+
+    def __init__(self, day: _dt.date, close: float) -> None:
+        self.date = day
+        self.close = close
+
+
 def _default_price_source(
     symbol: str, clock_ts: int, *, source: str = "yfinance", interval: str = "1d"
 ) -> tuple[float | None, float | None]:
-    """Daily-bar price source: last close ≤ clock + the prior close.
+    """Deprecated shim — see :class:`SessionPriceSource`.
 
-    Reads the disk cache (populated by the sandbox "Download Replay
-    Data…" preload). Best-effort — any failure yields ``(None, None)``.
+    Kept only so any out-of-tree caller keeps importing; it now delegates
+    to a one-shot :class:`SessionPriceSource` rather than the old
+    daily-bar lookup, which leaked the in-progress session's settled
+    close into a mid-session replay clock.
     """
-    try:
-        from .. import disk_cache
-
-        bars = disk_cache.load(source, symbol, interval) or []
-    except Exception:
-        return (None, None)
-    cutoff = float(clock_ts)
-    idx = -1
-    for i, c in enumerate(bars):
-        try:
-            cts = c.date.timestamp()
-        except (AttributeError, ValueError, OverflowError, OSError):
-            continue
-        if cts <= cutoff:
-            idx = i
-        else:
-            break
-    if idx < 0:
-        return (None, None)
-
-    def _finite(v: Any) -> float | None:
-        try:
-            f = float(v)
-        except (TypeError, ValueError):
-            return None
-        return None if f != f else f
-
-    price = _finite(bars[idx].close)
-    prior = _finite(bars[idx - 1].close) if idx - 1 >= 0 else None
-    return (price, prior)
+    src = SessionPriceSource(source=source, interval=interval)
+    src.build([symbol], clock_ts)
+    return src(symbol, clock_ts)
 
 
 # ---------------------------------------------------------------------------
@@ -152,7 +364,19 @@ class SandboxHeatmapWindow(tk.Toplevel):
         self.app = app
         self.controller = controller
         self.provider = provider if provider is not None else HeatmapProvider()
-        self.price_source = price_source or _default_price_source
+        # An injected price source is used verbatim (tests / callers that
+        # supply their own basis). Otherwise build one bound to the
+        # session's data source + tick interval, so the map is priced from
+        # exactly the bars the replay itself is running on.
+        self._session_prices: SessionPriceSource | None = None
+        if price_source is not None:
+            self.price_source = price_source
+        else:
+            self._session_prices = SessionPriceSource(
+                source=self._session_source(),
+                interval=self._session_interval(),
+            )
+            self.price_source = self._session_prices
         self.title("Market Heatmap")
 
         self._layout = None
@@ -163,6 +387,13 @@ class SandboxHeatmapWindow(tk.Toplevel):
         self._primed = False
         self._priming = False
         self._prime_done = False
+        self._pending_prime: tuple[list[str], int] | None = None
+        # Live artist handles so a recolor mutates facecolors instead of
+        # rebuilding ~N patches + labels on every 250 ms tick.
+        self._patches: dict[str, Any] = {}
+        self._labels: dict[str, Any] = {}
+        self._badges: dict[str, Any] = {}
+        self._tile_edge = "#ffffff"
 
         self._header = ttk.Label(self, text="Market Heatmap", anchor="w")
         self._header.pack(side=tk.TOP, fill=tk.X, padx=6, pady=(6, 2))
@@ -173,10 +404,7 @@ class SandboxHeatmapWindow(tk.Toplevel):
         self._status.pack(side=tk.BOTTOM, fill=tk.X, padx=6, pady=(2, 4))
         self._footer = ttk.Label(
             self,
-            text=(
-                "Point-in-time S&P 500 (look-ahead removed). Sizes: "
-                "historical market cap; hatched = approximate."
-            ),
+            text="",
             anchor="w",
             font=("TkDefaultFont", 8),
         )
@@ -213,8 +441,41 @@ class SandboxHeatmapWindow(tk.Toplevel):
     def _blind(self) -> bool:
         return bool(getattr(self.controller, "blind", False))
 
+    def _session_source(self) -> str:
+        """Data source the active session was started with.
+
+        The session records its choice on the controller
+        (``SandboxController.data_source``), so the map is priced from
+        the same provider the replay is running on instead of a
+        hardcoded vendor. Falls back to the app's active chart source.
+        """
+        src = str(getattr(self.controller, "data_source", "") or "").strip()
+        if src:
+            return src
+        try:
+            return str(self.app.source_var.get())
+        except Exception:
+            return "yfinance"
+
+    def _session_interval(self) -> str:
+        return str(getattr(self.controller, "interval", "") or "5m")
+
     def _members(self, clock: int) -> list[str]:
-        return list(members_asof(self.provider.date_added(), clock))
+        """Point-in-time members, narrowed to the session universe.
+
+        A prepared universe means the user deliberately scoped the
+        session; rendering 500 tiles when only 80 have bars produces a
+        mostly-grey map whose readable tiles are the ones you can't
+        trade. When no universe is set, the full point-in-time
+        membership is used (legacy behaviour).
+        """
+        members = list(members_asof(self.provider.date_added(), clock))
+        universe = getattr(self.app, "_sandbox_universe", None)
+        if universe:
+            scoped = [s for s in members if s in universe]
+            if scoped:
+                return scoped
+        return members
 
     def _rebuild_layout(self, clock: int, members: list[str]) -> dict[str, float | None]:
         size_by, pct_by, approx = compute_size_pct(
@@ -250,9 +511,9 @@ class SandboxHeatmapWindow(tk.Toplevel):
         members = self._members(clock)
         pct_by = self._rebuild_layout(clock, members)
         self._last_session_date = self._session_date()
-        self._recolor(clock, pct_by)
+        self._recolor(clock, pct_by, relayout=True)
         if not self._primed and not self._priming:
-            self._start_prime(members)
+            self._start_prime(members, clock)
 
     def on_replay_tick(self) -> None:
         """Recolor from the controller; relayout first if the session rolled."""
@@ -260,12 +521,21 @@ class SandboxHeatmapWindow(tk.Toplevel):
         if clock is None:
             return
         session = self._session_date()
-        if session != self._last_session_date or self._layout is None:
+        if session != self._last_session_date:
             self._last_session_date = session
+            # The price snapshot is per-session, so rebuild it off the Tk
+            # thread and keep the previous geometry until it lands: the
+            # cross-session guard already neutralises the colors, whereas
+            # relayouting from an empty snapshot would flash an
+            # equal-weight grid (every size floored to a sliver). The
+            # prime's completion poll calls refresh(), which does the
+            # real relayout with the new session's sizes.
+            self._start_prime(self._members(clock), clock, force=True)
+        if self._layout is None:
             pct_by = self._rebuild_layout(clock, self._members(clock))
-        else:
-            pct_by = self._pcts_only(clock)
-        self._recolor(clock, pct_by)
+            self._recolor(clock, pct_by, relayout=True)
+            return
+        self._recolor(clock, self._pcts_only(clock))
 
     def _session_date(self) -> Any:
         fn = getattr(self.controller, "current_session_date", None)
@@ -274,28 +544,60 @@ class SandboxHeatmapWindow(tk.Toplevel):
                 return fn()
             except Exception:
                 return None
-        return None
+        # No controller hook: fall back to the clock's own session date so
+        # a roll is still detected (returning a constant None here meant
+        # the layout and the price snapshot never refreshed).
+        clock = self._clock()
+        return None if clock is None else session_date_of(clock)
 
-    def _start_prime(self, members: list[str]) -> None:
-        """Fetch the universe's shares on a daemon thread; refresh when done.
+    def _start_prime(
+        self, members: list[str], clock: int, *, force: bool = False
+    ) -> None:
+        """Build shares + the session price snapshot on a daemon thread.
 
-        Renders complete instantly with approximate (cache-only) sizes;
-        the background prime fills `get_shares_full` for every member
-        (cached to disk), then a poll on the Tk thread triggers a full
-        refresh so real cap sizes appear. Uses the result-flag + `after`
-        poll pattern (never cross-thread `after`), per CLAUDE.md §7.15.
+        Renders complete instantly with approximate (cache-only) sizes
+        and neutral tiles; the background worker fills `get_shares_full`
+        for every member (disk-cached) **and** parses the session's bars
+        into :class:`SessionPriceSource`, then a poll on the Tk thread
+        triggers a full refresh so real cap sizes and colors appear.
+        Uses the result-flag + `after` poll pattern (never cross-thread
+        `after`), per CLAUDE.md §7.15.
+
+        Parsing the universe's bars is exactly the work that must not
+        happen on the Tk thread: it is O(symbols x bars) and used to run
+        per tile per 250 ms tick.
+
+        A ``force`` request that arrives while a prime is already in
+        flight is **queued**, not dropped: parsing takes seconds, and an
+        auto-cycle roll landing in that window would otherwise leave the
+        new session permanently unpriced (the cross-session guard would
+        reject every lookup, flooring the whole map to neutral slivers
+        until the *next* roll).
         """
-        if self._priming or self._primed:
+        if self._priming:
+            if force:
+                self._pending_prime = (list(members), int(clock))
             return
+        if self._primed and not force:
+            return
+        self._pending_prime = None
         self._priming = True
+        self._primed = False
         self._prime_done = False
         syms = list(members)
+        prices = self._session_prices
+        clock_ts = int(clock)
 
         def _work() -> None:
             try:
                 self.provider.prime(syms)
             except Exception:
                 pass
+            if prices is not None:
+                try:
+                    prices.build(syms, clock_ts)
+                except Exception:
+                    pass
             self._prime_done = True
 
         threading.Thread(target=_work, daemon=True, name="HeatmapSharesPrime").start()
@@ -308,6 +610,13 @@ class SandboxHeatmapWindow(tk.Toplevel):
         if self._prime_done:
             self._priming = False
             self._primed = True
+            pending = self._pending_prime
+            self._pending_prime = None
+            if pending is not None:
+                # A session rolled while this prime was running — run the
+                # queued rebuild now rather than leaving the new session
+                # with a snapshot that can't answer any lookup.
+                self._start_prime(pending[0], pending[1], force=True)
             try:
                 self.refresh()
             except Exception:
@@ -340,14 +649,68 @@ class SandboxHeatmapWindow(tk.Toplevel):
 
     # -- render --
 
-    def _recolor(self, clock: int, pct_by: dict[str, float | None]) -> None:
+    def _recolor(
+        self, clock: int, pct_by: dict[str, float | None], *, relayout: bool = False
+    ) -> None:
         if self._layout is None:
             return
         model = apply_colors(
             self._layout, pct_by_symbol=pct_by, as_of_ts=int(clock), universe_id="sp500"
         )
         self._tiles = model.tiles
-        self._draw(model, clock)
+        if relayout or not self._patches:
+            self._draw(model, clock)
+        else:
+            self._update_colors(model, clock)
+
+    def _update_colors(self, model: Any, clock: int) -> None:
+        """Cheap per-tick path: mutate facecolors + labels in place.
+
+        The geometry is unchanged within a session (decision 8), so
+        rebuilding every patch and text on each 250 ms tick was pure
+        waste — and at S&P-500 scale it was the dominant cost of a step.
+
+        Everything the old full redraw refreshed implicitly must be
+        refreshed explicitly here: the focus outline has to be *cleared*
+        from the previously-focused tile (focus changes mid-session via
+        click-to-chart), and position badges have to be re-read, because
+        opening or closing a position mid-session doesn't relayout.
+        """
+        focus = getattr(self.controller, "focus_symbol", None)
+        positions = self._positions()
+        for t in model.tiles:
+            patch = self._patches.get(t.symbol)
+            if patch is None:
+                # A symbol without an artist means the layout and the
+                # model disagree; fall back to a full redraw rather than
+                # silently rendering a partial map.
+                self._draw(model, clock)
+                return
+            patch.set_facecolor(t.fill)
+            if focus and t.symbol == focus:
+                patch.set_edgecolor("#ffd24d")
+                patch.set_linewidth(2.0)
+            else:
+                patch.set_edgecolor(self._tile_edge)
+                patch.set_linewidth(0.4)
+            label = self._labels.get(t.symbol)
+            if label is not None:
+                label.set_text(self._tile_label(t))
+                label.set_color(text_color_for(t.fill))
+            badge = self._badges.get(t.symbol)
+            if badge is not None:
+                badge.set_text(positions.get(t.symbol, ""))
+        self._header.configure(text=self._title_text(clock, len(model.tiles)))
+        self._footer.configure(text=self._footer_text(model))
+        self._canvas.draw_idle()
+
+    @staticmethod
+    def _tile_label(tile: HeatmapTile) -> str:
+        if tile.w < _LABEL_W or tile.h < _LABEL_H:
+            return ""
+        if tile.h >= _FULL_LABEL_H and tile.pct is not None:
+            return f"{tile.symbol}\n{tile.pct:+.1f}%"
+        return tile.symbol
 
     def _draw(self, model: Any, clock: int) -> None:
         theme = current_theme(self.app if self.app is not None else self)
@@ -357,6 +720,10 @@ class SandboxHeatmapWindow(tk.Toplevel):
 
         ax = self._ax
         ax.clear()
+        self._patches = {}
+        self._labels = {}
+        self._badges = {}
+        self._tile_edge = bg
         self._fig.set_facecolor(bg)
         ax.set_facecolor(bg)
         ax.set_xlim(0.0, 1.0)
@@ -378,26 +745,28 @@ class SandboxHeatmapWindow(tk.Toplevel):
                 rect.set_edgecolor("#ffd24d")
                 rect.set_linewidth(2.0)
             ax.add_patch(rect)
+            self._patches[t.symbol] = rect
 
-            if t.w >= _LABEL_W and t.h >= _LABEL_H:
-                label = t.symbol
-                if t.h >= _FULL_LABEL_H and t.pct is not None:
-                    label = f"{t.symbol}\n{t.pct:+.1f}%"
-                ax.text(
+            text = self._tile_label(t)
+            if text:
+                self._labels[t.symbol] = ax.text(
                     t.x + t.w / 2.0,
                     t.y + t.h / 2.0,
-                    label,
+                    text,
                     ha="center",
                     va="center",
                     fontsize=7,
                     color=text_color_for(t.fill),
                 )
             badge = positions.get(t.symbol)
-            if badge:
-                ax.text(
+            if t.w >= _LABEL_W and t.h >= _LABEL_H:
+                # Always create the artist (even when flat) so the
+                # per-tick fast path can show / hide it with set_text
+                # instead of needing a relayout to place it.
+                self._badges[t.symbol] = ax.text(
                     t.x + t.w - 0.004,
                     t.y + t.h - 0.004,
-                    badge,
+                    badge or "",
                     ha="right",
                     va="top",
                     fontsize=7,
@@ -420,7 +789,35 @@ class SandboxHeatmapWindow(tk.Toplevel):
                 )
 
         self._header.configure(text=self._title_text(clock, len(model.tiles)))
+        self._footer.configure(text=self._footer_text(model))
         self._canvas.draw_idle()
+
+    def _footer_text(self, model: Any) -> str:
+        """Coverage + fidelity label.
+
+        Quantifies what the map can and cannot show rather than asserting
+        a fixed caveat string: how many tiles are actually priced, how
+        many fell back to the prior completed session, and which vendor
+        the prices came from.
+        """
+        tiles = getattr(model, "tiles", ()) or ()
+        total = len(tiles)
+        priced = sum(1 for t in tiles if t.pct is not None)
+        approx = sum(1 for t in tiles if t.approx_size)
+        stale = 0
+        if self._session_prices is not None:
+            symbols = {t.symbol for t in tiles}
+            stale = len(self._session_prices.stale_symbols() & symbols)
+        parts = [
+            f"{total} members · {priced} priced",
+        ]
+        if stale:
+            parts.append(f"{stale} on prior close (no intraday bars)")
+        if approx:
+            parts.append(f"{approx} approx size (hatched)")
+        parts.append(f"source: {self._session_source()} {self._session_interval()}")
+        parts.append("point-in-time membership; look-ahead removed")
+        return " · ".join(parts)
 
     def _render_empty(self, msg: str) -> None:
         theme = current_theme(self.app if self.app is not None else self)
@@ -428,6 +825,9 @@ class SandboxHeatmapWindow(tk.Toplevel):
         apply_toplevel_theme(self, theme)
         ax = self._ax
         ax.clear()
+        self._patches = {}
+        self._labels = {}
+        self._badges = {}
         self._fig.set_facecolor(bg)
         ax.set_facecolor(bg)
         ax.axis("off")
@@ -467,11 +867,15 @@ class SandboxHeatmapWindow(tk.Toplevel):
 
     @staticmethod
     def _fmt_clock(clock: int) -> str:
+        """Format the replay clock in **exchange time**, not UTC.
+
+        A US-equity trader reads 16:00 ET, not "20:00 UTC" — the old
+        UTC stamp made every session look like it ran in the evening.
+        Routed through ``core.timezones`` per CLAUDE.md §7.23.
+        """
         try:
-            return datetime.fromtimestamp(int(clock), tz=timezone.utc).strftime(
-                "%Y-%m-%d %H:%M UTC"
-            )
-        except (ValueError, OverflowError, OSError):
+            return to_et(int(clock)).strftime("%Y-%m-%d %H:%M ET")
+        except (ValueError, OverflowError, OSError, TypeError):
             return str(clock)
 
     # -- interaction --
@@ -485,8 +889,14 @@ class SandboxHeatmapWindow(tk.Toplevel):
             return
         pct = "n/a" if t.pct is None else f"{t.pct:+.2f}%"
         approx = " (approx size)" if t.approx_size else ""
+        stale = ""
+        if (
+            self._session_prices is not None
+            and t.symbol in self._session_prices.stale_symbols()
+        ):
+            stale = " (prior close — no intraday bars)"
         self._status.configure(
-            text=f"{t.symbol} · {t.sector} / {t.industry} · {pct}{approx}"
+            text=f"{t.symbol} · {t.sector} / {t.industry} · {pct}{approx}{stale}"
         )
 
     def _on_click(self, event: Any) -> None:
@@ -551,4 +961,10 @@ def open_sandbox_heatmap(app: Any, controller: Any, **kwargs: Any) -> SandboxHea
     return win
 
 
-__all__ = ("SandboxHeatmapWindow", "open_sandbox_heatmap", "tile_at", "compute_size_pct")
+__all__ = (
+    "SandboxHeatmapWindow",
+    "SessionPriceSource",
+    "open_sandbox_heatmap",
+    "tile_at",
+    "compute_size_pct",
+)

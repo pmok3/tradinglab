@@ -14,7 +14,7 @@ pre-sandbox app-state snapshot restored on `end_session`.
 
 ## Public API
 ### `SandboxController`
-- `start_session(*, spec, session_date, interval, reference_symbol, reference_candles, lookback_days=1, screenshot_dir=None, include_extended=False, auto_cycle=False, blind=False, eligible_dates=None, daily_lookback_bars=100, daily_reference_candles=None, display_intervals=None)` — open-universe start anchored on a single reference ticker.
+- `start_session(*, spec, session_date, interval, reference_symbol, reference_candles, lookback_days=1, screenshot_dir=None, include_extended=False, auto_cycle=False, blind=False, eligible_dates=None, daily_lookback_bars=100, daily_reference_candles=None, display_intervals=None, data_source="")` — open-universe start anchored on a single reference ticker. `data_source` pins the vendor these bars came from onto the controller for the session's lifetime (audit `sandbox-data-source`); mid-session ticker loads (`gui/sandbox_app._sandbox_preferred_src`) and the Market Heatmap read it rather than re-deriving a ranking, so one session can't mix tapes. Empty = not pinned; consumers fall back to their own resolution.
 - `register_ticker(symbol, candles) -> List[Any]` — add a symbol mid-session; returns the per-symbol *visible* candle list (stable identity for the session).
 - `register_daily_for(symbol, daily_candles)` — lazy-attach a per-symbol raw daily series for 1d-context display.
 - `next_bar() -> bool` — advance one tick; sync visibles, invalidate focused caches, redraw, drive post-trade callbacks + screenshots.

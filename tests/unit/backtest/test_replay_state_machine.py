@@ -195,6 +195,7 @@ def _ctl_and_start(
     auto_cycle: bool = False,
     eligible_dates: list[_dt.date] | None = None,
     display_intervals: tuple | None = None,
+    data_source: str = "",
 ) -> tuple[SandboxController, _FakeChartApp, list[Candle]]:
     app = _FakeChartApp()
     spec = spec or _make_session_spec()
@@ -210,6 +211,7 @@ def _ctl_and_start(
         auto_cycle=auto_cycle,
         eligible_dates=eligible_dates,
         display_intervals=display_intervals,
+        data_source=data_source,
     )
     return ctl, app, candles
 
@@ -357,6 +359,23 @@ class TestStartSessionHappyPath:
         ctl, _, _ = _ctl_and_start()
         assert ctl.focus_symbol == "SPY"
         assert "SPY" in ctl.tickers()
+
+    def test_data_source_is_pinned_for_the_session(self):
+        """The vendor the session replays from is recorded on the controller.
+
+        Mid-session ticker loads and the Market Heatmap read
+        ``data_source`` instead of re-deriving a preference, so one
+        session can never mix tapes (audit ``sandbox-data-source``).
+        """
+        ctl, _, _ = _ctl_and_start(data_source="alpaca")
+        assert ctl.data_source == "alpaca"
+
+    def test_data_source_defaults_to_empty_not_a_guess(self):
+        ctl, _, _ = _ctl_and_start()
+        assert ctl.data_source == "", (
+            "unset must stay empty so consumers fall back explicitly "
+            "rather than inheriting a stale pin"
+        )
 
 
 # ---------------------------------------------------------------------------

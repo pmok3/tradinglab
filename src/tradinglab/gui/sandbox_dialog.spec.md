@@ -12,14 +12,15 @@ sandbox session.
   compatibility re-export.
 
 ## Public API
-- `class SandboxStartDialog(app, *, reference_symbol, intervals, eligible_dates_provider, fetch_provider=None, default_interval=None, default_selected_intervals=None, manifest_provider=None)` — modal, blocks via `wait_window`. `self.result` on close is either `None` (cancel) or a payload dict:
+- `class SandboxStartDialog(app, *, reference_symbol, intervals, eligible_dates_provider, fetch_provider=None, default_interval=None, default_selected_intervals=None, manifest_provider=None, sources=None, default_source="")` — modal, blocks via `wait_window`. `self.result` on close is either `None` (cancel) or a payload dict:
   ```
-  {session_date, interval, display_intervals, lookback_days, daily_lookback_bars,
-   starting_cash, slippage_bps, commission, deck_seed,
+  {session_date, interval, data_source, display_intervals, lookback_days,
+   daily_lookback_bars, starting_cash, slippage_bps, commission, deck_seed,
    blind, auto_cycle, eligible_dates,
    universe_id, universe_symbols, strict_offline, decision_logging_enabled}
   ```
-  `auto_cycle == blind` (Phase 1d UX coupling — blind random implies auto-cycle). `interval` is the *primary* tick interval (= smallest checked entry in `display_intervals`); `display_intervals` is the sorted-ascending list of all checked intraday timeframes (e.g. `["5m", "15m", "1h"]`).
+  `auto_cycle == blind` (Phase 1d UX coupling — blind random implies auto-cycle). `interval` is the *primary* tick interval (= smallest checked entry in `display_intervals`); `display_intervals` is the sorted-ascending list of all checked intraday timeframes (e.g. `["5m", "15m", "1h"]`). `data_source` is the pinned source name, or `""` for Auto.
+- `SandboxStartDialog.AUTO_SOURCE_LABEL` — the combobox label meaning "let the app rank"; `_selected_source()` maps it (and any source not in `sources`) to `""`.
 
   `universe_id` is the manifest id (e.g. `"sp500"`, `"qqq"`, `"watchlist:Mega Caps"`) when the user picked a prepared universe, else `""`. `universe_symbols` is a sorted tuple of upper-case tickers (the strict-offline allow-list); empty tuple when no universe is chosen. `strict_offline` is `True` only when both a universe is chosen *and* the locked-checked checkbox is set (i.e. always `True` with a universe, always `False` without one).
   `decision_logging_enabled` comes from an unchecked-by-default checkbox. It only enables a manual panel control; it does not create per-bar prompts.
@@ -31,9 +32,10 @@ sandbox session.
 - External: `tkinter`, `tkinter.ttk`.
 
 ## Design Decisions
-- **`fetch_provider` parameter** — optional callable `(interval) -> bool` that sync-fetches the reference symbol at the given interval and stores it in the host's cache. Invoked when `eligible_dates_provider` returns empty (interval change, Random click, or Blind+Start) so Random / Blind aren't stranded by an empty cache. The dialog disables Start / Random / interval controls and shows a `"Fetching {symbol} {itv}…"` status during the call, then restores the prior status on failure. When `None`, the caller is expected to fetch elsewhere; missing-cache simply surfaces the existing error path.
+- **`fetch_provider` parameter** — optional callable `(interval, source) -> bool` that sync-fetches the reference symbol at the given interval **from the selected source** and stores it in the host's cache. Invoked when `eligible_dates_provider` returns empty (interval change, source change, Random click, or Blind+Start) so Random / Blind aren't stranded by an empty cache. The dialog disables Start / Random / interval controls **and the source combobox** and shows a `"Fetching {symbol} {itv}…"` status during the call, then restores the prior status on failure. When `None`, the caller is expected to fetch elsewhere; missing-cache simply surfaces the existing error path.
+- **Data source is an explicit, first-position choice** (audit `sandbox-data-source`). The combobox offers `AUTO_SOURCE_LABEL` plus the caller's `sources` list, and sits above every other control because it decides what history exists at all — eligibility, the reference fetch and every mid-session load are resolved against it. Vendors are genuinely not interchangeable for replay (yfinance caps intraday at ~60 days but reports full consolidated volume; Alpaca's free feed reaches years with IEX-only volume ≈2–3% of the tape; Schwab/Polygon go deep with full volume), and only the trader knows which trade-off suits the practice they're doing — so this is a choice, not an inference. A grey hint line under the combobox states reach + volume tier for the selection so the trade-off doesn't require reading `data/quality.py`. Changing the source re-probes eligibility (`_on_source_change`), because the eligible-date pool really does differ by vendor and showing the previous source's count would invite a Start that immediately fails to anchor. A `default_source` that is no longer registered falls back to Auto rather than being silently used.
 - **No ticker selection in `SandboxStartDialog`**: Phase 1c-redux is open-universe — tickers are loaded mid-session via the regular ticker entry / watchlist. The dialog only configures the master clock + economics. The `reference_symbol` shown is display-only.
-- **`eligible_dates_provider` is callable, not a list**: invoked on dialog open and on every interval change so the eligible-count status line + Random button stay in sync without the caller managing change notifications.
+- **`eligible_dates_provider` is callable, not a list**: invoked with `(interval, source)` on dialog open and on every interval / source change so the eligible-count status line + Random button stay in sync without the caller managing change notifications.
 - **Multi-interval checkbox group replaces a single combobox**: the user picks any subset of `{1m, 2m, 5m, 15m, 30m, 1h}`; the smallest checked is the primary tick interval and every other entry must satisfy `aggregation.divides_evenly(primary, target)` (validated via `_validate_intervals` before Start). Default-checked: `{5m, 15m, 1h}` ∩ available. `_primary_interval()` is the canonical accessor — invalid combos block Start with an inline error rather than silently picking a primary.
 - **`_filtered_eligible_dates` applies the intraday lookback live**: the user typing a new value sees the trimmed count immediately. Both the manual Random button and blind-mode self-draw use the filtered list (otherwise a draw could land on a date with no prior context).
 - **Blind mode collapses date controls**: when checked, the date entry shows `(hidden)` and is disabled; on Start the dialog draws the date itself (via `draw_one_date`) and sets `auto_cycle=True`. Eligibility is mandatory in blind mode — without a list there's nothing to randomise over.
@@ -48,9 +50,11 @@ sandbox session.
 - The dialog finalizes with the base modal grab enabled and releases it on close — no other window receives input while open.
 - Start dialog payload `auto_cycle == blind` (Phase 1d coupling).
 - Start dialog payload `decision_logging_enabled` defaults to `False`.
+- Start dialog payload `data_source` is `""` (Auto) or a name present in the caller's `sources` list — never an unregistered source.
 
 ## Testing
-- Exercised through `check_g0_sandbox_replay_integration` and `check_g2_sandbox_open_universe` indirectly (controllers driven with synthetic payloads); dialog instantiation itself is not unit-tested headlessly because Tk modals can't be event-driven offscreen.
+- Exercised through `check_g0_sandbox_replay_integration` and `check_g2_sandbox_open_universe` indirectly (controllers driven with synthetic payloads).
+- `tests/unit/gui/test_sandbox_source_choice.py` — the data-source picker: Auto plus every offered source, Auto resolves to `""`, a remembered source is preselected, an unavailable one falls back to Auto, the selection reaches both providers and re-probes on change, the hint names reach + volume tier, and the payload carries `data_source`.
 
 ## Modal keys and wheel guard
 `SandboxStartDialog.__init__` calls `protect_combobox_wheel(self)` and

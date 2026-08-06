@@ -18,12 +18,28 @@ from .tags import TagStore
 def _sandbox_preferred_src(app: Any, interval: str) -> str:
     """Data source a sandbox mid-session fetch should use.
 
-    Mirrors the reference-load choice (perf item #7): the longest/
-    highest-quality source the user has configured, so compare / focus
-    symbols added mid-session share the reference's data basis instead of
-    silently pulling from a different (active-chart) source. Respects an
-    explicit synthetic/stub choice and falls back to the active source.
+    **The active session's own choice wins.** The source is pinned at
+    ``start_session`` (from the Start Sandbox dialog / the
+    ``sandbox_data_source`` setting) and recorded on the controller, so
+    compare / focus symbols added mid-session share the reference's data
+    basis. Re-deriving a preference here instead was a latent
+    vendor-mixing bug: saving credentials mid-session changes the global
+    ranking, so the next symbol loaded could silently come from a
+    different tape than the timeline it is being replayed against.
+
+    Falls back to the old behaviour (perf item #7: the longest /
+    highest-quality registered source, respecting an explicit
+    synthetic/stub choice) when no session source is pinned, and to the
+    active chart source on any error.
     """
+    pinned = ""
+    try:
+        sandbox = getattr(app, "_sandbox", None)
+        pinned = str(getattr(sandbox, "data_source", "") or "").strip()
+    except Exception:  # noqa: BLE001
+        pinned = ""
+    if pinned:
+        return pinned
     try:
         return _quality.preferred_source(app.source_var.get(), interval=interval)
     except Exception:  # noqa: BLE001

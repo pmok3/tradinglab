@@ -219,6 +219,14 @@ class SandboxController(EventsControllerMixin):
     session_date: _dt.date | None = None
     lookback_days: int = 1
     reference_symbol: str | None = None
+    #: Vendor the session's bars were loaded from, pinned at
+    #: ``start_session``. Sources differ in intraday depth and volume
+    #: quality, so the choice is the trader's (Start Sandbox dialog →
+    #: ``sandbox_data_source``) and is recorded here as the session's
+    #: single source of truth: mid-session ticker loads and the Market
+    #: Heatmap read it instead of re-deriving a preference, which is how
+    #: a session could previously end up mixing vendors mid-replay.
+    data_source: str = ""
 
     # Phase 1c: tag store + post-trade callback + screenshot dir.
     tag_store: TagStore = field(default_factory=TagStore)
@@ -409,6 +417,7 @@ class SandboxController(EventsControllerMixin):
         daily_lookback_bars: int = 100,
         daily_reference_candles: list[Any] | None = None,
         display_intervals: Sequence[str] | None = None,
+        data_source: str = "",
     ) -> None:
         """Begin a sandbox session anchored on a single reference ticker.
 
@@ -432,6 +441,13 @@ class SandboxController(EventsControllerMixin):
         * ``blind`` — informational flag the panel reads to suppress
           the date portion of the clock readout. Does not alter
           replay behaviour.
+        * ``data_source`` — the vendor these bars came from, pinned on
+          the controller for the session's lifetime. Downstream loads
+          (``register_ticker`` / ``register_compare`` via the app, and
+          the Market Heatmap's prices) read it instead of re-deriving a
+          preference, so one session never mixes vendors. Empty means
+          the caller didn't pin one and consumers fall back to their
+          own resolution.
 
         Failure modes:
 
@@ -525,6 +541,7 @@ class SandboxController(EventsControllerMixin):
         self.session_date = session_date
         self.lookback_days = int(lookback_days)
         self.reference_symbol = reference_symbol
+        self.data_source = str(data_source or "")
         self.include_extended = bool(include_extended)
         self.auto_cycle = bool(auto_cycle)
         self.blind = bool(blind)
