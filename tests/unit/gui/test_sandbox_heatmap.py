@@ -29,6 +29,7 @@ def _provider(tmp_path):
     return HeatmapProvider(
         meta=meta,
         shares_fetcher=lambda s: [(_epoch(2015, 1, 1), 1000.0)],
+        splits_fetcher=lambda _s: [],
         cache_dir=tmp_path,
     )
 

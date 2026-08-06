@@ -3,6 +3,17 @@
 ## [Unreleased]
 
 ### Fixed
+- **Heatmap tile sizes were wrong for anything that had split.** Tile
+  area multiplied a split-adjusted price by an as-reported share count,
+  so every company that split after the replay date was drawn smaller by
+  exactly its split ratio — and because a treemap fills a fixed area,
+  the companies that *hadn't* split grew to take up the slack. On a
+  2020 replay that meant NVDA drawn 40× too small, Amazon and Alphabet
+  20×, Tesla 15×, Apple 4×, while Microsoft and JPMorgan looked ~2.7×
+  bigger than they were. The names worth looking at were slivers and the
+  ones that weren't looked dominant. Share counts are now put on the
+  same basis as the price before sizing, so a split after the replay
+  clock no longer changes the map.
 - **The sandbox Market Heatmap was showing you the answer.** It read the
   1-Day % from *daily* bars, and a daily bar is timestamped at its open
   while carrying the session's settled close — so from the very first

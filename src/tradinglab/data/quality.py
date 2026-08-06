@@ -127,6 +127,51 @@ def is_partial_volume(source_name: str) -> bool:
     return volume_quality(source_name) == VOLUME_PARTIAL
 
 
+# --- Split adjustment ------------------------------------------------------
+#
+# Whether a source's *price history* is back-adjusted for splits. Distinct
+# from the dormant ``SourceQuality.adjusted`` flag above, which conflates
+# split and dividend adjustment and is not read by any code path.
+#
+# This matters wherever prices are multiplied by a share count: the sandbox
+# heatmap sizes tiles by ``shares × price`` and lifts an as-reported share
+# count onto the price's basis. Get the premise wrong in either direction
+# and every splitter is mis-sized by exactly its cumulative split ratio
+# (see backtest/heatmap.spec.md Invariant 7).
+#
+# Sources absent from this map default to True: every vendor here
+# back-adjusts by default, and yfinance does so unconditionally
+# (``auto_adjust=False`` only disables *dividend* adjustment).
+_SPLIT_ADJUSTED: dict[str, bool] = {
+    "yfinance": True,           # history() always back-adjusts splits
+    "polygon": True,            # adjusted=true baked into the URL
+    "schwab": True,
+    "yfinance+alpaca": True,    # both legs split-adjusted under defaults
+    "synthetic": True,          # generated series has no splits at all
+    "synthetic-stream": True,
+}
+
+
+def is_split_adjusted(source_name: str) -> bool:
+    """Whether ``source_name``'s price history is back-adjusted for splits.
+
+    Alpaca is resolved at call time from the configured ``adjustment``
+    mode: it defaults to ``split`` (adjusted), but a user may set
+    ``ALPACA_ADJUSTMENT`` to ``raw`` or ``dividend``, neither of which
+    back-adjusts splits. Never raises — a credential-read failure falls
+    back to the ``split`` default.
+    """
+    if source_name == "alpaca":
+        try:
+            from .credentials import get_credentials
+
+            adj = (get_credentials().alpaca.adjustment or "split").lower()
+        except Exception:  # noqa: BLE001 - be robust to any cred read failure
+            adj = "split"
+        return adj in {"split", "all"}
+    return _SPLIT_ADJUSTED.get(source_name, True)
+
+
 def partial_volume_warning(source_name: str) -> str | None:
     """User-facing caveat string if ``source_name`` has partial volume, else None.
 
@@ -200,6 +245,7 @@ __all__ = [
     "quality_for",
     "volume_quality",
     "is_partial_volume",
+    "is_split_adjusted",
     "partial_volume_warning",
     "rank_sources",
     "best_source",

@@ -77,7 +77,12 @@ def _provider(tmp_path):
         calls.append(sym)
         return list(fake_series.get(sym, []))
 
-    prov = P.HeatmapProvider(meta=meta, shares_fetcher=fetcher, cache_dir=tmp_path)
+    prov = P.HeatmapProvider(
+        meta=meta,
+        shares_fetcher=fetcher,
+        splits_fetcher=lambda _s: [],
+        cache_dir=tmp_path,
+    )
     return prov, calls
 
 
@@ -110,5 +115,7 @@ def test_provider_disk_cache_roundtrip(tmp_path):
         raise AssertionError("should not fetch; disk cache present")
 
     meta = {"AAA": {"sector": "Tech", "industry": "Software", "cik": "1", "date_added_ts": 0}}
-    prov2 = P.HeatmapProvider(meta=meta, shares_fetcher=boom, cache_dir=tmp_path)
+    prov2 = P.HeatmapProvider(
+        meta=meta, shares_fetcher=boom, splits_fetcher=lambda _s: [], cache_dir=tmp_path
+    )
     assert prov2.shares_at("AAA", _epoch(2018, 1, 1)) == (1000.0, False)

@@ -121,9 +121,14 @@ the pure [`backtest/heatmap.py`](../backtest/heatmap.spec.md) layer. See
   (~11y), sizing before the series start **carries back the earliest
   known count** (nearest-in-time, not today's) and marks those tiles
   `approx_size` (subtle hatched border) + notes it in the coverage
-  label. Size uses **raw** session price × **raw** shares so splits
-  self-cancel (split-consistency), capturing buybacks / dilution. Sizes
-  are stable within a session and update at each session roll.
+  label. The count is taken from `provider.basis_shares_at`, i.e.
+  already lifted onto the price series' basis by `split_factor_after`
+  when that series is back-adjusted (`data.quality.is_split_adjusted`,
+  passed as `HeatmapProvider.price_split_adjusted`) — multiplying a
+  back-adjusted price by an as-reported count under-sized every
+  post-replay-date splitter by its cumulative split ratio (`heatmap`
+  Invariant 7). Buybacks / dilution are still captured. Sizes are stable
+  within a session and update at each session roll.
 - **Point-in-time membership + coverage label** (v1 survivorship
   stance, decision 1). The universe is filtered through
   `heatmap.members_asof(clock)` (current members with `Date added` ≤

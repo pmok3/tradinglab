@@ -32,6 +32,7 @@ __all__ = (
     "apply_colors",
     "compute_1d_pct",
     "scaled_cap",
+    "split_factor_after",
     "price_at_or_before",
     "session_date_of",
     "completed_session_closes",
@@ -314,9 +315,17 @@ def compute_1d_pct(price_at_clock: float | None, prior_close: float | None) -> f
 def scaled_cap(shares: float | None, price: float | None) -> float:
     """Historically-scaled cap = ``shares * price``.
 
-    Caller must pass **raw** (as-reported) shares with **raw**
-    (unadjusted) price so splits self-cancel (spec Invariant 7). Missing
-    / NaN inputs -> ``0.0`` (the layout floors it to a sliver).
+    Both inputs must be on the **same split basis**. Most vendors
+    back-adjust the price series to *today's* basis (yfinance does so
+    unconditionally: ``auto_adjust=False`` only disables dividend
+    adjustment), in which case the caller lifts an as-reported share
+    count onto that basis with :func:`split_factor_after` rather than
+    trying to obtain a raw price the source will not give it. Where the
+    source serves as-reported prices instead (see
+    ``data.quality.is_split_adjusted``) no lift is applied. Mixing bases
+    mis-sizes a tile by exactly the split ratio, in whichever direction
+    (spec Invariant 7). Missing / NaN inputs -> ``0.0`` (the layout
+    floors it to a sliver).
     """
     if shares is None or price is None:
         return 0.0
@@ -328,6 +337,37 @@ def scaled_cap(shares: float | None, price: float | None) -> float:
     if math.isnan(s) or math.isnan(p) or s < 0.0 or p < 0.0:
         return 0.0
     return s * p
+
+
+def split_factor_after(
+    splits: Sequence[tuple[int, float]], as_of_ts: int
+) -> float:
+    """Cumulative split ratio for splits **strictly after** ``as_of_ts``.
+
+    Multiply an as-reported share count observed at ``as_of_ts`` by this
+    to express it on today's basis — the basis the back-adjusted price
+    series already uses.
+
+    This is the sizing analogue of the no-future-leakage rule: a split
+    that happens *after* the replay clock is information the historical
+    map must not react to, and reacting to it is precisely what shrinks
+    a pre-split tile by the split ratio. Ratios ``<= 0`` / NaN are
+    skipped; an empty series returns ``1.0``. Handles fractional ratios
+    (reverse splits and the spin-offs some vendors record as splits).
+    ``splits`` is ``(epoch_seconds, ratio)`` and need not be sorted.
+    """
+    cutoff = _to_seconds(as_of_ts)
+    factor = 1.0
+    for ts, ratio in splits:
+        try:
+            when = _to_seconds(ts)
+            r = float(ratio)
+        except (TypeError, ValueError):
+            continue
+        if when <= cutoff or math.isnan(r) or r <= 0.0:
+            continue
+        factor *= r
+    return factor
 
 
 def price_at_or_before(candles: Sequence[Candle], as_of_ts: int) -> float | None:

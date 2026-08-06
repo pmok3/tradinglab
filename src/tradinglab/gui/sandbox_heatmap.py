@@ -78,13 +78,16 @@ def compute_size_pct(
     """Compute ``(size_by_symbol, pct_by_symbol, approx_symbols)``.
 
     ``size`` is split-consistent historically-scaled cap
-    (``shares × price``); ``pct`` is 1-Day % (price-at-clock vs prior
-    close). Symbols whose shares came from a carried-back count (or are
-    missing / not-yet-primed) land in ``approx_symbols``. ``shares_at``
-    defaults to ``provider.shares_at`` (fetching); the window passes
-    ``provider.peek_shares_at`` for a non-blocking render.
+    (``shares × price``): ``shares_at`` returns the count already lifted
+    onto the price series' (today's, back-adjusted) basis, so a split
+    occurring after the replay clock cannot shrink the tile. ``pct`` is
+    1-Day % (price-at-clock vs prior close). Symbols whose shares came
+    from a carried-back count, or whose split history is unknown, land
+    in ``approx_symbols``. ``shares_at`` defaults to
+    ``provider.basis_shares_at`` (fetching); the window passes
+    ``provider.peek_basis_shares_at`` for a non-blocking render.
     """
-    sa = shares_at or provider.shares_at
+    sa = shares_at or provider.basis_shares_at
     size_by: dict[str, float] = {}
     pct_by: dict[str, float | None] = {}
     approx: set[str] = set()
@@ -363,7 +366,9 @@ class SandboxHeatmapWindow(tk.Toplevel):
         super().__init__(app, **kwargs)
         self.app = app
         self.controller = controller
-        self.provider = provider if provider is not None else HeatmapProvider()
+        self.provider = provider if provider is not None else HeatmapProvider(
+            price_split_adjusted=self._price_is_split_adjusted()
+        )
         # An injected price source is used verbatim (tests / callers that
         # supply their own basis). Otherwise build one bound to the
         # session's data source + tick interval, so the map is priced from
@@ -460,6 +465,20 @@ class SandboxHeatmapWindow(tk.Toplevel):
     def _session_interval(self) -> str:
         return str(getattr(self.controller, "interval", "") or "5m")
 
+    def _price_is_split_adjusted(self) -> bool:
+        """Whether the session source back-adjusts prices for splits.
+
+        Decides whether the share count must be lifted onto the price's
+        basis before sizing. Getting it wrong either way mis-sizes every
+        splitter by its cumulative ratio (`heatmap` Invariant 7).
+        """
+        try:
+            from ..data import quality as _quality
+
+            return bool(_quality.is_split_adjusted(self._session_source()))
+        except Exception:
+            return True
+
     def _members(self, clock: int) -> list[str]:
         """Point-in-time members, narrowed to the session universe.
 
@@ -483,7 +502,7 @@ class SandboxHeatmapWindow(tk.Toplevel):
             self.price_source,
             members,
             clock,
-            shares_at=self.provider.peek_shares_at,
+            shares_at=self.provider.peek_basis_shares_at,
         )
         self._layout = build_layout(
             symbols=members,

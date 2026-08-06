@@ -23,6 +23,13 @@ drive the partial-volume warning, not the current ranking order.
 - `quality_for(source_name) -> SourceQuality` — baseline descriptor (unknown → `_DEFAULT_QUALITY`).
 - `volume_quality(source_name) -> str` — **live**, feed-aware tier. Alpaca is refined by its configured feed (`iex`→partial, else full) via a lazy `get_credentials()` read; robust to cred-read failure (falls back to baseline). Other sources return their baseline tier.
 - `is_partial_volume(source_name) -> bool` — `volume_quality(...) == VOLUME_PARTIAL`.
+- `is_split_adjusted(source_name) -> bool` — whether the source's *price
+  history* is back-adjusted for splits. Resolved at call time for
+  `alpaca` from its configured `adjustment` mode (`split` / `all` →
+  True; `raw` / `dividend` → False); table-driven otherwise, defaulting
+  to True for unknown sources. Distinct from the dormant
+  `SourceQuality.adjusted` field, which conflates split and dividend
+  adjustment and is read by nothing.
 - `partial_volume_warning(source_name) -> str | None` — user-facing caveat when partial, else None. Consumed by `app.on_axis_change` (chart source change) and `gui/sandbox_menu` (sandbox start).
 - `rank_sources` / `best_source` / `preferred_source` — **back-compat shims** that delegate to the global, tier-aware ranking in `data/source_ranking.py` (see that spec). They accept a vestigial `interval` kwarg (ignored — the global order is interval-independent). `preferred_source` keeps the "respect a non-candidate active source" contract and defaults `candidates` to `data.base.user_visible_sources()`.
 
@@ -38,6 +45,7 @@ drive the partial-volume warning, not the current ranking order.
 
 ## Invariants
 - `is_partial_volume(name)` ⇔ `volume_quality(name) == VOLUME_PARTIAL`; only `alpaca` with `feed=="iex"` is partial today.
+- `is_split_adjusted(name)` is False only for `alpaca` in `raw` / `dividend` adjustment mode today. Consumers that multiply a price by a share count (the sandbox heatmap's tile sizing) must consult it: assuming the wrong basis mis-sizes every splitter by exactly its cumulative split ratio (see `backtest/heatmap.spec.md` Invariant 7).
 - `partial_volume_warning(name)` is None ⇔ not partial.
 - The ranking shims delegate to `data.source_ranking` (see that spec for ranking invariants); the vestigial `interval` kwarg never affects the result.
 - Never raises for a well-formed source name (cred/registry read failures degrade gracefully).

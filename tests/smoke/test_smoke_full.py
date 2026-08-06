@@ -12145,6 +12145,11 @@ def check_g3_sandbox_heatmap(app) -> None:
     provider = HeatmapProvider(
         meta=meta,
         shares_fetcher=lambda s: [(_ep(2015, 1, 1), 1000.0)],
+        # Must be injected: the default splits fetcher is the live
+        # yfinance one, and _stub_yfinance only swaps DATA_SOURCES —
+        # it does not stub the yfinance module, so an omitted fetcher
+        # silently puts this check on the network.
+        splits_fetcher=lambda _s: [],
         cache_dir=Path(tempfile.mkdtemp(prefix="tl_heatmap_smoke_")),
     )
     provider.prime(["AAA", "BBB"])  # so peek returns real (non-approx) sizes

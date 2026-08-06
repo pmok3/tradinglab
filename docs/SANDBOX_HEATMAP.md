@@ -33,7 +33,7 @@ onto the primary chart and drill into the daily + intraday confluence.
 |---|---|---|
 | 1 | Universe | **S&P 500** map (Finviz default), preloaded for the replay window; **point-in-time membership** via the `Date added` filter (look-ahead removed) + coverage label; narrowed to the session's prepared universe when one is set |
 | 2 | Data source | **The session's own source** — pinned at Sandbox Start (`sandbox_data_source`, default Auto) and read off `SandboxController.data_source`, so the map is priced from the same tape the replay runs on; sector / industry + historical shares series are cached (no scraping) |
-| 3 | Tile size | **Historically-scaled cap** = `shares(t) × price(t)`, split-consistent; `shares(t)` from `get_shares_full` snapped to clock; pre-series → carry back earliest-known (flagged approximate) |
+| 3 | Tile size | **Historically-scaled cap** = `shares(t) × price(t)`, split-consistent: the as-reported count is lifted onto the price series' back-adjusted basis via `split_factor_after`; `shares(t)` from `get_shares_full` snapped to clock; pre-series → carry back earliest-known (flagged approximate) |
 | 4 | Color metric | **Raw 1-Day % change** (pure Finviz); RS / vs-SPY deferred, seam kept clean |
 | 5 | Timeframe | **1-Day only** in v1; 1W / 1M / 3M / 6M / 1Y / YTD in v2 |
 | 6 | Layout | Sector → industry **squarified treemap** (vendored ~40-line squarify, no new dependency) |
@@ -105,21 +105,44 @@ display:
   back to the last **two completed** daily sessions (still leak-free,
   just a session stale) and says so in the footer + tooltip.
 - **Size — historically-scaled market cap:** `shares(t) × price(t)`,
-  both on the **same split basis** (raw price × raw shares, so a split
-  is a wash). `shares(t)` is the historical share count snapped to the
-  current replay **session** (yfinance `get_shares_full`, ~11y deep,
-  most-recent value ≤ the session date). **When price history is deeper
-  than the shares series,** sizing before the series start **carries
-  back the earliest known count** (nearest-in-time — never today's) and
-  flags those tiles approximate + counts them in the coverage label; the
-  session anchor price keeps sizes stable within a session and updates at
-  each session roll (decision 8). This captures buybacks and dilution —
-  the real economic share-count drift a static current-shares assumption
-  would miss. **The split trap:** `get_shares_full` returns
-  *raw, as-reported* shares, so e.g. AAPL's raw count reads +163% since
-  2015 purely from the 2020 4:1 split, while split-adjusted it *shrank*
-  ~34% via buybacks. Multiplying split-adjusted price × raw shares
-  over-sizes by the split ratio — hence the raw × raw rule.
+  both on the **same split basis**. `shares(t)` is the historical share
+  count snapped to the current replay **session** (yfinance
+  `get_shares_full`, ~11y deep, most-recent value ≤ the session date).
+  **When price history is deeper than the shares series,** sizing before
+  the series start **carries back the earliest known count**
+  (nearest-in-time — never today's) and flags those tiles approximate +
+  counts them in the coverage label; the session anchor price keeps
+  sizes stable within a session and updates at each session roll
+  (decision 8). This captures buybacks and dilution — the real economic
+  share-count drift a static current-shares assumption would miss.
+
+  **The split trap (and why the original rule was wrong).** This doc
+  used to prescribe "raw price × raw shares, so a split is a wash".
+  That rule is **unimplementable on the default source**: yfinance
+  back-adjusts its price history for splits *unconditionally* —
+  `auto_adjust=False` only disables *dividend* adjustment — so a raw
+  price simply cannot be obtained. Meanwhile `get_shares_full` really is
+  as-reported. Stating the rule that way is what led the implementation
+  to multiply a back-adjusted price by an as-reported count, which
+  **under-sizes a tile by exactly its cumulative split ratio**. Measured
+  on a 2020-06-01 replay: NVDA 40× too small, AMZN and GOOGL 20×, TSLA
+  15×, AAPL 4× — and since a treemap normalises to a unit square, the
+  names that *didn't* split inflated to absorb the freed area (MSFT drew
+  61% of a nine-name basket against a true 23%). The names that mattered
+  were slivers; the ones that didn't looked dominant.
+
+  The correction lifts the *shares* to meet the price's basis rather
+  than trying to push the price back:
+  `shares(t) × split_factor_after(splits, filing_date)`, measured from
+  the share count's own observation date (filings are quarterly, so a
+  split can land between the last one and the replay clock). The lift is
+  **conditional on the source**: a few configurations serve as-reported
+  prices (Alpaca in `raw` / `dividend` adjustment mode), where both legs
+  are already raw and lifting would over-size splitters by the same
+  ratio in the opposite direction — `data.quality.is_split_adjusted`
+  decides. Stated as a property, and true in either basis — the sizing
+  analogue of the no-future-leakage rule — **a split occurring after the
+  replay clock must not change any tile's area.**
 - **No future leakage (hard invariant):** every value derives only from
   candles at or before `SandboxController.clock_ts()`, and daily bars
   only from *completed* sessions. Enforced in
