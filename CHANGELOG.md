@@ -7,10 +7,9 @@
 The Market Heatmap release. The in-app heatmap stopped showing you the
 answer, started sizing tiles correctly, and now runs **live** on a
 streaming quote feed instead of only inside a replay session. Also
-includes the credential-handling work previously tagged `v0.6.1-beta`:
-API keys live in a proper encrypted per-vendor store, the app can tell
-you whether they actually work, and a newly-saved key enables its data
-source without a restart.
+includes a round of credential handling: API keys live in a proper
+encrypted per-vendor store, the app can tell you whether they actually
+work, and a newly-saved key enables its data source without a restart.
 
 ### Added
 
