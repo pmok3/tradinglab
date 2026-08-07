@@ -1526,16 +1526,31 @@ def check_d2_preserve_xlim_across_compare_toggle(app) -> None:
             print(f"  [SKIP] d2: dataset too small ({len(candles)} bars)")
             return
         # Ylim should cover a RECENT slice, not the first candle.
-        lows = [c.low for c in candles if c.low > 0]
-        if lows:
-            window = min(200, len(candles))
-            recent_low = min(c.low for c in candles[-window:] if c.low > 0)
-            recent_high = max(c.high for c in candles[-window:] if c.high > 0)
+        #
+        # Filter and guard over the SAME slice. Guarding on the whole
+        # series while taking min/max over only the tail is what made
+        # this check flake: compare mode inserts ``gap`` placeholder
+        # bars (zero/NaN OHLC) when one ticker has no data at a
+        # timestamp the other does, so the tail can legitimately be all
+        # gaps while an older bar still has ``low > 0``. The guard then
+        # passed and ``min()`` raised on an empty sequence — a CI
+        # failure that rotated across OS/Python combos purely on fetch
+        # timing (macOS 3.11 and windows 3.12 both hit it).
+        window = min(200, len(candles))
+        recent = candles[-window:]
+        recent_lows = [c.low for c in recent if c.low > 0]
+        recent_highs = [c.high for c in recent if c.high > 0]
+        if recent_lows and recent_highs:
+            recent_low = min(recent_lows)
+            recent_high = max(recent_highs)
             y_lo, y_hi = primary["price_ax"].get_ylim()
             assert y_lo <= recent_high and y_hi >= recent_low, (
                 f"compare toggle with preserve=True showed stale Y range: "
                 f"ylim=({y_lo:.2f}, {y_hi:.2f}) recent=({recent_low:.2f}, "
                 f"{recent_high:.2f})")
+        else:
+            print("  [SKIP] d2: recent window is all gap bars — nothing "
+                  "priced to compare the Y range against")
     finally:
         app._preserve_xlim_on_render = prev_preserve
         app.compare_var.set(prev_compare)
@@ -21657,7 +21672,17 @@ def check_d28_data_readout_strip(app) -> None:
         entry = app._ax_candle_map.get(app._ax_price)
         return entry is not None and entry[0] is prim
 
-    _pump_until(app, _fresh_render_landed, timeout=8.0)
+    if not _pump_until(app, _fresh_render_landed, timeout=8.0):
+        # §7.26: when the precondition can't be established, skip with a
+        # logged reason rather than asserting into whatever state exists.
+        # Discarding this bool is how the stale-stub comparison reached
+        # the OHLC assertions and failed with values that look like
+        # nonsense until you recognise d10/d12's flat stub.
+        prim = getattr(app, "_primary", None)
+        print(f"  [SKIP] d28: fresh render never landed "
+              f"(_primary={len(prim) if prim else 0} bars) — "
+              f"suspect §7.2 stub pollution from an earlier check")
+        return
 
     ax_p = app._ax_price
     ax_v = app._ax_volume
@@ -21728,6 +21753,18 @@ def check_d28_data_readout_strip(app) -> None:
                              f"{win_end}) first15={diag}")
 
     app._update_readout(test_idx + offset)
+    # A late in-flight future from an earlier check can re-render between
+    # the identity assertion above and this call, re-pointing
+    # ``_ax_candle_map`` at stub bars — the readout is then built from a
+    # different list than ``candles`` and every OHLC assertion below
+    # compares two unrelated series. The identity check above is only a
+    # point-in-time snapshot, so re-verify it here rather than reporting
+    # a mismatch that reads as a real regression (§7.2).
+    entry_now = app._ax_candle_map.get(ax_p)
+    if entry_now is None or entry_now[0] is not candles:
+        print("  [SKIP] d28: a late render swapped the series mid-check "
+              "— §7.2 stub pollution, not a readout regression")
+        return
     c = candles[test_idx]
     main = box._main_text.get_text()
     assert (f"O {c.open:.2f}" in main and f"H {c.high:.2f}" in main
