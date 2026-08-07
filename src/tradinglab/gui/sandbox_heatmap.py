@@ -1,12 +1,35 @@
 """Sandbox heatmap pop-out window.
 
-Non-modal ``tk.Toplevel`` launched from the Sandbox menu while a replay
-session is active. Renders the S&P 500 as a Finviz-style sector ->
+Non-modal ``tk.Toplevel`` renders the S&P 500 as a Finviz-style sector ->
 industry treemap (matplotlib ``Rectangle`` patches on an embedded
-``FigureCanvasTkAgg``), colored by 1-Day % change **as of the replay
-clock** and sized by historically-scaled market cap. Recolors every
-tick; relays out per session; click a tile to load that symbol on the
-primary chart. Blind-mode-safe and dark-mode-themed.
+``FigureCanvasTkAgg``), colored by 1-Day % change and sized by the
+selected basis. Recolors every tick; relays out per session; click a
+tile to load that symbol on the primary chart. Blind-mode-safe and
+dark-mode-themed.
+
+Runs in two modes behind one window:
+
+* **Replay** — launched from the Sandbox menu, driven by the replay
+  clock, priced from cached bars via :class:`SessionPriceSource`.
+* **Live** — launched from the View menu, driven by the wall clock and
+  priced from a streaming quote feed via :class:`QuotePriceSource`, with
+  the bar path as fallback.
+
+The mode is carried by the *context* object (``gui/heatmap_context.py``),
+not by branches through the render path — the window reads the same
+controller-shaped surface either way.
+
+Why live mode streams rather than polls
+---------------------------------------
+
+A heatmap is the wrong shape for REST. Five hundred symbols refreshed
+continuously would consume the request budget that on-demand chart loads
+and background history depend on, to reconstruct a value the quote wire
+already carries. So live mode subscribes once to a
+:class:`~tradinglab.streaming.quotes.QuoteSource` and paints from a
+coalescing book; it never opens a polling loop. When no quote source is
+configured it degrades to whatever bars are already cached — still no
+polling — and says so in the footer.
 
 See ``gui/sandbox_heatmap.spec.md`` and ``docs/SANDBOX_HEATMAP.md``.
 """
@@ -16,6 +39,7 @@ from __future__ import annotations
 import bisect
 import datetime as _dt
 import threading
+import time
 import tkinter as tk
 from collections.abc import Callable, Iterable
 from tkinter import ttk
@@ -38,6 +62,7 @@ from ..backtest.heatmap import (
 )
 from ..backtest.heatmap_provider import HeatmapProvider
 from ..core.timezones import normalize_epoch_to_seconds, to_et
+from .heatmap_context import LiveHeatmapContext, SandboxHeatmapContext
 from .native_theme import apply_toplevel_theme, current_theme
 
 # A price source resolves ``(price_at_clock, prior_close)`` for a symbol.
@@ -52,6 +77,18 @@ _LABEL_H = 0.030
 _FULL_LABEL_H = 0.050  # show ticker + % above this height, else ticker only
 _SECTOR_HDR_W = 0.06
 _SECTOR_HDR_H = 0.05
+
+#: Opacity applied to a tile whose last print is older than the staleness
+#: threshold. Dimming (rather than hatching) is deliberate: hatching
+#: already means "approximate size", and a trader must be able to see at
+#: a glance that a price is old *and* that its tile area is a guess.
+_STALE_ALPHA = 0.35
+
+#: Seconds without any symbol updating before the feed is called dead.
+#: Generous, because it is a whole-universe signal: on 500 names during
+#: regular hours something trades every few seconds, so silence this long
+#: means the socket, not the tape.
+_FEED_DEAD_AFTER_S = 90.0
 
 
 # ---------------------------------------------------------------------------
@@ -391,6 +428,168 @@ class _DailyBar:
         self.close = close
 
 
+class QuotePriceSource:
+    """Price source backed by a live quote feed, falling back to bars.
+
+    Satisfies the same ``(symbol, clock) -> (price, prior_close)``
+    contract as :class:`SessionPriceSource`, plus ``dollar_volume_at``,
+    so the window's compute path is identical in live and replay mode.
+
+    Three properties are worth stating explicitly, because they are what
+    make the quote path *better* than the bar path rather than merely
+    faster:
+
+    * **Both legs arrive in the same message.** ``prev_close`` is the
+      exchange's official previous close, not something derived by
+      indexing a daily series — so the look-ahead that
+      ``backtest/heatmap.spec.md`` Invariant 6 defends against is
+      structurally impossible here, not merely avoided.
+    * **``day_volume`` is consolidated and cumulative.** The bar path has
+      to sum its own intraday bars, which on an IEX-only feed measures
+      IEX share rather than dollar volume. The quote field is the real
+      session total.
+    * **Coverage degrades per symbol, not all at once.** Until a symbol's
+      first quote lands (and for anything the feed does not carry) the
+      fallback answers, so the map paints immediately from cache and
+      sharpens as quotes arrive rather than starting blank.
+
+    The clock argument is accepted and ignored: a quote *is* the current
+    value, and there is no history to index. Rewinding a live map is not
+    a supported operation — that is what replay is for.
+    """
+
+    def __init__(
+        self,
+        book: Any,
+        *,
+        fallback: Any | None = None,
+        stale_after_s: float = 120.0,
+        clock=time.time,
+    ) -> None:
+        self.book = book
+        self.fallback = fallback
+        self.stale_after_s = float(stale_after_s)
+        self._clock = clock
+
+    def _entry(self, symbol: str) -> Any | None:
+        try:
+            return self.book.get(symbol)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def __call__(self, symbol: str, clock_ts: int) -> tuple[float | None, float | None]:
+        entry = self._entry(symbol)
+        if entry is not None:
+            last = entry.quote.last
+            prior = entry.quote.prev_close
+            if last is not None and prior is not None:
+                return (last, prior)
+            # A partially-populated quote is worse than useless on its
+            # own: one leg is live and the other is missing, so the
+            # percent would be None while the tile looked connected.
+            # Borrow the missing leg from cache instead of dropping the
+            # symbol.
+            if self.fallback is not None:
+                fb_last, fb_prior = self.fallback(symbol, clock_ts)
+                return (
+                    last if last is not None else fb_last,
+                    prior if prior is not None else fb_prior,
+                )
+            return (last, prior)
+        if self.fallback is not None:
+            return self.fallback(symbol, clock_ts)
+        return (None, None)
+
+    def dollar_volume_at(self, symbol: str, clock_ts: int) -> float | None:
+        entry = self._entry(symbol)
+        if entry is not None:
+            vol = entry.quote.day_volume
+            price = entry.quote.last
+            if vol is not None and price is not None:
+                return float(vol) * float(price)
+        fb = getattr(self.fallback, "dollar_volume_at", None)
+        return fb(symbol, clock_ts) if callable(fb) else None
+
+    # -- coverage reporting --
+
+    def quoted_symbols(self) -> set[str]:
+        """Symbols the live feed can actually price **and** date.
+
+        Deliberately narrower than "has a book entry". A tile is only
+        covered by the quote path if the entry carries a usable ``last``
+        *and* a vendor timestamp — without the timestamp we cannot say
+        how old the price is, so the honest reading is that the feed does
+        not cover it and the bar source's staleness reporting still
+        applies. Treating mere presence as coverage let a
+        timestamp-less entry fall between the two sets and render at
+        full opacity while its legs came from a completed daily bar.
+        """
+        out: set[str] = set()
+        try:
+            snapshot = self.book.snapshot()
+        except Exception:  # noqa: BLE001
+            return out
+        for sym, entry in snapshot.items():
+            if entry.quote.last is not None and entry.quote.ts is not None:
+                out.add(sym)
+        return out
+
+    def untimed_symbols(self) -> set[str]:
+        """Symbols with a quote we cannot age (no vendor timestamp)."""
+        out: set[str] = set()
+        try:
+            snapshot = self.book.snapshot()
+        except Exception:  # noqa: BLE001
+            return out
+        for sym, entry in snapshot.items():
+            if entry.quote.ts is None:
+                out.add(sym)
+        return out
+
+    def stale_symbols(self) -> set[str]:
+        """Symbols whose most recent print is older than the threshold.
+
+        Unlike the replay source's ``stale_symbols`` (which means "priced
+        from a completed daily bar"), this is a *continuous* per-symbol
+        property that changes between paints. A thin name drifts in and
+        out of it all session while the feed stays perfectly healthy —
+        which is exactly why it must be shown per tile rather than
+        summarised once in the footer.
+
+        A symbol the feed has never delivered is **not** listed here: it
+        is served entirely by the fallback, whose own staleness reporting
+        already covers it. Counting it twice would double-report it.
+        """
+        out: set[str] = set()
+        now = self._clock()
+        try:
+            snapshot = self.book.snapshot()
+        except Exception:  # noqa: BLE001
+            return out
+        for sym, entry in snapshot.items():
+            age = entry.price_age_s(now=now)
+            if age is not None and age > self.stale_after_s:
+                out.add(sym)
+        return out
+
+    def feed_age_s(self) -> float | None:
+        """Seconds since *any* symbol updated — the feed-health signal."""
+        try:
+            return self.book.feed_age_s()
+        except Exception:  # noqa: BLE001
+            return None
+
+
+def _fmt_age(seconds: float) -> str:
+    """Compact human age: ``45s``, ``12m``, ``2h``."""
+    s = max(0.0, float(seconds))
+    if s < 90:
+        return f"{int(s)}s"
+    if s < 5400:
+        return f"{int(s / 60)}m"
+    return f"{int(s / 3600)}h"
+
+
 def _default_price_source(
     symbol: str, clock_ts: int, *, source: str = "yfinance", interval: str = "1d"
 ) -> tuple[float | None, float | None]:
@@ -426,12 +625,17 @@ class SandboxHeatmapWindow(tk.Toplevel):
         super().__init__(app, **kwargs)
         self.app = app
         self.controller = controller
+        self._live = bool(getattr(controller, "is_live", False))
         self.provider = provider if provider is not None else self._build_provider()
         # An injected price source is used verbatim (tests / callers that
         # supply their own basis). Otherwise build one bound to the
         # session's data source + tick interval, so the map is priced from
         # exactly the bars the replay itself is running on.
         self._session_prices: SessionPriceSource | None = None
+        self._quote_prices: QuotePriceSource | None = None
+        self._quote_book: Any = None
+        self._quote_sub: Any = None
+        self._quote_source_name = ""
         if price_source is not None:
             self.price_source = price_source
         else:
@@ -440,7 +644,9 @@ class SandboxHeatmapWindow(tk.Toplevel):
                 interval=self._session_interval(),
             )
             self.price_source = self._session_prices
-        self.title("Market Heatmap")
+            if self._live:
+                self._start_quote_feed()
+        self.title("Market Heatmap — Live" if self._live else "Market Heatmap")
 
         self._layout = None
         self._tiles: tuple[HeatmapTile, ...] = ()
@@ -485,6 +691,120 @@ class SandboxHeatmapWindow(tk.Toplevel):
         self.after(250, self._poll_clock)
 
     # -- construction --
+
+    def _stale_after_s(self) -> float:
+        try:
+            from .. import defaults as _defaults
+
+            return float(_defaults.get("heatmap_stale_after_s") or 120)
+        except Exception:
+            return 120.0
+
+    def _start_quote_feed(self) -> None:
+        """Subscribe to the configured quote source, if any.
+
+        Resolution happens **here**, at the window level, for the same
+        reason the shares source does (§ ``_build_provider``): the
+        tunable is policy, and the low-level modules should receive an
+        already-chosen provider rather than each reaching for settings.
+
+        Failure is not fatal and not loud. An unconfigured or broken
+        quote source leaves ``_quote_prices`` as ``None``, the window
+        keeps the cached-bar price source, and the footer reports which
+        one is actually in use — a live map that silently pretends to be
+        streaming is worse than one that admits it is reading cache.
+        """
+        try:
+            from ..streaming.quote_book import QuoteBook
+            from ..streaming.quotes import NullQuoteSource, resolve_quote_source
+
+            name, source = resolve_quote_source()
+            if isinstance(source, NullQuoteSource):
+                self._quote_source_name = ""
+                return
+            book = QuoteBook()
+            self._quote_book = book
+            self._quote_source_name = name
+            self._quote_prices = QuotePriceSource(
+                book,
+                fallback=self._session_prices,
+                stale_after_s=self._stale_after_s(),
+            )
+            self.price_source = self._quote_prices
+            self._quote_sub = source.subscribe_quotes([], book.update)
+        except Exception:
+            self._quote_prices = None
+            self._quote_book = None
+            self._quote_sub = None
+            self._quote_source_name = ""
+            if self._session_prices is not None:
+                self.price_source = self._session_prices
+
+    def _sync_quote_symbols(self, members: Iterable[str]) -> None:
+        """Point the subscription at the current membership.
+
+        Called on relayout rather than every tick: index membership is
+        near-static day to day, which is precisely why a subscription
+        beats polling here.
+        """
+        sub = self._quote_sub
+        if sub is None:
+            return
+        symbols = list(members)
+        try:
+            sub.set_symbols(symbols)
+        except Exception:
+            return
+        book = self._quote_book
+        if book is not None:
+            try:
+                book.retain(symbols)
+            except Exception:
+                pass
+
+    def _stale_symbols(self) -> set[str]:
+        """Symbols whose price should render as not-current.
+
+        Unions the independent notions, because they coexist in live
+        mode and a tile is untrustworthy under any of them:
+
+        * the quote source's "last print older than the threshold";
+        * a quote we cannot **age** at all (no vendor timestamp) — an
+          unknown age is not a fresh one, and it is exactly the case
+          where a leg may have been borrowed from a completed daily bar;
+        * the bar source's "priced from a completed daily session", for
+          every symbol the quote feed does not actually cover.
+        """
+        out: set[str] = set()
+        covered: set[str] = set()
+        if self._quote_prices is not None:
+            try:
+                out |= self._quote_prices.stale_symbols()
+                out |= self._quote_prices.untimed_symbols()
+                covered = self._quote_prices.quoted_symbols()
+            except Exception:
+                covered = set()
+        if self._session_prices is not None:
+            try:
+                # A symbol the live feed genuinely covers is not stale
+                # just because the cached bars behind it are old.
+                out |= self._session_prices.stale_symbols() - covered
+            except Exception:
+                pass
+        return out
+
+    def _feed_status(self) -> str:
+        """Human-readable state of the live feed, or ``""`` in replay."""
+        if not self._live:
+            return ""
+        if self._quote_prices is None:
+            return "cached bars (no quote feed configured)"
+        age = self._quote_prices.feed_age_s()
+        if age is None:
+            return f"{self._quote_source_name}: connecting…"
+        if age > _FEED_DEAD_AFTER_S:
+            return f"{self._quote_source_name}: NO DATA for {int(age)}s"
+        return f"{self._quote_source_name}: live"
 
     def _initial_size_basis(self) -> str:
         """Remembered tile-area basis, falling back to market cap."""
@@ -637,8 +957,16 @@ class SandboxHeatmapWindow(tk.Toplevel):
         mostly-grey map whose readable tiles are the ones you can't
         trade. When no universe is set, the full point-in-time
         membership is used (legacy behaviour).
+
+        **Replay only.** ``_sandbox_universe`` is app-level state written
+        on session start and cleared on end, so applying it live would do
+        exactly what the two windows are separate to prevent: starting a
+        scoped replay would silently shrink the *live* map to those
+        symbols, and ending it would grow it back.
         """
         members = list(members_asof(self.provider.date_added(), clock))
+        if self._live:
+            return members
         universe = getattr(self.app, "_sandbox_universe", None)
         if universe:
             scoped = [s for s in members if s in universe]
@@ -647,6 +975,7 @@ class SandboxHeatmapWindow(tk.Toplevel):
         return members
 
     def _rebuild_layout(self, clock: int, members: list[str]) -> dict[str, float | None]:
+        self._sync_quote_symbols(members)
         size_by, pct_by, approx = compute_size_pct(
             self.provider,
             self.price_source,
@@ -655,9 +984,13 @@ class SandboxHeatmapWindow(tk.Toplevel):
             shares_at=self.provider.peek_basis_shares_at,
             size_basis=self._size_basis,
             dollar_volume_at=(
-                self._session_prices.dollar_volume_at
-                if self._session_prices is not None
-                else None
+                self._quote_prices.dollar_volume_at
+                if self._quote_prices is not None
+                else (
+                    self._session_prices.dollar_volume_at
+                    if self._session_prices is not None
+                    else None
+                )
             ),
         )
         self._layout = build_layout(
@@ -854,6 +1187,7 @@ class SandboxHeatmapWindow(tk.Toplevel):
         """
         focus = getattr(self.controller, "focus_symbol", None)
         positions = self._positions()
+        stale = self._stale_symbols()
         for t in model.tiles:
             patch = self._patches.get(t.symbol)
             if patch is None:
@@ -863,6 +1197,7 @@ class SandboxHeatmapWindow(tk.Toplevel):
                 self._draw(model, clock)
                 return
             patch.set_facecolor(t.fill)
+            patch.set_alpha(_STALE_ALPHA if t.symbol in stale else 1.0)
             if focus and t.symbol == focus:
                 patch.set_edgecolor("#ffd24d")
                 patch.set_linewidth(2.0)
@@ -910,6 +1245,7 @@ class SandboxHeatmapWindow(tk.Toplevel):
 
         focus = getattr(self.controller, "focus_symbol", None)
         positions = self._positions()
+        stale = self._stale_symbols()
 
         for t in model.tiles:
             rect = Rectangle(
@@ -917,6 +1253,8 @@ class SandboxHeatmapWindow(tk.Toplevel):
             )
             if t.approx_size:
                 rect.set_hatch("//")
+            if t.symbol in stale:
+                rect.set_alpha(_STALE_ALPHA)
             if focus and t.symbol == focus:
                 rect.set_edgecolor("#ffd24d")
                 rect.set_linewidth(2.0)
@@ -973,29 +1311,35 @@ class SandboxHeatmapWindow(tk.Toplevel):
 
         Quantifies what the map can and cannot show rather than asserting
         a fixed caveat string: how many tiles are actually priced, how
-        many fell back to the prior completed session, and which vendor
-        the prices came from.
+        many are not current, and where the prices came from.
         """
         tiles = getattr(model, "tiles", ()) or ()
         total = len(tiles)
         priced = sum(1 for t in tiles if t.pct is not None)
         approx = sum(1 for t in tiles if t.approx_size)
-        stale = 0
-        if self._session_prices is not None:
-            symbols = {t.symbol for t in tiles}
-            stale = len(self._session_prices.stale_symbols() & symbols)
+        symbols = {t.symbol for t in tiles}
+        stale = len(self._stale_symbols() & symbols)
         parts = [
             f"{total} members · {priced} priced",
         ]
         if stale:
-            parts.append(f"{stale} on prior close (no intraday bars)")
+            noun = "stale" if self._live else "on prior close (no intraday bars)"
+            parts.append(f"{stale} {noun} (dimmed)")
         if approx:
             noun = ("approx size" if self._size_basis == SIZE_BASIS
                     else "no volume")
             parts.append(f"{approx} {noun} (hatched)")
         parts.append(f"size: {size_basis_label(self._size_basis)}")
-        parts.append(f"source: {self._session_source()} {self._session_interval()}")
-        parts.append("point-in-time membership; look-ahead removed")
+        if self._live:
+            feed = self._feed_status()
+            if self._quote_prices is not None:
+                quoted = len(self._quote_prices.quoted_symbols() & symbols)
+                parts.append(f"quotes: {quoted}/{total} · {feed}")
+            else:
+                parts.append(f"source: {feed}")
+        else:
+            parts.append(f"source: {self._session_source()} {self._session_interval()}")
+            parts.append("point-in-time membership; look-ahead removed")
         return " · ".join(parts)
 
     def _render_empty(self, msg: str) -> None:
@@ -1033,7 +1377,32 @@ class SandboxHeatmapWindow(tk.Toplevel):
             bar = self._blind_bar_label()
             return f"Market Heatmap — {bar} · {n_tiles} names · 1 Day %"
         stamp = self._fmt_clock(clock)
+        if self._live:
+            state = self._market_state_label()
+            return f"Market Heatmap — {stamp} · {state} · {n_tiles} names · 1 Day %"
         return f"Market Heatmap — {stamp} · {n_tiles} names · 1 Day %"
+
+    def _market_state_label(self) -> str:
+        """What the map means right now.
+
+        A closed-market map is not wrong, but it is a *different* thing
+        from a live one — it is the last session's final picture — and a
+        trader glancing at it deserves to know which without doing date
+        arithmetic on the timestamp.
+        """
+        fn = getattr(self.controller, "market_state", None)
+        state = ""
+        if callable(fn):
+            try:
+                state = str(fn())
+            except Exception:
+                state = ""
+        return {
+            "regular": "OPEN",
+            "pre": "PRE-MARKET",
+            "post": "AFTER HOURS",
+            "closed": "CLOSED",
+        }.get(state, state.upper() or "LIVE")
 
     def _blind_bar_label(self) -> str:
         idx = None
@@ -1068,15 +1437,34 @@ class SandboxHeatmapWindow(tk.Toplevel):
             return
         pct = "n/a" if t.pct is None else f"{t.pct:+.2f}%"
         approx = " (approx size)" if t.approx_size else ""
-        stale = ""
+        self._status.configure(
+            text=f"{t.symbol} · {t.sector} / {t.industry} · "
+                 f"{pct}{approx}{self._freshness_note(t.symbol)}"
+        )
+
+    def _freshness_note(self, symbol: str) -> str:
+        """Per-symbol staleness detail for the hover readout.
+
+        The dimming tells you *that* a tile is stale; this tells you how
+        stale, which is the difference between "the print is a couple of
+        minutes old on a thin name" and "this price is from before
+        lunch".
+        """
+        if self._quote_prices is not None:
+            entry = self._quote_prices.book.get(symbol)
+            if entry is not None:
+                age = entry.price_age_s()
+                if age is None:
+                    return " (no quote timestamp)"
+                if age > self._quote_prices.stale_after_s:
+                    return f" (last print {_fmt_age(age)} ago)"
+                return ""
         if (
             self._session_prices is not None
-            and t.symbol in self._session_prices.stale_symbols()
+            and symbol in self._session_prices.stale_symbols()
         ):
-            stale = " (prior close — no intraday bars)"
-        self._status.configure(
-            text=f"{t.symbol} · {t.sector} / {t.industry} · {pct}{approx}{stale}"
-        )
+            return " (prior close — no intraday bars)"
+        return ""
 
     def _on_click(self, event: Any) -> None:
         if event is None or not getattr(event, "inaxes", None):
@@ -1089,6 +1477,25 @@ class SandboxHeatmapWindow(tk.Toplevel):
         # Prefer the app's register-and-focus (loads the symbol into the
         # active sandbox + focuses the primary chart); fall back to the
         # controller's set_focus for already-registered symbols / stubs.
+        # Live mode has no sandbox to register into, so it goes straight
+        # to the app's normal symbol load.
+        if self._live:
+            fn = getattr(self.app, "load_symbol", None) or getattr(
+                self.app, "_load_symbol", None
+            )
+            if callable(fn):
+                try:
+                    fn(symbol)
+                    return
+                except Exception:
+                    pass
+            try:
+                self.app.ticker_var.set(symbol)
+                self.app._schedule_reload(0)
+                return
+            except Exception:
+                pass
+            return
         app_fn = getattr(self.app, "_sandbox_register_and_focus", None)
         if callable(app_fn):
             try:
@@ -1105,6 +1512,18 @@ class SandboxHeatmapWindow(tk.Toplevel):
 
     def close(self) -> None:
         self._poll_alive = False
+        # Drop the subscription BEFORE tearing down the canvas: the
+        # source's thread calls into the book, and leaving it running
+        # against a destroyed window is how a "main thread is not in main
+        # loop" teardown error turns into a real leak (§7.5 covers the
+        # noise; this would be an actual live socket).
+        sub = self._quote_sub
+        self._quote_sub = None
+        if sub is not None:
+            try:
+                sub.close()
+            except Exception:
+                pass
         for cid in (self._cid_motion, self._cid_click):
             try:
                 if cid is not None:
@@ -1118,23 +1537,55 @@ class SandboxHeatmapWindow(tk.Toplevel):
             pass
 
 
+def _focus_existing(win: Any) -> bool:
+    """Deiconify + lift + tick an existing window; False if it is gone."""
+    try:
+        if not win.winfo_exists():
+            return False
+        win.deiconify()
+        win.lift()
+        win.on_replay_tick()
+        return True
+    except tk.TclError:
+        return False
+
+
 def open_sandbox_heatmap(app: Any, controller: Any, **kwargs: Any) -> SandboxHeatmapWindow | None:
     """Sandbox-menu action — open (or focus) the heatmap window (singleton)."""
     if controller is None or not getattr(controller, "is_active", lambda: False)():
         return None
     existing = getattr(app, "_sandbox_heatmap_win", None)
-    if existing is not None:
-        try:
-            if existing.winfo_exists():
-                existing.deiconify()
-                existing.lift()
-                existing.on_replay_tick()
-                return existing
-        except tk.TclError:
-            pass
-    win = SandboxHeatmapWindow(app, controller, **kwargs)
+    if existing is not None and _focus_existing(existing):
+        return existing
+    ctx = (
+        controller
+        if getattr(controller, "market_state", None) is not None
+        else SandboxHeatmapContext(controller)
+    )
+    win = SandboxHeatmapWindow(app, ctx, **kwargs)
     try:
         app._sandbox_heatmap_win = win
+    except Exception:
+        pass
+    return win
+
+
+def open_live_heatmap(app: Any, **kwargs: Any) -> SandboxHeatmapWindow | None:
+    """View-menu action — open (or focus) the **live** heatmap.
+
+    A separate singleton from the replay window on purpose. The two show
+    different worlds — one a historical session under a replay clock, the
+    other the tape right now — and silently reusing one window for both
+    would let a sandbox start quietly repurpose a map the trader is
+    reading as live. They can be open side by side; each says which it is
+    in its title bar.
+    """
+    existing = getattr(app, "_live_heatmap_win", None)
+    if existing is not None and _focus_existing(existing):
+        return existing
+    win = SandboxHeatmapWindow(app, LiveHeatmapContext(app), **kwargs)
+    try:
+        app._live_heatmap_win = win
     except Exception:
         pass
     return win
@@ -1143,7 +1594,9 @@ def open_sandbox_heatmap(app: Any, controller: Any, **kwargs: Any) -> SandboxHea
 __all__ = (
     "SandboxHeatmapWindow",
     "SessionPriceSource",
+    "QuotePriceSource",
     "open_sandbox_heatmap",
+    "open_live_heatmap",
     "tile_at",
     "compute_size_pct",
 )

@@ -38,6 +38,30 @@
   caveat.
 
 ### Added
+- **The Market Heatmap now runs live, not just in replay.** A new
+  **View → Live Market Heatmap** opens the same treemap on the current
+  tape — no sandbox session needed. It is deliberately built on a
+  *streaming* quote feed rather than repeated API calls: a 500-name map
+  on a polling loop would burn the request budget that chart loads and
+  background history depend on, to rebuild numbers the quote wire
+  already sends. Where a quote feed is configured
+  (`heatmap_quote_source`, currently Schwab), last price, the previous
+  session's official close and consolidated day volume all come
+  straight off the wire — which also makes the look-ahead bug fixed
+  below *structurally* impossible, since both legs of the percent
+  arrive in the same message instead of being looked up in a daily
+  series. With no feed configured it falls back to whatever bars are
+  already cached, still without polling, and says which it is using.
+- **Stale live prices look stale.** In replay every symbol is priced at
+  the clock or it is grey. Live, symbols go stale independently — a thin
+  name's last print can be half an hour old while a mega-cap updates
+  every second — and two tiles that render identically while one is
+  ancient is how you act on a price that no longer exists. Tiles whose
+  last print is older than `heatmap_stale_after_s` (default 2 minutes)
+  are dimmed, hovering one tells you how old it is, and the title says
+  whether the market is open, pre-market, after hours, or closed. A dead
+  feed is reported separately in the footer, rather than by dimming all
+  500 tiles at once.
 - **Choose what tile size means.** The Market Heatmap has a "Size by"
   picker: **market cap** (as before), **dollar volume**, or **equal
   weight**. Cap is the Finviz default but it gives most of the map to a

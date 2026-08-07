@@ -331,6 +331,34 @@ TUNABLES: tuple[Tunable, ...] = (
             "'equal_weight'. Changeable live from the window's "
             "'Size by' picker, which writes the choice back here.",
             _v_str(allow_empty=True)),
+    # Which streaming provider supplies live quotes for the Market
+    # Heatmap outside replay. Indirected through
+    # ``streaming/quotes.py`` for the same reason as
+    # ``shares_data_source``. A heatmap is the wrong shape for REST
+    # polling — hundreds of symbols refreshed continuously would burn
+    # the request budget that on-demand chart loads and background
+    # history need — so live mode prefers a stream and falls back to
+    # cached bars, never to a polling loop.
+    Tunable("heatmap_quote_source", "", "str",
+            "Streaming provider for live Market Heatmap quotes: a "
+            "registered quote source (e.g. 'schwab-quotes'), or 'off' "
+            "to always use cached bars. Empty is treated as 'off'. A "
+            "quote feed carries last price, previous close and "
+            "consolidated day volume directly, so the map needs no "
+            "REST calls at all while it is connected.",
+            _v_str(allow_empty=True)),
+    # How old a live quote may get before its tile is marked stale.
+    # Live symbols go stale INDEPENDENTLY — a thin name's last print can
+    # be 40 minutes old while a mega-cap updates every second — and a
+    # stale tile that renders identically to a fresh one is how a trader
+    # reads a price that no longer exists.
+    Tunable("heatmap_stale_after_s", 120, "int",
+            "Seconds since a symbol's last print before its Market "
+            "Heatmap tile is marked stale (dimmed, and flagged in the "
+            "hover readout). Only applies to live quote mode; replay "
+            "has no per-symbol staleness. Raise it for thin universes "
+            "where slow prints are normal.",
+            _v_int(min_=5, max_=3600)),
     Tunable("sandbox_skip_detailed_journal", False, "bool",
             "Skip the mandatory pre-trade journal AND the mandatory "
             "post-trade review modals during sandbox replay. Submitted "

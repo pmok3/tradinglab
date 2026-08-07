@@ -1,12 +1,25 @@
 # gui/sandbox_heatmap.py — Spec
 
 ## Purpose
-Non-modal pop-out window that renders the sandbox Finviz-style heatmap.
-Launched from the Sandbox menu while a session is active, it draws the
-S&P 500 as a matplotlib treemap embedded in Tk, recolors on every
-replay tick, relays out per session, and lets the owner click a tile to
-pull that symbol onto the primary chart. All values come from the
-[`SandboxController`](../backtest/replay.spec.md) as of `clock_ts()` via
+Non-modal pop-out window that renders the Finviz-style market heatmap,
+in **two modes behind one window**:
+
+* **Replay** — launched from the Sandbox menu while a session is active,
+  driven by `controller.clock_ts()`, priced from cached bars via
+  `SessionPriceSource`.
+* **Live** — launched from View → Live Market Heatmap, driven by the
+  wall clock, priced from a streaming quote feed via `QuotePriceSource`
+  with the bar path as fallback.
+
+The mode is carried by the **context object**
+([`gui/heatmap_context`](heatmap_context.spec.md)), not by branches
+through the render path: the window only ever read a handful of
+controller attributes, all through `getattr(..., default)`, so an object
+exposing the same names is a controller as far as it is concerned.
+
+It draws the S&P 500 as a matplotlib treemap embedded in Tk, recolors on
+every tick, relays out per session, and lets the owner click a tile to
+pull that symbol onto the primary chart. Geometry and colour come from
 the pure [`backtest/heatmap.py`](../backtest/heatmap.spec.md) layer. See
 [`docs/SANDBOX_HEATMAP.md`](../../../docs/SANDBOX_HEATMAP.md).
 
@@ -15,13 +28,15 @@ the pure [`backtest/heatmap.py`](../backtest/heatmap.spec.md) layer. See
   - `__init__(app, controller, *, provider=None, price_source=None, **kwargs)` —
     build the figure/canvas, wire hover + click, do the first layout.
     With no injected `price_source`, builds a `SessionPriceSource` bound
-    to the session's `controller.data_source` + `controller.interval`.
-  - `on_replay_tick()` — recolor from the controller; relayout first if
+    to the session's `controller.data_source` + `controller.interval`;
+    in live mode additionally resolves and subscribes a quote feed.
+  - `on_replay_tick()` — recolor from the context; relayout first if
     the session rolled. Called by the window's self-poll when the
-    replay clock advances.
+    clock advances.
   - `refresh()` — full rebuild (layout + colors); used on open and
     universe change.
-  - `close()` — tear down canvas + mpl callbacks; idempotent.
+  - `close()` — drop the quote subscription, then tear down canvas + mpl
+    callbacks; idempotent.
 - `class SessionPriceSource` — clock-bounded `(price, prior_close)`
   provider. `__init__(*, source, interval, loader=None)`;
   `build(symbols, as_of_ts)` parses one session's bars (call it off the
@@ -29,9 +44,17 @@ the pure [`backtest/heatmap.py`](../backtest/heatmap.spec.md) layer. See
   `dollar_volume_at(symbol, clock_ts)` is the session's cumulative
   traded value up to the clock; `stale_symbols()` / `covered_symbols()`
   report coverage.
+- `class QuotePriceSource(book, *, fallback=None, stale_after_s=120.0, clock=time.time)` —
+  same `(price, prior_close)` + `dollar_volume_at` contract, backed by a
+  [`QuoteBook`](../streaming/quote_book.spec.md). Adds
+  `quoted_symbols()` (symbols with a usable `last` **and** a vendor
+  timestamp), `untimed_symbols()` (quotes that cannot be aged),
+  `stale_symbols()`, `feed_age_s()`.
 - `open_sandbox_heatmap(app, controller, **kwargs) -> SandboxHeatmapWindow | None` —
-  Sandbox-menu action. Singleton: focuses the existing window if open,
-  else constructs one. No-op when no session is active.
+  Sandbox-menu action. Singleton on `app._sandbox_heatmap_win`; focuses
+  the existing window if open. No-op when no session is active.
+- `open_live_heatmap(app, **kwargs) -> SandboxHeatmapWindow | None` —
+  View-menu action. Separate singleton on `app._live_heatmap_win`.
 - `tile_at(tiles, x, y) -> HeatmapTile | None` — pure hit-test helper.
 - `compute_size_pct(provider, price_source, members, clock, *, shares_at=None, size_basis=SIZE_BASIS, dollar_volume_at=None)` —
   size / percent / approximate-symbol helper used by the window and
@@ -40,12 +63,66 @@ the pure [`backtest/heatmap.py`](../backtest/heatmap.spec.md) layer. See
 ## Dependencies
 - Internal: [`backtest/heatmap`](../backtest/heatmap.spec.md) (pure
   layer), [`backtest/replay.SandboxController`](../backtest/replay.spec.md)
-  (duck-typed via `controller`), [`backtest/heatmap_provider`](../backtest/heatmap_provider.spec.md)
+  (duck-typed via `controller`), [`gui/heatmap_context`](heatmap_context.spec.md)
+  (replay vs live), [`backtest/heatmap_provider`](../backtest/heatmap_provider.spec.md)
   for classification / historical shares / membership data,
+  [`streaming/quotes`](../streaming/quotes.spec.md) +
+  [`streaming/quote_book`](../streaming/quote_book.spec.md) (live mode),
   [`gui/native_theme`](native_theme.spec.md) (dark theming), and an
-  injectable price source that defaults to daily bars from disk cache.
+  injectable price source that defaults to bars from disk cache.
 - External: `tkinter`, `matplotlib` (`Figure`, `FigureCanvasTkAgg`,
   `Rectangle`), `numpy`.
+
+## Live mode
+- **Streams, never polls.** A 500-name map on a REST refresh loop would
+  consume the request budget that on-demand chart loads and background
+  history depend on, to rebuild a value the quote wire already carries.
+  So live mode subscribes once to a
+  [`QuoteSource`](../streaming/quotes.spec.md) and paints from a
+  coalescing book. With no quote source configured it degrades to
+  whatever bars are already cached — still no polling — and says so.
+- **Quote resolution happens here**, at the window level, for the same
+  reason the shares source does: the tunable is policy, and low-level
+  modules should receive an already-chosen provider. A broken or absent
+  source is not fatal and not loud — `price_source` stays on the bar
+  path and the footer reports which is actually in use, because a live
+  map that silently pretends to be streaming is worse than one that
+  admits it is reading cache.
+- **The subscription follows membership, not the tick.** `set_symbols`
+  is called on relayout only; index membership is near-static day to
+  day, which is precisely why a subscription beats polling here.
+- **Staleness is per tile and is a correctness concern.** In replay
+  every symbol is priced at the clock or it is grey. Live, symbols go
+  stale independently — a thin name's last print can be 40 minutes old
+  while a mega-cap updates every second — and two tiles that render
+  identically while one is half an hour old is how a trader acts on a
+  price that no longer exists. Stale tiles are dimmed to
+  `_STALE_ALPHA`; hover reports the age. Dimming rather than hatching is
+  deliberate: hatching already means "approximate size", and both facts
+  must be readable at once.
+- **A symbol the feed has never delivered is not counted stale by the
+  quote source** — it is served entirely by the fallback, whose own
+  staleness reporting covers it. Counting both would double-report.
+- **"Covered by the feed" is narrower than "has a book entry."**
+  `quoted_symbols()` requires a usable `last` *and* a vendor timestamp.
+  Without the timestamp the age is unknown, and an unknown age is not a
+  fresh one — such a symbol used to fall between the two stale sets (the
+  quote source skips it because it cannot age it, and the window
+  subtracted it from the bar source's set as "covered"), rendering at
+  full opacity while its legs came from a completed daily bar.
+  `untimed_symbols()` feeds those into the stale set explicitly.
+- **The sandbox universe scope is replay-only.** `_sandbox_universe` is
+  app-level state written on session start and cleared on end, so
+  applying it live would do exactly what two separate windows exist to
+  prevent: starting a scoped replay would silently shrink the *live* map
+  to those symbols and ending it would grow it back.
+- **Feed health is separate from tile staleness.** A dead socket freezes
+  every symbol at once; dimming 500 tiles would bury the one fact that
+  matters, so `_feed_status()` reports it in the footer instead.
+- **Live and replay are separate singletons.** They show different
+  worlds — a historical session under a replay clock versus the tape
+  right now — and reusing one window would let a sandbox start quietly
+  repurpose a map the trader is reading as live.
 
 ## Design Decisions
 - **Non-modal pop-out, not a docked pane** (decision 7). A full S&P 500
@@ -235,6 +312,13 @@ motion_notify → hit-test → tooltip ; button_press → hit-test → load on c
 ```
 
 ## Testing
+- `tests/unit/gui/test_heatmap_live_quotes.py` — `QuotePriceSource`:
+  quote legs win, no-quote falls through to cached bars, a
+  half-populated quote borrows only the missing leg, the clock argument
+  is inert, a raising book degrades; dollar volume from the
+  consolidated session total with fallback; staleness threshold, a
+  quote with no vendor timestamp is not called stale, a never-delivered
+  symbol is not double-reported, feed age; `_fmt_age`.
 - `tests/unit/gui/test_sandbox_heatmap.py` — pure `tile_at` /
   `compute_size_pct` (exact + carry-back + peek-is-approx); Agg window:
   renders a synthetic universe, filters look-ahead members, hover /

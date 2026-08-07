@@ -49,6 +49,17 @@ LEVELONE_FIELDS = {
     "4":  "bid_size",
     "5":  "ask_size",
     "8":  "total_volume",       # cumulative day volume (not per-tick)
+    # 10-12 are consumed by the *quote* axis (streaming/schwab_quotes.py),
+    # not the bar builder, which ignores keys it doesn't read. Field 12 is
+    # the PREVIOUS session's close — the denominator of 1-Day %.
+    #
+    # These IDs are the current Schwab map and differ from the legacy TDA
+    # ``QUOTE`` map from field 10 onward (TDA: 10/11 were times since
+    # midnight, previous close was 15). Mixing the two silently yields
+    # "previous close = exchange ID".
+    "10": "high_price",         # session high
+    "11": "low_price",          # session low
+    "12": "close_price",        # PREVIOUS day's close
     "35": "trade_time_ms",      # epoch ms of last trade
 }
 

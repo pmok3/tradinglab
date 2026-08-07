@@ -4,7 +4,7 @@
 Top-level Tk + matplotlib application. Owns all runtime state (Tk widgets, `Figure`, caches, stream/fetch tokens, worker pool) and orchestrates the data → render → stream pipeline. `ChartApp` is composed of `tk.Tk` + a stack of mixins (each owns a concern documented in its own `*.spec.md`).
 
 ## Public API
-- `class ChartApp(PollingMixin, InteractionMixin, WatchlistTabMixin, WorkerPoolMixin, IndicatorMenuMixin, SandboxMenuMixin, ConfigMenuMixin, DrilldownMixin, EntriesAppMixin, ExitsAppMixin, HelpMenuMixin, FirstRunBannerMixin, AnchorPickAppMixin, ChartStackAppMixin, DrawingsAppMixin, EventsAppMixin, LivePriceOverlayAppMixin, PrefetchAppMixin, RecentMenusMixin, SandboxAliasMixin, SandboxAppMixin, ScannerAppMixin, SnapshotMixin, UpdateCheckMixin, tk.Tk)`
+- `class ChartApp(PollingMixin, InteractionMixin, WatchlistTabMixin, WorkerPoolMixin, IndicatorMenuMixin, SandboxMenuMixin, ConfigMenuMixin, DrilldownMixin, EntriesAppMixin, ExitsAppMixin, HelpMenuMixin, FirstRunBannerMixin, AnchorPickAppMixin, ChartStackAppMixin, DrawingsAppMixin, EventsAppMixin, LivePriceOverlayAppMixin, PrefetchAppMixin, RecentMenusMixin, SandboxAliasMixin, SandboxAppMixin, ScannerAppMixin, SnapshotMixin, UpdateCheckMixin, ViewMenuMixin, tk.Tk)`
 - `ChartApp(*, splash: SplashController | None = None)` — construct + open the window.
 - `_load_data()` / `_load_data_async()` — synchronous / executor-backed fetch + render.
 - `_render()` — rebuild figure from in-memory series. Sole site of `figure.clear()` (in its slow path; the topology-preserving fast path reuses axes — see Rendering §).

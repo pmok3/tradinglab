@@ -1,18 +1,93 @@
-# Sandbox Heatmap
+# Market Heatmap
 
-A **Finviz-style market heatmap for sandbox bar-replay**. It renders the
-S&P 500 as a sector → industry treemap, sized by market cap and colored
-by percent change — but every value is computed from **historical data
-as of the current replay clock**, so as you step bars forward the map
+A **Finviz-style market heatmap**, in two modes behind one window.
+
+**Sandbox mode** (Sandbox → Market Heatmap…) renders the S&P 500 as a
+sector → industry treemap, sized by the chosen basis and colored by
+percent change — but every value is computed from **historical data as
+of the current replay clock**, so as you step bars forward the map
 reflects the market *at that historical moment*. Finviz is real-time;
 this is the same glance-read experience rewound to any point in the
 tape, for maximum fidelity to what you would have seen live.
 
-> **Status: v1 implemented.** This document and the two colocated specs
+**Live mode** (View → Live Market Heatmap) is the same window on the
+current tape, with no sandbox session required.
+
+> **Status: v1 implemented; live mode added.** This document and the
+> colocated specs
 > ([`backtest/heatmap.spec.md`](../src/tradinglab/backtest/heatmap.spec.md),
-> [`gui/sandbox_heatmap.spec.md`](../src/tradinglab/gui/sandbox_heatmap.spec.md))
+> [`gui/sandbox_heatmap.spec.md`](../src/tradinglab/gui/sandbox_heatmap.spec.md),
+> [`gui/heatmap_context.spec.md`](../src/tradinglab/gui/heatmap_context.spec.md))
 > capture the design, per the repo's spec-driven convention. The eleven
 > decisions below were settled with the owner in a design consultation.
+
+---
+
+## Live mode
+
+### Why it streams instead of polling
+
+A heatmap is the wrong shape for REST. Refreshing 500 symbols
+continuously would consume the request budget that on-demand chart loads
+and background history depend on — and it would do so to rebuild a value
+the quote wire already carries.
+
+So live mode subscribes **once** to a quote feed and paints from a
+coalescing snapshot. The universe is near-static day to day, which is
+exactly the case a subscription is built for: subscribe at open, add or
+drop the occasional name, never poll. API calls stay available for what
+genuinely needs them — deep history, drill-downs, backfill.
+
+The wider principle the app now follows: **streams for breadth, REST for
+depth.** Wide + shallow + real-time (many symbols, last price) is a
+stream's job; narrow + deep + historical (one symbol, thousands of bars)
+is REST's.
+
+### A quote feed also removes a whole class of bug
+
+The sandbox path had to be hardened against reading a daily bar's
+settled close into a mid-session clock (see *Fidelity caveats* below).
+A quote feed cannot make that mistake: last price and the previous
+session's official close arrive **in the same message**, so there is no
+historical series to index into incorrectly. Cumulative day volume
+likewise arrives consolidated, rather than being summed from whatever
+bars a vendor happened to give us.
+
+### Configuring it
+
+| Setting | Meaning |
+|---|---|
+| `heatmap_quote_source` | Which quote feed to use (e.g. `schwab-quotes`), or `off`. Empty is treated as off. |
+| `heatmap_stale_after_s` | Seconds since a symbol's last print before its tile is dimmed. Default 120. |
+
+Schwab is currently the only real quote adapter, and it requires a
+completed OAuth login (**Tools → Connect to Schwab…**). Without a
+configured feed the live map still opens and reads from cached bars —
+it simply says so in the footer rather than pretending to be live.
+
+### Staleness is a correctness feature, not decoration
+
+In replay, a symbol is either priced at the clock or it is grey. Live is
+messier: symbols go stale **independently**, and at wildly different
+rates. A thin name's last print can be forty minutes old while a
+mega-cap updates every second.
+
+Two tiles that render identically when one of them is half an hour old
+is precisely how a trader acts on a price that no longer exists. So:
+
+- a tile past `heatmap_stale_after_s` is **dimmed** (hatching already
+  means "approximate size", and both facts have to be readable at once);
+- hovering it reports **how old** the print is;
+- the title states the market state — `OPEN`, `PRE-MARKET`,
+  `AFTER HOURS`, `CLOSED` — so a closed-market map is never mistaken for
+  a live one;
+- a **dead feed** is reported separately in the footer. It freezes every
+  symbol at once, and dimming 500 tiles individually would bury the one
+  fact that matters.
+
+The clock itself is never clamped: outside market hours the map reports
+the true time and the true (stale) data, rather than back-dating itself
+to the last close and hiding that nothing has moved.
 
 ---
 

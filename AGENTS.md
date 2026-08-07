@@ -98,7 +98,9 @@ tradinglab/
 │   ├── preload/               # universe (NYSE/NASDAQ/SPY/QQQ) preloaders
 │   ├── scanner/               # ranking presets, scan fields registry
 │   ├── simulation/            # sandbox bar-replay engine
-│   ├── streaming/             # intraday tick fan-out, polling, replay events
+│   ├── streaming/             # two axes: BAR streams (base.py, schwab.py — one symbol, deep)
+│   │                          # and QUOTE streams (quotes.py, quote_book.py, schwab_quotes.py —
+│   │                          # many symbols, shallow, real-time). See §7.36.
 │   └── watchlists/
 ├── tests/
 │   ├── unit/  core/  data/  entries/  exits/  positions/  scanner/  streaming/
@@ -646,6 +648,48 @@ and manual dispatch). Those files' docstrings own the contracts.
 
 ---
 
+### 7.36 Streams are for breadth; REST is for depth
+
+Two axes, deliberately siblings rather than layers. **Bar streams**
+(`streaming/base.py`) serve one symbol deeply — a chart wants exact OHLCV
+and a `MinuteBarBuilder` per subscription. **Quote streams**
+(`streaming/quotes.py`) serve many symbols shallowly — a heatmap, a live
+scanner, or a watchlist percent column wants one current number for
+hundreds of names off a single connection. Routing the second through
+the first stands up hundreds of aggregators and hundreds of REST seeds
+to rebuild a value the wire already sends.
+
+Rules that are easy to get wrong:
+
+- **Never poll REST for a many-symbol view.** It consumes the budget
+  on-demand chart loads and background history depend on.
+- **Quotes merge, they never replace.** Vendors send a full image on
+  subscribe then change-only deltas; `prev_close` typically arrives once,
+  so a wholesale replace blanks every percent on the first price tick.
+  `None` means "not reported", never zero.
+- **`QuoteBook` drops intermediate updates by design** — the inverse of
+  `scanner.tick_source.QueuedTickSource`, which must never drop a bar.
+- **Vendor event time and receive time are different failure modes.** A
+  quiet small-cap has an old print on a healthy feed (mark that tile); a
+  dead socket freezes everything at once (say so once, don't dim 500
+  tiles).
+- **Schwab allows ONE streamer connection per user**, so both axes share
+  `SchwabStreamSource`'s socket, and the wire symbol set is their union —
+  dropping the last bar subscriber must not unsubscribe a symbol the
+  quote axis still wants.
+- **Schwab LEVELONE field IDs differ from legacy TDA from field 10 on**
+  (TDA 10/11 were times-since-midnight, prev close 15; Schwab 10 high,
+  11 low, **12 prev close**). Field 35 is epoch **milliseconds** (§7.7).
+- The Schwab adapter is **written but never exercised against a live
+  feed** — see its spec's "Known limitations" for what to verify first.
+
+Specs: `streaming/{quotes,quote_book,synthetic_quotes,schwab_quotes}.spec.md`,
+`gui/heatmap_context.spec.md`. Tests: `tests/streaming/test_quotes.py`,
+`test_schwab_quotes.py`, `tests/unit/gui/test_heatmap_live_quotes.py`,
+smoke `check_g4_live_heatmap`.
+
+---
+
 ## 8. Build & release flow
 
 **Releases are cut by pushing a tag — you do NOT build locally.**
@@ -782,6 +826,9 @@ These files are **never** committed to git. Use them for working memory.
 | Recent-symbols / recent-intervals menus | `src/tradinglab/gui/recent_menus.py` (RecentMenusMixin) |
 | Chart snapshot save flow | `src/tradinglab/gui/snapshot.py` (SnapshotMixin) |
 | Config menu handlers + close-when-dirty | `src/tradinglab/gui/config_menu.py` (ConfigMenuMixin, wave 2) |
+| View-menu heatmap entries (Finviz + live) | `src/tradinglab/gui/view_menu.py` (ViewMenuMixin) |
+| Live vs replay heatmap clock/context | `src/tradinglab/gui/heatmap_context.py` (§7.36) |
+| Quote-level streaming (breadth axis) | `src/tradinglab/streaming/quotes.py` (protocol + registry), `streaming/quote_book.py` (coalescing store), `streaming/schwab_quotes.py` (LEVELONE adapter); see §7.36 |
 | Update-check banner + banner cleanup | `src/tradinglab/gui/update_check.py` (UpdateCheckMixin, wave 2) |
 | Sandbox property aliases | `src/tradinglab/backtest/sandbox_app_aliases.py` (SandboxAliasMixin, wave 2) |
 | Fetch executor / cache | `src/tradinglab/data/fetch_service.py`, `app.py` `_load_data_async` / `_load_events_async` |

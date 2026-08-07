@@ -58,6 +58,7 @@ class MenuBuilderCallbacks(Protocol):
     def _on_view_toggle_chartstack(self) -> None: ...
     def _on_view_open_theme_editor(self) -> None: ...
     def _on_view_heatmap(self) -> None: ...
+    def _on_view_live_heatmap(self) -> None: ...
     def _on_view_chartstack_settings(self) -> None: ...
     def _on_help_configure_credentials(self) -> None: ...
     def _on_help_configure_local_data(self) -> None: ...
@@ -352,12 +353,19 @@ class MenuBuilder:
         )
         view_menu.add_cascade(label="ChartStack", menu=cs_menu)
         view_menu.add_separator()
+        # In-app live heatmap. Ellipsis-free by the same convention as
+        # the Finviz launcher below: it opens a window, not a dialog
+        # (see ``tests/unit/gui/test_ellipsis_semantics.py``).
+        view_menu.add_command(
+            label="Live Market Heatmap",
+            command=self._cb._on_view_live_heatmap,
+        )
         # Finviz S&P 500 sector heatmap — direct browser launch
         # (no intermediate popup). Convention: no ellipsis since
         # this hands off to ``webbrowser.open`` rather than opening
         # a dialog (see ``tests/unit/gui/test_ellipsis_semantics.py``).
         view_menu.add_command(
-            label="Heatmap",
+            label="Heatmap (Finviz)",
             command=self._cb._on_view_heatmap,
         )
         menubar.add_cascade(label="View", menu=view_menu)

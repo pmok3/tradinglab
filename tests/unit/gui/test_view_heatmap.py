@@ -33,7 +33,7 @@ import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _MENU_BUILDER_PY = _REPO_ROOT / "src" / "tradinglab" / "gui" / "menu_builder.py"
-_APP_PY = _REPO_ROOT / "src" / "tradinglab" / "app.py"
+_VIEW_MENU_PY = _REPO_ROOT / "src" / "tradinglab" / "gui" / "view_menu.py"
 
 # Finviz S&P 500 sector heatmap (1D performance). The sector view
 # (~11 squares) is more useful for a glance during a trading session
@@ -48,20 +48,37 @@ _HEATMAP_URL = "https://finviz.com/map.ashx?t=sec"
 
 
 def test_view_menu_has_heatmap_entry() -> None:
-    """The View menu must wire a ``Heatmap`` command to
-    ``_on_view_heatmap`` on the callbacks struct."""
+    """The View menu must wire a Finviz heatmap command to
+    ``_on_view_heatmap`` on the callbacks struct.
+
+    The label gained a ``(Finviz)`` qualifier when the in-app live
+    heatmap landed beside it — two entries both called "Heatmap" would
+    be indistinguishable in the menu. Still no ellipsis.
+    """
     src = _MENU_BUILDER_PY.read_text(encoding="utf-8")
-    # The add_command must reference the new callback with the exact
-    # label "Heatmap" (no ellipsis).
     pattern = re.compile(
-        r'view_menu\.add_command\(\s*label\s*=\s*"Heatmap"\s*,'
+        r'view_menu\.add_command\(\s*label\s*=\s*"Heatmap \(Finviz\)"\s*,'
         r'\s*command\s*=\s*self\._cb\._on_view_heatmap\s*,?\s*\)',
         re.DOTALL,
     )
     assert pattern.search(src), (
         "view-heatmap-launcher regression: View menu must add a "
-        '"Heatmap" command wired to self._cb._on_view_heatmap. '
+        '"Heatmap (Finviz)" command wired to self._cb._on_view_heatmap. '
         "Found neither pattern in menu_builder.py."
+    )
+
+
+def test_view_menu_has_live_heatmap_entry() -> None:
+    """The in-app live heatmap must be reachable from the View menu."""
+    src = _MENU_BUILDER_PY.read_text(encoding="utf-8")
+    pattern = re.compile(
+        r'view_menu\.add_command\(\s*label\s*=\s*"Live Market Heatmap"\s*,'
+        r'\s*command\s*=\s*self\._cb\._on_view_live_heatmap\s*,?\s*\)',
+        re.DOTALL,
+    )
+    assert pattern.search(src), (
+        'View menu must add a "Live Market Heatmap" command wired to '
+        "self._cb._on_view_live_heatmap."
     )
 
 
@@ -79,25 +96,32 @@ def test_heatmap_label_has_no_ellipsis() -> None:
 
 
 def test_menu_builder_protocol_declares_on_view_heatmap() -> None:
-    """The ``MenuBuilderCallbacks`` protocol must declare
-    ``_on_view_heatmap`` so a callback drift fails fast under
-    static type checking + the menu_builder protocol-check test."""
+    """The ``MenuBuilderCallbacks`` protocol must declare both heatmap
+    callbacks so a callback drift fails fast under static type checking
+    + the menu_builder protocol-check test."""
     src = _MENU_BUILDER_PY.read_text(encoding="utf-8")
     assert "def _on_view_heatmap(self)" in src, (
         "MenuBuilderCallbacks protocol must declare _on_view_heatmap "
         "so MenuBuilder's view_menu.add_command can resolve the "
         "callback type. Add the stub line near _on_view_toggle_chartstack."
     )
+    assert "def _on_view_live_heatmap(self)" in src, (
+        "MenuBuilderCallbacks protocol must declare _on_view_live_heatmap."
+    )
 
 
-def test_chart_app_defines_on_view_heatmap() -> None:
-    """``ChartApp._on_view_heatmap`` must exist (source-grep
-    suffices — avoids the cost of a full ChartApp fixture)."""
-    src = _APP_PY.read_text(encoding="utf-8")
+def test_view_menu_mixin_defines_the_handlers() -> None:
+    """Both handlers live on ``ViewMenuMixin`` (§7.24 — extracted from
+    ``app.py`` rather than growing it). Source-grep suffices."""
+    src = _VIEW_MENU_PY.read_text(encoding="utf-8")
     assert re.search(r"^\s*def _on_view_heatmap\(self\) -> None:",
                      src, re.MULTILINE), (
-        "ChartApp must define _on_view_heatmap; the View → Heatmap "
+        "ViewMenuMixin must define _on_view_heatmap; the View → Heatmap "
         "menu entry routes through self._cb._on_view_heatmap."
+    )
+    assert re.search(r"^\s*def _on_view_live_heatmap\(self\) -> None:",
+                     src, re.MULTILINE), (
+        "ViewMenuMixin must define _on_view_live_heatmap."
     )
 
 
@@ -107,20 +131,21 @@ def test_chart_app_defines_on_view_heatmap() -> None:
 
 
 def _bind_callback() -> tuple[SimpleNamespace, callable]:
-    """Bind ``ChartApp._on_view_heatmap`` to a stub ``self`` that
+    """Bind ``ViewMenuMixin._on_view_heatmap`` to a stub ``self`` that
     only needs the attributes the method touches (``messagebox`` is
     monkey-patched, so the stub doesn't need to be a real Tk root).
     """
-    import tradinglab.app as app_mod
+    import tradinglab.gui.view_menu as vm_mod
     stub = SimpleNamespace()
-    return stub, app_mod.ChartApp._on_view_heatmap.__get__(stub)
+    return stub, vm_mod.ViewMenuMixin._on_view_heatmap.__get__(stub)
 
 
 def test_heatmap_callback_opens_finviz_url() -> None:
     """The callback hands off to ``webbrowser.open`` with the Finviz
     S&P 500 sector heatmap URL and returns silently on success."""
     stub, cb = _bind_callback()
-    with patch("tradinglab.app.webbrowser.open", return_value=True) as mock_open:
+    with patch("tradinglab.gui.view_menu.webbrowser.open",
+               return_value=True) as mock_open:
         cb()
     assert mock_open.called
     args, kwargs = mock_open.call_args
@@ -134,7 +159,8 @@ def test_heatmap_callback_passes_new_and_autoraise_flags() -> None:
     """Mirror the View Online Docs pattern: ``new=2`` opens a new
     tab and ``autoraise=True`` brings the browser to the foreground."""
     stub, cb = _bind_callback()
-    with patch("tradinglab.app.webbrowser.open", return_value=True) as mock_open:
+    with patch("tradinglab.gui.view_menu.webbrowser.open",
+               return_value=True) as mock_open:
         cb()
     args, kwargs = mock_open.call_args
     assert kwargs.get("new") == 2, (
@@ -152,8 +178,8 @@ def test_heatmap_callback_falls_back_to_messagebox_when_browser_returns_false() 
     user can copy-paste it manually."""
     stub, cb = _bind_callback()
     mock_mb = MagicMock()
-    with patch("tradinglab.app.webbrowser.open", return_value=False), \
-         patch("tradinglab.app.messagebox.showinfo", mock_mb):
+    with patch("tradinglab.gui.view_menu.webbrowser.open", return_value=False), \
+         patch("tradinglab.gui.view_menu.messagebox.showinfo", mock_mb):
         cb()
     assert mock_mb.called, (
         "messagebox.showinfo must be the fallback when webbrowser.open "
@@ -174,14 +200,41 @@ def test_heatmap_callback_swallows_webbrowser_exception() -> None:
     messagebox fallback rather than propagating to the Tk event loop."""
     stub, cb = _bind_callback()
     mock_mb = MagicMock()
-    with patch("tradinglab.app.webbrowser.open",
+    with patch("tradinglab.gui.view_menu.webbrowser.open",
                side_effect=RuntimeError("no browser available")), \
-         patch("tradinglab.app.messagebox.showinfo", mock_mb):
+         patch("tradinglab.gui.view_menu.messagebox.showinfo", mock_mb):
         cb()  # must NOT raise
     assert mock_mb.called, (
         "messagebox.showinfo must be the fallback when webbrowser.open "
         "raises (e.g. headless / sandboxed run)"
     )
+
+
+def test_live_heatmap_callback_delegates_to_open_live_heatmap() -> None:
+    """The live entry opens the in-app window rather than a browser."""
+    import tradinglab.gui.sandbox_heatmap as hm_mod
+    import tradinglab.gui.view_menu as vm_mod
+
+    stub = SimpleNamespace()
+    cb = vm_mod.ViewMenuMixin._on_view_live_heatmap.__get__(stub)
+    with patch.object(hm_mod, "open_live_heatmap") as mock_open:
+        cb()
+    assert mock_open.called
+    assert mock_open.call_args.args[0] is stub
+
+
+def test_live_heatmap_callback_swallows_failure() -> None:
+    """A failure to open must not propagate into the Tk event loop."""
+    import tradinglab.gui.sandbox_heatmap as hm_mod
+    import tradinglab.gui.view_menu as vm_mod
+
+    stub = SimpleNamespace()
+    cb = vm_mod.ViewMenuMixin._on_view_live_heatmap.__get__(stub)
+    mock_mb = MagicMock()
+    with patch.object(hm_mod, "open_live_heatmap", side_effect=RuntimeError("boom")), \
+         patch("tradinglab.gui.view_menu.messagebox.showinfo", mock_mb):
+        cb()  # must NOT raise
+    assert mock_mb.called
 
 
 # ---------------------------------------------------------------------------
@@ -193,8 +246,8 @@ def test_heatmap_url_is_finviz_sector_map() -> None:
     """The URL constant pinned in the test must match the actual
     URL the implementation hands off — guards against silent drift
     if a refactor moves the URL string."""
-    src = _APP_PY.read_text(encoding="utf-8")
+    src = _VIEW_MENU_PY.read_text(encoding="utf-8")
     assert _HEATMAP_URL in src, (
         f"_on_view_heatmap must hand off to {_HEATMAP_URL!r}; the "
-        "URL string is no longer present in app.py."
+        "URL string is no longer present in gui/view_menu.py."
     )

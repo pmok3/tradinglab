@@ -25,7 +25,6 @@ import os
 import queue
 import time
 import tkinter as tk
-import webbrowser
 from collections import OrderedDict
 from collections.abc import Callable
 from datetime import datetime
@@ -150,6 +149,7 @@ from .gui.splash import (
 from .gui.theme_controller import ThemeController
 from .gui.toolbar_controller import ToolbarController
 from .gui.update_check import UpdateCheckMixin
+from .gui.view_menu import ViewMenuMixin
 from .gui.watchlist_tab import WatchlistTabMixin
 from .gui.workers import WorkerPoolMixin
 from .gui.x_axis_locator import _adaptive_x_locator_class, _make_x_formatter
@@ -269,6 +269,7 @@ class ChartApp(
     ScannerAppMixin,
     SnapshotMixin,
     UpdateCheckMixin,
+    ViewMenuMixin,
     tk.Tk,
 ):
     """Top-level Tk window hosting the chart, controls, and data flow."""
@@ -6181,38 +6182,6 @@ class ChartApp(
         except Exception:  # noqa: BLE001
             pass
         return "break"
-
-    def _on_view_heatmap(self) -> None:
-        """View menu callback: open the Finviz S&P 500 sector heatmap.
-
-        Direct browser launch (no intermediate popup) per the
-        ``view-heatmap-launcher`` audit. Mirrors the
-        :meth:`gui.help_menu.HelpMenuMixin._on_help_view_online_docs`
-        pattern: ``webbrowser.open(url, new=2, autoraise=True)`` with
-        a ``messagebox.showinfo`` fallback that surfaces the URL so
-        the user can copy-paste it manually when the OS browser
-        hand-off fails (locked-down profile / no default browser
-        configured / headless run).
-
-        URL: ``https://finviz.com/map.ashx?t=sec`` — the S&P 500
-        sector performance treemap (1D). The per-stock 500-square
-        view (``t=sec_all``) is one query-string flip away; the
-        sector view is the more useful glance during a trading
-        session per the trader consult that informed this feature.
-        """
-        url = "https://finviz.com/map.ashx?t=sec"
-        try:
-            opened = webbrowser.open(url, new=2, autoraise=True)
-        except Exception:  # noqa: BLE001
-            opened = False
-        if opened:
-            return
-        messagebox.showinfo(
-            "Heatmap",
-            f"Could not launch a web browser automatically.\n\n"
-            f"Open this URL manually:\n{url}",
-            parent=self,
-        )
 
     def _capture_notebook_boundary(
         self, paned: object, currently_visible: bool

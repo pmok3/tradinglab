@@ -149,7 +149,7 @@ def build_subs_request(
 
 # Field IDs we want from each service. Keep these as strings — that's
 # what Schwab's wire protocol expects.
-LEVELONE_FIELD_IDS = ["0", "1", "2", "3", "4", "5", "8", "35"]
+LEVELONE_FIELD_IDS = ["0", "1", "2", "3", "4", "5", "8", "10", "11", "12", "35"]
 CHART_EQUITY_FIELD_IDS = ["0", "1", "2", "3", "4", "5", "6", "7"]
 
 
@@ -208,6 +208,150 @@ class SchwabStreamSource:
         self._subs: dict[str, list[_Subscription]] = {}
         self._symbols_subscribed: set[str] = set()
         self._connection: _Connection | None = None
+        # Quote axis (streaming/schwab_quotes.py). Kept here rather than
+        # in its own source because Schwab allows exactly ONE streamer
+        # connection per user — a second socket is not a second feed, it
+        # evicts the first. Quote symbols join ``_symbols_subscribed`` so
+        # the reconnect path re-images them with everything else, but
+        # they get no ``_Subscription`` and therefore no MinuteBarBuilder.
+        self._quote_symbols: set[str] = set()
+        self._quote_callbacks: list[Any] = []
+
+    def _refresh_symbols_locked(self) -> set[str]:
+        """Recompute the wire subscription set. Caller holds ``_lock``."""
+        self._symbols_subscribed = set(self._subs) | set(self._quote_symbols)
+        return self._symbols_subscribed
+
+    # --- quote axis ---
+
+    def subscribe_quotes(self, symbols, on_quote):
+        """Subscribe the quote fan-out. See ``streaming/quotes.py``."""
+        from .schwab_quotes import SchwabQuoteSubscription
+
+        sub = SchwabQuoteSubscription(self, on_quote)
+        with self._lock:
+            self._quote_callbacks.append(sub)
+        sub.set_symbols(symbols)
+        return sub
+
+    def _open_connection(self) -> _Connection | None:
+        """Open the connection if credentials allow.
+
+        Caller must **not** hold ``_lock``: ``get_access_token`` can make
+        a synchronous HTTPS round trip to Schwab's ``/oauth/token``, and
+        this is reachable from the Tk thread. Holding the lock across it
+        would freeze the UI *and* stall the socket thread's dispatch for
+        the duration — which is why ``subscribe()`` has always fetched
+        the token before taking the lock.
+        """
+        with self._lock:
+            if self._connection is not None:
+                return self._connection
+        try:
+            import websocket  # type: ignore  # noqa: F401
+        except ImportError:
+            LOG.warning(
+                "schwab-stream: websocket-client is not installed. "
+                "Install with `pip install tradinglab[schwab]`.")
+            return None
+        from ..data.credentials import get_credentials
+        from ..data.schwab_auth import get_access_token
+        creds = get_credentials().schwab
+        if not creds.is_configured():
+            LOG.debug("schwab-stream: credentials not configured")
+            return None
+        token = get_access_token(creds)
+        if not token:
+            LOG.warning("schwab-stream: no valid access token.")
+            return None
+        with self._lock:
+            # Another thread may have won the race while we were on the
+            # network; one connection per user means we must not replace
+            # a live one.
+            if self._connection is None:
+                self._connection = _Connection(self, creds, token)
+                self._connection.start()
+            return self._connection
+
+    def _apply_quote_symbols(self) -> None:
+        """Reconcile the union of every quote subscriber's symbol set.
+
+        Reads the union **under the lock** rather than trusting a
+        caller-supplied snapshot: a subscriber assigns its own
+        ``symbols`` before calling in, so a `close()` interleaving there
+        could otherwise resurrect a dead subscriber's symbols
+        permanently — which would also keep the idle check false forever
+        and leak the connection.
+        """
+        with self._lock:
+            union: set[str] = set()
+            for cb in self._quote_callbacks:
+                union |= getattr(cb, "symbols", set())
+            previous_wire = set(self._symbols_subscribed)
+            previous_quote = set(self._quote_symbols)
+            self._quote_symbols = union
+            current = self._refresh_symbols_locked()
+            # A symbol newly entering the QUOTE set needs an ADD even if
+            # it is already on the wire for the bar axis: Schwab sends a
+            # full image only in response to SUBS/ADD and change-only
+            # deltas after that, so without a re-image the book's first
+            # entry for it would be a delta and `prev_close` would never
+            # arrive. A duplicate ADD is harmless — it just re-images.
+            to_add = sorted((current - previous_wire) | (union - previous_quote))
+            to_remove = sorted(previous_wire - current)
+            has_conn = self._connection is not None
+        if not current and not has_conn:
+            # Nothing wanted and nothing open — notably the teardown
+            # path, which must never dial out just to hang up.
+            return
+        conn = self._connection if has_conn else self._open_connection()
+        if conn is None:
+            return
+        # Batched: one message per service, not one per symbol. At S&P
+        # scale the per-symbol loop was 500 blocking socket writes on
+        # open and 1000 on close, all on the Tk thread.
+        if to_add:
+            conn.add_symbols(to_add)
+        if to_remove:
+            conn.remove_symbols(to_remove)
+
+    def _drop_quote_subscription(self, sub: Any) -> None:
+        with self._lock:
+            self._quote_callbacks = [
+                c for c in self._quote_callbacks if c is not sub
+            ]
+            still_wanted = any(
+                getattr(c, "symbols", set()) for c in self._quote_callbacks
+            )
+            idle = not self._subs and not still_wanted
+            conn = self._connection
+            if idle:
+                # Tear down wholesale rather than UNSUBS-ing every symbol
+                # first: the connection is about to close, so the
+                # unsubscribe traffic would be pure waste.
+                self._quote_symbols = set()
+                self._refresh_symbols_locked()
+                self._connection = None
+        if idle:
+            if conn is not None:
+                conn.shutdown()
+            return
+        self._apply_quote_symbols()
+
+    def _dispatch_quote(self, symbol: str, decoded: dict[str, Any]) -> None:
+        """Fan one LEVELONE update out to the quote subscribers."""
+        from .schwab_quotes import quote_from_levelone
+
+        with self._lock:
+            subs = list(self._quote_callbacks)
+        if not subs:
+            return
+        quote = quote_from_levelone(symbol, decoded)
+        for sub in subs:
+            try:
+                sub.deliver(quote)
+            except Exception:
+                LOG.exception("schwab-stream: quote subscriber raised")
 
     def subscribe(
         self, ticker: str, interval: str, on_event: StreamCallback,
@@ -252,7 +396,7 @@ class SchwabStreamSource:
         with self._lock:
             self._subs.setdefault(sub.symbol, []).append(sub)
             new_symbol = sub.symbol not in self._symbols_subscribed
-            self._symbols_subscribed.add(sub.symbol)
+            self._refresh_symbols_locked()
             if self._connection is None:
                 self._connection = _Connection(self, creds, token)
                 self._connection.start()
@@ -275,10 +419,16 @@ class SchwabStreamSource:
                     lst[:] = [s for s in lst if s.alive]
                     if not lst:
                         self._subs.pop(sub.symbol, None)
-                        self._symbols_subscribed.discard(sub.symbol)
-                        if self._connection is not None:
+                        self._refresh_symbols_locked()
+                        # A symbol the QUOTE axis still wants must stay
+                        # on the wire — dropping the last bar subscriber
+                        # is not the same as nobody caring about it.
+                        if (
+                            self._connection is not None
+                            and sub.symbol not in self._quote_symbols
+                        ):
                             self._connection.remove_symbol(sub.symbol)
-                if not self._subs and self._connection is not None:
+                if not self._subs and not self._quote_symbols and self._connection:
                     self._connection.shutdown()
                     self._connection = None
         return _unsubscribe
@@ -286,6 +436,11 @@ class SchwabStreamSource:
     # --- internal: dispatchers called from the connection thread ---
 
     def _dispatch_levelone(self, symbol: str, decoded: dict[str, Any]) -> None:
+        # The quote axis first: it is a plain dict write per subscriber,
+        # whereas the bar path runs an aggregator per subscription. A
+        # slow or raising bar subscriber must not delay the quote
+        # snapshot the UI samples.
+        self._dispatch_quote(symbol, decoded)
         now = datetime.now()
         with self._lock:
             subs = list(self._subs.get(symbol.upper(), ()))
@@ -377,16 +532,34 @@ class _Connection:
 
     def add_symbol(self, symbol: str) -> None:
         """Send an ADD for one new symbol on the existing connection."""
+        self.add_symbols([symbol])
+
+    def add_symbols(self, symbols: list[str]) -> None:
+        """Send one ADD covering ``symbols``.
+
+        Batched because the quote axis reconciles whole universes: one
+        message per symbol was 500 blocking socket writes on open at S&P
+        scale, every one of them on the Tk thread.
+        """
+        if not symbols:
+            return
         if not self._connected_subs_sent or self._streamer_info is None:
-            return  # initial subs hasn't run yet; it'll include this symbol
-        self._send_subs([symbol])
+            return  # initial subs hasn't run yet; it'll include these
+        self._send_subs(list(symbols))
 
     def remove_symbol(self, symbol: str) -> None:
         """Send an UNSUBS for one symbol on the existing connection."""
+        self.remove_symbols([symbol])
+
+    def remove_symbols(self, symbols: list[str]) -> None:
+        """Send one UNSUBS per service covering ``symbols``."""
+        if not symbols:
+            return
         if not self._connected_subs_sent or self._streamer_info is None:
             return
         info = self._streamer_info
         self._request_id += 1
+        keys = ",".join(symbols)
         for service in ("LEVELONE_EQUITIES", "CHART_EQUITY"):
             unsub = {
                 "service": service,
@@ -394,7 +567,7 @@ class _Connection:
                 "requestid": str(self._request_id),
                 "SchwabClientCustomerId": info.get("schwabClientCustomerId"),
                 "SchwabClientCorrelId": info.get("schwabClientCorrelId"),
-                "parameters": {"keys": symbol},
+                "parameters": {"keys": keys},
             }
             self._send_json({"requests": [unsub]})
 

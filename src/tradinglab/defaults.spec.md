@@ -60,6 +60,8 @@ Each tunable has a validator so corrupt `settings.json` can't inject garbage.
 | `sandbox_data_source` | str | "" | Data source for sandbox replay (reference timeline, mid-session loads, Market Heatmap). Empty = Auto (global ranking). |
 | `shares_data_source` | str | "edgar" | Provider for historical shares-outstanding (market-cap tile sizing). Empty = registry default. |
 | `heatmap_size_basis` | str | "historical_market_cap" | What Market Heatmap tile area encodes: market cap, `dollar_volume`, or `equal_weight`. |
+| `heatmap_quote_source` | str | "" | Streaming provider for live Market Heatmap quotes (e.g. `schwab-quotes`), or `off`. Empty = off. A heatmap is the wrong shape for REST polling, so live mode prefers a stream and falls back to cached bars — never to a polling loop. |
+| `heatmap_stale_after_s` | int | 120 | Seconds since a symbol's last print before its live tile is dimmed and flagged. Live symbols go stale independently; a stale tile that renders like a fresh one is how a trader reads a price that no longer exists. |
 | `sec_user_agent` | str | "" | User-Agent sent to SEC EDGAR; empty uses the project default. SEC requires a contact address. |
 | `sandbox_skip_detailed_journal` | bool | false | Skip mandatory sandbox pre/post journal modals and stamp placeholder journal fields. |
 | `splash_enabled` | bool | true | Show the PyInstaller splash screen at frozen-executable startup. |
@@ -93,6 +95,8 @@ Each tunable has a validator so corrupt `settings.json` can't inject garbage.
 | `sandbox_data_source` | Start Sandbox dialog source picker (seed + write-back); `_sandbox_src` resolution; Prepare Universe Data preload source. |
 | `shares_data_source` | `data/shares_sources.resolve_shares_fetcher`, resolved by `gui/sandbox_heatmap._build_provider` and injected into `HeatmapProvider`. |
 | `heatmap_size_basis` | `gui/sandbox_heatmap` "Size by" picker (seed + write-back); passed to `compute_size_pct` / `build_layout`. |
+| `heatmap_quote_source` | `streaming/quotes.resolve_quote_source`, resolved by `gui/sandbox_heatmap._start_quote_feed` (live mode only). |
+| `heatmap_stale_after_s` | `gui/sandbox_heatmap.QuotePriceSource.stale_after_s` — the live per-tile dimming threshold. |
 | `sec_user_agent` | `data/edgar_shares.user_agent()` — every request to data.sec.gov. |
 | `sandbox_skip_detailed_journal` | Sandbox order/review dialogs; when true, bypasses mandatory pre/post modals with placeholder journal fields. |
 | `splash_enabled` | Frozen startup splash gating (env var / CLI still win). |

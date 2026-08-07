@@ -12247,6 +12247,169 @@ def check_g3_sandbox_heatmap(app) -> None:
         _pump(app, 0.1)
 
 
+def check_g4_live_heatmap(app) -> None:
+    """Live Market Heatmap — wall clock + streaming quotes, no sandbox.
+
+    The live counterpart to ``check_g3_sandbox_heatmap``. Defends the
+    properties that only exist outside replay:
+
+      * it opens with **no active sandbox session** (a wall-clock
+        context, not a controller);
+      * a registered quote source is subscribed, and quotes coming off
+        the feed are what colour the tiles — not cached bars;
+      * membership drives the subscription, so the source sees exactly
+        the symbols on the map;
+      * a symbol whose last print is older than the staleness threshold
+        is dimmed, and one that is current is not — the two must not
+        render identically;
+      * the title states the market state, so a closed-market map is
+        not mistaken for a live one;
+      * ``close()`` drops the subscription (a live socket outliving its
+        window is a real leak, unlike the §7.5 teardown noise).
+
+    An injected provider keeps it offline; the quote source is the
+    deterministic synthetic one, so no credentials are involved.
+    """
+    import datetime as dt
+    import tempfile
+    from pathlib import Path
+
+    from tradinglab import defaults as _defaults_mod
+    from tradinglab import settings as _settings_mod
+    from tradinglab.backtest.heatmap_provider import HeatmapProvider
+    from tradinglab.data.shares_sources import SharesFact as _SharesFact
+    from tradinglab.gui.sandbox_heatmap import open_live_heatmap
+    from tradinglab.streaming.quotes import (
+        Quote,
+        register_quote_source,
+        unregister_quote_source,
+    )
+
+    def _set_quote_tunable(value: str) -> None:
+        # ``defaults.get`` serves from a process-wide cache built on
+        # first read, so a settings write without reload() is invisible.
+        _settings_mod.set("heatmap_quote_source", value)
+        _defaults_mod.reload()
+
+    def _ep(y, m, d):
+        return int(dt.datetime(y, m, d, tzinfo=dt.timezone.utc).timestamp())
+
+    meta = {
+        "AAA": {"sector": "Technology", "industry": "Software",
+                "cik": "1", "date_added_ts": _ep(2010, 1, 1)},
+        "BBB": {"sector": "Financials", "industry": "Banks",
+                "cik": "2", "date_added_ts": _ep(2010, 1, 1)},
+    }
+    provider = HeatmapProvider(
+        meta=meta,
+        shares_fetcher=lambda s: [
+            _SharesFact(_ep(2015, 1, 1), _ep(2015, 1, 15), 1000.0)
+        ],
+        splits_fetcher=lambda _s: [],
+        cache_dir=Path(tempfile.mkdtemp(prefix="tl_live_heatmap_smoke_")),
+    )
+    provider.prime(["AAA", "BBB"])
+
+    class _RecordingSub:
+        """Captures the symbol set and pushes deterministic quotes."""
+
+        def __init__(self, on_quote):
+            self.on_quote = on_quote
+            self.symbols: list[str] = []
+            self.closed = False
+
+        def set_symbols(self, symbols):
+            self.symbols = sorted(symbols)
+            now = time.time()
+            # AAA current; BBB's last print is an hour old.
+            self.on_quote(Quote("AAA", last=110.0, prev_close=100.0,
+                                day_volume=1_000.0, ts=now))
+            self.on_quote(Quote("BBB", last=90.0, prev_close=100.0,
+                                day_volume=2_000.0, ts=now - 3600.0))
+
+        def close(self):
+            self.closed = True
+
+    made: list[_RecordingSub] = []
+
+    class _StubSource:
+        def subscribe_quotes(self, symbols, on_quote):
+            sub = _RecordingSub(on_quote)
+            made.append(sub)
+            sub.set_symbols(symbols)
+            return sub
+
+    pre_sandbox = getattr(app, "_sandbox", None)
+    pre_win = getattr(app, "_live_heatmap_win", None)
+    app._sandbox = None            # explicitly NOT in a replay session
+    app._live_heatmap_win = None
+    register_quote_source("smoke-quotes", lambda **_k: _StubSource())
+    pre_tunable = _settings_mod.get("heatmap_quote_source", "")
+    _set_quote_tunable("smoke-quotes")
+    win = None
+    try:
+        win = open_live_heatmap(app, provider=provider)
+        _pump(app, 0.3)
+        assert win is not None, "live heatmap should open without a sandbox"
+
+        # The context is the live one, and the feed was subscribed.
+        assert win._live is True
+        assert made, "a registered quote source must be subscribed"
+        assert win._quote_prices is not None, "quote path should be active"
+
+        # Membership drives the subscription.
+        syms = {t.symbol for t in win._tiles}
+        assert syms == {"AAA", "BBB"}, f"live heatmap members: {syms}"
+        assert made[0].symbols == ["AAA", "BBB"], (
+            f"subscription should follow membership; got {made[0].symbols}"
+        )
+
+        # Colour comes off the wire: AAA +10%, BBB -10%.
+        by_sym = {t.symbol: t for t in win._tiles}
+        assert by_sym["AAA"].pct is not None
+        assert by_sym["AAA"].pct > 5.0, f"AAA pct {by_sym['AAA'].pct}"
+        assert by_sym["BBB"].pct < -5.0, f"BBB pct {by_sym['BBB'].pct}"
+
+        # Staleness is per symbol: BBB's hour-old print must be dimmed
+        # while AAA's current one is not.
+        stale = win._stale_symbols()
+        assert "BBB" in stale, "an hour-old print must read as stale"
+        assert "AAA" not in stale, "a current print must not read as stale"
+        assert win._patches["BBB"].get_alpha() not in (None, 1.0), \
+            "stale tile should be dimmed"
+        assert win._patches["AAA"].get_alpha() in (None, 1.0), \
+            "current tile should be at full opacity"
+
+        # The hover readout names the age rather than only dimming.
+        note = win._freshness_note("BBB")
+        assert "last print" in note, f"stale hover note: {note!r}"
+        assert win._freshness_note("AAA") == ""
+
+        # The title states the market state so a closed map isn't
+        # mistaken for a live one.
+        title = win._header.cget("text")
+        assert any(s in title for s in ("OPEN", "CLOSED", "PRE-MARKET",
+                                        "AFTER HOURS")), \
+            f"live title should carry the market state: {title!r}"
+
+        # Re-opening focuses the same singleton rather than stacking.
+        again = open_live_heatmap(app)
+        assert again is win, "live heatmap should be a singleton"
+    finally:
+        if win is not None:
+            try:
+                win.close()
+            except Exception:  # noqa: BLE001
+                pass
+            assert all(s.closed for s in made), \
+                "close() must drop the quote subscription"
+        unregister_quote_source("smoke-quotes")
+        _set_quote_tunable(pre_tunable)
+        app._sandbox = pre_sandbox
+        app._live_heatmap_win = pre_win
+        _pump(app, 0.1)
+
+
 def check_b5_sandbox_save_load(app) -> None:
     """Phase 1d: Save/Load round-trip + performance aggregates.
 
@@ -23368,6 +23531,7 @@ def _run_all_checks(app) -> None:
     check_g1_sandbox_phase1c(app)
     check_g2_sandbox_open_universe(app)
     check_g3_sandbox_heatmap(app)
+    check_g4_live_heatmap(app)
     check_b5_sandbox_save_load(app)
     check_b6_sandbox_auto_cycle(app)
     check_b7_sandbox_multitf_context(app)
@@ -23716,6 +23880,7 @@ def _build_check_sequence():
         ("check_g1_sandbox_phase1c", check_g1_sandbox_phase1c),
         ("check_g2_sandbox_open_universe", check_g2_sandbox_open_universe),
         ("check_g3_sandbox_heatmap", check_g3_sandbox_heatmap),
+        ("check_g4_live_heatmap", check_g4_live_heatmap),
         ("check_b5_sandbox_save_load", check_b5_sandbox_save_load),
         ("check_b6_sandbox_auto_cycle", check_b6_sandbox_auto_cycle),
         ("check_b7_sandbox_multitf_context", check_b7_sandbox_multitf_context),

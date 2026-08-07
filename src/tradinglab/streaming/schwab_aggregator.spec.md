@@ -8,7 +8,7 @@ Pure, threadless aggregator that rolls Schwab streamer events into 1-minute `Can
 The module owns no threads, sockets, or `time.time()` — consumers feed it parsed dicts plus a wall-clock `datetime`. Drives unit tests directly.
 
 ## Public API
-- `LEVELONE_FIELDS: Dict[str, str]` — Schwab numeric-field-ID → logical name. Subset we consume: symbol / bid_price / ask_price / last_price / bid_size / ask_size / total_volume / trade_time_ms.
+- `LEVELONE_FIELDS: Dict[str, str]` — Schwab numeric-field-ID → logical name. Subset we consume: symbol / bid_price / ask_price / last_price / bid_size / ask_size / total_volume / high_price / low_price / close_price / trade_time_ms. Fields 10 (session high), 11 (session low) and 12 (**previous** day's close) are consumed by the quote axis ([`schwab_quotes`](schwab_quotes.spec.md)), not the bar builder, which ignores keys it does not read. **These IDs are the current Schwab map and differ from the legacy TDA `QUOTE` map from field 10 onward** — under TDA, 10/11 were times-since-midnight and previous close was 15.
 - `decode_levelone_content(content: Mapping) -> Dict[str, Any]` — translate one wire content dict to logical names; missing keys stay missing.
 - `CHART_EQUITY_FIELDS: Dict[str, str]` — symbol / sequence / open / high / low / close / volume / chart_time_ms.
 - `decode_chart_equity_content(content: Mapping) -> Dict[str, Any]`.
