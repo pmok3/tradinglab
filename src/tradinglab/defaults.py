@@ -294,6 +294,32 @@ TUNABLES: tuple[Tunable, ...] = (
             "volume quality differ per vendor, so the right choice "
             "depends on how far back you want to replay.",
             _v_str(allow_empty=True)),
+    # Which provider supplies historical shares-outstanding for
+    # market-cap sizing. Deliberately indirected through
+    # ``data/shares_sources.py`` rather than hardcoded at the point of
+    # use, so swapping EDGAR for a paid fundamentals feed later is a
+    # registration plus a settings change, not a refactor. Empty
+    # resolves to the registry default (``edgar``).
+    Tunable("shares_data_source", "edgar", "str",
+            "Provider for historical shares-outstanding, used for "
+            "market-cap tile sizing in the Market Heatmap. 'edgar' is "
+            "the SEC's free XBRL API — authoritative, point-in-time "
+            "(every fact carries the date it was filed), and covers "
+            "every US filer back to ~2009. Empty falls back to the "
+            "registry default. An unknown name disables cap sizing "
+            "rather than silently substituting another source.",
+            _v_str(allow_empty=True)),
+    # SEC rejects automated requests without a contact address (their
+    # WAF 403s a browser-style UA), and asks for <=10 req/s. Defaults to
+    # the project's public GitHub noreply address; set this to route
+    # attribution to yourself.
+    Tunable("sec_user_agent", "", "str",
+            "User-Agent sent to SEC EDGAR (data.sec.gov). The SEC "
+            "requires automated clients to identify themselves with a "
+            "contact address. Empty uses the project default; set it to "
+            "e.g. 'YourName your@email.com' to attribute requests to "
+            "you. Never send credentials here — it is a public header.",
+            _v_str(allow_empty=True)),
     Tunable("sandbox_skip_detailed_journal", False, "bool",
             "Skip the mandatory pre-trade journal AND the mandatory "
             "post-trade review modals during sandbox replay. Submitted "

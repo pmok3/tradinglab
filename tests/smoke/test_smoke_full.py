@@ -12111,6 +12111,7 @@ def check_g3_sandbox_heatmap(app) -> None:
     from tradinglab.backtest.heatmap_provider import HeatmapProvider
     from tradinglab.backtest.replay import SandboxController
     from tradinglab.backtest.session import ENGINE_VERSION, SessionSpec
+    from tradinglab.data.shares_sources import SharesFact as _SharesFact
     from tradinglab.gui.sandbox_heatmap import SandboxHeatmapWindow, tile_at
     from tradinglab.models import Candle
 
@@ -12144,7 +12145,9 @@ def check_g3_sandbox_heatmap(app) -> None:
     }
     provider = HeatmapProvider(
         meta=meta,
-        shares_fetcher=lambda s: [(_ep(2015, 1, 1), 1000.0)],
+        shares_fetcher=lambda s: [
+            _SharesFact(_ep(2015, 1, 1), _ep(2015, 1, 15), 1000.0)
+        ],
         # Must be injected: the default splits fetcher is the live
         # yfinance one, and _stub_yfinance only swaps DATA_SOURCES —
         # it does not stub the yfinance module, so an omitted fetcher

@@ -21,6 +21,7 @@ Normalization + parallelism helpers (shared across providers)::
     fetch_chunks_parallel  — I/O-parallel fetch primitive for chunked providers
 """
 
+from . import edgar_shares as _edgar_shares
 from .alpaca_source import (
     candles_from_alpaca_response,
     fetch_alpaca_data,
@@ -70,6 +71,15 @@ from .ratio_source import (
     ratio_display_label,
 )
 from .schwab_source import candles_from_schwab_response, fetch_schwab_data
+from .shares_sources import (
+    DEFAULT_SHARES_SOURCE,
+    SHARES_SOURCES,
+    SharesFact,
+    SharesFetcher,
+    available_shares_sources,
+    register_shares_source,
+    resolve_shares_fetcher,
+)
 from .source_ranking import (
     GLOBAL_SOURCE_PRIORITY,
     best_source,
@@ -101,6 +111,13 @@ register_source("yfinance", fetch_live_data)
 register_source(AUTO_SOURCE_NAME, fetch_auto_data)
 register_source("synthetic", fetch_synthetic_data, internal=True)
 register_source("synthetic-stream", fetch_synthetic_stream_bootstrap, internal=True)
+
+# Shares-outstanding providers live in their own registry (they answer a
+# different question than a price fetcher and have no interval/candle
+# shape). Registering here — rather than importing the vendor module at
+# the point of use — is what lets ``shares_data_source`` select one
+# without any consumer hardcoding a vendor.
+register_shares_source("edgar", _edgar_shares.make_fetcher)
 
 # Register OAuth/API-key vendors only when credentials are present, so
 # the source-selector dropdown stays uncluttered for users who only
@@ -238,6 +255,13 @@ __all__ = [
     "DataFetcher",
     "DataController",
     "FetchService",
+    "SHARES_SOURCES",
+    "SharesFact",
+    "SharesFetcher",
+    "DEFAULT_SHARES_SOURCE",
+    "available_shares_sources",
+    "register_shares_source",
+    "resolve_shares_fetcher",
     "register_source",
     "unregister_source",
     "is_internal_source",

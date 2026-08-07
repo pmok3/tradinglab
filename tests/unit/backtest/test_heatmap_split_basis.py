@@ -37,6 +37,14 @@ def _epoch(y: int, m: int, d: int) -> int:
     return int(datetime(y, m, d, tzinfo=timezone.utc).timestamp())
 
 
+def _fact(y: int, m: int, d: int, shares: float, *, filed_days: int = 14):
+    """A reported count, filed ``filed_days`` after the date it describes."""
+    from tradinglab.data.shares_sources import SharesFact
+
+    as_of = _epoch(y, m, d)
+    return SharesFact(as_of, as_of + filed_days * 86400, float(shares))
+
+
 # ---------------------------------------------------------------------------
 # split_factor_after
 # ---------------------------------------------------------------------------
@@ -87,11 +95,11 @@ def test_ms_timestamps_are_normalized() -> None:
 
 
 def test_shares_detail_reports_the_observation_timestamp() -> None:
-    series = [(_epoch(2020, 1, 1), 100.0), (_epoch(2020, 7, 1), 90.0)]
+    series = [_fact(2020, 1, 1, 100.0), _fact(2020, 7, 1, 90.0)]
     assert shares_at_detail_from_series(series, _epoch(2020, 6, 1)) == (
         100.0, False, _epoch(2020, 1, 1)
     )
-    # before the series -> carry back, and the observation is the first point
+    # before anything was filed -> carry back, observation = first as-of
     assert shares_at_detail_from_series(series, _epoch(2015, 1, 1)) == (
         100.0, True, _epoch(2020, 1, 1)
     )
@@ -115,7 +123,7 @@ def test_factor_is_measured_from_the_filing_not_the_clock(tmp_path) -> None:
     """
     prov = _provider(
         tmp_path,
-        shares=[(_epoch(2020, 1, 1), 100.0)],   # last filing
+        shares=[_fact(2020, 1, 1, 100.0)],   # last filing
         splits=[(_epoch(2020, 4, 1), 4.0)],     # split AFTER the filing,
     )                                           # BEFORE the clock
     got, approx = prov.basis_shares_at("X", _epoch(2020, 6, 1))
@@ -138,7 +146,7 @@ def test_split_after_the_clock_does_not_change_size(tmp_path) -> None:
     this case alone would also pass under clock-anchoring.
     """
     clock = _epoch(2020, 6, 1)
-    shares = [(_epoch(2020, 1, 1), 100.0)]
+    shares = [_fact(2020, 1, 1, 100.0)]
     price_before_split = 400.0  # price as the vendor served it pre-split
 
     unsplit = _provider(tmp_path / "a", shares=shares, splits=[])
@@ -186,7 +194,7 @@ def test_real_world_caps_come_out_right(
     """
     prov = _provider(
         tmp_path / symbol,
-        shares=[(_epoch(2020, 1, 1), raw_shares)],
+        shares=[_fact(2020, 1, 1, raw_shares)],
         splits=([] if factor == 1.0 else [(_epoch(2020, 9, 1), factor)]),
     )
     lifted, _approx = prov.basis_shares_at(symbol, _epoch(2020, 6, 1))
@@ -204,7 +212,7 @@ def test_real_world_caps_come_out_right(
 def test_unknown_split_history_flags_the_tile_approximate(tmp_path) -> None:
     """Assuming 1.0 on a failed fetch silently restores the old bug."""
     prov = _provider(
-        tmp_path, shares=[(_epoch(2020, 1, 1), 100.0)], splits=None
+        tmp_path, shares=[_fact(2020, 1, 1, 100.0)], splits=None
     )
     got, approx = prov.basis_shares_at("X", _epoch(2020, 6, 1))
     assert got == 100.0, "still renders, unlifted"
@@ -212,7 +220,7 @@ def test_unknown_split_history_flags_the_tile_approximate(tmp_path) -> None:
 
 
 def test_no_splits_is_known_and_exact(tmp_path) -> None:
-    prov = _provider(tmp_path, shares=[(_epoch(2020, 1, 1), 100.0)], splits=[])
+    prov = _provider(tmp_path, shares=[_fact(2020, 1, 1, 100.0)], splits=[])
     assert prov.basis_shares_at("X", _epoch(2020, 6, 1)) == (100.0, False)
 
 
@@ -221,7 +229,7 @@ def test_peek_never_fetches_and_reports_approximate(tmp_path) -> None:
 
     prov = HeatmapProvider(
         meta={"X": {"sector": "S", "industry": "I", "cik": "1", "date_added_ts": 0}},
-        shares_fetcher=lambda s: (calls.append(s) or [(_epoch(2020, 1, 1), 100.0)]),
+        shares_fetcher=lambda s: (calls.append(s) or [_fact(2020, 1, 1, 100.0)]),
         splits_fetcher=lambda s: (calls.append(s) or []),
         cache_dir=tmp_path,
     )
@@ -234,7 +242,7 @@ def test_peek_never_fetches_and_reports_approximate(tmp_path) -> None:
 def test_carry_back_still_flags_approximate_after_lifting(tmp_path) -> None:
     prov = _provider(
         tmp_path,
-        shares=[(_epoch(2020, 1, 1), 100.0)],
+        shares=[_fact(2020, 1, 1, 100.0)],
         splits=[(_epoch(2020, 9, 1), 4.0)],
     )
     got, approx = prov.basis_shares_at("X", _epoch(2015, 1, 1))
@@ -250,7 +258,7 @@ def test_carry_back_still_flags_approximate_after_lifting(tmp_path) -> None:
 def test_splits_cache_round_trips_known_history(tmp_path) -> None:
     prov = HeatmapProvider(
         meta={"X": {"sector": "S", "industry": "I", "cik": "1", "date_added_ts": 0}},
-        shares_fetcher=lambda _s: [(_epoch(2020, 1, 1), 100.0)],
+        shares_fetcher=lambda _s: [_fact(2020, 1, 1, 100.0)],
         splits_fetcher=lambda _s: [(_epoch(2021, 1, 1), 4.0)],
         cache_dir=tmp_path,
     )
@@ -280,7 +288,7 @@ def test_a_failed_split_fetch_is_never_persisted(tmp_path) -> None:
     meta = {"X": {"sector": "S", "industry": "I", "cik": "1", "date_added_ts": 0}}
     failing = HeatmapProvider(
         meta=meta,
-        shares_fetcher=lambda _s: [(_epoch(2020, 1, 1), 100.0)],
+        shares_fetcher=lambda _s: [_fact(2020, 1, 1, 100.0)],
         splits_fetcher=lambda _s: None,          # transient failure
         cache_dir=tmp_path,
     )
@@ -298,7 +306,7 @@ def test_a_failed_split_fetch_is_never_persisted(tmp_path) -> None:
     # A fresh process with a working fetcher must retry and get it right.
     recovered = HeatmapProvider(
         meta=meta,
-        shares_fetcher=lambda _s: [(_epoch(2020, 1, 1), 100.0)],
+        shares_fetcher=lambda _s: [_fact(2020, 1, 1, 100.0)],
         splits_fetcher=lambda _s: [(_epoch(2021, 1, 1), 4.0)],
         cache_dir=tmp_path,
     )
@@ -309,7 +317,7 @@ def test_a_legacy_null_on_disk_is_ignored_not_trusted(tmp_path) -> None:
     (tmp_path / "splits_cache.json").write_text('{"X": null}', encoding="utf-8")
     prov = HeatmapProvider(
         meta={"X": {"sector": "S", "industry": "I", "cik": "1", "date_added_ts": 0}},
-        shares_fetcher=lambda _s: [(_epoch(2020, 1, 1), 100.0)],
+        shares_fetcher=lambda _s: [_fact(2020, 1, 1, 100.0)],
         splits_fetcher=lambda _s: [(_epoch(2021, 1, 1), 4.0)],
         cache_dir=tmp_path,
     )
@@ -330,7 +338,7 @@ def test_no_lift_when_the_price_series_is_not_split_adjusted(tmp_path) -> None:
     """
     prov = HeatmapProvider(
         meta={"X": {"sector": "S", "industry": "I", "cik": "1", "date_added_ts": 0}},
-        shares_fetcher=lambda _s: [(_epoch(2020, 1, 1), 100.0)],
+        shares_fetcher=lambda _s: [_fact(2020, 1, 1, 100.0)],
         splits_fetcher=lambda _s: [(_epoch(2021, 1, 1), 4.0)],
         cache_dir=tmp_path,
         price_split_adjusted=False,

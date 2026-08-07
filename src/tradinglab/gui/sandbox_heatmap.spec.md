@@ -116,8 +116,8 @@ the pure [`backtest/heatmap.py`](../backtest/heatmap.spec.md) layer. See
   members / priced tiles / prior-close fallbacks / approximate sizes and
   names the source, rather than restating a fixed caveat string.
 - **Historically-scaled cap sizing** (decision 3): shares come from
-  yfinance `get_shares_full` snapped to the session date (most-recent
-  value ≤ date). When price history is deeper than the shares series
+  the injected `shares_data_source` provider (SEC EDGAR) snapped
+  point-in-time to the session date (most-recent value already *filed*). When price history is deeper than the shares series
   (~11y), sizing before the series start **carries back the earliest
   known count** (nearest-in-time, not today's) and marks those tiles
   `approx_size` (subtle hatched border) + notes it in the coverage
@@ -246,11 +246,11 @@ motion_notify → hit-test → tooltip ; button_press → hit-test → load on c
 - A footer label surfaces the fidelity caveats + coverage: membership
   is point-in-time via the `Date added` filter (look-ahead removed) with
   a labeled survivorship residual (removed names absent); classification
-  is as-of-today; share count is historical via `get_shares_full` (~11y),
+  is as-of-today; share count is historical via SEC EDGAR (~2009+),
   with carried-back approximate sizing (flagged) for deeper replays.
 - Requires the S&P 500 preloaded with prior-day closes for the replay
   window; a missing-symbol tile renders neutral with a hover note.
-- First-ever open fetches `get_shares_full` for the membership on a
+- First-ever open fetches shares for the membership on a
   background thread (disk-cached thereafter); a single refresh lands
   when done. Incremental / preload-time priming is future work.
 

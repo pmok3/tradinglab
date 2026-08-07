@@ -33,7 +33,7 @@ onto the primary chart and drill into the daily + intraday confluence.
 |---|---|---|
 | 1 | Universe | **S&P 500** map (Finviz default), preloaded for the replay window; **point-in-time membership** via the `Date added` filter (look-ahead removed) + coverage label; narrowed to the session's prepared universe when one is set |
 | 2 | Data source | **The session's own source** — pinned at Sandbox Start (`sandbox_data_source`, default Auto) and read off `SandboxController.data_source`, so the map is priced from the same tape the replay runs on; sector / industry + historical shares series are cached (no scraping) |
-| 3 | Tile size | **Historically-scaled cap** = `shares(t) × price(t)`, split-consistent: the as-reported count is lifted onto the price series' back-adjusted basis via `split_factor_after`; `shares(t)` from `get_shares_full` snapped to clock; pre-series → carry back earliest-known (flagged approximate) |
+| 3 | Tile size | **Historically-scaled cap** = `shares(t) × price(t)`, split-consistent: the as-reported count is lifted onto the price series' back-adjusted basis via `split_factor_after`; `shares(t)` from the `shares_data_source` provider (SEC EDGAR), snapped point-in-time to the clock; pre-series → carry back earliest-known (flagged approximate) |
 | 4 | Color metric | **Raw 1-Day % change** (pure Finviz); RS / vs-SPY deferred, seam kept clean |
 | 5 | Timeframe | **1-Day only** in v1; 1W / 1M / 3M / 6M / 1Y / YTD in v2 |
 | 6 | Layout | Sector → industry **squarified treemap** (vendored ~40-line squarify, no new dependency) |
@@ -73,7 +73,7 @@ display:
    replay tick.
 3. **Classification + shares provider** *(build task, not one of the two
    core specs)* — a small yfinance-backed cache of `sector` / `industry`
-   (`.info`) plus the **historical shares series** (`get_shares_full`)
+   (`.info`) plus the **historical shares series** (SEC EDGAR XBRL)
    per symbol, persisted to disk and refreshed on a schedule. Injected
    into both layers so neither fetches inline.
 
@@ -107,7 +107,7 @@ display:
 - **Size — historically-scaled market cap:** `shares(t) × price(t)`,
   both on the **same split basis**. `shares(t)` is the historical share
   count snapped to the current replay **session** (yfinance
-  `get_shares_full`, ~11y deep, most-recent value ≤ the session date).
+  SEC EDGAR XBRL, ~2009+, most-recent value already *filed* at the session date).
   **When price history is deeper than the shares series,** sizing before
   the series start **carries back the earliest known count**
   (nearest-in-time — never today's) and flags those tiles approximate +
@@ -121,7 +121,7 @@ display:
   That rule is **unimplementable on the default source**: yfinance
   back-adjusts its price history for splits *unconditionally* —
   `auto_adjust=False` only disables *dividend* adjustment — so a raw
-  price simply cannot be obtained. Meanwhile `get_shares_full` really is
+  price simply cannot be obtained. Meanwhile a reported share count really is
   as-reported. Stating the rule that way is what led the implementation
   to multiply a back-adjusted price by an as-reported count, which
   **under-sizes a tile by exactly its cumulative split ratio**. Measured
@@ -206,7 +206,7 @@ label states these:
 - **Sector / industry classification is current.** GICS assignments can
   change; the map uses today's.
 - **Share count is historical, not point-in-time-perfect.** Tile size
-  uses yfinance `get_shares_full` snapped to the replay session, so
+  uses SEC EDGAR XBRL snapped point-in-time to the replay session, so
   buybacks / dilution *are* captured (and splits cancel via the raw ×
   raw rule). **The series is ~11y deep, but price history can be deeper**
   — before the series starts, sizing **carries back the earliest known

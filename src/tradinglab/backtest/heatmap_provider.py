@@ -1,4 +1,4 @@
-"""Classification + historical-shares provider for the sandbox heatmap.
+"""Classification + membership + shares/split provider for the heatmap.
 
 Supplies, per S&P 500 symbol:
 
@@ -7,15 +7,20 @@ Supplies, per S&P 500 symbol:
   ``.info`` calls). yfinance ``.info`` remains the fallback for
   non-S&P universes (v2).
 * **Date added** + **CIK** — from the same CSV, for the point-in-time
-  membership filter (``heatmap.members_asof``) and rename-safe
-  resolution.
-* **historical shares outstanding** — yfinance ``get_shares_full``, the
-  only network-sourced field, disk-cached. Snapped to the replay clock
-  with carry-back before the series start (see ``docs/SANDBOX_HEATMAP.md``).
+  membership filter (``heatmap.members_asof``), rename-safe resolution,
+  and to resolve a symbol to its SEC filer without a network lookup.
+* **historical shares outstanding** — from an **injected** provider
+  (``shares_fetcher``). The concrete vendor is chosen by the
+  ``shares_data_source`` tunable and resolved by a higher-level caller
+  via :func:`data.shares_sources.resolve_shares_fetcher`; this module
+  never imports one, so the source can be swapped without touching it.
+* **split history** — from the price vendor, because a split is a
+  price-series concern and the shares lift must match the basis the
+  prices are on.
 
 The pure helpers (:func:`parse_date_added`, :func:`shares_at_from_series`,
-:func:`load_sp500_meta`) are headless-testable; the network fetch is
-injected (``shares_fetcher``) so tests run offline.
+:func:`load_sp500_meta`) are headless-testable; every network fetch is
+injected so tests run offline.
 """
 
 from __future__ import annotations
@@ -29,11 +34,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ..core.timezones import normalize_epoch_to_seconds
+from ..data.shares_sources import SharesFact, SharesFetcher, null_shares_fetcher
 from .heatmap import Classification, split_factor_after
 
-#: One symbol's historical shares series: ascending ``(epoch_seconds, shares)``.
-SharesSeries = list[tuple[int, float]]
-SharesFetcher = Callable[[str], SharesSeries]
+#: One symbol's shares history: ascending :class:`SharesFact` records.
+SharesSeries = list[SharesFact]
 
 #: One symbol's split history: ascending ``(epoch_seconds, ratio)``.
 #: ``[]`` means "no splits, known"; ``None`` means the fetch failed and
@@ -97,78 +102,53 @@ def load_sp500_meta(csv_path: Path | None = None) -> dict[str, dict]:
 
 
 def shares_at_from_series(
-    series: Sequence[tuple[int, float]], ts: int
+    series: Sequence[SharesFact], ts: int
 ) -> tuple[float | None, bool]:
     """Snap a shares series to ``ts``; return ``(shares, approx)``.
 
-    * Empty series -> ``(None, True)``.
-    * ``ts`` before the series start -> **carry back** the earliest
-      known count (nearest-in-time), flagged approximate.
-    * Otherwise -> the most-recent count at or before ``ts`` (exact).
-
-    ``series`` must be ascending by timestamp. ``ts`` is normalized
-    (ms -> s) so either unit works.
+    See :func:`shares_at_detail_from_series` for the full rule.
     """
     shares, approx, _observed = shares_at_detail_from_series(series, ts)
     return (shares, approx)
 
 
 def shares_at_detail_from_series(
-    series: Sequence[tuple[int, float]], ts: int
+    series: Sequence[SharesFact], ts: int
 ) -> tuple[float | None, bool, int | None]:
-    """:func:`shares_at_from_series` plus the **observation timestamp**.
+    """Point-in-time snap; returns ``(shares, approx, as_of_ts)``.
 
-    The observation date matters for split-basis correction: a count
-    as-reported at date *D* is on *D*'s basis, so the factor that lifts
-    it onto today's basis is the product of splits after *D* — not
-    after the replay clock. ``get_shares_full`` reports roughly
-    quarterly, so a split landing between the last filing and the
-    replay date would otherwise be missed.
+    **Only facts already filed at ``ts`` are eligible.** A share count
+    describes a date (``as_of_ts``) but does not become public until it
+    is filed (``filed_ts``), typically two weeks later — so selecting on
+    the as-of date alone sizes a replay tile from a number nobody had
+    yet. Among the eligible facts the most recently *reported* one wins
+    (greatest ``as_of_ts``), which is what a trader would have had in
+    front of them.
+
+    * Empty / nothing filed yet -> **carry back** the earliest known
+      count (nearest-in-time), flagged approximate; ``(None, True, None)``
+      when the series is empty.
+    * The returned ``as_of_ts`` is the basis anchor for the split lift:
+      the count is on *that* date's basis, not the clock's.
+
+    ``ts`` is normalized (ms -> s) so either unit works.
     """
     if not series:
         return (None, True, None)
     cutoff = _to_seconds(ts)
-    first_ts, first_val = series[0]
-    if cutoff < _to_seconds(first_ts):
-        return (float(first_val), True, int(first_ts))
-    val = float(first_val)
-    observed = int(first_ts)
-    for pts, pv in series:
-        if _to_seconds(pts) <= cutoff:
-            val = float(pv)
-            observed = int(pts)
-        else:
-            break
-    return (val, False, observed)
-
-
-def _yf_shares_fetcher(symbol: str) -> SharesSeries:
-    """Default fetcher: yfinance ``get_shares_full`` -> ascending series.
-
-    Best-effort: any failure (network, missing method, bad data) yields
-    an empty series, so the caller degrades to carry-back / no-size.
-    """
-    try:
-        import yfinance as yf
-
-        s = yf.Ticker(symbol).get_shares_full(start="2000-01-01")
-    except Exception:
-        return []
-    if s is None or len(s) == 0:
-        return []
-    out: SharesSeries = []
-    try:
-        for idx, val in s.items():
-            if val is None:
-                continue
-            fv = float(val)
-            if fv != fv or fv <= 0.0:  # NaN or nonpositive
-                continue
-            out.append((int(idx.timestamp()), fv))
-    except Exception:
-        return []
-    out.sort(key=lambda t: t[0])
-    return out
+    best: SharesFact | None = None
+    for fact in series:
+        if _to_seconds(fact.filed_ts) > cutoff:
+            continue
+        if best is None or fact.as_of_ts > best.as_of_ts:
+            best = fact
+    if best is None:
+        # Nothing had been filed yet — the clock precedes this company's
+        # first report. Carry back the earliest known count rather than
+        # rendering nothing, and flag it.
+        first = min(series, key=lambda f: f.as_of_ts)
+        return (float(first.shares), True, int(first.as_of_ts))
+    return (float(best.shares), False, int(best.as_of_ts))
 
 
 def _yf_splits_fetcher(symbol: str) -> SplitsSeries | None:
@@ -217,7 +197,14 @@ class HeatmapProvider:
     """
 
     meta: dict[str, dict] | None = None
-    shares_fetcher: SharesFetcher = _yf_shares_fetcher
+    #: Historical shares provider. **Injected** — this module never picks
+    #: a vendor. The higher-level caller resolves the
+    #: ``shares_data_source`` tunable via
+    #: ``data.shares_sources.resolve_shares_fetcher`` and passes the
+    #: result. The default knows nothing (and touches no network), so a
+    #: caller that forgets to inject gets "sizes unavailable" rather than
+    #: silent traffic to a vendor nobody selected.
+    shares_fetcher: SharesFetcher = null_shares_fetcher
     splits_fetcher: SplitsFetcher = _yf_splits_fetcher
     cache_dir: Path | None = None
     #: Whether the price series this provider's counts will be multiplied
@@ -260,6 +247,19 @@ class HeatmapProvider:
 
     def cik(self, symbol: str) -> str:
         return (self.meta.get(symbol) or {}).get("cik") or ""
+
+    def cik_int(self, symbol: str) -> int | None:
+        """CIK as an int, for a shares provider that resolves SEC filers.
+
+        Shipped in ``tools/sp500.csv``, so the S&P universe never pays a
+        network ticker lookup — and it is rename/recycled-ticker safe,
+        which a bare symbol is not.
+        """
+        raw = self.cik(symbol)
+        try:
+            return int(raw) if raw else None
+        except (TypeError, ValueError):
+            return None
 
     # -- historical shares --
 
@@ -386,11 +386,21 @@ class HeatmapProvider:
             try:
                 raw = json.loads(f.read_text(encoding="utf-8"))
                 for sym, series in raw.items():
+                    if not series:
+                        continue  # never trust a cached empty as "known"
                     self._shares.setdefault(
-                        sym, [(int(a), float(b)) for a, b in series]
+                        sym,
+                        [
+                            SharesFact(int(a), int(b), float(c))
+                            for a, b, c in series
+                        ],
                     )
             except Exception:
-                pass
+                # A cache written by an older build used 2-tuples with no
+                # filed date. There is no honest way to back-fill one, so
+                # the whole file is discarded and refetched rather than
+                # guessed at — a wrong filed date is a look-ahead.
+                self._shares.clear()
         sf = self._splits_cache_file()
         if sf is not None and sf.exists():
             try:
@@ -407,7 +417,16 @@ class HeatmapProvider:
                 pass
 
     def _save_disk_cache(self) -> None:
-        self._write_json(self._cache_file(), self._shares)
+        # Persist only NON-EMPTY shares histories. An empty result is
+        # indistinguishable from "fetch failed" or "no provider
+        # configured", and writing it would make that permanent: every
+        # later launch reloads it, skips the fetch, and sizes the tile at
+        # zero forever. Same reasoning as the splits cache below; both
+        # cost one request per session to re-try instead.
+        self._write_json(
+            self._cache_file(),
+            {k: v for k, v in self._shares.items() if v},
+        )
         # Persist only KNOWN split histories. A transient fetch failure
         # caches as ``None`` for the session (one attempt per run, so a
         # rate-limit storm doesn't retry 500 times), but writing that

@@ -58,6 +58,8 @@ Each tunable has a validator so corrupt `settings.json` can't inject garbage.
 | `volume_tod_intraday_interval` | str | "5m" | Internal — intraday interval used as the TOD shading source. |
 | `sandbox_reference_symbol` | str | "SPY" | Master-clock anchor ticker for sandbox replay sessions. |
 | `sandbox_data_source` | str | "" | Data source for sandbox replay (reference timeline, mid-session loads, Market Heatmap). Empty = Auto (global ranking). |
+| `shares_data_source` | str | "edgar" | Provider for historical shares-outstanding (market-cap tile sizing). Empty = registry default. |
+| `sec_user_agent` | str | "" | User-Agent sent to SEC EDGAR; empty uses the project default. SEC requires a contact address. |
 | `sandbox_skip_detailed_journal` | bool | false | Skip mandatory sandbox pre/post journal modals and stamp placeholder journal fields. |
 | `splash_enabled` | bool | true | Show the PyInstaller splash screen at frozen-executable startup. |
 | `update_check_on_startup` | bool | true | Check GitHub Releases for a newer version on startup; RTH-suppressed. |
@@ -88,6 +90,8 @@ Each tunable has a validator so corrupt `settings.json` can't inject garbage.
 | `show_earnings` / `show_dividends` / `show_upcoming_events` / `earnings_window_days` / `events_source` / `pre_earnings_warn_in_journal` / `events_fetch_ttl_seconds` / `events_hover_hit_px` | `app.py:_load_events_async`, `events/render.py`, `gui/events_overlay.py`, `gui/sandbox_dialog.py:PreTradeFormDialog`, `gui/performance_view.py`, `gui/watchlist_tab.py`, `events/cache.py`, `gui/interaction.py:_check_event_glyph_hit` |
 | `sandbox_reference_symbol` | Sandbox replay session construction / master-clock anchor selection. |
 | `sandbox_data_source` | Start Sandbox dialog source picker (seed + write-back); `_sandbox_src` resolution; Prepare Universe Data preload source. |
+| `shares_data_source` | `data/shares_sources.resolve_shares_fetcher`, resolved by `gui/sandbox_heatmap._build_provider` and injected into `HeatmapProvider`. |
+| `sec_user_agent` | `data/edgar_shares.user_agent()` — every request to data.sec.gov. |
 | `sandbox_skip_detailed_journal` | Sandbox order/review dialogs; when true, bypasses mandatory pre/post modals with placeholder journal fields. |
 | `splash_enabled` | Frozen startup splash gating (env var / CLI still win). |
 | `worker_count` | `gui/workers.py` + Settings worker slider; live-swaps the background executor. |

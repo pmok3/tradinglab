@@ -99,7 +99,7 @@ model it returns. See [`docs/SANDBOX_HEATMAP.md`](../../../docs/SANDBOX_HEATMAP.
 - **Historically-scaled cap, not current cap** (decision 3). `size` is
   `scaled_cap(shares_at_session, session_reference_price)` so tile area
   reflects the historical moment. `shares_at_session` is the caller's
-  historical share count (yfinance `get_shares_full`, most-recent value
+  historical share count (the `shares_data_source` provider (SEC EDGAR), most-recent filed value
   ≤ the session), capturing buybacks / dilution — not a constant —
   **lifted onto the price series' basis** by `split_factor_after`
   (Invariant 7). **Before the series starts** the caller carries back
@@ -209,7 +209,7 @@ model = apply_colors(layout, pct_by_symbol=pcts, as_of_ts=clock)
   the index before today remain absent (survivorship residual, surfaced
   by a coverage label). Full membership via a Wikipedia changes-log
   reconstruction is v2. `sector` / `industry` (GICS) stay as-of-today.
-  Shares are **historical** (yfinance `get_shares_full`, ~11y); before
+  Shares are **historical** (SEC EDGAR XBRL, ~2009+); before
   the series starts the caller carries back the earliest known count
   (nearest-in-time) and those tiles are `approx_size` + noted in the
   coverage label. Depth upgrades: SEC EDGAR XBRL (~2009, CIK in

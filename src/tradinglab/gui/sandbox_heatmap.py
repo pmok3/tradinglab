@@ -366,9 +366,7 @@ class SandboxHeatmapWindow(tk.Toplevel):
         super().__init__(app, **kwargs)
         self.app = app
         self.controller = controller
-        self.provider = provider if provider is not None else HeatmapProvider(
-            price_split_adjusted=self._price_is_split_adjusted()
-        )
+        self.provider = provider if provider is not None else self._build_provider()
         # An injected price source is used verbatim (tests / callers that
         # supply their own basis). Otherwise build one bound to the
         # session's data source + tick interval, so the map is priced from
@@ -399,6 +397,8 @@ class SandboxHeatmapWindow(tk.Toplevel):
         self._labels: dict[str, Any] = {}
         self._badges: dict[str, Any] = {}
         self._tile_edge = "#ffffff"
+        if not hasattr(self, "_shares_source_name"):
+            self._shares_source_name = ""
 
         self._header = ttk.Label(self, text="Market Heatmap", anchor="w")
         self._header.pack(side=tk.TOP, fill=tk.X, padx=6, pady=(6, 2))
@@ -478,6 +478,35 @@ class SandboxHeatmapWindow(tk.Toplevel):
             return bool(_quality.is_split_adjusted(self._session_source()))
         except Exception:
             return True
+
+    def _build_provider(self) -> HeatmapProvider:
+        """Construct the provider, resolving the shares source *here*.
+
+        This is the higher-level file the ``shares_data_source`` tunable
+        resolves in: the registry hands back a fetcher and the provider
+        is handed the result, so no low-level module imports a vendor.
+        Swapping EDGAR for a paid fundamentals feed is then a
+        registration plus a settings change.
+
+        The provider's own CIK column (shipped in ``tools/sp500.csv``)
+        is wired in as the symbol->filer lookup, so the S&P universe
+        never pays a network ticker resolution and recycled tickers
+        can't map to the wrong company.
+        """
+        provider = HeatmapProvider(
+            price_split_adjusted=self._price_is_split_adjusted(),
+        )
+        try:
+            from ..data.shares_sources import resolve_shares_fetcher
+
+            name, fetcher = resolve_shares_fetcher(
+                cik_lookup=provider.cik_int,
+            )
+            provider.shares_fetcher = fetcher
+            self._shares_source_name = name
+        except Exception:
+            self._shares_source_name = ""
+        return provider
 
     def _members(self, clock: int) -> list[str]:
         """Point-in-time members, narrowed to the session universe.
@@ -575,7 +604,7 @@ class SandboxHeatmapWindow(tk.Toplevel):
         """Build shares + the session price snapshot on a daemon thread.
 
         Renders complete instantly with approximate (cache-only) sizes
-        and neutral tiles; the background worker fills `get_shares_full`
+        and neutral tiles; the background worker fills the shares history
         for every member (disk-cached) **and** parses the session's bars
         into :class:`SessionPriceSource`, then a poll on the Tk thread
         triggers a full refresh so real cap sizes and colors appear.

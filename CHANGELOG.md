@@ -38,6 +38,21 @@
   caveat.
 
 ### Added
+- **Share counts now come from SEC EDGAR.** Tile sizing in the Market
+  Heatmap previously used a price vendor's fundamentals feed, which
+  turned out to mix as-reported and split-adjusted values (sometimes
+  three for the same day, one of them double-adjusted), leave gaps of up
+  to 675 days, and never say when a number became public. EDGAR is the
+  authoritative source: one clean value per filing, a ~91-day cadence
+  with a 98-day worst gap, every US filer, and — crucially — the date
+  each number was *filed*, so a replay can no longer size a tile from a
+  count nobody had yet. On a 2020 replay this took TSLA from 26× wrong
+  to within 6% of its published market cap, and Apple, Amazon, Nvidia
+  and Microsoft all land within 1–4%.
+  The provider is selected by a new `shares_data_source` setting
+  (default `edgar`) rather than hardcoded, so a different source can be
+  dropped in later without touching the heatmap. `sec_user_agent` lets
+  you attribute EDGAR requests to your own contact address.
 - **Pick your data source before starting a sandbox session.** The Start
   Sandbox dialog leads with a Data source selector — Auto (best
   available) or a specific vendor — with a hint line stating that

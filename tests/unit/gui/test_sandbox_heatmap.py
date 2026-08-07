@@ -9,11 +9,16 @@ import pytest
 
 from tradinglab.backtest.heatmap import HeatmapTile, scaled_cap
 from tradinglab.backtest.heatmap_provider import HeatmapProvider
+from tradinglab.data.shares_sources import SharesFact
 from tradinglab.gui.sandbox_heatmap import compute_size_pct, tile_at
 
 
 def _epoch(y, m, d) -> int:
     return int(datetime(y, m, d, tzinfo=timezone.utc).timestamp())
+
+
+def _shares_fact(as_of: int, shares: float) -> SharesFact:
+    return SharesFact(as_of, as_of + 14 * 86400, shares)
 
 
 def _ps(_sym, _clock):
@@ -28,7 +33,7 @@ def _provider(tmp_path):
     }
     return HeatmapProvider(
         meta=meta,
-        shares_fetcher=lambda s: [(_epoch(2015, 1, 1), 1000.0)],
+        shares_fetcher=lambda s: [_shares_fact(_epoch(2015, 1, 1), 1000.0)],
         splits_fetcher=lambda _s: [],
         cache_dir=tmp_path,
     )
