@@ -2,42 +2,18 @@
 
 ## [Unreleased]
 
-### Fixed
-- **Heatmap tile sizes were wrong for anything that had split.** Tile
-  area multiplied a split-adjusted price by an as-reported share count,
-  so every company that split after the replay date was drawn smaller by
-  exactly its split ratio — and because a treemap fills a fixed area,
-  the companies that *hadn't* split grew to take up the slack. On a
-  2020 replay that meant NVDA drawn 40× too small, Amazon and Alphabet
-  20×, Tesla 15×, Apple 4×, while Microsoft and JPMorgan looked ~2.7×
-  bigger than they were. The names worth looking at were slivers and the
-  ones that weren't looked dominant. Share counts are now put on the
-  same basis as the price before sizing, so a split after the replay
-  clock no longer changes the map.
-- **The sandbox Market Heatmap was showing you the answer.** It read the
-  1-Day % from *daily* bars, and a daily bar is timestamped at its open
-  while carrying the session's settled close — so from the very first
-  bar of a replay the map was colored by how the day *finished*. It also
-  meant the map never changed intraday (both legs were constant all
-  day). Prices now come from intraday bars at or before the replay
-  clock, with the base leg from the last **completed** daily session.
-  A metamorphic test pins it: deleting every bar after the clock must
-  not change a single value on the map.
-- **The heatmap no longer freezes the app while you step bars.** It was
-  re-reading and re-parsing every symbol's cache file, for every tile,
-  four times a second on the UI thread, then rebuilding all ~500
-  rectangles and labels. Bars are now parsed once per session on the
-  background thread and a recolor just updates the existing tiles.
-- **The heatmap works on any data source.** It was hardcoded to
-  yfinance daily bars, so Schwab / Alpaca / local users got a silently
-  blank grey map. It now prices from the session's own source and
-  interval.
-- Heatmap clock reads in exchange time (ET) instead of UTC, the map is
-  scoped to the session's prepared universe when there is one, and the
-  footer now counts what is actually priced instead of stating a fixed
-  caveat.
+## [0.6.1] - 2026-08-07
+
+The Market Heatmap release. The in-app heatmap stopped showing you the
+answer, started sizing tiles correctly, and now runs **live** on a
+streaming quote feed instead of only inside a replay session. Also
+includes the credential-handling work previously tagged `v0.6.1-beta`:
+API keys live in a proper encrypted per-vendor store, the app can tell
+you whether they actually work, and a newly-saved key enables its data
+source without a restart.
 
 ### Added
+
 - **The Market Heatmap now runs live, not just in replay.** A new
   **View → Live Market Heatmap** opens the same treemap on the current
   tape — no sandbox session needed. It is deliberately built on a
@@ -101,15 +77,6 @@
   remembered (`sandbox_data_source`), pinned for the session, and used
   by mid-session ticker loads, Prepare Universe Data, and the heatmap —
   so one session can't silently mix vendors.
-## [0.6.1] - 2026-07-31
-
-Credential-handling release: your API keys now live in a proper encrypted,
-per-vendor store, the app can tell you whether they actually work, and a
-newly-saved key enables its data source without a restart. Plus a round of
-internal de-duplication that fixed two real data bugs, and a much deeper
-test suite.
-
-### Added
 - **"Test connection" per vendor.** The Configure Credentials dialog can now
   probe each provider and tell you *specifically* what is wrong — bad key vs.
   a plan that doesn't cover the feed you asked for vs. a network blip. For
@@ -128,6 +95,7 @@ test suite.
   *not* recorded against your key.
 
 ### Changed
+
 - **Credentials are stored per vendor and versioned.** Existing single-blob
   stores are migrated on first launch, and clearing one vendor can no longer
   disturb another. Secrets are never copied into the process environment.
@@ -136,6 +104,40 @@ test suite.
   no longer picked up as your API keys.
 
 ### Fixed
+
+- **Heatmap tile sizes were wrong for anything that had split.** Tile
+  area multiplied a split-adjusted price by an as-reported share count,
+  so every company that split after the replay date was drawn smaller by
+  exactly its split ratio — and because a treemap fills a fixed area,
+  the companies that *hadn't* split grew to take up the slack. On a
+  2020 replay that meant NVDA drawn 40× too small, Amazon and Alphabet
+  20×, Tesla 15×, Apple 4×, while Microsoft and JPMorgan looked ~2.7×
+  bigger than they were. The names worth looking at were slivers and the
+  ones that weren't looked dominant. Share counts are now put on the
+  same basis as the price before sizing, so a split after the replay
+  clock no longer changes the map.
+- **The sandbox Market Heatmap was showing you the answer.** It read the
+  1-Day % from *daily* bars, and a daily bar is timestamped at its open
+  while carrying the session's settled close — so from the very first
+  bar of a replay the map was colored by how the day *finished*. It also
+  meant the map never changed intraday (both legs were constant all
+  day). Prices now come from intraday bars at or before the replay
+  clock, with the base leg from the last **completed** daily session.
+  A metamorphic test pins it: deleting every bar after the clock must
+  not change a single value on the map.
+- **The heatmap no longer freezes the app while you step bars.** It was
+  re-reading and re-parsing every symbol's cache file, for every tile,
+  four times a second on the UI thread, then rebuilding all ~500
+  rectangles and labels. Bars are now parsed once per session on the
+  background thread and a recolor just updates the existing tiles.
+- **The heatmap works on any data source.** It was hardcoded to
+  yfinance daily bars, so Schwab / Alpaca / local users got a silently
+  blank grey map. It now prices from the session's own source and
+  interval.
+- Heatmap clock reads in exchange time (ET) instead of UTC, the map is
+  scoped to the session's prepared universe when there is one, and the
+  footer now counts what is actually priced instead of stating a fixed
+  caveat.
 - **Exit-strategy templates stayed templates.** Opening one of the 20 shipped
   exit templates and saving it silently demoted it to an ordinary user strategy.
 - **End-of-day flatten used the wrong price.** In the strategy tester, the
@@ -144,6 +146,7 @@ test suite.
   (market-on-close), as documented.
 
 ### Internal
+
 - Retired ~2,500 lines of duplicated logic behind single definitions (ID
   minting, provenance metadata, condition-tree traversal, trade-statistics
   reduction, the shared editor-dialog footer).
