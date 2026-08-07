@@ -23,15 +23,28 @@ here — they stay with the price vendor, because a split is a price-series
 concern and the lift has to match the basis the prices are on.
 
 Network access is injected (``url_fetcher``) so every rule is testable
-offline. See ``data/edgar_shares.spec.md``.
+offline, and all requests pass a shared rate limiter so concurrent
+priming stays inside SEC's published budget.
+
+**Why not the bulk ``frames`` endpoint?** It returns ~4,800 filers for a
+quarter in one request, which is tempting for priming a wide universe —
+but its rows carry only ``end`` and an accession number, **no filing
+date**. Without ``filed`` a value cannot be selected point-in-time, and
+inventing a filing lag would trade the invariant this provider exists to
+uphold for a load-time win. The per-symbol ``companyconcept`` path is
+exact, and concurrency plus the disk cache make it fast enough.
+
+See ``data/edgar_shares.spec.md``.
 """
 
 from __future__ import annotations
 
 import datetime as _dt
 import json
+import threading
+import time
 import urllib.request
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from typing import Any
 
 from .shares_sources import SharesFact
@@ -67,7 +80,33 @@ _TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 UrlFetcher = Callable[[str], Any]
 
 
+#: SEC asks automated clients to stay under 10 requests/second. Enforced
+#: at the fetcher (not at each caller) so *every* EDGAR access is polite
+#: by construction, including concurrent priming.
+MAX_REQUESTS_PER_SECOND = 8.0
+
+_rate_lock = threading.Lock()
+_next_allowed_at = 0.0
+
+
+def _throttle() -> None:
+    """Block until the next request is allowed. Thread-safe."""
+    global _next_allowed_at
+    interval = 1.0 / MAX_REQUESTS_PER_SECOND
+    with _rate_lock:
+        now = time.monotonic()
+        wait = _next_allowed_at - now
+        if wait <= 0.0:
+            _next_allowed_at = now + interval
+            wait = 0.0
+        else:
+            _next_allowed_at += interval
+    if wait > 0.0:
+        time.sleep(wait)
+
+
 def _default_url_fetcher(url: str) -> Any:  # pragma: no cover - network path
+    _throttle()
     req = urllib.request.Request(url, headers={"User-Agent": user_agent()})
     with urllib.request.urlopen(req, timeout=30) as resp:
         return json.loads(resp.read())
@@ -215,54 +254,13 @@ def make_fetcher(
     return EdgarSharesFetcher(url_fetcher=url_fetcher, cik_lookup=cik_lookup)
 
 
-def prefetch_quarter(
-    period: str,
-    *,
-    url_fetcher: UrlFetcher | None = None,
-    symbols: Iterable[str] | None = None,
-) -> dict[int, float]:
-    """Bulk-load one quarter for **every** filer in a single request.
-
-    ``period`` is an EDGAR frame id such as ``"CY2020Q2I"``. Returns
-    ``{cik: shares}``. One request covers ~4,800 companies, so a wide
-    universe costs a handful of calls instead of one per symbol. Best
-    effort: any failure yields ``{}`` and the caller falls back to
-    per-symbol lookups. ``symbols`` is accepted for signature
-    compatibility with future filtered variants and is ignored.
-    """
-    fetch = url_fetcher or _default_url_fetcher
-    url = (
-        "https://data.sec.gov/api/xbrl/frames/dei/"
-        f"EntityCommonStockSharesOutstanding/shares/{period}.json"
-    )
-    try:
-        payload = fetch(url)
-    except Exception:
-        return {}
-    out: dict[int, float] = {}
-    rows = payload.get("data") if isinstance(payload, dict) else None
-    if not isinstance(rows, list):
-        return {}
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        try:
-            cik = int(row.get("cik"))
-            val = float(row.get("val"))
-        except (TypeError, ValueError):
-            continue
-        if val == val and val > 0.0:
-            out[cik] = val
-    return out
-
-
 __all__ = (
     "USER_AGENT",
     "user_agent",
+    "MAX_REQUESTS_PER_SECOND",
     "UrlFetcher",
     "EdgarSharesFetcher",
     "make_fetcher",
     "parse_company_concept",
     "parse_ticker_map",
-    "prefetch_quarter",
 )

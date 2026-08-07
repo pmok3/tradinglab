@@ -33,6 +33,9 @@ __all__ = (
     "compute_1d_pct",
     "scaled_cap",
     "split_factor_after",
+    "SIZE_BASES",
+    "is_valid_size_basis",
+    "size_basis_label",
     "price_at_or_before",
     "session_date_of",
     "completed_session_closes",
@@ -49,8 +52,38 @@ __all__ = (
 #: Group label for symbols with missing / empty classification.
 UNCLASSIFIED = "Unclassified"
 
-#: What tile area encodes (surfaced on the layout for the UI legend).
+#: What tile area encodes. The default stays market cap (Finviz
+#: parity), but cap is not the only useful weight — see
+#: :data:`SIZE_BASES`.
 SIZE_BASIS = "historical_market_cap"
+
+#: Selectable tile-area bases, ``id -> user-facing label``.
+#:
+#: Cap is what Finviz shows and is the right *macro* weight, but it hands
+#: ~30% of the pixels to a handful of mega-caps and shrinks the day's
+#: actual movers to hover-only slivers. Dollar volume weights by where
+#: money is actually changing hands, which is closer to what a discretionary
+#: trader is scanning for — and, unlike cap, it needs no share count, no
+#: filings and no split reconciliation, so it is also the only basis that
+#: works for non-filers and thinly-covered names. Equal weight removes
+#: size as a variable entirely when the read is purely about breadth.
+SIZE_BASES: OrderedDict[str, str] = OrderedDict(
+    (
+        (SIZE_BASIS, "Market cap"),
+        ("dollar_volume", "Dollar volume"),
+        ("equal_weight", "Equal weight"),
+    )
+)
+
+
+def is_valid_size_basis(basis: str) -> bool:
+    """True when ``basis`` is a known tile-area basis."""
+    return basis in SIZE_BASES
+
+
+def size_basis_label(basis: str) -> str:
+    """User-facing label for ``basis``; the raw id when unknown."""
+    return SIZE_BASES.get(basis, basis)
 
 #: Floor applied to a tile's size so squarify never sees a zero area
 #: (a symbol with unknown size renders as a negligible sliver, honestly).
@@ -173,14 +206,18 @@ def build_layout(
     size_by_symbol: Mapping[str, float],
     classification: Mapping[str, Classification],
     approx_size_symbols: Iterable[str] = frozenset(),
+    size_basis: str = SIZE_BASIS,
 ) -> HeatmapLayout:
     """Group symbols sector -> industry and squarify into a unit square.
 
-    ``size_by_symbol`` is the historically-scaled cap proxy (raw shares x
-    raw price). Missing / non-positive sizes are floored to
-    ``_MIN_TILE_SIZE`` so every symbol still gets a (tiny) tile — the
-    "every input symbol appears in exactly one tile" invariant. Tiles for
-    symbols in ``approx_size_symbols`` get ``approx_size=True``.
+    ``size_by_symbol`` is whatever the caller's chosen basis produced
+    (see :data:`SIZE_BASES`); this layer only cares that the values are
+    comparable positive magnitudes. Missing / non-positive sizes are
+    floored to ``_MIN_TILE_SIZE`` so every symbol still gets a (tiny)
+    tile — the "every input symbol appears in exactly one tile"
+    invariant. Tiles for symbols in ``approx_size_symbols`` get
+    ``approx_size=True``. ``size_basis`` is recorded on the layout for
+    the UI legend.
     """
     approx = set(approx_size_symbols)
 
@@ -250,7 +287,7 @@ def build_layout(
         tiles=tuple(tiles),
         sector_bounds=sector_bounds,
         industry_bounds=industry_bounds,
-        size_basis=SIZE_BASIS,
+        size_basis=size_basis,
     )
 
 

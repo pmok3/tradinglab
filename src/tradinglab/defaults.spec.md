@@ -59,6 +59,7 @@ Each tunable has a validator so corrupt `settings.json` can't inject garbage.
 | `sandbox_reference_symbol` | str | "SPY" | Master-clock anchor ticker for sandbox replay sessions. |
 | `sandbox_data_source` | str | "" | Data source for sandbox replay (reference timeline, mid-session loads, Market Heatmap). Empty = Auto (global ranking). |
 | `shares_data_source` | str | "edgar" | Provider for historical shares-outstanding (market-cap tile sizing). Empty = registry default. |
+| `heatmap_size_basis` | str | "historical_market_cap" | What Market Heatmap tile area encodes: market cap, `dollar_volume`, or `equal_weight`. |
 | `sec_user_agent` | str | "" | User-Agent sent to SEC EDGAR; empty uses the project default. SEC requires a contact address. |
 | `sandbox_skip_detailed_journal` | bool | false | Skip mandatory sandbox pre/post journal modals and stamp placeholder journal fields. |
 | `splash_enabled` | bool | true | Show the PyInstaller splash screen at frozen-executable startup. |
@@ -91,6 +92,7 @@ Each tunable has a validator so corrupt `settings.json` can't inject garbage.
 | `sandbox_reference_symbol` | Sandbox replay session construction / master-clock anchor selection. |
 | `sandbox_data_source` | Start Sandbox dialog source picker (seed + write-back); `_sandbox_src` resolution; Prepare Universe Data preload source. |
 | `shares_data_source` | `data/shares_sources.resolve_shares_fetcher`, resolved by `gui/sandbox_heatmap._build_provider` and injected into `HeatmapProvider`. |
+| `heatmap_size_basis` | `gui/sandbox_heatmap` "Size by" picker (seed + write-back); passed to `compute_size_pct` / `build_layout`. |
 | `sec_user_agent` | `data/edgar_shares.user_agent()` — every request to data.sec.gov. |
 | `sandbox_skip_detailed_journal` | Sandbox order/review dialogs; when true, bypasses mandatory pre/post modals with placeholder journal fields. |
 | `splash_enabled` | Frozen startup splash gating (env var / CLI still win). |

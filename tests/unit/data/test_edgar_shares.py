@@ -166,13 +166,36 @@ def test_network_failure_degrades_to_empty() -> None:
     assert f("AAPL") == [], "an outage must not raise into the render path"
 
 
-def test_bulk_quarter_prefetch() -> None:
-    payload = {"data": [{"cik": 320193, "val": 4275634000},
-                        {"cik": 789019, "val": 7567000000},
-                        {"cik": None, "val": 1}]}
-    got = E.prefetch_quarter("CY2020Q2I", url_fetcher=lambda _u: payload)
-    assert got == {320193: 4275634000.0, 789019: 7567000000.0}
-    assert E.prefetch_quarter("CY2020Q2I", url_fetcher=lambda _u: None) == {}
+def test_rate_limiter_keeps_requests_inside_the_sec_budget() -> None:
+    """Throttling lives at the fetcher, so concurrency can't outrun it.
+
+    SEC asks for <=10 req/s; priming a 500-name universe on a worker
+    pool would otherwise burst well past that.
+    """
+    import threading
+    import time
+
+    E._next_allowed_at = 0.0
+    stamps: list[float] = []
+    lock = threading.Lock()
+
+    def hit() -> None:
+        E._throttle()
+        with lock:
+            stamps.append(time.monotonic())
+
+    threads = [threading.Thread(target=hit) for _ in range(12)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    stamps.sort()
+    span = stamps[-1] - stamps[0]
+    rate = (len(stamps) - 1) / span if span > 0 else float("inf")
+    assert rate <= E.MAX_REQUESTS_PER_SECOND * 1.35, (
+        f"observed {rate:.1f} req/s against a {E.MAX_REQUESTS_PER_SECOND} cap"
+    )
 
 
 def test_user_agent_identifies_the_app_and_a_contact() -> None:

@@ -38,6 +38,17 @@
   caveat.
 
 ### Added
+- **Choose what tile size means.** The Market Heatmap has a "Size by"
+  picker: **market cap** (as before), **dollar volume**, or **equal
+  weight**. Cap is the Finviz default but it gives most of the map to a
+  handful of mega-caps and shrinks the day's actual movers to slivers
+  you can only find by hovering. Dollar volume weights by where money is
+  actually changing hands — and needs no share count, no filings and no
+  split history, so it keeps working on names where cap sizing can't
+  (non-filers, thin names, replays before 2009). Equal weight drops size
+  entirely when you just want breadth. Dollar volume only counts bars at
+  or before the replay clock, same rule as the colours. Your choice is
+  remembered.
 - **Share counts now come from SEC EDGAR.** Tile sizing in the Market
   Heatmap previously used a price vendor's fundamentals feed, which
   turned out to mix as-reported and split-adjusted values (sometimes
@@ -52,7 +63,9 @@
   The provider is selected by a new `shares_data_source` setting
   (default `edgar`) rather than hardcoded, so a different source can be
   dropped in later without touching the heatmap. `sec_user_agent` lets
-  you attribute EDGAR requests to your own contact address.
+  you attribute EDGAR requests to your own contact address. The first
+  open of a wide universe fetches on a small worker pool and saves as it
+  goes, so closing the app mid-fetch doesn't throw the work away.
 - **Pick your data source before starting a sandbox session.** The Start
   Sandbox dialog leads with a Data source selector — Auto (best
   available) or a specific vendor — with a hint line stating that

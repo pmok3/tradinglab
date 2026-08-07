@@ -39,8 +39,9 @@ composes these into `size_by_symbol` / membership for the pure
     `date_added() -> {sym: int | None}`, `cik(sym)`, `cik_int(sym)`.
   - `shares_series(sym)` — lazy fetch + disk-cache; `shares_at(sym, ts)`
     delegates to `shares_at_from_series`; `peek_shares_at(sym, ts)` is
-    cache-only and never fetches; `prime(symbols=None)` pre-fetches
-    **both** series.
+    cache-only and never fetches; `prime(symbols=None, *, workers=4)`
+    pre-fetches **both** series on a small worker pool, persisting
+    incrementally.
   - `splits_series(sym) -> SplitsSeries | None` / `peek_splits_series(sym)`
     — lazy fetch + disk-cache / cache-only.
   - `basis_shares_at(sym, ts) -> (float | None, bool)` — the share count
@@ -110,6 +111,14 @@ composes these into `size_by_symbol` / membership for the pure
   between the last one and the replay date; using the clock would miss
   it and leave the count a whole ratio short. Hence
   `shares_at_detail_from_series` surfaces the as-of timestamp.
+- **Priming is concurrent and resumable.** The cost is almost entirely
+  network latency (~370 ms per EDGAR round trip, so ~186 s serially for
+  a 500-name universe), and the EDGAR fetcher rate-limits itself, so a
+  small worker pool is safe by construction — concurrency here cannot
+  exceed the provider's request budget. Results persist every
+  `_PRIME_SAVE_EVERY` symbols rather than once at the end, so a session
+  closed mid-prime keeps the work already done instead of discarding
+  minutes of fetching.
 - **The shipped CIK resolves the filer.** `cik_int` feeds the shares
   provider's symbol→filer lookup, so the S&P universe never pays a
   network ticker resolution, and a recycled ticker can't map to the

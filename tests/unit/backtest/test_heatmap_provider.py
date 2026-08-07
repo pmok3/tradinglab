@@ -85,6 +85,72 @@ def test_shares_at_from_series_ms_normalization():
     assert P.shares_at_from_series(series, ts_ms) == (90.0, False)
 
 
+def test_prime_fetches_concurrently_and_saves_incrementally(tmp_path) -> None:
+    """A 500-name prime is ~3 minutes of latency if done serially.
+
+    Fetching on a pool cuts that; saving in batches means a session
+    closed mid-prime keeps the work already done. The EDGAR fetcher
+    rate-limits itself, so the pool can't outrun the request budget.
+    """
+    import threading
+
+    seen: list[str] = []
+    lock = threading.Lock()
+    saves: list[int] = []
+
+    def shares(sym):
+        with lock:
+            seen.append(sym)
+        return [_fact(2020, 1, 1, 100.0)]
+
+    syms = [f"S{i:03d}" for i in range(120)]
+    meta = {
+        s: {"sector": "S", "industry": "I", "cik": str(i), "date_added_ts": 0}
+        for i, s in enumerate(syms)
+    }
+    prov = P.HeatmapProvider(
+        meta=meta,
+        shares_fetcher=shares,
+        splits_fetcher=lambda _s: [],
+        cache_dir=tmp_path,
+    )
+    real_save = prov._save_disk_cache
+    prov._save_disk_cache = lambda: (saves.append(len(prov._shares)), real_save())[1]
+
+    prov.prime(syms, workers=4)
+
+    assert sorted(seen) == sorted(syms), "every symbol must be fetched exactly once"
+    assert len(saves) > 1, "a long prime must persist incrementally, not once at the end"
+    assert (tmp_path / "shares_cache.json").exists()
+
+
+def test_prime_skips_already_cached_symbols(tmp_path) -> None:
+    calls: list[str] = []
+    prov = P.HeatmapProvider(
+        meta={"A": {"sector": "S", "industry": "I", "cik": "1", "date_added_ts": 0}},
+        shares_fetcher=lambda s: (calls.append(s) or [_fact(2020, 1, 1, 1.0)]),
+        splits_fetcher=lambda _s: [],
+        cache_dir=tmp_path,
+    )
+    prov.prime(["A"])
+    prov.prime(["A"])
+    assert calls == ["A"], "a primed symbol must not be re-fetched"
+
+
+def test_prime_survives_a_failing_fetcher(tmp_path) -> None:
+    def boom(_s):
+        raise OSError("edgar down")
+
+    prov = P.HeatmapProvider(
+        meta={"A": {"sector": "S", "industry": "I", "cik": "1", "date_added_ts": 0}},
+        shares_fetcher=boom,
+        splits_fetcher=lambda _s: [],
+        cache_dir=tmp_path,
+    )
+    prov.prime(["A"])  # must not raise out of the daemon thread
+    assert prov.peek_shares_at("A", _epoch(2020, 6, 1)) == (None, True)
+
+
 def _provider(tmp_path):
     meta = {
         "AAA": {"sector": "Tech", "industry": "Software", "cik": "1", "date_added_ts": _epoch(2010, 1, 1)},

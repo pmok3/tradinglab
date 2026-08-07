@@ -30,10 +30,15 @@ model it returns. See [`docs/SANDBOX_HEATMAP.md`](../../../docs/SANDBOX_HEATMAP.
   point-in-time membership filter: the current members whose `Date added`
   ≤ `as_of_ts`. Removes look-ahead names; the caller feeds the result to
   `build_layout(symbols=…)`.
-- `build_layout(*, symbols, size_by_symbol, classification, approx_size_symbols=frozenset()) -> HeatmapLayout`
+- `SIZE_BASIS = "historical_market_cap"` — default tile-area basis.
+- `SIZE_BASES: OrderedDict[str, str]` — selectable bases, `id -> label`:
+  market cap, `dollar_volume`, `equal_weight`.
+- `is_valid_size_basis(basis) -> bool` / `size_basis_label(basis) -> str`.
+- `build_layout(*, symbols, size_by_symbol, classification, approx_size_symbols=frozenset(), size_basis=SIZE_BASIS) -> HeatmapLayout`
   — group sector → industry, run `squarify`, return geometry; tiles
   whose symbol is in `approx_size_symbols` get `approx_size=True`.
-  Called at session roll only.
+  `size_basis` is recorded on the layout for the UI legend. Called at
+  session roll and on a basis change.
 - `apply_colors(layout, *, pct_by_symbol, as_of_ts, clip_pct=3.0, timeframe="1D", universe_id="") -> HeatmapModel`
   — attach `pct` + Finviz `fill` per tile; stamp `as_of_ts` / `timeframe`
   / `universe_id` onto the model. Called every bar.
@@ -105,6 +110,16 @@ model it returns. See [`docs/SANDBOX_HEATMAP.md`](../../../docs/SANDBOX_HEATMAP.
   (Invariant 7). **Before the series starts** the caller carries back
   the earliest known count (nearest-in-time, never today's) and flags
   the symbol so its tile is `approx_size`.
+- **Tile area is a selectable basis, not just market cap** (`SIZE_BASES`).
+  Cap is Finviz parity and the right *macro* weight, but it hands ~30%
+  of the pixels to a handful of mega-caps and shrinks the day's actual
+  movers to hover-only slivers. `dollar_volume` weights by where money
+  is changing hands — and needs no share count, no filings and no split
+  reconciliation, so it is the only basis that works for non-filers and
+  thinly-covered names. `equal_weight` removes size as a variable when
+  the read is purely breadth. The pure layer stays agnostic: it only
+  requires comparable positive magnitudes, so a new basis is a caller
+  change plus a registry entry.
 - **1-Day % is the only color metric in v1** (decisions 4, 5). The
   color basis is a single injected `pct_by_symbol` map; a future RS /
   vs-SPY or custom-RS basis is a drop-in different map, so no signature

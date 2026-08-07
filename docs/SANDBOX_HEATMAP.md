@@ -33,7 +33,7 @@ onto the primary chart and drill into the daily + intraday confluence.
 |---|---|---|
 | 1 | Universe | **S&P 500** map (Finviz default), preloaded for the replay window; **point-in-time membership** via the `Date added` filter (look-ahead removed) + coverage label; narrowed to the session's prepared universe when one is set |
 | 2 | Data source | **The session's own source** — pinned at Sandbox Start (`sandbox_data_source`, default Auto) and read off `SandboxController.data_source`, so the map is priced from the same tape the replay runs on; sector / industry + historical shares series are cached (no scraping) |
-| 3 | Tile size | **Historically-scaled cap** = `shares(t) × price(t)`, split-consistent: the as-reported count is lifted onto the price series' back-adjusted basis via `split_factor_after`; `shares(t)` from the `shares_data_source` provider (SEC EDGAR), snapped point-in-time to the clock; pre-series → carry back earliest-known (flagged approximate) |
+| 3 | Tile size | **Selectable basis** (`heatmap_size_basis`): historically-scaled cap (default, split-consistent — the as-reported count is lifted onto the price series' basis via `split_factor_after`), **dollar volume** (needs no share count at all), or **equal weight**. Pre-series cap → carry back earliest-known (flagged approximate) |
 | 4 | Color metric | **Raw 1-Day % change** (pure Finviz); RS / vs-SPY deferred, seam kept clean |
 | 5 | Timeframe | **1-Day only** in v1; 1W / 1M / 3M / 6M / 1Y / YTD in v2 |
 | 6 | Layout | Sector → industry **squarified treemap** (vendored ~40-line squarify, no new dependency) |

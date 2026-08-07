@@ -22,8 +22,8 @@ registry, and the app's sole share-count source. Reads
   `__init__(*, url_fetcher=None, cik_lookup=None)`; `cik_for(symbol)`.
 - `make_fetcher(*, url_fetcher=None, cik_lookup=None)` — registry entry
   point.
-- `prefetch_quarter(period, *, url_fetcher=None, symbols=None) -> {cik: shares}`
-  — bulk-load one quarter for every filer in a single request.
+- `MAX_REQUESTS_PER_SECOND` / `_throttle()` — shared rate limiter applied
+  inside the default fetcher.
 
 ## Dependencies
 - Internal: [`shares_sources`](shares_sources.spec.md) (`SharesFact`).
@@ -64,9 +64,19 @@ registry, and the app's sole share-count source. Reads
 - **Every failure yields `[]`.** A fundamentals outage must never raise
   into the render path; empty is indistinguishable from "non-filer",
   which is the honest reading either way.
-- **Bulk `frames` endpoint for width.** One request returns ~4,800
-  companies for a quarter, so a wide universe costs a handful of calls
-  instead of one per symbol.
+- **The bulk `frames` endpoint is deliberately NOT used.** It returns
+  ~4,800 filers for a quarter in one request, which is tempting for
+  priming a wide universe — but its rows carry only `end` and an
+  accession number, **no filing date**. Without `filed` a value cannot
+  be selected point-in-time, and inventing a filing lag would trade the
+  invariant this provider exists to uphold for a load-time win. The
+  per-symbol path is exact; concurrency in the caller plus the disk
+  cache make it fast enough (~186s for 500 names serially, and once
+  ever).
+- **Rate limiting lives at the fetcher, not the caller.** SEC asks for
+  <=10 req/s; enforcing it inside `_default_url_fetcher` means *every*
+  access is polite by construction, including a concurrent prime, so no
+  caller can accidentally exceed the budget.
 
 ## Invariants
 - `parse_company_concept` returns facts ascending by `as_of_ts`, with
@@ -92,7 +102,8 @@ symbol → cik_for()                       # injected lookup, else SEC ticker ma
   individually); ticker-map parsing + dot-munge; fetcher wiring (injected
   CIK avoids a lookup, ticker-map fallback is cached, unknown symbol,
   network failure degrades); bulk quarter prefetch; User-Agent carries no
-  personal data.
+  personal data; the shared rate limiter holds concurrent callers inside
+  SEC's budget.
 
 ## Known limitations / Future work
 - **Depth is bounded by the XBRL mandate (~2009).** Replays earlier than
@@ -102,8 +113,6 @@ symbol → cik_for()                       # injected lookup, else SEC ticker ma
 - `company_tickers.json` lists current registrants only, so a delisted
   symbol resolves only when its CIK is supplied — which is why the
   heatmap passes the shipped CIK.
-- `prefetch_quarter` is implemented but not yet wired into the heatmap's
-  prime path; per-symbol lookups are used today.
 
 ## Recent history
 - Added as the sole share-count source, replacing yfinance

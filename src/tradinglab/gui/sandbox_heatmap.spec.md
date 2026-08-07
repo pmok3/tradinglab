@@ -26,13 +26,16 @@ the pure [`backtest/heatmap.py`](../backtest/heatmap.spec.md) layer. See
   provider. `__init__(*, source, interval, loader=None)`;
   `build(symbols, as_of_ts)` parses one session's bars (call it off the
   Tk thread); `__call__(symbol, clock_ts)` is a bisect;
-  `stale_symbols()` / `covered_symbols()` report coverage.
+  `dollar_volume_at(symbol, clock_ts)` is the session's cumulative
+  traded value up to the clock; `stale_symbols()` / `covered_symbols()`
+  report coverage.
 - `open_sandbox_heatmap(app, controller, **kwargs) -> SandboxHeatmapWindow | None` —
   Sandbox-menu action. Singleton: focuses the existing window if open,
   else constructs one. No-op when no session is active.
 - `tile_at(tiles, x, y) -> HeatmapTile | None` — pure hit-test helper.
-- `compute_size_pct(provider, price_source, members, clock, *, shares_at=None)` —
-  pure size / percent / approximate-symbol helper used by the window and tests.
+- `compute_size_pct(provider, price_source, members, clock, *, shares_at=None, size_basis=SIZE_BASIS, dollar_volume_at=None)` —
+  size / percent / approximate-symbol helper used by the window and
+  tests. `size` follows `size_basis`; `pct` is 1-Day % regardless.
 
 ## Dependencies
 - Internal: [`backtest/heatmap`](../backtest/heatmap.spec.md) (pure
@@ -112,6 +115,20 @@ the pure [`backtest/heatmap.py`](../backtest/heatmap.spec.md) layer. See
   rendering 500 tiles when 80 have bars produces a mostly-grey map whose
   readable tiles are the ones that can't be traded. No universe → full
   point-in-time membership (legacy behaviour).
+- **Tile-area basis is user-selectable** (`heatmap_size_basis`, and a
+  "Size by" combobox in the window). Market cap is the default and
+  Finviz parity, but it gives most of the pixels to a few mega-caps;
+  dollar volume weights by where money is trading and — crucially —
+  needs no share count, no filings and no split reconciliation, so it
+  keeps working for non-filers, pre-XBRL replays and thinly-covered
+  names where cap sizing degrades; equal weight makes the map pure
+  breadth. Dollar volume is accumulated **up to the clock** from the
+  session's own bars, so it inherits the same no-future-leakage rule as
+  colour — summing the whole session would be the in-progress-bar leak
+  in the size channel. A symbol with no intraday coverage has no dollar
+  volume and is flagged rather than given an invented one. Changing
+  basis relayouts (geometry changes) and writes the choice back to the
+  setting.
 - **Coverage footer is computed, not asserted.** The label counts
   members / priced tiles / prior-close fallbacks / approximate sizes and
   names the source, rather than restating a fixed caveat string.

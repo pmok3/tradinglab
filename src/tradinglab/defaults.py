@@ -320,6 +320,17 @@ TUNABLES: tuple[Tunable, ...] = (
             "e.g. 'YourName your@email.com' to attribute requests to "
             "you. Never send credentials here — it is a public header.",
             _v_str(allow_empty=True)),
+    # Which magnitude tile AREA encodes in the Market Heatmap. Market cap
+    # is Finviz parity and the right macro weight, but it gives most of
+    # the pixels to a few mega-caps; dollar volume weights by where money
+    # is actually trading (and needs no share count, so it works for
+    # non-filers); equal weight makes the map pure breadth.
+    Tunable("heatmap_size_basis", "historical_market_cap", "str",
+            "What tile area encodes in the Market Heatmap: "
+            "'historical_market_cap', 'dollar_volume', or "
+            "'equal_weight'. Changeable live from the window's "
+            "'Size by' picker, which writes the choice back here.",
+            _v_str(allow_empty=True)),
     Tunable("sandbox_skip_detailed_journal", False, "bool",
             "Skip the mandatory pre-trade journal AND the mandatory "
             "post-trade review modals during sandbox replay. Submitted "

@@ -22,14 +22,18 @@ from tkinter import ttk
 from typing import Any
 
 from ..backtest.heatmap import (
+    SIZE_BASES,
+    SIZE_BASIS,
     HeatmapTile,
     apply_colors,
     build_layout,
     completed_session_closes,
     compute_1d_pct,
+    is_valid_size_basis,
     members_asof,
     scaled_cap,
     session_date_of,
+    size_basis_label,
     text_color_for,
 )
 from ..backtest.heatmap_provider import HeatmapProvider
@@ -74,18 +78,29 @@ def compute_size_pct(
     clock: int,
     *,
     shares_at: Callable[[str, int], tuple[float | None, bool]] | None = None,
+    size_basis: str = SIZE_BASIS,
+    dollar_volume_at: Callable[[str, int], float | None] | None = None,
 ) -> tuple[dict[str, float], dict[str, float | None], set[str]]:
     """Compute ``(size_by_symbol, pct_by_symbol, approx_symbols)``.
 
-    ``size`` is split-consistent historically-scaled cap
-    (``shares × price``): ``shares_at`` returns the count already lifted
-    onto the price series' (today's, back-adjusted) basis, so a split
-    occurring after the replay clock cannot shrink the tile. ``pct`` is
-    1-Day % (price-at-clock vs prior close). Symbols whose shares came
-    from a carried-back count, or whose split history is unknown, land
-    in ``approx_symbols``. ``shares_at`` defaults to
-    ``provider.basis_shares_at`` (fetching); the window passes
-    ``provider.peek_basis_shares_at`` for a non-blocking render.
+    ``pct`` is 1-Day % (price-at-clock vs prior close) regardless of
+    basis. ``size`` depends on ``size_basis``:
+
+    * ``historical_market_cap`` — ``shares × price``, where ``shares_at``
+      returns the count already lifted onto the price series' basis, so
+      a split after the replay clock cannot shrink the tile. Symbols
+      whose count was carried back, or whose split history is unknown,
+      land in ``approx_symbols``.
+    * ``dollar_volume`` — session dollar volume up to the clock. Needs
+      no share count, no filings and no split reconciliation, so it is
+      exact wherever there are bars at all; a symbol with no intraday
+      coverage has none and is marked approximate.
+    * ``equal_weight`` — every tile the same area; size stops being a
+      variable and the map is pure breadth.
+
+    ``shares_at`` defaults to ``provider.basis_shares_at`` (fetching);
+    the window passes ``provider.peek_basis_shares_at`` for a
+    non-blocking render.
     """
     sa = shares_at or provider.basis_shares_at
     size_by: dict[str, float] = {}
@@ -94,6 +109,15 @@ def compute_size_pct(
     for sym in members:
         price, prior = price_source(sym, clock)
         pct_by[sym] = compute_1d_pct(price, prior)
+        if size_basis == "equal_weight":
+            size_by[sym] = 1.0
+            continue
+        if size_basis == "dollar_volume":
+            dv = dollar_volume_at(sym, clock) if dollar_volume_at else None
+            size_by[sym] = float(dv) if dv else 0.0
+            if not dv:
+                approx.add(sym)
+            continue
         shares, is_approx = sa(sym, clock)
         size_by[sym] = scaled_cap(shares, price)
         if is_approx or shares is None:
@@ -171,13 +195,17 @@ class SessionPriceSource:
         # ``(ts, close)`` pairs rather than Candle objects: a preloaded
         # 500-name universe at 5m would otherwise pin millions of
         # dataclass instances for two floats each.
-        self._intraday: dict[str, tuple[list[float], list[float]]] = {}
+        self._intraday: dict[
+            str, tuple[list[float], list[float], list[float]]
+        ] = {}
         self._daily: dict[str, list[tuple[_dt.date, float]]] = {}
         # Per-session snapshot, rebuilt by ``build``.
         self._session_date: _dt.date | None = None
         self._day_lo: float = 0.0
         self._day_hi: float = 0.0
-        self._snapshot: dict[str, tuple[list[float], list[float], float | None]] = {}
+        self._snapshot: dict[
+            str, tuple[list[float], list[float], list[float], float | None]
+        ] = {}
         self._stale: set[str] = set()
         self._covered: set[str] = set()
 
@@ -194,12 +222,15 @@ class SessionPriceSource:
         except Exception:
             return []
 
-    def _intraday_series(self, symbol: str) -> tuple[list[float], list[float]]:
+    def _intraday_series(
+        self, symbol: str
+    ) -> tuple[list[float], list[float], list[float]]:
         cached = self._intraday.get(symbol)
         if cached is not None:
             return cached
         ts: list[float] = []
         closes: list[float] = []
+        dollars: list[float] = []
         for c in self._load(symbol, self.interval):
             cts = _candle_epoch(c)
             if cts is None:
@@ -207,11 +238,13 @@ class SessionPriceSource:
             close = _finite(c.close)
             if close is None:
                 continue
+            vol = _finite(getattr(c, "volume", 0)) or 0.0
             ts.append(cts)
             closes.append(close)
-        pair = (ts, closes)
-        self._intraday[symbol] = pair
-        return pair
+            dollars.append(close * max(vol, 0.0))
+        triple = (ts, closes, dollars)
+        self._intraday[symbol] = triple
+        return triple
 
     def _daily_series(self, symbol: str) -> list[tuple[_dt.date, float]]:
         cached = self._daily.get(symbol)
@@ -256,7 +289,7 @@ class SessionPriceSource:
 
     def _build_one(
         self, symbol: str, day: _dt.date, as_of_ts: int
-    ) -> tuple[list[float], list[float], float | None]:
+    ) -> tuple[list[float], list[float], list[float], float | None]:
         daily = self._daily_series(symbol)
         # Reuse the pure primitive so the strictly-before rule has one
         # definition; it wants Candle-likes, and a (date, close) pair
@@ -264,7 +297,7 @@ class SessionPriceSource:
         completed = completed_session_closes(
             [_DailyBar(d, c) for d, c in daily], as_of_ts, count=2
         )
-        ts_all, close_all = self._intraday_series(symbol)
+        ts_all, close_all, dollar_all = self._intraday_series(symbol)
         # Session window as epoch-day arithmetic. ``session_date_of`` is
         # ``fromtimestamp(ts, utc).date()``, which is exactly
         # ``floor(ts / 86400)`` — deriving the bounds the same way keeps
@@ -275,19 +308,46 @@ class SessionPriceSource:
         hi = bisect.bisect_left(ts_all, float((epoch_day + 1) * 86400))
         session_ts = ts_all[lo:hi]
         session_closes = close_all[lo:hi]
+        # Running dollar volume, so a lookup at the clock is a bisect
+        # rather than a re-sum — and so it only ever counts bars at or
+        # before the clock.
+        running: list[float] = []
+        total = 0.0
+        for d in dollar_all[lo:hi]:
+            total += d
+            running.append(total)
         if session_ts:
             self._covered.add(symbol)
             prior = completed[-1] if completed else None
-            return (session_ts, session_closes, prior)
+            return (session_ts, session_closes, running, prior)
         # No intraday bars for this session — fall back to the last two
         # COMPLETED daily sessions. Never the in-progress bar.
         self._stale.add(symbol)
         if len(completed) >= 2:
             self._covered.add(symbol)
-            return ([], [completed[-1]], completed[-2])
-        return ([], [], None)
+            return ([], [completed[-1]], [], completed[-2])
+        return ([], [], [], None)
 
     # -- lookup (Tk thread, per tick) --
+
+    def dollar_volume_at(self, symbol: str, clock_ts: int) -> float | None:
+        """Dollar volume traded this session **up to** the clock.
+
+        ``None`` when the symbol has no intraday coverage for the
+        session — dollar volume is meaningless without it, and inventing
+        one from a daily bar would be the in-progress-bar leak again.
+        """
+        cutoff = normalize_epoch_to_seconds(clock_ts)
+        if not (self._day_lo <= cutoff < self._day_hi):
+            return None
+        entry = self._snapshot.get(symbol)
+        if entry is None:
+            return None
+        session_ts, _closes, running, _prior = entry
+        if not session_ts or not running:
+            return None
+        idx = bisect.bisect_right(session_ts, cutoff) - 1
+        return running[idx] if idx >= 0 else 0.0
 
     def __call__(self, symbol: str, clock_ts: int) -> tuple[float | None, float | None]:
         cutoff = normalize_epoch_to_seconds(clock_ts)
@@ -300,7 +360,7 @@ class SessionPriceSource:
         entry = self._snapshot.get(symbol)
         if entry is None:
             return (None, None)
-        session_ts, session_closes, prior = entry
+        session_ts, session_closes, _running, prior = entry
         if not session_ts:
             # Daily fallback: a single settled close, clock-independent
             # within the session.
@@ -397,11 +457,13 @@ class SandboxHeatmapWindow(tk.Toplevel):
         self._labels: dict[str, Any] = {}
         self._badges: dict[str, Any] = {}
         self._tile_edge = "#ffffff"
+        self._size_basis = self._initial_size_basis()
         if not hasattr(self, "_shares_source_name"):
             self._shares_source_name = ""
 
         self._header = ttk.Label(self, text="Market Heatmap", anchor="w")
         self._header.pack(side=tk.TOP, fill=tk.X, padx=6, pady=(6, 2))
+        self._build_toolbar()
 
         self._build_canvas()
 
@@ -423,6 +485,65 @@ class SandboxHeatmapWindow(tk.Toplevel):
         self.after(250, self._poll_clock)
 
     # -- construction --
+
+    def _initial_size_basis(self) -> str:
+        """Remembered tile-area basis, falling back to market cap."""
+        try:
+            from .. import defaults as _defaults
+
+            basis = str(_defaults.get("heatmap_size_basis") or "").strip()
+        except Exception:
+            basis = ""
+        return basis if is_valid_size_basis(basis) else SIZE_BASIS
+
+    def _build_toolbar(self) -> None:
+        """Tile-area basis picker.
+
+        Market cap is the Finviz default and the right *macro* weight,
+        but it hands most of the pixels to a handful of mega-caps and
+        shrinks the day's actual movers to hover-only slivers. Dollar
+        volume weights by where money is changing hands; equal weight
+        removes size as a variable when the read is purely breadth.
+        """
+        bar = ttk.Frame(self)
+        bar.pack(side=tk.TOP, fill=tk.X, padx=6, pady=(0, 2))
+        ttk.Label(bar, text="Size by:").pack(side=tk.LEFT)
+        self._size_labels = dict(SIZE_BASES)
+        self._size_ids = {v: k for k, v in SIZE_BASES.items()}
+        self._size_var = tk.StringVar(
+            value=self._size_labels.get(self._size_basis, "")
+        )
+        self._size_combo = ttk.Combobox(
+            bar,
+            textvariable=self._size_var,
+            state="readonly",
+            values=list(SIZE_BASES.values()),
+            width=16,
+        )
+        self._size_combo.pack(side=tk.LEFT, padx=(6, 0))
+        self._size_combo.bind(
+            "<<ComboboxSelected>>", lambda _e: self._on_size_basis_change()
+        )
+
+    def _on_size_basis_change(self) -> None:
+        """Switch basis: relayout (geometry changes), remember the choice."""
+        chosen = self._size_ids.get(self._size_var.get(), SIZE_BASIS)
+        if chosen == self._size_basis:
+            return
+        self._size_basis = chosen
+        try:
+            from .. import defaults as _defaults_mod
+            from .. import settings as _settings_mod
+
+            if _settings_mod.get("heatmap_size_basis", "") != chosen:
+                _settings_mod.set("heatmap_size_basis", chosen)
+                _defaults_mod.reload()
+        except Exception:
+            pass
+        try:
+            self.refresh()
+        except Exception:
+            pass
 
     def _build_canvas(self) -> None:
         from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -532,12 +653,19 @@ class SandboxHeatmapWindow(tk.Toplevel):
             members,
             clock,
             shares_at=self.provider.peek_basis_shares_at,
+            size_basis=self._size_basis,
+            dollar_volume_at=(
+                self._session_prices.dollar_volume_at
+                if self._session_prices is not None
+                else None
+            ),
         )
         self._layout = build_layout(
             symbols=members,
             size_by_symbol=size_by,
             classification=self.provider.classification(),
             approx_size_symbols=approx,
+            size_basis=self._size_basis,
         )
         return pct_by
 
@@ -862,7 +990,10 @@ class SandboxHeatmapWindow(tk.Toplevel):
         if stale:
             parts.append(f"{stale} on prior close (no intraday bars)")
         if approx:
-            parts.append(f"{approx} approx size (hatched)")
+            noun = ("approx size" if self._size_basis == SIZE_BASIS
+                    else "no volume")
+            parts.append(f"{approx} {noun} (hatched)")
+        parts.append(f"size: {size_basis_label(self._size_basis)}")
         parts.append(f"source: {self._session_source()} {self._session_interval()}")
         parts.append("point-in-time membership; look-ahead removed")
         return " · ".join(parts)

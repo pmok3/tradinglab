@@ -29,6 +29,7 @@ import csv
 import json
 import os
 from collections.abc import Callable, Iterable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -45,6 +46,11 @@ SharesSeries = list[SharesFact]
 #: the basis is unknown — the caller must degrade, not assume 1.0.
 SplitsSeries = list[tuple[int, float]]
 SplitsFetcher = Callable[[str], "SplitsSeries | None"]
+
+#: Symbols per incremental save during :meth:`HeatmapProvider.prime`.
+#: Small enough that closing a session mid-prime loses little, large
+#: enough that the JSON rewrite isn't the bottleneck.
+_PRIME_SAVE_EVERY = 50
 
 # Epoch ms/s normalization lives in core.timezones (single definition).
 
@@ -287,25 +293,57 @@ class HeatmapProvider:
             return (None, True)
         return shares_at_from_series(series, ts)
 
-    def prime(self, symbols: Iterable[str] | None = None) -> None:
-        """Fetch + cache shares **and splits** for ``symbols``; single save.
+    def prime(
+        self, symbols: Iterable[str] | None = None, *, workers: int = 4
+    ) -> None:
+        """Fetch + cache shares **and splits** for ``symbols``.
 
         Safe to run on a background thread — it only fetches symbols not
-        already cached and persists once at the end.
+        already cached. Fetches run on a small worker pool because the
+        cost is almost entirely network latency: sequentially, a 500-name
+        universe is ~3 minutes of round trips. The EDGAR fetcher applies
+        its own shared rate limit, so concurrency here cannot exceed the
+        provider's request budget.
+
+        Results are persisted **incrementally**, not once at the end, so
+        a session closed mid-prime keeps the work already done instead of
+        discarding several minutes of fetching.
         """
-        changed = False
-        for sym in symbols if symbols is not None else self.symbols():
+        todo = [
+            sym
+            for sym in (symbols if symbols is not None else self.symbols())
+            if sym not in self._shares or sym not in self._splits
+        ]
+        if not todo:
+            return
+
+        def _one(sym: str) -> None:
             if sym not in self._shares:
-                self._shares[sym] = self.shares_fetcher(sym) or []
-                changed = True
+                try:
+                    self._shares[sym] = self.shares_fetcher(sym) or []
+                except Exception:
+                    self._shares[sym] = []
             if sym not in self._splits:
                 try:
                     self._splits[sym] = self.splits_fetcher(sym)
                 except Exception:
                     self._splits[sym] = None
-                changed = True
-        if changed:
-            self._save_disk_cache()
+
+        n = max(1, int(workers))
+        if n == 1:
+            for sym in todo:
+                _one(sym)
+        else:
+            with ThreadPoolExecutor(
+                max_workers=n, thread_name_prefix="HeatmapPrime"
+            ) as pool:
+                # Persist as batches land so a long prime is resumable.
+                for i in range(0, len(todo), _PRIME_SAVE_EVERY):
+                    batch = todo[i:i + _PRIME_SAVE_EVERY]
+                    list(pool.map(_one, batch))
+                    self._save_disk_cache()
+                return
+        self._save_disk_cache()
 
     # -- split basis --
 

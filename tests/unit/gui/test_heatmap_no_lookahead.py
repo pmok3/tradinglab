@@ -212,6 +212,48 @@ def test_unknown_symbol_is_neutral_not_an_error() -> None:
     assert _source()("ZZZ", _CLOCK) == (None, None)
 
 
+def test_dollar_volume_is_clock_bounded_and_cumulative() -> None:
+    """Dollar volume must only count bars at or before the clock.
+
+    Summing the whole session would be the in-progress-bar leak again,
+    in the size channel instead of the colour channel.
+    """
+    src = _source()
+    seen = [
+        src.dollar_volume_at(
+            "AAA", int(_dt.datetime(2024, 6, 5, h, m, tzinfo=_UTC).timestamp())
+        )
+        for h, m in ((13, 30), (14, 0), (14, 30))
+    ]
+    assert seen == [
+        102.0 * 1000,
+        102.0 * 1000 + 103.0 * 1000,
+        102.0 * 1000 + 103.0 * 1000 + 104.0 * 1000,
+    ], seen
+    # the 15:00 and 16:00 bars are after the clock and must not be counted
+    full = src.dollar_volume_at(
+        "AAA", int(_dt.datetime(2024, 6, 5, 23, 0, tzinfo=_UTC).timestamp())
+    )
+    assert full > seen[-1], "later in the session accumulates more"
+
+
+def test_dollar_volume_is_none_without_intraday_coverage() -> None:
+    src = _source(intraday=[])
+    assert src.dollar_volume_at("AAA", _CLOCK) is None, (
+        "a daily bar cannot supply session dollar volume without leaking"
+    )
+
+
+def test_dollar_volume_respects_the_cross_session_guard() -> None:
+    src = _source()
+    next_day = int(_dt.datetime(2024, 6, 6, 14, 30, tzinfo=_UTC).timestamp())
+    assert src.dollar_volume_at("AAA", next_day) is None
+
+
+def test_dollar_volume_unknown_symbol() -> None:
+    assert _source().dollar_volume_at("ZZZ", _CLOCK) is None
+
+
 def test_build_is_idempotent_and_incremental() -> None:
     calls: list[tuple[str, str]] = []
 
