@@ -53,6 +53,11 @@ class EventsAppMixin:
         symbol = self._slot_symbol(slot)
         if not symbol:
             return None
+        # Scaled symbols share their underlying's event bundle — mirror the
+        # ``base_symbol_of`` resolution ``_load_events_async`` applies when
+        # caching, or ``AAPL/100`` would look up a key that is never written.
+        from ..data import base_symbol_of
+        symbol = base_symbol_of(str(symbol).strip().upper())
         ctl = getattr(self, "_sandbox_controller", None)
         if ctl is not None and getattr(ctl, "is_active", lambda: False)():
             try:
@@ -103,6 +108,17 @@ class EventsAppMixin:
         sym = str(symbol or "").strip().upper()
         if not sym:
             return
+        # A SCALED symbol (``AAPL/100``, ``^VIX/15.87``) is one real
+        # instrument on a rescaled axis, so its corporate events are the
+        # UNDERLYING's — resolve to the base symbol or the vendor would be
+        # asked for events on a ticker literally named "AAPL/100" and return
+        # nothing. A quotient ratio (``AMD/NVDA``) has no single underlying
+        # and is deliberately left alone (it resolves to itself and finds no
+        # events, which is correct). Note the resulting bundle is cached
+        # under the BASE symbol, so ``AAPL`` and ``AAPL/100`` share one
+        # fetch rather than duplicating it.
+        from ..data import base_symbol_of
+        sym = base_symbol_of(sym)
         if sym in self._events_fetch_inflight:
             return
         # In-memory cache hit short-circuits the executor submit so the

@@ -184,7 +184,7 @@ def test_ratio_rebase_y_scale_guards_empty_and_nonpositive():
 
 # ---------------------------------------------------------------- hide volume
 def test_hides_volume_for_ratio():
-    # Ratios always hide the volume pane (always candlesticks, no volume).
+    # Quotient ratios always hide the volume pane (no honest combined volume).
     assert ChartApp._slot_hides_volume(_stub("AMD/NVDA"), "primary") is True
     assert ChartApp._slot_hides_volume(_stub("RSP/SPY"), "primary") is True
 
@@ -192,3 +192,52 @@ def test_hides_volume_for_ratio():
 def test_shows_volume_for_non_ratio():
     assert ChartApp._slot_hides_volume(_stub("AMD"), "primary") is False
     assert ChartApp._slot_hides_volume(_stub("SPY"), "primary") is False
+
+
+# ------------------------------------------------- scaled symbols (SYM/number)
+def test_shows_volume_for_scaled_symbol():
+    """A scaled symbol is ONE real instrument on a rescaled axis, so its
+    volume is real. Gating on "contains a /" would wrongly hide it."""
+    assert ChartApp._slot_hides_volume(_stub("SPX/10"), "primary") is False
+    assert ChartApp._slot_hides_volume(_stub("AAPL/100"), "primary") is False
+    assert ChartApp._slot_hides_volume(_stub("^VIX/15.87"), "primary") is False
+
+
+def test_rebase_is_disabled_for_scaled_symbols():
+    """Rebasing multiplies by ``100 / anchor``, which cancels a constant
+    divisor exactly — ``(VIXi/k) * 100k/VIX0 == 100*VIXi/VIX0``. Applying it
+    would silently reproduce raw ^VIX and discard the implied-move units that
+    were the entire point of the divisor."""
+    cs = _series([2.0, 3.0, 1.0])
+    assert ChartApp._maybe_rebase_candles(
+        _stub("^VIX/15.87", rebase=True), "primary", cs) is cs
+    assert ChartApp._maybe_rebase_candles(
+        _stub("SPX/10", rebase=True), "primary", cs) is cs
+
+
+def test_rebase_still_applies_to_quotient_ratios():
+    """The scaled carve-out must not disable rebase where it IS meaningful."""
+    cs = _series([2.0, 3.0])
+    out = ChartApp._maybe_rebase_candles(
+        _stub("AMD/NVDA", rebase=True), "primary", cs)
+    assert out is not cs
+    assert abs(out[0].close - 100.0) < 1e-9
+
+
+# ------------------------------------------------------------- failure copy
+def test_failure_message_distinguishes_the_three_shapes():
+    """Telling someone who typed ``^VIX/0`` to check that "both legs are valid
+    tickers" sends them hunting for a ticker named 0."""
+    plain = ChartApp._ratio_failure_message("NOPE")
+    assert "not found" in plain              # §12 smoke check matches on this
+
+    scaled = ChartApp._ratio_failure_message("^VIX/15.87")
+    assert "Scaled symbol" in scaled
+    assert "'^VIX'" in scaled
+
+    bad_number = ChartApp._ratio_failure_message("^VIX/0")
+    assert "not a supported form" in bad_number
+
+    quotient = ChartApp._ratio_failure_message("AMD/NVDA")
+    assert "both legs" in quotient
+    assert "AMD / NVDA" in quotient

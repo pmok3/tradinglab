@@ -690,6 +690,48 @@ smoke `check_g4_live_heatmap`.
 
 ---
 
+### 7.37 `A/B` is two different objects — quotient vs scaled
+
+`AMD/NVDA` and `^VIX/15.87` share the ticker-box syntax and nothing else.
+**Never gate behaviour on `is_ratio_symbol`** (which means only "has a valid
+`NUM/DEN` split"); use `is_quotient_ratio` / `is_scaled_symbol`.
+
+- A **quotient** is an approximation: its H/L is a widened envelope, its bars
+  are inner-joined (non-overlapping bars are silently dropped), and its volume
+  is `0`.
+- A **scaled symbol** is exact: dividing by `k > 0` is order-preserving, so
+  `H/k` IS the true high, no join happens so no bar is ever lost, and the
+  underlying's **volume is preserved** (VWAP scales by the same `k`; RVOL is
+  unchanged). Its corporate events resolve to the underlying via
+  `base_symbol_of` — and the cache-write and cache-read sides must apply that
+  resolution identically or the glyphs never appear.
+- **Rebase-to-100 must stay off for scaled symbols.** It multiplies by
+  `100/anchor`, which cancels the divisor exactly
+  (`(VIXᵢ/k)·100k/VIX₀ == 100·VIXᵢ/VIX₀`), silently reproducing raw `^VIX`.
+  Numerically harmless, semantically destructive.
+
+Grammar is denominator-only, positive decimal, no `*`, no inverses, no
+expression engine (`SPX*0.1` is just `SPX/10`). A numeric-LOOKING leg is never
+fetched as a ticker — `^VIX/0` fails at the parser rather than asking a vendor
+for a symbol named `"0"`.
+
+**Index aliases are a curated allowlist, not a prefix rule.** `VIX` → `^VIX`
+(yfinance) / `$VIX` (Schwab) / `I:VIX` (Polygon), resolved at the same
+`register_source` chokepoint. Two verified traps: **`COMP` is Compass Inc**, a
+real equity, NOT the Nasdaq Composite (keyed `IXIC` for exactly this reason),
+and **`MOVE` is a real equity** too — both are in `NEVER_ALIAS`. Vendors also
+disagree beyond the sigil: the S&P 500 is `^GSPC` on Yahoo but `SPX`
+elsewhere, so "prefix the canonical name" would emit a wrong symbol. Resolution
+canonicalises its input first, which is what makes it idempotent AND lets one
+function re-resolve on a source switch (`^VIX` → `$VIX`).
+
+Specs: `data/{ratio_source,index_aliases,base}.spec.md`, `app.spec.md`,
+`gui/events_app.spec.md`, `disk_cache.spec.md`. Tests:
+`tests/unit/data/{test_ratio_scaled,test_index_aliases,test_ratio_source}.py`,
+`tests/unit/gui/{test_ratio_render_modes,test_source_change_reresolve}.py`.
+
+---
+
 ## 8. Build & release flow
 
 **Releases are cut by pushing a tag — you do NOT build locally.**

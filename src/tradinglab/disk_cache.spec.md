@@ -61,6 +61,12 @@ Durable cache of fetched candle data, keyed by `(source, ticker, interval)`. Act
   `list_entries`/cache-export pollution) and risk the cached ratio
   going stale vs its legs. The in-memory `_full_cache` still gives
   session-level responsiveness. See `data/ratio_source.spec.md`.
+  **Both ratio shapes are covered** (`is_ratio_symbol` is deliberately
+  "has a valid `NUM/DEN` split", not "is a quotient"), so a *scaled*
+  symbol like `^VIX/15.87` is also skipped. Note the staleness half of
+  the rationale is weaker there — a constant divisor never goes stale —
+  but the filename-illegality half still holds on its own, so the
+  behaviour is intentionally identical for both shapes.
 - `list_entries() -> List[Tuple[source, ticker, interval]]` — walks
   the cache dir and reverse-parses every
   `<source>__<ticker>__<interval>.jsonl` filename. Returns a sorted

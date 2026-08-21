@@ -51,6 +51,12 @@ from .credentials import (
 )
 from .fetch_service import FetchService
 from .hybrid_source import HYBRID_SOURCE_NAME, fetch_hybrid_data
+from .index_aliases import (
+    INDEX_ALIASES,
+    NEVER_ALIAS,
+    canonical_index_name,
+    resolve_symbol,
+)
 from .local_source import discover_subsources, make_local_fetcher
 from .normalize import (
     CandleArrays,
@@ -63,12 +69,19 @@ from .parallel import fetch_chunks_parallel
 from .polygon_source import candles_from_polygon_response, fetch_polygon_data
 from .ratio_source import (
     RATIO_DELIMITER,
+    base_symbol_of,
     canonical_ratio_symbol,
     compute_ratio_candles,
+    compute_scaled_candles,
     fetch_ratio,
+    is_numeric_leg,
+    is_quotient_ratio,
     is_ratio_symbol,
+    is_scaled_symbol,
     parse_ratio_symbol,
+    parse_scale_constant,
     ratio_display_label,
+    scaled_symbol_parts,
 )
 from .schwab_source import candles_from_schwab_response, fetch_schwab_data
 from .shares_sources import (
@@ -305,12 +318,23 @@ __all__ = [
     "stash_arrays",
     "fetch_chunks_parallel",
     "RATIO_DELIMITER",
+    "base_symbol_of",
     "canonical_ratio_symbol",
     "compute_ratio_candles",
+    "compute_scaled_candles",
     "fetch_ratio",
+    "is_quotient_ratio",
+    "is_numeric_leg",
     "is_ratio_symbol",
+    "is_scaled_symbol",
     "parse_ratio_symbol",
+    "parse_scale_constant",
     "ratio_display_label",
+    "scaled_symbol_parts",
+    "INDEX_ALIASES",
+    "NEVER_ALIAS",
+    "canonical_index_name",
+    "resolve_symbol",
     "Credentials",
     "SchwabCredentials",
     "AlpacaCredentials",

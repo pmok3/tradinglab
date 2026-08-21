@@ -289,7 +289,16 @@ def test_app_spec_md_mro_matches_real_chartapp_bases():
 #          reactive compare and companion-interval OHLC prefetch paths from
 #          app.py. The remaining _ensure_prefetched seam is retained only for
 #          live polling / on-demand overlays outside the cut-over.
-_APP_PY_LOC_CEILING = 7449
+#   7492 — scaled symbols (SYM/<number>, e.g. ^VIX/15.87) + source-aware index
+#          aliases (AGENTS.md §7.37). Two new methods that have no better home:
+#          _reresolve_symbols_for_source (the single seam that rewrites the
+#          ticker box for BOTH a typed shorthand and a source switch) and the
+#          static _ratio_failure_message (four-shape status copy). The rest is
+#          docstring: the three render gates moved from is_ratio_symbol to
+#          is_quotient_ratio, and each records WHY a scaled symbol is excluded
+#          (rebase cancels the divisor; volume is real). Deliberate raise — a
+#          mixin for two cohesive helpers would cost more than it saves.
+_APP_PY_LOC_CEILING = 7492
 
 # Once a real extraction drops app.py well under the ceiling, lower the
 # constant to lock the reduction in. The band keeps ordinary small edits from

@@ -49,6 +49,8 @@ A one-spec-per-`.py` documentation set. Each spec follows a fixed 9-section layo
 | `data/yfinance_source.spec.md` | `yfinance` wrapper with retry + prepost handling. |
 | `data/local_source.spec.md` | BYOD CSV import: `make_local_fetcher`, strict canonical schema, `discover_subsources`. |
 | `data/local_export.spec.md` | BYOD CSV export: `write_csv`, `export_entries` (atomic, multi-entry). |
+| `data/ratio_source.spec.md` | `NUM/DEN` pseudo-symbols — two-symbol **quotient ratios** (approximate, volume 0, inner-joined) vs **scaled symbols** `SYM/<number>` (exact, volume preserved, no bar loss). See [`RATIO_CHARTS.md`](RATIO_CHARTS.md) and AGENTS.md §7.37. |
+| `data/index_aliases.spec.md` | Source-aware index-symbol aliases (`VIX` → `^VIX` / `$VIX` / `I:VIX`). Curated allowlist — `COMP` and `MOVE` are real equities and are never aliased. |
 
 ## `indicators/`
 | Spec | Covers |

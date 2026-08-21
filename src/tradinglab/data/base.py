@@ -60,8 +60,8 @@ _RANGE_CAPABLE: set[str] = set()
 _PAGE_FETCHERS: dict[str, DataFetcher] = {}
 
 
-def _ratio_aware(fetcher: DataFetcher) -> DataFetcher:
-    """Wrap ``fetcher`` so ratio pseudo-symbols resolve leg-by-leg.
+def _ratio_aware(fetcher: DataFetcher, source_name: str = "") -> DataFetcher:
+    """Wrap ``fetcher`` so ratio symbols and index aliases resolve per-source.
 
     A *ratio symbol* (``NUM/DEN`` — e.g. ``IGV/SMH``; see
     :mod:`tradinglab.data.ratio_source`) can't be fetched as a single
@@ -80,22 +80,36 @@ def _ratio_aware(fetcher: DataFetcher) -> DataFetcher:
     wiring. ``**kwargs`` (e.g. range-fetch ``start`` / ``end``) are
     forwarded to each leg so the targeted-range path works for ratios too.
 
+    The same chokepoint also applies **index-symbol aliases** (see
+    :mod:`tradinglab.data.index_aliases`) when ``source_name`` is given, so
+    a bare ``VIX`` becomes ``^VIX`` on yfinance / ``$VIX`` on Schwab no
+    matter which surface asked — including watchlist and scanner rows that
+    never pass through the ticker box. Aliasing happens FIRST so ratio legs
+    are already in vendor form by the time they are fetched, and a scale
+    constant (``^VIX/15.87``) is never mistaken for a symbol.
+
+    Both behaviours live in ONE wrapper on purpose: a second layer would
+    break the documented ``DATA_SOURCES[name].__wrapped__ is fetcher``
+    invariant that tests and callers rely on.
+
     Idempotent: an already-wrapped fetcher is returned unchanged, so
     re-registering ``DATA_SOURCES.get(name)`` never double-wraps. The
     original fetcher stays reachable via ``__wrapped__`` (``functools``).
     """
     if getattr(fetcher, "_tl_ratio_aware", False):
         return fetcher
+    from .index_aliases import resolve_symbol
     from .ratio_source import fetch_ratio, parse_ratio_symbol
 
     @functools.wraps(fetcher)
     def wrapped(ticker: str, interval: str, **kwargs: object) -> list[Candle] | None:
-        if parse_ratio_symbol(ticker) is not None:
+        sym = resolve_symbol(ticker, source_name) if source_name else ticker
+        if parse_ratio_symbol(sym) is not None:
             return fetch_ratio(
-                ticker, interval,
+                sym, interval,
                 leg_fetcher=lambda t, i: fetcher(t, i, **kwargs),
             )
-        return fetcher(ticker, interval, **kwargs)
+        return fetcher(sym, interval, **kwargs)
 
     wrapped._tl_ratio_aware = True  # type: ignore[attr-defined]
     return wrapped
@@ -114,8 +128,10 @@ def register_source(
     The fetcher is wrapped by :func:`_ratio_aware` so it transparently
     resolves ratio pseudo-symbols (``NUM/DEN``) leg-by-leg through this
     same source — ratios therefore work on EVERY source, not just
-    yfinance. ``DATA_SOURCES[name]`` is that wrapper; the raw fetcher is
-    reachable via ``DATA_SOURCES[name].__wrapped__``.
+    yfinance. The same wrapper applies this source's index-symbol
+    aliases (``VIX`` → ``^VIX`` on yfinance), which is why ``name`` is
+    handed to it. ``DATA_SOURCES[name]`` is that wrapper; the raw
+    fetcher is reachable via ``DATA_SOURCES[name].__wrapped__``.
 
     Set ``internal=True`` for sources that should remain dispatchable
     (tests, sandbox replay, programmatic offline use) but be hidden from
@@ -131,7 +147,7 @@ def register_source(
     tests (which bypasses ``register_source`` entirely and therefore
     preserves the internal flag), so this is a non-issue.
     """
-    DATA_SOURCES[name] = _ratio_aware(fetcher)
+    DATA_SOURCES[name] = _ratio_aware(fetcher, name)
     if internal:
         _INTERNAL_SOURCES.add(name)
     else:

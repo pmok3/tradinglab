@@ -24,8 +24,9 @@ same chart. The chart title and watermark show it as **`AMD / NVDA`**.
 
 - **Candlesticks**, exactly like a normal symbol. Each bar's open/high/low/close
   is the ratio of the two symbols' corresponding prices.
-- **No volume pane** — a ratio has no meaningful volume, so the volume panel is
-  hidden to keep the chart clean.
+- **No volume pane** — a two-ticker ratio has no meaningful volume, so the
+  volume panel is hidden to keep the chart clean. (Dividing by a *number*
+  keeps the volume pane — see below.)
 - Indicators, drawings, crosshair, and pan/zoom all work as usual.
 
 > The candle high/low is an approximation: it's the envelope of the two
@@ -40,6 +41,70 @@ same chart. The chart title and watermark show it as **`AMD / NVDA`**.
   edge") instead of an absolute quotient like `1.17`. Off by default.
 
 You can also use the normal **log price scale** toggle on a ratio chart.
+
+## Dividing by a number
+
+The denominator can be a **plain positive number** instead of a ticker:
+
+```
+^VIX/15.87
+```
+
+This is a *scaled symbol* — one real instrument on a rescaled axis, not a
+relationship between two. The classic use is the one above: VIX is annualised
+30-day implied volatility, so dividing by √252 ≈ 15.87 converts it into the
+market's approximate **1-day expected move in percent**. A VIX of 24 reads as
+about 1.5% — i.e. a 1% day is unremarkable in that regime.
+
+| Type this | Reads as |
+|---|---|
+| `^VIX/15.87` | Approximate daily 1-sigma implied move, in % |
+| `^TNX/10` | The 10-year Treasury index quote as a yield in % |
+| `SPX/10` | S&P 500 index roughly aligned to SPY's scale |
+| `AAPL/100` | Any symbol rescaled to taste |
+
+Decimals are supported (`15.87`, `0.5`). The divisor must be **positive**, and
+only the **denominator** may be a number — `100/VIX` and `VIX*16` are not
+supported. `16/4` and `^VIX/0` are rejected.
+
+A scaled symbol behaves differently from a two-ticker ratio in ways that matter:
+
+- **The volume pane stays visible**, showing the underlying's real volume.
+  Dividing by a constant doesn't make volume meaningless the way a quotient
+  does, and volume-weighted studies stay valid (VWAP scales by the same number;
+  RVOL is unchanged). *(An index like `^VIX` has no volume of its own, of
+  course.)*
+- **Corporate events still show** — `AAPL/100` displays Apple's splits and
+  dividends.
+- **No bars are ever dropped.** A number has no trading calendar, so unlike a
+  two-ticker ratio there's nothing to inner-join against.
+- **The high and low are exact**, not the envelope approximation noted above.
+- **"Rebase to 100" does nothing**, on purpose. Rebasing multiplies the whole
+  series by a constant, which would cancel your divisor exactly and give you
+  back a plain `^VIX` chart — silently throwing away the units you asked for.
+
+> Because the divisor is always shown in the title and watermark
+> (**`^VIX / 15.87`**), a rescaled chart can't be mistaken for the raw symbol.
+
+## Index symbols (VIX, SPX, …)
+
+Indices aren't tradeable stocks, so every data provider spells them
+differently — Yahoo wants `^VIX`, Schwab `$VIX`, Polygon `I:VIX`. You can just
+type the plain name and it resolves for whichever source is active:
+
+```
+VIX     →  ^VIX      (on Yahoo)
+SPX     →  ^GSPC     (on Yahoo)
+```
+
+The box updates to show the real symbol, and **it re-resolves automatically if
+you switch data source**, so a chart of `^VIX` becomes `$VIX` when you move to
+Schwab rather than silently failing.
+
+Recognised shorthands: `VIX`, `VVIX`, `VXN`, `SPX`, `NDX`, `DJI`, `RUT`, `TNX`,
+`OEX`, `IXIC`. Anything else is passed through untouched — including `COMP` and
+`MOVE`, which are **real listed stocks** and are deliberately never treated as
+index shorthand. (The Nasdaq Composite is `IXIC`, not `COMP`.)
 
 ## Useful ratios
 
@@ -64,4 +129,8 @@ You can also use the normal **log price scale** toggle on a ratio chart.
 - Ratios are computed live from their two legs and are **not** written to the
   on-disk candle cache; the underlying legs cache normally.
 - Split/dividend adjustment follows the data source (yfinance auto-adjusts), so
-  a ratio of two adjusted series is internally consistent.
+  a ratio of two adjusted series is internally consistent. A divisor chosen to
+  align an index with an ETF (`SPX/10 ≈ SPY`) drifts over long histories — it's
+  a visual alignment, never an executable price.
+- A two-ticker ratio silently drops bars where the two symbols' calendars don't
+  overlap (halts, differing histories, index-vs-ETF sessions).

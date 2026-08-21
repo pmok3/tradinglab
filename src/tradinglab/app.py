@@ -66,8 +66,12 @@ from .data import (
     DATA_SOURCES,
     DataController,
     FetchService,
-    is_ratio_symbol,
+    is_numeric_leg,
+    is_quotient_ratio,
+    parse_ratio_symbol,
     ratio_display_label,
+    resolve_symbol,
+    scaled_symbol_parts,
     source_supports_range,
     user_visible_sources,
 )
@@ -2998,7 +3002,7 @@ class ChartApp(
                 continue
             try:
                 rebase_on = (
-                    is_ratio_symbol(self._active_symbol_for_slot(slot))
+                    is_quotient_ratio(self._active_symbol_for_slot(slot))
                     and bool(self._ratio_rebase_var.get())
                 )
             except Exception:  # noqa: BLE001
@@ -3155,6 +3159,7 @@ class ChartApp(
             # the watchlist would silently no-op in sandbox mode (b38).
             self._sandbox_sync_compare_to_var()
             return
+        self._reresolve_symbols_for_source()
         src = self.source_var.get()
         interval = self.interval_var.get()
         raw_primary = self.ticker_var.get().strip().upper()
@@ -3356,6 +3361,7 @@ class ChartApp(
             self._stop_stream()
         except Exception:  # noqa: BLE001
             pass
+        self._reresolve_symbols_for_source()
         src = self.source_var.get()
         interval = self.interval_var.get()
         raw_primary = self.ticker_var.get().strip().upper()
@@ -3508,32 +3514,14 @@ class ChartApp(
         if primary_failed and raw_primary:
             try:
                 self.ticker_var.set(self._confirmed_primary_ticker)
-                if is_ratio_symbol(raw_primary):
-                    self._status.error(
-                        f"Ratio '{ratio_display_label(raw_primary)}' could not be "
-                        f"loaded. Check that both legs are valid tickers"
-                    )
-                else:
-                    self._status.error(
-                        f"Ticker '{raw_primary}' not found. Check the "
-                        f"spelling or try a different data source"
-                    )
+                self._status.error(self._ratio_failure_message(raw_primary))
             except Exception:  # noqa: BLE001
                 pass
             return
         if compare_failed and raw_compare:
             try:
                 self.compare_ticker_var.set(self._confirmed_compare_ticker)
-                if is_ratio_symbol(raw_compare):
-                    self._status.error(
-                        f"Ratio '{ratio_display_label(raw_compare)}' could not be "
-                        f"loaded. Check that both legs are valid tickers"
-                    )
-                else:
-                    self._status.error(
-                        f"Ticker '{raw_compare}' not found. Check the "
-                        f"spelling or try a different data source"
-                    )
+                self._status.error(self._ratio_failure_message(raw_compare))
             except Exception:  # noqa: BLE001
                 pass
             # keep going with primary-only
@@ -5014,26 +5002,112 @@ class ChartApp(
         return (self._confirmed_primary_ticker
                 or self.ticker_var.get().strip().upper() or "")
 
-    def _slot_hides_volume(self, slot: str) -> bool:
-        """True if ``slot`` is a ratio chart (volume is hidden).
+    def _reresolve_symbols_for_source(self) -> bool:
+        """Rewrite the ticker entries into the ACTIVE source's symbol vocabulary.
 
-        Ratio pseudo-symbols (AMD/NVDA, ...) have volume 0, so their volume
-        pane is always collapsed + hidden. Non-ratio charts are unaffected.
+        Index symbols are spelled differently by every vendor (``^VIX`` on
+        yfinance, ``$VIX`` on Schwab, ``I:VIX`` on Polygon — see
+        ``data/index_aliases.py``), so the box must always show the symbol
+        actually being fetched rather than a shorthand.
+
+        Because ``resolve_symbol`` canonicalises its input first and is
+        idempotent, this ONE seam serves both entry points: typing ``VIX``
+        rewrites to ``^VIX``, and switching source re-resolves ``^VIX`` to
+        ``$VIX`` (the axis-change handler ends in a reload). No separate
+        source-change hook, so there is no second copy of the rule to drift.
+
+        Ratio legs resolve independently and a scale constant is left alone
+        (``VIX/15.87`` → ``^VIX/15.87``). Returns ``True`` if anything was
+        rewritten. Best-effort: never raises into a load path.
         """
         try:
-            return is_ratio_symbol(self._active_symbol_for_slot(slot))
+            source = self.source_var.get()
+        except Exception:  # noqa: BLE001
+            return False
+        if not source:
+            return False
+        changed = False
+        for var_name in ("ticker_var", "compare_ticker_var"):
+            var = getattr(self, var_name, None)
+            if var is None:
+                continue
+            try:
+                current = (var.get() or "").strip().upper()
+                if not current:
+                    continue
+                resolved = resolve_symbol(current, source)
+                if resolved and resolved != current:
+                    var.set(resolved)
+                    changed = True
+            except Exception:  # noqa: BLE001
+                continue
+        return changed
+
+    @staticmethod
+    def _ratio_failure_message(raw: str) -> str:
+        """Compose the status-bar copy for a ticker that failed to load.
+
+        Four shapes need four hints: telling a user who typed ``^VIX/0`` to
+        "check that both legs are valid tickers" sends them hunting for a
+        ticker named ``0``. Plain tickers keep the existing "not found"
+        phrasing, which the §12 smoke check matches on.
+        """
+        legs = parse_ratio_symbol(raw)
+        if legs is None:
+            return (f"Ticker '{raw}' not found. Check the "
+                    f"spelling or try a different data source")
+        label = ratio_display_label(raw)
+        parts = scaled_symbol_parts(raw)
+        if parts is not None:
+            return (f"Scaled symbol '{label}' could not be loaded. "
+                    f"Check that '{parts[0]}' is a valid ticker")
+        if is_numeric_leg(legs[0]) or is_numeric_leg(legs[1]):
+            return (f"'{label}' is not a supported form. Divide a symbol by a "
+                    f"positive number, e.g. ^VIX/15.87")
+        return (f"Ratio '{label}' could not be loaded. "
+                f"Check that both legs are valid tickers")
+
+    def _slot_hides_volume(self, slot: str) -> bool:
+        """True if ``slot`` is a QUOTIENT ratio chart (volume is hidden).
+
+        Quotient ratios (``AMD/NVDA``) have volume 0 — there is no honest
+        combined volume for two instruments — so their volume pane is
+        collapsed + hidden.
+
+        A **scaled symbol** (``^VIX/15.87``, ``SPX/10``) is deliberately NOT
+        hidden: it is one real instrument on a rescaled axis, so its volume
+        is entirely real and every volume-weighted study over it still holds
+        (VWAP scales by the same constant, RVOL is unchanged). Gating this on
+        ``is_ratio_symbol`` — i.e. on the mere presence of a ``/`` — would
+        throw that away. Non-ratio charts are unaffected.
+        """
+        try:
+            return is_quotient_ratio(self._active_symbol_for_slot(slot))
         except Exception:  # noqa: BLE001
             return False
 
     def _maybe_rebase_candles(self, slot: str, candles):
-        """Rebase a ratio slot's series to 100 at its first bar, else passthrough.
+        """Rebase a quotient-ratio slot's series to 100 at its first bar.
 
-        Applies only when the slot's symbol is a ratio AND the ratio-rebase
-        toggle is on. Returns a NEW ``Candle`` list — the canonical
-        ``self._primary`` / ``self._compare`` stay raw, but every per-slot
-        consumer (candle glyphs, ``_autoscale_slot_y``, hover hit-test via
-        ``_ax_candle_map`` / ``display_candles``) reads the rebased copy, so the
-        rebased view is internally coherent.
+        Applies only when the slot's symbol is a QUOTIENT ratio AND the
+        ratio-rebase toggle is on; otherwise the input passes through.
+
+        **Scaled symbols are deliberately excluded.** Rebasing multiplies
+        every bar by ``100 / anchor_close``, and for a series already divided
+        by a constant ``k`` that constant cancels exactly::
+
+            (VIXᵢ / k) · 100k / VIX₀  ==  100 · VIXᵢ / VIX₀
+
+        i.e. rebasing ``^VIX/15.87`` yields a chart identical to rebasing raw
+        ``^VIX``, silently discarding the implied-move units that were the
+        entire point of the divisor. Numerically harmless, semantically
+        destructive — so a scaled symbol never rebases.
+
+        Returns a NEW ``Candle`` list — the canonical ``self._primary`` /
+        ``self._compare`` stay raw, but every per-slot consumer (candle
+        glyphs, ``_autoscale_slot_y``, hover hit-test via ``_ax_candle_map``
+        / ``display_candles``) reads the rebased copy, so the rebased view is
+        internally coherent.
 
         This is the **initial** bake, anchored at bar 0 because the view's
         xlim isn't known yet at candle-build time.
@@ -5044,7 +5118,7 @@ class ChartApp(
         try:
             if not candles:
                 return candles
-            if not (is_ratio_symbol(self._active_symbol_for_slot(slot))
+            if not (is_quotient_ratio(self._active_symbol_for_slot(slot))
                     and bool(self._ratio_rebase_var.get())):
                 return candles
             anchor = float(candles[0].close)
@@ -5108,8 +5182,9 @@ class ChartApp(
         live y-axis tracking is instead handled by the
         ``_ratio_rebase_y_scale`` tick formatter (the y-axis is an animated
         pan artist), and this data re-bake lands once on release to realign
-        the hover/crosshair readouts. No-op for non-ratio / rebase-off
-        slots and when the left edge already reads ~100
+        the hover/crosshair readouts. No-op for non-quotient-ratio (see
+        :meth:`_maybe_rebase_candles` on why scaled symbols never rebase) /
+        rebase-off slots and when the left edge already reads ~100
         (``_rebased_to_anchor`` -> ``None``).
         """
         if getattr(self, "_pan_state", None) is not None:
@@ -5122,7 +5197,7 @@ class ChartApp(
         eps = 1e-6
         for slot, ps in list(self._panel_state.items()):
             try:
-                if not is_ratio_symbol(self._active_symbol_for_slot(slot)):
+                if not is_quotient_ratio(self._active_symbol_for_slot(slot)):
                     continue
                 candles = ps.get("candles") or []
                 n = len(candles)

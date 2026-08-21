@@ -8,7 +8,8 @@ Pure method-bag: no `__init__`, no `super()`; reads/writes state owned by
 ## Methods
 
 - `_get_events_view_for_slot(slot) -> EventsView | None` — resolve a **gated**
-  events view for the symbol displayed in `slot` (`_slot_symbol(slot)`).
+  events view for the symbol displayed in `slot` (`_slot_symbol(slot)`, then
+  `base_symbol_of` — see "Scaled symbols" below).
   Sandbox-active → delegates to the controller's `events_visible_for` (honours
   session clock + blind flag); non-sandbox → looks the bundle up in
   `_events_cache` and gates it against `time.time()*1000` with `blind=False`
@@ -24,6 +25,25 @@ Pure method-bag: no `__init__`, no `super()`; reads/writes state owned by
   superseded load's late callback doesn't overwrite a fresher bundle; on
   success caches into `_events_cache` and calls `_request_redraw_for_events`.
   Marshals back to the Tk thread via `_await_future_on_tk`.
+
+### Scaled symbols resolve to their underlying
+A **scaled symbol** (`AAPL/100`, `^VIX/15.87` — see `data/ratio_source.spec.md`)
+is one real instrument on a rescaled axis, so its corporate events are the
+UNDERLYING's. Both `_load_events_async` and `_get_events_view_for_slot` map the
+symbol through `data.base_symbol_of` before touching `_events_cache`, so the
+bundle is fetched and looked up under the base symbol. Two consequences worth
+knowing:
+- Without it the vendor would be asked for events on a ticker literally named
+  `AAPL/100` and return nothing — the resolution is what makes events appear at
+  all on a scaled chart.
+- The lookup side MUST mirror the caching side or the write and the read use
+  different keys and the glyphs never render.
+- `AAPL` and `AAPL/100` therefore share ONE cached bundle rather than
+  duplicating the fetch.
+
+A **quotient ratio** (`AMD/NVDA`) is deliberately left alone: it has no single
+underlying, so `base_symbol_of` returns it unchanged and it finds no events —
+which is correct.
 - `_request_redraw_for_events()` — repaint event glyphs for the visible slots
   after a fetch lands (re-renders per slot via `_render_event_glyphs_for_slot`,
   invalidates `_blit_bg`, and schedules a watchlist-tab refresh via
