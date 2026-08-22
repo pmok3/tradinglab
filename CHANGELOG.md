@@ -4,9 +4,36 @@
 
 ## [0.6.2] - 2026-08-21
 
-A small correctness release about the moment you add a data provider.
-Configuring an API key mid-session now changes what the chart actually
-draws, instead of quietly waiting for the next app restart.
+Ratio charts learn two new tricks — constant divisors and index
+shorthand — and configuring an API key mid-session now changes what the
+chart actually draws, instead of quietly waiting for the next restart.
+
+### Added
+
+- **Divide a symbol by a number: `^VIX/15.87`, `SPX/10`.** The ticker box
+  already accepted `AMD/NVDA`; it now also accepts a plain number as the
+  denominator, which is what you want for things like putting the VIX in
+  implied-move units. It is deliberately a *different* object from a
+  two-ticker ratio, and the difference is visible: dividing by a constant
+  is exact, so the high really is the high, **no bars are dropped**, and
+  the underlying's real volume is kept (a two-ticker ratio has to join
+  two series, throws away bars that don't line up, and has no meaningful
+  volume). Corporate-event glyphs still resolve to the underlying symbol.
+  Verified against live data: `VIX/16` keeps all 503 bars where the
+  quotient `AMD/NVDA` keeps 502.
+- **Rebase-to-100 is switched off for scaled symbols** — on purpose.
+  Rebasing multiplies by `100/anchor`, which cancels a constant divisor
+  exactly, so a rebased `^VIX/15.87` would silently redraw plain `^VIX`
+  and throw away the units you asked for.
+- **Type `VIX` and get the index.** Index shorthand now resolves to
+  whatever spelling your current data source uses — `^VIX` on yfinance,
+  `$VIX` on Schwab, `I:VIX` on Polygon — and **re-resolves when you
+  switch source**, so a chart that worked a moment ago doesn't break
+  because the new vendor spells it differently. It is a curated list, not
+  a "just add a `^`" rule, because that rule charts the wrong company:
+  `COMP` is Compass Inc, not the Nasdaq Composite, and `MOVE` is a real
+  equity too. Vendors also disagree beyond the prefix (the S&P 500 is
+  `^GSPC` on Yahoo but `SPX` elsewhere).
 
 ### Fixed
 
