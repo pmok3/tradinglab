@@ -734,7 +734,9 @@ class HelpMenuMixin:
         def _on_changed() -> None:
             # Newly-configured vendors (alpaca / yfinance+alpaca / polygon)
             # were just registered by the dialog — surface them in the
-            # toolbar dropdown immediately instead of after a restart.
+            # toolbar dropdown immediately instead of after a restart, and
+            # let SourceRegistryAppMixin re-resolve "Auto" (which may now
+            # rank the new vendor above whatever it is currently serving).
             try:
                 self._refresh_data_source_combobox()
             except Exception:  # noqa: BLE001

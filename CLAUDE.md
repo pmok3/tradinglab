@@ -30,7 +30,7 @@ If you read nothing else before touching code:
    without discussion. (§9)
 4. **Windows + PowerShell.** Backslash paths, fresh process per shell call,
    `gh` needs git on `PATH`. (§0, §3)
-5. **Read §7 before debugging something weird.** Thirty-five documented
+5. **Read §7 before debugging something weird.** Thirty-eight documented
    landmines, each pointing at the spec and the test that pin it.
 
 Everything else — project overview, layout, commands, smoke-test rules, CI,

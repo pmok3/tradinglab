@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Adding a data provider now takes effect on the chart immediately.**
+  Saving Alpaca credentials mid-session registered the new sources and
+  added them to the toolbar dropdown, but if the chart was on **Auto**
+  it kept drawing data from the provider Auto had picked *before* the
+  save — the upgrade only appeared after closing and reopening the app.
+  Auto re-resolves on every fetch, but its cached bars are filed under a
+  provider-agnostic "Auto" key, so the pre-save data kept satisfying the
+  cache and no fetch ever happened. Auto is now re-resolved as part of
+  the save: when its answer changes, the stale data is dropped, the
+  chart reloads from the new provider with your current date range held,
+  and the status bar names both providers (`Auto now uses
+  'yfinance+alpaca' (was 'yfinance')`). An explicit source choice is
+  never overridden, and an active sandbox session is left alone.
+- **"Test connection" says what it actually did.** It deliberately
+  probes the keys you have *typed*, not the ones on disk, so a
+  successful test on a provider that isn't a data source yet now adds
+  "click Save to add it" — instead of leaving a green checkmark that
+  reads like the provider is already live.
+
 ## [0.6.1] - 2026-08-07
 
 The Market Heatmap release. The in-app heatmap stopped showing you the

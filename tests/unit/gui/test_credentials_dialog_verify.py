@@ -564,6 +564,70 @@ class TestSaveRefreshesRegistration:
         assert "alpaca" in shown["msg"]
 
 
+class TestSaveIsTheMomentOfAddition:
+    """A green checkmark must not read as "this provider is now live".
+
+    "Test connection" probes what is TYPED, deliberately (see
+    ``TestUsesTypedValues``) — registration stays gated on saved-credential
+    presence per CLAUDE.md §7.32, so the source does not exist until Save.
+    Without an explicit nudge the user reasonably concludes the app needs a
+    restart, which is exactly the confusion this hint removes.
+    """
+
+    def test_ok_probe_on_an_unregistered_vendor_points_at_save(
+            self, dialog, monkeypatch):
+        monkeypatch.setattr(
+            dialog, "_current_sources", lambda: ("yfinance", "Auto"))
+        restore = _stub("alpaca", lambda creds=None, **kw: _ok(
+            detail="SIP feed entitled."))
+        try:
+            dialog._entries["ALPACA_API_KEY_ID"].insert(0, "K" * 12)
+            dialog._entries["ALPACA_API_SECRET_KEY"].insert(0, "S" * 12)
+            dialog._begin_verify("alpaca")
+            _pump_until(
+                dialog,
+                lambda: not dialog._verify_boxes["alpaca"]["inflight"])
+        finally:
+            restore()
+        detail = dialog._verify_detail_vars["alpaca"].get()
+        assert "SIP feed entitled." in detail   # original detail preserved
+        assert "Save" in detail
+
+    def test_no_hint_once_the_vendor_is_already_a_source(
+            self, dialog, monkeypatch):
+        monkeypatch.setattr(
+            dialog, "_current_sources", lambda: ("yfinance", "alpaca"))
+        restore = _stub("alpaca", lambda creds=None, **kw: _ok(
+            detail="SIP feed entitled."))
+        try:
+            dialog._entries["ALPACA_API_KEY_ID"].insert(0, "K" * 12)
+            dialog._entries["ALPACA_API_SECRET_KEY"].insert(0, "S" * 12)
+            dialog._begin_verify("alpaca")
+            _pump_until(
+                dialog,
+                lambda: not dialog._verify_boxes["alpaca"]["inflight"])
+        finally:
+            restore()
+        assert dialog._verify_detail_vars["alpaca"].get() == (
+            "SIP feed entitled.")
+
+    def test_no_hint_on_a_failed_probe(self, dialog, monkeypatch):
+        monkeypatch.setattr(dialog, "_current_sources", lambda: ("yfinance",))
+        restore = _stub("alpaca", lambda creds=None, **kw: verify.VerifyResult(
+            status=verify.STATUS_INVALID_CREDENTIALS, vendor="alpaca",
+            summary="Rejected (HTTP 401)", detail="Re-copy both values."))
+        try:
+            dialog._entries["ALPACA_API_KEY_ID"].insert(0, "K" * 12)
+            dialog._entries["ALPACA_API_SECRET_KEY"].insert(0, "S" * 12)
+            dialog._begin_verify("alpaca")
+            _pump_until(
+                dialog,
+                lambda: not dialog._verify_boxes["alpaca"]["inflight"])
+        finally:
+            restore()
+        assert "Save" not in dialog._verify_detail_vars["alpaca"].get()
+
+
 class TestCredentialRemoval:
     """Deleting a key must remove its source, symmetrically with adding.
 

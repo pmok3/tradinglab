@@ -732,6 +732,44 @@ Specs: `data/{ratio_source,index_aliases,base}.spec.md`, `app.spec.md`,
 
 ---
 
+### 7.38 Registration is dynamic — "Auto" must be re-resolved, not just re-listed
+
+`register_vendor_sources()` / `register_local_sources()` re-run **mid-session**
+(after a credentials save or a BYOD-root edit), so the source set changes under
+a running chart. Refreshing the toolbar combobox is only half the job.
+
+`"Auto"` is a delegating pseudo-source that re-resolves on every fetch, but its
+cache namespace is the opaque literal `"Auto"` — the key records no provider.
+So a user on Auto who saved Alpaca keys got a dropdown that gained `alpaca`
+while the chart kept drawing the yfinance bars already sitting in `_full_cache`
+under `("Auto", …)`, satisfying `_load_data_async`'s cache-hit fast path. Auto
+only "incorporated alpaca" after an app restart.
+
+Rules:
+
+- Route registration-change UI work through
+  `SourceRegistryAppMixin._refresh_data_source_combobox` — it also reconciles
+  Auto. Don't call `_toolbar.set_sources` directly.
+- **Compare provenance, not source lists.** `auto_source.last_resolved_source()`
+  (what produced the cached data) vs a fresh `resolve_auto_source()`. A list
+  diff misses an Alpaca free→paid **tier** flip, which moves Auto from
+  `yfinance+alpaca` to `alpaca` with an unchanged source list.
+- **Evict the `("Auto", …)` memory-cache entries before reloading**, or the
+  cache-hit fast path silently redraws the old provider's bars. The on-disk
+  `Auto__*` cache is deliberately kept: `merge_candles` gives the new provider
+  every overlapping bar, so reload and restart converge.
+- **Registration stays presence-gated** (§7.32). "Test connection" probes what
+  is *typed*; registering there would light up a source whose credentials
+  vanish on restart. Save is the moment of addition — the dialog says so.
+
+Specs: `gui/source_registry_app.spec.md`, `data/auto_source.spec.md`,
+`gui/credentials_dialog.spec.md`. Tests:
+`tests/unit/gui/test_source_registry_app.py`,
+`tests/unit/data/test_auto_source.py`,
+`tests/unit/gui/test_credentials_dialog_verify.py`.
+
+---
+
 ## 8. Build & release flow
 
 **Releases are cut by pushing a tag — you do NOT build locally.**
@@ -875,6 +913,7 @@ These files are **never** committed to git. Use them for working memory.
 | Sandbox property aliases | `src/tradinglab/backtest/sandbox_app_aliases.py` (SandboxAliasMixin, wave 2) |
 | Fetch executor / cache | `src/tradinglab/data/fetch_service.py`, `app.py` `_load_data_async` / `_load_events_async` |
 | Data source registry + `internal` flag | `src/tradinglab/data/base.py` (see §7.25 — `register_source(..., internal=True)`, `user_visible_sources()`) |
+| Source-list resync + "Auto" re-resolve after a registration change | `src/tradinglab/gui/source_registry_app.py` (SourceRegistryAppMixin) |
 | Polling / next-bar tick | `src/tradinglab/gui/polling.py` |
 | Dialogs (Settings, Watchlist, Credentials) | `src/tradinglab/gui/dialogs.py`, `gui/credentials_dialog.py`, `gui/watchlist_tab.py`, `gui/watchlist_columns_dialog.py` |
 | Record-ID minting (`new_id_hex` / `new_id_dashed`) | `src/tradinglab/core/ids.py`; see §7.34 |

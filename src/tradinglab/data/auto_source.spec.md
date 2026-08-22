@@ -26,6 +26,11 @@ slots into the ranking and Auto starts choosing it once registered.
   `DATA_SOURCES` registry (so a test stub or a freshly-registered vendor is
   honoured). Extra range kwargs are ignored (Auto is registered period-style).
   Guards against dispatching to itself. Never raises (delegate errors → `None`).
+  Records the delegate via `note_resolved_source` **before** dispatch.
+- `last_resolved_source() -> str | None` — the concrete source Auto most
+  recently delegated to, i.e. the provenance of whatever is cached under the
+  opaque `"Auto"` cache key. `None` when nothing has resolved yet.
+- `note_resolved_source(name)` — record that provenance (empty → `None`).
 
 ## Contract
 - **Auto is always live-capable by construction.** Free/IEX Alpaca ranks below
@@ -45,6 +50,15 @@ slots into the ranking and Auto starts choosing it once registered.
   "Auto" default. `tests/conftest.py` sets it to `"yfinance"` so a real ChartApp
   boot stays deterministic + network-free (an Auto→hybrid boot would otherwise
   fetch real Alpaca).
+- **Resolution is tracked because the cache key doesn't record it.** The
+  `"Auto"` namespace is provider-agnostic, so nothing downstream can tell which
+  vendor produced the bars on screen. `data/__init__` seeds
+  `note_resolved_source(resolve_auto_source())` right after the boot-time
+  `register_vendor_sources()` (a session that renders entirely from cache never
+  calls `fetch_auto_data`, so the seed is the only baseline it gets), and every
+  fetch rewrites it. `gui/source_registry_app` compares that against a fresh
+  resolve to detect a mid-session credential save moving Auto's answer, and
+  reloads instead of leaving the upgrade until the next app restart.
 
 ## Design Decisions
 - **Delegating-source (not an app-level resolve-to-concrete mode):** reuses the
@@ -60,6 +74,8 @@ slots into the ranking and Auto starts choosing it once registered.
 ## Invariants
 - `resolve_auto_source` never returns `"Auto"`; `fetch_auto_data` never
   dispatches to itself (self-dispatch guard → yfinance fallback).
+- `fetch_auto_data` always records its delegate, including when the delegate
+  is unregistered, raises, or is the self-dispatch fallback.
 - Registered unconditionally, so `"Auto"` is always a valid `source_var` value
   and startup default.
 
@@ -67,6 +83,8 @@ slots into the ranking and Auto starts choosing it once registered.
 `tests/unit/data/test_auto_source.py` — resolve excludes-self/fallback,
 yfinance-only, hybrid-over-yfinance, tier flip (paid→alpaca / free→yfinance via
 monkeypatched `is_live_capable`); fetch delegate/none/error-swallow/self-guard;
-registration order (yfinance first-visible, Auto visible), BUILTIN default is
-Auto, and the `TRADINGLAB_STARTUP_SOURCE` env-pin precedence in
-`AppState._resolve_source`.
+`last_resolved_source` recording on each of those paths; registration order
+(yfinance first-visible, Auto visible), BUILTIN default is Auto, and the
+`TRADINGLAB_STARTUP_SOURCE` env-pin precedence in `AppState._resolve_source`.
+`tests/unit/gui/test_source_registry_app.py` — the mid-session reload that
+consumes this provenance.

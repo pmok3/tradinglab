@@ -27,7 +27,13 @@ from .alpaca_source import (
     fetch_alpaca_data,
     fetch_alpaca_page,
 )
-from .auto_source import AUTO_SOURCE_NAME, fetch_auto_data
+from .auto_source import (
+    AUTO_SOURCE_NAME,
+    fetch_auto_data,
+    last_resolved_source,
+    note_resolved_source,
+    resolve_auto_source,
+)
 from .base import (
     DATA_SOURCES,
     DataFetcher,
@@ -208,6 +214,13 @@ def register_vendor_sources() -> list[str]:
 register_vendor_sources()
 
 
+# Seed Auto's provenance with its boot-time answer. Without a baseline, a
+# session that renders entirely from cache never calls ``fetch_auto_data``, so
+# a mid-session credential save could not tell that Auto's answer moved
+# (``gui/source_registry_app`` compares the two). See auto_source.spec.md.
+note_resolved_source(resolve_auto_source())
+
+
 def register_local_sources() -> list[str]:
     """Read ``local_data`` settings and (re-)register all BYOD subsources.
 
@@ -295,6 +308,9 @@ __all__ = [
     "fetch_live_data",
     "fetch_auto_data",
     "AUTO_SOURCE_NAME",
+    "resolve_auto_source",
+    "last_resolved_source",
+    "note_resolved_source",
     "fetch_hybrid_data",
     "HYBRID_SOURCE_NAME",
     "GLOBAL_SOURCE_PRIORITY",

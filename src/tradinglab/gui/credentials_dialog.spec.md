@@ -203,6 +203,16 @@ all three the credentials may be perfectly fine, and a red ✗ would send the
 user off re-copying a key that was never the problem. Only
 `invalid_credentials` and `error` are red.
 
+A **successful** probe on a vendor that is not yet a registered source
+(`_vendor_is_registered`, i.e. absent from `_current_sources()`) appends a
+"click Save to add it" line to the detail. "Test connection" reads like the
+moment the provider is added, but registration is gated on saved-credential
+presence (§7.32) — probing typed values is the whole point (above), so
+registering here would light up a source that vanishes on restart. Naming Save
+is the honest fix; the chart then picks the new provider up without a restart
+(`gui/source_registry_app.spec.md`). Never appended on a failed probe, and
+never once the vendor already backs a source.
+
 ### Stale-verdict invalidation
 
 Every credential field''s `textvariable` is traced; any change resets that
@@ -238,6 +248,14 @@ If the set of user-visible sources changed, a dialog names the entries that
 just became — or stopped being — available, pointing at the toolbar source
 dropdown. That is the concrete "your data source is ready for use" signal.
 It is silent when nothing changed, so a no-op save never nags.
+
+`on_changed` also reconciles **"Auto"**. A vendor that just registered may
+outrank whatever Auto is currently serving, and Auto's cache namespace is
+provider-agnostic — so before this, a user on Auto saw the dropdown gain an
+`alpaca` entry while the chart went on drawing yfinance bars until the app was
+restarted. `SourceRegistryAppMixin._reload_if_auto_source_changed` evicts the
+stale `("Auto", …)` cache entries and reloads; see
+`gui/source_registry_app.spec.md`.
 
 ### Sizing
 

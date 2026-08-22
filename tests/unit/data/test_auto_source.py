@@ -10,12 +10,25 @@ from tradinglab.data import auto_source as a
 from tradinglab.data.base import DATA_SOURCES
 from tradinglab.models import Candle
 
+#: Captured at import — ``tradinglab.data`` seeds Auto's provenance at boot and
+#: every test that mutates it restores the prior value, so this is still that
+#: boot answer. See :func:`test_boot_seeds_the_baseline`.
+_BOOT_SEED = a.last_resolved_source()
+
 
 def _candle() -> Candle:
     return Candle(
         date=datetime(2024, 6, 3, tzinfo=timezone.utc),
         open=1.0, high=1.0, low=1.0, close=1.0, volume=100,
     )
+
+
+@pytest.fixture(autouse=True)
+def _restore_last_resolved():
+    """Keep the module-global provenance from leaking between tests."""
+    before = a.last_resolved_source()
+    yield
+    a.note_resolved_source(before)
 
 
 # ---------------------------------------------------------------------------
@@ -94,6 +107,61 @@ def test_fetch_guards_against_self_dispatch(monkeypatch):
     out = a.fetch_auto_data("AAPL", "5m")
     assert out is not None
     assert stub_calls == ["yf"]     # dispatched to the yfinance fallback
+
+
+# ---------------------------------------------------------------------------
+# last_resolved_source — provenance for the opaque "Auto" cache namespace
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_records_the_delegate(monkeypatch):
+    monkeypatch.setitem(DATA_SOURCES, "faketest", lambda t, i: [_candle()])
+    monkeypatch.setattr(a, "resolve_auto_source", lambda: "faketest")
+    a.note_resolved_source("yfinance")
+    a.fetch_auto_data("AAPL", "5m")
+    assert a.last_resolved_source() == "faketest"
+
+
+def test_fetch_records_delegate_even_when_it_fails(monkeypatch):
+    def _boom(ticker, interval):
+        raise RuntimeError("network down")
+
+    monkeypatch.setitem(DATA_SOURCES, "faketest", _boom)
+    monkeypatch.setattr(a, "resolve_auto_source", lambda: "faketest")
+    assert a.fetch_auto_data("AAPL", "5m") is None
+    assert a.last_resolved_source() == "faketest"
+
+
+def test_fetch_records_unregistered_delegate(monkeypatch):
+    monkeypatch.setattr(a, "resolve_auto_source", lambda: "nonexistent_source")
+    assert a.fetch_auto_data("AAPL", "5m") is None
+    assert a.last_resolved_source() == "nonexistent_source"
+
+
+def test_fetch_records_fallback_on_self_dispatch(monkeypatch):
+    # The self-dispatch guard rewrites the target — provenance must follow it,
+    # never record the literal "Auto" (which is not a concrete source).
+    monkeypatch.setattr(a, "resolve_auto_source", lambda: a.AUTO_SOURCE_NAME)
+    monkeypatch.setitem(DATA_SOURCES, "yfinance", lambda t, i: [_candle()])
+    a.fetch_auto_data("AAPL", "5m")
+    assert a.last_resolved_source() == "yfinance"
+
+
+def test_note_resolved_source_normalizes_empty():
+    a.note_resolved_source("")
+    assert a.last_resolved_source() is None
+
+
+def test_boot_seeds_the_baseline():
+    # ``data/__init__`` seeds provenance right after the import-time
+    # ``register_vendor_sources()`` so a fully-cached session still has a
+    # baseline to compare a mid-session credential save against.
+    assert _BOOT_SEED, (
+        "tradinglab.data must call note_resolved_source(resolve_auto_source()) "
+        "at import time — without a baseline, a session that renders entirely "
+        "from cache can't detect that Auto's answer moved."
+    )
+    assert _BOOT_SEED != a.AUTO_SOURCE_NAME
 
 
 # ---------------------------------------------------------------------------

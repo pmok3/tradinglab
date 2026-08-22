@@ -889,10 +889,27 @@ class CredentialsDialog(BaseModalDialog):
             # The chip reads the recorded verdict, so refresh after it lands.
             self._refresh_vendor_header(vendor)
 
+    def _vendor_is_registered(self, vendor: str) -> bool:
+        """True when ``vendor`` currently backs a user-visible data source.
+
+        Registration is gated on saved-credential **presence** (§7.32), so a
+        vendor probed straight from the form is still absent until Save.
+        """
+        return vendor in self._current_sources()
+
     def _render_verify_result(
         self, vendor: str, result: verify.VerifyResult,
     ) -> None:
-        """Paint a :class:`VerifyResult` into the vendor's status rows."""
+        """Paint a :class:`VerifyResult` into the vendor's status rows.
+
+        A successful probe on a vendor that is not yet a registered source gets
+        an explicit "click Save" line. "Test connection" reads like the moment
+        the provider is added, but it deliberately probes what is *typed*, not
+        what is stored — registering here would light up a source backed by
+        credentials that vanish on restart. Naming Save is the honest fix; the
+        chart then picks the new provider up without a restart (see
+        ``gui/source_registry_app``).
+        """
         btn = self._verify_buttons.get(vendor)
         if btn is not None:
             try:
@@ -904,7 +921,12 @@ class CredentialsDialog(BaseModalDialog):
         text = f"{glyph} {result.summary}"
         if result.latency_ms is not None and result.ok:
             text += f"  ({result.latency_ms:.0f} ms)"
-        self._set_verify_text(vendor, text, color, result.detail)
+        detail = result.detail
+        if result.ok and not self._vendor_is_registered(vendor):
+            hint = ("Not a data source yet \u2014 click Save to add it "
+                    "(the chart picks it up right away).")
+            detail = f"{detail}\n{hint}" if detail else hint
+        self._set_verify_text(vendor, text, color, detail)
 
     def _on_destroy(self, event: object = None) -> None:
         """Cancel pending poll jobs so a mid-probe close doesn't TclError.

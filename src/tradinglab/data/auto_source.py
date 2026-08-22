@@ -17,6 +17,13 @@ Auto is **always live-capable** by construction: the free/IEX Alpaca feed ranks
 below yfinance, and yfinance is always available, so Auto never resolves to
 free-Alpaca-as-a-live-source. It resolves to paid-Alpaca (SIP), yfinance, or the
 yfinance+alpaca composite — all real-time on their live edge.
+
+Because Auto's cache namespace is the opaque literal ``"Auto"``, nothing in a
+cache key records WHICH concrete source produced the bars on screen. That is
+what :func:`last_resolved_source` is for: every delegation records its target,
+so the UI can notice that a credential save just changed Auto's answer and
+reload instead of silently serving the old provider's cached series until the
+next app restart.
 """
 from __future__ import annotations
 
@@ -29,6 +36,30 @@ AUTO_SOURCE_NAME = "Auto"
 
 #: Ultimate fallback when nothing else is registered (yfinance is always on).
 _FALLBACK_SOURCE = "yfinance"
+
+#: Concrete source the most recent Auto delegation actually used — i.e. the
+#: provenance of whatever Auto-keyed data is currently cached / on screen.
+#: Seeded at boot by ``data/__init__`` and rewritten by every
+#: :func:`fetch_auto_data` call. Plain module global: writes are single
+#: assignments (atomic under the GIL) and come from fetch workers.
+_last_resolved: str | None = None
+
+
+def note_resolved_source(name: str | None) -> None:
+    """Record ``name`` as the source Auto most recently resolved to."""
+    global _last_resolved
+    _last_resolved = name or None
+
+
+def last_resolved_source() -> str | None:
+    """Concrete source behind the currently-cached Auto data (``None`` if unknown).
+
+    Compare against a fresh :func:`resolve_auto_source` to detect that Auto's
+    answer moved — e.g. the user just saved Alpaca credentials, so the
+    ``yfinance+alpaca`` composite outranks the plain yfinance series already
+    cached under the ``"Auto"`` key.
+    """
+    return _last_resolved
 
 
 def resolve_auto_source(*, candidates: list[str] | None = None) -> str:
@@ -60,12 +91,17 @@ def fetch_auto_data(
     ``start`` / ``end``) are ignored — Auto is registered period-style. Returns
     the delegate's result verbatim (``None`` on a hard failure), so the app's
     usual handling is unchanged. Never raises.
+
+    Records the delegate via :func:`note_resolved_source` **before** dispatch,
+    so the recorded provenance matches the bars this call is about to cache
+    even when the delegate errors out.
     """
     from .base import DATA_SOURCES
 
     best = resolve_auto_source()
     if best == AUTO_SOURCE_NAME:  # defensive: never dispatch to ourselves
         best = _FALLBACK_SOURCE
+    note_resolved_source(best)
     fetcher = DATA_SOURCES.get(best)
     if fetcher is None:
         return None
@@ -75,4 +111,10 @@ def fetch_auto_data(
         return None
 
 
-__all__ = ["AUTO_SOURCE_NAME", "resolve_auto_source", "fetch_auto_data"]
+__all__ = [
+    "AUTO_SOURCE_NAME",
+    "resolve_auto_source",
+    "fetch_auto_data",
+    "last_resolved_source",
+    "note_resolved_source",
+]

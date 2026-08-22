@@ -143,6 +143,7 @@ from .gui.recent_menus import RecentMenusMixin
 from .gui.sandbox_menu import SandboxMenuMixin
 from .gui.scanner_app import ScannerAppMixin
 from .gui.snapshot import SnapshotMixin
+from .gui.source_registry_app import SourceRegistryAppMixin
 from .gui.splash import (
     STAGE_BUILDING_UI,
     STAGE_FETCHING,
@@ -272,6 +273,7 @@ class ChartApp(
     SandboxAppMixin,
     ScannerAppMixin,
     SnapshotMixin,
+    SourceRegistryAppMixin,
     UpdateCheckMixin,
     ViewMenuMixin,
     tk.Tk,
@@ -7135,22 +7137,6 @@ class ChartApp(
                 )
             except Exception:  # noqa: BLE001
                 pass
-
-    def _refresh_data_source_combobox(self) -> None:
-        """Repopulate the source combobox after BYOD registrations change.
-
-        Called by ``_on_help_configure_local_data`` once the local-data
-        dialog finishes saving. Reads the current user-visible source
-        list (post-``register_local_sources()``) and pushes it into
-        the toolbar widget. Selection is preserved if still valid.
-        Internal-flagged sources (synthetic / synthetic-stream) are
-        always filtered out — they are dispatchable programmatically
-        but never user-selectable.
-        """
-        try:
-            self._toolbar.set_sources(tuple(user_visible_sources()))
-        except Exception:  # noqa: BLE001
-            pass
 
     def _refresh_title(self) -> None:
         manager = getattr(self, "_config_manager", None)
