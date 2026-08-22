@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-08-21
+
+A small correctness release about the moment you add a data provider.
+Configuring an API key mid-session now changes what the chart actually
+draws, instead of quietly waiting for the next app restart.
+
 ### Fixed
 
 - **Adding a data provider now takes effect on the chart immediately.**
