@@ -47,6 +47,10 @@ class AppState:
             master=master,
             value=self._initial_chartstack_visible(),
         )
+        # Quant side tab (Tools → Quant). Off by default and deliberately
+        # NOT persisted: it is a reference panel the user pulls up when
+        # they want it, not a layout preference.
+        self.quant_visible = tk.BooleanVar(master=master, value=False)
         self.ticker = tk.StringVar(master=master, value=sd.get("ticker", _DEFAULT_TICKER))
         self.compare_ticker = tk.StringVar(
             master=master,

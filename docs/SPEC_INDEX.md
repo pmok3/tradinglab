@@ -4,7 +4,11 @@ A one-spec-per-`.py` documentation set. Each spec follows a fixed 9-section layo
 
 **Style guide:** see [`SPEC_STYLE.md`](SPEC_STYLE.md) for the canonical layout every spec follows.
 
-**Count: 273 specs (one per `.py` module; all skeletons now implemented — `data/coverage` (targeted intraday fetch, see [`TARGETED_FETCH.md`](TARGETED_FETCH.md)) and the watchlist columns / signals / dialog. The count here is the canonical authority; this index table is a curated subset listing the most-accessed specs, not an exhaustive enumeration).**
+**One spec per `.py` module — a HARD RULE enforced by
+`tests/unit/test_codebase_invariants.py` (`test_every_module_has_colocated_spec_md`
+and `test_no_orphan_spec_md_files`), which is the canonical authority on
+coverage. The table below is a curated subset listing the most-accessed specs,
+not an exhaustive enumeration.**
 
 ## Top-level (`tradinglab/`)
 | Spec | Covers |
@@ -163,6 +167,14 @@ A one-spec-per-`.py` documentation set. Each spec follows a fixed 9-section layo
 | `gui/universe_prepare_dialog.spec.md` | `UniversePrepareDialog` Toplevel — 4-basket picker (SP500/QQQ/NYSE/NASDAQ) + watchlist option, reactive ETA/size estimate, amber survivorship banner for full-exchange baskets, Stop-safe-to-resume cancel paradigm, fundamental-filter prepass. See [`docs/UNIVERSES.md`](UNIVERSES.md). |
 | `gui/scanner_block_editor.spec.md` | `BlockEditor` + `_ConditionFrame` + `_FieldRefPicker` widgets shared by Scanner / Entries / Exits / Custom Indicator Builder dialogs. Auto-stack ConditionFrame fit-based resize-reactive layout (see CLAUDE.md §7.19). |
 | `gui/strategy_tab.spec.md` | `StrategyTab` notebook tab — full Configure → Running → Result UX loop for the Strategy Tester. Entry/exit pickers, 3-mode universe picker (Symbols/Watchlist/Preset), date-range preset, advanced cost model, Run / Stop, headline metrics + per-symbol & per-year Treeviews. Runs the strategy_tester kernel on a daemon thread; loads `aggregate.json` via `report.load_aggregate`. Recent Runs sidebar (top-50 disk runs, Load / Refresh / Delete actions). Export HTML / PDF buttons (delegate to `strategy_tester.export`). Survivorship + sample-size banners. |
+| `gui/quant_tab.spec.md` | `QuantTab` — the **Quant** side tab. Grouped, collapsible Treeview over `quant/catalog.py`; Name in the tree column, then Symbol / Last / description. Double-click loads the row onto the chart; `GEX`/`DIX` render disabled with a hover reason. Owns no fetching. |
+| `gui/quant_app.spec.md` | `QuantAppMixin` — `ChartApp` glue for the Quant tab: hidden-at-startup lifecycle, the Tools → Quant checkbutton, watchlist-style primary/compare double-click routing, and the visibility-gated daily Last refresh through the shared `_apply_watchlist_snapshot_from_bars` seam. |
+
+## `quant/` — Market-internals catalog
+| Spec | Covers |
+|---|---|
+| `quant/__init__.spec.md` | Re-exports the catalog surface. |
+| `quant/catalog.spec.md` | `QuantRow` / `QuantGroup` + the shipped `QUANT_CATALOG` (7 groups, 31 rows). Volatility & expected move (`VIX`, `VIX/15.87` = VIX ÷ √252, …), credit, rates, breadth, rotation, cross-asset, and two disabled positioning rows (`GEX`, `DIX`) with no feed. `available_symbols()` is the seam a future sandbox / export pre-download should consume. |
 
 ## `preload/` — Sandbox universe preload pipeline
 | Spec | Covers |

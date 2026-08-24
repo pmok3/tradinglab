@@ -10,6 +10,9 @@ index, not a tradeable stock, and no vendor quotes it under the bare name.
 ## Public API
 - `INDEX_ALIASES: dict[str, dict[str, str]]` — canonical shorthand → per-source
   form. A source absent from an entry gets no alias and passes through.
+  Covers the volatility complex (`VIX`, `VVIX`, `VXN`, `SKEW`, `GVZ`, `OVX`),
+  the equity indices (`SPX`, `NDX`, `DJI`, `RUT`, `OEX`, `IXIC`), and the
+  Treasury yield curve (`IRX`, `FVX`, `TNX`, `TYX`).
 - `NEVER_ALIAS: frozenset[str]` — symbols that must never be treated as index
   shorthand because they are real listed equities. Currently `COMP`
   (Compass Inc) and `MOVE`.
@@ -35,6 +38,11 @@ index, not a tradeable stock, and no vendor quotes it under the bare name.
   scaled chart.
 - **Nasdaq Composite is keyed `IXIC`, not `COMP`.** The obvious shorthand is
   the dangerous one, so the canonical key is Yahoo's own name.
+- **The bond-volatility index has no row, by design.** `MOVE` is in
+  `NEVER_ALIAS` because the bare symbol is a listed equity, and `NEVER_ALIAS`
+  must stay disjoint from the table. The index is reachable as the literal
+  `^MOVE`, which is the only unambiguous way to ask for it; the Quant catalog
+  spells it that way (see `../quant/catalog.spec.md`).
 - **Explicit matrix, not a prefix map.** Vendors disagree on more than the
   sigil: the S&P 500 is `^GSPC` on Yahoo but `SPX` on Schwab/Polygon. A
   "prefix the canonical name" rule would emit `^SPX`. Pinned by

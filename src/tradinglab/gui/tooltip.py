@@ -79,6 +79,18 @@ class ToolTip:
         if self._label is not None:
             self._label.configure(text=text)
 
+    def hide(self) -> None:
+        """Cancel any pending show and tear down a visible popup.
+
+        Keeps the `<Enter>` / `<Leave>` bindings intact, so the tooltip
+        still works afterwards — unlike :meth:`detach`. Callers that
+        retarget one tooltip across sub-regions of a widget (e.g. a
+        Treeview row under the cursor) use this to drop the popup when
+        the cursor moves onto a region with no hint.
+        """
+        self._cancel_pending()
+        self._hide()
+
     def detach(self) -> None:
         self._cancel_pending()
         self._hide()

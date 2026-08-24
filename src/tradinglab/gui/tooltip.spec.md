@@ -14,6 +14,10 @@ that any caller can attach in one line.
   keep the instance reachable until `detach()` or widget teardown.
 - `ToolTip.set_text(text: str)` — update the hint after
   construction (e.g. a button whose meaning changes with state).
+- `ToolTip.hide()` — cancel any pending show and destroy a visible
+  popup, leaving the bindings intact. For one tooltip retargeted
+  across sub-regions of a widget (e.g. Treeview rows), where some
+  regions have no hint.
 - `ToolTip.detach()` — unbind handlers + destroy any visible
   popup. Used in tests and for conditionally-enabled tooltips.
 
@@ -22,6 +26,9 @@ that any caller can attach in one line.
   stays on the widget long enough, the popup appears.
 - Hover-out or any `<ButtonPress>` cancels the pending timer and
   destroys the popup if visible.
+- `set_text` on an already-visible popup updates the label in place,
+  so a retargeted tooltip follows the cursor without flicker. Setting
+  empty text does NOT close an open popup — call `hide()` for that.
 - The popup is a borderless `tk.Toplevel`
   (`overrideredirect=True`) anchored 4 px below + 12 px right of
   the widget's bottom-left. It uses `-topmost` so it floats over

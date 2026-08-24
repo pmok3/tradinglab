@@ -592,7 +592,9 @@ def check_c5_notebook(app) -> None:
     Compare tab is conditionally hidden when compare mode is off; the
     Sandbox tab is permanently registered but hidden until a replay
     session is started (single-window UX — sandbox controls live in
-    the side notebook, not a Toplevel).
+    the side notebook, not a Toplevel). The **Quant** tab is registered
+    the same way and hidden until Tools → Quant is checked, so notebook
+    indices stay stable for the process lifetime.
 
     NOTE: The Strategy Tester is **not** in this notebook anymore — it
     moved to a Toplevel popup launched from the **Strategy** menubar
@@ -603,12 +605,13 @@ def check_c5_notebook(app) -> None:
     nb = getattr(app, "_notebook", None)
     assert isinstance(nb, ttk.Notebook), "§18.4 _notebook must be a ttk.Notebook"
     tabs = [nb.tab(i, "text") for i in range(nb.index("end"))]
-    assert len(tabs) == 5, f"§1.2 expected 5 notebook tabs, got {tabs}"
+    assert len(tabs) == 6, f"§1.2 expected 6 notebook tabs, got {tabs}"
     assert "Watchlist" in tabs, f"§18.4 missing 'Watchlist' tab: {tabs}"
     assert "Sandbox" in tabs, f"§1.2 missing 'Sandbox' tab: {tabs}"
     assert "Scanner" in tabs, f"§1.2 missing 'Scanner' tab: {tabs}"
     assert "Entries" in tabs, f"missing 'Entries' tab: {tabs}"
     assert "Exits" in tabs, f"missing 'Exits' tab: {tabs}"
+    assert "Quant" in tabs, f"missing 'Quant' tab: {tabs}"
     assert "Strategy" not in tabs, (
         f"Strategy moved to a Toplevel popup; should not appear in "
         f"the notebook: {tabs}")
@@ -2800,12 +2803,14 @@ def check_d21_space_cycles_watchlist(app) -> None:
         except Exception:  # noqa: BLE001
             pass
         # Ensure outer notebook is on a non-Watchlist tab so we can
-        # verify Space surfaces it. The Watchlist tab is now index 0, so
-        # select the last tab (Exits) — always present and never Watchlist.
+        # verify Space surfaces it. Select **Exits by label**, not by
+        # position: `select()` on a hidden tab un-hides it, and the last
+        # tab is the hidden `Quant` panel (Tools → Quant).
         try:
-            _tabs = app._notebook.tabs()
-            if _tabs:
-                app._notebook.select(_tabs[-1])
+            for _tab_id in app._notebook.tabs():
+                if app._notebook.tab(_tab_id, "text") == "Exits":
+                    app._notebook.select(_tab_id)
+                    break
         except Exception:  # noqa: BLE001
             pass
         app._last_clicked_slot = "primary"
@@ -12408,6 +12413,129 @@ def check_g4_live_heatmap(app) -> None:
         app._sandbox = pre_sandbox
         app._live_heatmap_win = pre_win
         _pump(app, 0.1)
+
+
+def check_g5_quant_tab(app) -> None:
+    """Tools → Quant — the market-internals launcher tab.
+
+    Defends the properties that make the tab worth having, all of which
+    would fail silently rather than raise:
+
+      * the tab exists in the side notebook and starts **hidden**, so it
+        costs nothing until the user asks for it;
+      * the Tools checkbutton reveals AND selects it, and unchecking puts
+        it away again;
+      * every catalog row is rendered under its group, and the rows the
+        feature was requested with are present;
+      * a double-click loads the row's symbol into the ticker box exactly
+        like a watchlist double-click — including the ratio rows, which
+        are the whole point of `VIX/15.87`;
+      * `GEX` / `DIX` are inert: they must not blank the chart's ticker,
+        and must say why in the status bar;
+      * the refresh loop stops when the tab is put away (a live `after`
+        job outliving its panel is a real leak, unlike §7.5 noise).
+
+    The Last column is deliberately NOT asserted on: it is fed by a
+    background daily fetch whose timing is the flake surface §7.26 warns
+    about. `tests/unit/gui/test_quant_app.py` pins that logic directly.
+    """
+    from types import SimpleNamespace
+
+    from tradinglab.data.index_aliases import resolve_symbol as _resolve_symbol
+    from tradinglab.quant.catalog import QUANT_CATALOG, available_rows, iter_rows
+
+    tab = getattr(app, "_quant_tab", None)
+    assert tab is not None, "Quant tab should be built at startup"
+    assert str(app._notebook.tab(tab, "state")) == "hidden", (
+        "Quant tab must start hidden — Tools → Quant reveals it. If this "
+        "fails, an earlier check probably selected a notebook tab by "
+        "POSITION: ttk.Notebook.select() un-hides a hidden tab, and Quant "
+        "is the last one. Select by label instead (see check_d21)."
+    )
+
+    pre_visible = bool(app._quant_visible_var.get())
+    pre_ticker = app.ticker_var.get()
+    pre_selected = app._notebook.select()
+    try:
+        # --- reveal ---------------------------------------------------
+        app._quant_visible_var.set(True)
+        app._on_tools_toggle_quant()
+        _pump(app, 0.2)
+        assert str(app._notebook.tab(tab, "state")) == "normal", \
+            "checking Tools → Quant must reveal the tab"
+        assert app._notebook.select() == str(tab), \
+            "revealing the tab should also select it"
+        assert app._quant_refresh_job is not None, \
+            "revealing the tab should arm the Last-refresh loop"
+
+        # --- contents -------------------------------------------------
+        groups = tab.tree.get_children("")
+        assert len(groups) == len(QUANT_CATALOG), \
+            f"expected {len(QUANT_CATALOG)} groups, got {len(groups)}"
+        rendered = sum(len(tab.tree.get_children(g)) for g in groups)
+        assert rendered == len(list(iter_rows())), \
+            f"every catalog row should render; got {rendered}"
+        symbols = {s.upper() for s in tab.symbols()}
+        for wanted in ("VIX", "VIX/15.87", "RSP", "RSP/SPY", "HYG", "TLT"):
+            assert wanted in symbols, f"{wanted} missing from the Quant tab"
+
+        # --- double-click loads the chart -----------------------------
+        # Driven through the tab's own handler with a stubbed hit-test:
+        # Treeview row geometry is runner-dependent, and this exercises
+        # the same code path a real click reaches.
+        app._last_hovered_slot = "primary"
+        real_identify = tab.tree.identify_row
+        try:
+            tab.tree.identify_row = lambda _y: "row:spy_em_1d"
+            tab._on_double_click(SimpleNamespace(y=0))
+            _pump(app, 0.2)
+            # The ticker box holds the SOURCE-RESOLVED form, not the
+            # catalog shorthand: loading `VIX/15.87` re-resolves the
+            # symbol leg to yfinance's `^VIX/15.87` (§7.37/§7.38). Compare
+            # through the resolver so this passes on any active source.
+            loaded = _resolve_symbol(app.ticker_var.get(), app.source_var.get())
+            want = _resolve_symbol("VIX/15.87", app.source_var.get())
+            assert loaded == want, (
+                "double-clicking a ratio row should load it into the "
+                f"ticker box; got {app.ticker_var.get()!r}"
+            )
+
+            # --- an unavailable row is inert --------------------------
+            before = app.ticker_var.get()
+            tab.tree.identify_row = lambda _y: "row:gex"
+            tab._on_double_click(SimpleNamespace(y=0))
+            _pump(app, 0.1)
+            assert app.ticker_var.get() == before, \
+                "GEX has no feed; double-clicking it must not change the chart"
+            note = app.status.get()
+            assert "GEX" in note, \
+                f"an inert row should explain itself in the status bar: {note!r}"
+        finally:
+            tab.tree.identify_row = real_identify
+
+        # --- put it away ----------------------------------------------
+        app._quant_visible_var.set(False)
+        app._on_tools_toggle_quant()
+        _pump(app, 0.1)
+        assert str(app._notebook.tab(tab, "state")) == "hidden", \
+            "unchecking Tools → Quant must hide the tab"
+        assert app._quant_refresh_job is None, \
+            "hiding the tab must cancel the Last-refresh loop"
+    finally:
+        app._quant_visible_var.set(pre_visible)
+        try:
+            app._notebook.tab(tab, state="normal" if pre_visible else "hidden")
+        except Exception:  # noqa: BLE001
+            pass
+        app._stop_quant_refresh_loop()
+        app.ticker_var.set(pre_ticker)
+        try:
+            app._notebook.select(pre_selected)
+        except Exception:  # noqa: BLE001
+            pass
+        _pump(app, 0.1)
+    # Sanity: the catalog itself must not have quietly emptied out.
+    assert len(available_rows()) >= 25
 
 
 def check_b5_sandbox_save_load(app) -> None:
@@ -23532,6 +23660,7 @@ def _run_all_checks(app) -> None:
     check_g2_sandbox_open_universe(app)
     check_g3_sandbox_heatmap(app)
     check_g4_live_heatmap(app)
+    check_g5_quant_tab(app)
     check_b5_sandbox_save_load(app)
     check_b6_sandbox_auto_cycle(app)
     check_b7_sandbox_multitf_context(app)
@@ -23881,6 +24010,7 @@ def _build_check_sequence():
         ("check_g2_sandbox_open_universe", check_g2_sandbox_open_universe),
         ("check_g3_sandbox_heatmap", check_g3_sandbox_heatmap),
         ("check_g4_live_heatmap", check_g4_live_heatmap),
+        ("check_g5_quant_tab", check_g5_quant_tab),
         ("check_b5_sandbox_save_load", check_b5_sandbox_save_load),
         ("check_b6_sandbox_auto_cycle", check_b6_sandbox_auto_cycle),
         ("check_b7_sandbox_multitf_context", check_b7_sandbox_multitf_context),

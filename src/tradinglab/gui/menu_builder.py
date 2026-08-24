@@ -15,6 +15,7 @@ class MenuBuilderCallbacks(Protocol):
     _highlight_key_bars_var: tk.BooleanVar
     _volume_tod_var: tk.BooleanVar
     _chartstack_visible_var: tk.BooleanVar
+    _quant_visible_var: tk.BooleanVar
 
     def _on_menu_load_config(self) -> None: ...
     def _refresh_recent_menu(
@@ -63,6 +64,7 @@ class MenuBuilderCallbacks(Protocol):
     def _on_help_configure_credentials(self) -> None: ...
     def _on_help_configure_local_data(self) -> None: ...
     def _on_tools_export_bars_to_csv(self) -> None: ...
+    def _on_tools_toggle_quant(self) -> None: ...
     def _on_menu_sandbox_prepare_universe(self) -> None: ...
     def _on_open_status_history(self, _event: object | None = None) -> None: ...
     def _on_help_reveal_data_folder(self) -> None: ...
@@ -371,6 +373,18 @@ class MenuBuilder:
         menubar.add_cascade(label="View", menu=view_menu)
 
         tools_menu = tk.Menu(menubar, tearoff=0)
+        # Market-internals side tab. A checkbutton rather than a command
+        # because the tab is a panel the user pulls up and puts away, and
+        # an ellipsis-free label because it reveals a tab, not a dialog
+        # (see ``tests/unit/gui/test_ellipsis_semantics.py``).
+        tools_menu.add_checkbutton(
+            label="Quant",
+            onvalue=True,
+            offvalue=False,
+            variable=self._cb._quant_visible_var,
+            command=self._cb._on_tools_toggle_quant,
+        )
+        tools_menu.add_separator()
         tools_menu.add_command(
             label="Configure Credentials…",
             command=self._cb._on_help_configure_credentials,

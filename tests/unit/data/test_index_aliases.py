@@ -43,9 +43,31 @@ def _series(n=2, base=20.0):
     ("DJI", "yfinance", "^DJI"),
     ("RUT", "yfinance", "^RUT"),
     ("TNX", "yfinance", "^TNX"),
+    # Added for the Quant tab (quant/catalog.py): the rest of the yield
+    # curve and the wider volatility complex.
+    ("IRX", "yfinance", "^IRX"),
+    ("FVX", "yfinance", "^FVX"),
+    ("TYX", "yfinance", "^TYX"),
+    ("SKEW", "yfinance", "^SKEW"),
+    ("GVZ", "yfinance", "^GVZ"),
+    ("OVX", "yfinance", "^OVX"),
+    ("SKEW", "schwab", "$SKEW"),
+    ("OVX", "polygon", "I:OVX"),
 ])
 def test_resolves_shorthand_to_vendor_form(shorthand, source, expected):
     assert resolve_symbol(shorthand, source) == expected
+
+
+def test_bond_volatility_index_has_no_shorthand_row():
+    """`MOVE` is a listed equity, so the index is only reachable as `^MOVE`.
+
+    Giving `MOVE` an alias row would break the disjointness invariant below
+    and make the bare shorthand chart the wrong instrument. The Quant catalog
+    spells it with the caret for exactly this reason.
+    """
+    assert "MOVE" not in INDEX_ALIASES
+    assert resolve_symbol("MOVE", "yfinance") == "MOVE"
+    assert resolve_symbol("^MOVE", "yfinance") == "^MOVE"
 
 
 def test_sp500_is_not_a_prefix_rule():

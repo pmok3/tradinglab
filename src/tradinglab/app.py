@@ -139,6 +139,7 @@ from .gui.named_fonts import (
 # Polling / scheduling lives in ``gui.polling``.
 from .gui.polling import PollingMixin
 from .gui.prefetch_app import PrefetchAppMixin
+from .gui.quant_app import QuantAppMixin
 from .gui.recent_menus import RecentMenusMixin
 from .gui.sandbox_menu import SandboxMenuMixin
 from .gui.scanner_app import ScannerAppMixin
@@ -268,6 +269,7 @@ class ChartApp(
     EventsAppMixin,
     LivePriceOverlayAppMixin,
     PrefetchAppMixin,
+    QuantAppMixin,
     RecentMenusMixin,
     SandboxAliasMixin,
     SandboxAppMixin,
@@ -627,6 +629,7 @@ class ChartApp(
         self._highlight_ha_flat_var = self._state.highlight_ha_flat
         self._volume_tod_var = self._state.volume_tod
         self._chartstack_visible_var = self._state.chartstack_visible
+        self._quant_visible_var = self._state.quant_visible
         # Ratio-symbol render mode (AMD/NVDA etc.): consulted ONLY when the
         # slot's symbol is a ratio (is_ratio_symbol); non-ratio charts are
         # completely unaffected. Ratios always render as candlesticks with the
@@ -1569,6 +1572,11 @@ class ChartApp(
         # gui/entries_app.py.
         self._build_entries_stack()
 
+        # Tab 6: Quant — market-internals launcher (VIX, expected move,
+        # breadth/credit ratios). Added hidden; Tools → Quant reveals it.
+        # See gui/quant_app.py + quant/catalog.py.
+        self._build_quant_tab()
+
         # Strategy Tester — mechanical strategy tester pairing entry +
         # exit strategies and running them over a universe + date range.
         # Opens in a Toplevel popup via the **Strategy** menu (between
@@ -1760,6 +1768,7 @@ class ChartApp(
             self._reapply_status_tint()
         except Exception:  # noqa: BLE001
             pass
+        self._apply_quant_theme()
 
     # ------------------------------------------------------------------
     # Startup-default persistence (Settings → "Startup parameters")

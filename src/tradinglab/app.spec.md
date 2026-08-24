@@ -4,7 +4,7 @@
 Top-level Tk + matplotlib application. Owns all runtime state (Tk widgets, `Figure`, caches, stream/fetch tokens, worker pool) and orchestrates the data → render → stream pipeline. `ChartApp` is composed of `tk.Tk` + a stack of mixins (each owns a concern documented in its own `*.spec.md`).
 
 ## Public API
-- `class ChartApp(PollingMixin, InteractionMixin, WatchlistTabMixin, WorkerPoolMixin, IndicatorMenuMixin, SandboxMenuMixin, ConfigMenuMixin, DrilldownMixin, EntriesAppMixin, ExitsAppMixin, HelpMenuMixin, FirstRunBannerMixin, AnchorPickAppMixin, ChartStackAppMixin, DrawingsAppMixin, EventsAppMixin, LivePriceOverlayAppMixin, PrefetchAppMixin, RecentMenusMixin, SandboxAliasMixin, SandboxAppMixin, ScannerAppMixin, SnapshotMixin, SourceRegistryAppMixin, UpdateCheckMixin, ViewMenuMixin, tk.Tk)`
+- `class ChartApp(PollingMixin, InteractionMixin, WatchlistTabMixin, WorkerPoolMixin, IndicatorMenuMixin, SandboxMenuMixin, ConfigMenuMixin, DrilldownMixin, EntriesAppMixin, ExitsAppMixin, HelpMenuMixin, FirstRunBannerMixin, AnchorPickAppMixin, ChartStackAppMixin, DrawingsAppMixin, EventsAppMixin, LivePriceOverlayAppMixin, PrefetchAppMixin, QuantAppMixin, RecentMenusMixin, SandboxAliasMixin, SandboxAppMixin, ScannerAppMixin, SnapshotMixin, SourceRegistryAppMixin, UpdateCheckMixin, ViewMenuMixin, tk.Tk)`
 - `ChartApp(*, splash: SplashController | None = None)` — construct + open the window.
 - `_load_data()` / `_load_data_async()` — synchronous / executor-backed fetch + render.
 - `_render()` — rebuild figure from in-memory series. Sole site of `figure.clear()` (in its slow path; the topology-preserving fast path reuses axes — see Rendering §).
@@ -76,7 +76,7 @@ File structure:
 - `app.py` — class body (lifecycle, rendering, data load, sandbox bridge, themes, menus).
 - `gui/polling.py` — `PollingMixin` + scheduler helpers (`_market_window_et`, `_postpone_past_closed_market`, `_next_daily_close_epoch`, `_compute_fetch_delay_ms`); owns `_track_after`, stream-queue / worker-inbox drains, `_schedule_reload`, `_schedule_next_bar_fetch`.
 - `gui/x_axis_locator.py` — `_AdaptiveXLocator` + `_make_x_formatter`.
-- `gui/{drilldown,interaction,workers,watchlist_tab,indicator_menu,sandbox_menu,entries_app,exits_app,help_menu,banner,config_menu,anchor_pick_app,chartstack_app,drawings_app,events_app,live_price_overlay_app,recent_menus,scanner_app,snapshot,source_registry_app,update_check}.py` and `backtest/{sandbox_app_aliases,sandbox_app_methods}.py` — other mixins (`AnchorPickAppMixin` in `gui/anchor_pick_app.py` — the AVWAP "Pick Anchor…" click flow; `ChartStackAppMixin` in `gui/chartstack_app.py` — the ChartStack sidebar toggle/promote/sash glue; `EventsAppMixin` in `gui/events_app.py` — historical event-glyph fetch + overlay; `SourceRegistryAppMixin` in `gui/source_registry_app.py` — toolbar source-list resync + the "Auto" re-resolve/reload after a mid-session registration change; `ScannerAppMixin` in `gui/scanner_app.py`; `SandboxAppMixin` in `backtest/sandbox_app_methods.py`).
+- `gui/{drilldown,interaction,workers,watchlist_tab,indicator_menu,sandbox_menu,entries_app,exits_app,help_menu,banner,config_menu,anchor_pick_app,chartstack_app,drawings_app,events_app,live_price_overlay_app,quant_app,recent_menus,scanner_app,snapshot,source_registry_app,update_check}.py` and `backtest/{sandbox_app_aliases,sandbox_app_methods}.py` — other mixins (`AnchorPickAppMixin` in `gui/anchor_pick_app.py` — the AVWAP "Pick Anchor…" click flow; `ChartStackAppMixin` in `gui/chartstack_app.py` — the ChartStack sidebar toggle/promote/sash glue; `EventsAppMixin` in `gui/events_app.py` — historical event-glyph fetch + overlay; `QuantAppMixin` in `gui/quant_app.py` — the Quant market-internals side tab; `SourceRegistryAppMixin` in `gui/source_registry_app.py` — toolbar source-list resync + the "Auto" re-resolve/reload after a mid-session registration change; `ScannerAppMixin` in `gui/scanner_app.py`; `SandboxAppMixin` in `backtest/sandbox_app_methods.py`).
 
 `app.py` keeps module-level imports such as `filedialog` when they are
 test patch seams, even if moved behavior no longer uses the name in this
@@ -203,6 +203,9 @@ Persistence: `<app_data>/drawings.json`, format `"tradinglab-drawings"` v1, atom
 The Tools menu includes two BYOD entries that delegate to the
 helper-mixin methods on `HelpMenuMixin`:
 
+- `Tools → Quant` → `_on_tools_toggle_quant` (`QuantAppMixin`) — a
+  checkbutton bound to `_quant_visible_var`; reveals/hides the Quant side
+  tab. See "Quant tab integration" below.
 - `Tools → Configure Local Data…` → `_on_help_configure_local_data`
   opens `gui.local_data_dialog.LocalDataDialog`. On save the dialog
   calls back via `on_changed` → `_refresh_data_source_combobox()` so
@@ -239,6 +242,13 @@ Top-level `Watchlist` tab hosts a nested `ttk.Notebook` of pinned lists (cap `MA
 - `_on_scanner_row_action(symbol, kind)` routes `"primary"` / `"compare"` / `"watchlist"` per sandbox/live state.
 
 Startup opens at most one sub-tab (most-recently-updated); others reachable via "Load…". `_refresh_scanner_for_sandbox()` runs each sandbox tick on the Tk thread (safe — both reads and writes are Tk-bound). `_reset_scanner_state()` resets history on session end. Live mode = v1.1.
+
+### Quant tab integration
+Right-side tab `Quant`, built hidden by `_build_quant_tab()` (`QuantAppMixin`, `gui/quant_app.py`) and revealed by the `Tools → Quant` checkbutton. Contents come from `quant/catalog.py`; the widget is `gui/quant_tab.QuantTab`. Two callbacks:
+- `_on_quant_row_activate(symbol)` — mirrors `_on_watchlist_double`: `_last_hovered_slot` picks primary vs compare, compare routing is gated on `compare_var`, and the Notebook is not switched away.
+- `_on_quant_row_unavailable(row)` — `GEX` / `DIX` have no feed; warns in the status bar instead of loading.
+
+The Last column is derived from **daily** bars regardless of chart interval (`QUANT_LAST_INTERVAL`) through the shared `_apply_watchlist_snapshot_from_bars` seam, so sandbox-clock slicing is inherited rather than re-implemented. `_quant_refresh_tick()` repaints while the tab is revealed but only submits fetches while it is *visible*. Full contract: `gui/quant_app.spec.md`, `gui/quant_tab.spec.md`, `quant/catalog.spec.md`.
 
 ### Heikin-Ashi candle display
 View → Heikin-Ashi → Show Heikin-Ashi Candles. Substitution is **candle wick/body draw site only** — volumes, indicators, autoscale ranges continue to consume real candles. Hover shows real OHLC but y-axis hit-test uses displayed list (HA bodies often extend past the real `[low, high]`). State: `_ha_display_var: tk.BooleanVar`, persisted under `"heikin_ashi"`. Toggle handler writes setting, calls `_render`, then forces `_autoscale_y_to_visible()` + `draw_idle()` because HA range can exceed real range. H1 stream-tick fastpath bails when on (HA recurrence needs full prefix). Scanner-side HA support is independent (dedicated `ha_*` fields). Audit `ha-menu-cascade` (2026) moved this from a top-level View entry to a child of the `Heikin-Ashi` cascade so the candle-style toggle and the flat-bar overlay share a hierarchy.

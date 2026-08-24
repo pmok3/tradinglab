@@ -54,18 +54,34 @@ INDEX_ALIASES: dict[str, dict[str, str]] = {
     "VIX":  {"yfinance": "^VIX",  "schwab": "$VIX",   "polygon": "I:VIX"},
     "VVIX": {"yfinance": "^VVIX", "schwab": "$VVIX",  "polygon": "I:VVIX"},
     "VXN":  {"yfinance": "^VXN",  "schwab": "$VXN",   "polygon": "I:VXN"},
+    "SKEW": {"yfinance": "^SKEW", "schwab": "$SKEW",  "polygon": "I:SKEW"},
+    "GVZ":  {"yfinance": "^GVZ",  "schwab": "$GVZ",   "polygon": "I:GVZ"},
+    "OVX":  {"yfinance": "^OVX",  "schwab": "$OVX",   "polygon": "I:OVX"},
     "SPX":  {"yfinance": "^GSPC", "schwab": "$SPX",   "polygon": "I:SPX"},
     "NDX":  {"yfinance": "^NDX",  "schwab": "$NDX",   "polygon": "I:NDX"},
     "DJI":  {"yfinance": "^DJI",  "schwab": "$DJI",   "polygon": "I:DJI"},
     "RUT":  {"yfinance": "^RUT",  "schwab": "$RUT",   "polygon": "I:RUT"},
-    "TNX":  {"yfinance": "^TNX",  "schwab": "$TNX",   "polygon": "I:TNX"},
     "OEX":  {"yfinance": "^OEX",  "schwab": "$OEX",   "polygon": "I:OEX"},
     "IXIC": {"yfinance": "^IXIC", "schwab": "$COMPX", "polygon": "I:COMP"},
+    # Treasury yields, short tenor first.
+    "IRX":  {"yfinance": "^IRX",  "schwab": "$IRX",   "polygon": "I:IRX"},
+    "FVX":  {"yfinance": "^FVX",  "schwab": "$FVX",   "polygon": "I:FVX"},
+    "TNX":  {"yfinance": "^TNX",  "schwab": "$TNX",   "polygon": "I:TNX"},
+    "TYX":  {"yfinance": "^TYX",  "schwab": "$TYX",   "polygon": "I:TYX"},
+    # No ``MOVE`` row on purpose. The ICE BofA bond-volatility index shares
+    # its name with a real listed equity, so ``MOVE`` is in NEVER_ALIAS and
+    # an alias row here would break the disjointness invariant that keeps
+    # the equity reachable. Chart it as the literal ``^MOVE``.
 }
 
 #: Symbols that must NEVER be treated as index shorthand, because they are
 #: real tradeable equities. Verified against the live quote API — each
 #: returns genuine equity price data as a bare symbol.
+#:
+#: This set is disjoint from :data:`INDEX_ALIASES` and must stay that way:
+#: an entry here means the shorthand belongs to the equity, full stop. The
+#: index that shares the name is still reachable by typing its vendor form
+#: (``^MOVE``), which is the only unambiguous way to ask for it.
 NEVER_ALIAS: frozenset[str] = frozenset({"COMP", "MOVE"})
 
 #: Composite sources resolve their history through a yfinance leg, so they
