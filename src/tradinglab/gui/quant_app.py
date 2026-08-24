@@ -7,7 +7,7 @@ Three jobs:
 
 1. **Lifecycle.** The tab is added to the side notebook once at startup with
    ``state="hidden"``, mirroring the Sandbox tab, so notebook indices stay
-   stable for the life of the process. The Tools → Quant checkbutton flips
+   stable for the life of the process. The View → Quant checkbutton flips
    it between ``"hidden"`` and ``"normal"``.
 2. **Activation.** A double-click routes the row's symbol to the primary or
    compare slot using the same ``_last_hovered_slot`` rule the watchlist uses
@@ -74,8 +74,8 @@ class QuantAppMixin:
             return
         self._apply_quant_theme()
 
-    def _on_tools_toggle_quant(self) -> None:
-        """**Tools → Quant** checkbutton — reveal or hide the tab.
+    def _on_view_toggle_quant(self) -> None:
+        """**View → Quant** checkbutton — reveal or hide the tab.
 
         Revealing also selects the tab and kicks an immediate refresh, so the
         user sees the panel populate rather than a column of blanks.

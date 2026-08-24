@@ -203,9 +203,6 @@ Persistence: `<app_data>/drawings.json`, format `"tradinglab-drawings"` v1, atom
 The Tools menu includes two BYOD entries that delegate to the
 helper-mixin methods on `HelpMenuMixin`:
 
-- `Tools → Quant` → `_on_tools_toggle_quant` (`QuantAppMixin`) — a
-  checkbutton bound to `_quant_visible_var`; reveals/hides the Quant side
-  tab. See "Quant tab integration" below.
 - `Tools → Configure Local Data…` → `_on_help_configure_local_data`
   opens `gui.local_data_dialog.LocalDataDialog`. On save the dialog
   calls back via `on_changed` → `_refresh_data_source_combobox()` so
@@ -244,7 +241,7 @@ Top-level `Watchlist` tab hosts a nested `ttk.Notebook` of pinned lists (cap `MA
 Startup opens at most one sub-tab (most-recently-updated); others reachable via "Load…". `_refresh_scanner_for_sandbox()` runs each sandbox tick on the Tk thread (safe — both reads and writes are Tk-bound). `_reset_scanner_state()` resets history on session end. Live mode = v1.1.
 
 ### Quant tab integration
-Right-side tab `Quant`, built hidden by `_build_quant_tab()` (`QuantAppMixin`, `gui/quant_app.py`) and revealed by the `Tools → Quant` checkbutton. Contents come from `quant/catalog.py`; the widget is `gui/quant_tab.QuantTab`. Two callbacks:
+Right-side tab `Quant`, built hidden by `_build_quant_tab()` (`QuantAppMixin`, `gui/quant_app.py`) and revealed by the `View → Quant` checkbutton. The menu entry sits in View's market-context group alongside `Live Market Heatmap` and `Heatmap (Finviz)` — all three answer "what is the market doing", as opposed to the entries above them, which change how the ACTIVE chart is drawn. Contents come from `quant/catalog.py`; the widget is `gui/quant_tab.QuantTab`. Two callbacks:
 - `_on_quant_row_activate(symbol)` — mirrors `_on_watchlist_double`: `_last_hovered_slot` picks primary vs compare, compare routing is gated on `compare_var`, and the Notebook is not switched away.
 - `_on_quant_row_unavailable(row)` — `GEX` / `DIX` have no feed; warns in the status bar instead of loading.
 

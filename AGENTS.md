@@ -909,7 +909,7 @@ These files are **never** committed to git. Use them for working memory.
 | Config menu handlers + close-when-dirty | `src/tradinglab/gui/config_menu.py` (ConfigMenuMixin, wave 2) |
 | View-menu heatmap entries (Finviz + live) | `src/tradinglab/gui/view_menu.py` (ViewMenuMixin) |
 | Live vs replay heatmap clock/context | `src/tradinglab/gui/heatmap_context.py` (§7.36) |
-| Quant side tab (market internals) | `src/tradinglab/gui/quant_app.py` (QuantAppMixin) + `gui/quant_tab.py` (widget); rows live in `src/tradinglab/quant/catalog.py` |
+| Quant side tab (market internals) | `src/tradinglab/gui/quant_app.py` (QuantAppMixin) + `gui/quant_tab.py` (widget); rows live in `src/tradinglab/quant/catalog.py`. Menu entry is **View → Quant** |
 | Quote-level streaming (breadth axis) | `src/tradinglab/streaming/quotes.py` (protocol + registry), `streaming/quote_book.py` (coalescing store), `streaming/schwab_quotes.py` (LEVELONE adapter); see §7.36 |
 | Update-check banner + banner cleanup | `src/tradinglab/gui/update_check.py` (UpdateCheckMixin, wave 2) |
 | Sandbox property aliases | `src/tradinglab/backtest/sandbox_app_aliases.py` (SandboxAliasMixin, wave 2) |

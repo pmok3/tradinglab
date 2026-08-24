@@ -593,7 +593,7 @@ def check_c5_notebook(app) -> None:
     Sandbox tab is permanently registered but hidden until a replay
     session is started (single-window UX — sandbox controls live in
     the side notebook, not a Toplevel). The **Quant** tab is registered
-    the same way and hidden until Tools → Quant is checked, so notebook
+    the same way and hidden until View → Quant is checked, so notebook
     indices stay stable for the process lifetime.
 
     NOTE: The Strategy Tester is **not** in this notebook anymore — it
@@ -2805,7 +2805,7 @@ def check_d21_space_cycles_watchlist(app) -> None:
         # Ensure outer notebook is on a non-Watchlist tab so we can
         # verify Space surfaces it. Select **Exits by label**, not by
         # position: `select()` on a hidden tab un-hides it, and the last
-        # tab is the hidden `Quant` panel (Tools → Quant).
+        # tab is the hidden `Quant` panel (View → Quant).
         try:
             for _tab_id in app._notebook.tabs():
                 if app._notebook.tab(_tab_id, "text") == "Exits":
@@ -12416,7 +12416,7 @@ def check_g4_live_heatmap(app) -> None:
 
 
 def check_g5_quant_tab(app) -> None:
-    """Tools → Quant — the market-internals launcher tab.
+    """View → Quant — the market-internals launcher tab.
 
     Defends the properties that make the tab worth having, all of which
     would fail silently rather than raise:
@@ -12447,7 +12447,7 @@ def check_g5_quant_tab(app) -> None:
     tab = getattr(app, "_quant_tab", None)
     assert tab is not None, "Quant tab should be built at startup"
     assert str(app._notebook.tab(tab, "state")) == "hidden", (
-        "Quant tab must start hidden — Tools → Quant reveals it. If this "
+        "Quant tab must start hidden — View → Quant reveals it. If this "
         "fails, an earlier check probably selected a notebook tab by "
         "POSITION: ttk.Notebook.select() un-hides a hidden tab, and Quant "
         "is the last one. Select by label instead (see check_d21)."
@@ -12459,10 +12459,10 @@ def check_g5_quant_tab(app) -> None:
     try:
         # --- reveal ---------------------------------------------------
         app._quant_visible_var.set(True)
-        app._on_tools_toggle_quant()
+        app._on_view_toggle_quant()
         _pump(app, 0.2)
         assert str(app._notebook.tab(tab, "state")) == "normal", \
-            "checking Tools → Quant must reveal the tab"
+            "checking View → Quant must reveal the tab"
         assert app._notebook.select() == str(tab), \
             "revealing the tab should also select it"
         assert app._quant_refresh_job is not None, \
@@ -12515,10 +12515,10 @@ def check_g5_quant_tab(app) -> None:
 
         # --- put it away ----------------------------------------------
         app._quant_visible_var.set(False)
-        app._on_tools_toggle_quant()
+        app._on_view_toggle_quant()
         _pump(app, 0.1)
         assert str(app._notebook.tab(tab, "state")) == "hidden", \
-            "unchecking Tools → Quant must hide the tab"
+            "unchecking View → Quant must hide the tab"
         assert app._quant_refresh_job is None, \
             "hiding the tab must cancel the Last-refresh loop"
     finally:

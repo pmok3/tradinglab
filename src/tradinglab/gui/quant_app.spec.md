@@ -1,7 +1,7 @@
 # gui/quant_app.py — Spec
 
 ## Purpose
-`ChartApp` glue for the **Quant** side tab: tab lifecycle, the Tools → Quant
+`ChartApp` glue for the **Quant** side tab: tab lifecycle, the View → Quant
 toggle, double-click routing onto the chart, and the lazy refresh that fills
 the tab's Last column. Extracted as a mixin per AGENTS.md §7.24 — no
 `__init__`, no `super().__init__()`.
@@ -11,7 +11,7 @@ the tab's Last column. Extracted as a mixin per AGENTS.md §7.24 — no
   and `RecentMenusMixin` (alphabetical).
 - `_build_quant_tab()` — construct the tab hidden in `_notebook`. Called once
   from `_build_ui`.
-- `_on_tools_toggle_quant()` — Tools → Quant checkbutton command.
+- `_on_view_toggle_quant()` — View → Quant checkbutton command.
 - `_quant_tab_visible() -> bool` — revealed AND the selected notebook tab.
 - `_on_quant_row_activate(symbol)` / `_on_quant_row_unavailable(row)` — the
   tab's two callbacks.
@@ -38,6 +38,9 @@ the tab's Last column. Extracted as a mixin per AGENTS.md §7.24 — no
   tab indices then stay fixed for the process lifetime — the same reason the
   Sandbox tab is added hidden. Toggling only flips `state` between
   `"hidden"` and `"normal"`.
+- **The menu entry lives in View, not Tools.** View's last group is the
+  market-context surfaces (`Live Market Heatmap`, `Heatmap (Finviz)`); Quant
+  answers the same question. Tools is for configuration and data plumbing.
 - **Last is derived from DAILY bars, whatever the chart interval.** A Quant
   row states a macro quantity; an intraday last for `VIX/15.87` would be a
   different number from the one the description promises. `QUANT_LAST_INTERVAL`

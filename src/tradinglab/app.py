@@ -1573,7 +1573,7 @@ class ChartApp(
         self._build_entries_stack()
 
         # Tab 6: Quant — market-internals launcher (VIX, expected move,
-        # breadth/credit ratios). Added hidden; Tools → Quant reveals it.
+        # breadth/credit ratios). Added hidden; View → Quant reveals it.
         # See gui/quant_app.py + quant/catalog.py.
         self._build_quant_tab()
 

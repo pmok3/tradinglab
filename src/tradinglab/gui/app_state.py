@@ -47,7 +47,7 @@ class AppState:
             master=master,
             value=self._initial_chartstack_visible(),
         )
-        # Quant side tab (Tools → Quant). Off by default and deliberately
+        # Quant side tab (View → Quant). Off by default and deliberately
         # NOT persisted: it is a reference panel the user pulls up when
         # they want it, not a layout preference.
         self.quant_visible = tk.BooleanVar(master=master, value=False)

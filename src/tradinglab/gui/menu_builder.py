@@ -57,6 +57,7 @@ class MenuBuilderCallbacks(Protocol):
     def _on_menu_toggle_highlight_key_bars(self) -> None: ...
     def _on_menu_toggle_volume_tod(self) -> None: ...
     def _on_view_toggle_chartstack(self) -> None: ...
+    def _on_view_toggle_quant(self) -> None: ...
     def _on_view_open_theme_editor(self) -> None: ...
     def _on_view_heatmap(self) -> None: ...
     def _on_view_live_heatmap(self) -> None: ...
@@ -64,7 +65,6 @@ class MenuBuilderCallbacks(Protocol):
     def _on_help_configure_credentials(self) -> None: ...
     def _on_help_configure_local_data(self) -> None: ...
     def _on_tools_export_bars_to_csv(self) -> None: ...
-    def _on_tools_toggle_quant(self) -> None: ...
     def _on_menu_sandbox_prepare_universe(self) -> None: ...
     def _on_open_status_history(self, _event: object | None = None) -> None: ...
     def _on_help_reveal_data_folder(self) -> None: ...
@@ -355,6 +355,21 @@ class MenuBuilder:
         )
         view_menu.add_cascade(label="ChartStack", menu=cs_menu)
         view_menu.add_separator()
+        # Market-context group: the Quant side tab and the two heatmaps.
+        # All three answer "what is the market doing", as opposed to the
+        # entries above, which change how the ACTIVE chart is drawn.
+        #
+        # Quant is a checkbutton rather than a command because the tab is a
+        # panel the user pulls up and puts away. Ellipsis-free because it
+        # reveals a tab, not a dialog (see
+        # ``tests/unit/gui/test_ellipsis_semantics.py``).
+        view_menu.add_checkbutton(
+            label="Quant",
+            onvalue=True,
+            offvalue=False,
+            variable=self._cb._quant_visible_var,
+            command=self._cb._on_view_toggle_quant,
+        )
         # In-app live heatmap. Ellipsis-free by the same convention as
         # the Finviz launcher below: it opens a window, not a dialog
         # (see ``tests/unit/gui/test_ellipsis_semantics.py``).
@@ -373,18 +388,6 @@ class MenuBuilder:
         menubar.add_cascade(label="View", menu=view_menu)
 
         tools_menu = tk.Menu(menubar, tearoff=0)
-        # Market-internals side tab. A checkbutton rather than a command
-        # because the tab is a panel the user pulls up and puts away, and
-        # an ellipsis-free label because it reveals a tab, not a dialog
-        # (see ``tests/unit/gui/test_ellipsis_semantics.py``).
-        tools_menu.add_checkbutton(
-            label="Quant",
-            onvalue=True,
-            offvalue=False,
-            variable=self._cb._quant_visible_var,
-            command=self._cb._on_tools_toggle_quant,
-        )
-        tools_menu.add_separator()
         tools_menu.add_command(
             label="Configure Credentials…",
             command=self._cb._on_help_configure_credentials,

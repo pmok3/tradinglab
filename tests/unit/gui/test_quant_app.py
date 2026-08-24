@@ -159,7 +159,7 @@ def app():
 
 def test_toggle_on_reveals_selects_and_starts_the_loop(app):
     app._quant_visible_var.set(True)
-    app._on_tools_toggle_quant()
+    app._on_view_toggle_quant()
     assert app._notebook.states[app._quant_tab] == "normal"
     assert app._notebook.selected is app._quant_tab
     assert app._quant_refresh_job is not None
@@ -168,10 +168,10 @@ def test_toggle_on_reveals_selects_and_starts_the_loop(app):
 
 def test_toggle_off_hides_and_stops_the_loop(app):
     app._quant_visible_var.set(True)
-    app._on_tools_toggle_quant()
+    app._on_view_toggle_quant()
     job = app._quant_refresh_job
     app._quant_visible_var.set(False)
-    app._on_tools_toggle_quant()
+    app._on_view_toggle_quant()
     assert app._notebook.states[app._quant_tab] == "hidden"
     assert app._quant_refresh_job is None
     assert job in app.cancelled
@@ -180,7 +180,7 @@ def test_toggle_off_hides_and_stops_the_loop(app):
 def test_toggle_is_inert_without_a_tab(app):
     app._quant_tab = None
     app._quant_visible_var.set(True)
-    app._on_tools_toggle_quant()
+    app._on_view_toggle_quant()
     assert app._notebook.states == {}
     assert app._quant_refresh_job is None
 
@@ -218,7 +218,7 @@ def test_revealing_the_tab_fetches_on_the_very_first_tick(app):
     """Regression: the first batch used to be skipped, blanking Last 30s."""
     app._fetch_executor = _Executor()
     app._quant_visible_var.set(True)
-    app._on_tools_toggle_quant()
+    app._on_view_toggle_quant()
     assert app._fetch_executor.calls, (
         "revealing the tab must submit fetches immediately, not one tick later"
     )
