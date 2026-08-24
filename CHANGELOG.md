@@ -2,6 +2,57 @@
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-08-24
+
+A new **Quant** panel: one place to pull up the handful of market-wide
+numbers that tell you what kind of day it is, without typing tickers.
+
+### Added
+
+- **View → Quant** opens a side tab listing ~30 curated market-internals
+  series, grouped and double-clickable. Double-click a row and it loads
+  onto the chart exactly like a watchlist ticker — same
+  primary-vs-compare routing, same preserved view window. The tab is
+  hidden until you ask for it and costs nothing while it is away.
+- Each row shows its symbol, a **Last** value, and a one-line "what this
+  tells you", so the panel doubles as a reference rather than a list of
+  cryptic tickers.
+- The catalogue, by group:
+  - **Volatility & expected move** — `VIX`; `VIX/15.87`, which is VIX ÷
+    √252 and therefore literally the one-sigma move SPY is priced to make
+    tomorrow, in percent (plus 1-week ÷ √52 and 1-month ÷ √12 variants,
+    and a QQQ equivalent off VXN); `VVIX`; `^SKEW`; `^MOVE`; `^GVZ`;
+    `^OVX`.
+  - **Credit** — `HYG`, `TLT`, `HYG/LQD` (junk vs investment grade, which
+    rolls over first when credit cracks), `HYG/TLT` (credit vs duration).
+  - **Rates** — `TNX`, `TNX/IRX` (under 1.0 the curve is inverted),
+    `TLT/IEI`.
+  - **Breadth** — `RSP`, `RSP/SPY` (falling = leadership narrowing into
+    megacaps), `IWM/SPY`, `QQQ/SPY`.
+  - **Rotation** — `XLY/XLP`, `SMH/SPY`, `XLU/SPY`, `IWF/IWD`.
+  - **Cross-asset** — `GLD`, `GLD/SPY`, `UUP`, `BTC-USD`.
+- **`GEX` and `DIX` are listed but greyed out.** Neither is quotable as a
+  ticker by any supported vendor, so rather than quietly leave a hole in
+  a market-internals panel they are shown disabled, with a hover note
+  explaining why. Wiring a feed for them is future work.
+- **More index shorthand**: `SKEW`, `GVZ`, `OVX` and the rest of the
+  Treasury curve (`IRX`, `FVX`, `TYX`) now resolve per data source the
+  way `VIX` already did. The bond-volatility index is deliberately NOT
+  reachable as bare `MOVE` — that is a real listed company — so chart it
+  as `^MOVE`.
+
+### Notes
+
+- **Last** is always taken from daily bars, whatever interval the chart
+  is on: an intraday last for `VIX/15.87` would be a different quantity
+  from the one the row's description promises.
+- Values refresh while the tab is on screen and are served from cache
+  otherwise, so leaving the panel open does not sit there hammering your
+  data provider.
+- `^RVX` is delisted and `^VIX3M` / `^VIX9D` carry no usable history on
+  Yahoo, so VIX term-structure ratios are not offered — they would chart
+  a single bar.
+
 ## [0.6.2] - 2026-08-21
 
 Ratio charts learn two new tricks — constant divisors and index
