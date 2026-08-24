@@ -19,6 +19,8 @@ index, not a tradeable stock, and no vendor quotes it under the bare name.
 - `canonical_index_name(symbol) -> str | None` — reverse lookup accepting the
   bare shorthand OR any vendor's form; `None` for non-indices and for anything
   in `NEVER_ALIAS`.
+- `canonical_symbol_key(ticker) -> str` — collapse any vendor spelling of a
+  symbol or ratio into a stable instrument key for membership tests.
 - `resolve_leg(leg, source) -> str` — resolve ONE symbol (never a ratio).
 - `resolve_symbol(ticker, source) -> str` — ratio-aware, idempotent resolution.
 
@@ -52,6 +54,11 @@ index, not a tradeable stock, and no vendor quotes it under the bare name.
   to the target source's form. That single behaviour serves both entry points:
   resolving what the user types, and re-resolving on a source switch
   (`^VIX` → `$VIX`). One rule, no second copy to drift.
+- **Membership compares instruments, not spellings.** `canonical_symbol_key`
+  answers the inverse question from `resolve_symbol`: "are these two strings
+  the same instrument?" rather than "how does this source spell it?" A
+  universe prepared under yfinance can hold `^VIX` while a Schwab session
+  offers `$VIX`; strict-offline gates must accept that match.
 - **Composite sources borrow the yfinance column.** `Auto` and
   `yfinance+alpaca` resolve history through a yfinance leg, so they want
   Yahoo's spelling (`_SOURCE_ALIASES_OF`).
@@ -61,6 +68,10 @@ index, not a tradeable stock, and no vendor quotes it under the bare name.
   beats inventing a spelling.
 - **Scale constants are never aliased.** `VIX/15.87` resolves the symbol leg
   only — the divisor is not a symbol (see `ratio_source.spec.md`).
+- **Canonical keys are ratio-aware.** `canonical_symbol_key("^VIX/15.87")`
+  and `canonical_symbol_key("$VIX/15.87")` both return `VIX/15.87`; each
+  symbolic leg collapses independently and a numeric scale constant is left
+  as the typed constant.
 - **The `yfinance` column is empirically verified; `schwab` / `polygon` follow
   each vendor's documented convention.** Schwab's price-history source is
   still a stub and is not registered, so that column is forward-looking (see
@@ -72,6 +83,11 @@ index, not a tradeable stock, and no vendor quotes it under the bare name.
 - `NEVER_ALIAS` is disjoint from `INDEX_ALIASES` keys (pinned by test).
 - A symbol not in the table, on any source, is returned uppercased + stripped
   but otherwise untouched.
+- `canonical_symbol_key("") == ""`; unknown symbols return themselves
+  uppercased + stripped.
+- `canonical_symbol_key("MOVE") == "MOVE"` and
+  `canonical_symbol_key("^MOVE") == "^MOVE"` because `MOVE` is a real equity
+  and there is no alias row for the caret form.
 - Applied at ONE chokepoint: `data.base._ratio_aware`, installed by
   `register_source`, so every fetch surface benefits without per-site wiring.
 
@@ -82,7 +98,8 @@ canonicalisation, composite sources, sources without an alias column, ratio
 legs, scale-constant preservation, and end-to-end registry integration
 (including that the `DATA_SOURCES[n].__wrapped__ is fetcher` invariant
 survives). Source-switch re-resolution is covered by
-`tests/unit/gui/test_source_change_reresolve.py`.
+`tests/unit/gui/test_source_change_reresolve.py`. Cross-vendor canonical keys
+and ratio membership cases are also pinned by `tests/unit/test_quant_universe.py`.
 
 ## Known limitations
 - **Only the yfinance column is verified against a live feed.** Schwab and

@@ -26,8 +26,22 @@
 - `ChartApp` keeps legacy method names (`_is_sandbox_active`, `_sandbox_register_compare`, etc.) as thin delegation stubs.
 - **Mid-session fetches use the session's pinned source (audit `sandbox-data-source`).** `register_compare` and `register_and_focus` derive `src` via `_sandbox_preferred_src(app, interval)`, which returns the active session's `SandboxController.data_source` when one is pinned (the trader's choice in the Start Sandbox dialog). Only when nothing is pinned does it fall back to `data.quality.preferred_source(app.source_var, interval=interval)` = the global tier-aware priority in `data/source_ranking.py` (paid Alpaca / Schwab / Polygon / yfinance+Alpaca / yfinance / free Alpaca); the `interval` kwarg is accepted for back-compat but does not change the ranking. Preferring the session's pin is what makes a session single-tape: re-deriving the ranking mid-session was a latent vendor-mixing bug, because saving credentials (or a feed change) mid-replay reorders the ranking, so the next symbol loaded could come off a different tape than the timeline it is being replayed against. Falls back to the active source on any error.
 - `ChartApp` also keeps legacy sandbox attribute names via property-backed aliases so existing callers and tests can continue reading/writing `app._sandbox`, `app._sandbox_panel`, and related fields.
+- `can_register` enforces strict-offline membership with
+  `data.index_aliases.canonical_symbol_key`, not literal strings. A universe
+  prepared under yfinance may hold `^VIX`, while a Schwab replay offers `$VIX`
+  and the Quant tab passes `VIX`; all three must compare as the same
+  instrument.
+- `can_register` admits a ratio iff every non-numeric leg is in the canonical
+  universe. Ratios can never appear in a manifest because `disk_cache` does
+  not persist them, but they recompute for free once their legs are cached.
+  Rejecting the composite string would make every Quant ratio row unreachable
+  in a strict-offline session. The status error names the missing legs.
 - Complex UI work still flows through `ChartApp` callbacks/attributes (`_render`, `_set_data_state`, `_status`, `_toolbar`, Tk vars).
 - `build_spec` carries the start-dialog's `decision_logging_enabled` opt-in into `SessionSpec`; missing payload keys default to `False`.
+
+## Testing
+- `tests/unit/test_quant_universe.py` covers canonical strict-offline
+  membership and ratio leg gating.
 
 ## Non-goals
 - No engine logic duplication.

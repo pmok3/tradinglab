@@ -3159,6 +3159,8 @@ class ChartApp(
             # "jump" on every typed compare ticker. Re-arm preserve
             # so _render keeps the existing (full-session) xlim.
             self._preserve_xlim_on_render = True
+            # Re-resolve here too — see the sandbox branch in ``_load_data``.
+            self._reresolve_symbols_for_source()
             raw_primary = self.ticker_var.get().strip().upper()
             if raw_primary:
                 self._sandbox_register_and_focus(raw_primary)
@@ -3358,6 +3360,9 @@ class ChartApp(
             # us, but in sandbox the full-session xlim must stay
             # pinned across compare-ticker swaps. Re-arm it.
             self._preserve_xlim_on_render = True
+            # Sandbox returns early — re-resolve here too, or a Quant row
+            # registers ``VIX`` while cache/universe hold ``^VIX``.
+            self._reresolve_symbols_for_source()
             raw_primary = self.ticker_var.get().strip().upper()
             if raw_primary:
                 self._sandbox_register_and_focus(raw_primary)

@@ -23,11 +23,15 @@ load back the same bars on another machine. Audit `local-export-zip`.
 - `_load_cache_candles(source, ticker, interval) -> list[Candle] | None`
   — thin wrapper around `tradinglab.disk_cache.load(...)`. Also a stub
   seam for tests.
+- `is_quant_entry(ticker) -> bool` — pure predicate for whether a cached
+  ticker is one of the Quant tab's underlying leg series.
 
 ## Dependencies
 - Internal: `tradinglab.disk_cache.list_entries`, `tradinglab.disk_cache.load`,
+  `tradinglab.data.index_aliases.canonical_symbol_key`,
   `tradinglab.data.local_export.export_entries_zip`,
   `tradinglab.data.local_export.default_zip_filename`,
+  `tradinglab.quant.catalog.quant_leg_symbols`,
   `._modal_base.BaseModalDialog`,
   `._modal_base.protect_combobox_wheel`, `.colors.MUTED_GREY`.
 - External: `tkinter`, `tkinter.ttk`, `tkinter.filedialog`,
@@ -63,25 +67,44 @@ load back the same bars on another machine. Audit `local-export-zip`.
   only chooses the destination and loads cache entries; archive layout
   and CSV serialization go through the same vetted exporter as the
   programmatic export API.
+- **Quant-only is a view filter.** The checkbox never fetches; it only
+  narrows cache entries already returned by `disk_cache.list_entries()`.
+  Matching uses `data.index_aliases.canonical_symbol_key` against
+  `quant.catalog.quant_leg_symbols()`, so a yfinance cache entry like
+  `^VIX` still classifies when the user's current source would spell it
+  `$VIX`.
+- **Ratios are absent by construction.** `disk_cache` never persists ratio
+  symbols, so Quant-only exports the legs behind ratio rows. Those are the
+  files needed to reconstruct `RSP/SPY` or `VIX/15.87` elsewhere.
+- **Visible scope is load-bearing.** `visible_entries()` is the single source
+  of truth for Select All, Select None, the selected-count label, and Export.
+  A filtered view therefore writes exactly the rows the user can see.
 
 ## Invariants
 - Each row in the Treeview corresponds 1-to-1 with a key in `_selected`.
 - The Treeview row iid is `f"{source}__{ticker}__{interval}"` (matches
   the `_key()` helper) and is used as the `_selected` lookup key.
+- When Quant-only is checked, the Treeview contains exactly
+  `visible_entries()`, and Select All / Select None / Export operate only on
+  that visible set.
+- The Quant-only checkbox is disabled when no cache entry satisfies
+  `is_quant_entry`; its label includes the matching-entry count.
 - After Export, every entry with `_selected[key] == True` either lands
   in the destination zip at the expected member path OR appears in the
   per-entry results list with a non-None error message.
 - Cancel never writes to disk.
 
 ## Testing
-`tests/unit/gui/test_export_cache_dialog.py` — 10 tests covering:
+`tests/unit/gui/test_export_cache_dialog.py` — extended coverage:
 - Default state: empty cache renders a friendly message; populated
   cache initialises `_selected` to all-True.
-- Select All / Select None toggles flip every key in `_selected`.
+- Select All / Select None toggles flip every key in `visible_entries()`.
 - Export gating: refuses with "destination" message when destination
   is None; refuses with "nothing" message when no selection.
 - End-to-end: selected entries land inside the destination zip as
   `<source>/<TICKER>_<INTERVAL>.csv`; unselected entries do NOT land.
+- Quant-only classification uses canonical keys, disables when empty, and
+  makes export operate on the visible Quant-leg subset only.
 
 ## Known limitations
 - **No incremental progress bar**. For a very large export the dialog

@@ -143,6 +143,17 @@ class QuantAppMixin:
         sym = (symbol or "").strip().upper()
         if not sym:
             return
+        # The ticker box holds the RESOLVED form (``^VIX``) because every
+        # load path re-resolves before reading it, while the catalog spells
+        # the same row ``VIX``. Compare canonically or the "already showing
+        # this" short-circuit never fires for an index row and every click
+        # kicks a redundant reload.
+        try:
+            from ..data.index_aliases import canonical_symbol_key
+            same = canonical_symbol_key
+        except Exception:  # noqa: BLE001
+            def same(s: str) -> str:  # type: ignore[misc]
+                return (s or "").strip().upper()
         slot = getattr(self, "_last_hovered_slot", "primary") or "primary"
         try:
             compare_on = bool(self.compare_var.get())
@@ -150,11 +161,11 @@ class QuantAppMixin:
             compare_on = False
         try:
             if slot == "compare" and compare_on:
-                if sym == self.compare_ticker_var.get().strip().upper():
+                if same(sym) == same(self.compare_ticker_var.get()):
                     return
                 self.compare_ticker_var.set(sym)
             else:
-                if sym == self.ticker_var.get().strip().upper():
+                if same(sym) == same(self.ticker_var.get()):
                     return
                 self.ticker_var.set(sym)
         except Exception:  # noqa: BLE001
@@ -221,14 +232,30 @@ class QuantAppMixin:
             pass
 
     def _paint_quant_last_values(self) -> None:
-        """Push formatted Last text for every symbol that has a snapshot."""
+        """Push formatted Last text for every symbol that has a snapshot.
+
+        Snapshots are stored under the resolved vendor symbol (see
+        ``_submit_quant_fetches``) while the tab addresses its rows by the
+        catalog spelling, so the lookup resolves and the write-back uses the
+        catalog key the tab knows.
+        """
         tab = getattr(self, "_quant_tab", None)
         if tab is None:
             return
+        try:
+            src = self.source_var.get()
+        except Exception:  # noqa: BLE001
+            src = ""
         snapshots = getattr(self, "_watchlist_snapshot", {})
         values: dict[str, str] = {}
         for sym in tab.symbols():
-            last = (snapshots.get(sym.upper()) or {}).get("last")
+            snap = snapshots.get(self._quant_fetch_symbol(sym, src).upper())
+            if not snap:
+                # Fall back to the catalog spelling: a snapshot written
+                # before this session (or by the watchlist, which stores
+                # whatever the user typed) may still be under it.
+                snap = snapshots.get(sym.upper())
+            last = (snap or {}).get("last")
             if isinstance(last, (int, float)):
                 values[sym] = self._format_quant_last(last)
         if values:
@@ -254,14 +281,25 @@ class QuantAppMixin:
     def _submit_quant_fetches(self) -> None:
         """Fetch daily bars for any Quant symbol without a fresh cache entry.
 
-        Guarded three ways so a 30-second tick over ~29 symbols costs nothing
-        in steady state: a fresh ``_full_cache`` entry short-circuits, an
+        Guarded four ways so a 30-second tick over the catalog costs nothing
+        in steady state: a strict-offline sandbox session suppresses network
+        work entirely, a fresh ``_full_cache`` entry short-circuits, an
         in-flight marker prevents double submission, and a missing executor
         (teardown, unit harness) skips silently.
+
+        Symbols are keyed by their **resolved** vendor form. The catalog
+        spells index rows as shorthand (``VIX``) while every other path in
+        the app — the chart's ticker box, ``_full_cache``, the disk cache —
+        holds the vendor form (``^VIX``), because ``_load_data`` re-resolves
+        before it reads. Keying on the shorthand here made the Quant tab its
+        own private cache namespace: it re-fetched over the network on every
+        restart and never benefited from bars the chart had already stored.
         """
         tab = getattr(self, "_quant_tab", None)
         executor = getattr(self, "_fetch_executor", None)
         if tab is None or executor is None:
+            return
+        if self._quant_fetches_suppressed():
             return
         try:
             src = self.source_var.get()
@@ -269,27 +307,59 @@ class QuantAppMixin:
             return
         snapshots = getattr(self, "_watchlist_snapshot", {})
         for sym in tab.symbols():
-            key = (src, sym, QUANT_LAST_INTERVAL)
-            if sym in self._quant_fetch_inflight:
+            fetch_sym = self._quant_fetch_symbol(sym, src)
+            key = (src, fetch_sym, QUANT_LAST_INTERVAL)
+            if fetch_sym in self._quant_fetch_inflight:
                 continue
             cached = self._full_cache.get(key)
             if cached:
                 # Cache is warm. Derive the snapshot if it is missing (a
                 # restart repopulates _full_cache from disk before any Quant
                 # snapshot exists), otherwise leave it alone.
-                if "last" not in (snapshots.get(sym.upper()) or {}):
+                if "last" not in (snapshots.get(fetch_sym.upper()) or {}):
                     try:
                         self._apply_watchlist_snapshot_from_bars(
-                            sym, src, QUANT_LAST_INTERVAL, cached)
+                            fetch_sym, src, QUANT_LAST_INTERVAL, cached)
                     except Exception:  # noqa: BLE001
                         pass
                 if not self._cache_is_stale(cached, QUANT_LAST_INTERVAL):
                     continue
-            self._quant_fetch_inflight.add(sym)
+            self._quant_fetch_inflight.add(fetch_sym)
             try:
-                executor.submit(self._fetch_quant_last, sym, src)
+                executor.submit(self._fetch_quant_last, fetch_sym, src)
             except Exception:  # noqa: BLE001
-                self._quant_fetch_inflight.discard(sym)
+                self._quant_fetch_inflight.discard(fetch_sym)
+
+    @staticmethod
+    def _quant_fetch_symbol(symbol: str, src: str) -> str:
+        """Return the vendor spelling of a catalog symbol under ``src``.
+
+        Best-effort: an unresolvable symbol (unknown source column, import
+        failure during teardown) falls back to the catalog spelling, which
+        the ratio-aware fetcher wrapper resolves internally anyway — only
+        the cache key would be off, which is exactly the old behaviour.
+        """
+        try:
+            from ..data.index_aliases import resolve_symbol
+            return resolve_symbol(symbol, src) or symbol
+        except Exception:  # noqa: BLE001
+            return symbol
+
+    def _quant_fetches_suppressed(self) -> bool:
+        """True when the tick must not touch the network.
+
+        A strict-offline sandbox session is a deliberate promise that the
+        replay runs off prepared data. A 30-second background poll of the
+        whole quant catalog quietly breaks that promise — the Last column
+        is still clock-sliced so nothing leaks, but the user asked for no
+        network and would be getting ~29 requests a minute.
+        """
+        try:
+            if not self._is_sandbox_active():
+                return False
+        except Exception:  # noqa: BLE001
+            return False
+        return bool(getattr(self, "_sandbox_strict_offline", False))
 
     def _fetch_quant_last(self, symbol: str, src: str) -> None:
         """Worker-thread body: fetch daily bars and record the snapshot.

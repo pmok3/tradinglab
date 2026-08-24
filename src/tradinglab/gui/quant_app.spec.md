@@ -19,6 +19,10 @@ the tab's Last column. Extracted as a mixin per AGENTS.md §7.24 — no
   `_quant_refresh_tick()` — the Last-column refresh loop.
 - `_paint_quant_last_values()` / `_submit_quant_fetches()` /
   `_fetch_quant_last(symbol, src)` — repaint, submit, worker body.
+- `_quant_fetch_symbol(symbol, src) -> str` — best-effort vendor spelling for
+  a catalog symbol under the active source.
+- `_quant_fetches_suppressed() -> bool` — true when the refresh tick must not
+  make network calls.
 - `_format_quant_last(value) -> str` — magnitude-scaled Last formatting.
 - `_apply_quant_theme()` — re-tag rows; called from `_on_theme_changed`.
 - `QUANT_LAST_INTERVAL = "1d"`, `QUANT_REFRESH_MS = 30_000`.
@@ -29,8 +33,8 @@ the tab's Last column. Extracted as a mixin per AGENTS.md §7.24 — no
 (`gui/app_state.py`), because the menubar is built before `_build_ui` runs.
 
 ## Dependencies
-- Internal: `gui/quant_tab.py`, `quant/catalog.py` (transitively), `data`
-  (`DATA_SOURCES`, imported inside the worker).
+- Internal: `gui/quant_tab.py`, `quant/catalog.py` (transitively),
+  `data.index_aliases`, `data` (`DATA_SOURCES`, imported inside the worker).
 - External: `tkinter`, `threading`, `logging`.
 
 ## Design Decisions
@@ -65,6 +69,20 @@ the tab's Last column. Extracted as a mixin per AGENTS.md §7.24 — no
 - **A warm cache with no snapshot is repaired, not refetched.** After a
   restart `_full_cache` repopulates from disk before any Quant snapshot
   exists; deriving the snapshot from those bars avoids a pointless refetch.
+- **Quant fetches use vendor symbols.** `_submit_quant_fetches` keys
+  `_full_cache`, `_quant_fetch_inflight`, `_fetch_quant_last`, and
+  `_apply_watchlist_snapshot_from_bars` on `_quant_fetch_symbol(symbol, src)`.
+  The catalog says `VIX`, while the chart, `_full_cache`, and disk cache hold
+  `^VIX` / `$VIX` after source resolution. The old shorthand key made the tab
+  its own cache namespace and refetched every restart.
+- **Paint falls back to catalog spelling.** `_paint_quant_last_values` first
+  reads the resolved snapshot key, then the catalog spelling. Snapshots written
+  by watchlist paths or older sessions are therefore still displayed.
+- **Strict offline suppresses network only.** `_quant_fetches_suppressed()`
+  blocks the 30-second background fetch loop during a strict-offline sandbox
+  session. This honours the no-network promise; it is not a look-ahead fix,
+  because `_apply_watchlist_snapshot_from_bars` already slices Last by the
+  sandbox clock.
 - **The worker never calls `self.after`.** Bars cross to the Tk thread via
   `_worker_inbox` (§7.15). The direct-stash branch exists for synchronous
   test shims running on the main thread, matching `_preload_one_last`.
@@ -74,7 +92,9 @@ the tab's Last column. Extracted as a mixin per AGENTS.md §7.24 — no
 - **Activation mirrors `_on_watchlist_double`.** Same `_last_hovered_slot`
   routing, same compare-mode gate, same drilldown / time-preserve handling,
   and the Notebook is deliberately not switched away so the user can click
-  through several gauges.
+  through several gauges. The "already showing this" short-circuit compares
+  `data.index_aliases.canonical_symbol_key`, so a `VIX` catalog row matches a
+  ticker box already holding `^VIX`.
 - **`_quant_visible_var` is not persisted.** The tab is a reference panel
   pulled up on demand, not a layout preference like ChartStack.
 
@@ -87,19 +107,22 @@ the tab's Last column. Extracted as a mixin per AGENTS.md §7.24 — no
 - The refresh loop stops when the checkbutton is unchecked, and re-arms only
   while `_quant_visible_var` is true.
 - `_fetch_quant_last` runs off the Tk thread and touches no Tk widget.
+- Quant Last fetches are keyed by the active source's resolved symbol; catalog
+  shorthand is only a display input.
 
 ## Testing
 `tests/unit/gui/test_quant_app.py` — toggle reveals/hides and starts/stops the
 loop, activation sets `ticker_var` vs `compare_ticker_var` by hovered slot,
 unavailable rows warn instead of loading, `_format_quant_last` boundaries,
 fetch dedup + cache short-circuit, and that a missing tab makes every entry
-point inert. Smoke: `check_g5_quant_tab`.
+point inert. `tests/unit/test_quant_universe.py` covers resolved-symbol cache
+keys, strict-offline suppression, and canonical activation comparisons.
+Smoke: `check_g5_quant_tab`.
 
 ## Known limitations / Future work
-- No sandbox/export "pre-download quant series" checkbox yet. When added it
-  should consume `quant.catalog.available_symbols()` so the catalog stays the
-  single source of truth.
 - `GEX` / `DIX` have no feed, so they never populate a Last value.
 
 ## Recent history
+- Quant Last refresh now shares resolved cache keys with chart loads and
+  suppresses network fetches in strict-offline sandbox sessions.
 - Initial version alongside `gui/quant_tab.py` and `quant/catalog.py`.

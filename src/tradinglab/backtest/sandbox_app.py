@@ -397,18 +397,48 @@ class SandboxAppController:
                 scanner_tab.set_results({})
 
     def can_register(self, *, app: Any, sym: str) -> bool:
-        """Strict-offline gate for mid-session symbol registration."""
+        """Strict-offline gate for mid-session symbol registration.
+
+        Membership is tested on the *canonical* symbol key, not the literal
+        string. A universe prepared under yfinance holds ``^VIX`` while a
+        session replaying from Schwab offers ``$VIX``, and the Quant tab
+        hands over the bare shorthand ``VIX`` — all three name one
+        instrument, so a literal ``in`` test would reject a symbol that was
+        genuinely preloaded.
+
+        A ratio is admitted iff **every** leg is in the universe. Ratios are
+        never cached as themselves (AGENTS.md §7.37) so they can never
+        appear in a manifest, but they recompute for free once both legs
+        are present — and gating on the composite string would make every
+        Quant ratio row unreachable in a strict-offline session.
+        """
         if not self.active:
             return True
         if not self._strict_offline:
             return True
         if not self._universe:
             return True
-        if sym in self._universe:
+        from ..data.index_aliases import canonical_symbol_key
+        from ..data.ratio_source import is_numeric_leg, parse_ratio_symbol
+
+        legs = parse_ratio_symbol(sym)
+        if legs is None:
+            wanted = [sym]
+        else:
+            wanted = [leg for leg in legs if not is_numeric_leg(leg)]
+        missing = [
+            leg for leg in wanted
+            if canonical_symbol_key(leg) not in self._universe
+        ]
+        if not missing:
             return True
         try:
+            detail = (
+                f"{sym} is not in" if legs is None
+                else f"{sym} needs {', '.join(missing)}, not in"
+            )
             app._status.error(
-                f"Sandbox strict offline: {sym} is not in the prepared universe "
+                f"Sandbox strict offline: {detail} the prepared universe "
                 f"({self._universe_id or '?'}). Run Sandbox → Download Replay Data… first."
             )
         except Exception:  # noqa: BLE001

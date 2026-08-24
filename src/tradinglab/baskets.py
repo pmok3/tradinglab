@@ -204,6 +204,25 @@ def nasdaq_symbols() -> list[str]:
         _exchange_csv_path("nasdaq.csv"), label="NASDAQ", munge_dots=False)
 
 
+def quant_symbols() -> list[str]:
+    """Return the fetchable legs behind the **Quant** side tab's catalog.
+
+    Unlike the other baskets this one is not a CSV snapshot — it is derived
+    from ``quant/catalog.py``, which is already the single source of truth for
+    what "the quant set" means. So there is nothing to refresh quarterly and
+    no survivorship caveat: the catalog is a hand-curated list of market
+    gauges, not a point-in-time index membership.
+
+    Note this returns *legs*, not catalog rows. Most rows are ratios, and a
+    ratio is never fetched or cached as itself (AGENTS.md §7.37) — preloading
+    ``RSP/SPY`` would ask the disk cache to persist a key it silently refuses.
+    ``quant_leg_symbols`` decomposes each row into what a vendor can actually
+    serve; see its docstring.
+    """
+    from .quant.catalog import quant_leg_symbols
+    return list(quant_leg_symbols())
+
+
 # Keyed registry of built-in baskets. The GUI uses this to populate
 # the "Universe" radio in the prepare-universe dialog. Each value is
 # a zero-arg callable returning a fresh ``List[str]``.
@@ -212,6 +231,7 @@ BUILTIN_BASKETS: dict[str, Callable[[], list[str]]] = {
     "qqq": qqq_symbols,
     "nyse": nyse_symbols,
     "nasdaq": nasdaq_symbols,
+    "quant": quant_symbols,
 }
 
 
@@ -222,6 +242,7 @@ BUILTIN_BASKET_LABELS: dict[str, str] = {
     "qqq": "Nasdaq-100 (QQQ)",
     "nyse": "NYSE — all common stocks",
     "nasdaq": "NASDAQ — all common stocks",
+    "quant": "Quant — market internals",
 }
 
 
@@ -229,7 +250,9 @@ BUILTIN_BASKET_LABELS: dict[str, str] = {
 # YYYY-MM-DD" suffix per radio without each call-site reaching into
 # the module-level constants. SP500 ships from a Wikipedia-derived
 # CSV without a baked-in date, so it's intentionally absent here —
-# the dialog skips the suffix when a key is missing.
+# the dialog skips the suffix when a key is missing. ``quant`` is
+# absent for a different reason: it is generated from the catalog in
+# code, so it has no snapshot date to go stale.
 BUILTIN_BASKET_REFRESHED_DATES: dict[str, str] = {
     "qqq": QQQ_LAST_REFRESHED,
     "nyse": NYSE_LAST_REFRESHED,
@@ -242,3 +265,11 @@ BUILTIN_BASKET_REFRESHED_DATES: dict[str, str] = {
 # the two keys, so future full-exchange baskets get the treatment
 # automatically.
 FULL_EXCHANGE_BASKETS: frozenset = frozenset({"nyse", "nasdaq"})
+
+
+# Baskets whose members are indices, rates and cross-asset gauges rather
+# than companies. The fundamental pre-filter (market cap, price, dollar
+# volume) is meaningless for them — ``^VIX`` has no shares outstanding —
+# so the prepare dialog disables that form when one is selected.
+NON_EQUITY_BASKETS: frozenset = frozenset({"quant"})
+

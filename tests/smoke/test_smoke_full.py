@@ -12585,6 +12585,90 @@ def check_g5_quant_tab(app) -> None:
     assert len(available_rows()) >= 25
 
 
+def check_g6_quant_sandbox_and_export(app) -> None:
+    """The Quant catalog's reach into the sandbox universe and the exporter.
+
+    Three user-visible promises, checked at the wiring level rather than by
+    driving the modals (both are ``BaseModalDialog``s, and ``transient()``
+    deadlocks on the headless macOS runner — §7.1; the dialogs' own logic is
+    unit-tested on every platform in ``tests/unit/test_quant_universe.py``
+    and ``tests/unit/gui/test_export_cache_dialog.py``).
+
+    1. **Sandbox → Download Replay Data… offers a Quant universe**, and it
+       resolves to fetchable *legs* rather than catalog rows: a ratio is
+       never persisted (§7.37), so preloading ``RSP/SPY`` would ask the disk
+       cache to store a key it silently refuses — which the preload service
+       reads back as a failure after burning its whole retry budget.
+    2. **A prepared quant universe makes every Quant row reachable.** The
+       manifest holds the vendor spelling (``^VIX``) while the tab offers
+       the shorthand (``VIX``), so the strict-offline gate has to compare
+       instruments rather than strings — and admit a ratio whose legs are
+       both present.
+    3. **Tools → Export Bars to CSV can single those series out**, matching
+       on the canonical key so a cache written under any vendor's spelling
+       still classifies.
+    """
+    from types import SimpleNamespace
+
+    from tradinglab import baskets
+    from tradinglab.backtest.sandbox_app import SandboxAppController
+    from tradinglab.data.index_aliases import canonical_symbol_key
+    from tradinglab.data.index_aliases import resolve_symbol as _resolve_symbol
+    from tradinglab.data.ratio_source import is_ratio_symbol
+    from tradinglab.gui.export_cache_dialog import is_quant_entry
+    from tradinglab.quant.catalog import available_symbols, quant_leg_symbols
+
+    # --- 1. the basket is registered, and is legs rather than rows -------
+    assert "quant" in baskets.BUILTIN_BASKETS, \
+        "Download Replay Data… should offer a Quant universe"
+    legs = baskets.BUILTIN_BASKETS["quant"]()
+    assert legs, "the quant basket must not resolve to an empty list"
+    assert legs == quant_leg_symbols(), \
+        "the basket must BE the catalog's legs, not a re-listed copy"
+    offenders = [s for s in legs if is_ratio_symbol(s)]
+    assert not offenders, (
+        f"ratios are never cached (§7.37) so they must not be preloaded: "
+        f"{offenders}"
+    )
+    assert "quant" in baskets.NON_EQUITY_BASKETS, \
+        "the fundamental filter must be disabled for market internals"
+
+    # --- 2. a prepared quant universe admits every Quant row -------------
+    src = app.source_var.get()
+    ctl = SandboxAppController()
+    ctl.engine = SimpleNamespace(is_active=lambda: True)
+    # Sealed exactly as gui/sandbox_menu seals one, from the symbols the
+    # prepare dialog would have written for THIS app's active source.
+    ctl.universe = frozenset(
+        canonical_symbol_key(_resolve_symbol(s, src)) for s in legs
+    )
+    ctl.universe_id = "quant"
+    ctl.strict_offline = True
+    errors: list[str] = []
+    probe = SimpleNamespace(_status=SimpleNamespace(
+        error=errors.append, info=lambda m: None, warn=lambda m: None,
+    ))
+    for sym in available_symbols():
+        assert ctl.can_register(app=probe, sym=sym), (
+            f"{sym} is covered by the prepared quant universe but the "
+            f"strict-offline gate rejected it: {errors[-1:]!r}"
+        )
+    assert not errors
+    # ...and the gate is still a gate.
+    assert not ctl.can_register(app=probe, sym="ZZZZ_NOT_A_SYMBOL"), \
+        "strict offline must still reject a symbol outside the universe"
+
+    # --- 3. the export classifier recognises them in any vocabulary ------
+    for sym in legs:
+        resolved = _resolve_symbol(sym, src)
+        assert is_quant_entry(resolved), (
+            f"a cache entry for {resolved!r} should be selectable through "
+            f"the export dialog's 'Quant only' filter"
+        )
+    assert not is_quant_entry("ZZZZ_NOT_A_SYMBOL"), \
+        "the export filter must not sweep in unrelated tickers"
+
+
 def check_b5_sandbox_save_load(app) -> None:
     """Phase 1d: Save/Load round-trip + performance aggregates.
 
@@ -23709,6 +23793,7 @@ def _run_all_checks(app) -> None:
     check_g3_sandbox_heatmap(app)
     check_g4_live_heatmap(app)
     check_g5_quant_tab(app)
+    check_g6_quant_sandbox_and_export(app)
     check_b5_sandbox_save_load(app)
     check_b6_sandbox_auto_cycle(app)
     check_b7_sandbox_multitf_context(app)
@@ -24061,6 +24146,8 @@ def _build_check_sequence():
         ("check_g3_sandbox_heatmap", check_g3_sandbox_heatmap),
         ("check_g4_live_heatmap", check_g4_live_heatmap),
         ("check_g5_quant_tab", check_g5_quant_tab),
+        ("check_g6_quant_sandbox_and_export",
+         check_g6_quant_sandbox_and_export),
         ("check_b5_sandbox_save_load", check_b5_sandbox_save_load),
         ("check_b6_sandbox_auto_cycle", check_b6_sandbox_auto_cycle),
         ("check_b7_sandbox_multitf_context", check_b7_sandbox_multitf_context),

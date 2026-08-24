@@ -345,10 +345,13 @@ def available_symbols(
 ) -> list[str]:
     """Return each fetchable symbol once, in catalog order.
 
-    This is the seam the Quant tab uses to warm its Last column, and the
-    one a future sandbox / export "pre-download quant series" checkbox
-    should consume — so the catalog stays the single source of truth for
-    what "the quant set" means.
+    This is the seam the Quant tab uses to warm its Last column — the rows as
+    the user sees them, ratios included.
+
+    A universe preload or an export filter wants :func:`quant_leg_symbols`
+    instead: a ratio row is displayable but not fetchable-as-itself, so the
+    two lists are genuinely different questions rather than one list with a
+    flag.
     """
     seen: set[str] = set()
     out: list[str] = []
@@ -357,6 +360,61 @@ def available_symbols(
         if sym not in seen:
             seen.add(sym)
             out.append(row.symbol)
+    return out
+
+
+def quant_leg_symbols(
+    catalog: tuple[QuantGroup, ...] | None = None,
+) -> list[str]:
+    """Return every *fetchable leg* behind the catalog, once, in catalog order.
+
+    :func:`available_symbols` answers "what does the user see"; this answers
+    "what can a vendor actually be asked for". They differ because most of the
+    available rows are ratios, and a ratio is never fetched — or cached — as
+    itself (AGENTS.md §7.37; ``disk_cache.save`` refuses one outright). So a
+    row decomposes:
+
+    - a plain row (``SPY``) is its own leg;
+    - a quotient (``RSP/SPY``) contributes **both** legs;
+    - a scaled symbol (``VIX/15.87``) contributes only the numerator. The
+      divisor is a constant, and asking a vendor for a ticker literally named
+      ``"15.87"`` is the exact bug the ratio parser exists to prevent.
+
+    This — not :func:`available_symbols` — is what a universe preload or an
+    export filter wants. Handing a preloader the ratio rows makes it ask the
+    disk cache to persist keys it silently refuses, which reads back as a
+    per-symbol *failure* after the full retry budget has been burned.
+
+    Legs are de-duplicated case-insensitively (``SPY`` anchors six different
+    rows) and returned in first-appearance order. They are spelled as the
+    catalog spells them — shorthand ``VIX``, not ``^VIX``. Translating to a
+    vendor's vocabulary is ``data.index_aliases.resolve_symbol``'s job and
+    depends on the active source, so it deliberately does not happen here.
+
+    The ratio grammar is imported lazily to keep this module import-free at
+    module scope (see the spec's design notes): the catalog must stay readable
+    without dragging in the data layer.
+    """
+    from ..data.ratio_source import is_numeric_leg, parse_ratio_symbol
+
+    seen: set[str] = set()
+    out: list[str] = []
+
+    def _add(sym: str) -> None:
+        s = (sym or "").strip()
+        if not s or s.upper() in seen:
+            return
+        seen.add(s.upper())
+        out.append(s)
+
+    for row in available_rows(catalog):
+        legs = parse_ratio_symbol(row.symbol)
+        if legs is None:
+            _add(row.symbol)
+            continue
+        for leg in legs:
+            if not is_numeric_leg(leg):
+                _add(leg)
     return out
 
 
@@ -376,5 +434,6 @@ __all__ = [
     "available_rows",
     "available_symbols",
     "iter_rows",
+    "quant_leg_symbols",
     "row_for_key",
 ]

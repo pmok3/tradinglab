@@ -126,7 +126,11 @@ non-menu paths: ticker entry, watchlist, drilldown).
   mode and warns rather than refusing.
 - **Strict-offline universe**: captured **after** `self._sandbox`
   is constructed so a session-build failure doesn't leak universe
-  state. Reference symbol implicitly added to allow-set.
+  state. The allow-set is sealed as `data.index_aliases.canonical_symbol_key`
+  values, including the reference symbol, rather than raw uppercase strings.
+  This matches `SandboxAppController.can_register`: a manifest written as
+  `^VIX`, a Schwab session offering `$VIX`, and a Quant row passing `VIX`
+  are the same instrument.
 - **ChartStack lockstep (M5)**: after `_show_sandbox_panel()`,
   `_on_menu_sandbox_start` calls
   `self._chartstack.attach_sandbox(self._sandbox)` (when panel is

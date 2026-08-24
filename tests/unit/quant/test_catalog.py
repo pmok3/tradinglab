@@ -31,6 +31,7 @@ from tradinglab.quant.catalog import (
     available_rows,
     available_symbols,
     iter_rows,
+    quant_leg_symbols,
     row_for_key,
 )
 
@@ -198,3 +199,115 @@ def test_the_users_original_eight_are_present():
 
 def test_row_for_key_returns_none_for_unknown():
     assert row_for_key("no-such-row") is None
+
+
+# ---------------------------------------------------------------------------
+# quant_leg_symbols — the preload / export seam
+# ---------------------------------------------------------------------------
+#
+# The distinction these tests pin is the whole reason the function exists: a
+# ratio row is *displayable* but not *fetchable-as-itself*. Handing the row
+# list to a preloader makes it ask the disk cache to persist keys the cache
+# silently refuses (AGENTS.md §7.37), which the preload service reads back as
+# a per-symbol failure after burning its full retry budget on real network
+# calls. See `quant/catalog.spec.md`.
+
+
+LEGS = quant_leg_symbols()
+
+
+def test_legs_contain_no_ratio_symbols():
+    """The point of the function: every entry must be fetchable on its own."""
+    for sym in LEGS:
+        assert parse_ratio_symbol(sym) is None, f"{sym} is still a ratio"
+
+
+def test_legs_contain_no_scale_constants():
+    """A divisor is not a symbol — asking a vendor for '15.87' is the bug."""
+    for sym in LEGS:
+        assert parse_scale_constant(sym) is None, f"{sym} is a bare constant"
+
+
+def test_quotient_rows_contribute_both_legs():
+    for row in available_rows():
+        if not is_quotient_ratio(row.symbol):
+            continue
+        num, den = parse_ratio_symbol(row.symbol)
+        assert num in LEGS, f"{row.symbol}: missing numerator"
+        assert den in LEGS, f"{row.symbol}: missing denominator"
+
+
+def test_scaled_rows_contribute_only_their_base():
+    for row in available_rows():
+        if not is_scaled_symbol(row.symbol):
+            continue
+        base, divisor = scaled_symbol_parts(row.symbol)
+        assert base in LEGS
+        assert f"{divisor}" not in LEGS
+
+
+def test_plain_rows_pass_through_unchanged():
+    for row in available_rows():
+        if parse_ratio_symbol(row.symbol) is None:
+            assert row.symbol in LEGS
+
+
+def test_legs_are_deduplicated_case_insensitively():
+    """SPY anchors six different rows; it must appear exactly once."""
+    upper = [s.upper() for s in LEGS]
+    assert len(upper) == len(set(upper))
+    assert upper.count("SPY") == 1
+
+
+def test_legs_preserve_first_appearance_order():
+    """Catalog order is display order; the preload should follow it."""
+    seen: list[str] = []
+    for row in available_rows():
+        legs = parse_ratio_symbol(row.symbol)
+        candidates = [row.symbol] if legs is None else list(legs)
+        for leg in candidates:
+            if parse_scale_constant(leg) is not None:
+                continue
+            if leg.upper() not in {s.upper() for s in seen}:
+                seen.append(leg)
+    assert LEGS == seen
+
+
+def test_legs_are_a_strict_superset_question_not_a_subset():
+    """Legs and rows are different questions, not one list with a flag.
+
+    Legs add symbols no row names on its own (``LQD`` only ever appears as
+    the denominator of ``HYG/LQD``) and drop every composite. Asserting a
+    subset relation in either direction would be wrong.
+    """
+    rows = {s.upper() for s in available_symbols()}
+    legs = {s.upper() for s in LEGS}
+    assert legs - rows, "legs should surface symbols no row names alone"
+    assert rows - legs, "rows should retain composites legs cannot express"
+
+
+def test_every_leg_resolves_without_becoming_a_ratio():
+    """Resolution must not smuggle a delimiter in (guards the alias table)."""
+    for sym in LEGS:
+        for source in ("yfinance", "schwab", "polygon", "alpaca"):
+            resolved = resolve_symbol(sym, source)
+            assert resolved
+            assert parse_ratio_symbol(resolved) is None, (sym, source)
+
+
+def test_legs_accept_an_injected_catalog():
+    """The catalog argument is honoured, so tests aren't pinned to ship data."""
+    from tradinglab.quant.catalog import QuantGroup
+
+    tiny = (
+        QuantGroup(key="g", name="G", rows=(
+            QuantRow(key="a", name="A", symbol="AAA", description="d"),
+            QuantRow(key="b", name="B", symbol="AAA/BBB", description="d"),
+            QuantRow(key="c", name="C", symbol="CCC/4", description="d"),
+            QuantRow(
+                key="d", name="D", symbol="", description="d",
+                available=False, unavailable_reason="none",
+            ),
+        )),
+    )
+    assert quant_leg_symbols(tiny) == ["AAA", "BBB", "CCC"]

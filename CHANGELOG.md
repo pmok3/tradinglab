@@ -2,8 +2,47 @@
 
 ## [Unreleased]
 
+The **Quant** panel from 0.6.3 was a launcher only — its series were
+reachable on the live chart and nowhere else. They now reach the two places
+you would actually want them: an offline replay session, and the exporter.
+
+### Added
+
+- **Sandbox → Download Replay Data… offers a "Quant — market internals"
+  universe.** Prepare it once and a strict-offline replay can chart VIX, the
+  yield curve, credit spreads and the relative-strength ratios built from
+  them, alongside the equities you are trading.
+- **Tools → Export Bars to CSV… gained a "Quant only" filter.** It narrows
+  the list to the series behind the Quant tab so you can hand someone the
+  market context for a day without also handing them 3 GB of S&P 500 bars.
+  It is a view filter over what is already cached — it never fetches — and
+  Select All / Select None / Export all act on what you can see, so the
+  visible selection is exactly what gets written.
+
 ### Fixed
 
+- **The Quant tab no longer keeps its own private cache.** It asked for
+  `VIX` while every other path in the app — the ticker box, the disk cache —
+  holds the vendor spelling `^VIX`, so the tab re-downloaded every series on
+  every restart and never reused bars the chart had already saved. Both
+  sides now agree on the vendor form.
+- **Index rows work inside a sandbox session.** The sandbox took a different
+  route into the chart than a normal load and skipped symbol resolution
+  along the way, so double-clicking a Quant row mid-session tried to
+  register `VIX` against a universe holding `^VIX` and was refused. Symbols
+  are now resolved on that path too, and the strict-offline check compares
+  instruments rather than spellings — a universe prepared on one data source
+  is honoured by a session replaying from another.
+- **Ratio rows are reachable in a strict-offline session.** A ratio is
+  computed from its legs and never cached, so it could never appear in a
+  prepared universe and was rejected outright. It is now admitted whenever
+  both of its legs are present.
+- Preparing a universe that contains a ratio no longer wastes network calls
+  on it: the ratio is dropped up front rather than downloaded three times
+  and then reported as a failure to save.
+- The fundamental filter (minimum price, minimum volume) is greyed out for
+  the Quant universe. An index has no share price or dollar volume, so a
+  value left in that form would have silently rejected the entire basket.
 - **Typing a scaled symbol on the chart works again.** Click-to-type
   silently dropped every digit, so `AMD/1` stalled at `AMD/` and could
   not be completed — and click-to-type is the only way to enter a symbol

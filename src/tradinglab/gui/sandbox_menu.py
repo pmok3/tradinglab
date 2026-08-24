@@ -402,8 +402,20 @@ class SandboxMenuMixin:
         except Exception:  # noqa: BLE001
             uni_syms, uni_id, strict = (), "", False
         if uni_id and uni_syms:
-            allow = {str(s).strip().upper() for s in uni_syms if s}
-            allow.add(reference_symbol)  # master-clock anchor must be allowed
+            # Sealed as CANONICAL keys, not literal strings. The manifest
+            # records symbols in the vocabulary of the source it was
+            # prepared under (``^VIX`` on yfinance, ``$VIX`` on Schwab),
+            # but a session may replay from a different source and the
+            # Quant tab offers bare shorthand. Collapsing both sides to one
+            # key is what makes ``can_register`` compare instruments rather
+            # than spellings.
+            from ..data.index_aliases import canonical_symbol_key
+            allow = {
+                canonical_symbol_key(str(s)) for s in uni_syms if s
+            }
+            allow.discard("")
+            # master-clock anchor must be allowed
+            allow.add(canonical_symbol_key(reference_symbol))
             self._sandbox_universe = frozenset(allow)
             self._sandbox_universe_id = uni_id
             self._sandbox_strict_offline = strict

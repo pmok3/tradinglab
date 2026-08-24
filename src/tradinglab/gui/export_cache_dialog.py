@@ -12,6 +12,12 @@ Local Data at that folder yields a perfect round-trip.
 Empty-cache case: the dialog opens, shows a friendly "no cached data
 yet" message, and disables Export.
 
+A **Quant only** checkbox narrows the list to the series underlying the
+Quant side tab. It is a pure view filter — it never fetches, so a symbol
+the user has not charted yet simply is not there. Select All / Select
+None and Export all act on the filtered list, so the visible selection is
+always exactly what gets written.
+
 This is the symmetric counterpart to
 :mod:`tradinglab.gui.local_data_dialog`.
 """
@@ -35,6 +41,34 @@ def _load_cache_candles(source: str, ticker: str, interval: str):
     """Load candles for one cache key (used at export time, not on dialog open)."""
     from .. import disk_cache
     return disk_cache.load(source, ticker, interval)
+
+
+def is_quant_entry(ticker: str) -> bool:
+    """True iff ``ticker`` is one of the Quant tab's underlying series.
+
+    Matching is done on the canonical symbol key, not the literal string,
+    because the two sides spell index symbols differently: the catalog says
+    ``VIX`` while the disk cache holds whatever the fetching source used
+    (``^VIX`` on yfinance, ``$VIX`` on Schwab). Collapsing both sides is
+    what makes a cache populated by a yfinance session still classify
+    correctly for a user who has since switched vendors.
+
+    The comparison set is the catalog's **legs**, not its rows. A ratio row
+    like ``RSP/SPY`` is never persisted (AGENTS.md §7.37), so it can never
+    appear in ``disk_cache.list_entries()`` — matching against it would be
+    dead code, and its legs are exactly what a user wanting to reconstruct
+    it needs to export.
+    """
+    if not ticker:
+        return False
+    try:
+        from ..data.index_aliases import canonical_symbol_key
+        from ..quant.catalog import quant_leg_symbols
+    except Exception:  # noqa: BLE001
+        return False
+    return canonical_symbol_key(ticker) in {
+        canonical_symbol_key(s) for s in quant_leg_symbols()
+    }
 
 
 class ExportCacheDialog(BaseModalDialog):
@@ -61,6 +95,12 @@ class ExportCacheDialog(BaseModalDialog):
             self._key(s, t, i): True for s, t, i in self._entries
         }
         self._destination: Path | None = None
+        # Precomputed once: classifying 100 cache entries against the quant
+        # catalog is cheap, but doing it inside every tree repaint is not.
+        self._quant_tickers: set[str] = {
+            t for _s, t, _i in self._entries if is_quant_entry(t)
+        }
+        self._quant_only_var = tk.BooleanVar(value=False)
 
         self._build_widgets()
         protect_combobox_wheel(self)
@@ -98,7 +138,10 @@ class ExportCacheDialog(BaseModalDialog):
                 "file. Each entry becomes "
                 "<SOURCE>/<TICKER>_<INTERVAL>.csv inside the zip.\n"
                 "Unzip the archive into a folder and drop that folder "
-                "into Configure Local Data to load it back."
+                "into Configure Local Data to load it back.\n"
+                "\"Quant only\" narrows the list to the series behind the "
+                "Quant tab. Its ratio rows are computed from these, never "
+                "cached, so exporting the legs is what lets you rebuild them."
             ),
             foreground=MUTED_GREY,
             wraplength=520,
@@ -110,6 +153,19 @@ class ExportCacheDialog(BaseModalDialog):
         toggle_row.pack(fill="x", pady=(0, 6))
         ttk.Button(toggle_row, text="Select All", command=self._select_all).pack(side="left")
         ttk.Button(toggle_row, text="Select None", command=self._select_none).pack(side="left", padx=(6, 0))
+        # Quant filter. Purely a view filter over what is already cached —
+        # it never fetches. Ratio rows (RSP/SPY, VIX/15.87) are absent by
+        # construction: they are derived and never persisted, so what the
+        # user gets is the legs those rows are computed from.
+        self._quant_check = ttk.Checkbutton(
+            toggle_row,
+            text=f"Quant only ({len(self._quant_tickers)})",
+            variable=self._quant_only_var,
+            command=self._on_quant_only_toggle,
+        )
+        self._quant_check.pack(side="left", padx=(16, 0))
+        if not self._quant_tickers:
+            self._quant_check.state(["disabled"])
         self._selected_count_var = tk.StringVar(value=self._selected_count_text())
         ttk.Label(toggle_row, textvariable=self._selected_count_var, foreground=MUTED_GREY).pack(side="right")
 
@@ -164,14 +220,39 @@ class ExportCacheDialog(BaseModalDialog):
 
     # ---- helpers --------------------------------------------------------
 
+    def visible_entries(self) -> list[tuple[str, str, str]]:
+        """Entries currently listed, honouring the Quant-only filter.
+
+        The filter is deliberately load-bearing rather than cosmetic:
+        Select All / Select None and Export all operate on this list, so
+        what the user sees is what they act on. A filter that only hid rows
+        while Export still wrote the hidden ones would be a data-loss-shaped
+        surprise in the other direction — a 3 GB archive from a 40 MB
+        selection.
+        """
+        try:
+            quant_only = bool(self._quant_only_var.get())
+        except Exception:  # noqa: BLE001
+            quant_only = False
+        if not quant_only:
+            return list(self._entries)
+        return [e for e in self._entries if e[1] in self._quant_tickers]
+
+    def _on_quant_only_toggle(self) -> None:
+        self._refresh_tree()
+
     def _selected_count_text(self) -> str:
-        on = sum(1 for v in self._selected.values() if v)
-        return f"{on} of {len(self._selected)} selected"
+        visible = self.visible_entries()
+        on = sum(
+            1 for s, t, i in visible
+            if self._selected.get(self._key(s, t, i), False)
+        )
+        return f"{on} of {len(visible)} selected"
 
     def _refresh_tree(self) -> None:
         for item in self._tree.get_children():
             self._tree.delete(item)
-        for source, ticker, interval in self._entries:
+        for source, ticker, interval in self.visible_entries():
             checked = "☑" if self._selected[self._key(source, ticker, interval)] else "☐"
             self._tree.insert(
                 "", "end",
@@ -181,13 +262,13 @@ class ExportCacheDialog(BaseModalDialog):
         self._selected_count_var.set(self._selected_count_text())
 
     def _select_all(self) -> None:
-        for k in self._selected:
-            self._selected[k] = True
+        for s, t, i in self.visible_entries():
+            self._selected[self._key(s, t, i)] = True
         self._refresh_tree()
 
     def _select_none(self) -> None:
-        for k in self._selected:
-            self._selected[k] = False
+        for s, t, i in self.visible_entries():
+            self._selected[self._key(s, t, i)] = False
         self._refresh_tree()
 
     def _on_tree_click(self, event: tk.Event) -> None:
@@ -238,7 +319,7 @@ class ExportCacheDialog(BaseModalDialog):
             self._status_var.set("Pick a zip file first.")
             return
         selected = [
-            (s, t, i) for (s, t, i) in self._entries
+            (s, t, i) for (s, t, i) in self.visible_entries()
             if self._selected.get(self._key(s, t, i), False)
         ]
         if not selected:

@@ -116,6 +116,13 @@ class _App(QuantAppMixin):
         self.snapshot_calls: list[tuple] = []
         self.stashed: list[tuple] = []
         self.stale = False
+        # Sandbox surface: the refresh tick must make no network calls
+        # during a strict-offline replay.
+        self.sandbox_active = False
+        self._sandbox_strict_offline = False
+
+    def _is_sandbox_active(self):
+        return self.sandbox_active
 
     # --- ChartApp surface the mixin uses ---
     def after(self, ms, fn):
@@ -286,6 +293,21 @@ def test_paint_writes_only_symbols_with_a_snapshot(app):
     assert app._quant_tab.last_values == {"VIX": "15.82"}
 
 
+def test_paint_reads_the_resolved_snapshot_key(app):
+    """Fetches store under ``^VIX``; the tab addresses its row as ``VIX``."""
+    app._watchlist_snapshot["^VIX"] = {"last": 15.819}
+    app._paint_quant_last_values()
+    assert app._quant_tab.last_values == {"VIX": "15.82"}
+
+
+def test_paint_prefers_the_resolved_key_over_the_shorthand(app):
+    """A stale shorthand entry must not shadow the real one."""
+    app._watchlist_snapshot["VIX"] = {"last": 1.0}
+    app._watchlist_snapshot["^VIX"] = {"last": 15.819}
+    app._paint_quant_last_values()
+    assert app._quant_tab.last_values == {"VIX": "15.82"}
+
+
 def test_paint_ignores_non_numeric_snapshot_values(app):
     app._watchlist_snapshot["VIX"] = {"last": None}
     app._paint_quant_last_values()
@@ -311,17 +333,24 @@ def test_last_formatting_scales_with_magnitude(value, expected):
 
 
 def test_fetches_are_submitted_for_uncached_symbols(app):
+    """Submitted under the RESOLVED vendor symbol, not the catalog shorthand.
+
+    ``VIX`` is what the catalog says; ``^VIX`` is what yfinance is asked for,
+    what the chart's ticker box holds, and what lands in the disk cache. The
+    tab keys on the same thing so it shares one cache namespace with the rest
+    of the app instead of maintaining a private one.
+    """
     app._fetch_executor = _Executor()
     app._submit_quant_fetches()
     submitted = [args[0] for _fn, args in app._fetch_executor.calls]
-    assert submitted == ["VIX", "TLT"]
-    assert app._quant_fetch_inflight == {"VIX", "TLT"}
+    assert submitted == ["^VIX", "TLT"]
+    assert app._quant_fetch_inflight == {"^VIX", "TLT"}
 
 
 def test_a_fresh_cache_short_circuits_the_fetch(app):
     """Steady state over the whole catalog must cost zero HTTP calls."""
     app._fetch_executor = _Executor()
-    for sym in ("VIX", "TLT"):
+    for sym in ("^VIX", "TLT"):
         app._full_cache[("yfinance", sym, QUANT_LAST_INTERVAL)] = [1.0]
         app._watchlist_snapshot[sym] = {"last": 1.0}
     app.stale = False
@@ -331,7 +360,7 @@ def test_a_fresh_cache_short_circuits_the_fetch(app):
 
 def test_a_stale_cache_is_refetched(app):
     app._fetch_executor = _Executor()
-    for sym in ("VIX", "TLT"):
+    for sym in ("^VIX", "TLT"):
         app._full_cache[("yfinance", sym, QUANT_LAST_INTERVAL)] = [1.0]
         app._watchlist_snapshot[sym] = {"last": 1.0}
     app.stale = True
@@ -342,18 +371,33 @@ def test_a_stale_cache_is_refetched(app):
 def test_a_warm_cache_without_a_snapshot_is_repaired_not_refetched(app):
     """After a restart _full_cache reloads from disk before any snapshot."""
     app._fetch_executor = _Executor()
-    app._full_cache[("yfinance", "VIX", QUANT_LAST_INTERVAL)] = [15.82]
+    app._full_cache[("yfinance", "^VIX", QUANT_LAST_INTERVAL)] = [15.82]
     app._full_cache[("yfinance", "TLT", QUANT_LAST_INTERVAL)] = [82.6]
     app.stale = False
     app._submit_quant_fetches()
     assert app._fetch_executor.calls == []
-    assert {c[0] for c in app.snapshot_calls} == {"VIX", "TLT"}
-    assert app._watchlist_snapshot["VIX"]["last"] == 15.82
+    assert {c[0] for c in app.snapshot_calls} == {"^VIX", "TLT"}
+    assert app._watchlist_snapshot["^VIX"]["last"] == 15.82
+
+
+def test_a_cache_under_the_catalog_shorthand_is_not_reused(app):
+    """Regression guard on the namespace split this change closed.
+
+    A ``VIX``-keyed entry is what the OLD code wrote. It must not satisfy the
+    cache check now, or a stale private-namespace entry would keep the tab
+    from ever reading the chart's real bars.
+    """
+    app._fetch_executor = _Executor()
+    app._full_cache[("yfinance", "VIX", QUANT_LAST_INTERVAL)] = [15.82]
+    app.stale = False
+    app._submit_quant_fetches()
+    submitted = [args[0] for _fn, args in app._fetch_executor.calls]
+    assert "^VIX" in submitted
 
 
 def test_an_inflight_symbol_is_not_resubmitted(app):
     app._fetch_executor = _Executor()
-    app._quant_fetch_inflight.add("VIX")
+    app._quant_fetch_inflight.add("^VIX")
     app._submit_quant_fetches()
     assert [args[0] for _fn, args in app._fetch_executor.calls] == ["TLT"]
 
@@ -363,10 +407,83 @@ def test_fetches_use_the_daily_interval_not_the_chart_interval(app):
     app.interval_var.set("5m")
     app._fetch_executor = _Executor()
     app._submit_quant_fetches()
-    key = ("yfinance", "VIX", QUANT_LAST_INTERVAL)
+    key = ("yfinance", "^VIX", QUANT_LAST_INTERVAL)
     assert key not in app._full_cache  # nothing cached yet
     app._submit_quant_fetches()  # inflight-guarded, still one submission each
     assert len(app._fetch_executor.calls) == 2
+
+
+# --- strict-offline sandbox -------------------------------------------
+#
+# The Last column was already free of look-ahead — it goes through
+# ``_apply_watchlist_snapshot_from_bars``, which clock-slices. What these
+# pin is the OTHER promise: a strict-offline session said "no network", and
+# a 30-second poll of the whole catalog quietly breaks it.
+
+
+def test_strict_offline_sandbox_makes_no_network_calls(app):
+    app._fetch_executor = _Executor()
+    app.sandbox_active = True
+    app._sandbox_strict_offline = True
+    app._submit_quant_fetches()
+    assert app._fetch_executor.calls == []
+    assert app._quant_fetch_inflight == set()
+
+
+def test_a_non_strict_sandbox_session_still_fetches(app):
+    """Only the explicit offline promise suppresses; replay alone doesn't."""
+    app._fetch_executor = _Executor()
+    app.sandbox_active = True
+    app._sandbox_strict_offline = False
+    app._submit_quant_fetches()
+    assert len(app._fetch_executor.calls) == 2
+
+
+def test_strict_offline_outside_a_session_does_not_suppress(app):
+    """The flag is stale between sessions; ``active`` is the real gate."""
+    app._fetch_executor = _Executor()
+    app.sandbox_active = False
+    app._sandbox_strict_offline = True
+    app._submit_quant_fetches()
+    assert len(app._fetch_executor.calls) == 2
+
+
+def test_the_tick_still_repaints_while_suppressed(app):
+    """Suppression is about the network, not about going blank."""
+    app._fetch_executor = _Executor()
+    app.sandbox_active = True
+    app._sandbox_strict_offline = True
+    app._watchlist_snapshot["^VIX"] = {"last": 15.819}
+    app._quant_visible_var.set(True)
+    app._quant_refresh_tick()
+    assert app._quant_tab.last_values == {"VIX": "15.82"}
+    assert app._fetch_executor.calls == []
+
+
+# --- canonical activate short-circuit ---------------------------------
+
+
+def test_activating_the_row_already_charted_is_a_no_op(app):
+    """The box holds ``^VIX`` after re-resolution; the row says ``VIX``."""
+    app.ticker_var.set("^VIX")
+    app._on_quant_row_activate("VIX")
+    assert app.loads == 0
+    assert app.ticker_var.get() == "^VIX"
+
+
+def test_activating_a_different_row_still_loads(app):
+    app.ticker_var.set("^VIX")
+    app._on_quant_row_activate("TLT")
+    assert app.loads == 1
+    assert app.ticker_var.get() == "TLT"
+
+
+def test_compare_slot_short_circuit_is_canonical_too(app):
+    app._last_hovered_slot = "compare"
+    app.compare_var.set(True)
+    app.compare_ticker_var.set("^VIX")
+    app._on_quant_row_activate("VIX")
+    assert app.loads == 0
 
 
 def test_submit_is_inert_without_an_executor(app):

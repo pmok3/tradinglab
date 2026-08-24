@@ -41,9 +41,10 @@ chosen basket / watchlist and writing the resulting
    manifest. Deliberately the first control (see Design Decisions).
    `<<ComboboxSelected>>` → `_on_source_change()`.
 
-1. **Universe** — three grouped LabelFrames:
+1. **Universe** — four grouped LabelFrames:
    - *Index constituents:* `S&P 500 — ~503 symbols · curated CSV` and `Nasdaq-100 (QQQ) — ~105 symbols · refreshed {QQQ_LAST_REFRESHED}`.
    - *Full exchange listings:* `NYSE — all common stocks (~2,088 symbols) · refreshed {NYSE_LAST_REFRESHED}` and `NASDAQ — all common stocks (~2,894 symbols) · refreshed {NASDAQ_LAST_REFRESHED}`. The amber **survivorship banner** (see below) shows here when one of these is selected.
+   - *Market internals:* `Quant — market internals` from the Quant tab catalog. This preloads the individual legs behind the Quant rows; ratio rows recompute from their legs and are never cached.
    - *Custom:* `Watchlist:` radio + combobox of `app._watchlists.list_names()` (only non-empty watchlists).
    - Per-radio symbol count comes from the cached `_basket_size()` helper (constant per process). Per-radio refresh-date comes from `baskets.BUILTIN_BASKET_REFRESHED_DATES`; SP500 is intentionally absent so its label just says "curated CSV".
 2. **Intervals** group:
@@ -63,6 +64,10 @@ chosen basket / watchlist and writing the resulting
    | Min close ($)    | `_flt_min_close_var` | `min_close: Optional[float]` |
    | Max close ($)    | `_flt_max_close_var` | `max_close: Optional[float]` |
    | Lookback (days)  | `_flt_lookback_var`  | `lookback_days: int = 20` |
+
+   The form is disabled for baskets in `baskets.NON_EQUITY_BASKETS`
+   (`quant` today). The hint explains that market internals have no
+   share price, shares outstanding, or dollar volume to screen on.
 
 8. Buttons: `Start` and `Close`. Close morphs into `Stop (safe to resume)` while a run is in-flight; clicking it sets `cancel_event` and updates the status line to "Stopping after current symbol — bars already on disk are safe; press Start again to resume from where this stopped." On worker exit, the button reverts to `Close`.
 
@@ -137,8 +142,19 @@ chosen basket / watchlist and writing the resulting
 
 - Writes only when `loaded_per_symbol()` has at least one non-empty entry. Otherwise leaves `universes/` dir untouched with status "zero symbols persisted. No manifest written."
 - Loads the existing manifest for the plan UID (if any) and passes it as `previous=` to `manifest.build_from_loaded(...)`, so per-symbol interval sets are unioned with prior runs rather than overwritten. This is what makes Stop-then-resume non-destructive at any scale. `build_from_loaded` **scopes that union to the source**: a prior manifest prepared from a different provider is ignored outright, because its bars live under that provider's cache keys and an inherited symbol would be coverage the new manifest cannot back (see `preload/manifest.spec.md`).
-- Manifest IDs: `sp500` / `qqq` / `nyse` / `nasdaq` for built-ins; `watchlist:<name>` for user watchlists.
+- Manifest IDs: `sp500` / `qqq` / `nyse` / `nasdaq` / `quant` for built-ins; `watchlist:<name>` for user watchlists.
 - The manifest's `source` is the dropdown's selection at Start, snapshotted into the plan.
+- `_resolve_plan` resolves every non-ratio symbol through
+  `data.index_aliases.resolve_symbol(sym, source)` before fetch, cache, or
+  manifest writes — where `source` is that same dropdown selection, **not**
+  the caller-injected `source_name`. A preloaded universe and a live chart
+  then share the same cache key (`VIX` → `^VIX` on yfinance); resolution is
+  idempotent, so already-resolved watchlist entries are no-ops.
+- `_resolve_plan` drops ratio symbols from every universe, including
+  watchlists. Ratios cannot be persisted by `disk_cache`, so the preload
+  service would save nothing and report persistence verification failures
+  after exhausting real network retries. If dropping ratios leaves the list
+  empty, the status line names that ratio-only case distinctly.
 - Survivorship caveat shown in-dialog via the amber banner (full-exchange baskets only).
 
 ## Failure surfaces
@@ -152,7 +168,10 @@ chosen basket / watchlist and writing the resulting
 
 - `..baskets` — `BUILTIN_BASKETS`, `BUILTIN_BASKET_LABELS`,
   `BUILTIN_BASKET_REFRESHED_DATES`, `FULL_EXCHANGE_BASKETS`,
-  `QQQ_LAST_REFRESHED`, `NYSE_LAST_REFRESHED`, `NASDAQ_LAST_REFRESHED`.
+  `NON_EQUITY_BASKETS`, `QQQ_LAST_REFRESHED`, `NYSE_LAST_REFRESHED`,
+  `NASDAQ_LAST_REFRESHED`.
+- `..data.index_aliases` — `resolve_symbol`.
+- `..data.ratio_source` — `is_ratio_symbol`.
 - `..disk_cache` — `load`, `save`, `merge_candles`, plus L1
   mirror `load`.
 - `..preload.service` — `preload_universe`, `ProgressEvent`,
@@ -187,6 +206,19 @@ shared `_event_queue`; `_drain_events` routes to
 `_DAILY_INTERVAL` (`"1d"`) into the interval set. Main preload
 iterates only the matched subset; manifest carries the filter
 spec in its sidecar.
+
+For `baskets.NON_EQUITY_BASKETS`, `_resolve_plan` replaces the parsed spec
+with a blank `FundamentalFilter()`, not `None`. `None` is this function's
+"form failed to parse" signal and `is_filter_active` dereferences its
+argument. This belt-and-braces path matters because Tk keeps a disabled
+Entry's text; a value typed before switching to Quant would otherwise still
+run and reject every market-internals leg for lacking volume.
+
+## Testing
+
+`tests/unit/test_quant_universe.py` covers the Quant radio, source
+normalisation before preload/manifest writes, ratio dropping, ratio-only
+empty status, and non-equity fundamental-filter disabling.
 
 `__init__` calls `protect_combobox_wheel(self)` and then
 `BaseModalDialog._finalize_modal(cancel=self._on_close_request,

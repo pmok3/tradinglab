@@ -139,6 +139,34 @@ def resolve_leg(leg: str, source: str) -> str:
     return INDEX_ALIASES[canonical].get(_alias_column(source), s)
 
 
+def canonical_symbol_key(ticker: str) -> str:
+    """Collapse any vendor's spelling of ``ticker`` to one stable key.
+
+    ``VIX``, ``^VIX``, ``$VIX`` and ``I:VIX`` all return ``"VIX"``; an unknown
+    symbol returns itself, uppercased and stripped. Ratio-aware: each leg is
+    collapsed independently and a scale constant is left alone, so
+    ``^VIX/15.87`` and ``$VIX/15.87`` share the key ``VIX/15.87``.
+
+    This is the counterpart to :func:`resolve_symbol`. That function asks
+    "how does THIS source spell it"; this one asks "are these two strings the
+    same instrument". Membership tests want the latter — a sandbox universe
+    prepared under yfinance holds ``^VIX``, but the session may be replaying
+    from Schwab and offer ``$VIX``, and rejecting that would be wrong.
+    """
+    if not ticker:
+        return ""
+    s = ticker.strip().upper()
+    legs = parse_ratio_symbol(s)
+    if legs is None:
+        return canonical_index_name(s) or s
+    num, den = legs
+    new_num = num if parse_scale_constant(num) is not None else (
+        canonical_index_name(num) or num)
+    new_den = den if parse_scale_constant(den) is not None else (
+        canonical_index_name(den) or den)
+    return f"{new_num}{RATIO_DELIMITER}{new_den}"
+
+
 def resolve_symbol(ticker: str, source: str) -> str:
     """Resolve ``ticker`` to ``source``'s symbol vocabulary.
 
@@ -167,6 +195,7 @@ __all__ = [
     "INDEX_ALIASES",
     "NEVER_ALIAS",
     "canonical_index_name",
+    "canonical_symbol_key",
     "resolve_leg",
     "resolve_symbol",
 ]

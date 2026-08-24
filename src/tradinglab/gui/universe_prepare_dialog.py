@@ -29,6 +29,8 @@ from typing import Any
 
 from .. import baskets as _baskets
 from .. import disk_cache as _disk_cache
+from ..data.index_aliases import resolve_symbol as _resolve_symbol
+from ..data.ratio_source import is_ratio_symbol as _is_ratio_symbol
 from ..models import Candle
 from ..preload import manifest as _manifest
 from ..preload import service as _service
@@ -183,6 +185,16 @@ class UniversePrepareDialog(BaseModalDialog):
             :class:`UniverseManifest` (or ``None`` if the run was
             cancelled / had zero loaded symbols).
     """
+
+    #: Hint under the fundamental-filter form. A class constant so
+    #: :meth:`_refresh_kind_specific_state` can swap to the "not applicable"
+    #: copy for a non-equity basket and swap back without re-typing it.
+    _FLT_HINT = (
+        "Example: 10 / 80 / — / 20 → keep symbols whose 20-day "
+        "average daily volume is ≥ 10M shares AND whose latest "
+        "close is ≥ $80. Filter uses cached daily bars when "
+        "available; otherwise fetches them in parallel."
+    )
 
     def __init__(
         self,
@@ -528,9 +540,39 @@ class UniversePrepareDialog(BaseModalDialog):
         )
         # Don't grid yet — _refresh_kind_specific_state controls visibility.
 
+        # Market-internals group. Separate from the index-constituent
+        # baskets on purpose: these are gauges (volatility, credit, rates,
+        # cross-asset), not company lists, so neither the survivorship
+        # caveat nor the fundamental filter applies to them.
+        qt_frame = ttk.LabelFrame(uni_outer, text="Market internals", padding=8)
+        qt_frame.grid(row=2, column=0, sticky="ew", padx=0, pady=(0, 4))
+
+        ttk.Radiobutton(
+            qt_frame,
+            text=(
+                f"Quant — market internals (~{_basket_size('quant')} symbols) · "
+                f"from the Quant tab catalog"
+            ),
+            variable=self._kind_var, value="quant",
+            command=self._refresh_kind_specific_state,
+        ).grid(row=0, column=0, sticky="w")
+
+        ttk.Label(
+            qt_frame,
+            text=(
+                "Preloads the individual legs behind the Quant tab's rows, so a "
+                "strict-offline sandbox session can chart VIX, the yield curve, "
+                "credit spreads and the relative-strength ratios built from them. "
+                "Ratio rows recompute from their legs and are never cached."
+            ),
+            foreground=MUTED_GREY,
+            wraplength=440,
+            justify="left",
+        ).grid(row=1, column=0, sticky="w", pady=(4, 0))
+
         # Custom group
         cust_frame = ttk.LabelFrame(uni_outer, text="Custom", padding=8)
-        cust_frame.grid(row=2, column=0, sticky="ew")
+        cust_frame.grid(row=3, column=0, sticky="ew")
 
         ttk.Radiobutton(
             cust_frame, text="Watchlist:",
@@ -562,42 +604,55 @@ class UniversePrepareDialog(BaseModalDialog):
         ttk.Label(flt_frame, text="Min avg volume (millions):").grid(
             row=0, column=0, sticky="w",
         )
-        ttk.Entry(
+        self._flt_min_vol_entry = ttk.Entry(
             flt_frame, textvariable=self._flt_min_vol_var, width=10,
-        ).grid(row=0, column=1, sticky="w", padx=(8, 16))
+        )
+        self._flt_min_vol_entry.grid(row=0, column=1, sticky="w", padx=(8, 16))
 
         ttk.Label(flt_frame, text="Lookback (trading days):").grid(
             row=0, column=2, sticky="w",
         )
-        ttk.Spinbox(
+        self._flt_lookback_spin = ttk.Spinbox(
             flt_frame, textvariable=self._flt_lookback_var,
             from_=1, to=252, width=6, increment=1,
-        ).grid(row=0, column=3, sticky="w", padx=(8, 0))
+        )
+        self._flt_lookback_spin.grid(row=0, column=3, sticky="w", padx=(8, 0))
 
         ttk.Label(flt_frame, text="Min close ($):").grid(
             row=1, column=0, sticky="w", pady=(6, 0),
         )
-        ttk.Entry(
+        self._flt_min_close_entry = ttk.Entry(
             flt_frame, textvariable=self._flt_min_close_var, width=10,
-        ).grid(row=1, column=1, sticky="w", padx=(8, 16), pady=(6, 0))
+        )
+        self._flt_min_close_entry.grid(
+            row=1, column=1, sticky="w", padx=(8, 16), pady=(6, 0))
 
         ttk.Label(flt_frame, text="Max close ($):").grid(
             row=1, column=2, sticky="w", pady=(6, 0),
         )
-        ttk.Entry(
+        self._flt_max_close_entry = ttk.Entry(
             flt_frame, textvariable=self._flt_max_close_var, width=10,
-        ).grid(row=1, column=3, sticky="w", padx=(8, 0), pady=(6, 0))
-
-        flt_hint = (
-            "Example: 10 / 80 / — / 20 → keep symbols whose 20-day "
-            "average daily volume is ≥ 10M shares AND whose latest "
-            "close is ≥ $80. Filter uses cached daily bars when "
-            "available; otherwise fetches them in parallel."
         )
-        ttk.Label(
+        self._flt_max_close_entry.grid(
+            row=1, column=3, sticky="w", padx=(8, 0), pady=(6, 0))
+
+        # Tracked so _refresh_kind_specific_state can grey the whole form
+        # out for a non-equity basket, where market cap and dollar volume
+        # are not defined.
+        self._flt_widgets = (
+            self._flt_min_vol_entry,
+            self._flt_lookback_spin,
+            self._flt_min_close_entry,
+            self._flt_max_close_entry,
+        )
+
+        flt_hint = self._FLT_HINT
+        self._flt_hint_label = ttk.Label(
             flt_frame, text=flt_hint, foreground=MUTED_GREY,
             wraplength=510, justify="left",
-        ).grid(row=2, column=0, columnspan=4, sticky="w", pady=(8, 0))
+        )
+        self._flt_hint_label.grid(
+            row=2, column=0, columnspan=4, sticky="w", pady=(8, 0))
 
         # --- Interval selector ---------------------------------------
         itv_frame = ttk.LabelFrame(outer, text="Intervals", padding=8)
@@ -681,6 +736,31 @@ class UniversePrepareDialog(BaseModalDialog):
             )
         else:
             self._survivorship_banner.grid_forget()
+        # The fundamental filter screens companies by dollar volume and
+        # share price. Neither is defined for an index, a yield or a
+        # cross-asset gauge — ``^VIX`` has no shares outstanding and its
+        # "volume" is zero — so a non-blank field would silently reject
+        # the entire basket. Grey the form out rather than let that
+        # happen, and say why.
+        try:
+            non_equity = kind in _baskets.NON_EQUITY_BASKETS
+        except AttributeError:  # legacy baskets module
+            non_equity = False
+        for widget in getattr(self, "_flt_widgets", ()):
+            try:
+                widget.configure(state=("disabled" if non_equity else "normal"))
+            except tk.TclError:
+                pass
+        if non_equity:
+            self._flt_hint_label.configure(
+                text=(
+                    "Not applicable to market internals — an index or yield has "
+                    "no share price or dollar volume to screen on, so the filter "
+                    "is skipped for this universe."
+                ),
+            )
+        else:
+            self._flt_hint_label.configure(text=self._FLT_HINT)
         self._refresh_estimate_label()
 
     def _refresh_estimate_label(self) -> None:
@@ -769,6 +849,19 @@ class UniversePrepareDialog(BaseModalDialog):
         if flt_spec is None:
             return None  # _parse_filter_form already set the status
 
+        # A non-equity basket ignores the filter outright. The widgets are
+        # greyed out, but Tk keeps a disabled Entry's text — so a value the
+        # user typed before switching to Quant would otherwise still run,
+        # and reject every symbol in the basket for having no volume.
+        # Replaced with a blank spec rather than ``None``: ``None`` is this
+        # function's "the form failed to parse" signal, and
+        # ``is_filter_active`` dereferences its argument.
+        try:
+            if kind in _baskets.NON_EQUITY_BASKETS:
+                flt_spec = FundamentalFilter()
+        except AttributeError:  # legacy baskets module
+            pass
+
         intervals: list[str] = [intraday]
         if self._include_daily_var.get() and _DAILY_INTERVAL not in intervals:
             intervals.append(_DAILY_INTERVAL)
@@ -804,14 +897,58 @@ class UniversePrepareDialog(BaseModalDialog):
             self._status_var.set(f"Unknown universe kind: {kind!r}.")
             return None
 
-        # De-dupe while preserving order.
+        # Normalise into the SELECTED source's symbol vocabulary BEFORE
+        # anything is fetched, cached, or written to the manifest. It must
+        # be ``source`` (the dropdown's pick, already resolved above and
+        # about to be recorded on the manifest), not the caller-injected
+        # ``self._source_name`` — preparing an Alpaca universe while the
+        # chart sits on yfinance would otherwise cache under yfinance's
+        # spelling of an index and the session would find nothing.
+        #
+        # This is the seam that keeps a preloaded universe and a live chart
+        # talking about the same cache entry. The chart re-resolves its
+        # ticker box on every load (``app._reresolve_symbols_for_source``)
+        # and therefore persists ``^VIX``; a preload that saved the raw
+        # basket spelling would write ``VIX`` and the session would report
+        # every index as uncached. Resolution is idempotent, so running it
+        # over already-resolved symbols (a watchlist holding ``^VIX``) is a
+        # no-op rather than a double prefix.
+        #
+        # Ratio symbols are dropped, not fetched. ``disk_cache.save``
+        # refuses to persist a derived series (AGENTS.md §7.37), so the
+        # preload service's save-then-verify step would read the write back
+        # as empty and report "persistence verification failed" — after
+        # burning its full retry budget on real network calls. The legs are
+        # what a universe needs anyway: with both legs cached the ratio
+        # recomputes for free.
         seen: set = set()
         deduped: list[str] = []
+        dropped_ratios: list[str] = []
         for s in symbols:
             s2 = (s or "").strip().upper()
+            if not s2:
+                continue
+            if _is_ratio_symbol(s2):
+                dropped_ratios.append(s2)
+                continue
+            try:
+                s2 = _resolve_symbol(s2, source) or s2
+            except Exception:  # noqa: BLE001
+                pass  # unknown source column — the raw symbol still works
             if s2 and s2 not in seen:
                 seen.add(s2)
                 deduped.append(s2)
+
+        if not deduped:
+            if dropped_ratios:
+                self._status_var.set(
+                    f"'{display}' contains only ratio symbols, which are "
+                    f"derived from their legs and never cached. Add the "
+                    f"legs themselves instead."
+                )
+            else:
+                self._status_var.set(f"Universe '{display}' resolved to no symbols.")
+            return None
 
         return {
             "uid": uid,

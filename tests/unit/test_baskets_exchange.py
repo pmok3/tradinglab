@@ -137,10 +137,17 @@ def test_nasdaq_does_not_dot_munge() -> None:
 # Registry surface
 # ---------------------------------------------------------------------------
 
-def test_builtin_baskets_registry_contains_four_keys() -> None:
+def test_builtin_baskets_registry_contains_every_shipped_key() -> None:
     assert set(baskets.BUILTIN_BASKETS) == {
-        "sp500", "qqq", "nyse", "nasdaq"
+        "sp500", "qqq", "nyse", "nasdaq", "quant"
     }
+
+
+def test_non_equity_baskets_contains_quant() -> None:
+    """Market internals have no share price or dollar volume to screen on,
+    so the prepare dialog disables the fundamental filter for them."""
+    assert baskets.NON_EQUITY_BASKETS == frozenset({"quant"})
+    assert baskets.NON_EQUITY_BASKETS.isdisjoint(baskets.FULL_EXCHANGE_BASKETS)
 
 
 def test_full_exchange_baskets_contains_nyse_and_nasdaq() -> None:
@@ -155,7 +162,9 @@ def test_builtin_basket_labels_cover_every_basket() -> None:
 
 def test_builtin_basket_refreshed_dates_covers_dated_baskets() -> None:
     """SP500 ships without a baked-in date (Wikipedia-sourced) so it's
-    intentionally absent. The other three must have ISO-format dates."""
+    intentionally absent, and `quant` is generated from the Quant catalog in
+    code rather than from a snapshot, so it has no date to go stale. The
+    other three must have ISO-format dates."""
     expected_dated = {"qqq", "nyse", "nasdaq"}
     assert set(baskets.BUILTIN_BASKET_REFRESHED_DATES) == expected_dated
     for date in baskets.BUILTIN_BASKET_REFRESHED_DATES.values():
@@ -203,15 +212,19 @@ def test_loader_raises_filenotfound_for_missing_csv(tmp_path: Path,
 # the CSV, the loader raises FileNotFoundError in the .exe and the
 # "Prepare Universe Data" dialog shows **0 symbols** for that basket —
 # exactly the NYSE/NASDAQ-empty bug (sp500 was bundled, nyse/nasdaq were
-# not). QQQ is a hardcoded list (no CSV) so it is exempt.
+# not). QQQ is a hardcoded list and ``quant`` is derived from the Quant
+# catalog in code, so neither reads a CSV and both are exempt.
+
+#: Baskets that resolve their members without reading a bundled CSV.
+_NON_CSV_BASKETS = {"qqq", "quant"}
+
 
 def test_tradinglab_spec_bundles_every_csv_backed_basket() -> None:
     spec = REPO_ROOT / "TradingLab.spec"
     assert spec.is_file(), f"missing PyInstaller spec: {spec}"
     spec_src = spec.read_text(encoding="utf-8")
-    # CSV-backed baskets = every built-in except the hardcoded QQQ list.
     csv_backed = {
-        key for key in baskets.BUILTIN_BASKETS if key != "qqq"
+        key for key in baskets.BUILTIN_BASKETS if key not in _NON_CSV_BASKETS
     }
     assert csv_backed, "expected at least one CSV-backed basket"
     for key in csv_backed:

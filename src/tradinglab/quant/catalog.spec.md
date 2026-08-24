@@ -6,8 +6,8 @@ side tab (`gui/quant_tab.py`). The Quant tab is a launcher: each row names a
 quantity that describes the state of the *market* rather than one company,
 and double-clicking it loads that quantity onto the chart. This module holds
 only data — symbol, display name, one-line meaning — so the catalog is the
-single source of truth for "what the quant set is", including for a future
-sandbox / export pre-download option.
+single source of truth for "what the quant set is", including for sandbox
+preload and cache-export views.
 
 ## Public API
 - `QuantRow(key, name, symbol, description, available=True,
@@ -21,12 +21,15 @@ sandbox / export pre-download option.
 - `available_rows(catalog=None)` — rows that name a fetchable symbol.
 - `available_symbols(catalog=None)` — each fetchable symbol once, in catalog
   order; de-duplicated case-insensitively.
+- `quant_leg_symbols(catalog=None)` — each vendor-fetchable leg behind the
+  catalog once, in catalog order; de-duplicated case-insensitively.
 - `row_for_key(key)` — lookup by stable key, else `None`.
 
 ## Dependencies
-- Internal: none. The catalog is deliberately import-free so it can be read
-  by the GUI, by tests, and by a future prefetch path without dragging in Tk
-  or the data layer.
+- Internal: `data/ratio_source` is imported lazily inside
+  `quant_leg_symbols()`. The catalog stays import-free at module scope so it
+  can be read by the GUI, tests, and preload/export seams without dragging in
+  Tk or the data layer.
 - External: `dataclasses`, `typing`.
 
 ## Design Decisions
@@ -56,6 +59,16 @@ sandbox / export pre-download option.
   is a relative-strength read whose direction has an agreed meaning:
   `RSP/SPY` for breadth, `HYG/LQD` for credit stress, `XLY/XLP` for equity
   risk appetite.
+- **Rows and legs are different seams.** `available_symbols()` returns the
+  row symbols the user sees, including ratios. `quant_leg_symbols()` returns
+  the fetchable instruments behind those rows: plain rows map to themselves,
+  quotient ratios add both legs, and scaled symbols add only the numerator.
+  Ratios are never persisted by `disk_cache`, so preload/export consumers
+  must operate on legs, not rows. The expansion rules are pinned per-row by
+  `tests/unit/quant/test_catalog.py`, so neither list carries a count here.
+- **Catalog spelling, not vendor spelling.** `quant_leg_symbols()` returns
+  shorthand such as `VIX`, not `^VIX` / `$VIX` / `I:VIX`. Vendor resolution
+  depends on the active source and belongs at the caller's fetch/cache seam.
 - **Symbols verified against the live vendor.** `^RVX` is delisted and
   `^VIX3M` / `^VIX9D` are quote-only on Yahoo (one bar of history), so no
   term-structure ratio is offered — it would inner-join to a single bar.
@@ -70,13 +83,16 @@ sandbox / export pre-download option.
   under `data/ratio_source.parse_ratio_symbol`.
 - `available_symbols()` preserves catalog order and contains no
   case-insensitive duplicates.
+- `quant_leg_symbols()` preserves first appearance order, contains no
+  case-insensitive duplicates, and never returns numeric scale constants.
 
 ## Testing
 `tests/unit/quant/test_catalog.py` pins every invariant above, plus:
 symbol/ratio well-formedness through `data.ratio_source`, that each
 scaled-symbol divisor is positive, that index shorthand resolves through
 `data.index_aliases.resolve_symbol` without changing the scale constant, and
-that `MOVE` is *not* used as bare shorthand.
+that `MOVE` is *not* used as bare shorthand. The extended tests also pin
+`quant_leg_symbols()` expansion and de-duplication.
 
 ## Known limitations / Future work
 - `GEX` / `DIX` have no feed. Wiring SqueezeMetrics would mean a new
@@ -84,8 +100,10 @@ that `MOVE` is *not* used as bare shorthand.
 - `TNX/IRX` divides by the 13-week discount rate, which approaches zero at
   the zero bound and makes the ratio large. It is still the canonical
   recession pair; read the level, not the magnitude.
-- A future sandbox / export "pre-download quant series" checkbox should
-  consume `available_symbols()` rather than re-listing symbols.
+- `quant_leg_symbols()` is the sandbox/export seam. It is consumed by
+  `baskets.BUILTIN_BASKETS["quant"]` and
+  `gui/export_cache_dialog.is_quant_entry`.
 
 ## Recent history
+- Added `quant_leg_symbols()` for sandbox preload and cache-export filtering.
 - Initial version: 7 groups, 31 rows, 2 of them disabled (`GEX`, `DIX`).
