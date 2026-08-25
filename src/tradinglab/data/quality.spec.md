@@ -31,6 +31,7 @@ drive the partial-volume warning, not the current ranking order.
   `SourceQuality.adjusted` field, which conflates split and dividend
   adjustment and is read by nothing.
 - `partial_volume_warning(source_name) -> str | None` — user-facing caveat when partial, else None. Consumed by `app.on_axis_change` (chart source change) and `gui/sandbox_menu` (sandbox start).
+- `source_capability_line(source_name) -> str` — one-line reach + volume-tier summary, e.g. `"yfinance: ~60d intraday, ~30y daily, full consolidated volume."`. Feed-aware via `volume_quality` (Alpaca iex renders the `PARTIAL volume (IEX only, ~2–3% of the tape)` phrasing). Returns `""` for a blank name or on any lookup failure — the hint is decoration, never a gate. Shared by every source picker (`gui/sandbox_dialog.SandboxStartDialog._source_hint`, `gui/universe_prepare_dialog._on_source_change`) so the wording can't drift between them; reach and volume tier are the two facts that actually decide the choice, so stating them inline beats making the user find this module.
 - `rank_sources` / `best_source` / `preferred_source` — **back-compat shims** that delegate to the global, tier-aware ranking in `data/source_ranking.py` (see that spec). They accept a vestigial `interval` kwarg (ignored — the global order is interval-independent). `preferred_source` keeps the "respect a non-candidate active source" contract and defaults `candidates` to `data.base.user_visible_sources()`.
 
 ## Dependencies
@@ -47,8 +48,9 @@ drive the partial-volume warning, not the current ranking order.
 - `is_partial_volume(name)` ⇔ `volume_quality(name) == VOLUME_PARTIAL`; only `alpaca` with `feed=="iex"` is partial today.
 - `is_split_adjusted(name)` is False only for `alpaca` in `raw` / `dividend` adjustment mode today. Consumers that multiply a price by a share count (the sandbox heatmap's tile sizing) must consult it: assuming the wrong basis mis-sizes every splitter by exactly its cumulative split ratio (see `backtest/heatmap.spec.md` Invariant 7).
 - `partial_volume_warning(name)` is None ⇔ not partial.
+- `source_capability_line(name)` never raises and never returns `None`; `""` signals "no hint available".
 - The ranking shims delegate to `data.source_ranking` (see that spec for ranking invariants); the vestigial `interval` kwarg never affects the result.
 - Never raises for a well-formed source name (cred/registry read failures degrade gracefully).
 
 ## Testing
-- `tests/unit/data/test_quality.py` — volume tiers + feed-aware partial detection (iex vs sip via monkeypatched `get_credentials`), warning text, the `"yfinance+alpaca"` composite volume tier (FULL), and that the ranking shims delegate + ignore `interval`. Ranking behaviour itself is pinned in `tests/unit/data/test_source_ranking.py`.
+- `tests/unit/data/test_quality.py` — volume tiers + feed-aware partial detection (iex vs sip via monkeypatched `get_credentials`), warning text, the `"yfinance+alpaca"` composite volume tier (FULL), `source_capability_line` (reach + tier wording, feed-awareness, blank-on-empty, unknown-source fallback), and that the ranking shims delegate + ignore `interval`. Ranking behaviour itself is pinned in `tests/unit/data/test_source_ranking.py`.

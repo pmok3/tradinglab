@@ -334,11 +334,23 @@ def build_from_loaded(
     A subsequent run that legitimately wants a smaller universe can
     use ``manifest.delete(uid)`` first.
 
+    **The union is source-scoped.** A ``previous`` whose ``source``
+    differs from this run's is ignored entirely (no symbol or interval
+    carry-forward). Cache keys are namespaced by source, so
+    :func:`coverage_for_date` would look the inherited symbols up at
+    ``(new_source, sym, interval)`` and find nothing — the manifest
+    would claim coverage it cannot back, and strict-offline gating
+    would admit tickers with no bars. Re-preparing the same universe
+    from a different provider is a fresh manifest, not an increment.
+
     ``intervals`` (the top-level field) is the intended union of all
     runs that contributed to this manifest, so the gating layer can
     see the full set without scanning per-symbol entries.
     """
     now = time.time()
+
+    if previous is not None and previous.source != source:
+        previous = None
 
     merged: dict[str, set] = {}
     if previous is not None:

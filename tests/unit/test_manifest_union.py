@@ -179,3 +179,53 @@ def test_union_preserves_intervals_tuple_sortedness() -> None:
     )
     [aapl] = [e for e in man.symbols if e.symbol == "AAPL"]
     assert aapl.intervals == tuple(sorted(aapl.intervals))
+
+
+# ---------------------------------------------------------------------------
+# The union is source-scoped
+# ---------------------------------------------------------------------------
+
+def test_union_is_ignored_when_previous_used_a_different_source() -> None:
+    """Re-preparing a universe from another provider starts fresh.
+
+    Cache keys are namespaced by source, so carrying yfinance-fetched
+    symbols into an alpaca manifest would make ``coverage_for_date``
+    look them up at ``("alpaca", sym, interval)`` and find nothing —
+    the manifest would claim coverage it cannot back, and strict-offline
+    gating would admit tickers with no bars. Reachable as soon as the
+    Prepare Universe dialog lets the user pick the download source.
+    """
+    prev = _manifest({"AAPL": ("5m", "1d"), "MSFT": ("5m",)})
+    assert prev.source == "yfinance"
+
+    man = build_from_loaded(
+        uid="u1", name="U1", kind="basket", source="alpaca",
+        intervals=("15m",),
+        per_symbol={"AAPL": ("15m",)},
+        previous=prev,
+    )
+    assert man.source == "alpaca"
+    assert {e.symbol for e in man.symbols} == {"AAPL"}, (
+        "MSFT was only ever fetched under yfinance — it must not be "
+        "carried into an alpaca manifest"
+    )
+    [aapl] = man.symbols
+    assert aapl.intervals == ("15m",), (
+        "the 5m/1d bars live under yfinance's keys, so an alpaca "
+        "manifest must not claim them"
+    )
+    assert man.intervals == ("15m",)
+
+
+def test_union_still_applies_when_source_matches() -> None:
+    """Teeth for the guard above: same source keeps unioning."""
+    prev = _manifest({"AAPL": ("5m", "1d"), "MSFT": ("5m",)})
+    man = build_from_loaded(
+        uid="u1", name="U1", kind="basket", source="yfinance",
+        intervals=("15m",),
+        per_symbol={"AAPL": ("15m",)},
+        previous=prev,
+    )
+    assert {e.symbol for e in man.symbols} == {"AAPL", "MSFT"}
+    [aapl] = [e for e in man.symbols if e.symbol == "AAPL"]
+    assert set(aapl.intervals) == {"5m", "1d", "15m"}

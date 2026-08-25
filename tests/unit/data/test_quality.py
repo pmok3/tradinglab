@@ -74,3 +74,50 @@ def test_hybrid_volume_is_full():
     assert q.volume_quality("yfinance+alpaca") == q.VOLUME_FULL
     assert q.is_partial_volume("yfinance+alpaca") is False
     assert q.partial_volume_warning("yfinance+alpaca") is None
+
+
+# ---------------------------------------------------------------------------
+# source_capability_line — the shared source-picker hint
+# ---------------------------------------------------------------------------
+
+
+def test_capability_line_states_reach_and_volume_tier():
+    """Both source dropdowns (Start Sandbox Session, Prepare Universe
+    Data) render this one line, so it must carry the two facts that
+    actually decide the choice: how far back the source reaches, and
+    whether its volume is the real tape."""
+    line = q.source_capability_line("yfinance")
+    assert line.startswith("yfinance:")
+    assert "60d intraday" in line
+    assert "30y daily" in line
+    assert "full consolidated volume" in line
+
+
+def test_capability_line_is_feed_aware_for_alpaca(monkeypatch):
+    """Alpaca's tier is resolved live from the configured feed, so the
+    hint must say PARTIAL on the free IEX feed and not on SIP."""
+    class _Creds:
+        class alpaca:
+            feed = "iex"
+
+    import tradinglab.data.credentials as creds_mod
+
+    monkeypatch.setattr(creds_mod, "get_credentials", lambda: _Creds)
+    assert "PARTIAL" in q.source_capability_line("alpaca")
+
+    _Creds.alpaca.feed = "sip"
+    assert "full consolidated volume" in q.source_capability_line("alpaca")
+
+
+def test_capability_line_blank_for_empty_name():
+    """Decoration, never a gate — an empty/unknown name yields no text
+    rather than raising into a dialog build."""
+    assert q.source_capability_line("") == ""
+    assert q.source_capability_line("   ") == ""
+
+
+def test_capability_line_handles_unknown_source():
+    """An unregistered name still renders (via the default descriptor)
+    so a pinned-but-unknown source doesn't blank the hint."""
+    line = q.source_capability_line("totally-unknown")
+    assert line.startswith("totally-unknown:")

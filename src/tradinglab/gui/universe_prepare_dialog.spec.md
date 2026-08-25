@@ -11,18 +11,35 @@ chosen basket / watchlist and writing the resulting
 
 - `compute_run_estimate(*, symbol_count: int, intervals: tuple[str, ...], daily_interval: str = "1d") -> dict[str, Any]` — pure ETA / size estimator for the reactive run-estimate label. Returns `ops`, `seconds`, `bytes`, and a ready-to-render `label` string; label is blank when no universe is selected.
 - `class UniversePrepareDialog(BaseModalDialog)`.
-- `UniversePrepareDialog(app, *, source_name, fetcher, on_finished=None)`:
+- `UniversePrepareDialog(app, *, source_name, fetcher, sources=None, fetcher_for=None, on_finished=None)`:
   - `app` — parent ChartApp. Toplevel parent; read-only access to
     `_full_cache` (mirrored on Tk thread) and `_watchlists`.
-  - `source_name: str` — data-source key (`"yfinance"`).
-  - `fetcher: (sym, itv) -> Optional[List[Candle]]` — injected so
-    tests / fakes don't need `DATA_SOURCES`.
+  - `source_name: str` — data-source key (`"yfinance"`). The **initial**
+    dropdown selection, not a fixed setting; the run uses whatever is
+    selected at Start.
+  - `fetcher: (sym, itv) -> Optional[List[Candle]]` — the fetcher for
+    `source_name`, injected so tests / fakes don't need `DATA_SOURCES`.
+  - `sources: Optional[list[str]]` — selectable source names,
+    best-first. Defaults to `data.user_visible_sources()`.
+  - `fetcher_for: Optional[(source_name) -> fetcher | None]` — resolver
+    for a source other than `source_name`. Defaults to a lazy
+    `DATA_SOURCES.get`.
   - `on_finished: Optional[(Optional[UniverseManifest]) -> None]` —
     fires on Tk thread once worker has fully exited. `None`
     argument means no manifest written.
+- `selected_source() -> str` — the concrete provider the next run will
+  fetch and cache under. Falls back to `source_name` if the combobox
+  holds anything not in the offered list.
 - `result -> Optional[UniverseManifest]` — manifest written, or None.
 
 ## Form
+
+0. **Data source** — `LabelFrame` holding a readonly combobox
+   (`_source_var` / `_source_combo`), a grey capability hint
+   (`_source_hint_var`, from `data.quality.source_capability_line`), and
+   a static note that the choice is baked into the cache keys and the
+   manifest. Deliberately the first control (see Design Decisions).
+   `<<ComboboxSelected>>` → `_on_source_change()`.
 
 1. **Universe** — three grouped LabelFrames:
    - *Index constituents:* `S&P 500 — ~503 symbols · curated CSV` and `Nasdaq-100 (QQQ) — ~105 symbols · refreshed {QQQ_LAST_REFRESHED}`.
@@ -119,8 +136,9 @@ chosen basket / watchlist and writing the resulting
 ## Manifest write rules
 
 - Writes only when `loaded_per_symbol()` has at least one non-empty entry. Otherwise leaves `universes/` dir untouched with status "zero symbols persisted. No manifest written."
-- Loads the existing manifest for the plan UID (if any) and passes it as `previous=` to `manifest.build_from_loaded(...)`, so per-symbol interval sets are unioned with prior runs rather than overwritten. This is what makes Stop-then-resume non-destructive at any scale.
+- Loads the existing manifest for the plan UID (if any) and passes it as `previous=` to `manifest.build_from_loaded(...)`, so per-symbol interval sets are unioned with prior runs rather than overwritten. This is what makes Stop-then-resume non-destructive at any scale. `build_from_loaded` **scopes that union to the source**: a prior manifest prepared from a different provider is ignored outright, because its bars live under that provider's cache keys and an inherited symbol would be coverage the new manifest cannot back (see `preload/manifest.spec.md`).
 - Manifest IDs: `sp500` / `qqq` / `nyse` / `nasdaq` for built-ins; `watchlist:<name>` for user watchlists.
+- The manifest's `source` is the dropdown's selection at Start, snapshotted into the plan.
 - Survivorship caveat shown in-dialog via the amber banner (full-exchange baskets only).
 
 ## Failure surfaces
@@ -141,6 +159,11 @@ chosen basket / watchlist and writing the resulting
   `PreloadResult`.
 - `..preload.manifest` — `UniverseManifest`, `load`,
   `build_from_loaded`, `save`.
+- `..preload.fundamental_filter` — `FundamentalFilter`,
+  `is_filter_active`, `passes_fundamental_filter`.
+- `..data` — `user_visible_sources` (dropdown default), `DATA_SOURCES`
+  (lazy fetcher fallback when no `fetcher_for` is injected).
+- `..data.quality` — `source_capability_line` (the grey hint).
 - `._modal_base` — `BaseModalDialog`, `make_scrollable_form`,
   `protect_combobox_wheel`.
 - `.native_theme` — `apply_toplevel_theme`, `current_theme`.
@@ -168,5 +191,57 @@ spec in its sidecar.
 `__init__` calls `protect_combobox_wheel(self)` and then
 `BaseModalDialog._finalize_modal(cancel=self._on_close_request,
 primary=self._on_start)`. ESC closes or cancels in-flight, Return
-starts, and the watchlist / interval / filter spinbox widgets are
-guarded against wheel-driven value changes.
+starts, and the source / watchlist / interval / filter spinbox widgets
+are guarded against wheel-driven value changes.
+
+## Design Decisions
+
+- **The data source is an explicit, first-position choice.** The dialog
+  used to fetch from whatever the caller resolved (a pinned
+  `sandbox_data_source` default, else the chart source ranked through
+  `quality.preferred_source`), which meant reaching past yfinance's
+  ~60-day intraday cap required changing the app's chart source first.
+  Since the source determines what history exists at all — and this
+  dialog can spend 40 minutes downloading NYSE — it sits above the
+  universe selector, with a grey hint naming reach + volume tier so the
+  trade-off doesn't require reading `data/quality.py`. The caller's
+  resolved source is still the initial selection, so the default
+  behaviour is unchanged.
+- **No "Auto" entry — concrete providers only.** Every other source
+  picker offers `Auto (best available)`; this one deliberately does not.
+  The manifest records `source` verbatim and `coverage_for_date` reads
+  the disk cache at `(manifest.source, sym, interval)`; Auto's cache
+  namespace is the opaque literal `"Auto"` whose real provider re-resolves
+  per fetch and can change after a credentials save or an Alpaca tier flip
+  (`CLAUDE.md` §7.38). A universe prepared under it could silently become
+  a mix of providers, which defeats the point of a reproducible offline
+  replay.
+- **The list comes from `user_visible_sources()`, never `DATA_SOURCES`
+  keys** (§7.25) — the latter includes `internal=True` synthetic sources.
+  The caller's `source_name` is prepended even when absent from that list,
+  so a pinned-but-unregistered source still displays rather than the
+  dropdown quietly showing a different provider than the run will use.
+- **`source` + `fetcher` are snapshotted into the plan** at
+  `_resolve_plan` time, for the same reason the symbol list is: the run
+  must not shift under an in-flight worker. `_worker_main` and
+  `_run_filter_prepass` take the fetcher from the plan, not `self`.
+- **An unresolvable source fails at the form, not after the download.**
+  `_on_source_change` replaces the capability hint with "no fetcher
+  registered — configure its credentials first", and `_resolve_plan`
+  refuses Start with a status. Quoting reach figures for a provider that
+  cannot run would read as an endorsement.
+
+## Testing
+
+- `tests/unit/gui/test_universe_prepare_source.py` — the source picker:
+  list contents + ordering, `user_visible_sources()` default, absence of
+  any Auto entry, an unknown `source_name` still getting a slot, the
+  selection reaching both `plan["source"]` and `plan["fetcher"]`, the
+  capability hint (including the Alpaca PARTIAL caveat), the dead-source
+  refusal, and the combobox being locked during a run.
+- `tests/unit/gui/test_universe_prepare_estimate.py` — the pure ETA math.
+- `tests/unit/gui/test_native_widget_dark_theme.py::test_universe_prepare_dialog_toplevel_uses_dark_theme`
+  — Toplevel bg + content-fill grid weights.
+- `tests/unit/gui/test_dialog_scrollable_meta.py` — small-screen scroll.
+- `tests/unit/test_manifest_union.py::test_union_is_ignored_when_previous_used_a_different_source`
+  — the source-scoped manifest union this picker makes reachable.

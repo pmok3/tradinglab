@@ -425,7 +425,9 @@ class SandboxStartDialog(BaseModalDialog):
 
         Reach and volume tier are what actually decide whether a source
         can serve the session the trader has in mind, so state them
-        rather than making them look up ``data/quality.py``.
+        rather than making the user look up ``data/quality.py``. The
+        concrete-source wording is shared with the Prepare Universe
+        picker via ``quality.source_capability_line``.
         """
         chosen = self._selected_source()
         if not chosen:
@@ -434,28 +436,23 @@ class SandboxStartDialog(BaseModalDialog):
         try:
             from ..data import quality as _quality
 
-            q = _quality.quality_for(chosen)
-            vol = _quality.volume_quality(chosen)
+            return _quality.source_capability_line(chosen)
         except Exception:  # noqa: BLE001
             return ""
-        vol_text = {
-            "full": "full consolidated volume",
-            "partial": "PARTIAL volume (IEX only, ~2–3% of the tape)",
-            "synthetic": "synthetic volume",
-        }.get(vol, "unknown volume quality")
-        return (f"{chosen}: ~{q.intraday_days}d intraday, ~{q.daily_years}y "
-                f"daily, {vol_text}.")
 
     def _on_source_change(self) -> None:
         """Re-probe eligibility against the newly selected source.
 
         Depth differs per vendor, so the eligible-date pool genuinely
         changes with the source — showing the previous source's count
-        would invite a Start that immediately fails to anchor.
+        would invite a Start that immediately fails to anchor. The
+        coverage line is refreshed too: it now names the manifest's
+        preparation source and flags a mismatch against this one.
         """
         self._source_hint_var.set(self._source_hint())
         self._error_var.set("")
         self._refresh_eligible_count()
+        self._refresh_coverage()
         if self._fetch_provider is None:
             return
         itv = self._primary_interval()
@@ -599,9 +596,21 @@ class SandboxStartDialog(BaseModalDialog):
         try:
             from ..preload import manifest as _mod_manifest
             report = _mod_manifest.coverage_for_date(man, target, primary)
-            self._coverage_var.set(
-                f"{report.covered_count} / {report.total_count} symbols cover "
-                f"{target.isoformat()} at {primary}.")
+            line = (f"{report.covered_count} / {report.total_count} symbols "
+                    f"cover {target.isoformat()} at {primary} "
+                    f"(prepared from {man.source}).")
+            # The universe was downloaded under ONE provider and cached
+            # under that provider's keys, so replaying from a different
+            # one reads an empty cache. Now that Prepare Universe Data
+            # has its own source dropdown, that mismatch is reachable
+            # without changing any app setting — so name it instead of
+            # letting the user puzzle over "0 / 503".
+            chosen = self._selected_source()
+            if chosen and man.source and chosen != man.source:
+                line += (f" Session source is {chosen} — re-prepare this "
+                         f"universe from {chosen} or switch back to "
+                         f"{man.source}.")
+            self._coverage_var.set(line)
         except Exception as exc:  # noqa: BLE001
             self._coverage_var.set(
                 f"Coverage check failed: {exc}")

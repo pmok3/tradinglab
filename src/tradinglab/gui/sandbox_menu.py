@@ -705,11 +705,15 @@ class SandboxMenuMixin:
             except Exception:  # noqa: BLE001
                 pass
             return
-        # Preload with the SAME source the sandbox will replay from.
-        # Using the chart source here meant a universe could be cached
-        # under 'yfinance' while the session (and the heatmap) read from
+        # Preselect the SAME source the sandbox will replay from. Using
+        # the chart source here meant a universe could be cached under
+        # 'yfinance' while the session (and the heatmap) read from
         # 'alpaca', so every preloaded symbol looked uncached. Empty
-        # setting = Auto → the global ranking, as before.
+        # setting = Auto → the global ranking. This is only the initial
+        # selection now; the dialog's own dropdown lets the user
+        # download from a different provider (e.g. reach past
+        # yfinance's ~60-day intraday cap) without changing the app's
+        # chart source first.
         src = self.source_var.get()
         try:
             from .. import defaults as _defaults_mod
@@ -728,6 +732,12 @@ class SandboxMenuMixin:
                 pass
             return
         try:
+            from ..data import user_visible_sources
+
+            sources = list(user_visible_sources())
+        except Exception:  # noqa: BLE001
+            sources = []
+        try:
             from ..gui.universe_prepare_dialog import UniversePrepareDialog
         except Exception as exc:  # noqa: BLE001
             try:
@@ -737,7 +747,8 @@ class SandboxMenuMixin:
                 pass
             return
         dlg = UniversePrepareDialog(
-            self, source_name=src, fetcher=fetcher)
+            self, source_name=src, fetcher=fetcher, sources=sources,
+            fetcher_for=DATA_SOURCES.get)
         # Modal: block here so the menu doesn't allow stacking dialogs.
         try:
             self.wait_window(dlg)
@@ -747,7 +758,8 @@ class SandboxMenuMixin:
         if man is not None:
             try:
                 self._status.info(
-                    f"Universe '{man.id}' prepared: {len(man.symbols)} "
-                    f"symbols across {len(man.intervals)} intervals.")
+                    f"Universe '{man.id}' prepared from {man.source}: "
+                    f"{len(man.symbols)} symbols across "
+                    f"{len(man.intervals)} intervals.")
             except Exception:  # noqa: BLE001
                 pass

@@ -188,6 +188,35 @@ def partial_volume_warning(source_name: str) -> str | None:
     )
 
 
+def source_capability_line(source_name: str) -> str:
+    """One-line reach + volume-tier summary, e.g. for a source picker hint.
+
+    Reach and volume tier are what actually decide whether a source can
+    serve the job the trader has in mind — a 60-day intraday cap rules
+    out a 2019 replay, and an IEX-only tape ruins RVOL — so every source
+    dropdown states them inline rather than making the user look up this
+    module. Feed-aware via :func:`volume_quality` (Alpaca iex vs sip).
+
+    Returns ``""`` for an empty name or if the metadata lookup fails;
+    the hint is decoration, never a gate.
+    """
+    name = (source_name or "").strip()
+    if not name:
+        return ""
+    try:
+        q = quality_for(name)
+        vol = volume_quality(name)
+    except Exception:  # noqa: BLE001
+        return ""
+    vol_text = {
+        VOLUME_FULL: "full consolidated volume",
+        VOLUME_PARTIAL: "PARTIAL volume (IEX only, ~2–3% of the tape)",
+        VOLUME_SYNTHETIC: "synthetic volume",
+    }.get(vol, "unknown volume quality")
+    return (f"{name}: ~{q.intraday_days}d intraday, ~{q.daily_years}y "
+            f"daily, {vol_text}.")
+
+
 # --- Ranking (delegated to data/source_ranking.py) ------------------------
 #
 # The authoritative source order is the fixed, tier-aware GLOBAL priority in
@@ -247,6 +276,7 @@ __all__ = [
     "is_partial_volume",
     "is_split_adjusted",
     "partial_volume_warning",
+    "source_capability_line",
     "rank_sources",
     "best_source",
     "preferred_source",

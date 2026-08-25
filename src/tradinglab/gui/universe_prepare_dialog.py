@@ -162,10 +162,21 @@ class UniversePrepareDialog(BaseModalDialog):
         source_name: the data-source key used by the rest of the app
             (e.g. ``"yfinance"``). Threaded through to the disk cache
             and to the manifest so the cache keys match what a
-            session-time read will look up.
+            session-time read will look up. This is the *initial*
+            selection — the user can change it in the dialog's source
+            dropdown, and the run uses whatever is selected at Start.
         fetcher: ``(ticker, interval) -> Optional[List[Candle]]``
-            callable from ``DATA_SOURCES``. Synchronous; injected so
-            tests can supply a fake.
+            callable from ``DATA_SOURCES`` for ``source_name``.
+            Synchronous; injected so tests can supply a fake.
+        sources: selectable source names, best-first. Defaults to
+            ``data.user_visible_sources()`` when omitted. Deliberately
+            **concrete only** — no "Auto" entry (see Design Decisions
+            in the spec).
+        fetcher_for: optional ``(source_name) -> fetcher | None``
+            resolver used when the user picks a source other than
+            ``source_name``. Defaults to a lazy ``DATA_SOURCES.get``.
+            Injected so tests can drive the dropdown without a real
+            registry.
         on_finished: optional callback invoked on the Tk thread once
             the worker thread has fully exited and a manifest has
             been written. Receives the saved
@@ -179,6 +190,9 @@ class UniversePrepareDialog(BaseModalDialog):
         *,
         source_name: str,
         fetcher: Callable[[str, str], list[Candle] | None],
+        sources: list[str] | None = None,
+        fetcher_for: Callable[[str], Callable[[str, str], list[Candle] | None] | None]
+        | None = None,
         on_finished: Callable[[_manifest.UniverseManifest | None], None] | None = None,
     ) -> None:
         # Width is fixed (the form fields are sized in characters), but
@@ -203,7 +217,19 @@ class UniversePrepareDialog(BaseModalDialog):
         self.app = app
         self._source_name = source_name
         self._fetcher = fetcher
+        self._fetcher_for = fetcher_for
         self._on_finished = on_finished
+        # Selectable sources. The caller's ``source_name`` is always
+        # offered even if it is not in ``sources`` (a pinned setting for
+        # a source that has since been unregistered still needs a slot
+        # to display), and leads so the dropdown opens on it.
+        self._sources = self._resolve_source_choices(sources, source_name)
+        # Fetchers resolved so far, keyed by source. Seeded with the
+        # caller's injected pair so the default selection never depends
+        # on the registry being importable (tests pass a fake).
+        self._fetcher_cache: dict[str, Callable[[str, str], list[Candle] | None]] = {}
+        if source_name:
+            self._fetcher_cache[source_name] = fetcher
 
         # Hard floor so users can never shrink to the point where the
         # bottom button row falls below the screen.
@@ -231,6 +257,8 @@ class UniversePrepareDialog(BaseModalDialog):
         self._filter_matched_count: int = -1
 
         # ---- Tk variables ----
+        self._source_var = tk.StringVar(value=self._sources[0] if self._sources else "")
+        self._source_hint_var = tk.StringVar(value="")
         self._kind_var = tk.StringVar(value="sp500")
         self._wl_var = tk.StringVar(value="")
         self._intraday_var = tk.StringVar(value=_DEFAULT_INTRADAY_INTERVAL)
@@ -250,6 +278,7 @@ class UniversePrepareDialog(BaseModalDialog):
 
         self._build_ui()
         self._refresh_kind_specific_state()
+        self._on_source_change()
         self._center_on_parent()
 
         protect_combobox_wheel(self, scroll_target=getattr(self, "_form_canvas", None))
@@ -264,6 +293,92 @@ class UniversePrepareDialog(BaseModalDialog):
     def result(self) -> _manifest.UniverseManifest | None:
         """Manifest written on success, or None if cancelled / failed."""
         return self._saved_manifest
+
+    # -----------------------------------------------------------------
+    # Data source
+    # -----------------------------------------------------------------
+
+    @staticmethod
+    def _resolve_source_choices(
+        sources: list[str] | None, source_name: str,
+    ) -> list[str]:
+        """Ordered, de-duped source list with ``source_name`` leading.
+
+        Falls back to ``data.user_visible_sources()`` — never the raw
+        ``DATA_SOURCES`` keys, which include ``internal=True`` synthetic
+        sources that must not surface in a user-facing dropdown
+        (``CLAUDE.md`` §7.25).
+        """
+        if sources is None:
+            try:
+                from ..data import user_visible_sources
+
+                sources = list(user_visible_sources())
+            except Exception:  # noqa: BLE001
+                sources = []
+        out: list[str] = []
+        for name in [source_name, *sources]:
+            clean = (name or "").strip()
+            if clean and clean not in out:
+                out.append(clean)
+        return out
+
+    def selected_source(self) -> str:
+        """The source the next run will fetch and cache under.
+
+        Always a concrete provider name: the dropdown offers no "Auto"
+        entry, because the manifest records this string and
+        ``manifest.coverage_for_date`` reads the disk cache at
+        ``(manifest.source, sym, interval)``. Auto's cache namespace is
+        the opaque literal ``"Auto"`` whose real provider can change
+        later (§7.38), which would silently invalidate a prepared
+        universe.
+        """
+        value = (self._source_var.get() or "").strip()
+        return value if value in self._sources else self._source_name
+
+    def _resolve_fetcher(self, source: str):
+        """Fetcher for ``source``, or ``None`` if it can't be resolved.
+
+        Cached per source so switching back and forth doesn't re-hit
+        the registry.
+        """
+        cached = self._fetcher_cache.get(source)
+        if cached is not None:
+            return cached
+        resolver = self._fetcher_for
+        if resolver is None:
+            def resolver(name: str):  # noqa: ANN202 - local shim
+                from ..data import DATA_SOURCES
+
+                return DATA_SOURCES.get(name)
+        try:
+            found = resolver(source)
+        except Exception:  # noqa: BLE001
+            found = None
+        if found is not None:
+            self._fetcher_cache[source] = found
+        return found
+
+    def _on_source_change(self) -> None:
+        """Refresh the capability hint and validate the new selection.
+
+        An unresolvable source is surfaced here rather than at Start:
+        the reach / volume trade-off is the whole reason to choose, so
+        a dead entry should say so while the user is still looking at
+        the dropdown.
+        """
+        source = self.selected_source()
+        try:
+            from ..data import quality as _quality
+
+            hint = _quality.source_capability_line(source)
+        except Exception:  # noqa: BLE001
+            hint = ""
+        if self._resolve_fetcher(source) is None:
+            hint = (f"{source}: no fetcher registered — configure its "
+                    f"credentials first.") if source else "No data source available."
+        self._source_hint_var.set(hint)
 
     # -----------------------------------------------------------------
     # UI construction
@@ -305,6 +420,36 @@ class UniversePrepareDialog(BaseModalDialog):
         outer, self._form_canvas = make_scrollable_form(container)
         outer.configure(padding=12)
 
+        # --- Data source ----------------------------------------------
+        # Deliberately the FIRST control: it decides what history exists
+        # at all, and — unlike the chart's source selector — the choice
+        # is baked into the manifest and the disk-cache keys, so it is
+        # not something to discover after a 40-minute NYSE download.
+        src_frame = ttk.LabelFrame(outer, text="Data source", padding=8)
+        src_frame.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        src_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(src_frame, text="Download from:").grid(row=0, column=0, sticky="w")
+        self._source_combo = ttk.Combobox(
+            src_frame, textvariable=self._source_var,
+            state="readonly", width=24, values=list(self._sources),
+        )
+        self._source_combo.grid(row=0, column=1, sticky="w", padx=(8, 0))
+        self._source_combo.bind(
+            "<<ComboboxSelected>>", lambda _e: self._on_source_change(),
+        )
+        ttk.Label(
+            src_frame, textvariable=self._source_hint_var,
+            foreground=MUTED_GREY, wraplength=510, justify="left",
+        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        ttk.Label(
+            src_frame,
+            text=("Bars are cached under this source, and the universe "
+                  "manifest records it — pick the one the sandbox session "
+                  "will replay from."),
+            foreground=MUTED_GREY, wraplength=510, justify="left",
+        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(2, 0))
+
         # --- Universe selector ----------------------------------------
         # 3 grouped LabelFrames per UX agent guidance:
         #   * Index constituents (S&P 500, QQQ)
@@ -315,7 +460,7 @@ class UniversePrepareDialog(BaseModalDialog):
         # from baskets.BUILTIN_BASKET_REFRESHED_DATES so users can see
         # how stale their snapshot is at a glance.
         uni_outer = ttk.Frame(outer)
-        uni_outer.grid(row=0, column=0, sticky="ew", padx=0, pady=(0, 8))
+        uni_outer.grid(row=1, column=0, sticky="ew", padx=0, pady=(0, 8))
 
         # Index group
         idx_frame = ttk.LabelFrame(uni_outer, text="Index constituents", padding=8)
@@ -412,7 +557,7 @@ class UniversePrepareDialog(BaseModalDialog):
             outer, text="Optional fundamental filter (leave blank to skip)",
             padding=8,
         )
-        flt_frame.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        flt_frame.grid(row=2, column=0, sticky="ew", pady=(0, 8))
 
         ttk.Label(flt_frame, text="Min avg volume (millions):").grid(
             row=0, column=0, sticky="w",
@@ -456,7 +601,7 @@ class UniversePrepareDialog(BaseModalDialog):
 
         # --- Interval selector ---------------------------------------
         itv_frame = ttk.LabelFrame(outer, text="Intervals", padding=8)
-        itv_frame.grid(row=2, column=0, sticky="ew", pady=(0, 8))
+        itv_frame.grid(row=3, column=0, sticky="ew", pady=(0, 8))
 
         ttk.Label(itv_frame, text="Primary intraday:").grid(row=0, column=0, sticky="w")
         intraday_combo = ttk.Combobox(
@@ -484,11 +629,11 @@ class UniversePrepareDialog(BaseModalDialog):
         ttk.Label(
             outer, textvariable=self._estimate_var,
             foreground="#444", wraplength=510, justify="left",
-        ).grid(row=3, column=0, sticky="w", pady=(0, 8))
+        ).grid(row=4, column=0, sticky="w", pady=(0, 8))
 
         # --- Progress + status ---------------------------------------
         prog_frame = ttk.Frame(outer)
-        prog_frame.grid(row=4, column=0, sticky="ew", pady=(0, 8))
+        prog_frame.grid(row=5, column=0, sticky="ew", pady=(0, 8))
         prog_frame.columnconfigure(0, weight=1)
 
         self._progress = ttk.Progressbar(
@@ -502,7 +647,7 @@ class UniversePrepareDialog(BaseModalDialog):
 
         # --- Buttons --------------------------------------------------
         btn_frame = ttk.Frame(outer)
-        btn_frame.grid(row=5, column=0, sticky="e")
+        btn_frame.grid(row=6, column=0, sticky="e")
         self._start_btn = ttk.Button(btn_frame, text="Start", command=self._on_start)
         self._start_btn.grid(row=0, column=0, padx=(0, 6))
         self._cancel_btn = ttk.Button(btn_frame, text="Close", command=self._on_close_request)
@@ -592,15 +737,28 @@ class UniversePrepareDialog(BaseModalDialog):
     def _resolve_plan(self) -> dict[str, Any] | None:
         """Translate the form into a runnable plan.
 
-        Returns a dict ``{uid, name, kind, source, intervals, symbols,
-        filter}`` or ``None`` (with status set) if the form is
+        Returns a dict ``{uid, name, kind, source, fetcher, intervals,
+        symbols, filter}`` or ``None`` (with status set) if the form is
         invalid. ``filter`` is a :class:`FundamentalFilter` (or
         ``None`` when every form field is blank).
+
+        ``source`` and ``fetcher`` are snapshotted here rather than read
+        off ``self`` in the worker, for the same reason the symbol list
+        is: the plan must not shift under an in-flight run.
         """
         kind = self._kind_var.get()
         intraday = (self._intraday_var.get() or "").strip()
         if not intraday:
             self._status_var.set("Pick a primary intraday interval.")
+            return None
+
+        source = self.selected_source()
+        fetcher = self._resolve_fetcher(source)
+        if not source or fetcher is None:
+            self._status_var.set(
+                f"No fetcher registered for data source {source!r}. Pick "
+                f"another source or configure its credentials."
+            )
             return None
 
         # Parse the fundamental-filter form. Blank = no constraint.
@@ -659,7 +817,8 @@ class UniversePrepareDialog(BaseModalDialog):
             "uid": uid,
             "name": display,
             "kind": ("basket" if kind != "watchlist" else "watchlist"),
-            "source": self._source_name,
+            "source": source,
+            "fetcher": fetcher,
             "intervals": tuple(intervals),
             "symbols": tuple(deduped),
             "filter": flt_spec if is_filter_active(flt_spec) else None,
@@ -792,8 +951,10 @@ class UniversePrepareDialog(BaseModalDialog):
         # ---- Phase 1: optional fundamental filter pre-pass ---------
         flt: FundamentalFilter | None = plan.get("filter")
         symbols: tuple[str, ...] = plan["symbols"]
+        fetcher = plan.get("fetcher") or self._fetcher
         if flt is not None and is_filter_active(flt):
-            matched = self._run_filter_prepass(symbols, plan["source"], flt)
+            matched = self._run_filter_prepass(
+                symbols, plan["source"], flt, fetcher)
             if self._cancel_event.is_set():
                 # User-cancelled mid-filter; piggy-back on the
                 # service's PreloadResult shape by emitting an empty
@@ -827,7 +988,7 @@ class UniversePrepareDialog(BaseModalDialog):
                 list(symbols),
                 list(plan["intervals"]),
                 source_name=plan["source"],
-                fetcher=self._fetcher,
+                fetcher=fetcher,
                 cache_load=_disk_cache.load,
                 cache_save=_disk_cache.save,
                 merge=_disk_cache.merge_candles,
@@ -856,6 +1017,7 @@ class UniversePrepareDialog(BaseModalDialog):
         symbols: tuple[str, ...],
         source: str,
         spec: FundamentalFilter,
+        fetcher: Callable[[str, str], list[Candle] | None],
     ) -> list[str]:
         """Parallel-fetch 1d bars per symbol and apply the filter.
 
@@ -890,7 +1052,7 @@ class UniversePrepareDialog(BaseModalDialog):
             if not bars:
                 # Cold cache: fall back to the live fetcher.
                 try:
-                    bars = self._fetcher(sym, _DAILY_INTERVAL)
+                    bars = fetcher(sym, _DAILY_INTERVAL)
                 except Exception:  # noqa: BLE001
                     bars = None
                 if bars:
@@ -1110,8 +1272,9 @@ class UniversePrepareDialog(BaseModalDialog):
         failed = result.failed()
         head = "Canceled" if result.cancelled else "Done"
         self._status_var.set(
-            f"{head}. {len(non_empty)} / {len(plan['symbols'])} symbols persisted. "
-            f"{len(failed)} interval failures. Manifest saved to '{plan['uid']}'."
+            f"{head}. {len(non_empty)} / {len(plan['symbols'])} symbols persisted "
+            f"from {plan['source']}. {len(failed)} interval failures. "
+            f"Manifest saved to '{plan['uid']}'."
         )
         self._progress.configure(value=self._progress["maximum"])
         self._notify_finished(self._saved_manifest)

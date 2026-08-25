@@ -35,8 +35,12 @@ non-menu paths: ticker entry, watchlist, drilldown).
 - `_on_menu_sandbox_tags()` — open `TagsEditorDialog` for the
   setup-tag taxonomy.
 - `_on_menu_sandbox_prepare_universe()` — open
-  `UniversePrepareDialog`. Refuses while sandbox active (would
-  mutate `_full_cache` mid-replay).
+  `UniversePrepareDialog`, seeded with the sandbox-resolved source as
+  the initial selection plus the full `user_visible_sources()` list and
+  `DATA_SOURCES.get` as the fetcher resolver, so the user can download
+  from a different provider without changing the app's chart source.
+  Refuses while sandbox active (would mutate `_full_cache` mid-replay).
+  On success the status line names the manifest's source.
 
 ## Mixin Rules
 
@@ -105,9 +109,14 @@ non-menu paths: ticker entry, watchlist, drilldown).
   `_fetch_reference_at`, the start-flow fetch) share `_sandbox_src` so the
   `_full_cache` keys stay consistent, the resolved name is passed to
   `start_session(data_source=…)` so the controller pins it for the
-  session, and **Prepare Universe Data uses the same resolution** — a
-  universe cached under one vendor while the session replays from
-  another looks entirely uncached.
+  session, and **Prepare Universe Data is seeded from the same
+  resolution** — a universe cached under one vendor while the session
+  replays from another looks entirely uncached. That seeding is now the
+  dialog's *initial* selection rather than a fixed setting: its own
+  source dropdown can override it per run (e.g. to reach past
+  yfinance's ~60-day intraday cap for an older replay date), and the
+  Start dialog's coverage line flags a manifest/session source mismatch
+  when one results.
 - **Sandbox intervals**: `["1m", "2m", "5m", "15m", "30m", "1h"]`
   only (master clock is intraday).
 - **Daily reference fetch** (`daily_lookback_bars > 0`): degrades
