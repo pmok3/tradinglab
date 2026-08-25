@@ -298,6 +298,66 @@ def test_universe_prepare_dialog_toplevel_uses_dark_theme(dark_root: tk.Toplevel
         dlg.destroy()
 
 
+def test_base_modal_dialog_paints_toplevel_dark(dark_root: tk.Toplevel) -> None:
+    """``BaseModalDialog._finalize_modal`` paints the Toplevel's classic
+    ``bg`` for EVERY subclass.
+
+    ``ttk.Style`` never reaches a Toplevel's own background, so a dialog
+    whose content does not cover the full window rendered the bright
+    system default in dark mode. Hoisting the paint into the base class
+    (rather than a third hand-rolled copy) is what makes the guarantee
+    hold for dialogs nobody remembered to fix.
+    """
+    from tradinglab.gui._modal_base import BaseModalDialog
+
+    dlg = BaseModalDialog(dark_root, title="probe", geometry_key=None)
+    try:
+        dlg._finalize_modal(grab=False)  # noqa: SLF001
+        assert str(dlg.cget("background")) == DARK_THEME["win_bg"], (
+            "BaseModalDialog must paint its Toplevel bg with win_bg so no "
+            "bright system-default region shows in dark mode"
+        )
+    finally:
+        with contextlib.suppress(tk.TclError):
+            dlg.destroy()
+
+
+def test_sandbox_start_dialog_toplevel_uses_dark_theme(dark_root: tk.Toplevel) -> None:
+    """Start Sandbox Session must be dark across the whole window span.
+
+    The dialog is resizable and its persisted ``dlg.sandbox_start``
+    geometry can exceed the form's request size, so it needs BOTH halves
+    of the fix: a painted Toplevel ``bg`` (the padding gutters) and grid
+    weights so the themed ttk content frame stretches into the slack
+    instead of leaving a bright region right/bottom.
+    """
+    import datetime as _dt
+
+    from tradinglab.gui.sandbox_dialog import SandboxStartDialog
+
+    dlg = SandboxStartDialog(
+        dark_root,
+        reference_symbol="SPY",
+        intervals=["1m", "5m", "15m", "1h"],
+        eligible_dates_provider=lambda _itv, _src: [_dt.date(2024, 6, 3)],
+    )
+    try:
+        assert str(dlg.cget("background")) == DARK_THEME["win_bg"]
+        assert int(dlg.grid_columnconfigure(0).get("weight", 0)) == 1
+        assert int(dlg.grid_rowconfigure(0).get("weight", 0)) == 1
+        # Teeth: enlarge well past the form and confirm the themed frame
+        # really grows to cover the window (weights alone could be set on
+        # the wrong cell).
+        dlg.geometry("1000x900")
+        dlg.update_idletasks()
+        content = dlg.winfo_children()[0]
+        assert content.winfo_x() + content.winfo_width() >= dlg.winfo_width() - 8
+        assert content.winfo_y() + content.winfo_height() >= dlg.winfo_height() - 4
+    finally:
+        with contextlib.suppress(tk.TclError):
+            dlg.destroy()
+
+
 # ===========================================================================
 # Meta-test: every window's classic Tk widgets are linked to the dark theme.
 #

@@ -50,12 +50,16 @@ safety) in :func:`geometry_store._clamp_to_screen`.
 
 Theming
 -------
-Subclasses may pass ``apply_dark_theme=True`` to opt into the
-project's dark-mode color propagation. The base class queries the
-parent for an ``apply_dark_theme_to(toplevel)`` method and calls it
-when the parent supports it — this lets dark-mode-aware apps tint the
-dialog without each dialog needing to re-implement the lookup. Apps
-that don't expose that hook are silently no-op'd.
+Subclasses may pass ``apply_dark_theme=True`` (the default) to opt into
+the project's dark-mode color propagation. ``_finalize_modal`` then
+paints the Toplevel's own classic ``bg`` with the active theme's
+``win_bg`` via :func:`native_theme.apply_toplevel_theme` — ``ttk.Style``
+does not reach it, so any region the themed content does not cover
+(padding gutters; the right/bottom slack of a resizable dialog) would
+otherwise show the bright system default in dark mode. It also queries
+the parent for an ``apply_dark_theme_to(toplevel)`` method and calls it
+when present, which lets dark-mode-aware apps add richer per-dialog
+tinting. Apps that don't expose that hook are silently no-op'd.
 """
 from __future__ import annotations
 
@@ -171,9 +175,24 @@ class BaseModalDialog(tk.Toplevel):
             except tk.TclError:
                 pass
 
-        # Dark-theme propagation — best-effort. Apps wire this via
-        # ``apply_dark_theme_to(top)`` on the parent / app object.
+        # Dark-theme propagation — best-effort.
         if self._apply_dark:
+            # ``ttk.Style`` themes ttk children but never reaches the
+            # Toplevel's own classic ``bg``, so every region the dialog's
+            # themed content does not cover (padding gutters, and the
+            # right/bottom slack on any resizable dialog whose form is
+            # smaller than the window) renders in the bright system
+            # default under dark mode. Paint it here — in the base class —
+            # so a dialog cannot ship with a half-lit window merely by
+            # forgetting the call, which is how the same bug reached both
+            # the Prepare Universe and Start Sandbox Session dialogs.
+            try:
+                from .native_theme import apply_toplevel_theme, current_theme
+                apply_toplevel_theme(self, current_theme(self))
+            except Exception:  # noqa: BLE001
+                pass
+            # Legacy opt-in hook: apps may wire ``apply_dark_theme_to(top)``
+            # on the parent / app object for richer per-dialog tinting.
             for candidate in (self._parent_ref, getattr(self._parent_ref, "master", None)):
                 if candidate is None:
                     continue

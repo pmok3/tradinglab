@@ -17,7 +17,9 @@ helpers.
     call at the **end** of `__init__` after widgets exist. Wires
     `WM_DELETE_WINDOW` to `cancel`, binds `<Escape>`/`<Return>`
     via `bind_modal_keys`, restores + binds geometry via
-    `    geometry_store`, optionally `grab_set`s, propagates the
+    `    geometry_store`, optionally `grab_set`s, paints the Toplevel
+    `bg` with the active theme's `win_bg` via
+    `native_theme.apply_toplevel_theme`, then propagates the
     parent or parent-master dark theme via
     `apply_dark_theme_to(top)` when present.
   - `_on_cancel()` — default ESC / [Cancel] (destroys).
@@ -110,7 +112,7 @@ helpers.
   `.geometry_store.store`, `.colors.ERROR_RED` /
   `.colors.MUTED_GREY` / `.colors.SUCCESS_GREEN` (last with
   `ImportError` fallback), `.native_theme.apply_canvas_theme`,
-  `.native_theme.current_theme`.
+  `.native_theme.apply_toplevel_theme`, `.native_theme.current_theme`.
 - External: `tkinter`, `tkinter.ttk`, `typing.Any`.
 
 ## Design Decisions
@@ -124,9 +126,24 @@ helpers.
   confirm dialogs skip; complex editors pass `"dlg.entries"` etc.
 - **`grab=True` default**; non-modal viewers / editors (Doc Viewer,
   Drawing, Indicator) override to `grab=False`.
-- **Dark-theme propagation opt-in via parent hook**: checks the
-  parent and its `master`, then silently no-ops if no
-  `apply_dark_theme_to(top)` hook is present.
+- **Dark-theme propagation is a base-class guarantee, not a per-dialog
+  chore**: when `apply_dark_theme=True` (default), `_finalize_modal`
+  paints the Toplevel's own classic `bg` with the active theme's
+  `win_bg` via `native_theme.apply_toplevel_theme(self,
+  current_theme(self))`. `ttk.Style` reaches ttk children but never the
+  Toplevel background, so every region the dialog's content does not
+  cover — the padding gutters, and the right/bottom slack on any
+  resizable dialog whose form is smaller than the restored geometry —
+  rendered in the bright system default under dark mode. Doing it here
+  rather than per dialog is deliberate: the identical bug shipped twice
+  (Prepare Universe, then Start Sandbox Session) because the fix was
+  hand-rolled at the call site each time (`CLAUDE.md` §7.34). Covering
+  the full span still needs the dialog to grant its content grid
+  weights, but the painted background means forgetting that degrades to
+  a cosmetic gap rather than a half-lit window.
+  The legacy `apply_dark_theme_to(top)` parent hook is still consulted
+  afterwards (parent, then its `master`) for apps that want richer
+  per-dialog tinting, and silently no-ops when absent.
 - **Footer pack-from-right**: `side="right"` reverses visual
   order; packing `Cancel` first yields the canonical
   `[Validate] [Apply] [Save & Close] [Cancel]`.
@@ -135,6 +152,11 @@ helpers.
 
 - `_finalize_modal` idempotent — `_finalized` flag guards
   double-call.
+- After `_finalize_modal` with `apply_dark_theme=True`, the Toplevel's
+  classic `bg` equals the active theme's `win_bg` — pinned by
+  `tests/unit/gui/test_native_widget_dark_theme.py::test_base_modal_dialog_paints_toplevel_dark`.
+  Theme resolution and the paint are both best-effort: a parent with no
+  `_theme_ctrl` resolves to `LIGHT_THEME`, and a `TclError` is swallowed.
 - Geometry persistence best-effort: Tcl/OS errors during restore
   are swallowed.
 - Default `_on_cancel` / `_on_primary` safe on destroyed dialog

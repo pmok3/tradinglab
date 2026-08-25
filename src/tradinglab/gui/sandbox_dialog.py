@@ -179,6 +179,23 @@ class SandboxStartDialog(BaseModalDialog):
         pad = {"padx": 8, "pady": 4}
         frame = ttk.Frame(self)
         frame.grid(row=0, column=0, sticky="nsew", **pad)
+        # Let the themed content frame fill the Toplevel. The dialog is
+        # resizable and its persisted geometry can be larger than the
+        # form, so without these weights the frame keeps its request
+        # size and the slack right/bottom renders in the Toplevel's own
+        # (unthemed) background. ``BaseModalDialog`` paints that
+        # background with ``win_bg``, so the two together mean dark mode
+        # covers the whole window at any size.
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+        # Column 2 carries the hint labels; giving it the slack lets the
+        # form spread instead of leaving a dead strip on the right.
+        frame.grid_columnconfigure(2, weight=1)
+        # Row 14 is an empty spacer that absorbs vertical slack, which
+        # keeps the [Start] [Cancel] row pinned to the bottom edge
+        # (Windows dialog convention) instead of floating mid-window
+        # when the user enlarges the dialog.
+        frame.grid_rowconfigure(14, weight=1)
 
         header = ttk.Frame(frame)
         header.grid(row=0, column=0, columnspan=3, sticky="ew", **pad)
@@ -385,7 +402,7 @@ class SandboxStartDialog(BaseModalDialog):
         self._refresh_coverage()
 
         btns = ttk.Frame(frame)
-        btns.grid(row=14, column=0, columnspan=3, sticky="ew", **pad)
+        btns.grid(row=15, column=0, columnspan=3, sticky="ew", **pad)
         # Windows dialog convention (audit ``button-order-windows``):
         # visual order ``[Start] [Cancel]`` with the dismiss action
         # rightmost. ``side=tk.RIGHT`` reverses pack order, so pack
