@@ -162,9 +162,32 @@ the release `.exe`s.
   fails with "failed to determine base repo: ... not a git repository"
   otherwise. Prepend `$env:PATH = $env:PATH + ';C:\Program Files\Git\cmd'`
   before every `gh` call in PowerShell.
-- **`GH_TOKEN` outranks the gh keyring.** An agent session is usually
-  authenticated as a read-only account, so pushes 403. Clear `GH_TOKEN`, then
-  `gh auth switch --user pmok3` — see §8.
+- **Pushing to `main` needs the `pmok3` credential, and the obvious
+  incantation does NOT work.** An agent session is usually authenticated as a
+  read-only account, so `git push` 403s with "Permission to pmok3/tradinglab
+  denied to pacomok_microsoft". Two layers have to be defeated:
+  1. `GH_TOKEN` / `GITHUB_TOKEN` outrank the gh keyring — clear them, then
+     `gh auth switch --user pmok3`.
+  2. The Copilot CLI injects **command-line** git config
+     `credential.https://github.com.helper copilot`, which resolves to the
+     read-only account. Command-line config beats file config, and a
+     *URL-specific* helper beats the generic one — so the widely-cited
+     `-c credential.helper='!gh auth git-credential'` is silently ignored for
+     github.com. Override the URL-specific key instead, resetting the list
+     with an empty value first:
+
+  ```powershell
+  $env:PATH = $env:PATH + ';C:\Program Files\Git\cmd'
+  Remove-Item Env:\GH_TOKEN, Env:\GITHUB_TOKEN -ErrorAction SilentlyContinue
+  gh auth switch --user pmok3
+  $gh = (Get-Command gh).Source
+  git -c "credential.https://github.com.helper=" `
+      -c "credential.https://github.com.helper=!'$gh' auth git-credential" `
+      push origin HEAD:main
+  ```
+
+  Diagnose a 403 with `git config --show-origin --get-regexp 'credential.*'`
+  — entries whose origin is `command line:` are the ones winning.
 - **`gh run view` does NOT accept `--branch`.** Use
   `gh run list --branch main --limit N` first to grab the run id, then
   `gh run view <id>`.
@@ -805,10 +828,9 @@ gh release view v<version> --json isPrerelease,assets
   `MAJOR.MINOR.PATCH` (pinned by `tests/unit/test_versioning.py`, the rewrite
   regex in `tools/bump_version.py`, and the numeric Win32 VERSIONINFO tuple
   `build_exe.ps1` feeds PyInstaller) — express the beta in the TAG, not the literal.
-- **Pushing needs the `pmok3` credential.** An agent session is usually
-  authenticated as a read-only account; `git push` then fails with a 403. Use
-  `gh auth switch --user pmok3` (clear `GH_TOKEN` first, it outranks the keyring)
-  and push with `-c credential.helper='!gh auth git-credential'`.
+- **Pushing needs the `pmok3` credential**, and the plain
+  `-c credential.helper=…` override does not survive the Copilot CLI's
+  command-line git config. Use the exact recipe in §3 — don't improvise.
 - **Local builds** (`tools/build_exe.ps1`, full guide in `docs/BUILDING_EXE.md`)
   are for debugging the frozen app, not for releasing. If you do cross-arch builds
   by hand, wipe `.venv-build` between arches — see §7.4.
@@ -845,7 +867,7 @@ gh release view v<version> --json isPrerelease,assets
   $env:PATH = $env:PATH + ';C:\Program Files\Git\cmd'
   git fetch origin
   git rebase origin/main          # keep history linear
-  git push origin HEAD:main
+  git push origin HEAD:main       # 403? use the §3 credential recipe
   ```
 
 - **Because there is no PR gate, validate BEFORE you push.** `main` is what
@@ -860,7 +882,8 @@ gh release view v<version> --json isPrerelease,assets
 
   CI still runs on `main` afterwards as a backstop, not as the gate.
 - Push with the **`pmok3`** credential. An agent session may be authenticated
-  as a different account with read-only access; see §3.
+  as a different account with read-only access, and the CLI's injected
+  credential helper wins over the usual override — full recipe in §3.
 ### Style
 - `ruff check src tests` must pass (config in `pyproject.toml`).
 - Line length 110.
