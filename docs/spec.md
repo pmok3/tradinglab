@@ -1050,9 +1050,13 @@ handles the (often changed) data-coord mapping correctly.
 
 Left-click a chart: begin typing mode for that slot. The slot is stored
 as `_typing_target` ∈ `{"primary", "compare"}`. Keystrokes accumulate in
-`_typing_buffer` (alnum + `._-`). A large grey `ax.text(0.5, 0.5, buffer, ...)`
-is rendered in the center of the chart as the preview. Enter commits
-(calls `_schedule_reload(delay_ms=0)`), Esc cancels.
+`_typing_buffer`: letters and `._-/` always, digits only once the buffer
+is non-empty (a digit must never open a phantom buffer from a stray
+keypress, but it must type through inside a symbol — the divisor of a
+scaled symbol like `SPX/10` or `^VIX/15.87` is all digits). A large grey
+`ax.text(0.5, 0.5, buffer, ...)` is rendered in the center of the chart
+as the preview. Enter commits (calls `_schedule_reload(delay_ms=0)`),
+Esc cancels.
 
 If the user starts typing with no chart clicked, we default to
 `"primary"` and set `_last_clicked_slot = "primary"` for continuity.

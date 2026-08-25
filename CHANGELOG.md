@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Typing a scaled symbol on the chart works again.** Click-to-type
+  silently dropped every digit, so `AMD/1` stalled at `AMD/` and could
+  not be completed — and click-to-type is the only way to enter a symbol
+  (the toolbar *Ticker:* box is a read-only display). Digits now extend a
+  symbol you have started typing, which makes the whole scaled-symbol
+  family (`SPX/10`, `VIX/15.87` — the same shapes the Quant panel loads
+  on a double-click) reachable from the keyboard. A digit still won't
+  *start* a buffer, so a stray numeric keypress over the chart doesn't
+  raise a phantom `1` preview.
+
 ## [0.6.3] - 2026-08-24
 
 A new **Quant** panel: one place to pull up the handful of market-wide

@@ -42,10 +42,12 @@ by `ChartApp._build_ui`.
   NOT overwrite `_blit_bg`). A genuine redraw also drops `_tick_blit_bg`
   (decorations were repainted, so the data-less snapshot is stale).
 - `_on_key_press(event)` — accumulate keystrokes into
-  `_typing_buffer` (letters + `._-/` only; digits ignored to avoid
-  phantom buffers). Enter commits, Escape cancels, Backspace
-  deletes. **Space (`keysym == "space"`)** returns early — the
-  watchlist-cycle hotkey is owned by app-level
+  `_typing_buffer` (letters + `._-/` always; digits only once the
+  buffer is non-empty, so a stray numeric keypress can't open a
+  phantom buffer while `AMD/1` / `^VIX/15.87` still type through —
+  see `_starts_typing` / `_continues_typing`). Enter commits, Escape
+  cancels, Backspace deletes. **Space (`keysym == "space"`)** returns
+  early — the watchlist-cycle hotkey is owned by app-level
   `bind_all("<KeyPress-space>")`. Handling here too would
   double-cycle.
 
@@ -204,6 +206,20 @@ by `ChartApp._build_ui`.
 
 `_begin_click_to_type(ax)`, `_refresh_typing_preview`,
 `_commit_click_to_type`, `_cancel_click_to_type`.
+
+**Accepted characters** are split across two module-level predicates so
+the anti-phantom rule and the symbol grammar don't fight each other:
+`_starts_typing(ch)` (letters + `._-/`) may OPEN a buffer;
+`_continues_typing(ch)` (that set **plus digits**) may EXTEND a
+non-empty one. A digit therefore never spawns a phantom `"1"` preview
+from a stray keypress over the chart, but it does type through inside a
+symbol — which is what makes the divisor of a scaled symbol reachable
+(`AMD/1`, `SPX/10`, `^VIX/15.87`; see `../data/ratio_source.spec.md` and
+CLAUDE.md §7.37). Before this split the handler was alpha-only in both
+positions, so a typed scaled symbol stalled at `"SPX/"` and could not be
+completed at all — the toolbar `Ticker:` box is a read-only label
+(`toolbar_controller.spec.md`), so click-to-type is the ONLY symbol-entry
+path.
 
 **`_refresh_typing_preview` composites via the blit fast path** (audit
 `typing-preview-blit`). The grey preview letters are a big `Text` artist

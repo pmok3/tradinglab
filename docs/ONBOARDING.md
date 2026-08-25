@@ -280,7 +280,7 @@ By default scroll DOWN zooms IN. If you prefer the macOS
 
 | Key | What it does |
 |---|---|
-| **Type letters** while the chart has focus | Click-to-type ticker entry. Letters / `.` / `_` / `-` accumulate into the *Ticker:* (or *Compare:*, if the last click was on the compare panel) readout. **Enter** commits and loads the chart, **Esc** cancels the buffer, **Backspace** deletes a letter. |
+| **Type letters** while the chart has focus | Click-to-type ticker entry. Letters / `.` / `_` / `-` / `/` accumulate into the *Ticker:* (or *Compare:*, if the last click was on the compare panel) readout; **digits are accepted once you've typed at least one character**, so ratio and scaled symbols like `AMD/NVDA` and `^VIX/15.87` work (a digit won't *start* a buffer — that would spawn a phantom "1" from a stray keypress). **Enter** commits and loads the chart, **Esc** cancels the buffer, **Backspace** deletes a character. |
 | **Space** | Cycle to the next ticker in the active pinned watchlist |
 | **Alt+H** with cursor on a chart | Drop a horizontal price line at the cursor's price (TradingView-style). Double-click the line to edit color / width / style / label, right-click for "Edit Properties…" or "Delete This Line". Right-click empty chart for "Remove All Drawings on <TICKER>". Lines persist per-ticker across interval changes, primary↔compare swaps, and app restarts. |
 | **R** *(`Ctrl+R`)* | Reset view (snaps back to 1d, right-edge default window) |

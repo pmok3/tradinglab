@@ -455,8 +455,9 @@ for _attr in (
 
 
 class TestKeyPressTypingBuffer:
-    """The click-to-type buffer must accept letters, ignore digits and
-    modifiers, and respect special keys (BackSpace / Return / Escape)."""
+    """The click-to-type buffer must accept letters (and digits, once it
+    is non-empty), ignore leading digits and modifiers, and respect
+    special keys (BackSpace / Return / Escape)."""
 
     def test_bare_letter_starts_typing_on_primary(self):
         h = _InteractionHarness()
@@ -477,6 +478,45 @@ class TestKeyPressTypingBuffer:
         h._on_key_press(_FakeEvent(keysym="1", char="1"))
         assert h._typing_target is None
         assert h._typing_buffer == ""
+
+    def test_digit_ignored_after_bare_click_with_empty_buffer(self):
+        """A click arms `_typing_target` with an EMPTY buffer; a digit
+        must still not open one (same phantom guard as above)."""
+        h = _InteractionHarness()
+        h._begin_click_to_type(h._price_ax)
+        h._on_key_press(_FakeEvent(keysym="1", char="1"))
+        assert h._typing_buffer == ""
+
+    def test_digit_extends_non_empty_buffer(self):
+        h = _InteractionHarness()
+        for c in "brk":
+            h._on_key_press(_FakeEvent(keysym=c, char=c))
+        h._on_key_press(_FakeEvent(keysym="2", char="2"))
+        assert h._typing_buffer == "BRK2"
+
+    def test_scaled_symbol_divisor_types_through(self):
+        """Regression: the divisor of a scaled symbol is all digits, so
+        an alpha-only filter stranded the buffer at ``AMD/`` with no way
+        to finish the symbol (CLAUDE.md §7.37)."""
+        h = _InteractionHarness()
+        for c in "amd/1":
+            h._on_key_press(_FakeEvent(keysym=c, char=c))
+        assert h._typing_buffer == "AMD/1"
+
+    def test_scaled_symbol_with_decimal_divisor_commits(self):
+        h = _InteractionHarness()
+        h._begin_click_to_type(h._price_ax)
+        for c in "vix/15.87":
+            h._on_key_press(_FakeEvent(keysym=c, char=c))
+        h._on_key_press(_FakeEvent(keysym="Return", char="\r"))
+        assert h.ticker_var.get() == "VIX/15.87"
+        assert h.schedule_reload_calls == [0]
+
+    def test_quotient_ratio_types_through(self):
+        h = _InteractionHarness()
+        for c in "amd/nvda":
+            h._on_key_press(_FakeEvent(keysym=c, char=c))
+        assert h._typing_buffer == "AMD/NVDA"
 
     def test_dot_and_dash_allowed_for_class_shares(self):
         h = _InteractionHarness()

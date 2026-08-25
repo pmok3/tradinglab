@@ -516,6 +516,53 @@ def check_b0_click_to_type(app) -> None:
     print("  [OK] §12 click-to-type state + begin/commit/cancel")
 
 
+def check_b0a_click_to_type_scaled_symbol(app) -> None:
+    """spec §12 — a scaled symbol must type through the REAL key handler.
+
+    Regression: ``_on_key_press`` accepted letters + ``._-/`` only, so every
+    digit was silently dropped and a typed ``AMD/1`` stalled at ``"AMD/"``.
+    The divisor of a scaled symbol (CLAUDE.md §7.37) is entirely numeric,
+    and click-to-type is the ONLY symbol-entry path — the toolbar
+    ``Ticker:`` box is a read-only label — so the whole shape was
+    unreachable from the UI.
+
+    Drives ``_on_key_press`` (not the buffer directly, which is what let
+    b0 pass throughout the bug) and never commits, so no fetch is issued.
+    """
+    class _Key:
+        def __init__(self, ch: str) -> None:
+            self.keysym = ch
+            self.char = ch
+
+    ax = app._panel_state.get("primary", {}).get("price_ax")
+    assert ax is not None, "§12 need a price_ax on primary slot"
+    original = app.ticker_var.get()
+    try:
+        app._begin_click_to_type(ax)
+        # A digit must not OPEN a buffer (no phantom "1" from a stray key).
+        app._on_key_press(_Key("1"))
+        assert app._typing_buffer == "", (
+            "§12 a digit must not open a click-to-type buffer; got "
+            f"{app._typing_buffer!r}")
+        for ch in "amd/1":
+            app._on_key_press(_Key(ch))
+        assert app._typing_buffer == "AMD/1", (
+            "§12 digits must extend a non-empty buffer so a scaled symbol "
+            f"is typeable; got {app._typing_buffer!r}")
+        app._cancel_click_to_type()
+        # Quotient legs and decimal divisors too.
+        app._begin_click_to_type(ax)
+        for ch in "vix/15.87":
+            app._on_key_press(_Key(ch))
+        assert app._typing_buffer == "VIX/15.87", (
+            f"§12 decimal divisor should type through; got "
+            f"{app._typing_buffer!r}")
+    finally:
+        app._cancel_click_to_type()
+        app.ticker_var.set(original)
+    print("  [OK] §12 click-to-type accepts digits inside a symbol")
+
+
 def check_c0_watchlist_tab(app) -> None:
     """spec §18.4 — watchlist tab populated from _watchlist_snapshot + debouncer."""
     assert hasattr(app, "_watchlists") or hasattr(app, "watchlists"), (
@@ -23566,6 +23613,7 @@ def _run_all_checks(app) -> None:
     check_95_stream_queue_coalescing(app)
     check_a0_hover_and_crosshair(app)
     check_b0_click_to_type(app)
+    check_b0a_click_to_type_scaled_symbol(app)
     check_c0_watchlist_tab(app)
     check_c5_notebook(app)
     check_c6_bad_ticker(app)
@@ -23865,6 +23913,8 @@ def _build_check_sequence():
         ("check_95_stream_queue_coalescing", check_95_stream_queue_coalescing),
         ("check_a0_hover_and_crosshair", check_a0_hover_and_crosshair),
         ("check_b0_click_to_type", check_b0_click_to_type),
+        ("check_b0a_click_to_type_scaled_symbol",
+         check_b0a_click_to_type_scaled_symbol),
         ("check_c0_watchlist_tab", check_c0_watchlist_tab),
         ("check_c5_notebook", check_c5_notebook),
         ("check_c6_bad_ticker", check_c6_bad_ticker),

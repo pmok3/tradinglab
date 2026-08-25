@@ -37,6 +37,35 @@ from .. import defaults as _defaults  # noqa: E402
 
 _HOVER_THROTTLE_MS = _defaults.get("hover_throttle_ms")
 
+#: Non-alphanumeric characters accepted into the click-to-type buffer.
+#: Dot / dash carry class shares and pairs (``BRK.B``, ``BTC-USD``); the
+#: slash carries both ratio shapes (``AMD/NVDA``, ``^VIX/15.87`` — §7.37).
+_TYPING_PUNCT = "._-/"
+
+
+def _starts_typing(ch: str) -> bool:
+    """True if ``ch`` may OPEN a click-to-type buffer.
+
+    Digits are excluded on purpose: with no buffer open, a stray numeric
+    keypress over the chart would spawn a phantom ``"1"`` / ``"23"``
+    symbol preview.
+    """
+    return bool(ch) and (ch.isalpha() or ch in _TYPING_PUNCT)
+
+
+def _continues_typing(ch: str) -> bool:
+    """True if ``ch`` may EXTEND an already-open click-to-type buffer.
+
+    A superset of :func:`_starts_typing` by exactly the digits. Once the
+    user has demonstrably started typing a symbol there is no phantom to
+    guard against, and digits are load-bearing: the divisor of a scaled
+    symbol (``SPX/10``, ``^VIX/15.87`` — §7.37) is entirely numeric, so
+    dropping them stranded the buffer at ``"SPX/"`` with no way to finish
+    the symbol. Tickers that merely contain a digit (``BRK.B`` has none,
+    but plenty of listings do) were unreachable for the same reason.
+    """
+    return bool(ch) and (ch.isalnum() or ch in _TYPING_PUNCT)
+
 
 class InteractionMixin:
     """Pan, zoom, hover tooltip, crosshair, and click-to-type behaviour."""
@@ -489,6 +518,10 @@ class InteractionMixin:
     def _on_key_press(self, event) -> None:
         """Accumulate keystrokes for click-to-type (§12).
 
+        Accepted characters are letters, ``._-/`` and — once the buffer
+        is non-empty — digits (see :func:`_starts_typing` /
+        :func:`_continues_typing`).
+
         Space is reserved as the watchlist-cycle hotkey but is handled
         exclusively by the app-level ``bind_all("<KeyPress-space>")``
         registration (see ``ChartApp._on_global_space``) — that binding
@@ -516,12 +549,10 @@ class InteractionMixin:
             return
         if self._typing_target is None:
             # Starting typing with no chart clicked defaults to primary.
-            # Tickers are letters (plus dot/dash for class shares like
-            # BRK.B, and slash for ratio symbols like AMD/NVDA). Digits
-            # are intentionally ignored so a stray numeric keypress
-            # doesn't start a phantom "1" / "23" symbol buffer over the
-            # chart.
-            if ch and (ch.isalpha() or ch in "._-/"):
+            # Only a character that may OPEN a buffer counts here: digits
+            # are excluded so a stray numeric keypress doesn't start a
+            # phantom "1" / "23" symbol buffer over the chart.
+            if _starts_typing(ch):
                 self._typing_target = self._last_clicked_slot or "primary"
                 self._typing_buffer = ""
             else:
@@ -533,9 +564,14 @@ class InteractionMixin:
         elif keysym == "BackSpace":
             self._typing_buffer = self._typing_buffer[:-1]
             self._refresh_typing_preview()
-        elif ch and (ch.isalpha() or ch in "._-/"):
+        elif _starts_typing(ch) or (self._typing_buffer
+                                    and _continues_typing(ch)):
+            # Digits EXTEND a non-empty buffer but never open one, so
+            # `AMD/1` and `^VIX/15.87` type through while a bare digit on
+            # a merely-clicked (empty-buffer) chart still does nothing.
             self._typing_buffer += ch.upper()
             self._refresh_typing_preview()
+
     # ---- pan + zoom (spec §6.4) ---------------------------------------
     def _pan_setup_blit(self) -> None:
         """Mark all data artists animated, force a clean draw, snapshot bg.
