@@ -1433,6 +1433,14 @@ class WatchlistTabMixin:
             self._preload_watchlist_events()
         except Exception:  # noqa: BLE001
             pass
+        # Replay: newly-pinned tickers are not on the session's clock yet,
+        # so top the market feed up. No-op when no session is active or
+        # nothing new appeared (see ``backtest/sandbox_feed.spec.md``).
+        try:
+            if self._is_sandbox_active():
+                self._sandbox_ctrl.refresh_feed(app=self)
+        except Exception:  # noqa: BLE001
+            pass
         # Pinned watchlists changed → re-arm the WL tiers (flagged; no-op off).
         self._prefetch_observe_watchlists()
 
@@ -1454,6 +1462,83 @@ class WatchlistTabMixin:
             return (True, ts, sd)
         except Exception:  # noqa: BLE001
             return (False, None, None)
+
+    def _sandbox_pinned_source(self) -> str:
+        """The session's pinned vendor, or ``""``. **Thread-safe** (no Tk)."""
+        try:
+            return str(getattr(self._sandbox, "data_source", "") or "").strip()
+        except Exception:  # noqa: BLE001
+            return ""
+
+    def _sandbox_watchlist_source(self) -> str | None:
+        """The data source watchlist values must be read under during replay.
+
+        **Not** ``source_var``. The Start Sandbox dialog pins the session's
+        vendor (`gui/sandbox_menu._sandbox_src`), which routinely differs
+        from the toolbar: the shipped default toolbar source is ``"Auto"``,
+        and ``Auto`` is unranked in `data/source_ranking`, so the session
+        resolves to a concrete vendor (``yfinance`` on a stock install)
+        while the combobox still reads ``Auto``. Reading ``_full_cache``
+        under ``("Auto", …)`` therefore missed every tape the session had
+        loaded under ``("yfinance", …)``, and the watchlist sat blank for
+        the whole replay. Mirrors
+        `backtest/sandbox_app._sandbox_preferred_src`.
+
+        Tk-thread only — the ``source_var`` fallback reads a Tcl variable.
+        Workers use :meth:`_sandbox_pinned_source` with their own
+        caller-resolved fallback.
+        """
+        pinned = self._sandbox_pinned_source()
+        if pinned:
+            return pinned
+        try:
+            return self.source_var.get()
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _sandbox_visible_bars(self, ticker: str) -> list | None:
+        """Clock-synced visible bars for ``ticker`` from the replay session.
+
+        The session's per-symbol visible list already ends at the replay
+        clock and grows in place on every tick (see
+        `backtest/replay.spec.md`), so this needs no slicing and cannot
+        leak look-ahead. Returns ``None`` when the symbol isn't registered
+        with the session — the caller falls back to the cache path.
+        """
+        try:
+            visible = self._sandbox.visible_candles_by_symbol.get(ticker)
+        except Exception:  # noqa: BLE001
+            return None
+        return visible or None
+
+    def _sandbox_daily_bars(self, ticker: str) -> list | None:
+        """Raw daily context registered for ``ticker``, if any."""
+        try:
+            daily = self._sandbox.daily_full_by_symbol.get(ticker)
+        except Exception:  # noqa: BLE001
+            return None
+        return daily or None
+
+    def _sandbox_watchlist_interval(self) -> str | None:
+        """The session's tick interval — never the toolbar's.
+
+        The toolbar interval follows whatever timeframe the user is
+        *viewing* and can legitimately read ``"1d"`` (the daily-context
+        toggle), which would make the intraday visible list get treated
+        as a daily series by
+        :meth:`_apply_watchlist_snapshot_from_bars`. The session's own
+        ``interval`` is the one its bars are actually in.
+        """
+        try:
+            itv = str(getattr(self._sandbox, "interval", "") or "").strip()
+        except Exception:  # noqa: BLE001
+            itv = ""
+        if itv:
+            return itv
+        try:
+            return self.interval_var.get()
+        except Exception:  # noqa: BLE001
+            return None
 
     def _apply_watchlist_change_from_daily_tail(
         self,
@@ -1541,12 +1626,20 @@ class WatchlistTabMixin:
         src: str | None,
         itv: str | None,
         bars: object,
+        *,
+        clock_synced: bool = False,
     ) -> bool:
         """Derive Watchlist Last/Change cells from fetched bars on the Tk thread.
 
         This is the shared snapshot seam for legacy watchlist preload workers
         and scheduler-warmed watchlist jobs. It preserves the sandbox clock
         slicing rules that keep replay watchlists free of look-ahead bias.
+
+        ``clock_synced=True`` promises ``bars`` already ends at the replay
+        clock — the contract of the session's own
+        ``visible_candles_by_symbol`` lists. That skips the per-bar scan
+        for the last in-clock bar, which would otherwise walk the whole
+        visible list for every pinned ticker on every tick.
         """
         try:
             cs = list(bars or [])
@@ -1571,7 +1664,9 @@ class WatchlistTabMixin:
         else:
             sb_active, sb_ts, _sb_date = self._sandbox_watchlist_clock()
             last_bar = None
-            if sb_active and sb_ts is not None:
+            if clock_synced or not sb_active or sb_ts is None:
+                last_bar = cs[-1]
+            else:
                 for c in cs:
                     try:
                         cts = int(c.date.timestamp())
@@ -1581,8 +1676,6 @@ class WatchlistTabMixin:
                         last_bar = c
                     else:
                         break
-            else:
-                last_bar = cs[-1]
             if last_bar is None:
                 return False
             snap = self._watchlist_snapshot.setdefault(ticker, {})
@@ -1598,51 +1691,73 @@ class WatchlistTabMixin:
         return changed
 
     def _refresh_watchlist_for_sandbox(self) -> None:
-        """Re-run the price-preload pipeline so watchlist Last/Change
-        reflect the sandbox clock.
+        """Re-derive watchlist Last/Change from the replay clock.
 
-        Clears clock-dependent snapshot fields (``last``, ``change_1d``,
-        ``pct_1d``, legacy ``chg``/``pct``) so the next repaint sees
-        empty cells until the worker pool refills them — preferable to
-        showing stale today-values during the brief refetch window.
-        Then resubmits both preload helpers, which detect sandbox via
-        :meth:`_sandbox_watchlist_clock` and slice the cached series to
-        the replay clock.
+        Runs on sandbox start and on every bar advance, so "one more bar"
+        means new information for every pinned ticker — not just the
+        focused chart.
+
+        Resolution order per ticker:
+
+        1. The session's own clock-synced visible list
+           (:meth:`_sandbox_visible_bars`). Preferred: it already ends at
+           the replay clock, grows in place per tick, and therefore costs
+           one dict lookup and one index — no slicing, no look-ahead risk.
+           The market-feed warm (`backtest/sandbox_feed.spec.md`) is what
+           puts pinned tickers there.
+        2. ``_full_cache`` under the **session's pinned source**
+           (:meth:`_sandbox_watchlist_source`), sliced against the clock.
+           Covers a symbol the warm hasn't reached yet.
+
+        Clock-dependent fields are cleared **per ticker, and only when
+        replacement data exists**. Blanket-clearing first was the old
+        behaviour and it is why a source-key miss showed as a permanently
+        empty table: every tick wiped Last/Change for every row and then
+        refilled nothing.
         """
-        snap_map = getattr(self, "_watchlist_snapshot", None)
-        if isinstance(snap_map, dict):
-            for snap in snap_map.values():
-                if not isinstance(snap, dict):
-                    continue
-                for k in (
-                    "last", "change_1d", "pct_1d", "chg", "pct",
-                    "_last_source", "_last_day", "_daily_change_tail",
-                ):
-                    snap.pop(k, None)
         try:
-            src = self.source_var.get()
-            itv = self.interval_var.get()
+            tickers = list(self._pinned_ticker_union())
         except Exception:  # noqa: BLE001
-            src = itv = None
-        if src and itv:
+            tickers = []
+        if not tickers:
             try:
-                tickers = list(self._pinned_ticker_union())
+                self._populate_watchlist_tab()
             except Exception:  # noqa: BLE001
-                tickers = []
-            for t in tickers:
+                pass
+            return
+
+        src = self._sandbox_watchlist_source()
+        itv = self._sandbox_watchlist_interval()
+
+        for t in tickers:
+            intraday = self._sandbox_visible_bars(t)
+            synced = intraday is not None
+            daily = self._sandbox_daily_bars(t)
+            if intraday is None and src and itv:
                 try:
-                    bars = self._full_cache.get((src, t, itv))
-                    if bars:
-                        self._apply_watchlist_snapshot_from_bars(t, src, itv, bars)
+                    intraday = self._full_cache.get((src, t, itv))
+                except Exception:  # noqa: BLE001
+                    intraday = None
+            if daily is None and src:
+                try:
+                    daily = self._full_cache.get((src, t, "1d"))
+                except Exception:  # noqa: BLE001
+                    daily = None
+            if not intraday and not daily:
+                continue
+            self._clear_watchlist_clock_fields(t)
+            if intraday:
+                try:
+                    self._apply_watchlist_snapshot_from_bars(
+                        t, src, itv, intraday, clock_synced=synced)
                 except Exception:  # noqa: BLE001
                     pass
-            for t in tickers:
+            if daily:
                 try:
-                    bars = self._full_cache.get((src, t, "1d"))
-                    if bars:
-                        self._apply_watchlist_snapshot_from_bars(t, src, "1d", bars)
+                    self._apply_watchlist_snapshot_from_bars(t, src, "1d", daily)
                 except Exception:  # noqa: BLE001
                     pass
+
         try:
             self._preload_watchlist_signals()
         except Exception:  # noqa: BLE001
@@ -1651,6 +1766,25 @@ class WatchlistTabMixin:
             self._populate_watchlist_tab()
         except Exception:  # noqa: BLE001
             pass
+
+    def _clear_watchlist_clock_fields(self, ticker: str) -> None:
+        """Drop one ticker's clock-dependent snapshot fields.
+
+        Showing an empty cell for the instant between clear and refill is
+        preferable to showing today's live value during a historical
+        replay; the refill happens in the same call.
+        """
+        snap_map = getattr(self, "_watchlist_snapshot", None)
+        if not isinstance(snap_map, dict):
+            return
+        snap = snap_map.get(ticker)
+        if not isinstance(snap, dict):
+            return
+        for k in (
+            "last", "change_1d", "pct_1d", "chg", "pct",
+            "_last_source", "_last_day", "_daily_change_tail",
+        ):
+            snap.pop(k, None)
 
     # ---- preload (ticker-union deduped) ------------------------------
     def _preload_watchlist(self) -> None:
@@ -1796,11 +1930,23 @@ class WatchlistTabMixin:
     def _signal_bars(self, source: str, symbol: str, interval: str):
         """``bars_provider`` for the signal evaluator (worker thread).
 
-        Prefers the shared ``_full_cache``; otherwise fetches via the
-        registered data source. Slices to the sandbox replay clock when a
-        replay session is active so signal columns carry no look-ahead.
+        During replay, prefers the session's own clock-synced visible
+        list, then ``_full_cache`` under the **session's pinned source**
+        (not ``source_var`` — see :meth:`_sandbox_watchlist_source`), and
+        only then the registered fetcher. Anything that does reach a
+        fetcher is sliced to the replay clock so signal columns carry no
+        look-ahead.
         """
         bars = None
+        sb_active, sb_ts, _sb_date = self._sandbox_watchlist_clock()
+        if sb_active:
+            visible = self._sandbox_visible_bars(symbol)
+            if visible:
+                # Already ends at the clock — no slice needed. Copied
+                # because the Tk thread appends to this list in place on
+                # every tick and the evaluator reads it off-thread.
+                return list(visible)
+            source = self._sandbox_pinned_source() or source
         try:
             bars = self._full_cache.get((source, symbol, interval))
         except Exception:  # noqa: BLE001
@@ -1815,7 +1961,6 @@ class WatchlistTabMixin:
                 return None
         if not bars:
             return None
-        sb_active, sb_ts, _sb_date = self._sandbox_watchlist_clock()
         if sb_active and sb_ts is not None:
             sliced = []
             for c in bars:

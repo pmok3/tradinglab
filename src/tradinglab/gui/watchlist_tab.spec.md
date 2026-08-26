@@ -155,15 +155,21 @@ larger; pinning makes a list reachable from the main UI.
   `_pinned_ticker_union()` for tickers missing from `_events_cache`,
   so the default Next Earnings column fills proactively. Repeated calls
   are harmless because `_load_events_async` also in-flight dedupes.
-- `_apply_watchlist_snapshot_from_bars(ticker, src, itv, bars)` —
+- `_apply_watchlist_snapshot_from_bars(ticker, src, itv, bars, *, clock_synced=False)` —
   Tk-thread snapshot seam shared by legacy preload workers and the
   scheduler live seam. Intraday bars update `last`, `_last_source`,
   `_last_day`, then recompute Change from cached daily tails; daily bars
   update the Change columns (and may provide a daily fallback Last when no
   intraday Last exists). Preserves sandbox replay slicing: intraday Last
   uses only bars at-or-before the replay clock, and daily Change uses only
-  sessions before the replay session date. Successful updates queue a
-  `("refresh", None)` inbox item.
+  sessions before the replay session date. `clock_synced=True` promises
+  `bars` already ends at the replay clock (the contract of the session's
+  `visible_candles_by_symbol` lists) and takes `bars[-1]` directly instead
+  of scanning. Successful updates queue a `("refresh", None)` inbox item.
+- `_sandbox_watchlist_source()` / `_sandbox_pinned_source()` /
+  `_sandbox_watchlist_interval()` / `_sandbox_visible_bars(ticker)` /
+  `_sandbox_daily_bars(ticker)` — replay-time resolution helpers. See the
+  Design Decisions entry on the replay source.
 - `_preload_one_last(ticker, src=None, itv=None)` /
   `_preload_one_daily(ticker, src=None)` — legacy worker-thread fetchers kept
   as direct seams for tests/manual callers; normal watchlist refresh no longer
@@ -184,8 +190,9 @@ larger; pinning makes a list reachable from the main UI.
 - **Synchronous fast path** for smoke tests: when invoked on the
   Tk thread the cache stash is applied inline.
 - `_kick_watchlist_preloads()` — invoked at the end of
-  `_rebuild_watchlist_subtabs`; re-arms the scheduler watchlist tiers and keeps
-  non-OHLC events/signals preloads.
+  `_rebuild_watchlist_subtabs`; re-arms the scheduler watchlist tiers, keeps
+  non-OHLC events/signals preloads, and (during replay) tops up the sandbox
+  market feed so newly-pinned tickers join the session's clock.
 
 ### Recurring poll loop
 
@@ -304,20 +311,45 @@ larger; pinning makes a list reachable from the main UI.
   as the reference. If intraday Last is unavailable, daily closes
   provide a temporary day-over-day fallback until intraday refresh
   lands.
-- **Sandbox-aware watchlist values**: while sandbox active, both
-  worker fetchers slice the cached series against
-  `ChartApp._sandbox_watchlist_clock()` (returns `(active,
-  clock_ts, session_date)`) before writing to the snapshot —
-  otherwise watchlist shows today's live values during a
-  historical replay. `_preload_one_last` uses close of latest
-  intraday bar whose timestamp ≤ `clock_ts`. `_preload_one_daily`
-  filters to bars whose `date.date() < session_date`; computes
-  `change_1d = last_intraday − prior_session_close` (matches a
-  real broker ticker at that historical moment). If intraday Last
-  has not landed, it falls back to filtered day-over-day.
-  `_refresh_watchlist_for_sandbox()` clears clock-dependent fields
-  and resubmits both preloads; called on (a) sandbox start,
-  (b) every `next_bar` advance.
+- **Sandbox-aware watchlist values**: during replay the values come from
+  the *session*, not from live data. `_refresh_watchlist_for_sandbox()`
+  resolves each pinned ticker in order: (1) the session's own
+  `visible_candles_by_symbol` list via `_sandbox_visible_bars` — already
+  clock-correct, grows in place per tick, so it needs no slicing and
+  cannot leak look-ahead; (2) `_full_cache` under
+  `_sandbox_watchlist_source()`, sliced against
+  `_sandbox_watchlist_clock()`. `_apply_watchlist_snapshot_from_bars`
+  takes `clock_synced=True` for path (1) to skip the per-bar scan.
+  Daily Change filters to bars whose `date.date() < session_date`;
+  `change_1d = last_intraday − prior_session_close` (matches a real
+  broker ticker at that historical moment). Called on (a) sandbox start,
+  (b) every `next_bar` advance that is not inside a `_defer_render`
+  batch, (c) once at the end of `skip_to_next_day`, (d) each market-feed
+  warm batch.
+- **The replay source is the session's, never `source_var`** — this was a
+  live bug, not a hypothetical. `_sandbox_watchlist_source()` returns
+  `SandboxController.data_source` (pinned by the Start Sandbox dialog),
+  falling back to `source_var` only when nothing is pinned;
+  `_sandbox_pinned_source()` is the Tk-free variant workers use.
+  The shipped default toolbar source is `"Auto"`, which is *unranked* in
+  `data/source_ranking`, so a stock install pins the session to
+  `yfinance` while the combobox still reads `Auto` — every
+  `_full_cache[("Auto", …)]` lookup missed the tapes the session had
+  loaded under `("yfinance", …)` and the table stayed blank for the whole
+  replay. `_sandbox_watchlist_interval()` is the matching fix for the
+  interval: the toolbar can legitimately read `"1d"` (the daily-context
+  toggle), which would make an intraday visible list be treated as a
+  daily series.
+- **Clock fields are cleared per ticker, only when refillable** —
+  `_clear_watchlist_clock_fields(ticker)` runs immediately before the
+  refill for that row. Blanket-clearing every row up front (the previous
+  behaviour) is what turned a source-key miss into a permanently empty
+  table: each tick wiped Last/Change everywhere and then refilled
+  nothing.
+- **`_signal_bars` follows the same rules** — session visible list first
+  (copied, because the Tk thread appends to it while the evaluator reads
+  off-thread), then `_full_cache` under the pinned source, then a
+  fetcher whose result is clock-sliced.
 - **Double-click preserves tab focus** (user-requested).
 - **Configurable signal columns** (feature `watchlist-columns`): a
   watchlist's columns are user-chosen scanner `FieldRef`s evaluated at the

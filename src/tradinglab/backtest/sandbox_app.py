@@ -59,6 +59,7 @@ class SandboxAppController:
         self._universe: frozenset[str] = frozenset()
         self._universe_id: str = ""
         self._strict_offline: bool = False
+        self._feed: Any | None = None
 
     @property
     def active(self) -> bool:
@@ -136,6 +137,60 @@ class SandboxAppController:
     @strict_offline.setter
     def strict_offline(self, value: bool) -> None:
         self._strict_offline = bool(value)
+
+    # ---- market feed (clock-synced observable universe) --------------
+
+    @property
+    def feed(self):
+        """The active :class:`sandbox_feed.SandboxFeedWarmer`, or ``None``."""
+        return self._feed
+
+    def start_feed(self, *, app: Any) -> Any | None:
+        """Begin warming the session's observable universe from disk.
+
+        Called once, right after ``start_session``. See
+        `sandbox_feed.spec.md` — the warm is what makes "one more bar"
+        mean "one more bar for every symbol I'm watching" rather than
+        just for the focused chart.
+        """
+        from .sandbox_feed import SandboxFeedWarmer
+
+        self.stop_feed()
+        if not self.active:
+            return None
+        warmer = SandboxFeedWarmer(app=app, controller=self._sandbox)
+        self._feed = warmer
+        try:
+            warmer.request()
+        except Exception:  # noqa: BLE001
+            pass
+        return warmer
+
+    def refresh_feed(self, *, app: Any) -> None:
+        """Top the feed up after a watchlist / universe change.
+
+        No-op when nothing new appeared — :meth:`SandboxFeedWarmer.request`
+        skips symbols already registered with the session.
+        """
+        warmer = self._feed
+        if warmer is None:
+            if self.active:
+                self.start_feed(app=app)
+            return
+        try:
+            warmer.request()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def stop_feed(self) -> None:
+        """Cancel any in-flight warm and drop the warmer."""
+        warmer = self._feed
+        self._feed = None
+        if warmer is not None:
+            try:
+                warmer.cancel()
+            except Exception:  # noqa: BLE001
+                pass
 
     def build_spec(self, dlg_result: dict[str, Any]) -> SessionSpec:
         """Translate the start-dialog payload into a SessionSpec."""
@@ -342,11 +397,22 @@ class SandboxAppController:
             return
 
     def refresh_scanner_for_sandbox(self, *, app: Any, silent_tcl: Any) -> None:
-        """Run saved scans against the current sandbox universe."""
+        """Run saved scans against the current sandbox universe.
+
+        **Consumer-gated** — see :meth:`_scanner_has_consumer`. Since the
+        market feed registers the whole prepared universe, this call is no
+        longer a two-symbol scan: measured on the dev box, 500 symbols
+        costs ~96 ms for one scan and ~423 ms for three, per tick, on the
+        Tk thread. Paying that while the user is on the Chart tab with no
+        scanner-driven automation armed would make every "next bar" press
+        feel broken for a result nobody reads.
+        """
         scanner_tab = getattr(app, "_scanner_tab", None)
         runner = getattr(app, "_scan_runner", None)
         sandbox = self._sandbox
         if scanner_tab is None or runner is None or sandbox is None:
+            return
+        if not self._scanner_has_consumer(app=app):
             return
         scans = scanner_tab.get_active_scan_definitions()
         if not scans:
@@ -380,6 +446,51 @@ class SandboxAppController:
         app._scan_last_results = results
         with silent_tcl():
             scanner_tab.set_results(results)
+
+    def _scanner_has_consumer(self, *, app: Any) -> bool:
+        """True when something will actually read this tick's scan results.
+
+        Two consumers, and they have different tolerances:
+
+        * **The Scanner tab**, when it is on screen. Same reasoning as the
+          watchlist visibility guard (`gui/watchlist_tab.spec.md`
+          qw-watchlist-visguard): a `ttk.Notebook` unmaps unselected tabs,
+          so results computed while the user is on the Chart tab are
+          invisible. Defaults to "visible" whenever Tk geometry can't be
+          probed, so a headless harness never silently stops scanning.
+        * **An armed `SCANNER_ALERT` entry strategy**, always. Those fire
+          from the runner's `new_rows` subscription
+          (`entries/evaluator.spec.md`), so skipping a tick would swallow
+          an entry the trader armed — a correctness bug, not a missed
+          repaint. This deliberately keeps the cost on the tick even
+          during a batched `skip_to_next_day`.
+        """
+        if self._entries_want_scanner(app=app):
+            return True
+        frame = getattr(app, "_scanner_tab", None)
+        if frame is None:
+            return False
+        try:
+            return bool(frame.winfo_viewable())
+        except Exception:  # noqa: BLE001
+            return True
+
+    @staticmethod
+    def _entries_want_scanner(*, app: Any) -> bool:
+        """True when any armed entry strategy fires off scanner results."""
+        evaluator = getattr(app, "_entry_evaluator", None)
+        if evaluator is None:
+            return False
+        probe = getattr(evaluator, "has_armed_scanner_alert", None)
+        if probe is None:
+            # Older / stubbed evaluator: assume yes rather than risk
+            # swallowing an armed entry.
+            return True
+        try:
+            return bool(probe())
+        except Exception:  # noqa: BLE001
+            return True
+
 
     def reset_scanner_state(self, *, app: Any, silent_tcl: Any) -> None:
         """Drop accumulated scanner history between sandbox sessions."""

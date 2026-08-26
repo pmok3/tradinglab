@@ -10,9 +10,10 @@
 - `_panel`, `_panel_window`
 - `_tag_store`
 - `_universe`, `_universe_id`, `_strict_offline`
+- `_feed` — the active [`SandboxFeedWarmer`](sandbox_feed.spec.md), or `None`
 
 ## Public surface
-- Properties: `active`, `engine`, `last_result`, `last_screenshot_dir`, `panel`, `panel_window`, `tag_store`, `universe`, `universe_id`, `strict_offline`
+- Properties: `active`, `engine`, `last_result`, `last_screenshot_dir`, `panel`, `panel_window`, `tag_store`, `universe`, `universe_id`, `strict_offline`, `feed`
 - Methods called from `ChartApp` delegation stubs:
   - `build_spec`, `current_result`, `current_screenshot_dir`
   - `show_panel`, `hide_panel`
@@ -21,6 +22,7 @@
   - `can_register`, `register_compare`, `sync_compare_to_var`, `register_and_focus`
   - `install_compare_series`, `restrict_toolbar_intervals`, `restore_toolbar_intervals`
   - `reset_compare_for_session_start`, `install_primary_series`
+  - `start_feed`, `refresh_feed`, `stop_feed`
 
 ## Integration contract
 - `ChartApp` keeps legacy method names (`_is_sandbox_active`, `_sandbox_register_compare`, etc.) as thin delegation stubs.
@@ -36,7 +38,11 @@
   not persist them, but they recompute for free once their legs are cached.
   Rejecting the composite string would make every Quant ratio row unreachable
   in a strict-offline session. The status error names the missing legs.
-- Complex UI work still flows through `ChartApp` callbacks/attributes (`_render`, `_set_data_state`, `_status`, `_toolbar`, Tk vars).
+- **The market feed is owned here, driven from `SandboxMenuMixin`.** `start_feed` on session start, `stop_feed` **before** `end_session` (so an in-flight batch can't register into a dead controller), and `refresh_feed` from `_kick_watchlist_preloads` when pinned watchlists change mid-session. See [sandbox_feed](sandbox_feed.spec.md).
+- **`refresh_scanner_for_sandbox` is consumer-gated (`_scanner_has_consumer`).** Once the feed registers the prepared universe this is no longer a two-symbol scan: measured, `ScanRunner.run` over 500 symbols × 400 bars costs ~96 ms for one scan and ~423 ms for three, per tick, on the Tk thread. Two consumers with different tolerances:
+  - The **Scanner tab when viewable** — same reasoning as the watchlist visibility guard in [`gui/watchlist_tab`](../gui/watchlist_tab.spec.md); a `ttk.Notebook` unmaps unselected tabs, so results computed while the user is on the Chart tab are invisible. Defaults to "visible" when Tk geometry can't be probed, so a headless harness never silently stops scanning.
+  - An **armed `SCANNER_ALERT` entry strategy, always** — via `EntryEvaluator.has_armed_scanner_alert()`. Those fire from the runner's `new_rows` subscription, so a skipped scan is a swallowed entry, not a missed repaint. This keeps the cost on the tick even inside a batched `skip_to_next_day`, deliberately.   A missing / stubbed evaluator answers "yes" rather than risk swallowing a fire.
+  - Complex UI work still flows through `ChartApp` callbacks/attributes (`_render`, `_set_data_state`, `_status`, `_toolbar`, Tk vars).
 - `build_spec` carries the start-dialog's `decision_logging_enabled` opt-in into `SessionSpec`; missing payload keys default to `False`.
 
 ## Testing

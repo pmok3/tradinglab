@@ -95,6 +95,7 @@ not an exhaustive enumeration.**
 | `backtest/persistence.spec.md` | `save_session` / `load_session` — versioned JSON envelope + mirrored screenshots. |
 | `backtest/performance.spec.md` | `TradeRow` + `SetupAggregate` + `ProximityAggregate` + `build_trade_rows` / `build_setup_aggregates` / `build_proximity_aggregates` — round-trip pairing + per-setup / per-event-proximity rollups. |
 | `backtest/replay.spec.md` | `SandboxController` — open-universe, frozen master timeline, multi-TF daily context, multi-interval intraday display via aggregation, blind / auto-cycle, post-trade memento callback. |
+| `backtest/sandbox_feed.spec.md` | `SandboxFeedWarmer` — registers the session's observable universe (pinned watchlists ∪ prepared "Download Replay Data…" universe) from the disk cache, off-thread and batched, so a replay tick advances the whole watchlist and scan universe rather than just the focused chart. |
 | `backtest/heatmap.spec.md` | Pure metric + geometry layer for the sandbox Finviz-style heatmap — historically-scaled cap sizing + 1-Day % color, sector → industry squarify, headless. See [`docs/SANDBOX_HEATMAP.md`](../docs/SANDBOX_HEATMAP.md). |
 | `backtest/heatmap_provider.spec.md` | Classification (GICS from `sp500.csv`) + point-in-time `Date added` membership + historical shares (yfinance `get_shares_full`, disk-cached) provider for the heatmap. |
 | `backtest/aggregation.spec.md` | `aggregate` + `divides_evenly` — pure-Python session-anchored higher-TF candle derivation from a single primary tick interval. |

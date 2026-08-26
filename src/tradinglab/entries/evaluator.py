@@ -396,6 +396,24 @@ class EntryEvaluator:
     def pending_position_ids(self) -> dict[str, str]:
         return dict(self._pending_position_ids)
 
+    def has_armed_scanner_alert(self) -> bool:
+        """True when at least one armed strategy fires from scan results.
+
+        Consumed by the sandbox scanner gate
+        (`backtest/sandbox_app._scanner_has_consumer`): a replay tick may
+        skip re-scanning a large universe when nobody is looking at the
+        Scanner tab, but never when a `SCANNER_ALERT` strategy is armed —
+        those fire from :meth:`on_scan_results`, so a skipped scan is a
+        swallowed entry rather than a missed repaint.
+        """
+        for strategy_id in self._armed:
+            strategy = self._strategies.get(strategy_id)
+            if strategy is None:
+                continue
+            if strategy.trigger.kind == TriggerKind.SCANNER_ALERT:
+                return True
+        return False
+
     # ------------------------------------------------------------------
     # Tick path
     # ------------------------------------------------------------------

@@ -51,6 +51,32 @@ Durable cache of fetched candle data, keyed by `(source, ticker, interval)`. Act
   (`tempfile.mkstemp` in the same directory + `os.replace`). Writes
   one JSON object per line via `_candle_to_dict`. **No-op for ratio
   pseudo-symbols** (`_is_ratio_ticker`) and `mark_no_persist` sources.
+- `load_window(source, ticker, interval, *, start_day, end_day) ->
+  Optional[List[Candle]]` — the windowed sibling of `load`. Both bounds are
+  **inclusive `YYYY-MM-DD` strings** compared against the record's own ISO
+  date prefix, so the filter needs no timezone maths; a caller that cares
+  about an exact UTC instant widens by a day and cuts precisely on the
+  result. Same ratio / `mark_no_persist` / never-raises contract as `load`.
+  Two deliberate differences:
+  - **Never rewrites the file.** `load`'s heal-on-read `save` would persist
+    the *window* over the full series and destroy every bar outside it.
+    Poison bars are dropped from the returned list only.
+  - **Early break on the first record past `end_day`**, because `save`
+    always persists an ascending, merged series.
+  `_line_iso_day(line)` is the fast path: records are written with `"d"`
+  first and `json.dumps` preserves insertion order, so the ISO date sits
+  right after the key and a string slice replaces a `json.loads` for every
+  out-of-window line. It accepts both `save`'s compact form (`{"d":"…`)
+  and the spaced form, returns `None` on any layout it doesn't recognise,
+  and the loader then falls back to a real parse plus a parsed-date window
+  check (and keeps scanning — ordering can't be assumed for such a file).
+  The trick is an optimisation and never the source of truth.
+  **Why it exists:** sandbox replay warms a whole universe (see
+  `backtest/sandbox_feed.spec.md`). A session only needs its lookback
+  window, but `load` materialises everything ever fetched for that key — a
+  60-day 5m file is ~4,700 records, so a 500-symbol warm would parse ~2.3M
+  JSON objects and hold the lot. Windowing makes the warm proportional to
+  the session window instead.
 - `_is_ratio_ticker(ticker) -> bool` — true for a ratio pseudo-symbol
   (`AMD/NVDA` slash form). Lazy-imports
   `data.ratio_source.is_ratio_symbol` to avoid a module-load import
@@ -173,6 +199,8 @@ Durable cache of fetched candle data, keyed by `(source, ticker, interval)`. Act
   file no longer contains them (heal-on-load persistence). A clean file
   is left byte-for-byte unchanged (no spurious rewrite).
 - `load()` never raises — corrupt → `None`.
+- `load_window()` never raises and never writes — a windowed read must not
+  be able to truncate the on-disk series to its window.
 - `save()` either replaces the destination atomically or leaves the
   prior file intact.
 - **Single-instance assumption — last-writer-wins** — no advisory

@@ -288,6 +288,112 @@ def load(source: str, ticker: str, interval: str) -> list[Candle] | None:
     return cleaned
 
 
+#: Every record written by :func:`_candle_to_dict` starts with the ``"d"``
+#: key — the dict is built with it first and :func:`json.dumps` preserves
+#: insertion order. :func:`save` writes with compact separators
+#: (``{"d":"…"``); the spaced form (``{"d": "…"``) is accepted too so a
+#: hand-written or older file still takes the fast path.
+_DATE_KEY = '{"d":'
+#: ``YYYY-MM-DD`` — the slice of an ISO timestamp that is safe to compare
+#: lexicographically regardless of the trailing time / UTC offset.
+_ISO_DAY_LEN = 10
+
+
+def _line_iso_day(line: str) -> str | None:
+    """Return the ``YYYY-MM-DD`` prefix of a record without parsing it.
+
+    Pure fast-path helper for :func:`load_window`: a full ``json.loads``
+    costs ~10x a string slice, and a windowed read discards most lines.
+    Returns ``None`` for any line that doesn't match the expected layout
+    so the caller can fall back to a real parse — the prefix trick is an
+    optimisation, never the source of truth.
+    """
+    if not line.startswith(_DATE_KEY):
+        return None
+    i = len(_DATE_KEY)
+    n = len(line)
+    while i < n and line[i] == " ":
+        i += 1
+    if i >= n or line[i] != '"':
+        return None
+    i += 1
+    day = line[i:i + _ISO_DAY_LEN]
+    if len(day) != _ISO_DAY_LEN or day[4] != "-" or day[7] != "-":
+        return None
+    return day
+
+
+def load_window(
+    source: str,
+    ticker: str,
+    interval: str,
+    *,
+    start_day: str,
+    end_day: str,
+) -> list[Candle] | None:
+    """Return only the cached candles whose date falls in ``[start_day, end_day]``.
+
+    Both bounds are inclusive ``YYYY-MM-DD`` strings compared against the
+    record's own ISO date prefix, so no timezone maths is needed at the
+    filter step — widen the caller's bounds by a day if an exact UTC
+    instant matters and do the precise cut on the returned candles.
+
+    Exists because sandbox replay warms a whole universe: a session only
+    ever needs its lookback window, but :func:`load` materialises the
+    entire on-disk series (a 60-day 5m file is ~4,700 records). Streaming
+    with an early break makes warming N symbols proportional to the
+    session window rather than to everything ever fetched.
+
+    **Never rewrites the file.** :func:`load` heals NaN-OHLC poison on
+    read by saving the cleaned series back; doing that here would persist
+    the *window* over the full series and destroy history outside it.
+    Poison bars are dropped from the returned list only.
+    """
+    if source in _NO_PERSIST:
+        return None
+    if _is_ratio_ticker(ticker):
+        return None  # ratios are derived — never persisted
+    path = _path_for(source, ticker, interval)
+    if not path.exists():
+        return None
+    candles: list[Candle] = []
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            for raw_line in f:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                day = _line_iso_day(line)
+                if day is not None:
+                    if day < start_day:
+                        continue
+                    if day > end_day:
+                        # Records are written in ascending date order
+                        # (``save`` persists an already-merged, sorted
+                        # series), so the first record past the window
+                        # ends the read.
+                        break
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                c = _candle_from_dict(record)
+                if c is None:
+                    continue
+                if day is None:
+                    # Unrecognised layout — apply the window on the
+                    # parsed date instead, and keep scanning (we can't
+                    # trust ordering assumptions about this file).
+                    iso = c.date.isoformat()[:_ISO_DAY_LEN]
+                    if iso < start_day or iso > end_day:
+                        continue
+                candles.append(c)
+    except OSError:
+        return None
+    cleaned = _drop_nonfinite_ohlc(candles)
+    return cleaned or None
+
+
 def merge_adds_nothing(previous: list[Candle] | None,
                        merged: list[Candle] | None) -> bool:
     """True when ``merged`` is identical to ``previous`` at the tail.

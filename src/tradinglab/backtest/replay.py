@@ -318,6 +318,12 @@ class SandboxController(EventsControllerMixin):
     # writes via :meth:`set_event_bundle`.
     _raw_full_events: dict[str, Any] = field(default_factory=dict)
     _events_fetch_token: int = 0
+    # Symbols an events prefetch has already been *requested* for. Distinct
+    # from ``_raw_full_events`` (which only gains a key when a bundle
+    # actually lands): a symbol with no events would otherwise re-fetch on
+    # every focus change. Written by :meth:`register_ticker` and the lazy
+    # :meth:`set_focus` top-up for feed-warmed symbols.
+    _events_prefetch_requested: set[str] = field(default_factory=set)
 
     # M5 (ChartStack lockstep): per-tick subscribers fired
     # synchronously inside ``next_bar`` and ``cycle_to_next`` after
@@ -646,6 +652,8 @@ class SandboxController(EventsControllerMixin):
         self,
         symbol: str,
         candles: list[Any],
+        *,
+        prefetch_events: bool = True,
     ) -> list[Any]:
         """Add ``symbol`` to the active session at the current clock.
 
@@ -667,6 +675,16 @@ class SandboxController(EventsControllerMixin):
         per-symbol storage out of proportion. Symbols whose data has
         no overlap with the session window register as empty visible
         lists (caller may surface "symbol has no data for this date").
+
+        ``prefetch_events=False`` skips the per-symbol events fetch.
+        Registration is otherwise identical — the symbol is fully
+        tradeable and its visible list is clock-synced like any other.
+        The flag exists for the bulk market-feed warm
+        (:mod:`tradinglab.backtest.sandbox_feed`): that path registers
+        the whole scan universe, and one event fetch per symbol would
+        mean hundreds of network round-trips for glyphs nobody is
+        looking at. Events are prefetched lazily instead, when a symbol
+        is actually focused (see :meth:`set_focus`).
         """
         if not self.active or self.engine is None:
             raise RuntimeError("no active sandbox session")
@@ -714,10 +732,12 @@ class SandboxController(EventsControllerMixin):
         # Kick off async events prefetch for this newly-registered
         # symbol; bundle arrives on the Tk thread and the corporate
         # actions queue is registered via :meth:`set_event_bundle`.
-        try:
-            self.prefetch_events_for(symbol)
-        except Exception:  # noqa: BLE001
-            pass
+        if prefetch_events:
+            try:
+                self._events_prefetch_requested.add(symbol)
+                self.prefetch_events_for(symbol)
+            except Exception:  # noqa: BLE001
+                pass
         return visible
 
     def end_session(self) -> SessionResult | None:
@@ -1085,22 +1105,26 @@ class SandboxController(EventsControllerMixin):
         if panel is not None and not self._defer_render:
             with _silent_tcl():
                 panel.refresh()
-        # Watchlist Last/Change must follow the replay clock. Day-only
-        # tick when the clock crosses midnight is enough — chg/pct
-        # depend on prior session close (constant within a day) and
-        # last_intraday only updates the displayed primary/compare
-        # panels, not the watchlist Last column. But "last" in the
-        # watchlist *should* track the replay clock for every pinned
-        # ticker, so refresh on every tick. The cached fetcher hits
-        # the in-memory cache for already-loaded tickers, so cost is
-        # one dict lookup + one slice per pinned symbol per tick.
-        try:
-            refresh = getattr(self.app, "_refresh_watchlist_for_sandbox",
-                              None)
-            if refresh is not None:
-                refresh()
-        except Exception:  # noqa: BLE001
-            pass
+        # Watchlist Last/Change must follow the replay clock: every pinned
+        # ticker registered with the session reveals one more bar, exactly
+        # like the focused chart. Cost is one dict lookup + one index per
+        # pinned symbol (the visible lists are already clock-correct — see
+        # ``_refresh_watchlist_for_sandbox``).
+        #
+        # Suppressed under ``_defer_render`` because it is pure display:
+        # a batched ``skip_to_next_day`` would otherwise repaint the whole
+        # table ~78 times for a result nobody sees between the first and
+        # last bar. The terminal refresh in ``skip_to_next_day`` restores
+        # exactly the same end state. Everything with a side effect
+        # (scanner alerts, entries, exits) still runs per bar.
+        if not self._defer_render:
+            try:
+                refresh = getattr(self.app, "_refresh_watchlist_for_sandbox",
+                                  None)
+                if refresh is not None:
+                    refresh()
+            except Exception:  # noqa: BLE001
+                pass
         # Scanner re-evaluation runs after the watchlist refresh so any
         # universe-wide candle list extensions for this tick are applied
         # first. Tolerated to a no-op when the host app has no scanner
@@ -1262,6 +1286,16 @@ class SandboxController(EventsControllerMixin):
         if bars and self.focus_symbol:
             self._install_focus_for_display(self.focus_symbol)
         self._pending_day_changed = False
+        # Terminal watchlist repaint for the batched segment: the per-tick
+        # hook is display-only and was suppressed under ``_defer_render``,
+        # so catch the table up to the clock in one pass.
+        if bars:
+            try:
+                refresh = getattr(self.app, "_refresh_watchlist_for_sandbox", None)
+                if refresh is not None:
+                    refresh()
+            except Exception:  # noqa: BLE001
+                pass
 
         # Step 3: EOD kill switch + mandatory review flow.
         flattened = self._flatten_open_at_clock()
@@ -1297,6 +1331,12 @@ class SandboxController(EventsControllerMixin):
           e.g. the lazy fetch failed).
         * Higher-TF intraday — install aggregated series.
         * Otherwise — install raw primary visible list.
+
+        Also lazily prefetches ``symbol``'s event bundle if it was
+        registered with ``prefetch_events=False`` (the bulk market-feed
+        warm — see :meth:`register_ticker`). Focusing a symbol is the
+        moment its event glyphs become visible, so it is the right
+        moment to pay for them.
         """
         if not self.active:
             return
@@ -1305,6 +1345,12 @@ class SandboxController(EventsControllerMixin):
         if symbol == self.focus_symbol:
             return
         self.focus_symbol = symbol
+        if symbol not in self._events_prefetch_requested:
+            try:
+                self._events_prefetch_requested.add(symbol)
+                self.prefetch_events_for(symbol)
+            except Exception:  # noqa: BLE001
+                pass
         self._install_focus_for_display(symbol)
         panel = getattr(self.app, "_sandbox_panel", None)
         if panel is not None:

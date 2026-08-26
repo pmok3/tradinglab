@@ -468,6 +468,15 @@ class SandboxMenuMixin:
             self._refresh_watchlist_for_sandbox()
         except Exception:  # noqa: BLE001
             pass
+        # Warm the session's observable universe (pinned watchlists +
+        # the prepared universe) from the disk cache so every one of
+        # those symbols advances with the replay clock — see
+        # ``backtest/sandbox_feed.spec.md``. Off-thread, batched, and
+        # cache-only: never blocks Start and never hits the network.
+        try:
+            self._sandbox_ctrl.start_feed(app=self)
+        except Exception:  # noqa: BLE001
+            pass
         # If the Manage Indicators dialog is open, refresh its
         # per-row interval checkbox set to reflect the sandbox's
         # display_intervals (b41).
@@ -491,6 +500,12 @@ class SandboxMenuMixin:
         """
         if not self._is_sandbox_active():
             return
+        # Stop the market-feed warm before tearing the session down so an
+        # in-flight batch can't register into a dead controller.
+        try:
+            self._sandbox_ctrl.stop_feed()
+        except Exception:  # noqa: BLE001
+            pass
         ended = None
         try:
             ended = self._sandbox.end_session()

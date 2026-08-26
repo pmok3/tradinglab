@@ -21116,6 +21116,160 @@ def check_b68_volume_tod_shading(app) -> None:
           "default OFF, settings round-trip works, engine untouched")
 
 
+def check_d85_sandbox_feed_warms_watchlist(app) -> None:
+    """Sandbox replay advances the whole watchlist, not just the chart.
+
+    Two regressions and one feature in a single wiring check.
+
+    Regression: ``_refresh_watchlist_for_sandbox`` looked its bars up in
+    ``_full_cache`` under ``source_var``, but the Start Sandbox dialog
+    pins the session's own vendor. On a stock install the toolbar reads
+    ``"Auto"`` while the session resolves to a concrete provider, so every
+    lookup missed — and because the refresh blanket-cleared Last/Change
+    for every row on every tick, the table stayed permanently empty.
+
+    Feature: the market feed (``backtest/sandbox_feed.py``) registers the
+    pinned-watchlist ∪ prepared-universe symbols with the session from the
+    disk cache, so their ``visible_candles_by_symbol`` lists grow one bar
+    per ``next_bar`` — new bar, new information, for every symbol the
+    trader is watching.
+
+    Validates:
+
+      A. The feed registers a pinned watchlist ticker that the session
+         never focused, reading it under the session's PINNED source
+         while ``source_var`` says something else.
+      B. Watchlist ``last`` populates from the replay clock (not the last
+         bar of the cached tape — that would be look-ahead).
+      C. ``next_bar`` advances that ``last`` by exactly one bar.
+      D. The warm issues no provider fetch (cache-only contract).
+    """
+    import datetime as _dt
+
+    from tradinglab import data as _data_pkg
+    from tradinglab import disk_cache
+    from tradinglab.backtest.bars import _clear_cache_for_tests
+    from tradinglab.backtest.replay import SandboxController
+    _clear_cache_for_tests()
+
+    TICKER = "FEEDPROBE"
+    REF = "FEEDREF"
+    # Deliberately NOT the toolbar source — that mismatch is the bug.
+    PINNED_SRC = "feedprobe-src"
+    WL_NAME = "D85Probe"
+
+    toolbar_src = app.source_var.get()
+    assert PINNED_SRC != toolbar_src, "test setup: sources must differ"
+
+    intraday, days = _b1x_make_bars(0.0, n_days=3, n_per_day=12)
+    session_date = days[1]
+
+    fetch_calls: list = []
+
+    def _never_fetch(t: str, itv: str):
+        fetch_calls.append((t, itv))
+        return []
+
+    saved_fetch = _data_pkg.DATA_SOURCES.get(PINNED_SRC)
+    _data_pkg.DATA_SOURCES[PINNED_SRC] = _never_fetch
+    disk_cache.save(PINNED_SRC, TICKER, "5m", intraday)
+
+    mgr = app._watchlists
+    ctl = SandboxController(app=app)
+    saved_snap = dict(getattr(app, "_watchlist_snapshot", {}))
+    had_wl = WL_NAME in mgr.list_names()
+    if had_wl:
+        mgr.delete(WL_NAME)
+    mgr.create(WL_NAME, [TICKER])
+    mgr.pin(WL_NAME)
+    try:
+        ctl.start_session(
+            spec=_b1x_default_spec(),
+            session_date=session_date, interval="5m",
+            reference_symbol=REF, reference_candles=intraday,
+            lookback_days=1, include_extended=False,
+            display_intervals=["5m"],
+            data_source=PINNED_SRC,
+        )
+        app._sandbox = ctl
+        ctl.next_bar()
+
+        assert TICKER not in ctl.visible_candles_by_symbol, (
+            "test setup: the probe must not be registered before the warm")
+
+        app._sandbox_ctrl.start_feed(app=app)
+        # The warm registers in batches via ``_track_after``; pump until
+        # the symbol lands rather than assuming a single hop.
+        _pump_until(
+            app,
+            lambda: TICKER in ctl.visible_candles_by_symbol,
+            timeout=5.0,
+        )
+
+        # ---- A. registered under the session's pinned source ----------
+        assert TICKER in ctl.visible_candles_by_symbol, (
+            f"A: feed did not register {TICKER}; the pinned source "
+            f"{PINNED_SRC!r} differs from source_var {toolbar_src!r}")
+
+        # ---- B. Last follows the replay clock -------------------------
+        app._refresh_watchlist_for_sandbox()
+        visible = ctl.visible_candles_by_symbol[TICKER]
+        assert visible, "B: visible list should be non-empty after a tick"
+        expected = visible[-1].close
+        snap = app._watchlist_snapshot.get(TICKER, {})
+        assert snap.get("last") is not None, (
+            "B: watchlist Last must populate during replay (the reported "
+            "bug: it stayed blank for the whole session)")
+        assert abs(snap["last"] - expected) < 1e-6, (
+            f"B: Last should be the clock bar {expected}; got {snap['last']}")
+        assert abs(snap["last"] - intraday[-1].close) > 1e-6, (
+            "B: Last equals the last cached bar — that is look-ahead, not "
+            "the replay clock")
+
+        # ---- C. a new bar is new information --------------------------
+        before = snap["last"]
+        ctl.next_bar()
+        app._refresh_watchlist_for_sandbox()
+        after = app._watchlist_snapshot.get(TICKER, {}).get("last")
+        assert after is not None and abs(after - before) > 1e-9, (
+            f"C: next_bar must move the watchlist Last; stayed at {before}")
+        assert abs(after - visible[-1].close) < 1e-6, (
+            f"C: Last should track the new clock bar {visible[-1].close}; "
+            f"got {after}")
+
+        # ---- D. cache-only ---------------------------------------------
+        assert fetch_calls == [], (
+            f"D: the warm must not hit a provider; saw {fetch_calls}")
+    finally:
+        try:
+            app._sandbox_ctrl.stop_feed()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            ctl.end_session()
+        except Exception:  # noqa: BLE001
+            pass
+        app._sandbox = None
+        try:
+            mgr.unpin(WL_NAME)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            mgr.delete(WL_NAME)
+        except Exception:  # noqa: BLE001
+            pass
+        if saved_fetch is not None:
+            _data_pkg.DATA_SOURCES[PINNED_SRC] = saved_fetch
+        else:
+            _data_pkg.DATA_SOURCES.pop(PINNED_SRC, None)
+        app._watchlist_snapshot.clear()
+        app._watchlist_snapshot.update(saved_snap)
+        for itv in ("5m", "1d"):
+            app._full_cache.pop((PINNED_SRC, TICKER, itv), None)
+            app._full_cache.pop((PINNED_SRC, REF, itv), None)
+        _clear_cache_for_tests()
+
+
 def check_e0_disk_cache_persist(app) -> None:
     """Disk cache is written on fetch and read back on next session."""
     from datetime import timedelta
@@ -23862,6 +24016,7 @@ def _run_all_checks(app) -> None:
     check_d82_modeless_dialogs_preserve_grab(app)
     check_d83_entries_scanner_alert_renders_scanner_id_entry(app)
     check_d84_targeted_intraday_fetch(app)
+    check_d85_sandbox_feed_warms_watchlist(app)
     check_e0_disk_cache_persist(app)
 
 
@@ -24262,6 +24417,8 @@ def _build_check_sequence():
          check_d83_entries_scanner_alert_renders_scanner_id_entry),
         ("check_d84_targeted_intraday_fetch",
          check_d84_targeted_intraday_fetch),
+        ("check_d85_sandbox_feed_warms_watchlist",
+         check_d85_sandbox_feed_warms_watchlist),
         ("check_e0_disk_cache_persist", check_e0_disk_cache_persist),
     ]
     return seq
