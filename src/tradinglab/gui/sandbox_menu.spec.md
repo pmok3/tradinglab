@@ -41,6 +41,12 @@ non-menu paths: ticker entry, watchlist, drilldown).
   from a different provider without changing the app's chart source.
   Refuses while sandbox active (would mutate `_full_cache` mid-replay).
   On success the status line names the manifest's source.
+- `_confirm_sandbox_data_ready(*, source, interval, universe_symbols=())
+  -> bool` — offline-data gate; `True` proceeds, `False` aborts the
+  start. Probes the pinned watchlists ∪ prepared universe with
+  `sandbox_feed.has_cached_bars` and, when any symbol was never
+  downloaded, offers Yes (open the downloader, abort) / No (start anyway,
+  warn) / Cancel (abort).
 
 ## Mixin Rules
 
@@ -143,3 +149,16 @@ non-menu paths: ticker entry, watchlist, drilldown).
 - **Prepare Universe Data placement**: `_on_menu_sandbox_prepare_universe`
   is wired under the Sandbox cascade because it prepares the offline
   universe that strict-offline sessions replay.
+- **The data gate runs before the controller exists.** Replay is offline
+  by design — the market feed
+  ([`backtest/sandbox_feed`](../backtest/sandbox_feed.spec.md)) registers
+  from the disk cache and never fetches — so a symbol that was never
+  downloaded stays blank in the watchlist and invisible to every scan for
+  the entire session. `_confirm_sandbox_data_ready` surfaces that up
+  front instead of letting the trader discover it one empty column at a
+  time. It is called after the start dialog returns and **before**
+  `SandboxController` is constructed, because
+  `_on_menu_sandbox_prepare_universe` refuses to open while a session is
+  active: a prompt raised mid-session could not actually link anywhere.
+  A `TclError` (headless, no window manager) proceeds rather than
+  blocking.

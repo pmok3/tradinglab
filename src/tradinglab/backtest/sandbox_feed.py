@@ -75,6 +75,74 @@ _LOAD_BATCH = 40
 _WINDOW_PAD_DAYS = 2
 
 
+def source_candidates(pinned: str) -> list[str]:
+    """Disk-cache source keys to read ``pinned``'s bars from, best first.
+
+    Always ``[pinned]``, plus ``"Auto"`` when Auto *currently resolves to*
+    ``pinned``.
+
+    The alias matters because the disk cache is keyed by source name and
+    ``"Auto"`` caches under the opaque literal ``"Auto"`` — the key records
+    no provider (see ``data/auto_source.spec.md`` and CLAUDE.md §7.38).
+    ``"Auto"`` is also the shipped default chart source, so a trader's
+    everyday history accumulates under ``Auto__SYM__5m.jsonl`` while a
+    session pins a concrete vendor and looks for ``alpaca__SYM__5m.jsonl``.
+    Without the alias, symbols the user charts daily read as "never
+    downloaded".
+
+    Gated on the equality rather than always appended: if the trader
+    explicitly pinned yfinance while Auto resolves to Alpaca, the
+    ``Auto__*`` file holds Alpaca bars, and feeding those into a yfinance
+    session would replay one symbol against another's tape (audit
+    ``sandbox-data-source``).
+    """
+    pinned = str(pinned or "").strip()
+    if not pinned:
+        return []
+    out = [pinned]
+    try:
+        from ..data.auto_source import AUTO_SOURCE_NAME, resolve_auto_source
+
+        if pinned != AUTO_SOURCE_NAME and resolve_auto_source() == pinned:
+            out.append(AUTO_SOURCE_NAME)
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def _load_first(sources: list[str], symbol: str, interval: str,
+                *, start_day: str, end_day: str) -> list:
+    """First non-empty windowed read across ``sources``."""
+    for src in sources:
+        bars = _disk_cache.load_window(
+            src, symbol, interval, start_day=start_day, end_day=end_day)
+        if bars:
+            return list(bars)
+    return []
+
+
+def has_cached_bars(symbol: str, *, sources: list[str], interval: str) -> bool:
+    """Cheap "is this symbol downloadable-from-disk" probe.
+
+    A path ``stat`` per candidate source — no parse. Used by the
+    pre-flight gate in `gui/sandbox_menu`, which runs over the whole
+    universe before a session exists and must stay instant; a real
+    ``load_window`` per symbol there would cost as much as the warm
+    itself. It answers "never downloaded", not "covers your window" —
+    depth gaps still surface as the warm's own missing-data report.
+    """
+    for src in sources:
+        try:
+            if _disk_cache.is_no_persist(src):
+                continue
+            path = _disk_cache._path_for(src, symbol, interval)
+            if path.exists() and path.stat().st_size > 0:
+                return True
+        except Exception:  # noqa: BLE001
+            continue
+    return False
+
+
 class SandboxFeedWarmer:
     """Registers a session's observable universe from the disk cache.
 
@@ -212,12 +280,12 @@ class SandboxFeedWarmer:
     def _dispatch_loads(self, pending: list[str]) -> None:
         executor = getattr(self._app, "_fetch_executor", None)
         await_helper = getattr(self._app, "_await_future_on_tk", None)
-        src = self._source()
+        sources = source_candidates(self._source())
         interval = str(getattr(self._controller, "interval", "") or "")
         want_daily = int(
             getattr(self._controller, "daily_lookback_bars", 0) or 0) > 0
         start_day, end_day = self._window_days()
-        if not src or not interval:
+        if not sources or not interval:
             self._finish_batch([])
             return
 
@@ -229,15 +297,15 @@ class SandboxFeedWarmer:
                 for sym in syms:
                     if self._cancelled:
                         break
-                    bars = _disk_cache.load_window(
-                        src, sym, interval,
-                        start_day=start_day, end_day=end_day) or []
+                    bars = _load_first(
+                        sources, sym, interval,
+                        start_day=start_day, end_day=end_day)
                     daily: list = []
                     if want_daily:
-                        daily = _disk_cache.load_window(
-                            src, sym, "1d",
-                            start_day="0001-01-01", end_day=end_day) or []
-                    out.append((sym, list(bars), list(daily)))
+                        daily = _load_first(
+                            sources, sym, "1d",
+                            start_day="0001-01-01", end_day=end_day)
+                    out.append((sym, bars, daily))
                 return out
 
             if executor is None or await_helper is None:
@@ -317,7 +385,10 @@ class SandboxFeedWarmer:
             missing = len(self._failed)
             msg = f"Sandbox: {self._total - missing} symbols live on the replay clock"
             if missing:
-                msg += f" ({missing} had no cached data — run Download Replay Data…)"
+                msg += (
+                    f" — {missing} have no cached data for this session "
+                    f"(end the session and run Sandbox → Download Replay Data…)"
+                )
             self._status(msg)
         for name in ("_refresh_watchlist_for_sandbox", "_refresh_scanner_for_sandbox"):
             hook: Callable[[], None] | None = getattr(self._app, name, None)
@@ -328,6 +399,10 @@ class SandboxFeedWarmer:
             except Exception:  # noqa: BLE001
                 pass
 
+    def missing(self) -> list[str]:
+        """Symbols the warm could not resolve from disk."""
+        return list(self._failed)
+
     # -- misc ---------------------------------------------------------
 
     def _status(self, message: str) -> None:
@@ -337,4 +412,4 @@ class SandboxFeedWarmer:
             pass
 
 
-__all__ = ["SandboxFeedWarmer"]
+__all__ = ["SandboxFeedWarmer", "source_candidates", "has_cached_bars"]

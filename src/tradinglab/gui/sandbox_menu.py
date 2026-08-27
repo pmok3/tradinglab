@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import tkinter as tk
 from pathlib import Path
+from tkinter import messagebox
 from typing import Any
 
 from ..data import DATA_SOURCES
@@ -313,6 +314,21 @@ class SandboxMenuMixin:
 
         spec = self._build_sandbox_spec(dlg.result)
 
+        # Offline-data gate. A replay session is only as good as the bars
+        # it can put on the clock, and the sandbox never fetches — so a
+        # symbol that was never downloaded is simply blank for the whole
+        # session. Check BEFORE the session exists, because "Download
+        # Replay Data…" refuses to open while one is active.
+        try:
+            uni_syms_preflight = tuple(
+                dlg.result.get("universe_symbols") or ())
+        except Exception:  # noqa: BLE001
+            uni_syms_preflight = ()
+        if not self._confirm_sandbox_data_ready(
+                source=src, interval=chosen_itv,
+                universe_symbols=uni_syms_preflight):
+            return
+
         # Phase 1d: blind / auto-cycle wiring + extended-hours
         # default. Sandbox replay uses *regular-hours-only* bars by
         # default to avoid the regular-session UX leaking pre/post
@@ -486,6 +502,95 @@ class SandboxMenuMixin:
                 dlg.refresh_available_intervals()
         except Exception:  # noqa: BLE001
             pass
+
+    def _confirm_sandbox_data_ready(
+        self,
+        *,
+        source: str,
+        interval: str,
+        universe_symbols: tuple = (),
+    ) -> bool:
+        """Gate session start on the observable universe being downloaded.
+
+        Returns ``True`` to proceed, ``False`` to abort.
+
+        Sandbox replay is deliberately offline: the market feed
+        (``backtest/sandbox_feed.py``) registers symbols from the disk
+        cache and never fetches, so a symbol that was never downloaded
+        stays blank in the watchlist and invisible to every scan for the
+        whole session. Rather than let the trader discover that one empty
+        column at a time, check up front and offer the fix.
+
+        Runs **before** ``SandboxController`` is constructed on purpose:
+        ``_on_menu_sandbox_prepare_universe`` refuses to open while a
+        session is active, so a prompt raised mid-session could not
+        actually link anywhere.
+
+        Coverage is probed by path existence (`sandbox_feed.has_cached_bars`),
+        which answers "never downloaded" rather than "covers your window" —
+        the cheap question, over a universe that can be hundreds of names.
+        Depth gaps still surface in the warm's own report.
+        """
+        from ..backtest.sandbox_feed import has_cached_bars, source_candidates
+
+        sources = source_candidates(source)
+        if not sources or not interval:
+            return True
+
+        wanted: list[str] = []
+        seen: set[str] = set()
+        for group in (self._pinned_ticker_union(), universe_symbols):
+            for raw in (group or ()):
+                sym = str(raw or "").strip().upper()
+                if sym and sym not in seen:
+                    seen.add(sym)
+                    wanted.append(sym)
+        if not wanted:
+            return True
+
+        missing = [s for s in wanted
+                   if not has_cached_bars(s, sources=sources, interval=interval)]
+        if not missing:
+            return True
+
+        preview = ", ".join(missing[:8])
+        if len(missing) > 8:
+            preview += f", … (+{len(missing) - 8} more)"
+        prompt = (
+            f"{len(missing)} of {len(wanted)} symbols have no cached "
+            f"{interval} data from '{source}':\n\n{preview}\n\n"
+            "Sandbox replay never fetches — these will stay blank in the "
+            "watchlist and invisible to every scan for the whole session.\n\n"
+            "Download them now?\n\n"
+            "Yes — open Sandbox → Download Replay Data…\n"
+            "No — start anyway\n"
+            "Cancel — don't start"
+        )
+        try:
+            answer = messagebox.askyesnocancel(
+                "Sandbox: missing replay data",
+                prompt, parent=self, icon="warning", default="yes")
+        except tk.TclError:
+            return True          # headless / no WM — never block the session
+        if answer is None:
+            return False
+        if answer:
+            try:
+                self._on_menu_sandbox_prepare_universe()
+            except Exception as exc:  # noqa: BLE001
+                try:
+                    self._status.error(
+                        f"Could not open Download Replay Data: {exc}")
+                except Exception:  # noqa: BLE001
+                    pass
+            return False
+        try:
+            self._status.warn(
+                f"Sandbox: starting with {len(missing)} symbols missing "
+                f"replay data; their watchlist and scanner rows stay empty")
+        except Exception:  # noqa: BLE001
+            pass
+        return True
 
     def _on_menu_sandbox_end(self) -> None:
         """End the active sandbox session and restore prior chart state.

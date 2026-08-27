@@ -466,3 +466,118 @@ def test_warm_never_calls_a_data_source(cache, monkeypatch):
     SandboxFeedWarmer(app=app, controller=ctrl).request()
     app.drain_after()
     assert called == []
+
+
+# ---------------------------------------------------------------------------
+# The "Auto" cache alias
+#
+# The disk cache is keyed by source name and "Auto" caches under the literal
+# "Auto" — the key records no provider. "Auto" is also the shipped default
+# chart source, so a trader's everyday history accumulates under
+# ``Auto__SYM__5m.jsonl`` while a session pins a concrete vendor. Without the
+# alias, symbols charted daily read as "never downloaded".
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def auto_resolves_to(monkeypatch):
+    def _set(name: str):
+        monkeypatch.setattr(
+            "tradinglab.data.auto_source.resolve_auto_source", lambda **k: name)
+    return _set
+
+
+def test_auto_is_a_candidate_when_it_resolves_to_the_pinned_source(auto_resolves_to):
+    from tradinglab.backtest.sandbox_feed import source_candidates
+
+    auto_resolves_to("yfinance")
+    assert source_candidates("yfinance") == ["yfinance", "Auto"]
+
+
+def test_auto_is_not_a_candidate_for_a_different_vendor(auto_resolves_to):
+    """Auto's bars are some other vendor's — mixing tapes is the bug."""
+    from tradinglab.backtest.sandbox_feed import source_candidates
+
+    auto_resolves_to("alpaca")
+    assert source_candidates("yfinance") == ["yfinance"]
+
+
+def test_auto_pinned_does_not_duplicate_itself(auto_resolves_to):
+    from tradinglab.backtest.sandbox_feed import source_candidates
+
+    auto_resolves_to("yfinance")
+    assert source_candidates("Auto") == ["Auto"]
+
+
+def test_empty_source_has_no_candidates():
+    from tradinglab.backtest.sandbox_feed import source_candidates
+
+    assert source_candidates("") == []
+
+
+def test_warm_recovers_bars_cached_under_auto(cache, auto_resolves_to):
+    """The real-world case: charted on Auto, replayed on the resolved vendor."""
+    auto_resolves_to("yfinance")
+    cache("Auto", "GLD", "5m", _candles())      # only under the Auto key
+    app = _App(pinned=["GLD"])
+    ctrl = _Controller(data_source="yfinance")
+    SandboxFeedWarmer(app=app, controller=ctrl).request()
+    app.drain_after()
+    assert [s for s, _n, _e in ctrl.registered] == ["GLD"]
+
+
+def test_pinned_source_wins_over_the_auto_alias(cache, auto_resolves_to):
+    auto_resolves_to("yfinance")
+    cache("yfinance", "AMD", "5m", _candles(5, base=100.0))
+    cache("Auto", "AMD", "5m", _candles(9, base=500.0))
+    app = _App(pinned=["AMD"])
+    ctrl = _Controller(data_source="yfinance")
+    SandboxFeedWarmer(app=app, controller=ctrl).request()
+    app.drain_after()
+    assert ctrl.registered == [("AMD", 5, False)]
+
+
+def test_warm_ignores_auto_bars_for_a_different_vendor(cache, auto_resolves_to):
+    auto_resolves_to("alpaca")
+    cache("Auto", "GLD", "5m", _candles())
+    app = _App(pinned=["GLD"])
+    ctrl = _Controller(data_source="yfinance")
+    warmer = SandboxFeedWarmer(app=app, controller=ctrl)
+    warmer.request()
+    app.drain_after()
+    assert ctrl.registered == []
+    assert warmer.missing() == ["GLD"]
+
+
+# ---------------------------------------------------------------------------
+# has_cached_bars — the pre-flight probe
+# ---------------------------------------------------------------------------
+
+
+def test_has_cached_bars_finds_a_downloaded_symbol(cache):
+    from tradinglab.backtest.sandbox_feed import has_cached_bars
+
+    cache("yfinance", "AMD", "5m", _candles())
+    assert has_cached_bars("AMD", sources=["yfinance"], interval="5m")
+    assert not has_cached_bars("AMD", sources=["yfinance"], interval="1m")
+    assert not has_cached_bars("GHOST", sources=["yfinance"], interval="5m")
+
+
+def test_has_cached_bars_checks_every_candidate(cache):
+    from tradinglab.backtest.sandbox_feed import has_cached_bars
+
+    cache("Auto", "GLD", "5m", _candles())
+    assert not has_cached_bars("GLD", sources=["yfinance"], interval="5m")
+    assert has_cached_bars("GLD", sources=["yfinance", "Auto"], interval="5m")
+
+
+def test_has_cached_bars_ignores_no_persist_sources(cache):
+    from tradinglab import disk_cache
+    from tradinglab.backtest.sandbox_feed import has_cached_bars
+
+    cache("yfinance", "AMD", "5m", _candles())
+    disk_cache.mark_no_persist("yfinance")
+    try:
+        assert not has_cached_bars("AMD", sources=["yfinance"], interval="5m")
+    finally:
+        disk_cache.clear_no_persist()

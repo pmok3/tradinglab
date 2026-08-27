@@ -20,9 +20,17 @@ nothing to scan.
 - `cancel()` — stop the warm; in-flight disk reads are discarded on
   arrival.
 - `active -> bool`, `progress() -> tuple[int, int]` — `(registered, total)`.
+- `missing() -> list[str]` — symbols the warm could not resolve from disk.
+- `source_candidates(pinned) -> list[str]` — disk-cache source keys to
+  read `pinned`'s bars from, best first. Module-level; also used by the
+  pre-flight gate in [`gui/sandbox_menu`](../gui/sandbox_menu.spec.md).
+- `has_cached_bars(symbol, *, sources, interval) -> bool` — path-`stat`
+  probe for "was this ever downloaded". Module-level, no parse.
 
 ## Dependencies
-- Internal: `disk_cache.load_window`, `backtest/replay.SandboxController`
+- Internal: `disk_cache.load_window` / `_path_for` / `is_no_persist`,
+  `data.auto_source` (`AUTO_SOURCE_NAME`, `resolve_auto_source`),
+  `backtest/replay.SandboxController`
   (`register_ticker`, `register_daily_for`, `session_date`,
   `lookback_days`, `interval`, `data_source`, `daily_lookback_bars`),
   and on the app: `_fetch_executor`, `_await_future_on_tk`,
@@ -64,6 +72,19 @@ nothing to scan.
   than the reference timeline would replay one symbol against another's
   tape (audit `sandbox-data-source`). Falls back to `source_var` only
   when nothing is pinned.
+- **`"Auto"` is read as an alias when provenance-safe.** The disk cache is
+  keyed by source name and `"Auto"` caches under the opaque literal
+  `"Auto"` — the key records no provider (see
+  [`data/auto_source`](../data/auto_source.spec.md) and CLAUDE.md §7.38).
+  `"Auto"` is also the shipped default chart source, so a trader's
+  everyday history accumulates under `Auto__SYM__5m.jsonl` while a session
+  pins a concrete vendor and looks for `alpaca__SYM__5m.jsonl`. Without
+  the alias, symbols charted daily read as "never downloaded".
+  `source_candidates` appends `"Auto"` **only when
+  `resolve_auto_source()` equals the pinned source** — if the trader
+  explicitly pinned yfinance while Auto resolves to Alpaca, the `Auto__*`
+  file holds Alpaca bars and using them would mix tapes. The pinned key
+  is always tried first, so an exact-vendor file wins.
 - **Date-string window bounds, padded.** `load_window` compares ISO date
   prefixes, which carry whatever UTC offset the vendor wrote, so the
   request pads `_WINDOW_PAD_DAYS` either side and lets the controller's
@@ -116,9 +137,13 @@ _on_loaded  (Tk thread)
   depends on.
 
 ## Known limitations / Future work
-- A symbol missing from the disk cache is reported, not fetched. The user
-  is directed to `Sandbox → Download Replay Data…`, which is the
-  deliberate offline contract.
+- A symbol missing from the disk cache is reported, not fetched. Replay
+  stays offline by design; the trader is gated up front by
+  `gui/sandbox_menu._confirm_sandbox_data_ready`, which links to
+  `Sandbox → Download Replay Data…`.
+- `has_cached_bars` answers "never downloaded", not "covers your
+  window" — a file that exists but is too shallow for the session's
+  lookback passes the pre-flight and surfaces later in `missing()`.
 - The warm has no partial-progress UI beyond the status line.
 
 ## Recent history
