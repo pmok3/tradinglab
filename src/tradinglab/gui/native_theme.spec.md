@@ -26,7 +26,45 @@ Centralizes dark/light theming for classic Tk widgets that are not reached by th
   and call the matching `apply_*_theme` helper after the widget is built. If the
   dialog can stay open while the app theme changes, register a `winfo_exists`-
   guarded `ThemeController.on_change` callback to re-apply the helper.
+- **Containers count too — that is the resize bug.** `tk.Frame` /
+  `tk.LabelFrame` / the `Toplevel` itself need the same treatment as the leaf
+  widgets. An unthemed container is invisible while the window is small
+  (its children cover it) and appears as a light strip the moment the window
+  grows past them, which reads as "half the window went light mode".
+- **Two independent ways a growing window stays painted**, and either is
+  sufficient: the content expands to cover the window
+  (`grid_rowconfigure/columnconfigure(weight=1)` + `sticky="nsew"`, or
+  `pack(expand=True, fill="both")`), **or** the Toplevel's own background is
+  themed so the slack is painted. `BaseModalDialog` supplies the second for
+  free via `apply_toplevel_theme`, which is why several fixed-size dialogs
+  legitimately never expand their content. Failing *both* is the bug that
+  shipped in the Prepare Universe and Start Sandbox dialogs.
 
 ## Tests
 
 Pinned by `tests/unit/gui/test_native_widget_dark_theme.py`, which builds every audited native-widget dialog under `DARK_THEME` and asserts the classic Tk widget options are dark palette values rather than OS defaults. The themed `ThemedColorChooser` (audit `themed-color-chooser`) is covered separately by `tests/unit/gui/test_themed_color_chooser.py::test_dark_theme_chrome_uses_dark_bg` and `::test_dark_theme_labels_use_dark_palette` — those pin that the chooser's `tk.Canvas` chrome + classic `tk.Label`s adopt `DARK_THEME` palette values while leaving the rendered swatch / gradient pixels intact.
+
+Two generic probes run over the `_DARK_WINDOWS` roster:
+
+- `test_window_classic_widgets_linked_to_dark_theme` — tree-walks each
+  window and fails any classic Tk **leaf or container** whose resolved
+  background has luma ≥ 0.5.
+- `test_window_has_no_light_gutter_after_resize` — asserts the window
+  cannot expose an unpainted region when it grows, satisfied by either
+  expanding content or a themed Toplevel background.
+
+`test_every_dialog_is_probed_or_exempt` ties the roster to an AST walk of
+every `Toplevel` / `BaseModalDialog` subclass, so a new dialog must either
+gain a builder or a documented `_PROBE_EXEMPTIONS` entry. Companion tests
+reject stale exemptions, roster/exemption overlap, and roster keys that
+name no real class.
+
+**The gutter probe is structural, not pixel-based, and deliberately so.**
+Dialogs parented to the withdrawn test root are never mapped, so every
+`winfo_width()` is `1`; a measured assertion such as
+`reach >= width - 8` collapses to `1 >= -7` and passes regardless of
+layout. The hand-written Start Sandbox check had exactly that hole and was
+replaced. Geometry-manager configuration and widget colours are both
+readable while unmapped, which is what makes the current form falsifiable —
+each probe carries an anti-vacuity test proving it fails on a synthetic
+offender.
