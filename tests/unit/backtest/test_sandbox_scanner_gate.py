@@ -31,14 +31,29 @@ def _silent_tcl():
     yield
 
 
+class _Toplevel:
+    """Stand-in for the app window behind the Scanner tab."""
+
+    def __init__(self, *, mapped: bool = True) -> None:
+        self._mapped = mapped
+
+    def winfo_viewable(self) -> int:
+        return 1 if self._mapped else 0
+
+
 class _ScannerTab:
-    def __init__(self, *, viewable: bool = True, scans=("scan-1",)) -> None:
+    def __init__(self, *, viewable: bool = True, scans=("scan-1",),
+                 window_mapped: bool = True) -> None:
         self._viewable = viewable
         self._scans = list(scans)
+        self._toplevel = _Toplevel(mapped=window_mapped)
         self.results_set = 0
 
     def winfo_viewable(self) -> int:
         return 1 if self._viewable else 0
+
+    def winfo_toplevel(self) -> _Toplevel:
+        return self._toplevel
 
     def get_active_scan_definitions(self):
         return list(self._scans)
@@ -75,8 +90,9 @@ class _Evaluator:
 
 class _App:
     def __init__(self, *, viewable: bool, evaluator: Any = None,
-                 scans=("scan-1",)) -> None:
-        self._scanner_tab = _ScannerTab(viewable=viewable, scans=scans)
+                 scans=("scan-1",), window_mapped: bool = True) -> None:
+        self._scanner_tab = _ScannerTab(
+            viewable=viewable, scans=scans, window_mapped=window_mapped)
         self._scan_runner = _Runner()
         self._scan_tick_id = 0
         self._scan_last_results: dict = {}
@@ -126,6 +142,41 @@ def test_unprobeable_geometry_defaults_to_scanning():
         raise RuntimeError("no Tk geometry here")
 
     app._scanner_tab.winfo_viewable = _boom
+    _refresh(_ctrl(), app)
+    assert app._scan_runner.runs == 1
+
+
+def test_withdrawn_root_defaults_to_scanning():
+    """A non-viewable tab under an UNMAPPED window infers nothing.
+
+    Regression: the gate originally read "tab not viewable" as "user is on
+    another tab". Every headless harness withdraws its root — including
+    ``tests/scanner/test_app_wiring.py``, which runs a real ChartApp and
+    calls ``app.withdraw()`` — so the gate silently skipped every scan and
+    three wiring tests failed with ``assert 0 == 1``. Those tests are
+    skipped when the suite shares a Tk root with tests/smoke and only run
+    when ``tests/scanner`` is invoked on its own, which is how the release
+    workflow runs it, so the break surfaced at the release gate.
+    """
+    app = _App(viewable=False, window_mapped=False)
+    _refresh(_ctrl(), app)
+    assert app._scan_runner.runs == 1
+
+
+def test_hidden_tab_under_a_mapped_window_still_skips():
+    """The real signal survives: mapped window + unviewable tab = hidden."""
+    app = _App(viewable=False, window_mapped=True)
+    _refresh(_ctrl(), app)
+    assert app._scan_runner.runs == 0
+
+
+def test_unprobeable_toplevel_defaults_to_scanning():
+    app = _App(viewable=False)
+
+    def _boom():
+        raise RuntimeError("no toplevel")
+
+    app._scanner_tab.winfo_toplevel = _boom
     _refresh(_ctrl(), app)
     assert app._scan_runner.runs == 1
 

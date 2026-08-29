@@ -46,6 +46,45 @@ def _sandbox_preferred_src(app: Any, interval: str) -> str:
         return app.source_var.get()
 
 
+def _scanner_tab_is_hidden(frame: Any) -> bool:
+    """True only when the Scanner tab is *positively* known to be off screen.
+
+    Deliberately asymmetric: it answers "hidden" only with evidence, and
+    treats every ambiguous case as visible. Skipping a scan is a
+    performance optimisation, so a false "visible" costs a wasted tick
+    while a false "hidden" silently stops the Scanner tab updating.
+
+    The distinction that matters is between the two reasons a widget can
+    be non-viewable:
+
+    * **Another notebook tab is selected** — a ``ttk.Notebook`` unmaps the
+      widgets of unselected tabs. This is the real signal, and the whole
+      point of the gate.
+    * **Nothing is mapped at all** — a withdrawn root (every headless test
+      harness; ``tests/scanner/test_app_wiring.py`` calls
+      ``app.withdraw()``) or a minimised window. Here the tab's own
+      viewability says nothing about which tab the user is on, so the
+      earlier version of this check read "withdrawn root" as "user is on
+      another tab" and stopped scanning in every headless run.
+
+    Probing the toplevel separates them: if the window itself is not
+    viewable, no conclusion about tab selection can be drawn.
+    """
+    if frame is None:
+        return False
+    try:
+        if frame.winfo_viewable():
+            return False
+    except Exception:  # noqa: BLE001
+        return False  # can't probe Tk geometry — assume visible
+    try:
+        if not frame.winfo_toplevel().winfo_viewable():
+            return False  # whole window unmapped — infers nothing
+    except Exception:  # noqa: BLE001
+        return False
+    return True
+
+
 class SandboxAppController:
     """Own sandbox session state and app-facing orchestration helpers."""
 
@@ -456,8 +495,7 @@ class SandboxAppController:
           watchlist visibility guard (`gui/watchlist_tab.spec.md`
           qw-watchlist-visguard): a `ttk.Notebook` unmaps unselected tabs,
           so results computed while the user is on the Chart tab are
-          invisible. Defaults to "visible" whenever Tk geometry can't be
-          probed, so a headless harness never silently stops scanning.
+          invisible.
         * **An armed `SCANNER_ALERT` entry strategy**, always. Those fire
           from the runner's `new_rows` subscription
           (`entries/evaluator.spec.md`), so skipping a tick would swallow
@@ -467,13 +505,7 @@ class SandboxAppController:
         """
         if self._entries_want_scanner(app=app):
             return True
-        frame = getattr(app, "_scanner_tab", None)
-        if frame is None:
-            return False
-        try:
-            return bool(frame.winfo_viewable())
-        except Exception:  # noqa: BLE001
-            return True
+        return not _scanner_tab_is_hidden(getattr(app, "_scanner_tab", None))
 
     @staticmethod
     def _entries_want_scanner(*, app: Any) -> bool:
