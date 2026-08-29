@@ -34,6 +34,7 @@ one continuous day, so any day-boundary spacing claim needs its own fixture.
 """
 from __future__ import annotations
 
+import contextlib
 import math
 import sys
 import time
@@ -474,17 +475,44 @@ def check_a0_hover_and_crosshair(app) -> None:
         button = None
     app._hover_throttle_job = None
     app._hover_pending_event = None
-    app._on_mouse_move(_FakeEv())
-    job_after_first = app._hover_throttle_job
-    app._on_mouse_move(_FakeEv())
-    app._on_mouse_move(_FakeEv())
-    assert app._hover_throttle_job == job_after_first, (
-        "H2: subsequent motion events must NOT schedule additional after() "
-        "jobs while one is pending (event coalescing)")
-    # Drain.
-    _pump(app, 0.2)
-    assert app._hover_throttle_job is None, (
-        "H2: throttle job should clear after firing")
+    # Anchor on the dispatcher actually running (CLAUDE.md §7.26) instead of
+    # pumping a fixed interval and asserting a steady state afterwards.
+    #
+    # The naive form — `_pump(app, 0.2)` then `assert
+    # app._hover_throttle_job is None` — asserts "no hover dispatch is
+    # pending right now", which is not a stable property inside a live Tk
+    # loop: `_pump` calls `app.update()`, and ANY genuine motion event
+    # delivered during those 200 ms legitimately schedules a fresh job. That
+    # flaked on macos-latest/3.12 with `assert 'after#1658' is None`. What
+    # the check actually cares about is that `_run_throttled_hover` clears
+    # the job id when it fires, so capture that value inside the callback.
+    real_runner = app._run_throttled_hover
+    fired = {"n": 0, "job_when_fired": "<never fired>"}
+
+    def _counting_runner():
+        real_runner()
+        # Read AFTER the body: the dispatcher's contract is that it clears
+        # the id before dispatching.
+        fired["job_when_fired"] = app._hover_throttle_job
+        fired["n"] += 1
+
+    app._run_throttled_hover = _counting_runner  # type: ignore[method-assign]
+    try:
+        app._on_mouse_move(_FakeEv())
+        job_after_first = app._hover_throttle_job
+        app._on_mouse_move(_FakeEv())
+        app._on_mouse_move(_FakeEv())
+        assert app._hover_throttle_job == job_after_first, (
+            "H2: subsequent motion events must NOT schedule additional after() "
+            "jobs while one is pending (event coalescing)")
+        assert _pump_until(app, lambda: fired["n"] >= 1, timeout=2.0), (
+            "H2: the coalesced hover dispatch never fired")
+        assert fired["job_when_fired"] is None, (
+            "H2: throttle job should clear after firing; _run_throttled_hover "
+            f"left {fired['job_when_fired']!r}")
+    finally:
+        with contextlib.suppress(AttributeError):
+            del app._run_throttled_hover
     print("  [OK] H2 hover throttle coalesces motion events")
     print("  [OK] §11 hover + crosshair API + behavior")
 

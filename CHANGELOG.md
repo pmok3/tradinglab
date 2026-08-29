@@ -1,6 +1,11 @@
 # Changelog
 
-## [Unreleased]
+## [0.6.4] - 2026-08-28
+
+Replay stops being a single-chart exercise. A sandbox bar now advances the
+whole board — every pinned watchlist ticker and the prepared universe move
+with the clock — so "time passes, new information arrives" holds for the
+watchlist and the scanner, not just the symbol you happen to be charting.
 
 The **Quant** panel from 0.6.3 was a launcher only — its series were
 reachable on the live chart and nowhere else. They now reach the two places
@@ -8,6 +13,17 @@ you would actually want them: an offline replay session, and the exporter.
 
 ### Added
 
+- **A sandbox session advances every symbol you are watching.** The replay
+  clock now feeds the pinned watchlists and the prepared "Download Replay
+  Data…" universe, loading their tapes from the disk cache at session start
+  (off the UI thread, in batches). Watchlist Last / Change track the replay
+  clock bar by bar instead of sitting blank, and a scan during replay sees
+  the whole prepared universe rather than the two or three symbols the
+  session happened to register.
+- **Starting a sandbox tells you when replay data is missing.** Replay never
+  fetches, so a symbol that was never downloaded is silently blank for the
+  entire session. Start now checks up front and offers to open
+  **Sandbox → Download Replay Data…**, start anyway, or cancel.
 - **Sandbox → Download Replay Data… offers a "Quant — market internals"
   universe.** Prepare it once and a strict-offline replay can chart VIX, the
   yield curve, credit spreads and the relative-strength ratios built from
@@ -21,6 +37,20 @@ you would actually want them: an offline replay session, and the exporter.
 
 ### Fixed
 
+- **Watchlist values were blank for the whole of a sandbox session.** The
+  session pins its own data vendor, which on a default install differs from
+  the toolbar's — the shipped default source is "Auto", and a session
+  resolves that to a concrete provider. The watchlist looked its bars up
+  under the toolbar's name and missed every tape the session had loaded.
+  Worse, the refresh cleared Last / Change for every row before refilling
+  and ran on every bar, so the miss showed as a permanently empty table
+  rather than stale numbers.
+- **Symbols you chart every day were reported as "never downloaded".** The
+  disk cache is keyed by source name and "Auto" caches under the literal
+  `"Auto"`, recording no provider — so a session pinned to a concrete vendor
+  could not see history the chart had already saved. Those bars are now
+  read, but only when Auto currently resolves to that same vendor, so a
+  session can never be replayed against another provider's tape.
 - **The Quant tab no longer keeps its own private cache.** It asked for
   `VIX` while every other path in the app — the ticker box, the disk cache —
   holds the vendor spelling `^VIX`, so the tab re-downloaded every series on
@@ -52,6 +82,19 @@ you would actually want them: an offline replay session, and the exporter.
   on a double-click) reachable from the keyboard. A digit still won't
   *start* a buffer, so a stray numeric keypress over the chart doesn't
   raise a phantom `1` preview.
+
+### Internal
+
+- Fast-forwarding a day no longer repaints the watchlist once per skipped
+  bar, and a replay tick only re-runs saved scans when something is actually
+  reading them (the Scanner tab is open, or a scanner-driven entry is
+  armed). Scanning a 500-symbol universe costs ~100 ms per bar, which would
+  otherwise be paid on every press of "next bar".
+- The dark-mode meta-test now walks containers, not just list/text/canvas
+  widgets, and checks that a window cannot expose an unpainted strip when it
+  is resized — the "half the window went light mode" failure. Its roster
+  grew from 10 windows to 25 and is now tied to an automatic scan of every
+  dialog class, so a new dialog cannot quietly skip theme coverage.
 
 ## [0.6.3] - 2026-08-24
 
