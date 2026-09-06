@@ -8782,6 +8782,120 @@ def check_d49_indicator_render_integration(app) -> None:
           "(overlay+pane Line2D on canvas, scope filter, remove/clear)")
 
 
+def check_d95_ichimoku_cloud(app) -> None:
+    """Ichimoku reaches the live chart with projection, fill and toggles."""
+    import math
+    from datetime import timedelta
+
+    from tradinglab.gui.indicator_dialog import open_indicator_dialog
+    from tradinglab.indicators.config import IndicatorConfig
+    from tradinglab.models import Candle
+
+    mgr = app._indicator_manager
+    saved = list(mgr.list())
+    saved_symbol = getattr(app, "_confirmed_primary_ticker", "")
+    saved_primary = app._primary
+    saved_compare_on = bool(app.compare_var.get())
+    dlg = None
+    try:
+        mgr.clear()
+        app.compare_var.set(False)
+        app._confirmed_primary_ticker = "AAPL"
+        t0 = datetime(2026, 1, 5, 9, 30)
+        app._primary = [
+            Candle(
+                date=t0 + timedelta(minutes=5 * i),
+                open=100.0 + i * 0.05,
+                high=101.0 + i * 0.05 + math.sin(i / 6.0),
+                low=99.0 + i * 0.05 + math.sin(i / 6.0),
+                close=100.2 + i * 0.05 + math.sin(i / 6.0),
+                volume=1_000 + i,
+                session="regular",
+            )
+            for i in range(100)
+        ]
+        cfg = mgr.add(IndicatorConfig(
+            kind_id="ichimoku",
+            kind_version=1,
+            display_name="Ichimoku(9,26,52,26)",
+            params={
+                "conversion_period": 9,
+                "base_period": 26,
+                "span_b_period": 52,
+                "displacement": 26,
+            },
+            scopes=frozenset({"main"}),
+        ))
+        ready = _pump_until(
+            app,
+            lambda: bool(
+                (app._panel_state.get("primary") or {}).get("ind_state")
+                and app._panel_state["primary"]["ind_state"].overlay_fills.get(cfg.id)
+            ),
+            timeout=1.0,
+        )
+        assert ready, "Ichimoku cloud fill did not reach the primary chart"
+        ps = app._panel_state["primary"]
+        state = ps["ind_state"]
+        lines = state.overlay_lines.get(cfg.id, {})
+        assert {
+            "tenkan", "kijun", "senkou_span_a_raw", "senkou_span_b_raw",
+        }.issubset(lines), f"Ichimoku lines missing: {sorted(lines)}"
+        assert "chikou_source" not in lines, "Chikou must default hidden"
+        assert state.overlay_fills[cfg.id].get("cloud"), "Kumo fill missing"
+        assert state.forward_horizon == 26
+        span_x = lines["senkou_span_a_raw"].get_xdata()
+        assert float(span_x[-1]) > len(ps["candles"]) - 1, \
+            "Senkou A must extend beyond the latest candle"
+        n = len(ps["candles"])
+        ps["price_ax"].set_xlim(max(0, n - 20) - 0.5, n - 0.5)
+        app._autoscale_slot_y("primary", max(0, n - 20), n)
+        assert ps["price_ax"].get_xlim()[1] >= len(ps["candles"]) - 0.5 + 25, \
+            "visible Ichimoku must reserve its projected future gutter"
+
+        dlg = open_indicator_dialog(app)
+        _pump(app, 0.1)
+        row = next((item for item in dlg._rows if item.config_id == cfg.id), None)
+        assert row is not None, "Ichimoku row missing from Manage Indicators"
+        assert "cloud" in row.fill_vars, "Ichimoku row missing Cloud visibility toggle"
+        row.fill_vars["cloud"].set(False)
+        dlg._on_toggle_fill_visible(row, "cloud")
+        assert mgr.get(cfg.id).fill_visibility == {"cloud": False}, \
+            "Cloud checkbox did not persist its independent visibility state"
+        dlg._on_save_close()
+        dlg = None
+        hidden = _pump_until(
+            app,
+            lambda: not (
+                app._panel_state["primary"]["ind_state"].overlay_fills.get(cfg.id)
+                or {}
+            ),
+            timeout=1.0,
+        )
+        assert hidden, "independent Cloud toggle did not remove the fill"
+        current_state = app._panel_state["primary"]["ind_state"]
+        assert current_state.overlay_lines.get(cfg.id), \
+            "hiding the Cloud fill must not remove Ichimoku lines"
+    finally:
+        if dlg is not None:
+            try:
+                dlg._on_cancel()
+            except Exception:  # noqa: BLE001
+                pass
+        app._primary = saved_primary
+        app._confirmed_primary_ticker = saved_symbol
+        app.compare_var.set(saved_compare_on)
+        try:
+            mgr.clear()
+            for item in saved:
+                mgr.add(item)
+        except Exception:  # noqa: BLE001
+            pass
+        _pump(app, 0.2)
+
+    print("  [OK] §d95 Ichimoku cloud (projection, Kumo, gutter, fill toggle)")
+
+
 def check_d54_indicator_reorder(app) -> None:
     """Drag-to-reorder (b43): IndicatorManager.reorder + dialog row
     resync + keyboard fallback + render-side effect on pane order and
@@ -23954,6 +24068,7 @@ def _run_all_checks(app) -> None:
     check_d47_cache_stale_session_aware(app)
     check_d48_indicator_dialog(app)
     check_d49_indicator_render_integration(app)
+    check_d95_ichimoku_cloud(app)
     check_d54_indicator_reorder(app)
     check_d50_indicators_menu_wiring(app)
     check_d55_indicator_preset_menu(app)
@@ -24302,6 +24417,8 @@ def _build_check_sequence():
         ("check_d48_indicator_dialog", check_d48_indicator_dialog),
         ("check_d49_indicator_render_integration",
          check_d49_indicator_render_integration),
+        ("check_d95_ichimoku_cloud",
+         check_d95_ichimoku_cloud),
         ("check_d54_indicator_reorder", check_d54_indicator_reorder),
         ("check_d50_indicators_menu_wiring", check_d50_indicators_menu_wiring),
         ("check_d55_indicator_preset_menu", check_d55_indicator_preset_menu),

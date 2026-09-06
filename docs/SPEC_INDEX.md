@@ -74,6 +74,7 @@ not an exhaustive enumeration.**
 | `indicators/smi.spec.md` | Stochastic Momentum Index. |
 | `indicators/vwap.spec.md` | Session-anchored VWAP (RTH-anchored). |
 | `indicators/avwap.spec.md` | Anchored VWAP — user-clickable bar starts cumulation; optional ±1σ / ±2σ bands. |
+| `indicators/ichimoku.spec.md` | Ichimoku Cloud — causal Tenkan/Kijun/Senkou/Chikou outputs with observed-bar displacement and independently visible Kumo fill. |
 | `indicators/rvol.spec.md` | Relative Volume family — Cumulative-Day / Time-of-Day / Simple Rolling, sharing one pane via `pane_group="rvol"`. |
 | `indicators/sessions.spec.md` | Shared session helpers (per-day grouping, HH:MM time-of-day key, intraday detection). |
 | `indicators/render.spec.md` | Render-side bridge: gap-aware compute → `Line2D` artists on price + lower panes; `PanelIndicatorState` walked by blit / theme swap. |

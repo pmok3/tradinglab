@@ -13,6 +13,14 @@ Own TradingLab's panel rendering state and the helper methods that mutate candle
   `None` (any decoration-changing repaint invalidates both). The capture +
   blit lives app-side in `gui/interaction.py:_paint_tick_frame`; the renderer
   only decides when to call it.
+- `applied_forward_gutter` — right-glued gutter width currently represented
+  in the shared viewport. Renderer-owned so it survives `figure.clear()` and
+  prevents each SNAP_RIGHT/poll cycle from counting the same gutter into the
+  preserved width again.
+- `right_glued_candle_width` — candle-only width paired with the applied
+  gutter. Distinguishes a SNAP_RIGHT window carrying an old gutter from a
+  fresh axes/default candle window, so rebuilding axes never trades away
+  historical candles merely because the prior chart had projection enabled.
 
 ## Public API
 - `class ChartRenderer`
@@ -22,7 +30,12 @@ Own TradingLab's panel rendering state and the helper methods that mutate candle
   - `key_bar_hollow_indices_for(candles, *, highlight_key_bars_on)` — derive hollow-bar indices.
   - `ha_flat_overlay_for(candles, *, highlight_ha_flat_on, ha_on, dark_mode)` — derive HA-flat hatch metadata only when HA mode and the flat-highlight toggle are both on. Hatch colours derive from the **live** `constants.BULL_COLOR` / `BEAR_COLOR` (module imports `from .. import constants as _constants` and reads `_constants.BULL_COLOR` at call time, NOT a value-binding `from ..constants import BULL_COLOR`) so the Okabe-Ito palette toggle re-colours the hatch without a relaunch. Audit `color-blind-palette`.
   - `repaint_visible_slot_glyphs(...)` — redraw existing slot slices without rebuilding topology.
-  - `autoscale_slot_y(...)`, `ensure_rendered_for_view(...)` — viewport maintenance helpers.
+  - `autoscale_slot_y(...)`, `ensure_rendered_for_view(...)` — viewport
+    maintenance helpers. Price autoscale unions candle bounds with visible
+    overlay line/fill bounds in plotted X space. When a right-glued slot has a
+    positive indicator `forward_horizon`, autoscale extends the right edge by
+    that many abstract slots while leaving the candle window's left edge
+    untouched.
   - `apply_tick_to_artists(...)`, `refresh_view_after_tick(...)`, `refresh_view_after_append(...)` — streaming fast paths.
   - `_snapshot_slot_limits(ps)` — hashable `(xlim, ylim)` tuple over a slot's price / volume / indicator axes; equal between two ticks iff no axis moved. Backs the tick-blit eligibility test.
   - `render_indicators_for_slot(...)`, `autoscale_indicator_panes_for_slot(slot)` — indicator delegation + pane scaling. `autoscale_indicator_panes_for_slot` groups pane lines by their shared `Axes` (via `indicators.render.lines_by_pane_axes`) and calls `autoscale_pane_y` ONCE per distinct axes with the UNION of every config's lines on it — so a shared pane (e.g. RVOL Cumulative + ToD) fits both series instead of last-config-wins.
@@ -51,12 +64,27 @@ Own TradingLab's panel rendering state and the helper methods that mutate candle
   candle / volume artists, `apply_tick_to_artists` calls the supplied
   `render_indicators(slot)` callback so indicator lines/panes recompute
   against the forming bar before the blit/full-draw decision.
+- **Projected indicator gutter belongs here, not `app.py`.** The renderer
+  reads `PanelIndicatorState.forward_horizon` after indicator rendering. It
+  only extends an axis whose right edge is still glued to the latest candle
+  (or a previously applied indicator gutter), preserving manual pan/zoom.
+  Shared primary/compare axes use the maximum horizon across both slots for
+  autoscale and append sliding, so processing a non-projecting compare slot
+  cannot erase or repeatedly widen the primary's gutter. Future slots contain
+  no synthetic candles or timestamps.
+- **Overlay-aware price autoscale.** Visible displaced lines and independently
+  visible fills contribute to automatic Y limits inside the plotted viewport;
+  log mode ignores non-positive values. Manual/panned X windows remain
+  untouched, and existing candle padding is preserved before any overlay
+  expansion.
 
 ## Invariants
 - Methods are fail-soft: rendering overlays and derived computations must never abort a paint.
 - Artist teardown is idempotent.
 - Streaming fast paths only mutate in place when the visible slice and cached artist metadata still line up.
 - Indicator pane autoscale always operates on the visible x-window, not the full history.
+- A projected gutter appears only while a visible line or fill requests it.
+  It never replaces historical candle width.
 
 ## Testing
 - Covered by the existing unit suite that exercises render, stream, indicator, and overlay code through `ChartApp`.

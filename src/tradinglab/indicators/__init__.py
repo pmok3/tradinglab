@@ -42,10 +42,13 @@ from .avwap import AnchoredVWAP
 from .base import (
     INDICATORS,
     PARAM_KINDS,
+    FillSpec,
     Indicator,
     IndicatorFactory,
     LineStyle,
+    OutputPlotSpec,
     ParamDef,
+    ReadoutStateSpec,
     factory_by_kind_id,
     kind_id_for,
     register_indicator,
@@ -53,6 +56,7 @@ from .base import (
 )
 from .bollinger import BollingerBands
 from .chandelier import ChandelierStops
+from .ichimoku import IchimokuCloud
 from .keltner import KeltnerChannels
 from .lrsi import LRSI
 from .macd import MACD
@@ -86,6 +90,7 @@ register_indicator("Laguerre RSI", LRSI)
 register_indicator("RVOL", RVOL)
 register_indicator("RRVOL", RRVOL)
 register_indicator("Chandelier Stops", ChandelierStops)
+register_indicator("Ichimoku Cloud", IchimokuCloud)
 register_indicator("Prior Day H/L/C", PriorDayHLC)
 register_indicator("Overlap Score Inverted", OverlapScoreInverted)
 
@@ -93,9 +98,12 @@ __all__ = [
     "INDICATORS",
     "Indicator",
     "IndicatorFactory",
+    "FillSpec",
     "LineStyle",
+    "OutputPlotSpec",
     "PARAM_KINDS",
     "ParamDef",
+    "ReadoutStateSpec",
     "factory_by_kind_id",
     "kind_id_for",
     "register_indicator",
@@ -114,6 +122,7 @@ __all__ = [
     "RVOL",
     "RRVOL",
     "ChandelierStops",
+    "IchimokuCloud",
     "PriorDayHLC",
     "OverlapScoreInverted",
 ]

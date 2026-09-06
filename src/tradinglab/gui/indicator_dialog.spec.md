@@ -57,6 +57,10 @@ _output_visible` honours the persisted `LineStyle.visible` (hidden band
 vanishes from BOTH chart and legend, the latter via
 `readout_legend._effective_output_keys_for`). This is finer-grained than the
 whole-indicator Primary/Compare master toggle.
+Hydration records any visibility value that differs from the declared
+default—not just `False`. This is load-bearing for outputs such as Ichimoku
+Chikou, whose default is hidden but which may carry an explicit persisted
+`visible=True` override.
 
 Both are committed via `manager.update(style=...)` where `_build_style`
 materialises one `LineStyle(color, width=default, visible)` per output whose
@@ -65,6 +69,21 @@ default-colour band is still persisted, while an untouched output persists no
 entry and future default tweaks propagate). Switching kind purges both
 `style_overrides` and `visible_overrides`; re-hydrating a row from a saved
 config brings each checkbox up matching the persisted `visible` flag.
+
+Factories with paired-area `fill_specs` append a **Fills:** group with one
+checkbox per fill. Fill visibility is independent from its boundary lines and
+the whole-indicator scope toggle. `_build_fill_visibility` persists only
+deviations through `IndicatorConfig.fill_visibility`; it never writes the
+toggle into compute `params`, so hiding/showing a cloud redraws without
+invalidating numerical cache entries. Fill colors and opacity are fixed
+semantic renderer metadata in v1, so fill rows intentionally have no color
+swatch.
+
+Factories may mark line outputs with `semantic_output_colors`
+(`"bull"` / `"bear"`). `_default_style_for_kind` resolves those defaults from
+the live application palette before building swatches or comparing overrides,
+so a color-blind toggle updates Ichimoku's Senkou defaults without converting
+them into persisted user colors.
 
 ### Per-interval visibility checkboxes (b41)
 Inline `{1m,2m,5m,15m,30m,1h,1d,1wk,1mo}` checkbox group maps to
@@ -337,6 +356,8 @@ to any future "common picks plus free-text" param. Audit
 
 - Only one instance per app; `open_indicator_dialog` is idempotent.
 - Dialog state mirrors `app._indicator_manager` after every observed event.
+- Fill visibility survives row hydration, kind reconciliation, manager
+  updates, and preset round-trips independently of line styles.
 - Editing an unknown-kind row is impossible (UI disabled).
 - Render deferral is depth-balanced: every `_begin_render_deferral` is
   matched by exactly one `_end_render_deferral` (on teardown, or on

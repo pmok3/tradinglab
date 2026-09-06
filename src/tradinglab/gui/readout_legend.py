@@ -61,6 +61,19 @@ class OverlaySegment:
 
 
 @dataclass(frozen=True)
+class OverlayState:
+    """Two-output comparison rendered as a compact semantic state."""
+
+    first_output: str
+    second_output: str
+    label: str
+    fill_key: str
+    first_above: str
+    second_above: str
+    equal: str
+
+
+@dataclass(frozen=True)
 class ReadoutLegendRow:
     """One legend row: one overlay indicator config.
 
@@ -82,6 +95,8 @@ class ReadoutLegendRow:
     label: str
     outputs: list[OverlaySegment]
     visible: bool
+    state: OverlayState | None = None
+    unavailable_reason: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -298,6 +313,7 @@ def build_overlay_legend_rows(
     interval: str,
     *,
     theme_text: str = "#cccccc",
+    symbol: str = "",
 ) -> list[ReadoutLegendRow]:
     """Return the legend rows for overlay indicators on ``(scope, interval)``.
 
@@ -318,9 +334,23 @@ def build_overlay_legend_rows(
     except Exception:  # noqa: BLE001
         return rows
     for cfg in configs:
+        factory = _factory_for_kind_id(cfg.kind_id)
+        unavailable_reason = ""
+        if factory is not None:
+            try:
+                from ..indicators.base import factory_is_available_for
+
+                availability = factory_is_available_for(
+                    factory,
+                    interval,
+                    cfg.params,
+                    symbol=symbol,
+                )
+                if not availability.ok:
+                    unavailable_reason = availability.reason or "Unavailable"
+            except Exception:  # noqa: BLE001
+                unavailable_reason = ""
         keys = _effective_output_keys_for(cfg)
-        if not keys:
-            continue
         multi = len(keys) > 1
         segments: list[OverlaySegment] = [
             OverlaySegment(
@@ -330,12 +360,48 @@ def build_overlay_legend_rows(
             )
             for k in keys
         ]
+        state = None
+        if factory is not None:
+            hook = getattr(factory, "readout_state_spec", None)
+            if callable(hook):
+                try:
+                    spec = hook(dict(cfg.params or {}))
+                    if spec is not None:
+                        state = OverlayState(
+                            first_output=str(spec.first_output),
+                            second_output=str(spec.second_output),
+                            label=str(spec.label),
+                            fill_key=str(spec.fill_key),
+                            first_above=str(spec.first_above),
+                            second_above=str(spec.second_above),
+                            equal=str(spec.equal),
+                        )
+                except Exception:  # noqa: BLE001
+                    state = None
+        if state is not None and state.fill_key:
+            default_visible = True
+            for fill in tuple(getattr(factory, "fill_specs", ()) or ()):
+                if str(getattr(fill, "key", "")) == state.fill_key:
+                    default_visible = bool(
+                        getattr(fill, "default_visible", True),
+                    )
+                    break
+            if not bool(
+                (cfg.fill_visibility or {}).get(
+                    state.fill_key, default_visible,
+                ),
+            ):
+                state = None
+        if not keys and state is None:
+            continue
         rows.append(
             ReadoutLegendRow(
                 config_id=int(cfg.id),
                 label=format_indicator_label(cfg),
                 outputs=segments,
                 visible=bool(getattr(cfg, "visible", True)),
+                state=state,
+                unavailable_reason=unavailable_reason,
             )
         )
     return rows
@@ -343,6 +409,7 @@ def build_overlay_legend_rows(
 
 __all__ = (
     "OverlaySegment",
+    "OverlayState",
     "ReadoutLegendRow",
     "build_overlay_legend_rows",
     "format_indicator_label",

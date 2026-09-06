@@ -601,7 +601,7 @@ def _const_int(node: ast.AST) -> int | None:
 _NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,31}$")
 _BUILTIN_KIND_IDS: frozenset[str] = frozenset({
     "sma", "ema", "wma", "rma", "ma", "rsi", "atr", "adx", "vwap",
-    "bbands", "macd", "keltner", "chandelier", "smi", "lrsi",
+    "bbands", "macd", "keltner", "chandelier", "ichimoku", "smi", "lrsi",
     "rvol", "rrvol", "prior_day", "anchored_vwap", "overlap_score",
     "sessions",
 })

@@ -9,7 +9,7 @@ observer callbacks on every mutation.
 
 ## Public API
 - `IndicatorConfig` (dataclass) — `id, kind_id, kind_version,
-  display_name, params, style, intervals, scopes, visible, origin,
+  display_name, params, style, fill_visibility, intervals, scopes, visible, origin,
   unknown, pane_group`.
   - `pane_group: str = ""` — optional override persisted on the
     config; when non-empty, overrides the factory's class-level
@@ -30,9 +30,12 @@ observer callbacks on every mutation.
     `_migrate_avwap_anchor_params`, preserving the prior "one anchor on
     every symbol" behaviour. A legacy blank anchor stays per-symbol
     (empty) → renders "Not set". See `indicators/avwap.spec.md`.
-  - `applies_to(scope, interval) -> bool` — visibility + scope +
+  - `fill_visibility: dict[str, bool]` — per-fill rendering overrides,
+    separate from compute params and line styles. Missing keys inherit the
+    factory `FillSpec.default_visible`.
+  - `applies_to(scope, interval, *, symbol="") -> bool` — visibility + scope +
     interval filter (empty `intervals` = all) + params-aware factory
-    availability via `factory_is_available_for`.
+    interval/symbol availability via `factory_is_available_for`.
   - `make_indicator()` — instantiate from `kind_id` + `params`.
     Returns `None` for unknown placeholders. Raises `KeyError` if the
     kind disappears between hydrate and call.
@@ -46,7 +49,7 @@ observer callbacks on every mutation.
   `DEFAULT_SCOPES = frozenset({"main", "drilldown"})`.
 - `IndicatorManager(scheduler=None)` — `add / remove / update / list /
   get / clear / reorder(config_id, new_index) / applicable(scope,
-  interval) / save_preset / set_preset / delete_preset / list_presets
+  interval, *, symbol="") / save_preset / set_preset / delete_preset / list_presets
   / active_preset / to_dict / load_dict / presets_to_dict /
   install_presets`.
   - `presets_to_dict() -> dict[name, list[config_dict]]` — serialize ONLY
@@ -105,6 +108,12 @@ observer callbacks on every mutation.
   preset to the live chart.
 - **`config_hash` lives in `cache.py`**, not here — only compute-
   affecting fields matter for the cache key.
+- **Fill visibility is render-only.** It round-trips through active configs,
+  imports/exports, and named presets, but does not enter `params` or invalidate
+  the indicator compute cache.
+- **Availability suppression is contextual, not destructive.** A symbol-
+  incompatible config remains persisted with its original scopes/visibility
+  and automatically renders again when that slot changes to a compatible symbol.
 - **`reorder` clamping is on the post-removal list**
   (`pop(current); insert(target)`) — "move to index N" is unambiguous
   regardless of the moved item's previous slot. The indicator dialog
@@ -119,7 +128,7 @@ observer callbacks on every mutation.
 - Full event vocabulary: `add` / `remove` / `update` / `clear` /
   `reorder` / `preset_saved` / `preset_deleted` / `preset_loaded` /
   `loaded` / `redraw`.
-- `applies_to(scope, interval)` is False for unknown / invisible /
+- `applies_to(scope, interval, symbol=...)` is False for unknown / invisible /
   out-of-scope / out-of-interval / factory-unavailable configs.
 - `to_dict() → from_dict()` round-trips all persisted fields.
 - After `load_dict(d)` returns, state is fully replaced atomically;

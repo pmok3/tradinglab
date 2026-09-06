@@ -97,6 +97,10 @@ ACRONYMS: dict[str, tuple[str, str]] = {
         "Chandelier Stops",
         "Trailing stop level pinned N×ATR below the highest high since entry.",
     ),
+    "ichimoku": (
+        "Ichimoku Cloud",
+        "Trend structure with conversion/base lines and a displaced price cloud.",
+    ),
     "prior_day_hlc": (
         "Prior Day High / Low / Close",
         "Yesterday's regular-session H/L/C as horizontal reference lines.",

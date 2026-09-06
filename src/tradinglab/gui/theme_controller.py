@@ -262,6 +262,17 @@ class ThemeController:
                         lt = getattr(lta, "_text", None)
                         if lt is not None:
                             lt.set_color(theme["text"])
+                        state = row.get("state")
+                        sta = state.get("textarea") if state else None
+                        st = getattr(sta, "_text", None)
+                        if st is not None:
+                            direction = state.get("direction")
+                            color = (
+                                _constants.BULL_COLOR if direction == "bull"
+                                else _constants.BEAR_COLOR if direction == "bear"
+                                else theme["text"]
+                            )
+                            st.set_color(color)
                     else:
                         container = row.get("container")
                         kids = container.get_children() if container is not None else ()

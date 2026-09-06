@@ -35,7 +35,7 @@ from matplotlib.ticker import FuncFormatter, Locator
 
 from ..models import Candle
 from ._palette import FALLBACK_GRAY
-from .base import compute_via_bars
+from .base import FillSpec, OutputPlotSpec, compute_via_bars
 from .base import factory_by_kind_id as _factory_by_kind_id_raw
 
 _LOG = logging.getLogger(__name__)
@@ -348,6 +348,10 @@ class PanelIndicatorState:
 
     # config_id -> {output_key: Line2D} on the price axis (overlays).
     overlay_lines: dict[int, dict[str, Any]] = field(default_factory=dict)
+    # config_id -> {fill_key: (bull_collection, bear_collection)}.
+    overlay_fills: dict[int, dict[str, tuple[Any, ...]]] = field(
+        default_factory=dict,
+    )
     # config_id -> Axes (lower pane) for non-overlay indicators.
     panes: dict[int, Any] = field(default_factory=dict)
     # config_id -> {output_key: Line2D} on the per-config lower pane.
@@ -355,12 +359,17 @@ class PanelIndicatorState:
     # Snapshot of which config_ids appeared on this slot the last time
     # we rendered. Used to detect stale lines that need removing.
     last_config_ids: tuple[int, ...] = ()
+    # Maximum positive plot displacement among currently visible outputs.
+    forward_horizon: int = 0
 
     def all_artists(self) -> list[Any]:
         """Flat list of every Line2D currently held — for blit-anim sets."""
         out: list[Any] = []
         for lines in self.overlay_lines.values():
             out.extend(lines.values())
+        for fills in self.overlay_fills.values():
+            for collections in fills.values():
+                out.extend(collections)
         for lines in self.pane_lines.values():
             out.extend(lines.values())
         return out
@@ -369,15 +378,21 @@ class PanelIndicatorState:
         for lines in self.overlay_lines.values():
             for ln in lines.values():
                 _safe_remove_line(ln)
+        for fills in self.overlay_fills.values():
+            for collections in fills.values():
+                for collection in collections:
+                    _safe_remove_line(collection)
         for lines in self.pane_lines.values():
             for ln in lines.values():
                 _safe_remove_line(ln)
         self.overlay_lines.clear()
+        self.overlay_fills.clear()
         self.pane_lines.clear()
         # Note: `panes` axes are owned by the figure via gridspec;
         # _render rebuilds them. We don't remove them here.
         self.panes.clear()
         self.last_config_ids = ()
+        self.forward_horizon = 0
 
 
 def _safe_remove_line(ln: Any) -> None:
@@ -389,12 +404,26 @@ def _safe_remove_line(ln: Any) -> None:
 
 # --- Compute + render helper -------------------------------------------
 
+
+def _manager_applicable(
+    manager: IndicatorManager,
+    scope: str,
+    interval: str,
+    symbol: str,
+) -> list[IndicatorConfig]:
+    """Call symbol-aware managers while preserving lightweight legacy stubs."""
+    try:
+        return list(manager.applicable(scope, interval, symbol=symbol))
+    except TypeError:
+        return list(manager.applicable(scope, interval))
+
+
 def applicable_non_overlay_configs(
-    manager: IndicatorManager, scope: str, interval: str,
+    manager: IndicatorManager, scope: str, interval: str, *, symbol: str = "",
 ) -> list[IndicatorConfig]:
     """Return non-overlay configs that should render in this slot."""
     out: list[IndicatorConfig] = []
-    for cfg in manager.applicable(scope, interval):
+    for cfg in _manager_applicable(manager, scope, interval, symbol):
         if cfg.unknown:
             continue
         cls = factory_by_kind_id(cfg.kind_id)
@@ -406,7 +435,7 @@ def applicable_non_overlay_configs(
 
 
 def applicable_pane_groups(
-    manager: IndicatorManager, scope: str, interval: str,
+    manager: IndicatorManager, scope: str, interval: str, *, symbol: str = "",
 ) -> list[list[IndicatorConfig]]:
     """Group non-overlay configs by ``pane_group`` for shared-pane rendering.
 
@@ -425,7 +454,9 @@ def applicable_pane_groups(
     """
     groups: list[list[IndicatorConfig]] = []
     by_key: dict[str, list[IndicatorConfig]] = {}
-    for cfg in applicable_non_overlay_configs(manager, scope, interval):
+    for cfg in applicable_non_overlay_configs(
+        manager, scope, interval, symbol=symbol,
+    ):
         # Params-aware: the unified RVOL / RRVOL indicators toggle
         # between "rvol" and "rvol_z" pane groups based on z_score.
         # ``effective_pane_group`` resolves the live pane group from
@@ -447,7 +478,7 @@ def applicable_pane_groups(
 
 
 def applicable_overlay_configs(
-    manager: IndicatorManager, scope: str, interval: str,
+    manager: IndicatorManager, scope: str, interval: str, *, symbol: str = "",
 ) -> list[IndicatorConfig]:
     """Configs for ``(scope, interval)`` whose kind is an overlay.
 
@@ -458,7 +489,7 @@ def applicable_overlay_configs(
     log file when diagnosed.
     """
     out: list[IndicatorConfig] = []
-    for cfg in manager.applicable(scope, interval):
+    for cfg in _manager_applicable(manager, scope, interval, symbol):
         if cfg.unknown:
             continue
         cls = factory_by_kind_id(cfg.kind_id)
@@ -633,13 +664,27 @@ def _resolve_style(cfg: IndicatorConfig, output_key: str) -> tuple[str, float]:
     """Return ``(color_hex, line_width)`` for one output of one config."""
     cls = factory_by_kind_id(cfg.kind_id)
     default = {}
+    semantic_role = ""
     if cls is not None:
         default = dict(getattr(cls, "default_style", {}) or {})
+        semantic_role = str(
+            dict(getattr(cls, "semantic_output_colors", {}) or {}).get(
+                output_key, "",
+            ),
+        )
     cfg_style: dict[str, Any] = dict(getattr(cfg, "style", {}) or {})
-    spec = cfg_style.get(output_key) or default.get(output_key)
+    override = cfg_style.get(output_key)
+    spec = override or default.get(output_key)
     if spec is None:
         return "#1f77b4", 1.2
     color = getattr(spec, "color", None) or "#1f77b4"
+    if override is None and semantic_role in {"bull", "bear"}:
+        from .. import constants as _constants
+
+        color = (
+            _constants.BULL_COLOR
+            if semantic_role == "bull" else _constants.BEAR_COLOR
+        )
     width = float(getattr(spec, "width", 1.2) or 1.2)
     return color, width
 
@@ -663,6 +708,270 @@ def _output_visible(cfg: IndicatorConfig, output_key: str) -> bool:
     if spec is None:
         return True
     return bool(getattr(spec, "visible", True))
+
+
+def _output_plot_specs(
+    factory: Any,
+    params: dict[str, Any],
+) -> dict[str, OutputPlotSpec]:
+    """Resolve parameter-aware plot metadata defensively."""
+    method = getattr(factory, "output_plot_specs", None)
+    if not callable(method):
+        return {}
+    try:
+        raw = method(params)
+    except Exception:  # noqa: BLE001
+        return {}
+    out: dict[str, OutputPlotSpec] = {}
+    try:
+        for key, value in dict(raw or {}).items():
+            if isinstance(value, OutputPlotSpec):
+                out[str(key)] = value
+            else:
+                out[str(key)] = OutputPlotSpec(
+                    x_offset=int(getattr(value, "x_offset", value)),
+                )
+    except (TypeError, ValueError):
+        return {}
+    return out
+
+
+def _fill_specs(factory: Any) -> tuple[FillSpec, ...]:
+    raw = getattr(factory, "fill_specs", ()) or ()
+    return tuple(spec for spec in raw if isinstance(spec, FillSpec))
+
+
+def _fill_visible(cfg: IndicatorConfig, spec: FillSpec) -> bool:
+    overrides = dict(getattr(cfg, "fill_visibility", {}) or {})
+    return bool(overrides.get(spec.key, spec.default_visible))
+
+
+def _plot_xy(
+    arr: np.ndarray,
+    *,
+    plot_spec: OutputPlotSpec,
+    gap_mask: np.ndarray | None,
+    n: int,
+    offset: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Map a causal output onto observed-bar-displaced chart coordinates."""
+    values = np.asarray(arr, dtype=np.float64)
+    if values.shape != (n,) or n == 0:
+        return np.zeros(0, dtype=float), np.zeros(0, dtype=float)
+    source_positions = (
+        np.arange(n, dtype=np.int64)
+        if gap_mask is None
+        else np.flatnonzero(~gap_mask).astype(np.int64, copy=False)
+    )
+    m = int(source_positions.size)
+    if m == 0:
+        return np.zeros(0, dtype=float), np.zeros(0, dtype=float)
+
+    shift = int(plot_spec.x_offset)
+    source_ord = np.arange(m, dtype=np.int64)
+    target_ord = source_ord + shift
+    keep = target_ord >= 0
+    if not np.any(keep):
+        return np.zeros(0, dtype=float), np.zeros(0, dtype=float)
+    source_ord = source_ord[keep]
+    target_ord = target_ord[keep]
+
+    targets = np.empty(target_ord.size, dtype=np.int64)
+    inside = target_ord < m
+    targets[inside] = source_positions[target_ord[inside]]
+    targets[~inside] = n + (target_ord[~inside] - m)
+    source_values = values[source_positions[source_ord]]
+
+    lo = int(np.min(targets))
+    hi = int(np.max(targets))
+    dense_y = np.full(hi - lo + 1, np.nan, dtype=np.float64)
+    dense_y[targets - lo] = source_values
+    dense_x = np.arange(lo, hi + 1, dtype=np.float64) + float(offset)
+    return dense_x, dense_y
+
+
+def _stamp_plot_metadata(artist: Any, x: np.ndarray, y: np.ndarray, offset: float) -> None:
+    """Attach plot-coordinate data used by shifted readouts/autoscaling."""
+    try:
+        artist._sc_x_data = x
+        artist._sc_y_data = y
+        artist._sc_panel_offset = float(offset)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def forward_horizon_for_slot(
+    manager: IndicatorManager,
+    scope: str,
+    interval: str,
+    *,
+    symbol: str = "",
+) -> int:
+    """Maximum positive observed-bar displacement among visible overlays."""
+    horizon = 0
+    for cfg in applicable_overlay_configs(
+        manager, scope, interval, symbol=symbol,
+    ):
+        factory = factory_by_kind_id(cfg.kind_id)
+        if factory is None:
+            continue
+        specs = _output_plot_specs(factory, dict(cfg.params or {}))
+        for key, spec in specs.items():
+            if _output_visible(cfg, key):
+                horizon = max(horizon, int(spec.x_offset))
+        for fill in _fill_specs(factory):
+            if not _fill_visible(cfg, fill):
+                continue
+            horizon = max(
+                horizon,
+                int(specs.get(fill.first_output, OutputPlotSpec()).x_offset),
+                int(specs.get(fill.second_output, OutputPlotSpec()).x_offset),
+            )
+    return max(0, horizon)
+
+
+def visible_overlay_y_bounds(
+    state: PanelIndicatorState,
+    x_min: float,
+    x_max: float,
+    *,
+    positive_only: bool = False,
+) -> tuple[float, float] | None:
+    """Finite bounds of visible overlay lines/fills inside a plotted X range."""
+    chunks: list[np.ndarray] = []
+
+    def _collect(artist: Any) -> None:
+        try:
+            if not bool(artist.get_visible()):
+                return
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            x_raw = getattr(artist, "_sc_x_data", None)
+            y_raw = getattr(artist, "_sc_y_data", None)
+            x = np.asarray(
+                x_raw if x_raw is not None else artist.get_xdata(),
+                dtype=np.float64,
+            )
+            y = np.asarray(
+                y_raw if y_raw is not None else artist.get_ydata(),
+                dtype=np.float64,
+            )
+        except Exception:  # noqa: BLE001
+            return
+        if x.shape != y.shape:
+            return
+        mask = (x >= x_min) & (x <= x_max) & np.isfinite(y)
+        if positive_only:
+            mask &= y > 0
+        if np.any(mask):
+            chunks.append(y[mask])
+
+    for lines in state.overlay_lines.values():
+        for artist in lines.values():
+            _collect(artist)
+    for fills in state.overlay_fills.values():
+        for collections in fills.values():
+            for collection in collections:
+                try:
+                    if not bool(collection.get_visible()):
+                        continue
+                    x = np.asarray(collection._sc_x_data, dtype=np.float64)
+                    first = np.asarray(collection._sc_first_data, dtype=np.float64)
+                    second = np.asarray(collection._sc_second_data, dtype=np.float64)
+                except Exception:  # noqa: BLE001
+                    continue
+                mask = (
+                    (x >= x_min) & (x <= x_max)
+                    & np.isfinite(first) & np.isfinite(second)
+                )
+                if positive_only:
+                    mask &= (first > 0) & (second > 0)
+                if np.any(mask):
+                    chunks.extend((first[mask], second[mask]))
+    if not chunks:
+        return None
+    values = np.concatenate(chunks)
+    return float(np.min(values)), float(np.max(values))
+
+
+def _draw_fills(
+    price_ax: Any,
+    *,
+    cfg: IndicatorConfig,
+    factory: Any,
+    out: dict[str, np.ndarray],
+    plot_specs: dict[str, OutputPlotSpec],
+    gap_mask: np.ndarray | None,
+    n: int,
+    offset: float,
+    existing: dict[str, tuple[Any, ...]],
+    zorder: float,
+) -> None:
+    """Rebuild directional paired-output fills for one overlay config."""
+    for collections in existing.values():
+        for collection in collections:
+            _safe_remove_line(collection)
+    existing.clear()
+
+    from .. import constants as _constants
+
+    for spec in _fill_specs(factory):
+        if not bool(cfg.visible) or not _fill_visible(cfg, spec):
+            continue
+        first = out.get(spec.first_output)
+        second = out.get(spec.second_output)
+        if first is None or second is None:
+            continue
+        x_first, y_first = _plot_xy(
+            first,
+            plot_spec=plot_specs.get(spec.first_output, OutputPlotSpec()),
+            gap_mask=gap_mask,
+            n=n,
+            offset=offset,
+        )
+        x_second, y_second = _plot_xy(
+            second,
+            plot_spec=plot_specs.get(spec.second_output, OutputPlotSpec()),
+            gap_mask=gap_mask,
+            n=n,
+            offset=offset,
+        )
+        if x_first.shape != x_second.shape or not np.array_equal(x_first, x_second):
+            continue
+        valid = np.isfinite(y_first) & np.isfinite(y_second)
+        if not np.any(valid):
+            continue
+        made: list[Any] = []
+        for where, color in (
+            (valid & (y_first >= y_second), _constants.BULL_COLOR),
+            (valid & (y_first < y_second), _constants.BEAR_COLOR),
+        ):
+            if not np.any(where):
+                continue
+            try:
+                collection = price_ax.fill_between(
+                    x_first,
+                    y_first,
+                    y_second,
+                    where=where,
+                    interpolate=True,
+                    facecolor=color,
+                    edgecolor="none",
+                    alpha=float(spec.alpha),
+                    zorder=zorder,
+                )
+            except Exception:  # noqa: BLE001
+                continue
+            try:
+                collection._sc_x_data = x_first
+                collection._sc_first_data = y_first
+                collection._sc_second_data = y_second
+            except Exception:  # noqa: BLE001
+                pass
+            made.append(collection)
+        if made:
+            existing[spec.key] = tuple(made)
 
 
 def _draw_histogram(
@@ -871,6 +1180,7 @@ def render_for_slot(
     interval: str,
     scope: str,
     state: PanelIndicatorState,
+    symbol: str = "",
 ) -> None:
     """Compute + render every applicable indicator for one slot.
 
@@ -882,12 +1192,19 @@ def render_for_slot(
     Mutates ``state`` in place. Removes Line2Ds for configs that no
     longer apply.
     """
-    overlays = applicable_overlay_configs(manager, scope, interval)
-    pane_groups = applicable_pane_groups(manager, scope, interval)
+    overlays = applicable_overlay_configs(
+        manager, scope, interval, symbol=symbol,
+    )
+    pane_groups = applicable_pane_groups(
+        manager, scope, interval, symbol=symbol,
+    )
     panes: list[IndicatorConfig] = [c for grp in pane_groups for c in grp]
     n = len(candles)
     gap_mask = _build_gap_mask(candles) if n else None
     x = np.arange(n, dtype=float) + float(offset) if n else np.zeros(0)
+    state.forward_horizon = forward_horizon_for_slot(
+        manager, scope, interval, symbol=symbol,
+    )
 
     current_ids = {c.id for c in overlays} | {c.id for c in panes}
 
@@ -897,6 +1214,12 @@ def render_for_slot(
             for ln in state.overlay_lines[cid].values():
                 _safe_remove_line(ln)
             state.overlay_lines.pop(cid, None)
+    for cid in list(state.overlay_fills):
+        if cid not in current_ids:
+            for collections in state.overlay_fills[cid].values():
+                for collection in collections:
+                    _safe_remove_line(collection)
+            state.overlay_fills.pop(cid, None)
     for cid in list(state.pane_lines):
         if cid not in current_ids:
             for ln in state.pane_lines[cid].values():
@@ -912,18 +1235,49 @@ def render_for_slot(
     for i, cfg in enumerate(overlays):
         out = _compute_for_config(cfg, candles, gap_mask, cache)
         existing = state.overlay_lines.setdefault(cfg.id, {})
+        existing_fills = state.overlay_fills.setdefault(cfg.id, {})
         if out is None:
             for ln in existing.values():
                 _safe_remove_line(ln)
             state.overlay_lines.pop(cfg.id, None)
+            for collections in existing_fills.values():
+                for collection in collections:
+                    _safe_remove_line(collection)
+            state.overlay_fills.pop(cfg.id, None)
             continue
         z = 4.0 + 0.01 * i
         cls_ov = factory_by_kind_id(cfg.kind_id)
         out_kinds_ov: dict[str, str] = (
             dict(getattr(cls_ov, "output_kinds", {}) or {}) if cls_ov else {}
         )
+        plot_specs = _output_plot_specs(cls_ov, dict(cfg.params or {}))
+        readout_keys: set[str] = set()
+        readout_hook = getattr(cls_ov, "readout_state_spec", None)
+        if callable(readout_hook):
+            try:
+                readout_spec = readout_hook(dict(cfg.params or {}))
+                if readout_spec is not None:
+                    readout_keys = {
+                        str(readout_spec.first_output),
+                        str(readout_spec.second_output),
+                    }
+            except Exception:  # noqa: BLE001
+                readout_keys = set()
+        _draw_fills(
+            price_ax,
+            cfg=cfg,
+            factory=cls_ov,
+            out=out,
+            plot_specs=plot_specs,
+            gap_mask=gap_mask,
+            n=n,
+            offset=float(offset),
+            existing=existing_fills,
+            zorder=1.5 + 0.01 * i,
+        )
         for key, arr in out.items():
-            if not bool(cfg.visible) or not _output_visible(cfg, key):
+            line_visible = bool(cfg.visible) and _output_visible(cfg, key)
+            if not line_visible and key not in readout_keys:
                 # Master toggle off OR this specific output hidden by the
                 # user (e.g. Bollinger ``upper``/``lower`` unchecked while
                 # ``middle`` stays on). Hide existing line if any.
@@ -934,10 +1288,17 @@ def render_for_slot(
             color, width = _resolve_style(cfg, key)
             kind_ov = out_kinds_ov.get(key, "line")
             drawstyle = _drawstyle_for_output_kind(kind_ov)
+            plot_x, plot_y = _plot_xy(
+                arr,
+                plot_spec=plot_specs.get(key, OutputPlotSpec()),
+                gap_mask=gap_mask,
+                n=n,
+                offset=float(offset),
+            )
             ln = existing.get(key)
             if ln is None:
                 (ln,) = price_ax.plot(
-                    x, arr, color=color, linewidth=width,
+                    plot_x, plot_y, color=color, linewidth=width,
                     label=cfg.display_name, zorder=z,
                     drawstyle=drawstyle,
                 )
@@ -950,11 +1311,12 @@ def render_for_slot(
                         ln.set_drawstyle(drawstyle)
                 except Exception:  # noqa: BLE001
                     pass
-                ln.set_data(x, arr)
+                ln.set_data(plot_x, plot_y)
                 ln.set_color(color)
                 ln.set_linewidth(width)
                 ln.set_zorder(z)
-                ln.set_visible(True)
+            ln.set_visible(line_visible)
+            _stamp_plot_metadata(ln, plot_x, plot_y, float(offset))
 
     # Non-overlay panes — iterated by group so multiple configs can
     # share one Axes (``pane_group`` field). Each group consumes one

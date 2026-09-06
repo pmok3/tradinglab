@@ -35,6 +35,10 @@ class ChartRenderer:
         # volume/indicator/live-price artists hidden so they can be redrawn
         # ghost-free on top each tick. Invalidated whenever ``blit_bg`` is.
         self.tick_blit_bg = None
+        # Gutter currently applied to a right-glued shared X viewport.
+        # Renderer-owned so it survives ``figure.clear()`` / new axes.
+        self.applied_forward_gutter = 0
+        self.right_glued_candle_width: float | None = None
 
     def reset_slot_artists(self, slot: str) -> None:
         """Remove the candle/volume/shading artists held by ``panel_state[slot]``."""
@@ -193,8 +197,76 @@ class ChartRenderer:
         sa = series_getter(candles)
         try:
             price_ax = ps["price_ax"]
+            state = ps.get("ind_state")
+            horizon = max(
+                [
+                    0,
+                    *(
+                        int(getattr(item.get("ind_state"), "forward_horizon", 0) or 0)
+                        for item in self.panel_state.values()
+                    ),
+                ],
+            )
+            x_lo, x_hi = price_ax.get_xlim()
+            base_right = (
+                len(candles) - 0.5 + float(ps.get("offset", 0) or 0)
+            )
+            prior = max(0, int(self.applied_forward_gutter))
+            width = float(x_hi) - float(x_lo)
+            if abs(float(x_hi) - (base_right + prior)) <= 0.75:
+                price_ax.set_xlim(
+                    float(x_lo), float(x_hi) + horizon - prior,
+                )
+                self.applied_forward_gutter = horizon
+                self.right_glued_candle_width = max(1.0, width - prior)
+            elif abs(float(x_hi) - base_right) <= 0.75:
+                expected_total = (
+                    self.right_glued_candle_width + prior
+                    if self.right_glued_candle_width is not None else None
+                )
+                carried_gutter = bool(
+                    prior
+                    and expected_total is not None
+                    and abs(width - expected_total) <= 0.75
+                )
+                # SNAP_RIGHT may preserve total width (including the old
+                # gutter) while resetting its right edge to the last candle.
+                # A fresh/default window has no carried gutter and must keep
+                # its left edge so the new slots add width rather than replace
+                # historical candles.
+                new_lo = float(x_lo) + prior if carried_gutter else float(x_lo)
+                price_ax.set_xlim(
+                    new_lo, base_right + horizon,
+                )
+                self.applied_forward_gutter = horizon
+                self.right_glued_candle_width = max(
+                    1.0, width - prior if carried_gutter else width,
+                )
             use_log = price_ax.get_yscale() == "log" or bool(log_price_on)
             ylim = _y_limits_for_slice(sa, "price", lo, hi, log=use_log)
+            if ylim is not None and state is not None:
+                try:
+                    x_min, x_max = price_ax.get_xlim()
+                    overlay_bounds = _ind_render.visible_overlay_y_bounds(
+                        state,
+                        float(x_min),
+                        float(x_max),
+                        positive_only=use_log,
+                    )
+                except Exception:  # noqa: BLE001
+                    overlay_bounds = None
+                if overlay_bounds is not None:
+                    low = min(float(ylim[0]), float(overlay_bounds[0]))
+                    high = max(float(ylim[1]), float(overlay_bounds[1]))
+                    if use_log:
+                        low = max(low / 1.03, 1e-9)
+                        high *= 1.03
+                    else:
+                        span = max(high - low, abs(high) * 1e-6, 1e-9)
+                        pad = 0.03 * span
+                        low -= pad
+                        high += pad
+                    ylim = (low, high)
             if ylim is not None:
                 price_ax.set_ylim(*ylim)
             vlim = _y_limits_for_slice(sa, "volume", lo, hi)
@@ -419,10 +491,20 @@ class ChartRenderer:
                 lo_f, hi_f = ax_p.get_xlim()
             except Exception:  # noqa: BLE001
                 return
-            glued = (n - 2) >= lo_f and (n - 2) <= hi_f + 0.6
+            horizon = max(
+                [
+                    0,
+                    *(
+                        int(getattr(item.get("ind_state"), "forward_horizon", 0) or 0)
+                        for item in self.panel_state.values()
+                    ),
+                ],
+            )
+            old_right_edge = (n - 2) + 0.5 + horizon
+            glued = lo_f <= old_right_edge <= hi_f + 0.6
             if glued:
                 width = hi_f - lo_f
-                new_hi = (n - 1) + 0.5
+                new_hi = (n - 1) + 0.5 + horizon
                 new_lo = new_hi - width
                 try:
                     ax_p.set_xlim(new_lo, new_hi)
@@ -484,6 +566,7 @@ class ChartRenderer:
                     interval=interval,
                     scope=scope,
                     state=state,
+                    symbol=slot_symbol,
                 )
         except Exception as e:  # noqa: BLE001
             if warn is not None:

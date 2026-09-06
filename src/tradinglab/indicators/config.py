@@ -167,6 +167,8 @@ class IndicatorConfig:
       ``style``        — per-output-key :class:`LineStyle` overrides
                          layered on top of the indicator's
                          ``default_style``.
+      ``fill_visibility`` — per-fill visibility overrides. Missing keys
+                         inherit the factory's ``FillSpec.default_visible``.
       ``intervals``    — empty = all; otherwise an explicit set of
                          interval keys (e.g. ``{"1d", "1h"}``).
       ``scopes``       — subset of :data:`SCOPES`; default is
@@ -198,6 +200,9 @@ class IndicatorConfig:
     #: copied onto the config at construction time so persistence
     #: round-trips even if the factory's default later changes.
     pane_group: str = ""
+    # Render-only paired-fill visibility overrides. Appended to preserve the
+    # positional constructor order used by older plugin/test code.
+    fill_visibility: dict[str, bool] = field(default_factory=dict)
 
     # ---- factory + compute ----
 
@@ -216,7 +221,7 @@ class IndicatorConfig:
         _name, factory = entry
         return factory(**self.params)
 
-    def applies_to(self, scope: str, interval: str) -> bool:
+    def applies_to(self, scope: str, interval: str, *, symbol: str = "") -> bool:
         """True iff this config is visible AND in-scope AND
         interval-eligible AND its factory considers itself available
         on ``interval`` for these specific ``params``.
@@ -238,7 +243,9 @@ class IndicatorConfig:
         entry = factory_by_kind_id(self.kind_id)
         if entry is not None:
             _name, factory = entry
-            if not factory_is_available_for(factory, interval, self.params).ok:
+            if not factory_is_available_for(
+                factory, interval, self.params, symbol=symbol,
+            ).ok:
                 return False
         return True
 
@@ -259,6 +266,9 @@ class IndicatorConfig:
             "style": {k: {"color": s.color, "width": s.width,
                           "visible": s.visible}
                       for k, s in self.style.items()},
+            "fill_visibility": {
+                str(k): bool(v) for k, v in self.fill_visibility.items()
+            },
             "intervals": list(self.intervals),
             "scopes": sorted(self.scopes),
             "visible": self.visible,
@@ -321,6 +331,10 @@ class IndicatorConfig:
             display_name=str(d.get("display_name", "")),
             params=params,
             style=style,
+            fill_visibility={
+                str(k): bool(v)
+                for k, v in (d.get("fill_visibility") or {}).items()
+            },
             intervals=tuple(str(s) for s in (d.get("intervals") or ())),
             scopes=scopes_fs,
             visible=bool(d.get("visible", True)),
@@ -421,10 +435,15 @@ class IndicatorManager:
                 return c
         return None
 
-    def applicable(self, scope: str, interval: str) -> builtins.list[IndicatorConfig]:
+    def applicable(
+        self, scope: str, interval: str, *, symbol: str = "",
+    ) -> builtins.list[IndicatorConfig]:
         """Filter active list to configs that should render in
         ``(scope, interval)``."""
-        return [c for c in self._configs if c.applies_to(scope, interval)]
+        return [
+            c for c in self._configs
+            if c.applies_to(scope, interval, symbol=symbol)
+        ]
 
     def __len__(self) -> int:
         return len(self._configs)

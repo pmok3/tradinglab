@@ -1,11 +1,17 @@
 # indicators/base.py — Spec
 
 ## Purpose
-Declares the `Indicator` Protocol, the `INDICATORS` display registry, and the typed-parameter schema (`ParamDef`, `LineStyle`) that drives both the auto-generated Add Indicator dialog and persistence-time validation. An indicator transforms an OHLCV series into one or more named line series (e.g. `{"sma": ndarray}`, `{"upper": ..., "middle": ..., "lower": ...}`), all the same length as the input candles, NaN-padded where undefined.
+Declares the `Indicator` Protocol, the `INDICATORS` display registry, and the typed parameter/render metadata (`ParamDef`, `LineStyle`, `OutputPlotSpec`, `FillSpec`, `ReadoutStateSpec`) consumed by the auto-generated dialog and chart renderer. An indicator transforms OHLCV into causal named arrays, all the same length as the input candles and NaN-padded where undefined; visual displacement is metadata rather than a mutation of those arrays.
 
 ## Public API
-- `class Indicator(Protocol)` — class-level: `kind_id: str` (stable persistence id, e.g. `"sma"`), `kind_version: int`, `params_schema: Tuple[ParamDef, ...]`, `default_style: Dict[str, LineStyle]`. Optional class-level (ClassVar) scanner opt-in: `scannable_outputs: Tuple[Tuple[str, str], ...] = ()` — list of `(output_key, dtype)` pairs the scanner / entries / exits / ranking UI should surface. Empty tuple (the default) means "chart-only — invisible to the scanner". `dtype` is `"numeric"` or `"bool"`. `resets_daily: bool = False` — set True for session-anchored indicators (VWAP, RVOL, RRVOL) so condition validators can warn cross-interval mismatches. Instance: `name: str`, `overlay: bool`. Method: `compute(candles) -> Dict[str, np.ndarray]`.
-- `class BaseIndicator` — concrete mixin that owns the canonical `compute(candles)` shim plus the readout-legend hooks `effective_output_keys(params)`, `legend_label(display_name, params)`, and `output_key_label(key)` (see Design Decisions). Subclasses implement `compute_arr(bars: Bars)`; the shim builds `Bars.from_candles(candles)` and forwards.
+- `class Indicator(Protocol)` — class-level: `kind_id`, `kind_version`, `params_schema`, `default_style`, optional `fill_specs`, scanner opt-in `scannable_outputs`, and `resets_daily`. Instance: `name`, `overlay`; method: `compute(candles)`.
+- `class BaseIndicator` — canonical `compute(candles)` shim plus the render/readout hooks `output_plot_specs(params)`, `readout_state_spec(params)`, `effective_output_keys(params)`, `legend_label(display_name, params)`, and `output_key_label(key)`. Subclasses implement `compute_arr(bars: Bars)`.
+- `OutputPlotSpec(x_offset=0)` — observed-bar X displacement applied only by the renderer. Compute arrays remain calculation-time aligned and causal.
+- `FillSpec(key, first_output, second_output, alpha=0.16, default_visible=True)` — immutable paired-output fill declaration. Per-instance visibility lives outside compute params.
+- `ReadoutStateSpec(first_output, second_output, label="", fill_key="",
+  first_above="↑", second_above="↓", equal="=")` — optional compact state
+  comparison for the in-chart legend. `fill_key` makes the state follow an
+  independently hideable paired fill.
 - `BaseIndicator.effective_output_keys(cls, params: dict) -> tuple[str, ...]` — classmethod declaring which output keys this indicator *actually renders* for the given params. The base returns `tuple(cls.default_style.keys())` — every key in the static `default_style` table. Indicators whose param toggles enable/disable specific outputs override this to return only the visible subset in **canonical top-down visual order**: AVWAP returns `("avwap",)` when `bands="off"` and `("upper2", "upper1", "avwap", "lower1", "lower2")` when `bands="both"`; Bollinger always returns `("upper", "middle", "lower")` (top-down visual order on the chart, NOT default_style insertion order). The in-readout overlay legend (`gui/readout_legend.py`) calls this for every indicator config to decide which output rows to render — so an AVWAP with bands disabled now shows ONE row, not five.
 - `BaseIndicator.legend_label(cls, display_name: str, params: dict) -> str | None` — optional class hook for overriding the consolidated readout-legend row prefix. `None` means the generic `format_indicator_label` schema walker is used.
 - `BaseIndicator.output_key_label(cls, key: str) -> str` — optional class hook for the compact per-output label shown beside each value in the readout legend. Default returns the canonical output key unchanged.
@@ -14,7 +20,7 @@ Declares the `Indicator` Protocol, the `INDICATORS` display registry, and the ty
 - `IndicatorFactory = Callable[..., Indicator]`.
 - `Availability(ok, reason="")` — interval-availability result for factories that gate themselves by interval or params.
 - `intraday_only(interval) -> Availability` — shared helper for indicators that only render on intraday intervals.
-- `factory_is_available_for(factory, interval, params=None) -> Availability` — resolves two-arg `is_available_for(interval, params)`, legacy one-arg `is_available_for(interval)`, legacy `available_intervals`, or defaults to available.
+- `factory_is_available_for(factory, interval, params=None, *, symbol="") -> Availability` — resolves interval availability first, then optional `is_available_for_symbol(symbol, params)`; both retain legacy one-argument compatibility.
 - `compute_via_bars(indicator, bars) -> Dict[str, np.ndarray]` — render hot-path dispatcher; prefers `indicator.compute_arr(bars)`, falls back to `indicator.compute(bars.candles)` when needed.
 - `INDICATORS: Dict[str, IndicatorFactory]` — display registry, insertion-ordered.
 - `register_indicator(name, factory)` — idempotent; adds to both `INDICATORS` (visible display registry → menu) and `_BY_KIND_ID` (persistence-side lookup) when the factory exposes a `kind_id`.
@@ -68,6 +74,9 @@ Declares the `Indicator` Protocol, the `INDICATORS` display registry, and the ty
 - **`kind_id` is stable, display name is not** — `INDICATORS["SMA"]` may rename, but `"sma"` round-trips through saved configs forever. `_BY_KIND_ID` index is the persistence-side lookup.
 - **`params_schema` is a Tuple[ParamDef]**, classvar — narrow `kind` whitelist keeps the auto-generated dialog simple. Custom indicators that need exotic types expose a `str` field with a documented format and parse internally.
 - **`default_style` per output key** (not per indicator) — Bollinger's middle/upper/lower want different defaults; a single per-class color would be wrong.
+- **Causal arrays, visual displacement.** `OutputPlotSpec.x_offset` never changes compute output or cache keys. This is the no-lookahead boundary for Ichimoku and any future displaced study.
+- **Fills are metadata, not synthetic outputs.** `FillSpec` references two real outputs and carries fixed semantic rendering defaults; visibility is persisted separately by `IndicatorConfig`.
+- **Symbol compatibility is optional and dynamic.** A factory may reject a symbol without mutating the saved config, so the same indicator can disappear on an approximate quotient ratio and reappear after switching to an exact symbol.
 - **Canonical compute shim.** `BaseIndicator` centralises the `compute(candles)` → `compute_arr(Bars.from_candles(candles))` bridge so built-ins do not hand-roll identical shims.
 - **`effective_output_keys(params)` classmethod** (added in the `legend-condensation` sprint). Lets indicators whose param toggles enable/disable specific outputs (AVWAP `bands="off"` ⇒ no band lines) declare to the legend which output keys are visible **and** in what canonical top-down visual order. Default returns `tuple(cls.default_style.keys())`. The legend (`gui/readout_legend.py:_effective_output_keys_for`) ANDs this set with the per-output `cfg.style[key].visible` toggle to decide which output values to show in the row. Without this hook the legend rendered every key in `default_style` regardless of whether the line was drawn — so AVWAP with bands disabled showed 4 NaN band rows.
 - **`legend_label(display_name, params) -> str | None` classmethod** (added in the `avwap-anchor-only-label` sprint). Indicator-class hook for overriding the consolidated readout-legend row prefix. Default returns `None` meaning "use `format_indicator_label`'s generic `params_schema` walker"; overriding returns a custom prefix string used verbatim. Use this for indicators where the generic walker produces a noisy label — AVWAP (whose `price_source` + `bands` are rendering knobs, not important details — only the anchor matters) and Prior Day H/L/C (whose three boolean toggles would otherwise render as `(True, show_low=True, show_close=True)`). New indicators should leave this alone unless the same noisy-label problem applies.
@@ -80,6 +89,7 @@ Declares the `Indicator` Protocol, the `INDICATORS` display registry, and the ty
 - `INDICATORS` and `_BY_KIND_ID` persist registrations across repeat package imports.
 - `register_indicator(name, factory)` is idempotent and keeps both indexes consistent.
 - `BaseIndicator.compute(candles)` is pure boilerplate; indicator-specific math lives in `compute_arr(bars)`.
+- Plot offsets and fill visibility never alter the input-length compute contract.
 
 ## Testing
 - `tests/smoke/test_smoke_full.py:check_d39_indicators_phase1` — registry wiring, kind_id round-trip, schema declarations, NaN-padding, value spot-checks for SMA/EMA/RSI/BB.

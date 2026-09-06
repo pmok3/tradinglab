@@ -58,6 +58,7 @@ def _corpus() -> list[tuple[str, type, dict]]:
         VWAP,
         BollingerBands,
         ChandelierStops,
+        IchimokuCloud,
         KeltnerChannels,
         PriorDayHLC,
     )
@@ -75,6 +76,7 @@ def _corpus() -> list[tuple[str, type, dict]]:
         ("bollinger", BollingerBands, {"length": 20}),
         ("keltner", KeltnerChannels, {}),
         ("chandelier", ChandelierStops, {}),
+        ("ichimoku", IchimokuCloud, {}),
         ("vwap", VWAP, {}),
         ("rvol", RVOL, {"length": 5}),
         ("prior_day", PriorDayHLC, {}),

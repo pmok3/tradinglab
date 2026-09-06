@@ -226,6 +226,8 @@ class _IndicatorRow:
         "style_overrides",
         "visible_vars",
         "visible_overrides",
+        "fill_vars",
+        "fill_visibility_overrides",
         "last_good_params",
         "is_unknown",
         "suppress",
@@ -306,6 +308,8 @@ class _IndicatorRow:
         # swatches whenever the row's kind changes.
         self.visible_vars: dict[str, tk.BooleanVar] = {}
         self.visible_overrides: dict[str, bool] = {}
+        self.fill_vars: dict[str, tk.BooleanVar] = {}
+        self.fill_visibility_overrides: dict[str, bool] = {}
         # Last params dict that successfully constructed an indicator
         # — used to revert in-place when validation fails so the
         # chart never sees an invalid config.
@@ -1355,17 +1359,19 @@ class IndicatorDialog(BaseModalDialog):
         # changed are kept; the others fall back to default_style.
         row.style_overrides = {}
         row.visible_overrides = {}
+        row.fill_visibility_overrides = {}
         if cfg is not None:
             for k, ls in (cfg.style or {}).items():
                 col = getattr(ls, "color", None)
                 if col:
                     row.style_overrides[str(k)] = str(col)
-                # Hydrate a hidden band (visible=False) so its checkbox
-                # comes up unchecked; visible=True is the default so we
-                # only record explicit hides to keep the override dict
-                # minimal.
-                if getattr(ls, "visible", True) is False:
-                    row.visible_overrides[str(k)] = False
+            row.visible_overrides = self._visibility_overrides_for_kind(
+                kind_id, cfg.style or {},
+            )
+            row.fill_visibility_overrides = {
+                str(k): bool(v)
+                for k, v in (cfg.fill_visibility or {}).items()
+            }
         self._rebuild_color_buttons(row, kind_id)
         # Last-good params snapshot: starts at the hydrated values so
         # an immediate revert before the user has typed anything goes
@@ -2162,6 +2168,7 @@ class IndicatorDialog(BaseModalDialog):
             # row to match the new factory's default_style keys (b42).
             row.style_overrides = {}
             row.visible_overrides = {}
+            row.fill_visibility_overrides = {}
             self._rebuild_color_buttons(row, new_kind_id)
         finally:
             row.suppress = False
@@ -2573,7 +2580,49 @@ class IndicatorDialog(BaseModalDialog):
         if pair is None:
             return {}
         _name, cls = pair
-        return dict(getattr(cls, "default_style", {}) or {})
+        styles = dict(getattr(cls, "default_style", {}) or {})
+        semantic = dict(getattr(cls, "semantic_output_colors", {}) or {})
+        if semantic:
+            from .. import constants as _constants
+
+            for key, role in semantic.items():
+                current = styles.get(key)
+                if current is None or role not in {"bull", "bear"}:
+                    continue
+                styles[key] = LineStyle(
+                    color=(
+                        _constants.BULL_COLOR
+                        if role == "bull" else _constants.BEAR_COLOR
+                    ),
+                    width=float(getattr(current, "width", 1.2)),
+                    visible=bool(getattr(current, "visible", True)),
+                )
+        return styles
+
+    @staticmethod
+    def _fill_specs_for_kind(kind_id: str) -> tuple[Any, ...]:
+        pair = factory_by_kind_id(kind_id)
+        if pair is None:
+            return ()
+        _name, cls = pair
+        return tuple(getattr(cls, "fill_specs", ()) or ())
+
+    @classmethod
+    def _visibility_overrides_for_kind(
+        cls, kind_id: str, style: dict[str, LineStyle],
+    ) -> dict[str, bool]:
+        defaults = cls._default_style_for_kind(kind_id)
+        out: dict[str, bool] = {}
+        for key, saved in style.items():
+            declared = defaults.get(str(key))
+            default_visible = (
+                bool(getattr(declared, "visible", True))
+                if declared is not None else True
+            )
+            saved_visible = bool(getattr(saved, "visible", True))
+            if saved_visible != default_visible:
+                out[str(key)] = saved_visible
+        return out
 
     def _resolved_color_for(self, row: _IndicatorRow, key: str,
                             default_style: dict[str, LineStyle]) -> str:
@@ -2624,6 +2673,18 @@ class IndicatorDialog(BaseModalDialog):
             return
         self._commit_now(row)
 
+    def _on_toggle_fill_visible(self, row: _IndicatorRow, key: str) -> None:
+        if row.is_unknown:
+            return
+        var = row.fill_vars.get(key)
+        if var is None:
+            return
+        try:
+            row.fill_visibility_overrides[key] = bool(var.get())
+        except tk.TclError:
+            return
+        self._commit_now(row)
+
     def _rebuild_color_buttons(self, row: _IndicatorRow,
                                kind_id: str) -> None:
         """Tear down + rebuild the row's per-output line controls.
@@ -2646,6 +2707,7 @@ class IndicatorDialog(BaseModalDialog):
                 pass
         row.color_buttons = {}
         row.visible_vars = {}
+        row.fill_vars = {}
         if row.is_unknown:
             return
         default_style = self._default_style_for_kind(kind_id)
@@ -2710,6 +2772,29 @@ class IndicatorDialog(BaseModalDialog):
                     pass
             tk.Label(cell, text=_disp).pack(side="left")
             row.color_buttons[str(key)] = swatch
+        fill_specs = self._fill_specs_for_kind(kind_id)
+        if fill_specs:
+            try:
+                tk.Label(sf, text="Fills:").pack(side="left", padx=(4, 4))
+            except tk.TclError:
+                return
+        for spec in fill_specs:
+            key = str(getattr(spec, "key", "") or "")
+            if not key:
+                continue
+            default_visible = bool(getattr(spec, "default_visible", True))
+            visible = row.fill_visibility_overrides.get(key, default_visible)
+            var = tk.BooleanVar(value=visible)
+            row.fill_vars[key] = var
+            cell = tk.Frame(sf)
+            cell.pack(side="left", padx=(0, 8))
+            ttk.Checkbutton(
+                cell,
+                variable=var,
+                takefocus=False,
+                command=lambda r=row, k=key: self._on_toggle_fill_visible(r, k),
+            ).pack(side="left", padx=(0, 3))
+            tk.Label(cell, text=key.replace("_", " ").title()).pack(side="left")
         # Theme freshly-built frames so light/dark mode matches.
         try:
             self._apply_theme()
@@ -2785,6 +2870,21 @@ class IndicatorDialog(BaseModalDialog):
                                       visible=bool(visible))
         return out
 
+    def _build_fill_visibility(
+        self, row: _IndicatorRow, kind_id: str,
+    ) -> dict[str, bool]:
+        """Persist only fill visibility values that differ from defaults."""
+        defaults = {
+            str(spec.key): bool(getattr(spec, "default_visible", True))
+            for spec in self._fill_specs_for_kind(kind_id)
+            if getattr(spec, "key", "")
+        }
+        return {
+            str(key): bool(value)
+            for key, value in row.fill_visibility_overrides.items()
+            if key in defaults and bool(value) != defaults[key]
+        }
+
     def _commit_now(self, row: _IndicatorRow) -> None:
         """Validate the row and commit to the manager.
 
@@ -2819,6 +2919,7 @@ class IndicatorDialog(BaseModalDialog):
         scopes, visible = self._build_scopes(row)
         intervals_t = self._build_intervals(row)
         style_overrides = self._build_style(row, kind_id)
+        fill_visibility = self._build_fill_visibility(row, kind_id)
         new_display = getattr(indicator, "name", kind_id)
         # Mark our own commits so the manager's notify->reconcile path
         # doesn't tear down the row mid-edit.
@@ -2833,6 +2934,7 @@ class IndicatorDialog(BaseModalDialog):
                     scopes=scopes,
                     intervals=intervals_t,
                     style=style_overrides,
+                    fill_visibility=fill_visibility,
                     visible=visible,
                     pane_group=str(getattr(cls, "pane_group", "") or ""),
                 )
@@ -2848,6 +2950,7 @@ class IndicatorDialog(BaseModalDialog):
                     scopes=scopes,
                     intervals=intervals_t,
                     style=style_overrides,
+                    fill_visibility=fill_visibility,
                     visible=visible,
                 )
         finally:

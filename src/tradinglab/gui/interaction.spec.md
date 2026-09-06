@@ -512,6 +512,19 @@ during drag.
     walks `outputs` per row and writes `_line_value_at(line, idx)` into
     each segment's `value_textarea` (visible rows) or leaves the
     placeholder + greyed label (hidden rows / hidden bands).
+    Each update re-resolves the current artist from
+    `PanelIndicatorState.overlay_lines[config_id][output_key]`; metadata's
+    build-time artist is only a fallback. Slice refills replace artists
+    without rebuilding the readout container, so retaining the old reference
+    would make values and cloud state stale after pan/append.
+    `_line_value_at` is plot-coordinate-aware when an artist carries
+    `_sc_x_data`: it searches for `candle_idx + panel_offset` instead of
+    indexing the causal Y array directly. This is required for Ichimoku's
+    forward Senkou and backward Chikou lines and remains equivalent for
+    ordinary same-X indicators.
+    An optional row `state` compares two plotted outputs and renders a
+    non-color-only semantic token (`Cloud ↑`, `Cloud ↓`, or `Cloud =`) using
+    the live bull/bear palette.
     **AVWAP "Not set":** when a row is an `avwap` config whose effective
     anchor for THIS slot's symbol is empty (resolved via
     `indicators.avwap.resolve_anchor_ts(cfg.params, slot_symbol)`), the
@@ -524,6 +537,12 @@ during drag.
     `compare`→`compare`). Transparent background (no overlap with the
     OHLCV strip). Click routing: see `_maybe_handle_readout_legend_click`
     / `_readout_legend_row_hit` above.
+  - **Projected gutter readout.** If cursor X lands in an indicator's
+    shared maximum forward horizon beyond the final candle, the OHLCV row reads
+    `Projected +N bars`; no candle, timestamp, volume, or percent change is
+    fabricated on either primary or compare, even when only one slot owns the
+    projected indicator. Shift-aware indicator values and compact state still
+    update at that plotted X. The floating time badge remains hidden.
   - **Live theme swap.** The OHLCV `_main_text` AND every overlay legend
     row's name/segments bake their colour at build time, so a light↔dark
     toggle must recolor them in place. `theme_controller._apply_overlay_artists`

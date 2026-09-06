@@ -90,7 +90,7 @@ on any indicator should block the change unless explicitly justified
 ## CI perf-gate
 
 The most expensive vectorised indicators (MACD, Chandelier, Keltner,
-SMI, LRSI) are pinned by a regression-gate test suite at
+Ichimoku, SMI, LRSI) are pinned by a regression-gate test suite at
 ``tests/perf/test_indicator_perf_gate.py``. It uses the same
 ``min-of-N`` methodology as the harness (CLAUDE.md §7.26) and sizes
 each budget at **~4× the v0.3.0 ARM64 baseline** so it absorbs CI
@@ -98,13 +98,19 @@ runner contention while still catching any 2× regression on the
 fastest hardware. Specifically (25k-bar synthetic regular-session
 input, 11 timed samples):
 
-| kind_id      | v0.3.0 baseline (ms) | budget (ms) |
-|--------------|---------------------:|------------:|
+| kind_id      | ARM64 baseline (ms) | budget (ms) |
+|--------------|--------------------:|------------:|
 | `smi`        |                16.34 |          64 |
 | `lrsi`       |                10.90 |          46 |
 | `macd`       |                 3.30 |          14 |
 | `chandelier` |                 1.88 |           8 |
 | `keltner`    |                 1.76 |           8 |
+| `ichimoku`   |                 5.31 |          24 |
+
+Ichimoku's default 9/26/52 kernel measured 5.31 ms at 25k bars; a
+worst-case 500/500/500 configuration measured 58.90 ms. The 500-period
+schema cap therefore remains a deliberate UI-safety bound rather than an
+unbounded warmup/window allocation.
 
 The ``perf`` marker is **opt-in** — the default ``pytest`` session
 filters it out via ``-m 'not perf'`` in ``pyproject.toml`` so the

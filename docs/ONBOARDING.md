@@ -118,9 +118,10 @@ When the app opens, you'll see (top-down, roughly):
     axis, follows the crosshair. Same widget appears on the volume
     axis below.
   - **Price panel** (top, ~2/3 of vertical space) — candles + any
-    indicator overlays you've added (SMA, EMA, Bollinger Bands,
-    Keltner Channels, VWAP/AVWAP, MACD, Chandelier Stops, RSI, ATR,
-    RVOL/RRVOL, ADX, SMI, LRSI). See [Indicators](#indicators).
+    indicator overlays you've added (Moving Average, Bollinger Bands,
+    Keltner Channels, Ichimoku Cloud, VWAP/AVWAP, MACD, Chandelier Stops,
+    RSI, ATR, RVOL/RRVOL, ADX, SMI, LRSI). See
+    [Indicators](#indicators).
   - **Volume panel** (bottom) — green/red bars matching the candle
     direction.
 
@@ -164,7 +165,7 @@ the parameter dialog, and the persistence layer all stay in sync.
 
 | Family | Members |
 |---|---|
-| Trend / overlay | SMA, EMA, Bollinger Bands, Keltner Channels, VWAP, AVWAP, Chandelier Stops |
+| Trend / overlay | Moving Average (SMA/EMA/WMA/RMA), Bollinger Bands, Keltner Channels, Ichimoku Cloud, VWAP, AVWAP, Chandelier Stops, Prior Day H/L/C |
 | Momentum / oscillator | RSI, MACD, ADX, SMI, LRSI |
 | Volatility | ATR (modes: rolling RMA, time-of-day) |
 | Volume / participation | RVOL Simple Rolling, RVOL Time-of-Day, Cumulative-Day RVOL, RRVOL (relative-to-comparison-symbol) |
@@ -182,6 +183,20 @@ auto-generates the *Add Indicator* dialog — no per-indicator UI code.
 3. The overlay appears immediately. Multiple instances of the same
    indicator (e.g. SMA-20 *and* SMA-50) coexist — each is its own row
    in the dialog.
+
+### Ichimoku Cloud
+
+Ichimoku defaults to the traditional `9 / 26 / 52` periods with a
+26-bar lead/lag displacement. The cloud, its boundaries, Conversion line,
+and Base line start visible; the Lagging line is available but starts hidden.
+The **Cloud** checkbox is independent from the two boundary-line toggles.
+
+Projected cloud values occupy unlabeled future bar slots—these are displaced
+known values, not forecasts or synthetic candles. Hover there shows projected
+indicator values but no invented OHLC/timestamp. Ichimoku follows the chart's
+Pre/Post selection and updates provisionally on the forming bar. It is disabled
+for quotient ratios such as `AMD/NVDA` because those highs/lows are approximate;
+exact scaled symbols such as `^VIX/15.87` remain supported.
 
 ### ATR modes (rolling vs time-of-day)
 

@@ -170,6 +170,9 @@ walks `INDICATORS`.
   mode generators emit `scannable_outputs` only when `scannable=True`.
   Chart-only custom indicators omit it and remain invisible to scanner /
   entries / exits field dropdowns.
+- **Built-in ids stay reserved.** `_BUILTIN_KIND_IDS` includes
+  `"ichimoku"` so generated custom indicators cannot collide with the
+  built-in study. Ichimoku adds no expression functions in visual-only v1.
 
 ## Tests
 

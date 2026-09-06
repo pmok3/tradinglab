@@ -185,6 +185,9 @@ _INCREMENTAL_EXPECTED: dict[str, bool] = {
     # Chandelier: rolling HH/LL ratchet + ATR; window-extrema is not a
     #   first-order recurrence.
     "chandelier": False,
+    # Ichimoku: four rolling extrema plus displaced paired rendering;
+    #   vectorized full recompute is benchmarked before adding incremental state.
+    "ichimoku": False,
     # Prior Day H/L/C: step function keyed on the prior completed session;
     #   trivially cheap, no per-tick recompute pressure.
     "prior_day_hlc": False,

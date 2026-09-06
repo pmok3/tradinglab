@@ -254,6 +254,19 @@ register_indicator("Donchian Channels", DonchianChannels)
 - Uses `sliding_window_view` from NumPy for efficient rolling max/min.
 - All three arrays must be the same length as `candles`.
 
+Advanced overlays may additionally return causal, input-length arrays and
+declare render-only metadata:
+
+- `output_plot_specs(params) -> {key: OutputPlotSpec(x_offset=N)}` shifts a
+  line by observed bars without shifting or wrapping its compute array.
+- `fill_specs = (FillSpec("area", "upper", "lower"),)` creates an
+  independently hideable directional fill between two outputs.
+
+Keep displacement out of the computed arrays: scanners and other numerical
+consumers read calculation-time values, while only the chart applies
+`x_offset`. Fill visibility persists separately and does not invalidate the
+compute cache.
+
 ---
 
 ### Example 4 — Choice parameter (selectable moving average type)

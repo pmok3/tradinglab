@@ -1504,8 +1504,17 @@ class InteractionMixin:
         except Exception:  # noqa: BLE001
             interval = ""
         try:
+            slot_symbol = str(self._slot_symbol(str(slot_key)) or "")
+        except Exception:  # noqa: BLE001
+            slot_symbol = ""
+        try:
             rows = build_overlay_legend_rows(
-                mgr, scope, interval, theme_text=theme["text"])
+                mgr,
+                scope,
+                interval,
+                theme_text=theme["text"],
+                symbol=slot_symbol,
+            )
         except Exception:  # noqa: BLE001
             return packers, meta
         if not rows:
@@ -1515,14 +1524,9 @@ class InteractionMixin:
         if ps_match is not None:
             state = ps_match.get("ind_state")
             overlay_lines = getattr(state, "overlay_lines", {}) or {}
-        # Slot symbol for symbol-keyed AVWAP "Not set" detection.
-        try:
-            slot_symbol = str(self._slot_symbol(str(slot_key)) or "")
-        except Exception:  # noqa: BLE001
-            slot_symbol = ""
         muted = theme.get("muted") or theme.get("axis") or "#888888"
         for row in rows:
-            visible = row.visible
+            visible = row.visible and not row.unavailable_reason
             label_color = theme["text"] if visible else muted
             # AVWAP "Not set": an unanchored AVWAP for this slot's symbol
             # draws no line — show "Not set" in the value slot instead of
@@ -1540,7 +1544,11 @@ class InteractionMixin:
             # recolor JUST the indicator-name label without rebuilding the row
             # (see ``theme_controller._apply_overlay_artists``).
             label_ta = TextArea(
-                f"{row.label} ",
+                (
+                    f"{row.label} \u2014 {row.unavailable_reason} "
+                    if row.unavailable_reason
+                    else f"{row.label} "
+                ),
                 textprops=dict(
                     color=label_color, fontsize=9, family="monospace",
                 ),
@@ -1593,6 +1601,32 @@ class InteractionMixin:
                     "value_textarea": value_ta,
                     "notset": row_notset,
                 })
+            state_meta = None
+            if row.state is not None:
+                state_ta = TextArea(
+                    f"{row.state.label} \u2014 ",
+                    textprops=dict(
+                        color=label_color, fontsize=9, family="monospace",
+                    ),
+                )
+                children.append(state_ta)
+                state_meta = {
+                    "spec": row.state,
+                    "textarea": state_ta,
+                    "first_line": (
+                        overlay_lines.get(row.config_id, {}).get(
+                            row.state.first_output,
+                        )
+                        if visible else None
+                    ),
+                    "second_line": (
+                        overlay_lines.get(row.config_id, {}).get(
+                            row.state.second_output,
+                        )
+                        if visible else None
+                    ),
+                    "direction": "neutral",
+                }
             container = HPacker(
                 children=children, align="center", pad=0, sep=0,
             )
@@ -1604,6 +1638,7 @@ class InteractionMixin:
                 "visible": visible,
                 "container": container,
                 "outputs": output_metas,
+                "state": state_meta,
             })
         return packers, meta
 
@@ -1972,6 +2007,11 @@ class InteractionMixin:
                 continue
             multi = len(lines) > 1
             for key, ln in lines.items():
+                try:
+                    if not bool(ln.get_visible()):
+                        continue
+                except Exception:  # noqa: BLE001
+                    pass
                 val = self._line_value_at(ln, idx)
                 if val is None:
                     continue
@@ -2007,7 +2047,23 @@ class InteractionMixin:
         underlying indicator's output dict.
         """
         try:
+            sc_x = getattr(line2d, "_sc_x_data", None)
             sc_y = getattr(line2d, "_sc_y_data", None)
+            if sc_x is not None and sc_y is not None:
+                xdata = np.asarray(sc_x, dtype=float)
+                ydata = np.asarray(sc_y, dtype=float)
+                target = float(idx) + float(
+                    getattr(line2d, "_sc_panel_offset", 0.0),
+                )
+                pos = int(np.searchsorted(xdata, target))
+                if (
+                    pos < 0
+                    or pos >= len(xdata)
+                    or not np.isclose(xdata[pos], target, atol=1e-9)
+                ):
+                    return None
+                v = float(ydata[pos])
+                return v if np.isfinite(v) else None
             if sc_y is not None:
                 if idx < 0 or idx >= len(sc_y):
                     return None
@@ -2200,47 +2256,76 @@ class InteractionMixin:
                 rs = ps.get("render_start", 0) if ps else 0
                 re_ = ps.get("render_end", len(candles)) if ps else len(candles)
 
-                idx = None
+                plot_idx = None
+                candle_idx = None
+                projected_steps = None
                 if xdata is not None:
                     i = int(round(float(xdata) - offset))
                     if (rs <= i < re_ and 0 <= i < len(candles)
                             and not candles[i].is_gap):
-                        idx = i
-                if idx is None:
+                        plot_idx = i
+                        candle_idx = i
+                    else:
+                        horizon = max(
+                            [
+                                0,
+                                *(
+                                    int(
+                                        getattr(
+                                            item.get("ind_state"),
+                                            "forward_horizon",
+                                            0,
+                                        ) or 0
+                                    )
+                                    for item in self._panel_state.values()
+                                ),
+                            ],
+                        )
+                        if len(candles) <= i <= len(candles) - 1 + horizon:
+                            plot_idx = i
+                            projected_steps = i - len(candles) + 1
+                if plot_idx is None:
                     end = min(re_, len(candles))
                     start = max(0, rs)
                     for j in range(end - 1, start - 1, -1):
                         if 0 <= j < len(candles) and not candles[j].is_gap:
-                            idx = j
+                            plot_idx = j
+                            candle_idx = j
                             break
-                if idx is None:
+                if plot_idx is None:
                     box.set_visible(False)
                     continue
 
-                c = candles[idx]
-                # Walk backwards for the prior non-gap close so the pct
-                # works on aligned/compare panels where Candle.gap slots
-                # break the strict idx-1 sequence.
-                prev_close = None
-                for k in range(idx - 1, -1, -1):
-                    if not candles[k].is_gap:
-                        prev_close = candles[k].close
-                        break
+                if candle_idx is not None:
+                    c = candles[candle_idx]
+                    # Walk backwards for the prior non-gap close so the pct
+                    # works on aligned/compare panels where Candle.gap slots
+                    # break the strict idx-1 sequence.
+                    prev_close = None
+                    for k in range(candle_idx - 1, -1, -1):
+                        if not candles[k].is_gap:
+                            prev_close = candles[k].close
+                            break
 
-                if prev_close is not None and prev_close > 0:
-                    pct = (c.close - prev_close) / prev_close * 100.0
-                    pct_str = f"  {pct:+.2f}%"
-                    pct_color = (_constants.BULL_COLOR if pct >= 0
-                                 else _constants.BEAR_COLOR)
+                    if prev_close is not None and prev_close > 0:
+                        pct = (c.close - prev_close) / prev_close * 100.0
+                        pct_str = f"  {pct:+.2f}%"
+                        pct_color = (_constants.BULL_COLOR if pct >= 0
+                                     else _constants.BEAR_COLOR)
+                    else:
+                        pct_str = ""
+                        pct_color = self._theme["text"]
+
+                    main_str = (
+                        f"O {c.open:,.2f}  H {c.high:,.2f}  "
+                        f"L {c.low:,.2f}  C {c.close:,.2f}  "
+                        f"Vol {fmt_volume(c.volume)}"
+                    )
                 else:
+                    main_str = f"Projected +{int(projected_steps or 0)} bars"
                     pct_str = ""
                     pct_color = self._theme["text"]
 
-                main_str = (
-                    f"O {c.open:,.2f}  H {c.high:,.2f}  "
-                    f"L {c.low:,.2f}  C {c.close:,.2f}  "
-                    f"Vol {fmt_volume(c.volume)}"
-                )
                 box._main_text.set_text(main_str)
                 box._pct_text.set_text(pct_str)
                 # TextArea has no public set_color; mutate the inner
@@ -2256,6 +2341,12 @@ class InteractionMixin:
                 # own colour. Hidden rows keep just their greyed name.
                 for ind_meta in getattr(box, "_ind_rows", None) or ():
                     try:
+                        current_lines = {}
+                        if ps is not None:
+                            current_state = ps.get("ind_state")
+                            current_lines = (
+                                getattr(current_state, "overlay_lines", {}) or {}
+                            ).get(ind_meta.get("config_id"), {})
                         outputs = ind_meta.get("outputs") or ()
                         for seg in outputs:
                             ta = seg.get("value_textarea")
@@ -2265,12 +2356,56 @@ class InteractionMixin:
                                 # Unanchored AVWAP for this slot's symbol.
                                 ta.set_text("Not set ")
                                 continue
-                            line = seg.get("line")
-                            val = (self._line_value_at(line, idx)
+                            line = current_lines.get(
+                                seg.get("output_key"),
+                                seg.get("line"),
+                            )
+                            val = (self._line_value_at(line, plot_idx)
                                    if line is not None else None)
                             ta.set_text(
                                 f"{val:,.2f} " if val is not None else "  ",
                             )
+                        state_meta = ind_meta.get("state")
+                        if state_meta is not None:
+                            ta = state_meta.get("textarea")
+                            spec = state_meta.get("spec")
+                            first_line = current_lines.get(
+                                spec.first_output,
+                                state_meta.get("first_line"),
+                            ) if spec is not None else None
+                            second_line = current_lines.get(
+                                spec.second_output,
+                                state_meta.get("second_line"),
+                            ) if spec is not None else None
+                            first = self._line_value_at(
+                                first_line, plot_idx,
+                            ) if first_line is not None else None
+                            second = self._line_value_at(
+                                second_line, plot_idx,
+                            ) if second_line is not None else None
+                            if ta is not None and spec is not None:
+                                if first is None or second is None:
+                                    text = f"{spec.label} \u2014 "
+                                    color = self._theme["text"]
+                                    direction = "neutral"
+                                elif first > second:
+                                    text = f"{spec.label} {spec.first_above} "
+                                    color = _constants.BULL_COLOR
+                                    direction = "bull"
+                                elif first < second:
+                                    text = f"{spec.label} {spec.second_above} "
+                                    color = _constants.BEAR_COLOR
+                                    direction = "bear"
+                                else:
+                                    text = f"{spec.label} {spec.equal} "
+                                    color = self._theme["text"]
+                                    direction = "neutral"
+                                state_meta["direction"] = direction
+                                ta.set_text(text)
+                                try:
+                                    ta._text.set_color(color)
+                                except Exception:  # noqa: BLE001
+                                    pass
                     except Exception:  # noqa: BLE001
                         pass
                 box.set_visible(True)

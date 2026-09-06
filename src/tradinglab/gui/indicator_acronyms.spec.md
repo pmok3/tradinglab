@@ -15,6 +15,9 @@ Single source of truth for the per-indicator tooltip blurbs surfaced by the Mana
 ## Maintenance
 Adding a new built-in indicator to the registry SHOULD include an entry here, but it's a soft requirement — `explain_kind_id` falls back to the bare id, so the lookup never raises. The Manage Indicators dialog renders the raw id in that case (acceptable for power-user plugins that don't ship with docs).
 
+The built-in table includes `ichimoku` ("Ichimoku Cloud") and describes its
+conversion/base lines plus displaced cloud.
+
 ## Consumers
 - `gui.indicator_dialog._IndicatorDialog` — kind-combobox tooltip
 - `gui.per_indicator_dialog._PerIndicatorDialog` — per-row header tooltip

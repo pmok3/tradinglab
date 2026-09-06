@@ -35,6 +35,7 @@ from tests.smoke.test_smoke_full import (
     check_d57_performance_view_equity_csv_export,
     check_d58_anchored_vwap,
     check_d59_relative_volume,
+    check_d95_ichimoku_cloud,
 )
 
 _CHECKS = [
@@ -43,6 +44,7 @@ _CHECKS = [
     check_d42_indicator_scope_picker,
     check_d48_indicator_dialog,
     check_d49_indicator_render_integration,
+    check_d95_ichimoku_cloud,
     check_d50_indicators_menu_wiring,
     check_d51_hover_indicator_readout,
     check_d54_indicator_reorder,

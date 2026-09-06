@@ -106,6 +106,42 @@ class LineStyle:
     visible: bool = True
 
 
+@dataclass(frozen=True)
+class OutputPlotSpec:
+    """Rendering metadata for one causal indicator output.
+
+    ``x_offset`` moves the output by observed bars at render time. The
+    underlying compute array remains aligned to the bar that produced the
+    value, which keeps scanner/backtest consumers causal.
+    """
+
+    x_offset: int = 0
+
+
+@dataclass(frozen=True)
+class FillSpec:
+    """A directional fill between two indicator outputs."""
+
+    key: str
+    first_output: str
+    second_output: str
+    alpha: float = 0.16
+    default_visible: bool = True
+
+
+@dataclass(frozen=True)
+class ReadoutStateSpec:
+    """Compact comparison state rendered beside an indicator legend row."""
+
+    first_output: str
+    second_output: str
+    label: str = ""
+    fill_key: str = ""
+    first_above: str = "\u2191"
+    second_above: str = "\u2193"
+    equal: str = "="
+
+
 # --- Indicator protocol ------------------------------------------------------
 
 
@@ -118,6 +154,7 @@ class Indicator(Protocol):
       ``params_schema``     — tuple of :class:`ParamDef` describing
                               factory parameters; drives the dialog.
       ``default_style``     — ``{output_key: LineStyle}`` defaults.
+      ``fill_specs``        — paired-output area fills (empty by default).
       ``scannable_outputs`` — tuple of ``(output_key, dtype)`` pairs that
                               the scanner should expose. Empty (the
                               default) means the indicator is NOT
@@ -151,6 +188,7 @@ class Indicator(Protocol):
     kind_version: ClassVar[int]
     params_schema: ClassVar[tuple[ParamDef, ...]]
     default_style: ClassVar[dict[str, LineStyle]]
+    fill_specs: ClassVar[tuple[FillSpec, ...]] = ()
     scannable_outputs: ClassVar[tuple[tuple[str, str], ...]] = ()
     resets_daily: ClassVar[bool] = False
 
@@ -208,6 +246,20 @@ class BaseIndicator:
         raise NotImplementedError(
             f"{type(self).__name__} must implement compute_arr(bars)"
         )
+
+    @classmethod
+    def output_plot_specs(
+        cls, params: Mapping[str, Any],
+    ) -> Mapping[str, OutputPlotSpec]:
+        """Return render-only metadata keyed by causal output name."""
+        return {}
+
+    @classmethod
+    def readout_state_spec(
+        cls, params: Mapping[str, Any],
+    ) -> ReadoutStateSpec | None:
+        """Return an optional compact comparison state for the chart readout."""
+        return None
 
     @classmethod
     def effective_output_keys(cls, params: dict) -> tuple[str, ...]:
@@ -354,8 +406,10 @@ def factory_is_available_for(
     factory: Any,
     interval: str,
     params: Mapping[str, Any] | None = None,
+    *,
+    symbol: str = "",
 ) -> Availability:
-    """Resolve a factory's interval availability to an :class:`Availability`.
+    """Resolve a factory's interval and symbol availability.
 
     Order of resolution:
 
@@ -367,6 +421,9 @@ def factory_is_available_for(
     3. ``factory.available_intervals`` (frozenset / tuple) — legacy
        attribute form. Membership check against ``interval``.
     4. Otherwise — :class:`Availability(True, "")`.
+    5. If interval availability passes, optional
+       ``factory.is_available_for_symbol(symbol, params)`` (or the legacy
+       one-argument form) is applied.
 
     Plugin indicators that don't define either keep working unchanged.
     The two-arg form is detected by inspecting the callable's signature;
@@ -374,8 +431,7 @@ def factory_is_available_for(
     """
     if factory is None:
         return Availability(True, "")
-    method = getattr(factory, "is_available_for", None)
-    if callable(method):
+    def _call(method: Any, value: str) -> Availability:
         # Detect whether the method accepts a ``params`` kwarg / second
         # positional. Use signature inspection so plugin indicators that
         # only accept ``interval`` keep working unchanged.
@@ -404,9 +460,9 @@ def factory_is_available_for(
             accepts_params = False
         try:
             if accepts_params:
-                res = method(interval, params or {})
+                res = method(value, params or {})
             else:
-                res = method(interval)
+                res = method(value)
         except Exception:  # noqa: BLE001
             return Availability(True, "")
         if isinstance(res, Availability):
@@ -417,14 +473,30 @@ def factory_is_available_for(
             except Exception:  # noqa: BLE001
                 return Availability(True, "")
         return Availability(bool(res), "")
-    intervals = getattr(factory, "available_intervals", None)
-    if intervals:
-        try:
-            ok = interval in intervals
-        except TypeError:
-            ok = True
-        return Availability(ok, "" if ok else "Not available for this interval")
-    return Availability(True, "")
+
+    interval_result = Availability(True, "")
+    method = getattr(factory, "is_available_for", None)
+    if callable(method):
+        interval_result = _call(method, interval)
+        if not interval_result.ok:
+            return interval_result
+    else:
+        intervals = getattr(factory, "available_intervals", None)
+        if intervals:
+            try:
+                ok = interval in intervals
+            except TypeError:
+                ok = True
+            interval_result = Availability(
+                ok, "" if ok else "Not available for this interval",
+            )
+            if not interval_result.ok:
+                return interval_result
+
+    symbol_method = getattr(factory, "is_available_for_symbol", None)
+    if callable(symbol_method):
+        return _call(symbol_method, str(symbol or ""))
+    return interval_result
 
 
 # --- Display registry --------------------------------------------------------

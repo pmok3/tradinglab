@@ -10,7 +10,7 @@ A desktop candlestick charting application for equities, built in Python with Tk
 - 📈 Live intraday streaming (1m/5m/15m/30m/60m)
 - 🔍 1d → 5m drill-down on double-click
 - ⚖️ Compare-mode dual-pane charts with shared X axis
-- 📊 15 built-in indicators: SMA, EMA, RSI, Bollinger Bands, Keltner Channels, MACD, VWAP, Anchored VWAP, Stochastic Momentum Index, ADX, ATR, Laguerre RSI, RVOL, RRVOL, Chandelier Stops (plus a user-plugin loader for custom indicators)
+- 📊 17 built-in indicators: Moving Average (SMA/EMA/WMA/RMA), RSI, Bollinger Bands, Keltner Channels, MACD, VWAP, Anchored VWAP, Stochastic Momentum Index, ADX, ATR, Laguerre RSI, RVOL, RRVOL, Chandelier Stops, Ichimoku Cloud, Prior Day H/L/C, and Overlap Score Inverted (plus a user-plugin loader for custom indicators)
 - 📌 Pinned watchlist tabs with parallel preload
 - 🎨 Light/dark/custom themes, configurable startup defaults
 - ⚙️ Mouse-wheel zoom (TradingView-style, cursor-anchored), pan, reset view

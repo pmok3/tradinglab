@@ -362,6 +362,166 @@ class TestAutoscaleSlotY:
         assert hi > lo
         plt.close(fig)
 
+    def test_projected_overlay_adds_gutter_and_participates_in_y_fit(self):
+        from types import SimpleNamespace
+
+        import numpy as np
+
+        from tradinglab.indicators.render import PanelIndicatorState
+
+        renderer = ChartRenderer()
+        fig = plt.figure()
+        price_ax = fig.add_subplot(211)
+        vol_ax = fig.add_subplot(212)
+        candles = _candles(10)
+        price_ax.set_xlim(-0.5, 9.5)
+        line, = price_ax.plot([10.0, 11.0], [200.0, 210.0])
+        line._sc_x_data = np.array([10.0, 11.0])
+        line._sc_y_data = np.array([200.0, 210.0])
+        line._sc_panel_offset = 0.0
+        state = PanelIndicatorState(
+            overlay_lines={1: {"projected": line}},
+            forward_horizon=2,
+        )
+        renderer.panel_state["primary"] = {
+            "candles": candles,
+            "price_ax": price_ax,
+            "vol_ax": vol_ax,
+            "ind_state": state,
+            "offset": 0,
+        }
+
+        def _getter(c):
+            return SimpleNamespace(
+                highs=np.array([bar.high for bar in c]),
+                lows=np.array([bar.low for bar in c]),
+                closes=np.array([bar.close for bar in c]),
+                opens=np.array([bar.open for bar in c]),
+                volumes=np.array([bar.volume for bar in c], dtype=float),
+            )
+
+        renderer.autoscale_slot_y(
+            "primary", 0, 10, series_getter=_getter, log_price_on=False,
+        )
+        assert price_ax.get_xlim()[1] == pytest.approx(11.5)
+        assert price_ax.get_ylim()[1] > 210.0
+        plt.close(fig)
+
+    def test_shared_axis_uses_maximum_horizon_across_compare_slots(self):
+        from types import SimpleNamespace
+
+        import numpy as np
+
+        from tradinglab.indicators.render import PanelIndicatorState
+
+        renderer = ChartRenderer()
+        fig = plt.figure()
+        price_ax = fig.add_subplot(211)
+        vol_ax = fig.add_subplot(212)
+        candles = _candles(10)
+        price_ax.set_xlim(-0.5, 9.5)
+        renderer.panel_state = {
+            "primary": {
+                "candles": candles,
+                "price_ax": price_ax,
+                "vol_ax": vol_ax,
+                "ind_state": PanelIndicatorState(forward_horizon=2),
+                "offset": 0,
+            },
+            "compare": {
+                "candles": candles,
+                "price_ax": price_ax,
+                "vol_ax": vol_ax,
+                "ind_state": PanelIndicatorState(forward_horizon=0),
+                "offset": 0,
+            },
+        }
+
+        def _getter(c):
+            return SimpleNamespace(
+                highs=np.array([bar.high for bar in c]),
+                lows=np.array([bar.low for bar in c]),
+                volumes=np.array([bar.volume for bar in c], dtype=float),
+            )
+
+        renderer.autoscale_slot_y(
+            "primary", 0, 10, series_getter=_getter, log_price_on=False,
+        )
+        assert price_ax.get_xlim()[1] == pytest.approx(11.5)
+        # Mirror the compare window logic, which resets the shared X limit.
+        price_ax.set_xlim(-0.5, 9.5)
+        renderer.autoscale_slot_y(
+            "compare", 0, 10, series_getter=_getter, log_price_on=False,
+        )
+        assert price_ax.get_xlim()[1] == pytest.approx(11.5)
+        plt.close(fig)
+
+    def test_snap_right_does_not_repeatedly_widen_projected_view(self):
+        from types import SimpleNamespace
+
+        import numpy as np
+
+        from tradinglab.indicators.render import PanelIndicatorState
+
+        renderer = ChartRenderer()
+        fig = plt.figure()
+        price_ax = fig.add_subplot(211)
+        vol_ax = fig.add_subplot(212)
+        candles = _candles(100)
+        price_ax.set_xlim(79.5, 99.5)
+        renderer.panel_state["primary"] = {
+            "candles": candles,
+            "price_ax": price_ax,
+            "vol_ax": vol_ax,
+            "ind_state": PanelIndicatorState(forward_horizon=26),
+            "offset": 0,
+        }
+
+        def _getter(c):
+            return SimpleNamespace(
+                highs=np.array([bar.high for bar in c]),
+                lows=np.array([bar.low for bar in c]),
+                volumes=np.array([bar.volume for bar in c], dtype=float),
+            )
+
+        renderer.autoscale_slot_y(
+            "primary", 79, 100, series_getter=_getter, log_price_on=False,
+        )
+        first = price_ax.get_xlim()
+        assert first == pytest.approx((79.5, 125.5))
+
+        # SNAP_RIGHT preserves total width but temporarily resets the right
+        # edge to the newest candle before the renderer reapplies the gutter.
+        renderer.panel_state["primary"]["candles"] = _candles(101)
+        price_ax.set_xlim(54.5, 100.5)
+        renderer.autoscale_slot_y(
+            "primary", 80, 101, series_getter=_getter, log_price_on=False,
+        )
+        second = price_ax.get_xlim()
+        assert second == pytest.approx((80.5, 126.5))
+        assert second[1] - second[0] == pytest.approx(first[1] - first[0])
+
+        renderer.panel_state["primary"]["candles"] = _candles(102)
+        price_ax.set_xlim(55.5, 101.5)
+        renderer.autoscale_slot_y(
+            "primary", 81, 102, series_getter=_getter, log_price_on=False,
+        )
+        third = price_ax.get_xlim()
+        assert third == pytest.approx((81.5, 127.5))
+        assert third[1] - third[0] == pytest.approx(first[1] - first[0])
+
+        # A fresh axes gets a candle-only default window. The persisted
+        # renderer gutter must not make it sacrifice 26 historical candles.
+        fresh_ax = fig.add_subplot(111)
+        fresh_ax.set_xlim(79.5, 99.5)
+        renderer.panel_state["primary"]["price_ax"] = fresh_ax
+        renderer.panel_state["primary"]["candles"] = _candles(100)
+        renderer.autoscale_slot_y(
+            "primary", 79, 100, series_getter=_getter, log_price_on=False,
+        )
+        assert fresh_ax.get_xlim() == pytest.approx((79.5, 125.5))
+        plt.close(fig)
+
 
 # ---------------------------------------------------------------------------
 # 8. refresh_view_after_tick
@@ -552,6 +712,39 @@ class TestRefreshViewAfterAppend:
         )
         lo, hi = ax.get_xlim()
         assert (lo, hi) == (0.0, 10.0)
+        plt.close(fig)
+
+    def test_compare_append_uses_primary_projected_horizon(self):
+        from tradinglab.indicators.render import PanelIndicatorState
+
+        renderer = ChartRenderer()
+        fig = plt.figure()
+        primary_ax = fig.add_subplot(211)
+        compare_ax = fig.add_subplot(212, sharex=primary_ax)
+        candles = _candles(20)
+        primary_ax.set_xlim(12.0, 20.5)
+        renderer.panel_state = {
+            "primary": {
+                "candles": candles,
+                "price_ax": primary_ax,
+                "ind_state": PanelIndicatorState(forward_horizon=2),
+            },
+            "compare": {
+                "candles": candles,
+                "price_ax": compare_ax,
+                "ind_state": PanelIndicatorState(forward_horizon=0),
+            },
+        }
+        renderer.refresh_view_after_append(
+            "compare",
+            ensure_rendered_for_view=lambda _slot: None,
+            autoscale_slot_y=lambda *_args: None,
+            autoscale_indicator_panes=lambda _slot: None,
+            canvas_draw_idle=lambda: None,
+        )
+        lo, hi = primary_ax.get_xlim()
+        assert hi == pytest.approx(21.5)
+        assert lo == pytest.approx(13.0)
         plt.close(fig)
 
 

@@ -6,9 +6,17 @@ Render-side bridge between the pure-compute indicator stack ([`base`](base.spec.
 ## Public API
 - `factory_by_kind_id(kind_id)` — convenience wrapper around `base.factory_by_kind_id` returning just the factory class (or `None`).
 - `compute_layout(num_lower_panes, fig_height_in, dpi=100.0) -> (height_ratios, can_add_more)` — size the price / volume / indicator pane stack.
-- `class PanelIndicatorState` — dataclass: per-slot artist registry the app walks during blit / theme swap.
-- `applicable_overlay_configs(manager, scope, interval) -> list[IndicatorConfig]`, `applicable_non_overlay_configs(manager, scope, interval) -> list[IndicatorConfig]`, and `applicable_pane_groups(manager, scope, interval) -> list[list[IndicatorConfig]]` — filter and group the manager's configs for a slot.
+- `class PanelIndicatorState` — per-slot artist registry. Owns overlay lines,
+  paired fill collections, lower-pane artists, and the active
+  `forward_horizon`; `all_artists()` includes lines and fills for blitting.
+- `applicable_overlay_configs(manager, scope, interval, *, symbol="")`,
+  `applicable_non_overlay_configs(...)`, and `applicable_pane_groups(...)` —
+  symbol-aware filtering and lower-pane grouping.
 - `render_for_slot(...) -> None` — top-level call from `_render`: runs compute and mutates the supplied `PanelIndicatorState` with artists on price + lower axes.
+- `forward_horizon_for_slot(manager, scope, interval, *, symbol="") -> int` —
+  maximum positive displacement required by a visible line or fill.
+- `visible_overlay_y_bounds(state, x_min, x_max, *, positive_only=False)` —
+  finite envelope of visible overlay lines and fills in plotted X space.
 - `autoscale_pane_y(ax_lower, lines, lo, hi)` — Y-autoscale a non-overlay pane to its visible window, fitting the UNION of all `lines` passed (so a shared pane with several configs fits every series, not one). Reads `_sc_y_data` off non-Line2D artists (e.g. histogram `LineCollection`) so they participate the same way `Line2D.get_ydata()` does. **Scale-aware**, branching on the `_sc_axis_mode` tag set by `_apply_pane_axis_scale`: (a) `"centered"` → pins `ylim=(0, max(visible_max, 5.0))` and writes that `top` to `ax._sc_centered_top` so the FuncScale transform + locator re-map (5× floor keeps 2×/5× stable in calm windows); (b) log (`get_yscale()=="log"`) → restricts the fit to strictly-positive samples, floors the lower bound (≥1e-6), pads multiplicatively (`/1.1`, `*1.1`); (c) linear → additive 5% pad. Untagged axes (e.g. unit-test panes) fall through to the log/linear branches, preserving prior behaviour.
 - `lines_by_pane_axes(state) -> list[(axes, [lines])]` — groups a slot's pane lines by their shared `Axes` object (keyed by identity), unioning `pane_lines` across every config-id that maps to the same Axes. The single source of truth for "all lines on a shared pane", consumed by the autoscale callers so a shared pane (RVOL Cumulative + ToD) fits/refits against ALL its configs. Reference axhlines are excluded (they live on `ax.lines`, not `pane_lines`).
 - `_render_pane_labels(ax_lower, visible_label_cfgs, scope)` — (re)creates ONE pickable `Text` artist per visible config (its name), laid left-to-right; **reserves an inline value slot right after each name** and records its x in `ax_lower._sc_pane_value_x_by_cid` (`{config_id: x_axesfrac}`) for `gui.interaction` to place that config's live value. A click targets the SPECIFIC indicator (not just the first config on a shared pane). See "Clickable in-pane labels" below.
@@ -20,12 +28,36 @@ Render-side bridge between the pure-compute indicator stack ([`base`](base.spec.
 
 ## Design Decisions
 - **Tk-thread / matplotlib-coupled by design**. Pure compute (NaN-correct, no Tk imports) lives in the `base` / kind-specific modules. Render is the only place where artists are created.
-- **Gap-aware via `gap_mask`**: when a slot's candles list has been gap-padded for compare-mode alignment, the helper computes on the **non-gap subset** and NaN-pads the result back to the full length so x positions line up with the rendered candles. Without this, indicators would visibly drift across compare gaps. The non-gap path uses `compute_via_bars` so `BaseIndicator` / `compute_arr` indicators share the same fast-path contract.
+- **Gap-aware via `gap_mask`**: computation runs on the non-gap subset and
+  pads causal outputs back to the aligned series. Ordinary outputs remain at
+  aligned X positions. Displaced outputs count **observed source bars**:
+  `_plot_xy` maps source ordinal `j` to the aligned coordinate of ordinal
+  `j + offset`, leaves alignment-only slots as NaN breaks, clips negative
+  pre-history, and allocates abstract integer slots after the final aligned
+  candle for positive overflow.
+- **Paired-area fills.** A factory's `FillSpec` is rendered as separate
+  bullish/bearish `fill_between` collections using live semantic
+  `BULL_COLOR`/`BEAR_COLOR`, interpolation at crossings, and hard NaN/gap
+  breaks. Collections sit below candle bodies, are recreated without
+  accumulation, and are owned by `PanelIndicatorState.overlay_fills`.
+- **Shift-aware artist metadata.** Overlay lines and fills carry their plotted
+  X/Y arrays plus the panel offset. Hover/readout and price autoscale consume
+  plotted coordinates rather than indexing causal arrays by candle position.
+- **Contextual symbol filtering.** `symbol` flows through manager
+  applicability. Incompatible configs are omitted without changing persisted
+  visibility or scopes. Legacy test/plugin manager stubs without the keyword
+  retain the two-argument fallback.
 - **Symbol-keyed AVWAP anchor resolution** — `_compute_for_config` special-cases `kind_id == "avwap"`: it reads the slot's symbol from `core.render_context.current_context()["primary_symbol"]` (the render layer sets this per slot — it is the slot's ticker, primary OR compare), resolves the effective scalar anchor via `indicators.avwap.resolve_anchor_ts(cfg.params, symbol)`, and builds the instance + cache hash from `{**cfg.params, "anchor_ts": <resolved>}`. This lets ONE shared AVWAP config draw each pane's ticker at its own per-symbol anchor, and the resolved anchor flowing into `config_hash` keeps the primary and compare cache entries distinct despite identical `cfg.params`. Every other indicator builds straight from `cfg.params`. A symbol with no anchor resolves to `""` → all-NaN (no line); the readout shows "Not set".
 - **Style resolution**: `_resolve_style(cfg, output_key)` reads a config's per-output style (e.g. RSI's `rsi` line, Bollinger's `middle`/`upper`/`lower`). Falls back to factory defaults when the config doesn't override.
+- **Live semantic line colors.** A factory may declare
+  `semantic_output_colors = {output_key: "bull"|"bear"}`. When that output
+  has no explicit config color, `_resolve_style` reads the live
+  `constants.BULL_COLOR` / `BEAR_COLOR` rather than an import-time snapshot;
+  explicit user colors still win. Ichimoku uses this for both Senkou outlines
+  so a runtime color-blind palette toggle changes lines and fill together.
 - **Per-output visibility**: `_output_visible(cfg, output_key)` returns the user-flippable `LineStyle.visible` for one output — `cfg.style[key].visible`, falling back to the factory `default_style` visibility, then `True`. Both draw loops (overlay on the price axis, and the shared lower pane) skip drawing an output whose `_output_visible` is `False` (and `set_visible(False)` on any pre-existing artist so a mid-session toggle hides — never deletes — the line, so toggling back doesn't recompute). This lets the user hide, e.g., Bollinger's `upper`/`lower` bands while keeping `middle`. The same key is suppressed from the readout legend by `gui.readout_legend._effective_output_keys_for`, so a hidden band vanishes from BOTH the chart and the legend. Orthogonal to the whole-indicator master `cfg.visible` gate (which hides every output).
 - **Wraps `base.factory_by_kind_id`'s `(display_name, factory)` tuple shape**: the `(name, factory)` tuple is right for menu/dialog code; render only needs the class. `_safe_remove_line` swallows `ValueError` because matplotlib raises when an artist has already been detached (theme swap + clear race).
-- **`PanelIndicatorState` is the contract surface for fast paths**: blit code walks the state's `Line2D` lists with `set_animated(True)` so pan / zoom / streaming-tick redraws don't trigger a full figure rebuild.
+- **`PanelIndicatorState` is the contract surface for fast paths**: blit code walks all line and fill artists with `set_animated(True)` so pan / zoom / streaming-tick redraws don't trigger a full figure rebuild.
 - **Overlay zorder follows manager-list position (b43)**: each overlay's `Line2D` is created (or restamped via `set_zorder`) with `zorder = 4 + 0.01 * i`, where `i` is the config's index in `applicable_overlay_configs(...)`. This makes `IndicatorManager.reorder` actually reflow the visual stacking of overlapping overlay lines on the price axis. A pure constant `zorder=4` left late-added lines stranded on top because matplotlib's `axes.lines` insertion order — not the config order — was deciding the draw order, and we deliberately reuse `Line2D` artists across renders (keyed by `cfg.id`) to keep blit fast. Lower-pane order naturally tracks manager order via the figure-level gridspec rebuild on `_render`, so no equivalent zorder trick is needed for panes.
 - **Reference-level rendering for pane indicators** — `_resolve_reference_levels(cfg, factory)` consults the instance's `reference_levels` first (built from `cfg.params`), then the class attribute, then an empty tuple. Levels are drawn via `ax_lower.axhline` and tracked through axis attributes `_sc_ref_levels_drawn` (the most-recent levels tuple), `_sc_ref_style_drawn` (the most-recent line style), and `_sc_ref_level_lines` (the resulting `Line2D` artists), so a config-edit on the same axis tears down stale lines and draws the new ones without waiting for a full figure rebuild. SMI uses class-level ±40 / 0 by default; LRSI exposes per-instance levels driven by `oversold` / `overbought` / `show_reference_lines`; ADX uses class-level 25; MACD uses class-level 0; RSI exposes per-instance 30 / 70 bands.
 - **Per-indicator reference-line style** — `_resolve_reference_line_style(factory)` reads the factory's optional `reference_line_style` class attribute and falls back to dashed `"--"` (the style every oscillator used before this hook). The first config in a shared pane that contributes levels owns the pane's style. RSI sets `":"` so its 30 / 70 bands render **dotted**, visually distinct from every other oscillator's dashed reference lines. The style is part of the redraw key (`_sc_ref_style_drawn`) so a style change re-draws even when the levels tuple is unchanged.
@@ -39,5 +71,8 @@ Render-side bridge between the pure-compute indicator stack ([`base`](base.spec.
 
 ## Invariants
 - Compute output is the same length as the input candles list (NaN-padded across gaps).
+- Rendering displacement never mutates cached compute outputs.
+- Every collection created for a fill is removed before replacement and on
+  config removal/clear; repeated live renders cannot accumulate polygons.
 - `render_for_slot` never raises on an unknown `kind_id` — unknown configs are skipped silently (the indicator dialog already presents them as "Unknown indicator (…)" read-only rows).
 - Artists created here are owned by the supplied `PanelIndicatorState`; the caller is responsible for `set_animated` and removal on full rebuild.

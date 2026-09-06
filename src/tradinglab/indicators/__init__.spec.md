@@ -15,7 +15,8 @@ From `.base`:
 - `register_indicator(name, factory)`,
   `register_legacy_indicator(name, factory)`,
   `factory_by_kind_id(kind_id)`, `kind_id_for(name)`.
-- `ParamDef`, `LineStyle`, `PARAM_KINDS`.
+- `ParamDef`, `LineStyle`, `OutputPlotSpec`, `FillSpec`,
+  `ReadoutStateSpec`, `PARAM_KINDS`.
 
 Built-ins registered at import time (display name → kind_id):
 - `"Moving Average"` → `"ma"` (consolidated SMA / EMA / WMA / RMA;
@@ -33,6 +34,7 @@ Built-ins registered at import time (display name → kind_id):
 - `"RVOL"` → `"rvol"`
 - `"RRVOL"` → `"rrvol"`
 - `"Chandelier Stops"` → `"chandelier"`
+- `"Ichimoku Cloud"` → `"ichimoku"`
 - `"Prior Day H/L/C"` → `"prior_day_hlc"`
 - `"Overlap Score Inverted"` → `"overlap_score_inv"`
 

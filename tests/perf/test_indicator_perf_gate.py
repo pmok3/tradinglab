@@ -79,6 +79,8 @@ _BUDGETS_MS_25K: dict[str, float] = {
     "chandelier": 8.0,
     # baseline 1.76 ms → budget 8 ms (~4x; matches chandelier)
     "keltner": 8.0,
+    # baseline 5.31 ms → budget 24 ms (>4x)
+    "ichimoku": 24.0,
 }
 
 

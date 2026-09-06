@@ -25,6 +25,7 @@ matplotlib.use("Agg")
 
 from matplotlib.offsetbox import HPacker, TextArea  # noqa: E402
 
+from tradinglab import constants as _constants  # noqa: E402
 from tradinglab.gui.theme_controller import ThemeController  # noqa: E402
 
 _TEXT = "#e0e0e0"      # dark-theme text
@@ -83,6 +84,27 @@ def test_hidden_overlay_row_is_fully_muted():
     _controller_for({"ax": box})._apply_overlay_artists(_THEME)
     assert _color(label) == _MUTED
     assert _color(value) == _MUTED
+
+
+def test_visible_semantic_state_recolors_by_direction():
+    label = _ta(_LIGHT)
+    state_text = _ta(_LIGHT)
+    container = HPacker(children=[label, state_text], align="center", pad=0, sep=0)
+    row = {
+        "config_id": 3,
+        "visible": True,
+        "label_textarea": label,
+        "container": container,
+        "outputs": [],
+        "state": {"textarea": state_text, "direction": "bull"},
+    }
+    box = SimpleNamespace(_main_text=_ta(_LIGHT), _ind_rows=[row])
+    _controller_for({"ax": box})._apply_overlay_artists(_THEME)
+    assert _color(state_text) == _constants.BULL_COLOR
+
+    row["state"]["direction"] = "neutral"
+    _controller_for({"ax": box})._apply_overlay_artists(_THEME)
+    assert _color(state_text) == _TEXT
 
 
 def test_multiple_rows_and_boxes_all_recolor():

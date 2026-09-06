@@ -22,8 +22,8 @@ As of the **`legend-condensation`** sprint:
   with `bands="off"` returns only `("avwap",)`); the per-output
   `LineStyle.visible` flag on the config further filters the row.
 
-Everything here is a **pure function** of the `IndicatorManager` +
-theme — no Tk, no matplotlib — so it is unit-testable headless.
+Everything here is a **pure function** of the `IndicatorManager`, slot
+symbol, and theme — no Tk, no matplotlib — so it is unit-testable headless.
 
 ## Public API
 
@@ -34,6 +34,11 @@ theme — no Tk, no matplotlib — so it is unit-testable headless.
     (`"upper"`, `"middle"`, `"lower"`). Empty for single-output
     indicators where the parenthesised label already disambiguates.
   - `color: str` — resolved colour for this output's value text.
+
+- `OverlayState` (frozen dataclass): two output keys, optional controlling
+  `fill_key`, and accessible first-above / second-above / equality labels for
+  a compact semantic state such as Ichimoku's
+  `Cloud ↑` / `Cloud ↓` / `Cloud =`.
 
 - `ReadoutLegendRow` (frozen dataclass):
   - `config_id: int` — identifies the indicator config for routing
@@ -46,15 +51,20 @@ theme — no Tk, no matplotlib — so it is unit-testable headless.
   - `outputs: list[OverlaySegment]` — visible output segments in
     indicator-declared order (top-down on chart).
   - `visible: bool` — mirrors `cfg.visible`; hidden rows are greyed.
+  - `state: OverlayState | None` — optional plotted-output comparison.
+  - `unavailable_reason: str` — contextual symbol/interval rejection shown
+    instead of silently dropping the persisted row.
 
 - `build_overlay_legend_rows(manager, scope, interval, *,
-  theme_text="#cccccc") -> list[ReadoutLegendRow]`:
+  theme_text="#cccccc", symbol="") -> list[ReadoutLegendRow]`:
   - Enumerates via `overlay_legend.collect_overlay_configs` (manager
     insertion order), **including hidden configs** (re-enable-able).
   - For each config, calls the indicator class's
     `effective_output_keys(params)` to get the visible output set
     (declares which bands are actually rendered for these params),
     then filters by per-output `cfg.style[key].visible` (user toggle).
+  - Resolves factory availability for the slot symbol and optional
+    `readout_state_spec(params)` metadata.
   - Returns `[]` if overlay-config collection fails (fail-safe — legend simply absent).
 
 - `format_indicator_label(cfg: IndicatorConfig) -> str`:
@@ -106,6 +116,11 @@ theme — no Tk, no matplotlib — so it is unit-testable headless.
   a hidden overlay stays in the legend (greyed) so right-click → Show
   re-enables it. The renderer sets `line=None` for every output
   segment of a hidden row (no live value, just the greyed name).
+- **Unavailable configs remain explainable.** A symbol-incompatible row is
+  retained with a muted reason while its chart artists are suppressed.
+- **State is non-color-only.** Direction uses arrows/equality as well as the
+  live semantic bull/bear palette. A state tied to `fill_key` disappears when
+  that fill is hidden, even if its boundary lines remain visible.
 - **Pure / Tk-free.** Keeps the testable core isolated from the
   matplotlib + hit-test machinery in `interaction.py`.
 - **Reuses `collect_overlay_configs`.** Single source of truth for
