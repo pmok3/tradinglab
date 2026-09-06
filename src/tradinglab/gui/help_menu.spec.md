@@ -63,7 +63,13 @@ Schwab connect, local data, and CSV export.
   manager: `os.startfile` (Win) / `open` (macOS) / `xdg-open`
   (Linux). Falls back to path-display dialog.
 - `_on_help_configure_credentials` —
-  `gui.credentials_dialog.open_credentials_dialog(self)`.
+  `gui.credentials_dialog.open_credentials_dialog(self, on_changed=...)`.
+  The `on_changed` hook calls `self._refresh_data_source_combobox()`, so a
+  vendor registered by a credential save appears in the toolbar dropdown
+  immediately instead of after a restart — and `SourceRegistryAppMixin`
+  re-resolves `"Auto"`, which may now rank the new vendor above whatever it
+  is currently serving (AGENTS.md §7.38). Swallows hook exceptions so a
+  refresh failure can't break the dialog.
 - `_on_help_connect_schwab` —
   `gui.schwab_connect_dialog.open_schwab_connect_dialog(self)` (guarded
   import). Interactive Schwab OAuth sign-in (system browser + paste-back; no

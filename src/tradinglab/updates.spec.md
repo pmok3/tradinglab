@@ -19,11 +19,19 @@ Blank across all three returns `UpdateResult(status="disabled")`. Only
 
 ## Strictly RTH-suppressed
 The poll never makes an outbound HTTPS call during US regular trading hours
-(Monday–Friday, 09:30–16:00 America/New_York). A fresh cache entry may be
-returned during RTH because it is local-only; otherwise the check returns
-`status="rth_suppressed"` before network setup. If the ET timezone cannot be
-resolved, the helper fails closed and treats the moment as RTH. `force=True`
-does not bypass RTH policy.
+(Monday–Friday, half-open `[09:30, 16:00)` America/New_York). A fresh cache
+entry may be returned during RTH because it is local-only; otherwise the check
+returns `status="rth_suppressed"` before network setup. If the ET timezone
+cannot be resolved, the helper fails closed and treats the moment as RTH.
+`force=True` does not bypass RTH policy.
+
+The predicate itself is **not implemented here**: `_is_rth_now()` is a thin
+delegate to `core.session_calendar.is_rth_now`, the single owner of the RTH
+question. Don't re-inline the `datetime.now(ET)` + weekday + time-window
+arithmetic — this module used to carry its own copy, and that duplication is
+what the `session_calendar` consolidation retired. `session_calendar`
+resolves `datetime` and `ET` function-locally on purpose so this module's
+tests can keep patching them at call time.
 
 ## Public API
 - Constants exported for tests/configuration: `ENV_URL`, `DEFAULT_RELEASES_URL`,

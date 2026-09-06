@@ -34,7 +34,7 @@ Alpaca Market Data v2 → `List[Candle]`. Two-layer module: a pure response-mapp
 - **Default lookback** via `constants.provider_lookback_days("alpaca", interval)`: Alpaca has no yfinance 60-day intraday cap, but each intraday window is **fetch-speed-bounded** (the whole series loads up front, so 5m ≈ 4 months / ~120d, 1h ≈ 4y, 1m ≈ 1mo — each ~1 API page / ≲3s to clear the 5s drilldown deadline). Daily requests ~15y (the server caps to the plan's availability — free IEX ≈ 6y for AAPL). Replaces the old 730d/60d yfinance-matched cap that truncated daily history to ~2 years and drilldown to ~60 days.
 - **Interval map**: `{1m,5m,15m,30m,1h,1d,1wk,1mo} → Alpaca's `"1Min" / "1Hour" / "1Day"` etc.`
 - **Non-finite OHLC rows are dropped by the shared normalizer** before `Candle` construction.
-- **Never raises**: HTTP/JSON errors caught broadly; logged at WARNING; returns `None`.
+- **Never raises**: HTTP/JSON errors caught broadly; logged at WARNING; returns `None`. Before returning, the handler routes the exception through `verify.note_runtime_failure("alpaca", exc, secrets=(api_key_id, api_secret_key))` so a revoked key or a downgraded plan flips the vendor's status to `invalid_credentials` / `forbidden` instead of masquerading as a generic data outage — `is_configured()` would still report `True`, since presence never stopped being true. Transient failures (429 / 5xx / timeouts / parse errors) are classified and **not** recorded. See `data/verify.spec.md` §"Runtime failure routing".
 
 ## Invariants
 - Returns either `None` or a (possibly empty) list of `Candle`. Never raises.

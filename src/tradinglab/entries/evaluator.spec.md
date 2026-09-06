@@ -34,6 +34,7 @@ class EntryEvaluator:
     def all_strategies() -> List[EntryStrategy]
     def is_armed(self, strategy_id) -> bool
     def armed_strategies() -> Set[str]
+    def has_armed_scanner_alert() -> bool  # any armed SCANNER_ALERT strategy
     def arm(self, strategy_id) -> None
     def disarm(self, strategy_id) -> None
     def disarm_all() -> None
@@ -108,6 +109,14 @@ each row through the same fire path as `on_tick`. **`new_rows` is
 edge-filtered** by `MatchHistory` — re-arming uses `disarm` + `arm` to
 reset.
 
+`has_armed_scanner_alert()` is the read-only introspection this path
+exposes to the sandbox: `backtest/sandbox_app._scanner_has_consumer`
+may skip re-scanning a large replay universe when nobody is watching
+the Scanner tab, but never while a `SCANNER_ALERT` strategy is armed —
+those fire from the subscription above, so a skipped scan is a
+swallowed entry rather than a missed repaint. See
+`backtest/sandbox_app.spec.md` §"consumer-gated".
+
 ## INDICATOR path
 
 `_build_indicator_context(symbol, trigger)` builds an
@@ -144,8 +153,9 @@ OPEN` for a `pending_position_id`:
 ## Threading
 
 Every public mutator `@require_tk_thread` (mirrors `ExitEvaluator`).
-Read-only queries (`stats`, `armed_strategies`, `pending_position_ids`)
-unrestricted. Subscribed ScanRunner / PositionTracker callbacks are
+Read-only queries (`stats`, `armed_strategies`, `pending_position_ids`,
+`has_armed_scanner_alert`) unrestricted. Subscribed ScanRunner /
+PositionTracker callbacks are
 guarded so off-thread delivery fails fast with `TkThreadViolation`.
 
 ## See also

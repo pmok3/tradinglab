@@ -29,7 +29,7 @@ Polygon.io Aggregates v2 → `List[Candle]`. Two-layer module: a pure response-m
   response (`limit=50000` aggregates) is ~3 MB.
 - **Default lookback** via `constants.provider_lookback_days("polygon", interval)`: generous but fetch-speed-bounded per-interval windows with no yfinance 60-day intraday cap (5m ≈ 4mo, daily ≈ 15y) — see `constants.spec.md`.
 - **Interval map**: `1m/5m/15m/30m → (n, minute)`, `1h → (1, hour)`, `1d/1wk/1mo → (1, day|week|month)`. Unsupported intervals return `None` rather than raise.
-- **Never raises**: all HTTP/JSON errors caught in a broad `except Exception` and logged at WARNING. The app-level fallback handles `None`.
+- **Never raises**: all HTTP/JSON errors caught in a broad `except Exception` and logged at WARNING. The app-level fallback handles `None`. The handler also routes the exception through `verify.note_runtime_failure("polygon", exc, secrets=(api_key,))` so a credential problem does not masquerade as a generic data outage: a mid-session 401 flips the vendor to `invalid_credentials` and a 403 to `forbidden`, while transient failures are classified and **not** recorded. See `data/verify.spec.md` §"Runtime failure routing".
 - **`adjusted=true, sort=asc, limit=50000`** baked into the URL — that's what the chart expects (chronological, split-adjusted bars).
 
 ## Invariants

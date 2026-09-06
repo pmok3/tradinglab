@@ -14,7 +14,7 @@ Constructs and owns these Tk variables:
 - `source`, `interval`, `prepost`, `days`
 - `dark`, `log_price`, `watchlist`
 - `status`, `status_display`
-- `ha_display`, `highlight_key_bars`, `highlight_ha_flat`, `volume_tod`, `chartstack_visible`
+- `ha_display`, `highlight_key_bars`, `highlight_ha_flat`, `volume_tod`, `chartstack_visible`, `quant_visible`
 
 ## Dependencies
 - Internal: `tradinglab.defaults`, `tradinglab.settings`, `tradinglab.data.DATA_SOURCES`, `tradinglab.data.is_internal_source`, `tradinglab.data.user_visible_sources`, `tradinglab.watchlists.DEFAULT_WATCHLIST_NAME`, `tradinglab.gui.chartstack.settings_adapter` (late import for initial ChartStack visibility).
@@ -25,6 +25,7 @@ Constructs and owns these Tk variables:
 - **No `ChartApp` import**: the module must stay independent of `tradinglab.app` to avoid circular imports during startup.
 - **Compare label stays local**: the compare-label trace lives here because it only depends on Tk variables, while `interval` traces remain in `app.py` because they call back into `ChartApp` behavior.
 - **`highlight_ha_flat` defaults to OFF** — first-launch users see plain HA candles without the cross-hatched overlay. Previously the default was ON, which surprised users who didn't opt in. Users who want the highlight enable it explicitly via View → Heikin-Ashi → "Highlight Flat Bars"; the setting is persisted under `highlight_ha_flat` even when HA mode is off. Audit `ha-flat-default-off`.
+- **`quant_visible` is NOT persisted**, unlike `chartstack_visible` (which seeds from `chartstack.settings_adapter`). The Quant side tab (View → Quant, see `menu_builder.spec.md`) is a reference panel the user pulls up when they want it, not a layout preference, so it is constructed `value=False` every launch and no key is read from or written to `settings`. Aliased onto `ChartApp._quant_visible_var` for the `MenuBuilderCallbacks` protocol.
 
 ## Invariants
 - `compare_enabled` is an alias of `compare`.
