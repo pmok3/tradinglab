@@ -38,6 +38,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $TrustedRepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 
 Add-Type -AssemblyName System.Drawing
@@ -146,6 +147,12 @@ public static class TradingLabUxNative {
 
     [DllImport("user32.dll")]
     private static extern bool SetForegroundWindow(IntPtr hwnd);
+
+    [DllImport("user32.dll")]
+    private static extern bool BringWindowToTop(IntPtr hwnd);
+
+    [DllImport("user32.dll")]
+    private static extern void SwitchToThisWindow(IntPtr hwnd, bool altTab);
 
     [DllImport("user32.dll")]
     private static extern bool AttachThreadInput(uint first, uint second, bool attach);
@@ -259,13 +266,16 @@ public static class TradingLabUxNative {
         bool attachedTarget = targetThread != 0 && targetThread != current &&
             targetThread != foregroundThread && AttachThreadInput(current, targetThread, true);
         try {
-            SetForegroundWindow(top);
+            BringWindowToTop(top);
+            if (!SetForegroundWindow(top)) {
+                SwitchToThisWindow(top, true);
+            }
+            Thread.Sleep(120);
         }
         finally {
             if (attachedTarget) AttachThreadInput(current, targetThread, false);
             if (attachedForeground) AttachThreadInput(current, foregroundThread, false);
         }
-        Thread.Sleep(120);
         return GetForegroundWindow() == top;
     }
 
@@ -685,7 +695,7 @@ public static class TradingLabUxNative {
 [TradingLabUxNative]::EnablePerMonitorDpiAwareness()
 
 function Write-Result([object]$Value) {
-    $Value | ConvertTo-Json -Depth 8 -Compress
+    $Value | ConvertTo-Json -Depth 8 -Compress -EscapeHandling EscapeNonAscii
 }
 
 function Get-ProcessWindows([int]$ProcessId) {

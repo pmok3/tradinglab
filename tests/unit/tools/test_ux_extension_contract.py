@@ -27,6 +27,15 @@ def test_extension_is_window_scoped_and_isolates_persistence() -> None:
     assert "WaitOne(0)" in lock_text
 
 
+def test_agent_handoffs_do_not_close_the_desktop_run() -> None:
+    text = EXTENSION.read_text(encoding="utf-8")
+    hook = text.split("onSessionEnd:", 1)[1].split("let shuttingDown", 1)[0]
+    assert 'trace("agent_session_end"' in hook
+    assert "closeActiveRun" not in hook
+    assert 'process.once("SIGTERM", shutdown)' in text
+    assert 'closeActiveRun("extension-shutdown")' in text
+
+
 def test_native_driver_rejects_arbitrary_windows_and_commands() -> None:
     text = DRIVER.read_text(encoding="utf-8")
     assert "WindowsForProcess" in text

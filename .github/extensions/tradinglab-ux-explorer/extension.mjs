@@ -1069,12 +1069,34 @@ const session = await joinSession({
         }),
     })),
     hooks: {
-        onSessionEnd: () => serializeOperation(async () => {
-            if (activeRun) await closeActiveRun("session-ended");
-            else await releaseGlobalLock();
-        }),
+        onSessionEnd: async (input, invocation) => {
+            // This hook also fires for agent handoffs. It must not tear down
+            // a desktop run another agent is still exploring.
+            await trace("agent_session_end", {
+                reason: input.reason,
+                session_id: invocation?.sessionId,
+            });
+        },
     },
 });
+
+let shuttingDown = false;
+function shutdown() {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    serializeOperation(async () => {
+        if (activeRun) await closeActiveRun("extension-shutdown");
+        else await releaseGlobalLock();
+    }).then(
+        () => process.exit(0),
+        (error) => {
+            process.stderr.write(`TradingLab UX shutdown: ${error.message}\n`);
+            process.exit(1);
+        },
+    );
+}
+process.once("SIGTERM", shutdown);
+process.once("SIGINT", shutdown);
 
 await session.log(
     "TradingLab UX explorer loaded. It remains inert until tradinglab_ux_start is called.",

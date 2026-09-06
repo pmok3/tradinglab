@@ -1,6 +1,7 @@
 """Windows-native safety checks for the UX explorer driver."""
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import uuid
@@ -104,3 +105,27 @@ def test_input_requires_launch_identity() -> None:
     )
     assert result.returncode != 0
     assert "unique run marker are required" in result.stderr
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="PowerShell JSON transport")
+def test_window_titles_survive_legacy_console_encoding() -> None:
+    driver_path = str(DRIVER).replace("'", "''")
+    command = f"""
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    '{driver_path}', [ref]$null, [ref]$null)
+$writer = $ast.Find({{
+    param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -eq 'Write-Result'
+}}, $true)
+[Console]::OutputEncoding = [System.Text.Encoding]::GetEncoding(437)
+. ([scriptblock]::Create($writer.Extent.Text))
+Write-Result @{{title = 'Manage Indicators ' + [char]0x2022 + [char]0x4E2D}}
+"""
+    result = subprocess.run(
+        ["pwsh", "-NoProfile", "-NonInteractive", "-Command", command],
+        capture_output=True, timeout=30, check=False,
+    )
+    assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+    assert result.stdout.isascii()
+    assert json.loads(result.stdout)["title"] == "Manage Indicators \u2022\u4e2d"

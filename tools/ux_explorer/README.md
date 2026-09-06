@@ -25,6 +25,10 @@ private application state.
 - Real credentials are forbidden. Closing uses `WM_CLOSE`, never a process kill.
 - Traces, screenshots and findings remain under the gitignored
   `_ux_explorer\` directory.
+- Agent handoffs do not close an active GUI run. The explorer explicitly calls
+  `tradinglab_ux_finish`; extension-process shutdown also requests a graceful
+  close. Native JSON output escapes non-ASCII titles so dirty-state markers
+  cannot corrupt the transport under legacy Windows console encodings.
 
 The driver is an input guard, **not an operating-system sandbox**. Do not open
 external applications, submit real credentials, or select file destinations
@@ -99,3 +103,9 @@ low-level input stack. In message mode, modifier chords are rejected because
 `WM_KEYDOWN` does not faithfully affect another thread's modifier state in
 message mode. Reports therefore use only recorded GUI evidence from the
 extension, never application state or backend trading-test assertions.
+
+For a ttk combobox popup titled `popdown`, keep keyboard input addressed to its
+parent dialog: use Down/Up/Home/End and Enter after opening the arrow. Unlike a
+native `#32768` menu, that popup cannot itself own foreground focus. If an
+owned tooltip obscures a click target, move the pointer to a clear part of the
+parent first, then retry. These transport limits are not application defects.
