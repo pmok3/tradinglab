@@ -14,6 +14,11 @@ private application state.
   HWND/PID. The target point must hit-test back to that process/root. Native
   menu popups must belong to TradingLab's active foreground menu loop. If
   handoff fails or focus changes during an action, input fails closed.
+- When Windows rejects programmatic focus, activation may use one click on an
+  unobscured TradingLab title-bar point. Both ownership and `HTCAPTION` hit-tests
+  must pass immediately before that click; window buttons, client controls, and
+  other applications are never activation targets. All subsequent input still
+  requires verified foreground ownership.
 - Message input mode remains an explicit, limited option for scoped probes that
   should use process-addressed Win32 messages instead of foreground input.
 - Screenshots are restricted to `PrintWindow` captures of windows owned by the

@@ -276,12 +276,44 @@ public static class TradingLabUxNative {
             if (attachedTarget) AttachThreadInput(current, targetThread, false);
             if (attachedForeground) AttachThreadInput(current, foregroundThread, false);
         }
-        return GetForegroundWindow() == top;
+        return GetForegroundWindow() == top || TryActivateByCaption(top, processId);
+    }
+
+    private static bool IsOwnedCaptionPoint(IntPtr top, int processId, int x, int y) {
+        GetWindowThreadProcessId(top, out uint owner);
+        IntPtr hit = WindowFromPoint(new POINT { X = x, Y = y });
+        GetWindowThreadProcessId(hit, out uint hitOwner);
+        if (owner != processId || hitOwner != processId || GetAncestor(hit, 2) != top) {
+            return false;
+        }
+        IntPtr point = new IntPtr((y << 16) | (x & 0xFFFF));
+        return SendMessage(top, 0x0084, IntPtr.Zero, point).ToInt32() == 2;
+    }
+
+    private static bool TryActivateByCaption(IntPtr top, int processId) {
+        if (!GetWindowRect(top, out RECT rect) || !IsWindowEnabled(top)) return false;
+        foreach (int key in new int[] { 0x01, 0x02, 0x10, 0x11, 0x12, 0x5B, 0x5C }) {
+            if ((GetAsyncKeyState(key) & 0x8000) != 0) return false;
+        }
+        int x = rect.Left + (rect.Right - rect.Left) / 3;
+        foreach (int offset in new int[] { 12, 20, 28, 36, 44 }) {
+            int y = rect.Top + offset;
+            if (!IsOwnedCaptionPoint(top, processId, x, y)) continue;
+            if (!SetCursorPos(x, y)) return false;
+            Thread.Sleep(40);
+            if (!IsOwnedCaptionPoint(top, processId, x, y)) return false;
+            // Activation only: the hit-test must be HTCAPTION, never a button,
+            // control, or pixels belonging to another process.
+            Send(new INPUT[] { MouseInput(2), MouseInput(4) });
+            Thread.Sleep(150);
+            return GetForegroundWindow() == top;
+        }
+        return false;
     }
 
     private static void BeginForegroundInput(long top, int pid) {
         if (!ActivateOwned(top, pid)) {
-            throw new InvalidOperationException("Cannot acquire TradingLab foreground. Unlock the desktop and activate TradingLab; no input was sent.");
+            throw new InvalidOperationException("Cannot acquire TradingLab foreground. Unlock the desktop and activate TradingLab; no control input was sent.");
         }
         RequireForeground(top, pid);
     }

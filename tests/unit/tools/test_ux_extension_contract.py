@@ -50,6 +50,10 @@ def test_native_driver_rejects_arbitrary_windows_and_commands() -> None:
     assert "RequireForeground" in text
     assert "RequirePoint" in text
     assert 'InputMode -eq "foreground"' in text
+    assert "TryActivateByCaption(top, processId)" in text
+    assert "IsOwnedCaptionPoint(top, processId, x, y)" in text
+    assert "hitOwner != processId || GetAncestor(hit, 2) != top" in text
+    assert "ToInt32() == 2" in text
     assert "PostMessage" in text
     assert "0x0010" in text
     assert "Invoke-Expression" not in text
