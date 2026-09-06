@@ -70,6 +70,7 @@ Write-Step "Probe 1: $ExePath --version (exit 0 within 30s)"
 # about exit codes / WM_CLOSE handling and a transient splash window
 # can confuse the MainWindowHandle poll in probe 2 (the splash is a
 # pyi_splash Tk window, not the real ChartApp window).
+$env:PYINSTALLER_SUPPRESS_SPLASH_SCREEN = "1"
 $env:TRADINGLAB_NO_SPLASH = "1"
 
 # We need stdout to assert the version line. Run via cmd /c with output
@@ -110,6 +111,8 @@ if ($SkipGui) {
     Write-Host "  (probe 2 skipped per -SkipGui)" -ForegroundColor Yellow
     Write-Host ""
     Write-Host "verify_frozen: OK (probe 1 only)" -ForegroundColor Green
+    Remove-Item Env:TRADINGLAB_NO_SPLASH -ErrorAction SilentlyContinue
+    Remove-Item Env:PYINSTALLER_SUPPRESS_SPLASH_SCREEN -ErrorAction SilentlyContinue
     return
 }
 
@@ -169,6 +172,7 @@ finally {
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $smokeRoot
     Remove-Item Env:TRADINGLAB_DATA_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:TRADINGLAB_NO_SPLASH -ErrorAction SilentlyContinue
+    Remove-Item Env:PYINSTALLER_SUPPRESS_SPLASH_SCREEN -ErrorAction SilentlyContinue
 }
 
 Write-Host ""

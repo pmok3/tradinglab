@@ -70,8 +70,13 @@ def _isolate_settings(monkeypatch):
 def _install_fake_pyi_splash() -> types.ModuleType:
     """Inject a fake ``pyi_splash`` module so PyiSplashController is constructible."""
     fake = types.ModuleType("pyi_splash")
+    fake.closed = False
     fake.update_text = lambda _txt: None
-    fake.close = lambda: None
+
+    def _close() -> None:
+        fake.closed = True
+
+    fake.close = _close
     sys.modules["pyi_splash"] = fake
     return fake
 
@@ -91,11 +96,12 @@ class TestSplashEnabledTunable:
 
 class TestMakeSplashSettingsGate:
     def test_settings_false_returns_null_even_when_pyi_available(self):
-        _install_fake_pyi_splash()
+        fake = _install_fake_pyi_splash()
         settings.set("splash_enabled", False)
         defaults.reload()
         ctl = make_splash()
         assert isinstance(ctl, NullSplashController)
+        assert fake.closed is True
 
     def test_settings_true_keeps_pyi_path(self):
         _install_fake_pyi_splash()

@@ -333,11 +333,10 @@ try {
         # settings. ``-NoNewWindow`` would inherit the parent's console
         # but doesn't apply to GUI subsystem exes anyway.
         #
-        # TRADINGLAB_NO_SPLASH=1 keeps the splash from briefly flashing
-        # during the --version smoke. The flag short-circuits before any
-        # Tk window is constructed, so the splash isn't strictly needed
-        # for --version anyway — but disabling it avoids one moving part
-        # in the smoke probe.
+        # The PyInstaller variable suppresses the bootloader window before
+        # Python starts; the TradingLab variable keeps the application-side
+        # controller disabled as defense in depth.
+        $env:PYINSTALLER_SUPPRESS_SPLASH_SCREEN = "1"
         $env:TRADINGLAB_NO_SPLASH = "1"
         try {
             $proc = Start-Process -FilePath $exePath -ArgumentList "--version" `
@@ -352,6 +351,7 @@ try {
             Write-Ok "smoke OK (exit 0)"
         } finally {
             Remove-Item Env:TRADINGLAB_NO_SPLASH -ErrorAction SilentlyContinue
+            Remove-Item Env:PYINSTALLER_SUPPRESS_SPLASH_SCREEN -ErrorAction SilentlyContinue
         }
     } else {
         Write-Host "  (smoke check skipped per -NoSmoke)" -ForegroundColor Yellow

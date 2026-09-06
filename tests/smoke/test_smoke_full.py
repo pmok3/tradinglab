@@ -8782,6 +8782,28 @@ def check_d49_indicator_render_integration(app) -> None:
           "(overlay+pane Line2D on canvas, scope filter, remove/clear)")
 
 
+def check_d96_toolbar_reflow(app) -> None:
+    """Toolbar controls stay reachable at the supported minimum window width."""
+    original_geometry = app.geometry()
+    try:
+        min_width, min_height = app.minsize()
+        app.geometry(f"{min_width}x{min_height}")
+        _pump(app, 0.3)
+        toolbar = app._toolbar
+        width = toolbar.frame.winfo_width()
+        height = toolbar.frame.winfo_height()
+        for group in toolbar._groups:
+            assert group.winfo_x() + group.winfo_width() <= width + 2, \
+                "Toolbar group extends beyond the right edge"
+            assert group.winfo_y() + group.winfo_height() <= height + 2, \
+                "Toolbar group extends beyond the bottom edge"
+            for control in group.winfo_children():
+                assert control.winfo_manager(), "Toolbar control lost its layout manager"
+    finally:
+        app.geometry(original_geometry)
+        _pump(app, 0.2)
+
+
 def check_d95_ichimoku_cloud(app) -> None:
     """Ichimoku reaches the live chart with projection, fill and toggles.
 
@@ -22952,6 +22974,10 @@ def check_bxx_splash_and_bundles(app) -> None:
 
     import tempfile as _tempfile
     from pathlib import Path as _Path
+
+    # --- Splash factory honours the disable env var ------------------
+    from types import SimpleNamespace
+    from unittest.mock import Mock
     from unittest.mock import patch as _patch
 
     from tradinglab._single_instance import single_instance_guard
@@ -22974,8 +23000,10 @@ def check_bxx_splash_and_bundles(app) -> None:
         compare_versions,
     )
 
-    # --- Splash factory honours the disable env var ------------------
-    splash = make_splash(force_disable=True)
+    bootloader_close = Mock()
+    with _patch.dict(sys.modules, {"pyi_splash": SimpleNamespace(close=bootloader_close)}):
+        splash = make_splash(force_disable=True)
+    bootloader_close.assert_called_once_with()
     assert isinstance(splash, NullSplashController), (
         f"force_disable=True must return Null backend, got {type(splash)!r}")
     splash.report(STAGE_SETTINGS)
@@ -24079,6 +24107,7 @@ def _run_all_checks(app) -> None:
     check_d48_indicator_dialog(app)
     check_d49_indicator_render_integration(app)
     check_d95_ichimoku_cloud(app)
+    check_d96_toolbar_reflow(app)
     check_d54_indicator_reorder(app)
     check_d50_indicators_menu_wiring(app)
     check_d55_indicator_preset_menu(app)
@@ -24429,6 +24458,7 @@ def _build_check_sequence():
          check_d49_indicator_render_integration),
         ("check_d95_ichimoku_cloud",
          check_d95_ichimoku_cloud),
+        ("check_d96_toolbar_reflow", check_d96_toolbar_reflow),
         ("check_d54_indicator_reorder", check_d54_indicator_reorder),
         ("check_d50_indicators_menu_wiring", check_d50_indicators_menu_wiring),
         ("check_d55_indicator_preset_menu", check_d55_indicator_preset_menu),

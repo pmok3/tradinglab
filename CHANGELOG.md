@@ -13,6 +13,15 @@ you would actually want them: an offline replay session, and the exporter.
 
 ### Added
 
+- **A screenshot-driven UX explorer can now inspect the frozen app like a
+  user.** A project-scoped, Windows-native Copilot extension launches an
+  isolated `TradingLab.exe`, sees only its owned windows, and drives them
+  through mouse, keyboard, scrolling and resizing. A stochastic campaign
+  catalog targets 51 user surfaces across 24 open-ended missions and records
+  action traces, screenshots and reproducible findings under `_ux_explorer/`.
+  It deliberately never imports application internals or substitutes backend
+  assertions for visible behavior. Reports distinguish actual visited surfaces
+  from unvisited or blocked missions; this is not a claim of exhaustive coverage.
 - **A sandbox session advances every symbol you are watching.** The replay
   clock now feeds the pinned watchlists and the prepared "Download Replay
   Data…" universe, loading their tapes from the disk cache at session start
@@ -37,6 +46,15 @@ you would actually want them: an offline replay session, and the exporter.
 
 ### Fixed
 
+- **The full toolbar stays reachable at the supported minimum window size.**
+  Its symbol, axis and action controls now reflow as measured groups instead
+  of letting Settings and Watchlists disappear beyond the right edge on a
+  1200-wide high-DPI window.
+- **Disabling the frozen splash no longer leaves an orphan splash window.**
+  The PyInstaller bootloader creates that window before TradingLab can read
+  its env, command-line or saved-setting gates, so those disabled paths now
+  explicitly close the already-created overlay. Build verification also uses
+  PyInstaller's pre-Python suppression variable.
 - **Watchlist values were blank for the whole of a sandbox session.** The
   session pins its own data vendor, which on a default install differs from
   the toolbar's — the shipped default source is "Auto", and a session

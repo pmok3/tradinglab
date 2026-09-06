@@ -166,6 +166,22 @@ class TestPyiSplashControllerWithFake:
         ctl = make_splash()
         assert isinstance(ctl, PyiSplashController)
 
+    def test_force_disable_closes_bootloader_window(self, monkeypatch):
+        monkeypatch.delenv(ENV_DISABLE, raising=False)
+        monkeypatch.setattr(sys, "argv", ["TradingLab.exe"])
+        fake = self._install_fake(monkeypatch)
+        ctl = make_splash(force_disable=True)
+        assert isinstance(ctl, NullSplashController)
+        assert fake.closed is True
+
+    def test_cli_disable_closes_bootloader_window(self, monkeypatch):
+        monkeypatch.delenv(ENV_DISABLE, raising=False)
+        monkeypatch.setattr(sys, "argv", ["TradingLab.exe", CLI_DISABLE])
+        fake = self._install_fake(monkeypatch)
+        ctl = make_splash()
+        assert isinstance(ctl, NullSplashController)
+        assert fake.closed is True
+
     def test_make_splash_falls_back_on_construction_failure(self, monkeypatch):
         """If PyiSplashController() raises, we degrade to Null."""
         monkeypatch.delenv(ENV_DISABLE, raising=False)

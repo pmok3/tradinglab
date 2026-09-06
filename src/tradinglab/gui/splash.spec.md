@@ -39,11 +39,12 @@ CLI_DISABLE = "--no-splash"
 
 In order, first hit wins:
 
-1. `force_disable=True` (kwarg) → `NullSplashController`.
-2. `TRADINGLAB_NO_SPLASH=1` → null.
-3. `--no-splash` in `sys.argv` → null.
+1. `force_disable=True` (kwarg) → close any bootloader-created splash, then
+   `NullSplashController`.
+2. `TRADINGLAB_NO_SPLASH=1` → close any bootloader-created splash, then null.
+3. `--no-splash` in `sys.argv` → close any bootloader-created splash, then null.
 4. `splash_enabled = False` in `defaults.py` / `settings.json`
-   → null. (User-facing toggle in Settings; env / CLI
+   → close any bootloader-created splash, then null. (User-facing toggle in Settings; env / CLI
    short-circuit BEFORE this so frozen-build verify keeps a
    single off-switch.)
 5. `pyi_splash` not importable (dev mode / no `Splash(...)` block
@@ -61,6 +62,10 @@ end users never get a permanent black screen on corrupt settings.
 - `PyiSplashController.report` wrapped in try/except. Splash is
   decorative; never a hard dependency. Failures swallowed.
 - `.close()` is idempotent.
+- Disabled paths explicitly close `pyi_splash` before returning the null
+  controller. The bootloader creates its window before Python can read
+  TradingLab's env/CLI/settings gates; omitting this cleanup leaves a visible
+  orphan splash behind the main window.
 - Stage labels (`STAGE_*` constants) are canonical strings;
   hand-typing forbidden (unit tests grep `app.py` for `STAGE_*`).
 

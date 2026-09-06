@@ -1235,10 +1235,10 @@ class ChartApp(
 
         Only runs when there is no saved window geometry from a prior
         session (``_has_stored_main_geometry`` is False), so a user's
-        deliberately-resized window is never overridden. The toolbar is a
-        single non-wrapping horizontal row of controls; if the window is
-        narrower than the toolbar's requested width, the rightmost controls
-        clip off-screen. We grow the window width (clamped to the screen)
+        deliberately-resized window is never overridden. The toolbar also
+        reflows its semantic groups at narrower widths; this first-run helper
+        gives it more horizontal room when available.
+        We grow the window width (clamped to the screen)
         to at least the toolbar's required width and re-center horizontally,
         preserving the height and vertical position.
         """

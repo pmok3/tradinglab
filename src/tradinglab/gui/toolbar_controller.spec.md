@@ -13,7 +13,8 @@ Move the top toolbar widget construction out of `app.py` while keeping the exist
   - `on_open_watchlists()`
   - `on_theme_toggle()`
 - `ToolbarController(parent, state, *, callbacks, intervals, sources)`
-  - Builds the packed toolbar widgets.
+  - Builds the toolbar as three semantic groups (symbol/compare, source/axis,
+    and actions) and reflows those groups when the available width changes.
   - Exposes `frame` for the host to pack.
   - Exposes compatibility widget handles used elsewhere (`ticker_label`, `compare_label`, `compare_check`, `source_combo`, `interval_combo`, `prepost_check`, `prepost_tooltip`). The **`ticker_label` / `compare_label`** read-only displays are `width=14` so a ratio symbol like `AMD/NVDA` fits without truncation. **`compare_check` is a toggle `ttk.Button`** (not a `ttk.Checkbutton`) — see Design.
   - `sources` is the user-visible source list (callers MUST pass `data.user_visible_sources()`, NOT `data.DATA_SOURCES.keys()`, so internal-only sources like `synthetic` / `synthetic-stream` are filtered out of the combobox — see `data/base.spec.md`). The combobox shows the raw source keys verbatim (no display-name layer); built-ins appear in registration order (`yfinance`, `Auto`, then credential-gated vendors such as `alpaca` and `yfinance+alpaca`).
@@ -23,9 +24,16 @@ Move the top toolbar widget construction out of `app.py` while keeping the exist
   BYOD source registration changes.
 - `interval_saved_values` — read-only snapshot of the interval values
   saved by the sandbox lock, or `None` when unlocked.
+- `layout_mode` — `wide`, `actions-row`, `symbol-row`, or `stacked`.
 
 ## Design
 - Reads all mutable UI state from `AppState`; the controller does not own business logic.
+- The toolbar is fit-responsive. It keeps all three groups on one row when
+  their measured requested widths fit, moves one group to a second row at
+  intermediate widths, and stacks all three only when neither two-group
+  combination fits. This preserves every control at the main window's
+  supported minimum size instead of clipping the right edge. Classification
+  is based on runtime widget metrics, not a hard-coded pixel breakpoint.
 - Label text is mirrored from Tk variables via traces so smoke tests that inspect `widget.cget("text")` still see live values.
 - **Compare on/off is a fixed-width toggle button, not a checkbox** (audit `compare-toggle-button`). Layout is `Compare:` label → `compare_check` button → `compare_label` (the compare-ticker display). `compare_check` is a `ttk.Button` (`width=5`, themed `TButton` — `Toolbutton` is intentionally avoided because it isn't in `build_ttk_style_spec` and would render unthemed in dark mode) whose text is just the state `On` / `Off` (the `Compare:` prefix is the static label to its left). Its `command` (`_on_compare_button`) flips the `compare` BooleanVar (still the source of truth read by `_render` / `_on_compare_toggle` / topology key everywhere) and then calls `on_compare_toggle` — mirroring a checkbox's flip-then-command order. A trace (`_bind_compare_button`) keeps the `On`/`Off` text in sync whether toggled by the button or set programmatically (failed-compare revert, sandbox replay). The attribute name `compare_check` is retained for back-compat even though the widget is now a button.
 - The sandbox interval lock preserves the pre-sandbox combobox values and restores them on unlock.

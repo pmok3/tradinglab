@@ -180,6 +180,20 @@ def _disabled_by_settings() -> bool:
         return False
 
 
+def _close_bootloader_splash_if_present() -> None:
+    """Close an already-created PyInstaller splash before returning null.
+
+    The bootloader creates its window before Python can inspect our env,
+    command-line, or persisted-setting gates. Returning a null controller
+    without closing that existing window leaves it alive behind the main app.
+    """
+    try:
+        import pyi_splash  # type: ignore[import-not-found]
+        pyi_splash.close()
+    except Exception:  # noqa: BLE001 - splash cleanup is best-effort
+        pass
+
+
 def make_splash(*, force_disable: bool = False) -> SplashController:
     """Return the best splash backend for the current runtime.
 
@@ -197,14 +211,17 @@ def make_splash(*, force_disable: bool = False) -> SplashController:
     Never raises. A broken construction falls back to null.
     """
     if force_disable or _disabled_by_env_or_argv():
+        _close_bootloader_splash_if_present()
         return NullSplashController()
     if _disabled_by_settings():
+        _close_bootloader_splash_if_present()
         return NullSplashController()
     if not pyi_splash_available():
         return NullSplashController()
     try:
         return PyiSplashController()
     except Exception:  # noqa: BLE001
+        _close_bootloader_splash_if_present()
         return NullSplashController()
 
 
