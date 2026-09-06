@@ -8783,7 +8783,17 @@ def check_d49_indicator_render_integration(app) -> None:
 
 
 def check_d95_ichimoku_cloud(app) -> None:
-    """Ichimoku reaches the live chart with projection, fill and toggles."""
+    """Ichimoku reaches the live chart with projection, fill and toggles.
+
+    macOS skip per §7.1: ``IndicatorDialog`` calls ``transient()``, which
+    deadlocks the headless ``macos-15-arm64`` runner. The chart/render path
+    and dialog controls are unit-tested on every platform; this smoke wiring
+    remains covered on Linux and Windows.
+    """
+    if sys.platform == "darwin":
+        print("  [SKIP] d95: macOS Tk dialog deadlock (transient + headless)")
+        return
+
     import math
     from datetime import timedelta
 
