@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, ClassVar
 
+from ..core.ids import new_id_hex
 from ..core.timezones import utc_now_iso
 
 __all__ = [
@@ -102,6 +103,10 @@ class DatePreset(str, Enum):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _new_id() -> str:
+    return new_id_hex()
 
 
 def _utcnow_iso() -> str:
