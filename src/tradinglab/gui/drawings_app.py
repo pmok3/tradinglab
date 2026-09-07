@@ -659,7 +659,7 @@ class DrawingsAppMixin:
                 offset = int(ps.get("offset", 0))
                 idx = int(round(float(event.xdata) - offset))
                 if 0 <= idx < len(candles):
-                    ts = format_dt(candles[idx].date)
+                    ts = format_dt(candles[idx].date, "%Y-%m-%d %H:%M")
                 else:
                     ts = "?"
                 price_str = f"{float(event.ydata):.2f} @ {ts}"

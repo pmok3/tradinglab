@@ -86,6 +86,13 @@ horizontal-line drawing concern:
   for ~100× fewer artist rebuilds vs the full `_render`.
 - **Session-sticky color** lives on `_last_drawing_color` so a
   user drawing five red lines in a row never re-picks red.
+- **Copy Price + Time** translates the chart's global x coordinate by the
+  rendered slice's `offset` before looking up the candle. The clipboard
+  value is `<price to 2 decimals> @ YYYY-MM-DD HH:MM` in the candle's
+  timestamp timezone; an out-of-slice index uses `?` for the time.
+  The call supplies `format_dt`'s required format argument. Pinned by
+  `tests/unit/gui/test_drawings_app_behavior.py` and smoke d80's actual
+  menu-command invocation.
 
 ## Invariants
 

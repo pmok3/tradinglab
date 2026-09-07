@@ -7439,6 +7439,23 @@ def check_d38_drilldown_race_and_coverage(app) -> None:
         else:
             pre_hist = len(app._status.history())
             app._zoom_5m_for_date(target)
+            _pump_until(
+                app,
+                lambda: app._drilldown_request is None
+                or app._drilldown_request.future is not None,
+                timeout=2.0,
+            )
+            pending = app._drilldown_request
+            if pending is not None and pending.future is not None and not pending.future.done():
+                fetch_id = pending.request_id
+                for offset in (3, 4):
+                    target = (datetime(2026, 4, 29) - timedelta(days=offset)).date()
+                    app._zoom_5m_for_date(target)
+                    assert app._drilldown_request is pending
+                    assert pending.request_id == fetch_id, \
+                        "in-flight retarget must keep timeout/completion callbacks valid"
+            else:
+                print("[SKIP D retarget] fetch already settled before in-flight retarget")
             # Wait for the UI deadline ERROR (or the request being
             # cleared if the fetch completed unexpectedly fast inside
             # the deadline window). 4s timeout absorbs worker-pickup
@@ -7468,11 +7485,15 @@ def check_d38_drilldown_race_and_coverage(app) -> None:
             else:
                 assert app._drilldown_request is not None, \
                     "request should remain pending past UI deadline"
+                assert not app._drilldown_request.cursor_set
+                assert str(app.cget("cursor")) in ("", "arrow")
                 # Release worker so fetch returns; drill should land.
                 state["delay_5m"] = 0.0
                 _pump_until(app, lambda: app._drilldown_request is None, timeout=3.0)
                 assert app._drilldown_request is None, \
                     "request should be cleared after late fetch completes"
+                assert app._drilldown_day == target, \
+                    "late fetch must land on the latest in-flight retarget"
 
         # ---- Sub-test E: ticker change mid-fetch invalidates request ----
         drain_prefetches()
@@ -23110,6 +23131,37 @@ def check_d80_horizontal_lines(app) -> None:
     finally:
         _tk.Menu.tk_popup = _orig_tk_popup_a  # type: ignore[assignment]
     print("  [OK] context-menu helpers swallow non-event invocations")
+
+    # Invoke the real Tk menu entry without replacing the desktop clipboard.
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    ps = app._panel_state.get("primary") or {}
+    candles = ps.get("candles") or []
+    assert candles, "Copy Price + Time needs a rendered candle (not a no-op path)"
+    event = SimpleNamespace(xdata=ps.get("offset", 0), ydata=123.456)
+    menus = []
+    try:
+        with (
+            patch.object(_tk.Menu, "tk_popup", lambda menu, *a: menus.append(menu)),
+            patch.object(app, "clipboard_clear") as clear_clipboard,
+            patch.object(app, "clipboard_append") as append_clipboard,
+            patch.object(app, "update"),
+        ):
+            app._show_chart_canvas_menu("primary", event, 100, 100)
+            menu, = menus
+            index = next(
+                i for i in range(menu.index("end") + 1)
+                if menu.type(i) == "command" and menu.entrycget(i, "label") == "Copy Price + Time"
+            )
+            menu.invoke(index)
+            clear_clipboard.assert_called_once()
+            append_clipboard.assert_called_once_with(
+                f"123.46 @ {candles[0].date.strftime('%Y-%m-%d %H:%M')}")
+    finally:
+        for menu in menus:
+            menu.destroy()
+    print("  [OK] Copy Price + Time menu command formats the rendered candle timestamp")
 
     # --- Regression for C1 (adversarial reviewer 2026-05): both
     # ``_open_drawing_dialog`` and ``_show_drawing_context_menu`` call

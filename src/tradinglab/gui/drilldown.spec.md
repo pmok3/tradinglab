@@ -52,6 +52,15 @@ short-circuits, but a same-context async-load completion no longer
 discards the user's drill intent. See d38 sub-test C (latest-click-wins,
 retarget pending day).
 
+Retargeting during the prefetch grace period advances `request_id` and
+replaces the grace timer, invalidating an already-queued old timer. Once a
+fetch future is attached, retargeting changes only `day`: the request ID
+must stay stable because both its UI timeout and completion callback
+captured that ID. Repeated in-flight clicks therefore preserve cursor
+cleanup and land on the latest requested day, including after the UI
+timeout. A genuinely superseded request still cannot finish a newer one.
+Pinned by `tests/unit/gui/test_drilldown_lifecycle.py` and smoke d38.
+
 ## Coverage check & the intraday fetch window
 
 When the 5m cache is present but the clicked day isn't in it

@@ -222,11 +222,11 @@ class DrilldownMixin:
             # completion handler will pick up the new day. Otherwise
             # cancel and reschedule the grace timer from "now".
             old_day = existing.day
-            self._drilldown_request_seq += 1
-            existing.request_id = self._drilldown_request_seq
             existing.day = day
             if existing.future is None:
                 # Still waiting on the grace timer — reset its deadline.
+                self._drilldown_request_seq += 1
+                existing.request_id = self._drilldown_request_seq
                 if existing.timer_job is not None:
                     try:
                         self.after_cancel(existing.timer_job)
