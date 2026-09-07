@@ -79,4 +79,6 @@ src/tradinglab/_build_info.py
 # GUI-test scratch dirs (screenshot probes + fetched-data caches)
 _guitest/
 _guitest_probe_cache/
+
+# Archived evidence from the retired GUI explorer (not runnable tooling).
 _ux_explorer/

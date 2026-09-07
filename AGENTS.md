@@ -230,24 +230,6 @@ tradinglab --version
 & '...\Python312-arm64\python.exe' -m ruff check src tests
 ```
 
-### Exploratory frozen-GUI campaigns
-```powershell
-# Validate the surface catalog, then create a randomized campaign.
-& '...\Python312-arm64\python.exe' -m tools.ux_explorer validate
-& '...\Python312-arm64\python.exe' -m tools.ux_explorer init --limit 5
-```
-
-The project extension in `.github/extensions/tradinglab-ux-explorer/` drives
-only windows owned by a verified frozen `TradingLab.exe`, one desktop run at a
-time. It uses an isolated data root and records screenshots/traces/findings
-under gitignored `_ux_explorer/`. Explorers must use visible GUI behavior only;
-never replace a campaign with direct application-state or backend inspection.
-Foreground mode needs an unlocked, exclusively available desktop and verifies
-window ownership before input; message mode is explicitly limited and must not
-be reported as full interaction coverage. Campaign reports count only recorded
-visited surfaces, not all surfaces assigned to a mission.
-Full workflow and safety contract: `tools/ux_explorer/README.md`.
-
 ### Tests
 ```powershell
 # Full suite (~93s for unit, +~140s smoke)
@@ -974,7 +956,6 @@ These files are **never** committed to git. Use them for working memory.
 | Scanner | `src/tradinglab/scanner/` (`fields.py`, `tab.py`) |
 | Synthetic test events | `src/tradinglab/events/synthetic_events.py` |
 | Helpers used by smoke | `tests/smoke/_helpers.py` |
-| Screenshot-driven frozen GUI exploration | `.github/extensions/tradinglab-ux-explorer/` + `tools/ux_explorer/` |
 | Synthetic market generator (opt-in) | `tests/_fixtures/market_sim.py`; see §7.35 |
 | Committed real-market snapshot | `tests/_fixtures/market_data/` (5m, 5 days, 6 tickers) |
 | Causality / metamorphic oracles | `tests/oracles/`; marker `oracle`; see §7.35 |
