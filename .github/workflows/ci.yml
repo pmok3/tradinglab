@@ -104,24 +104,53 @@ jobs:
     # Informational coverage report — NOT a gate. Runs the deterministic,
     # offline unit + scanner suites on Windows/3.12 (the same platform the
     # release unit-gates on, so the pixel-calibrated GUI-geometry tests
-    # read true), prints a term-missing summary, and uploads coverage.xml
-    # as an artifact. ``continue-on-error`` keeps it purely informational:
+    # read true), prints a term-missing summary, and uploads coverage.xml.
+    # Main runs also retain separate statement/branch counts for 90 days and
+    # compare only trustworthy, compatible ancestor runs in the step summary.
+    # ``continue-on-error`` keeps it purely informational:
     # the ``unit`` job stays the real gate, and there is intentionally no
     # ``--cov-fail-under`` threshold (see pyproject ``[tool.coverage]``).
     runs-on: windows-latest
     timeout-minutes: 30
     continue-on-error: true
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      # A downstream rerun must use the producer's attempt, not its own.
+      summary_artifact: ${{ steps.coverage_artifact.outputs.summary_artifact }}
     env:
       MPLBACKEND: Agg
       PYTHONIOENCODING: utf-8
     steps:
       - uses: actions/checkout@v6
+        with:
+          # Baseline ancestry and source-tree checks must not use shallow history.
+          fetch-depth: 0
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - run: pip install -e .[dev]
+      - name: Name coverage summary artifact
+        id: coverage_artifact
+        run: '"summary_artifact=coverage-summary-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT" >> $env:GITHUB_OUTPUT'
       - name: Run tests with coverage
-        run: pytest tests/unit tests/scanner tests/core tests/data tests/entries tests/exits tests/positions tests/streaming tests/oracles --cov=tradinglab --cov-report=xml --cov-report=term-missing:skip-covered -q
+        id: coverage_measurement
+        run: python tools/report_coverage_trend.py measure -- pytest tests/unit tests/scanner tests/core tests/data tests/entries tests/exits tests/positions tests/streaming tests/oracles --cov=tradinglab --cov-report=xml --cov-report=term-missing:skip-covered -q
+      - name: Report main coverage trend (informational)
+        if: always() && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && steps.coverage_measurement.outcome != 'skipped'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python tools/report_coverage_trend.py report
+      - name: Persist coverage measurement (90-day history)
+        # PR artifacts carry provenance for same-run consumers, but are never baselines.
+        if: always() && steps.coverage_artifact.outputs.summary_artifact != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.coverage_artifact.outputs.summary_artifact }}
+          path: coverage-summary.json
+          retention-days: 90
+          if-no-files-found: warn
       - name: Upload coverage.xml artifact
         if: always()
         uses: actions/upload-artifact@v7
@@ -129,6 +158,8 @@ jobs:
           name: coverage-xml
           path: coverage.xml
           if-no-files-found: warn
+          # Rerunning this producer replaces the previous attempt's raw XML.
+          overwrite: true
 
   gui-coverage:
     name: GUI-only coverage (informational)
