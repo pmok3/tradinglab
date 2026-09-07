@@ -8,6 +8,7 @@ import json
 import re
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -199,6 +200,59 @@ def test_xml_paths_are_canonical(name, expected):
 def test_unsafe_paths_are_not_accepted(name):
     with pytest.raises(trend.TrendError):
         trend.file_name(name)
+
+
+@pytest.mark.parametrize("producer, source, filename", [
+    ("/checkout", "/checkout", "src/tradinglab/a.py"),
+    ("/checkout", ".", "src/tradinglab/a.py"),
+    ("/checkout", "", "src/tradinglab/a.py"),
+    ("/checkout", "src", "tradinglab/a.py"),
+    ("/checkout", "src/tradinglab", "a.py"),
+    ("/checkout", "/checkout/src/tradinglab", "a.py"),
+    ("/checkout", "/checkout/src/tradinglab", "/checkout/src/tradinglab/a.py"),
+    (r"C:\checkout", r"c:\CHECKOUT\src\tradinglab", "a.py"),
+    (r"C:\checkout", r"C:\checkout", r"src\tradinglab\a.py"),
+    (r"C:\checkout", r"C:\checkout\src", r"tradinglab\a.py"),
+    (r"C:\checkout", r"C:\checkout\src\tradinglab", r"C:\CHECKOUT\src\tradinglab\a.py"),
+    ("//server/share/checkout", "//SERVER/SHARE/CHECKOUT/src/tradinglab", "a.py"),
+    ("/", "/src/tradinglab", "a.py"),
+    ("C:/", "C:/src/tradinglab", "a.py"),
+])
+def test_shared_mapper_supports_explicit_coverage_layouts(producer, source, filename):
+    paths = trend.XmlPaths(producer, [source], {"src/tradinglab/a.py"})
+    assert paths.resolve(filename) == "src/tradinglab/a.py"
+
+
+@pytest.mark.parametrize("producer, source", [
+    ("/checkout", "/different-checkout/src/tradinglab"),
+    ("C:/checkout", "C:/different-checkout/src/tradinglab"),
+    ("C:/checkout", "D:/checkout/src/tradinglab"),
+    ("//server/share/checkout", "//server/other/checkout/src/tradinglab"),
+    ("/checkout", "/checkout-other/src/tradinglab"),
+    ("/checkout", "elsewhere"),
+    ("/checkout", "../src/tradinglab"),
+])
+def test_shared_mapper_rejects_foreign_source_even_with_identical_known_filename(producer, source):
+    with pytest.raises(trend.TrendError):
+        trend.XmlPaths(producer, [source], {"src/tradinglab/a.py"})
+
+
+def test_shared_mapper_rejects_absent_roots_and_unmapped_or_ambiguous_paths():
+    files = {"src/tradinglab/a.py", "src/tradinglab/data/a.py"}
+    with pytest.raises(trend.TrendError, match="source roots"):
+        trend.XmlPaths("/checkout", [], files)
+    paths = trend.XmlPaths("/checkout", ["src/tradinglab", "src/tradinglab/data"], files)
+    with pytest.raises(trend.TrendError, match="ambiguous"):
+        paths.resolve("a.py")
+    paths = trend.XmlPaths("/checkout", ["src/tradinglab/data"], {"src/tradinglab/a.py"})
+    with pytest.raises(trend.TrendError, match="unmapped"):
+        paths.resolve("a.py")
+    with pytest.raises(trend.TrendError, match="outside producer"):
+        paths.resolve("/other/src/tradinglab/a.py")
+    with pytest.raises(trend.TrendError, match="case-colliding"):
+        trend.XmlPaths("C:/checkout", ["src/tradinglab"], {
+            "src/tradinglab/A.py", "src/tradinglab/a.py",
+        })
 
 
 def test_round_trip_json_is_deterministic():
@@ -492,8 +546,54 @@ def measurement_environment(tmp_path, monkeypatch):
     monkeypatch.setattr(trend, "identity", lambda: metadata)
     monkeypatch.setattr(trend, "scope", lambda command: current["scope"])
     monkeypatch.setattr(trend, "require_clean", lambda: None)
+    monkeypatch.setattr(trend, "tracked_source_files", lambda: set(current["files"]))
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    for name in current["files"]:
+        target = tmp_path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("print('fixture')\nprint('fixture')\n", encoding="utf-8")
     return tmp_path, current
+
+
+def local_xml(root):
+    tree = ET.fromstring(XML)
+    tree.find("./sources/source").text = str(root / "src" / "tradinglab")
+    return ET.tostring(tree)
+
+
+def test_measured_xml_uses_nested_root_binding_for_count_keys(measurement_environment):
+    root, _ = measurement_environment
+    tree = ET.fromstring(local_xml(root))
+    tree.find("./sources/source").text = str(root / "src" / "tradinglab" / "data")
+    classes = tree.find("./packages/package/classes")
+    classes.remove(classes[0])
+    classes[0].set("filename", "b.py")
+    tree.set("lines-covered", "2")
+    tree.set("lines-valid", "2")
+    tree.set("branches-covered", "1")
+    tree.set("branches-valid", "2")
+    overall, files = trend.parse_measured_xml(ET.tostring(tree))
+    assert set(files) == {"src/tradinglab/data/b.py"}
+    assert overall == {
+        "statements": {"covered": 2, "total": 2}, "branches": {"covered": 1, "total": 2},
+    }
+
+
+@pytest.mark.parametrize("redirect_source", [False, True])
+def test_measured_xml_rejects_physical_redirects(measurement_environment, monkeypatch, redirect_source):
+    root, _ = measurement_environment
+    source = root / "src" / "tradinglab"
+    redirected = source if redirect_source else source / "a.py"
+    original_resolve = Path.resolve
+
+    def resolve(path, *args, **kwargs):
+        if path == redirected:
+            return root.parent / "different-checkout" / redirected.name
+        return original_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", resolve)
+    with pytest.raises(trend.TrendError, match="outside|redirected"):
+        trend.parse_measured_xml(local_xml(root))
 
 
 @pytest.mark.parametrize("exit_code", [0, 1, 5])
@@ -508,17 +608,40 @@ def test_measure_clears_stale_outputs_and_preserves_test_outcome(measurement_env
             "coverage.xml", trend.SUMMARY_NAME, ".coverage", ".coverage.parallel",
         ))
         assert kwargs["env"]["COVERAGE_FILE"] == str(root / ".coverage")
-        (root / "coverage.xml").write_bytes(XML)
+        (root / "coverage.xml").write_bytes(local_xml(root))
         return SimpleNamespace(returncode=exit_code)
 
     monkeypatch.setattr(trend.subprocess, "run", run)
     assert trend.main(["measure", "--", "pytest", "tests/unit"]) == exit_code
     result = trend.load_summary((root / trend.SUMMARY_NAME).read_bytes())
     assert result["test_exit_code"] == exit_code
-    assert result["xml_sha256"] == trend.digest(XML)
+    assert result["xml_sha256"] == trend.digest(local_xml(root))
     assert result["provenance"]["producer_root"] == str(root)
     assert result["provenance"]["clean_start"] is True
     assert result["provenance"]["clean_end"] is True
+
+
+def test_measure_cannot_stamp_foreign_source_with_matching_files_and_counts(
+    measurement_environment, monkeypatch, capsys,
+):
+    root, current = measurement_environment
+    foreign_root = root.parent / (root.name + "-different-checkout")
+    for name in current["files"]:
+        foreign = foreign_root / name
+        foreign.parent.mkdir(parents=True, exist_ok=True)
+        foreign.write_bytes((root / name).read_bytes())
+        assert foreign.read_bytes() == (root / name).read_bytes()
+    foreign_xml = local_xml(foreign_root)
+    assert trend.parse_xml(foreign_xml) == (current["overall"], current["files"])
+
+    def run(command, **kwargs):
+        (root / "coverage.xml").write_bytes(foreign_xml)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(trend.subprocess, "run", run)
+    assert trend.main(["measure", "--", "pytest"]) == 2
+    assert not (root / trend.SUMMARY_NAME).exists()
+    assert "outside producer checkout" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("option", ["--cov-append", "--cov-config=elsewhere.ini"])
@@ -575,7 +698,8 @@ def test_clean_guard_includes_untracked_sources_tests_and_config(monkeypatch):
     assert {"src/tradinglab", "tests", "pyproject.toml", ".coveragerc"} <= set(calls[0])
 
 
-def test_real_pytest_producer_in_temporary_clean_repository(tmp_path, monkeypatch):
+@pytest.mark.parametrize("wrong_checkout", [False, True])
+def test_real_pytest_producer_in_temporary_clean_repository(tmp_path, monkeypatch, capsys, wrong_checkout):
     """Exercise actual pytest-cov XML/raw output and Git provenance, without Actions."""
     monkeypatch.chdir(tmp_path)
     source = tmp_path / "src" / "tradinglab"
@@ -600,6 +724,14 @@ def test_real_pytest_producer_in_temporary_clean_repository(tmp_path, monkeypatc
     trend.git("-c", "user.name=Coverage fixture", "-c", "user.email=fixture@example.invalid",
               "-c", "commit.gpgsign=false", "commit", "-m", "fixture")
     head = trend.git("rev-parse", "HEAD")
+    imported_source = tmp_path / "src"
+    if wrong_checkout:
+        imported_source = tmp_path.parent / (tmp_path.name + "-different-checkout") / "src"
+        foreign = imported_source / "tradinglab"
+        foreign.mkdir(parents=True)
+        for name in ("__init__.py", "sample.py"):
+            (foreign / name).write_bytes((source / name).read_bytes())
+            assert (foreign / name).read_bytes() == (source / name).read_bytes()
     for name, value in {
         "GITHUB_REPOSITORY": "pmok3/tradinglab",
         "GITHUB_RUN_ID": "10",
@@ -608,16 +740,28 @@ def test_real_pytest_producer_in_temporary_clean_repository(tmp_path, monkeypatc
         "GITHUB_REF": trend.MAIN_REF,
         "GITHUB_EVENT_NAME": "push",
         "GITHUB_WORKFLOW_REF": f"pmok3/tradinglab/{trend.WORKFLOW}@{trend.MAIN_REF}",
-        "PYTHONPATH": str(tmp_path / "src"),
+        "PYTHONPATH": str(imported_source),
     }.items():
         monkeypatch.setenv(name, value)
     monkeypatch.delenv("PYTEST_ADDOPTS", raising=False)
     command = [sys.executable, "-m", "pytest", "tests", "--cov=tradinglab", "--cov-report=xml", "-q"]
-    assert trend.measure(command, tmp_path / "coverage.xml", tmp_path / trend.SUMMARY_NAME) == 0
+    result = trend.main(["measure", "--", *command])
+    if wrong_checkout:
+        assert result == 2
+        assert not (tmp_path / trend.SUMMARY_NAME).exists()
+        assert "outside producer checkout" in capsys.readouterr().out
+        # Identical files/counts elsewhere still cannot establish this checkout's provenance.
+        xml = ET.fromstring((tmp_path / "coverage.xml").read_bytes())
+        assert tuple(int(xml.get(key)) for key in (
+            "lines-covered", "lines-valid", "branches-covered", "branches-valid",
+        )) == (3, 4, 1, 2)
+        return
+    assert result == 0
     value = trend.load_summary((tmp_path / trend.SUMMARY_NAME).read_bytes())
     assert value["commit"] == head
     assert value["source_tree"] == trend.git("rev-parse", "HEAD:src/tradinglab")
     assert value["scope"]["definition"]["config_sha256"] == trend.digest(config)
+    assert value["scope"]["definition"]["xml_path_policy"] == "checkout-tracked-v1"
     assert value["overall"]["statements"] == {"covered": 3, "total": 4}
     assert value["overall"]["branches"] == {"covered": 1, "total": 2}
     assert value["xml_sha256"] == trend.digest((tmp_path / "coverage.xml").read_bytes())
@@ -626,7 +770,9 @@ def test_real_pytest_producer_in_temporary_clean_repository(tmp_path, monkeypatc
 
 
 def prepare_report(root, current):
-    (root / "coverage.xml").write_bytes(XML)
+    data = local_xml(root)
+    current["xml_sha256"] = trend.digest(data)
+    (root / "coverage.xml").write_bytes(data)
     (root / trend.SUMMARY_NAME).write_bytes(trend.canonical(current))
 
 

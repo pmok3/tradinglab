@@ -12,6 +12,8 @@ commit/source-tree/XML hashes, run identity, test outcome, and a canonical scope
 digest. Scope includes exact argv, the entire pyproject.toml hash, Python minor,
 OS/architecture, test/coverage versions and relevant environment overrides.
 Even an unrelated pyproject edit deliberately resets comparison compatibility.
+XML source roots and filenames must bind uniquely to tracked files in the
+measured checkout; an editable install pointing elsewhere cannot claim its SHA.
 
 History is NOT permanent: artifacts have 90-day retention (subject to repository
 limits/deletion); lookup examines at most the latest 100 completed workflow runs.
@@ -35,6 +37,7 @@ import sys
 import xml.etree.ElementTree as ET
 import zipfile
 from collections import Counter
+from collections.abc import Iterable
 from fractions import Fraction
 from importlib.metadata import version
 from pathlib import Path, PurePosixPath
@@ -49,6 +52,7 @@ MAX_XML_BYTES = 32 * 1024 * 1024
 MAX_RUNS = 100
 MAX_FILES = 10
 SUMMARY_NAME = "coverage-summary.json"
+SOURCE_ROOT = "src/tradinglab"
 SHA = re.compile(r"[0-9a-f]{40}")
 
 
@@ -86,7 +90,9 @@ def git_blob(name: str) -> bytes:
 
 
 def git(*args: str) -> str:
-    result = subprocess.run(["git", *args], capture_output=True, text=True, check=False, timeout=30)
+    result = subprocess.run(
+        ["git", *args], capture_output=True, text=True, encoding="utf-8", check=False, timeout=30,
+    )
     require(result.returncode == 0, f"git {' '.join(args)} failed: {result.stderr.strip()}")
     return result.stdout.strip()
 
@@ -119,6 +125,80 @@ def file_name(raw: str) -> str:
     return f"src/tradinglab/{name}"
 
 
+def _lexical(raw: str) -> str:
+    require(isinstance(raw, str), "Path must be a string")
+    require(not any(ord(char) < 32 or ord(char) == 127 for char in raw), f"Control character in path: {raw!r}")
+    name = raw.replace("\\", "/")
+    require(".." not in name.split("/"), f"Path traversal is not allowed: {raw!r}")
+    require(not re.match(r"^[A-Za-z]:(?!/)", name), f"Drive-relative path is not allowed: {raw!r}")
+    normalized = PurePosixPath(name).as_posix()
+    return normalized + "/" if re.fullmatch(r"[A-Za-z]:", normalized) else normalized
+
+
+def _absolute(name: str) -> bool:
+    return name.startswith("/") or bool(re.match(r"^[A-Za-z]:/", name))
+
+
+class XmlPaths:
+    """Bind XML paths to declared sources and known Git files, on either OS.
+
+    ``files`` supplies canonical repository-relative source paths (a dict's keys
+    are sufficient). Relative filenames use only declared XML roots, never an
+    inferred basename, package prefix or suffix match.
+    """
+
+    def __init__(self, producer_root: str, sources: list[str], files: Iterable[str]):
+        self.root = _lexical(producer_root)
+        if self.root != "/" and not re.fullmatch(r"[A-Za-z]:/", self.root):
+            self.root = self.root.rstrip("/")
+        require(_absolute(self.root), "Provenance producer_root must be absolute")
+        self.windows = bool(re.match(r"^[A-Za-z]:/", self.root) or self.root.startswith("//"))
+        self.names: dict[str, str] = {}
+        for name in files:
+            require(file_name(name) == name, f"Non-canonical Git source path: {name!r}")
+            key = self._key(_lexical(name))
+            require(key not in self.names, f"Ambiguous case-colliding Git paths: {name}")
+            self.names[key] = name
+        require(bool(sources), "Coverage XML has no declared source roots")
+        self.roots = []
+        for source in sources:
+            name = _lexical(source)
+            if _absolute(name):
+                name = self._relative(name)
+            require(
+                self._key(name) in (".", "src", SOURCE_ROOT) or self._key(name).startswith(f"{SOURCE_ROOT}/"),
+                f"XML source is outside the measured source tree: {source!r}",
+            )
+            self.roots.append(name)
+
+    def _key(self, name: str) -> str:
+        return name.casefold() if self.windows else name
+
+    def _relative(self, name: str) -> str:
+        root = self.root.rstrip("/") + "/"
+        if self._key(name) == self._key(self.root):
+            return "."
+        require(self._key(name).startswith(self._key(root)), f"XML path is outside producer checkout: {name!r}")
+        return name[len(root):]
+
+    def resolve(self, filename: str) -> str:
+        require(bool(filename), "Missing XML class filename")
+        name = _lexical(filename)
+        if _absolute(name):
+            candidates = {self._relative(name)}
+        else:
+            candidates = {str(PurePosixPath(root) / name) for root in self.roots}
+        matches = {
+            self.names[self._key(candidate)]
+            for candidate in candidates if self._key(candidate) in self.names
+        }
+        require(
+            len(matches) == 1,
+            f"XML filename is {'ambiguous' if matches else 'unmapped'} at measured head: {filename!r}",
+        )
+        return matches.pop()
+
+
 def empty_counts() -> dict:
     return {metric: {"covered": 0, "total": 0} for metric in METRICS}
 
@@ -137,7 +217,7 @@ def xml_integer(value: str | None) -> int:
     return int(value)
 
 
-def parse_xml(data: bytes) -> tuple[dict, dict]:
+def _xml_root(data: bytes) -> ET.Element:
     require(len(data) <= MAX_XML_BYTES, "Coverage XML exceeds size limit")
     require(b"<!DOCTYPE" not in data.upper() and b"<!ENTITY" not in data.upper(), "XML DTD/entities forbidden")
     try:
@@ -145,9 +225,19 @@ def parse_xml(data: bytes) -> tuple[dict, dict]:
     except ET.ParseError as exc:
         raise TrendError(f"Malformed coverage XML: {exc}") from exc
     require(root.tag == "coverage", "Expected coverage.py XML root")
+    return root
+
+
+def parse_xml(data: bytes, *, file_map: dict[str, str] | None = None) -> tuple[dict, dict]:
+    root = _xml_root(data)
     files = {}
     for cls in root.findall("./packages/package/classes/class"):
-        name = file_name(cls.get("filename"))
+        raw = cls.get("filename")
+        if file_map is not None:
+            require(raw in file_map, f"XML filename has no measured checkout binding: {raw!r}")
+            name = file_name(file_map[raw])
+        else:
+            name = file_name(raw)
         require(name not in files, f"Duplicate XML file: {name}")
         stats = empty_counts()
         seen = set()
@@ -176,6 +266,38 @@ def parse_xml(data: bytes) -> tuple[dict, dict]:
             )
     require(bool(files), "Coverage XML contains no measured files")
     return overall, dict(sorted(files.items()))
+
+
+def tracked_source_files() -> set[str]:
+    return {
+        name for name in git("ls-tree", "-r", "--name-only", "-z", "HEAD", "--", SOURCE_ROOT).split("\0")
+        if name.endswith(".py")
+    }
+
+
+def parse_measured_xml(data: bytes) -> tuple[dict, dict]:
+    """Validate physical producer paths before attaching checkout provenance."""
+    root = _xml_root(data)
+    checkout = Path.cwd().resolve()
+    sources = [source.text or "" for source in root.findall("./sources/source")]
+    paths = XmlPaths(str(checkout), sources, tracked_source_files())
+    for source in paths.roots:
+        directory = checkout / source
+        require(
+            directory.is_dir() and directory.resolve().is_relative_to(checkout),
+            f"XML source is missing or resolves outside producer checkout: {source!r}",
+        )
+    mapping = {}
+    for cls in root.findall("./packages/package/classes/class"):
+        raw = cls.get("filename")
+        name = paths.resolve(raw)
+        target = checkout / name
+        require(
+            target.is_file() and target.resolve() == target,
+            f"XML file is missing or redirected outside its tracked checkout path: {raw!r}",
+        )
+        mapping[raw] = name
+    return parse_xml(data, file_map=mapping)
 
 
 def identity() -> dict:
@@ -208,6 +330,7 @@ def scope(command: list[str]) -> dict:
         "versions": {name: version(name) for name in ("coverage", "pytest-cov", "pytest")},
         "coverage_config": "pyproject.toml",
         "raw_data_file": ".coverage",
+        "xml_path_policy": "checkout-tracked-v1",
         "environment": {
             key: digest(value.encode("utf-8")) for key, value in sorted(os.environ.items())
             if key in ("MPLBACKEND", "PYTHONPATH", "PYTEST_ADDOPTS", "PYTEST_DISABLE_PLUGIN_AUTOLOAD")
@@ -335,7 +458,7 @@ def measure(command: list[str], xml: Path, output: Path) -> int:
     require(identity() == metadata, "Checkout/run identity changed during measurement")
     require(scope(command) == measurement_scope, "Measurement configuration changed during test execution")
     data = xml.read_bytes()
-    overall, files = parse_xml(data)
+    overall, files = parse_measured_xml(data)
     summary = validate_summary({
         "schema_version": SCHEMA_VERSION,
         **metadata,
@@ -625,7 +748,7 @@ def main(argv: list[str] | None = None) -> int:
         require(all(current[key] == value for key, value in identity().items()), "Stale local measurement identity")
         xml_data = args.xml.read_bytes()
         require(digest(xml_data) == current["xml_sha256"], "Stale local measurement XML digest")
-        overall, files = parse_xml(xml_data)
+        overall, files = parse_measured_xml(xml_data)
         require(overall == current["overall"] and files == current["files"], "Local XML/summary counts disagree")
         require(
             current["ref"] == MAIN_REF and current["event"] in MAIN_EVENTS,
