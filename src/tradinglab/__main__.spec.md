@@ -6,7 +6,7 @@ Last updated: 2026-09-07
 Enables `python -m tradinglab` and the PyInstaller entry point to launch the GUI. Uses absolute imports so the file works both as a package module and as the frozen bootloader's top-level script, calls `multiprocessing.freeze_support()` defensively, then delegates to `app.main()` after acquiring the single-instance guard.
 
 ## Public API
-- No public names exported; guards `main()` with `if __name__ == "__main__":` so importing the module doesn't start the event loop.
+- `main`: re-export of `tradinglab.app.main`, used by the `tradinglab` console script. Importing the module does not call it or run the `__main__` startup guard.
 
 ## Dependencies
 - Internal: `.app.main`, `._single_instance.single_instance_guard`, `._single_instance.release_single_instance`.
