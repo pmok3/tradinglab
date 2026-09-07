@@ -130,6 +130,55 @@ jobs:
           path: coverage.xml
           if-no-files-found: warn
 
+  gui-coverage:
+    name: GUI-only coverage (informational)
+    needs: spec-freshness
+    # Keep tests/gui in its own interpreter/job: mixing its Tk-object GC
+    # with the unit/logic suites risks Tcl_AsyncDelete during teardown.
+    # This score is GUI-only, NOT total/unit coverage; never combine its
+    # data with the coverage job's baseline. The unit GUI gate stays intact.
+    runs-on: windows-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    env:
+      MPLBACKEND: Agg
+      PYTHONIOENCODING: utf-8
+      COVERAGE_FILE: ${{ runner.temp }}\.coverage.gui
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install -e .[dev]
+      - name: Explain GUI-only coverage scope
+        shell: pwsh
+        run: |
+          @'
+          ### GUI-only coverage (`tests/gui`)
+
+          Informational Windows/Python 3.12 measurement of `tradinglab` through `tests/gui` only, in an isolated interpreter. This is not `tests/unit/gui` and excludes the unit, logic, oracle and full smoke suites.
+
+          Do not compare this score with total/unit coverage or merge these artifacts into the unit baseline. Skipped Tk tests contribute no execution; pytest prints skip reasons in the job log. The existing `unit` job's isolated GUI invocation remains the gate.
+          '@ | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
+      - name: Run GUI-only coverage (isolated interpreter; show skip reasons)
+        shell: pwsh
+        run: python -m pytest tests\gui --cov=tradinglab --cov-report="xml:$env:RUNNER_TEMP\coverage-gui.xml" --cov-report=term-missing:skip-covered -q -ra
+      - name: Upload GUI-only raw coverage data
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-gui-raw
+          path: ${{ runner.temp }}\.coverage.gui
+          include-hidden-files: true
+          if-no-files-found: error
+      - name: Upload GUI-only coverage XML
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-gui-xml
+          path: ${{ runner.temp }}\coverage-gui.xml
+          if-no-files-found: error
+
   smoke:
     needs: spec-freshness
     strategy:
