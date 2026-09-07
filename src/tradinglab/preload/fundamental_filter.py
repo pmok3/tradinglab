@@ -40,7 +40,7 @@ convenience predicate for that).
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from ..models import Candle
@@ -109,31 +109,3 @@ def passes_fundamental_filter(
             return False
 
     return True
-
-
-def filter_symbols(
-    symbols: Iterable[str],
-    bars_lookup: callable,  # type: ignore[valid-type]
-    spec: FundamentalFilter,
-) -> list[str]:
-    """Apply the filter to an iterable of symbols.
-
-    ``bars_lookup(symbol) -> Optional[List[Candle]]`` is injected so
-    the caller can decide whether to use disk cache, the live
-    fetcher, or a fake. Returns the symbols that pass, in input
-    order.
-
-    This helper is provided for tests / scripts; the GUI dialog
-    interleaves the lookup with progress reporting and so calls
-    :func:`passes_fundamental_filter` directly.
-    """
-    out: list[str] = []
-    if not is_filter_active(spec):
-        return [s for s in symbols]
-    for sym in symbols:
-        bars = bars_lookup(sym)
-        if bars is None:
-            continue
-        if passes_fundamental_filter(bars, spec):
-            out.append(sym)
-    return out

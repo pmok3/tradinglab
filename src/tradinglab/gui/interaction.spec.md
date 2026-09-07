@@ -490,7 +490,7 @@ during drag.
     next in-bar hover repaints against fresh data. The crosshair updates
     every event regardless — only the string churn is skipped.
   - **Overlay legend rows** (TradingView-style; replaces the retired Tk
-    `OverlayLegend` pill). Built by `_build_readout_indicator_rows(ax,
+    Tk overlay pill). Built by `_build_readout_indicator_rows(ax,
     theme)` which enumerates via the pure
     `gui.readout_legend.build_overlay_legend_rows`. As of the
     `legend-condensation` sprint each row is an **`HPacker` of

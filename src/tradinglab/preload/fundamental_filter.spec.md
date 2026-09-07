@@ -17,11 +17,6 @@
   given a sorted-ascending `Sequence[Candle]` and the filter spec,
   return whether the symbol qualifies.
 
-* `filter_symbols(symbols, bars_lookup, spec) -> List[str]` —
-  convenience wrapper for tests / scripts; the GUI dialog interleaves
-  per-symbol lookup with progress reporting and so calls
-  `passes_fundamental_filter` directly.
-
 ## Semantics
 
 * A `None` criterion means "no constraint on this dimension". A

@@ -50,7 +50,6 @@ import json
 import math
 import os
 import random
-import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -64,6 +63,7 @@ from ..backtest.performance import (
     write_trade_rows_csv,
 )
 from ..backtest.session import SessionResult
+from ..core.io_helpers import atomic_write_json
 from . import storage
 
 __all__ = [
@@ -804,7 +804,15 @@ def save_aggregate(run_dir: Path, agg: RunAggregate) -> Path:
     # Stable sha256 over the canonical payload so tooling can detect changes.
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     payload["fingerprint"] = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
-    return _atomic_write_json(target, payload)
+    atomic_write_json(
+        target,
+        payload,
+        indent=None,
+        sort_keys=True,
+        ensure_ascii=False,
+        fsync=False,
+    )
+    return target
 
 
 def load_aggregate(run_dir: Path) -> RunAggregate | None:
@@ -898,24 +906,6 @@ def _flatten_rows(rows_by_symbol: dict[str, list[TradeRow]]) -> list[TradeRow]:
     for symbol_rows in rows_by_symbol.values():
         rows.extend(symbol_rows)
     return rows
-
-
-def _atomic_write_json(target: Path, payload: dict[str, Any]) -> Path:
-    """Mirror :func:`tradinglab.strategy_tester.storage._atomic_write_json`."""
-    tmp_fd, tmp_path = tempfile.mkstemp(
-        prefix=target.name, suffix=".tmp", dir=str(target.parent),
-    )
-    try:
-        with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
-            json.dump(payload, fh, sort_keys=True, separators=(",", ":"))
-        os.replace(tmp_path, target)
-    except Exception:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
-    return target
 
 
 def _aggregate_from_dict(payload: dict[str, Any]) -> RunAggregate:

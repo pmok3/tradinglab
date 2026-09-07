@@ -26,6 +26,11 @@ Modal Tk dialogs owned by `ChartApp`: the Settings dialog (worker count, dark mo
 - External: `tkinter`, `tkinter.ttk`, `tkinter.simpledialog`, `tkinter.filedialog`, `tkinter.messagebox`.
 
 ## Design notes
+- The two dialogs intentionally remain in one module for now. Existing
+  source-slice tests and lazy imports patch `gui.dialogs` directly, and a
+  split would either break those seams or require compatibility shims with
+  no runtime benefit. Keep the cohesive settings/watchlist classes together
+  until those tests are migrated deliberately.
 - Both dialogs inherit from `gui._modal_base.BaseModalDialog`, which
   owns `transient` / `grab_set` / ESC+Return keybindings / geometry
   persistence (geometry keys `dlg.settings` / `dlg.watchlists`) via

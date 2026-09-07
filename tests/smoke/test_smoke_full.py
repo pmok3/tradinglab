@@ -43,6 +43,8 @@ from datetime import datetime, timedelta
 
 import pytest
 
+from tests._fixtures.candles import banded_daily, banded_intraday
+
 # Re-export helpers at module scope so existing references inside
 # ``check_*`` functions keep working without rewriting 128 callsites.
 from tests.smoke._helpers import (  # noqa: F401  (used inside check_* fns)
@@ -3974,26 +3976,10 @@ def check_d34_compare_toggle_after_drilldown_ylim(app) -> None:
     }
 
     def make_1d(seed):
-        out, base = [], datetime(2026, 2, 2, 16, 0)
-        for d in range(60):
-            lo = 50 + d * 2 + seed
-            out.append(Candle(date=base + timedelta(days=d),
-                              open=lo, high=lo + 5, low=lo - 1,
-                              close=lo + 2, volume=80000,
-                              session="regular"))
-        return out
+        return banded_daily(60, seed=seed, start_date=datetime(2026, 2, 2, 16, 0))
 
     def make_5m(seed):
-        out, base = [], datetime(2026, 2, 2, 9, 30)
-        for d in range(30):
-            lo = 50 + d * 2 + seed
-            for i in range(78):
-                p = lo + i * 0.05
-                out.append(Candle(date=base + timedelta(days=d, minutes=5 * i),
-                                  open=p, high=p + 0.3, low=p - 0.3,
-                                  close=p + 0.1, volume=1000 + i,
-                                  session="regular"))
-        return out
+        return banded_intraday(30, seed=seed, start_date=datetime(2026, 2, 2, 9, 30))
 
     try:
         app._cache_is_stale = lambda *a, **k: False  # type: ignore[assignment]
@@ -4183,25 +4169,10 @@ def check_d34b_compare_toggle_today_drilldown_keeps_primary(app) -> None:
     }
 
     def make_1d(seed, n_days):
-        out, base = [], datetime(2026, 2, 2, 16, 0)
-        for d in range(n_days):
-            lo = 50 + d * 2 + seed
-            out.append(Candle(date=base + timedelta(days=d),
-                              open=lo, high=lo + 5, low=lo - 1,
-                              close=lo + 2, volume=80000, session="regular"))
-        return out
+        return banded_daily(n_days, seed=seed, start_date=datetime(2026, 2, 2, 16, 0))
 
     def make_5m(seed, n_days):
-        out, base = [], datetime(2026, 2, 2, 9, 30)
-        for d in range(n_days):
-            lo = 50 + d * 2 + seed
-            for i in range(78):
-                p = lo + i * 0.05
-                out.append(Candle(date=base + timedelta(days=d, minutes=5 * i),
-                                  open=p, high=p + 0.3, low=p - 0.3,
-                                  close=p + 0.1, volume=1000 + i,
-                                  session="regular"))
-        return out
+        return banded_intraday(n_days, seed=seed, start_date=datetime(2026, 2, 2, 9, 30))
 
     # Primary 5m runs one calendar day FURTHER than compare 5m — the
     # "today" the compare ticker hasn't been fetched for yet.
@@ -4355,26 +4326,10 @@ def check_d53_compare_off_during_drilldown_ylim(app) -> None:
     }
 
     def make_1d(seed):
-        out, base = [], datetime(2026, 2, 2, 16, 0)
-        for d in range(60):
-            lo = 50 + d * 2 + seed
-            out.append(Candle(date=base + timedelta(days=d),
-                              open=lo, high=lo + 5, low=lo - 1,
-                              close=lo + 2, volume=80000,
-                              session="regular"))
-        return out
+        return banded_daily(60, seed=seed, start_date=datetime(2026, 2, 2, 16, 0))
 
     def make_5m(seed):
-        out, base = [], datetime(2026, 2, 2, 9, 30)
-        for d in range(30):
-            lo = 50 + d * 2 + seed
-            for i in range(78):
-                p = lo + i * 0.05
-                out.append(Candle(date=base + timedelta(days=d, minutes=5 * i),
-                                  open=p, high=p + 0.3, low=p - 0.3,
-                                  close=p + 0.1, volume=1000 + i,
-                                  session="regular"))
-        return out
+        return banded_intraday(30, seed=seed, start_date=datetime(2026, 2, 2, 9, 30))
 
     try:
         app._cache_is_stale = lambda *a, **k: False  # type: ignore[assignment]
@@ -4555,25 +4510,10 @@ def check_d86_compare_toggle_preserves_drilldown_day(app) -> None:
     }
 
     def make_1d(seed, n=30):
-        out, base = [], datetime(2026, 1, 5, 16, 0)
-        for d in range(n):
-            lo = 50 + d * 2 + seed
-            out.append(Candle(date=base + timedelta(days=d),
-                              open=lo, high=lo + 5, low=lo - 1,
-                              close=lo + 2, volume=80000, session="regular"))
-        return out
+        return banded_daily(n, seed=seed, start_date=datetime(2026, 1, 5, 16, 0))
 
     def make_5m(seed, n=30):
-        out, base = [], datetime(2026, 1, 5, 9, 30)
-        for d in range(n):
-            lo = 50 + d * 2 + seed
-            for i in range(78):
-                p = lo + i * 0.05
-                out.append(Candle(date=base + timedelta(days=d, minutes=5 * i),
-                                  open=p, high=p + 0.3, low=p - 0.3,
-                                  close=p + 0.1, volume=1000 + i,
-                                  session="regular"))
-        return out
+        return banded_intraday(n, seed=seed, start_date=datetime(2026, 1, 5, 9, 30))
 
     try:
         app._cache_is_stale = lambda *a, **k: False  # type: ignore[assignment]
@@ -4773,30 +4713,12 @@ def check_d87_compare_toggle_drilldown_no_index_shift(app) -> None:
     }
 
     def make_1d(seed, n=30):
-        out, base = [], datetime(2026, 1, 5, 16, 0)
-        for d in range(n):
-            lo = 50 + d * 2 + seed
-            out.append(Candle(date=base + timedelta(days=d),
-                              open=lo, high=lo + 5, low=lo - 1,
-                              close=lo + 2, volume=80000, session="regular"))
-        return out
+        return banded_daily(n, seed=seed, start_date=datetime(2026, 1, 5, 16, 0))
 
     def make_5m(seed, n=30, *, sparse=False):
-        out, base = [], datetime(2026, 1, 5, 9, 30)
-        for d in range(n):
-            lo = 50 + d * 2 + seed
-            for i in range(78):
-                # Sparse primary drops every 3rd bar → the dense compare
-                # has ~26 timestamps/day the primary lacks, which the
-                # align turns into inserted gap slots (index shift).
-                if sparse and i % 3 == 2:
-                    continue
-                p = lo + i * 0.05
-                out.append(Candle(date=base + timedelta(days=d, minutes=5 * i),
-                                  open=p, high=p + 0.3, low=p - 0.3,
-                                  close=p + 0.1, volume=1000 + i,
-                                  session="regular"))
-        return out
+        return banded_intraday(
+            n, seed=seed, start_date=datetime(2026, 1, 5, 9, 30), sparse=sparse
+        )
 
     try:
         app._cache_is_stale = lambda *a, **k: False  # type: ignore[assignment]
@@ -4970,27 +4892,12 @@ def check_d88_compare_toggle_repeated_no_creep(app) -> None:
     }
 
     def make_1d(seed, n=30):
-        out, base = [], datetime(2026, 1, 5, 16, 0)
-        for d in range(n):
-            lo = 50 + d * 2 + seed
-            out.append(Candle(date=base + timedelta(days=d),
-                              open=lo, high=lo + 5, low=lo - 1,
-                              close=lo + 2, volume=80000, session="regular"))
-        return out
+        return banded_daily(n, seed=seed, start_date=datetime(2026, 1, 5, 16, 0))
 
     def make_5m(seed, n=30, *, sparse=False):
-        out, base = [], datetime(2026, 1, 5, 9, 30)
-        for d in range(n):
-            lo = 50 + d * 2 + seed
-            for i in range(78):
-                if sparse and i % 3 == 2:
-                    continue
-                p = lo + i * 0.05
-                out.append(Candle(date=base + timedelta(days=d, minutes=5 * i),
-                                  open=p, high=p + 0.3, low=p - 0.3,
-                                  close=p + 0.1, volume=1000 + i,
-                                  session="regular"))
-        return out
+        return banded_intraday(
+            n, seed=seed, start_date=datetime(2026, 1, 5, 9, 30), sparse=sparse
+        )
 
     def _reseed():
         app._full_cache[(src, primary_t, "1d")] = make_1d(0)
@@ -5196,27 +5103,12 @@ def check_d89_compare_toggle_manual_pan_no_creep(app) -> None:
     }
 
     def make_1d(seed, n=30):
-        out, base = [], datetime(2026, 1, 5, 16, 0)
-        for d in range(n):
-            lo = 50 + d * 2 + seed
-            out.append(Candle(date=base + timedelta(days=d),
-                              open=lo, high=lo + 5, low=lo - 1,
-                              close=lo + 2, volume=80000, session="regular"))
-        return out
+        return banded_daily(n, seed=seed, start_date=datetime(2026, 1, 5, 16, 0))
 
     def make_5m(seed, n=30, *, sparse=False):
-        out, base = [], datetime(2026, 1, 5, 9, 30)
-        for d in range(n):
-            lo = 50 + d * 2 + seed
-            for i in range(78):
-                if sparse and i % 3 == 2:
-                    continue
-                p = lo + i * 0.05
-                out.append(Candle(date=base + timedelta(days=d, minutes=5 * i),
-                                  open=p, high=p + 0.3, low=p - 0.3,
-                                  close=p + 0.1, volume=1000 + i,
-                                  session="regular"))
-        return out
+        return banded_intraday(
+            n, seed=seed, start_date=datetime(2026, 1, 5, 9, 30), sparse=sparse
+        )
 
     def _seed_5m():
         # Re-assert the 5m cache (a reload can trigger a prefetch that
@@ -5395,18 +5287,9 @@ def check_d90_compare_index_preserve_render_no_xlim_drift(app) -> None:
     }
 
     def make_5m(seed, *, sparse=False):
-        out, base = [], datetime(2026, 1, 5, 9, 30)
-        for d in range(20):
-            lo = 50 + d * 2 + seed
-            for i in range(78):
-                if sparse and i % 3 == 2:
-                    continue
-                p = lo + i * 0.05
-                out.append(Candle(date=base + timedelta(days=d, minutes=5 * i),
-                                  open=p, high=p + 0.3, low=p - 0.3,
-                                  close=p + 0.1, volume=1000 + i,
-                                  session="regular"))
-        return out
+        return banded_intraday(
+            20, seed=seed, start_date=datetime(2026, 1, 5, 9, 30), sparse=sparse
+        )
 
     def _xlim():
         ps = app._panel_state.get("primary") or {}
@@ -5783,25 +5666,10 @@ def check_d92_compare_toggle_drilldown_no_extra_bar(app) -> None:
     }
 
     def make_1d(seed, n=30):
-        out, base = [], datetime(2026, 1, 5, 16, 0)
-        for d in range(n):
-            lo = 50 + d * 2 + seed
-            out.append(Candle(date=base + timedelta(days=d),
-                              open=lo, high=lo + 5, low=lo - 1,
-                              close=lo + 2, volume=80000, session="regular"))
-        return out
+        return banded_daily(n, seed=seed, start_date=datetime(2026, 1, 5, 16, 0))
 
     def make_5m(seed, n=30):
-        out, base = [], datetime(2026, 1, 5, 9, 30)
-        for d in range(n):
-            lo = 50 + d * 2 + seed
-            for i in range(78):  # dense: 78 bars/day (last idx always odd)
-                p = lo + i * 0.05
-                out.append(Candle(date=base + timedelta(days=d, minutes=5 * i),
-                                  open=p, high=p + 0.3, low=p - 0.3,
-                                  close=p + 0.1, volume=1000 + i,
-                                  session="regular"))
-        return out
+        return banded_intraday(n, seed=seed, start_date=datetime(2026, 1, 5, 9, 30))
 
     def _reseed():
         app._full_cache[(src, primary_t, "1d")] = make_1d(0)
@@ -5952,25 +5820,10 @@ def check_d93_compare_toggle_empty_cache_targeted_fetch(app) -> None:
     }
 
     def make_1d(seed, n=30):
-        out, base = [], datetime(2026, 1, 5, 16, 0)
-        for d in range(n):
-            lo = 50 + d * 2 + seed
-            out.append(Candle(date=base + timedelta(days=d),
-                              open=lo, high=lo + 5, low=lo - 1,
-                              close=lo + 2, volume=80000, session="regular"))
-        return out
+        return banded_daily(n, seed=seed, start_date=datetime(2026, 1, 5, 16, 0))
 
     def make_5m(seed, n=30):
-        out, base = [], datetime(2026, 1, 5, 9, 30)
-        for d in range(n):
-            lo = 50 + d * 2 + seed
-            for i in range(78):
-                p = lo + i * 0.05
-                out.append(Candle(date=base + timedelta(days=d, minutes=5 * i),
-                                  open=p, high=p + 0.3, low=p - 0.3,
-                                  close=p + 0.1, volume=1000 + i,
-                                  session="regular"))
-        return out
+        return banded_intraday(n, seed=seed, start_date=datetime(2026, 1, 5, 9, 30))
 
     def _seed_primary_only():
         # Primary fully cached at 1d + 5m; compare cached at 1d ONLY (its 5m

@@ -164,3 +164,81 @@ def daily(
         prev_close = cl
         t = t + timedelta(days=1)
     return out
+
+
+def banded_daily(
+    n: int,
+    *,
+    seed: float = 0.0,
+    start_date: datetime | None = None,
+    base_price: float = 50.0,
+    day_step: float = 2.0,
+    high_offset: float = 5.0,
+    low_offset: float = 1.0,
+    close_offset: float = 2.0,
+    volume: int = 80000,
+) -> list[Candle]:
+    """Build daily bars whose price band advances by ``day_step`` each day.
+
+    This is for smoke scenarios that need distinct, deterministic per-day
+    bands while sharing the same candle shape.
+    """
+    if n < 0:
+        raise ValueError(f"n must be >= 0, got {n}")
+    if start_date is None:
+        start_date = datetime(2026, 1, 5, 16, 0)
+    return [
+        Candle(
+            date=start_date + timedelta(days=d),
+            open=lo,
+            high=lo + high_offset,
+            low=lo - low_offset,
+            close=lo + close_offset,
+            volume=volume,
+            session="regular",
+        )
+        for d in range(n)
+        for lo in (base_price + d * day_step + seed,)
+    ]
+
+
+def banded_intraday(
+    n: int,
+    *,
+    seed: float = 0.0,
+    start_date: datetime | None = None,
+    base_price: float = 50.0,
+    day_step: float = 2.0,
+    bars_per_day: int = 78,
+    interval_min: int = 5,
+    price_step: float = 0.05,
+    high_offset: float = 0.3,
+    low_offset: float = 0.3,
+    close_offset: float = 0.1,
+    volume_start: int = 1000,
+    sparse: bool = False,
+) -> list[Candle]:
+    """Build deterministic intraday bars with advancing daily price bands."""
+    if n < 0:
+        raise ValueError(f"n must be >= 0, got {n}")
+    if start_date is None:
+        start_date = datetime(2026, 1, 5, 9, 30)
+    out: list[Candle] = []
+    for d in range(n):
+        lo = base_price + d * day_step + seed
+        for i in range(bars_per_day):
+            if sparse and i % 3 == 2:
+                continue
+            p = lo + i * price_step
+            out.append(
+                Candle(
+                    date=start_date + timedelta(days=d, minutes=interval_min * i),
+                    open=p,
+                    high=p + high_offset,
+                    low=p - low_offset,
+                    close=p + close_offset,
+                    volume=volume_start + i,
+                    session="regular",
+                )
+            )
+    return out

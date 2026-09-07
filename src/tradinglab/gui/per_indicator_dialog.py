@@ -1,8 +1,8 @@
 """Per-indicator settings popup spawned by double-clicking a legend row.
 
-The OverlayLegend (`overlay_legend.py`) shows a horizontal pill per
+The in-readout matplotlib legend shows one row per
 overlay :class:`~tradinglab.indicators.config.IndicatorConfig` in each
-price panel. Double-clicking a pill opens a focused, modeless settings
+price panel. Double-clicking a row opens a focused, modeless settings
 window that exposes ONLY that indicator's row from the Manage Indicators
 dialog — same kind dropdown, same scope checkboxes, same per-param
 widgets, same live-debounced commit pipeline, same per-output color

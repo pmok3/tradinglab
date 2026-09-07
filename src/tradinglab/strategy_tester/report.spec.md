@@ -31,6 +31,7 @@ to `manifest.json`. The Strategy tab's Report view reads this file
   point.
 - `save_aggregate(run_dir, agg) -> Path` /
   `load_aggregate(run_dir) -> RunAggregate | None` — disk round-trip.
+  Aggregate writes use the shared atomic JSON helper from `core.io_helpers`.
 - `write_run_csv(run_dir, rows=None) -> Path` — writes the canonical
   22-column trades CSV via
   `backtest.performance.write_trade_rows_csv`. Passing `rows` avoids

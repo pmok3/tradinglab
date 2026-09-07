@@ -4,8 +4,7 @@
 
 Computes the **rows** for the TradingView-style overlay-indicator legend
 that lives *inside* the top-left matplotlib readout offsetbox (replacing
-the retired opaque Tk `OverlayLegend` pill — see
-`gui/overlay_legend.spec.md`).
+the retired opaque Tk overlay pill — see `gui/overlay_legend.spec.md`).
 
 As of the **`legend-condensation`** sprint:
 
@@ -57,7 +56,7 @@ symbol, and theme — no Tk, no matplotlib — so it is unit-testable headless.
 
 - `build_overlay_legend_rows(manager, scope, interval, *,
   theme_text="#cccccc", symbol="") -> list[ReadoutLegendRow]`:
-  - Enumerates via `overlay_legend.collect_overlay_configs` (manager
+  - Enumerates via `collect_overlay_configs` (manager
     insertion order), **including hidden configs** (re-enable-able).
   - For each config, calls the indicator class's
     `effective_output_keys(params)` to get the visible output set

@@ -6,14 +6,12 @@ Pure-function suite — no Tk, no network, no executor.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import List
 
 import pytest
 
 from tradinglab.models import Candle
 from tradinglab.preload.fundamental_filter import (
     FundamentalFilter,
-    filter_symbols,
     is_filter_active,
     passes_fundamental_filter,
 )
@@ -220,38 +218,6 @@ def test_combined_filter_one_fails_short_circuits() -> None:
         min_avg_volume_millions=10.0, min_close=80.0,
     )
     assert passes_fundamental_filter(bars, spec) is False
-
-
-# ---------------------------------------------------------------------------
-# filter_symbols wrapper
-# ---------------------------------------------------------------------------
-
-
-def test_filter_symbols_returns_input_order() -> None:
-    bars_by_sym = {
-        "AAA": _daily_bars(n=30, close=100.0, volume=15_000_000),
-        "BBB": _daily_bars(n=30, close=20.0, volume=15_000_000),  # below min_close
-        "CCC": _daily_bars(n=30, close=200.0, volume=15_000_000),
-    }
-    spec = FundamentalFilter(min_close=50.0)
-    out = filter_symbols(["AAA", "BBB", "CCC"], bars_by_sym.get, spec)
-    assert out == ["AAA", "CCC"]
-
-
-def test_filter_symbols_skips_unknown_symbols() -> None:
-    """Symbols whose bars_lookup returns None are dropped (no bars = no decision)."""
-    bars_by_sym = {"AAA": _daily_bars(n=30, close=100.0, volume=15_000_000)}
-    spec = FundamentalFilter(min_close=50.0)
-    out = filter_symbols(["AAA", "BBB"], bars_by_sym.get, spec)
-    assert out == ["AAA"]
-
-
-def test_filter_symbols_passthrough_when_filter_inactive() -> None:
-    """With no criteria set, every symbol passes — bars_lookup is not even called."""
-    def explode(_sym: str):
-        raise AssertionError("bars_lookup should not be called when filter is inactive")
-    out = filter_symbols(["AAA", "BBB", "CCC"], explode, FundamentalFilter())
-    assert out == ["AAA", "BBB", "CCC"]
 
 
 def test_filter_spec_is_frozen() -> None:

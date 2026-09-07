@@ -3,7 +3,9 @@
 ## Purpose
 
 Per-indicator settings popup spawned by clicking an in-readout
-overlay-legend row or a lower-pane indicator label. Lets
+matplotlib overlay-legend row or a lower-pane indicator label. The
+legend is rendered inside the readout; no Tk legend widget is involved.
+Lets
 the user edit one indicator's params /
 scopes / color / per-interval visibility without opening the
 multi-row Manage Indicators dialog. Reuses every widget the manager

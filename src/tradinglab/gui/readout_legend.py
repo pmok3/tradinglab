@@ -37,10 +37,36 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from .overlay_legend import collect_overlay_configs
-
 if TYPE_CHECKING:
     from ..indicators.config import IndicatorConfig, IndicatorManager
+
+
+def collect_overlay_configs(
+    manager: IndicatorManager, scope: str, interval: str,
+) -> list[IndicatorConfig]:
+    """Return every overlay config for ``(scope, interval)``.
+
+    Hidden configs are retained so the in-readout context menu can re-enable
+    them.  This is the former ``OverlayLegend`` enumeration behavior.
+    """
+    from ..indicators.config import factory_by_kind_id
+
+    out: list[IndicatorConfig] = []
+    for cfg in manager.list():
+        if getattr(cfg, "unknown", False):
+            continue
+        if scope not in getattr(cfg, "scopes", frozenset()):
+            continue
+        intervals = getattr(cfg, "intervals", ())
+        if intervals and interval not in intervals:
+            continue
+        entry = factory_by_kind_id(cfg.kind_id)
+        if entry is None:
+            continue
+        _name, factory = entry
+        if bool(getattr(factory, "overlay", True)):
+            out.append(cfg)
+    return out
 
 
 @dataclass(frozen=True)
@@ -325,7 +351,7 @@ def build_overlay_legend_rows(
 
     Hidden configs are included (greyed by the renderer) so the user
     can right-click → Show to re-enable them. The order matches
-    :func:`gui.overlay_legend.collect_overlay_configs` (manager
+    :func:`collect_overlay_configs` (manager
     insertion order).
     """
     rows: list[ReadoutLegendRow] = []
@@ -412,5 +438,6 @@ __all__ = (
     "OverlayState",
     "ReadoutLegendRow",
     "build_overlay_legend_rows",
+    "collect_overlay_configs",
     "format_indicator_label",
 )

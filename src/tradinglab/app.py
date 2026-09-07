@@ -1386,31 +1386,11 @@ class ChartApp(
 
         self._canvas = FigureCanvasTkAgg(self._figure, master=self._chart_frame)
         self._canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-        # Per-overlay legend with eye-toggles (big-bet item #9, rev 2).
-        # User direction (2026-05-16): the legend used to float in the
-        # top-right of the chart frame — we've since moved it INTO each
-        # price panel, just below the OHLCV readout strip. One legend
-        # per slot ("primary" → main chart, "compare" → compare panel
-        # when active), instantiated up-front so the dict is always
-        # populated; ``_refresh_overlay_legend`` flips visibility by
-        # passing an empty config list when a slot is unused.
-        #
-        # Double-clicking a legend row spawns a per-indicator settings
-        # popup (``gui/per_indicator_dialog.py``). Singletons live in
-        # ``self._per_indicator_dialogs``; the callback below funnels
-        # all double-clicks through ``_open_per_indicator_dialog`` so
-        # the slot context is preserved for future scope-split work.
-        # Right-click on a legend row spawns the contextual Edit /
-        # Color / Duplicate / Hide / Remove menu — see
-        # ``_show_legend_context_menu``.
+        # Per-indicator popups are opened from the in-readout matplotlib
+        # legend.  Keep this registry as the patch seam used by callers and
+        # tests; no Tk overlay widget is constructed.
         self._per_indicator_dialogs: dict[int, Any] = {}
-        # The per-overlay legend is now rendered as transparent
-        # matplotlib ``TextArea`` rows INSIDE the top-left readout
-        # (see ``InteractionMixin._build_readout_indicator_rows``), so
-        # the old opaque Tk pill strip (gui.overlay_legend.OverlayLegend)
-        # is no longer instantiated. These handles stay as empty dicts so
-        # ``_refresh_overlay_legend`` / ``_reposition_overlay_legends``
-        # short-circuit to no-ops and ``_apply_theme`` keeps working.
+        # Legacy attributes remain empty for plugin/test compatibility.
         self._overlay_legends: dict[str, Any] = {}
         self._overlay_legend = None
         # ChartStack panel — opt-in mini-chart strip. Insert as the
@@ -1711,14 +1691,6 @@ class ChartApp(
         self._theme_ctrl.replace_theme_overrides(overrides)
 
     def _on_theme_changed(self, theme: dict[str, str]) -> None:
-        legends = getattr(self, "_overlay_legends", None) or {}
-        for legend in legends.values():
-            if legend is None:
-                continue
-            try:
-                legend.apply_theme(theme)
-            except Exception:  # noqa: BLE001
-                pass
         ind_dlg = getattr(self, "_indicator_dialog", None)
         if ind_dlg is not None:
             try:
@@ -5591,88 +5563,12 @@ class ChartApp(
                 pass
 
     def _refresh_overlay_legend(self) -> None:
-        """Refresh the per-overlay legends with all overlay configs.
-
-        One legend strip per ``kind == "price"`` axes (primary +
-        compare). Each pulls configs for its scope ("main" /
-        "compare") from :func:`gui.overlay_legend.collect_overlay_configs`
-        which does NOT filter by ``cfg.visible`` — the legend needs
-        hidden configs too so they can be re-enabled with one click.
-
-        Compare slot: only populated when compare mode is on AND a
-        valid compare panel exists; otherwise an empty config list
-        hides the legend.
-
-        Positioning is then handed off to ``_reposition_overlay_legends``
-        so each strip lines up below its axes' OHLCV readout. We always
-        re-position after a refresh (even for empty lists) so a
-        slot that just got cleared correctly hides its widget.
-        """
-        legends = getattr(self, "_overlay_legends", None) or {}
-        if not legends:
-            return
-        try:
-            from .gui.overlay_legend import collect_overlay_configs
-        except Exception:  # noqa: BLE001
-            return
-        interval = self.interval_var.get()
-        scope_for_slot = {"primary": "main", "compare": "compare"}
-        compare_on = bool(getattr(self, "compare_var", None)
-                          and self.compare_var.get())
-        for slot_key, legend in legends.items():
-            if legend is None:
-                continue
-            scope = scope_for_slot.get(slot_key, "main")
-            try:
-                if slot_key == "compare" and not compare_on:
-                    legend.refresh([])
-                else:
-                    configs = collect_overlay_configs(
-                        self._indicator_manager, scope, interval)
-                    legend.refresh(configs)
-            except Exception:  # noqa: BLE001
-                try:
-                    legend.refresh([])
-                except Exception:  # noqa: BLE001
-                    pass
-        # Anchor each legend below its axes' OHLCV strip. On the very
-        # first paint the canvas may not be laid out yet — the next
-        # ``draw_event`` will repeat the call and snap things into
-        # place once dimensions are known.
-        try:
-            self._reposition_overlay_legends()
-        except Exception:  # noqa: BLE001
-            pass
+        """Retained no-op for plugins that still call the old refresh hook."""
+        return
 
     def _reposition_overlay_legends(self) -> None:
-        """Anchor each per-slot legend below its price axes' OHLCV strip.
-
-        Called from :meth:`_refresh_overlay_legend` (post-refresh) and
-        from the matplotlib ``draw_event`` handler in ``InteractionMixin``
-        (so the legend follows the axes through resizes / compare-
-        toggles / theme switches). No-op if the canvas widget isn't
-        ready yet (winfo_height == 1 on the first paint).
-        """
-        legends = getattr(self, "_overlay_legends", None) or {}
-        if not legends:
-            return
-        canvas = getattr(self, "_canvas", None)
-        if canvas is None:
-            return
-        try:
-            canvas_widget = canvas.get_tk_widget()
-        except Exception:  # noqa: BLE001
-            return
-        panel_state = getattr(self, "_panel_state", None) or {}
-        for slot_key, legend in legends.items():
-            if legend is None:
-                continue
-            ps = panel_state.get(slot_key)
-            ax_p = ps.get("price_ax") if ps else None
-            try:
-                legend.reposition_for_axes(ax_p, canvas_widget)
-            except Exception:  # noqa: BLE001
-                pass
+        """Retained no-op for the retired Tk legend."""
+        return
 
     def _render_indicators_for_slot(self, slot: str) -> None:
         ChartApp._ensure_renderer(self).render_indicators_for_slot(
@@ -6750,7 +6646,7 @@ class ChartApp(
     ) -> None:
         """Open the per-indicator settings popup for ``config_id``.
 
-        Funneled through this method so the OverlayLegend doesn't
+        Funneled through this method so the readout legend doesn't
         need to import the popup module directly. Singletons are
         managed in ``self._per_indicator_dialogs``; a second
         double-click on the same legend row refocuses the existing
@@ -6783,7 +6679,7 @@ class ChartApp(
         Items: Edit Settings… / Change Color (single output or
         cascading sub-menu when the indicator has 2+ outputs) /
         Duplicate / Hide ↔ Show / Remove. Wired by
-        :class:`OverlayLegend` via the ``on_row_context_menu``
+        readout legend via its ``on_row_context_menu``
         callback in :meth:`__init__`.
 
         Swallows exceptions defensively: a broken menu must never
