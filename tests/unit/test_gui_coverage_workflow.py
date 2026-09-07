@@ -26,7 +26,11 @@ def _steps(job: str) -> list[str]:
 
 
 def _pytest_commands(job: str) -> list[str]:
-    return re.findall(r"(?m)^\s+(?:run: )?((?:python -m )?pytest .+)$", job)
+    return re.findall(
+        r"(?m)^\s+(?:- )?(?:run: )?(?:python tools[/\\]report_coverage_trend\.py measure -- )?"
+        r"((?:python -m )?pytest .+)$",
+        job,
+    )
 
 
 @pytest.fixture(scope="module")
@@ -147,3 +151,20 @@ def test_mixed_unit_coverage_does_not_collect_the_gui_suite(ci_workflow: str) ->
     assert commands, "Keep the existing mixed-unit coverage measurement"
     for command in commands:
         assert not re.search(r"\btests[/\\]gui(?:\s|$)", command)
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    ["", "python tools/report_coverage_trend.py measure -- ", r"python tools\report_coverage_trend.py measure -- "],
+)
+def test_mixed_coverage_scope_guard_rejects_gui_with_or_without_wrapper(prefix: str) -> None:
+    workflow = (
+        "jobs:\n  coverage:\n    steps:\n"
+        f"      - run: {prefix}pytest tests/unit --cov=tradinglab -q\n"
+    )
+    test_mixed_unit_coverage_does_not_collect_the_gui_suite(workflow)
+    for gui_path in ("tests/gui", r"tests\gui"):
+        with pytest.raises(AssertionError):
+            test_mixed_unit_coverage_does_not_collect_the_gui_suite(
+                workflow.replace("tests/unit", f"tests/unit {gui_path}"),
+            )
