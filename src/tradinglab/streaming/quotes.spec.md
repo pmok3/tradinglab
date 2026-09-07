@@ -1,5 +1,7 @@
 # streaming/quotes.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 The **breadth** axis of market data: a protocol + registry for sources
 that publish one current value per symbol for many symbols at once.

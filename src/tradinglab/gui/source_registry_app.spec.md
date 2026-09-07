@@ -1,5 +1,7 @@
 # gui/source_registry_app.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 `SourceRegistryAppMixin` — keeps the source UI in step with the **live**
 `DATA_SOURCES` registry. Registration is dynamic: `register_vendor_sources()`

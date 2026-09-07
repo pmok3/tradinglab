@@ -1,5 +1,7 @@
 # gui/color_palette.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Themed clone of the Windows Win32 ChooseColor dialog. Implemented
 as :class:`ThemedColorChooser`, a modal :class:`BaseModalDialog`

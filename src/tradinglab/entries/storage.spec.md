@@ -1,5 +1,7 @@
 # entries/storage.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 JSON persistence for entry strategies. One file per strategy at

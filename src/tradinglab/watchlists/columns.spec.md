@@ -1,5 +1,7 @@
 # watchlists/columns.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Defines the **watchlist column model**: `WatchlistColumn` (a `"system"`
 column like `last` / `next_earn`, or a `"signal"` column backed by a

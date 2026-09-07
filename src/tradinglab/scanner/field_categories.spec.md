@@ -1,5 +1,7 @@
 # scanner/field_categories.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Concept **categories** for the field catalog, so the raw field pickers can render a *grouped* dropdown (section headers + members) instead of one long flat list — the "don't throw every building block at me up front" ask, applied to the raw picker. (The composable [`gui/expression_builder`](../gui/expression_builder.spec.md) "+" token-stacker is the complementary half of that same ask — modular *operands* rather than a fixed palette.)
 

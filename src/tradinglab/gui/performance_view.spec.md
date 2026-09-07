@@ -1,5 +1,7 @@
 # gui/performance_view.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Phase 1d read-only Performance View Toplevel. Multi-pane window driven by a [`SessionResult`](../backtest/session.spec.md): summary, equity chart, trade and aggregate tables, and a daily journal that interleaves explicit decisions with trades beneath each day's watch note. Bottom controls export trades or decisions, copy trade TSV, and close.
 

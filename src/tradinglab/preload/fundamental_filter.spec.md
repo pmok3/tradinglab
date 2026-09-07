@@ -1,5 +1,7 @@
 # `preload/fundamental_filter.py` — Spec
 
+Last updated: 2026-09-07
+
 ## Public API
 
 * `FundamentalFilter` — frozen dataclass:

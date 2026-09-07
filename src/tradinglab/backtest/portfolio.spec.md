@@ -1,5 +1,7 @@
 # backtest/portfolio.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Cash + per-symbol position bookkeeping plus a mark-to-market equity curve. Sign-aware: opens / adds use weighted-average cost, reduces / closes realise P/L, and a flip through zero (e.g. selling more than the long quantity) splits cleanly into a close + new open at `fill_price`.
 

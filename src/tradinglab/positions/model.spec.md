@@ -1,5 +1,7 @@
 # positions/model.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Pure-data dataclasses for one open / closed equity exposure (`Position`) and an immutable ledger entry describing a state change (`PositionEvent`). The tracker mutates `Position` in place by `id`; consumers persist or replay sessions by serialising the ledger via `to_dict` / `from_dict`.
 

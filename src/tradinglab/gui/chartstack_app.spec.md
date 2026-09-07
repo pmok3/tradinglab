@@ -1,5 +1,7 @@
 # gui/chartstack_app.py — Spec
 
+Last updated: 2026-09-07
+
 `ChartStackAppMixin` — glue for the opt-in ChartStack mini-chart sidebar,
 extracted from `ChartApp` (mixin-extraction wave-4, AGENTS.md §7.24). Pure
 method-bag: no `__init__`, no `super()`; reads/writes state owned by

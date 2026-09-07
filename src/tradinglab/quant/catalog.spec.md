@@ -1,5 +1,7 @@
 # quant/catalog.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Defines the curated set of market-internals rows rendered by the **Quant**
 side tab (`gui/quant_tab.py`). The Quant tab is a launcher: each row names a

@@ -1,5 +1,7 @@
 # ids.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Provide the single source of truth for minting generated record IDs, so the
 per-subsystem `_new_id()` copies stop drifting. Five subsystems (`entries`,

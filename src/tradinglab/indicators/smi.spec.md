@@ -1,5 +1,7 @@
 # indicators/smi.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Stochastic Momentum Index (William Blau, 1993) — a double-smoothed
 refinement of the classic stochastic oscillator. Measures how far the

@@ -1,5 +1,7 @@
 # events/yfinance_events.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 yfinance-backed events fetcher. Calls `yfinance.Ticker(symbol)` and materialises `EarningsRecord` / `DividendRecord` lists from `Ticker.earnings_dates` + `Ticker.actions`. The column-tolerant DataFrame → records translation is delegated to `events.normalize` so the variant matrix is unit-testable without yfinance installed.
 

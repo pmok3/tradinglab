@@ -1,5 +1,7 @@
 # session_calendar.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Single source of truth for US-equity **trading-session boundaries**
 (pre / regular / post) and the RTH predicates. Replaces ~7 independent

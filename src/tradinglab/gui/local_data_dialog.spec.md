@@ -1,5 +1,7 @@
 # gui/local_data_dialog.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 The dialog opened by **Tools → Configure Local Data…**. Lets the user
 manage BYOD (Bring Your Own Data) roots — folders on disk **or zip

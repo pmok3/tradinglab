@@ -1,5 +1,7 @@
 # baskets.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Resolve the well-known basket names ("S&P 500", "Nasdaq-100 / QQQ", "NYSE", "NASDAQ", "Quant") into concrete ticker-symbol lists for the sandbox universe-preload feature. Pure data; no network, no I/O beyond reading CSVs that already ship in the repo or the Quant catalog. The GUI consumes this module to populate the Universe radios in the prepare-universe dialog without reaching into `tools/` or `quant/`.
 

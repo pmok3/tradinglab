@@ -1,5 +1,7 @@
 # backtest/replay_events.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Earnings / dividends / corporate-actions bridge for `SandboxController`. The headless backtest kernel (`engine.py`, `bars.py`, `clock.py`, `portfolio.py`, …) intentionally never imports from `tradinglab.events`; this mixin is the explicit boundary that translates per-symbol `EventBundle` data into engine-shaped `CorporateAction` records and exposes clock-gated read accessors for the GUI render path and journal proximity tags.
 

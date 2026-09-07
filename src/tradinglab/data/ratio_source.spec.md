@@ -1,5 +1,7 @@
 # data/ratio_source.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 **Ratio pseudo-symbols** — a typed ticker that charts the per-bar quotient of
 two real symbols. The user types the general **`NUM/DEN`** form straight into

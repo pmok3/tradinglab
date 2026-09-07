@@ -1,5 +1,7 @@
 # entries/spec.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Pure-function trigger-evaluation helpers for native (non-INDICATOR,

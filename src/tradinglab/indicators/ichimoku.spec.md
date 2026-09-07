@@ -1,5 +1,7 @@
 # indicators/ichimoku.py — Ichimoku Cloud
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Provide the traditional five-component Ichimoku visual study without exposing

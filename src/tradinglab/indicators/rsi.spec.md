@@ -1,5 +1,7 @@
 # indicators/rsi.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Wilder's Relative Strength Index over close prices. Values in `[0, 100]`. Non-overlay (draws in its own pane).
 

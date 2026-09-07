@@ -1,5 +1,7 @@
 # `gui/overlay_legend.py` — retired compatibility module
 
+Last updated: 2026-09-07
+
 ## Status
 
 The floating Tk `OverlayLegend` class is retired and no longer exists.

@@ -1,5 +1,7 @@
 # backtest/bars.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Per-field-ndarray bar container consumed by the engine, plus a memoised `from_candles` adapter from `List[Candle]`. The columnar layout is locked so both sandbox replay and the Strategy Tester can share the kernel: tight fill/MAE-MFE loops walk `open` / `high` / `low` / `close` arrays directly.
 

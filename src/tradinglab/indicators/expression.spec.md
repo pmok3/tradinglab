@@ -1,5 +1,7 @@
 # indicators/expression.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 A safe, whitelisted mini-expression language used by the **Custom

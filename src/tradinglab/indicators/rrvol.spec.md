@@ -1,5 +1,7 @@
 # indicators/rrvol.py — Spec
 
+Last updated: 2026-09-07
+
 Single `RRVOL` factory (replacing three legacy classes) with z-score
 support, mirroring unified `RVOL`. RRVOL = stock's RVOL ÷ comparison
 symbol's RVOL of the same flavor. Surfaces idiosyncratic activity vs

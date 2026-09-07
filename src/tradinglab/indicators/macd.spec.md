@@ -1,5 +1,7 @@
 # indicators/macd.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 MACD — Moving Average Convergence Divergence. Three concurrent series
 on its own pane (`pane_group = "macd"`): `macd = fast_ma - slow_ma`,

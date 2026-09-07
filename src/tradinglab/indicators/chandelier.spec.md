@@ -1,5 +1,7 @@
 # indicators/chandelier.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Always-on chart-study indicator that overlays Chandelier Stops (Chuck LeBeau, 1995) on the price pane. Companion to the in-trade exit rule that lives in `exits/spec.py` and shares the same math via `core/chandelier_math.py`.
 

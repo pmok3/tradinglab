@@ -1,5 +1,7 @@
 # data/synthetic_source.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Offline random-walk data source. Used for development, smoke tests, and as the history bootstrap for the synthetic streaming source (which needs seed bars that don't collide with its own in-progress rollover bar).
 

@@ -1,5 +1,7 @@
 # `chartstack/dpi.py` — display-DPI helpers (M7)
 
+Last updated: 2026-09-07
+
 ## Purpose
 Lets the panel auto-cap card count at 6 on a 4K-class display
 (spec §5.2). Centralizing the Tk `winfo_fpixels` call here keeps

@@ -1,5 +1,7 @@
 # Chandelier Stops Math (`core/chandelier_math.py`)
 
+Last updated: 2026-09-07
+
 Pure compute (no matplotlib / Tk / main-thread coupling). Thread-safe.
 
 Shared by `indicators.chandelier.ChandelierStops` (always-on overlay) and `exits.spec` chandelier evaluator (in-trade exit rule). Math is identical — only the lifecycle differs.

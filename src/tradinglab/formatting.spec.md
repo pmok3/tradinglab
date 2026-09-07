@@ -1,5 +1,7 @@
 # formatting.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Tiny module of display-formatting helpers shared across the GUI tables, tooltips, and volume axis formatter. Exists so `rendering.py`, `core/series.py`, and `app.py` don't each re-implement (or import inconsistent) volume humanizers.
 

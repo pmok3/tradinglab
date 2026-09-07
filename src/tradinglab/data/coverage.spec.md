@@ -1,5 +1,7 @@
 # data/coverage.py — Spec
 
+Last updated: 2026-09-07
+
 > Design contract: [`docs/TARGETED_FETCH.md`](../../../docs/TARGETED_FETCH.md).
 > The module is implemented + unit-tested and is consumed by the drilldown
 > targeted-fetch path.

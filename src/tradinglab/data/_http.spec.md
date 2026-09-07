@@ -1,5 +1,7 @@
 # `data/_http.py` — Shared credential-safe HTTP opener
 
+Last updated: 2026-09-07
+
 ## Purpose
 Single source of truth for the HTTP details that every vendor
 fetcher must get right:

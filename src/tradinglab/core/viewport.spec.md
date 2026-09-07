@@ -1,5 +1,7 @@
 # core/viewport.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Pure math for y-axis autoscale and the virtualized render-range calculation. Called from `ChartApp._autoscale_slot_y`, `gui/interaction._autoscale_y_to_visible`, and `ChartApp._ensure_rendered_for_view` / `_render`.
 

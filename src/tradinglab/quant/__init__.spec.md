@@ -1,5 +1,7 @@
 # quant/__init__.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Package init for the market-internals ("Quant") domain. Re-exports the
 catalog surface so callers can `from tradinglab.quant import

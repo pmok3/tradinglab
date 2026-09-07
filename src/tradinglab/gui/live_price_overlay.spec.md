@@ -1,5 +1,7 @@
 # gui/live_price_overlay.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Owns the dotted horizontal "live quote" line at the current price, plus its right-edge label, for every slot in `_panel_state`. Mirrors `exits_overlay.py` / `entries_overlay.py` in lifecycle: rebuild on every `_render`, mutate in place on every `_refresh_view_after_tick`.
 

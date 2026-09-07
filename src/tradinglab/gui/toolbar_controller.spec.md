@@ -1,5 +1,7 @@
 # `gui/toolbar_controller.py` — Toolbar extraction
 
+Last updated: 2026-09-07
+
 ## Purpose
 Move the top toolbar widget construction out of `app.py` while keeping the existing TradingLab toolbar behavior and compatibility attributes intact. The controller owns the toolbar frame, wires widgets to `AppState`, and delegates user actions back to `ChartApp` through a small callback protocol.
 

@@ -1,5 +1,7 @@
 # strategy_tester/acceptance.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 `AcceptanceToken` — a cancellation primitive shared between the GUI Stop button and worker threads driving the strategy tester's per-symbol engine fan-out. Thin wrapper over `threading.Event` so workers can poll a single bit cheaply without touching Tk.
 

@@ -1,5 +1,7 @@
 # `chartstack/render.py` — Per-card matplotlib drawing
 
+Last updated: 2026-09-07
+
 ## Purpose
 Single source of truth for what gets painted on a card's `Axes`. Per the
 2026-05-16 candles-only simplification, cards render miniature daily OHLC

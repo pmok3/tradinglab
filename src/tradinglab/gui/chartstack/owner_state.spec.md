@@ -1,5 +1,7 @@
 # `chartstack/owner_state.py` — owner-state adapters (M6)
 
+Last updated: 2026-09-07
+
 ## Purpose
 Brokers reads from `ChartApp`'s scanner / position / sandbox state
 into plain Python collections the panel can consume without

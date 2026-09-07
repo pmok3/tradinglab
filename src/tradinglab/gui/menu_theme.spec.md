@@ -1,5 +1,7 @@
 # `gui/menu_theme.py` — classic Tk menu theming
 
+Last updated: 2026-09-07
+
 ## Purpose
 Centralize explicit palette application for classic `tk.Menu` widgets and provide the Windows cascade-arrow workaround.
 

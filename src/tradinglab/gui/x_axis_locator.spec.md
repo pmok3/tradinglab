@@ -1,5 +1,7 @@
 # gui/x_axis_locator.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 TradingView-style adaptive x-axis locator + formatter for the chart's

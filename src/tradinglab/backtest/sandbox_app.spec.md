@@ -1,5 +1,7 @@
 # backtest/sandbox_app.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 - `SandboxAppController` owns app-level sandbox state extracted from `app.py`.
 - It is **not** the replay engine; `backtest/replay.py` still owns session advancement.

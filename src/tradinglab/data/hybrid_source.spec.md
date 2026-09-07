@@ -1,5 +1,7 @@
 # data/hybrid_source.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 A composite data source that stitches **yfinance (recent + live)** over
 **Alpaca (deep history)** into one continuous series, giving a completely-free

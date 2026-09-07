@@ -1,5 +1,7 @@
 # backtest/sandbox_app_aliases.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 `SandboxAliasMixin` extracted from `ChartApp`. Owns the six

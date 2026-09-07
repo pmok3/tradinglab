@@ -1,5 +1,7 @@
 # gui/_widget_metrics.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Single source of truth for the Tk font + widget pixel metrics used by the

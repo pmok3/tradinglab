@@ -1,5 +1,7 @@
 # `gui/strategy_tab.py` — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 PR 4 of the Strategy Tester rollout. A self-contained Tk widget
 (``ttk.Frame`` subclass) embedded in a Toplevel popup launched from

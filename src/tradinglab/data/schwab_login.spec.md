@@ -1,5 +1,7 @@
 # data/schwab_login.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 One-time Schwab OAuth-code login CLI. Walks the user through the browser-redirect dance, exchanges the resulting auth code for tokens, and writes the persistent cache that `schwab_auth` then auto-refreshes for ~7 days.
 

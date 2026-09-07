@@ -1,5 +1,7 @@
 # streaming/__init__.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Aggregates bar and quote streaming-source plugins into the `STREAM_SOURCES` and
 `QUOTE_SOURCES` registries. Registration mirrors `data/__init__.py`.

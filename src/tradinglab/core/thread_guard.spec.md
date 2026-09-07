@@ -1,5 +1,7 @@
 # core/thread_guard.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Enforce the Tk-main-thread invariant on state-owning subsystems (PositionTracker, ExitEvaluator, AuditLog, PaperBrokerEngine, IndicatorManager, DrawingStore). Calling these from worker / stream-source threads races indicator memos, Treeview updates, drawing persistence, and the JSONL audit log.
 

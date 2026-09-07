@@ -1,5 +1,7 @@
 # `splash.py` — startup splash controller (Feature B)
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Bridges the PyInstaller bootloader's optional `pyi_splash` overlay

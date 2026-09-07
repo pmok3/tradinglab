@@ -1,5 +1,7 @@
 # data/source_ranking.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 The single source of truth for the app's **global, tier-aware data-source
 priority** — the fixed order in which registered sources are preferred when

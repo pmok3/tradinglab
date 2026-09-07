@@ -1,5 +1,7 @@
 # indicators/base.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Declares the `Indicator` Protocol, the `INDICATORS` display registry, and the typed parameter/render metadata (`ParamDef`, `LineStyle`, `OutputPlotSpec`, `FillSpec`, `ReadoutStateSpec`) consumed by the auto-generated dialog and chart renderer. An indicator transforms OHLCV into causal named arrays, all the same length as the input candles and NaN-padded where undefined; visual displacement is metadata rather than a mutation of those arrays.
 

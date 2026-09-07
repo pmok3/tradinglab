@@ -1,5 +1,7 @@
 # watchlists/manager.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 In-memory watchlist manager with **explicit save** semantics. Mirrors the configuration-file model: nothing auto-loaded on construction, nothing auto-written on mutation. Users explicitly load/save via `File → Load/Save Watchlists…` menu items (or Watchlists dialog `Import…` / `Export…` buttons, which route through the same methods).
 

@@ -1,5 +1,7 @@
 # disk_cache.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Durable cache of fetched candle data, keyed by `(source, ticker, interval)`. Acts as a log of every bar we've ever seen for a key, so that historical bars which fall outside a provider's current window (e.g. yfinance's 60-day intraday cap) are retained across sessions. Freshness policy is **not** enforced here — sealed OHLCV bars are immutable facts; the caller (`ChartApp._cache_is_stale`) decides when to re-fetch.
 

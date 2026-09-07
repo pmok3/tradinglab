@@ -1,5 +1,7 @@
 # preload/service.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Pure-logic batch fetch loop for the sandbox universe-preload feature. Serial, cancellable, retry-aware. All dependencies are injected (fetcher, cache_load, cache_save, merge, sleep, progress callback) so the service can be unit-tested without Tk, network, or filesystem.
 

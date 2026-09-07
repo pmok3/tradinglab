@@ -1,5 +1,7 @@
 # gui/drawings_app.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 `DrawingsAppMixin` extracted from `ChartApp`. Owns the chart-side

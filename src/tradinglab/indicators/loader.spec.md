@@ -1,5 +1,7 @@
 # indicators/loader.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Custom-indicator drop-in folder loader. When the user enables
 `custom_indicators_enabled` (Settings, default OFF), the app calls

@@ -1,5 +1,7 @@
 # `gui/theme_editor.py` — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Dedicated **Theme Editor** `BaseModalDialog` (big-bet item #7 of

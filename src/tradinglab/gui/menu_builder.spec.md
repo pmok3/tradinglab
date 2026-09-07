@@ -1,5 +1,7 @@
 # `gui/menu_builder.py` — menubar extraction
 
+Last updated: 2026-09-07
+
 ## Purpose
 - Move the large menubar-construction block out of `app.py` while preserving TradingLab's existing menubar surface across these top-level cascades, **in display order**:
   1. **File** — Load / Save / Save As Configuration, Recent Configurations, Theme…, Exit.

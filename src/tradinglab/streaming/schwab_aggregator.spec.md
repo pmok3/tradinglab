@@ -1,5 +1,7 @@
 # streaming/schwab_aggregator.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Pure, threadless aggregator that rolls Schwab streamer events into 1-minute `Candle`s. Two services are decoded here:
 * **LEVELONE_EQUITIES** (sub-minute quote/trade ticks) → drives an in-progress bar.

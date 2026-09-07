@@ -1,5 +1,7 @@
 # rendering.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Pure matplotlib drawing primitives for candlestick + volume charts. Designed

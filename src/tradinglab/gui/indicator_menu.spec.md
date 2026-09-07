@@ -1,5 +1,7 @@
 # gui/indicator_menu
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Hosts the menu-callback handlers for the **Indicators** cascade in the

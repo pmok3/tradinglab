@@ -1,5 +1,7 @@
 # `gui/drawing_dialog.py` — drawing edit dialog (Feature C)
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Modeless Toplevel exposing editable properties of a single

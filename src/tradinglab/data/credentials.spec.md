@@ -1,5 +1,7 @@
 # data/credentials.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Stdlib-only loader for broker / data-vendor credentials from environment,
 the encrypted store, `.env` files, and plaintext `alpaca.txt` /

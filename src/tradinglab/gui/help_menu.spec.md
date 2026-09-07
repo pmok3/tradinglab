@@ -1,5 +1,7 @@
 # `gui/help_menu.py` — Help cascade for the ChartApp menubar
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 `HelpMenuMixin` adds a `Help` cascade as the last menu in the

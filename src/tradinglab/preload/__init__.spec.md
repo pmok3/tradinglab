@@ -1,5 +1,7 @@
 # preload/__init__.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Subpackage namespace for the sandbox universe-preload feature. Splits the responsibilities into testable units (manifest persistence + pure-logic fetch service) so the Tk dialog stays a thin wrapper.
 

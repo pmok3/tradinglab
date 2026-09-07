@@ -1,5 +1,7 @@
 # data/prefetch/tiers.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 The **relevance ladder**: a frozen `PrefetchContext` snapshot + gap-ranked
 `TierProvider`s + `expand_all` that turns app state into band-0 `FetchJob`s.

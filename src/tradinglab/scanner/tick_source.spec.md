@@ -1,5 +1,7 @@
 # scanner/tick_source.py — spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Tick source abstraction that decouples *where ticks come from* from

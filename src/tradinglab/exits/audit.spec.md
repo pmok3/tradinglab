@@ -1,5 +1,7 @@
 # `exits/audit.py` — append-only JSONL audit log
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Records every state-changing event in the exit-strategies subsystem

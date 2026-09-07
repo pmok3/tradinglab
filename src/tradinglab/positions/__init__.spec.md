@@ -1,5 +1,7 @@
 # positions/__init__.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Public re-export shim for the `positions` package — single source of truth for paper / sandbox open positions during a session. Owned by the Tk main thread; the per-file design (mutable `Position`, frozen `PositionEvent` ledger, Tk-thread `PositionTracker`, atomic JSON persistence) is described in the sibling `spec.md` (package design notes).
 

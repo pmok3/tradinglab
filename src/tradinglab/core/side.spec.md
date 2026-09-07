@@ -1,5 +1,7 @@
 # side.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Provide one canonical value type — `Side` — for the position-direction
 concept ("is this a long-side or short-side position") so the next

@@ -1,5 +1,7 @@
 # strategy_tester/universe.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Resolve a `UniverseSpec` into a concrete symbol tuple for fan-out. Three sources per design: explicit symbols, saved watchlist, built-in preset.
 

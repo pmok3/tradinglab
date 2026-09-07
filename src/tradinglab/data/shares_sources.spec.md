@@ -1,5 +1,7 @@
 # data/shares_sources.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Registry of historical shares-outstanding providers, and the resolution
 of the `shares_data_source` tunable to a concrete fetcher. Mirrors the

@@ -1,5 +1,7 @@
 # watchlists/storage.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 JSON persistence for watchlists. Single file under the user's cache dir (`_cache_dir() / "watchlists.json"`). Schema-versioned so future breaking changes can be migrated without destroying user data.
 

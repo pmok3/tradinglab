@@ -1,5 +1,7 @@
 # backtest/replay.py — Spec
 
+Last updated: 2026-09-07
+
 > ⚠ **Tk-coupled module** — imports `tkinter`. The SOLE Tk-coupled
 > module in `backtest/`; must NEVER be auto-imported from
 > `backtest/__init__.py` or any kernel module.

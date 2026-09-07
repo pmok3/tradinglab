@@ -1,5 +1,7 @@
 # `scanner/operators.py` — operator dispatch registry
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Single source of truth for the **behavioural** half of the scanner's

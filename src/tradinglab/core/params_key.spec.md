@@ -1,5 +1,7 @@
 # params_key.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Provide a single canonical helper for turning a per-indicator
 ``params`` mapping into a hashable, deterministic cache key. Replaces

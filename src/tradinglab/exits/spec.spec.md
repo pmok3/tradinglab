@@ -1,5 +1,7 @@
 # exits/spec.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Pure-function trigger-evaluation helpers for native exit triggers (market, limit, stop, trailing-stop, chandelier, time-of-day) plus state-machine maths for trailing / chandelier. `update_*` mutates a small dataclass; `evaluate_*` reads it + the new bar. No Tk, no I/O.

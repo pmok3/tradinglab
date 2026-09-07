@@ -1,5 +1,7 @@
 # models.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Defines the `Candle` dataclass — the one data type that flows end-to-end through fetchers, caches, normalizers, renderers, streaming, and indicators. Intentionally trivial: mutating a `Candle` in place (for streaming ticks) must be cheap and must preserve object identity.
 

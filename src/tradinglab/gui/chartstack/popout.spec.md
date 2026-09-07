@@ -1,5 +1,7 @@
 # `chartstack/popout.py` — M4 placeholder
 
+Last updated: 2026-09-07
+
 ## Purpose
 Reserves the import path for the M4 pop-out window. Middle-click
 on a card will open its real ~600×400 chart in a `tk.Toplevel`

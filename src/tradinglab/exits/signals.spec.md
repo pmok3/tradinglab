@@ -1,5 +1,7 @@
 # `exits/signals.py` — exit-signal protocol + concrete sinks
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 The evaluator decides *when* and *what* to exit, hands a broker-agnostic `ExitSignal` to a sink that delivers the order. This module owns the protocol + the three v1 sinks.

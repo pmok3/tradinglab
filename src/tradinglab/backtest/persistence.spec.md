@@ -1,5 +1,7 @@
 # backtest/persistence.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Save / load a sandbox session to a single JSON file plus an optional sibling screenshots directory. Phase 1d "File menu Load/Save Session" model — explicit, no autosave. The on-disk envelope is deliberately thin; the embedded `SessionResult.to_dict()` does the real work.
 

@@ -1,5 +1,7 @@
 # streaming/synthetic_quotes.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Deterministic offline [`QuoteSource`](quotes.spec.md) — the counterpart
 to [`streaming/synthetic`](synthetic.spec.md) for the quote axis, and

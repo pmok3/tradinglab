@@ -1,5 +1,7 @@
 # backtest/clock.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Monotonic bar-index advancer over the engine's master timeline. The sandbox is multi-ticker but synchronous — every "Next bar" advances all loaded tickers in lockstep. The clock owns the master timeline (an `int64` ndarray of epoch seconds) so there is one authoritative answer to "what time is it now?" regardless of which ticker is focused.
 

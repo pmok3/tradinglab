@@ -1,5 +1,7 @@
 # core/bars_registry.py — spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Shared `(symbol, interval) → (BarsBuffer, IndicatorMemo)` registry. Layer 0 of the exit-strategies design — sits on top of `MultiIntervalCache` (which owns buffers) and adds a memo lifecycle keyed by the same tuple. `ScanRunner`, live entry/exit evaluators, and the strategy tester use one memo per `(symbol, interval)` per tick — e.g. a 5m EMA(50) computed for a scan is reused by an exit trigger on the same bars.
 

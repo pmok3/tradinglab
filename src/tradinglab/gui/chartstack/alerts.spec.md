@@ -1,5 +1,7 @@
 # `chartstack/alerts.py` — four-tier alert engine (M6)
 
+Last updated: 2026-09-07
+
 ## Purpose
 Owns the per-card ChartStack alert evaluation, audio rate-limiter,
 and time-of-day gating described in §2.4 of the synthesis. Pure

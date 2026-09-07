@@ -1,5 +1,7 @@
 # backtest/performance.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Pure-Python aggregates over a [`SessionResult`](session.spec.md) feeding Phase 1d's Performance View. Derived structures cover trades, setup/proximity rollups, replay-day journals (notes, trades, and explicit decisions), and realized P&L. Export helpers write trade and decision CSVs. No Tk imports.
 

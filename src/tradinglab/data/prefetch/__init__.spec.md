@@ -1,5 +1,7 @@
 # data/prefetch/__init__.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Package root for the background **prefetch scheduler** — a priority-queue,
 rate-gated, breadth-first preloader that warms the disk + working-set caches so

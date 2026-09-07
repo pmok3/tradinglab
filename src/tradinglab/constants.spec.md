@@ -1,5 +1,7 @@
 # constants.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Holds palette (light/dark theme dicts), the candlestick bull/bear colors, the interval→yfinance-period lookup, and a handful of small helpers for intraday session classification and interval arithmetic. Acts as the single source of truth for display colors and interval-related constants, avoiding circular imports.
 

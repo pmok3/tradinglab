@@ -1,5 +1,7 @@
 # gui/per_indicator_dialog.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Per-indicator settings popup spawned by clicking an in-readout

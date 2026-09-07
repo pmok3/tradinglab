@@ -1,5 +1,7 @@
 # gui/view_menu.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 `ChartApp` mixin holding the View menu's two heatmap commands: the
 Finviz browser launcher and the in-app live heatmap window. They live

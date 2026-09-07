@@ -1,5 +1,7 @@
 # indicators/render.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Render-side bridge between the pure-compute indicator stack ([`base`](base.spec.md), [`moving_averages`](moving_averages.spec.md), [`rsi`](rsi.spec.md), bollinger) and the matplotlib figure. Computes (cached) values, materialises `Line2D` artists onto the slot's price axis (overlays) and per-config lower panes (non-overlays), and exposes a state object the app walks during fast paths (pan/zoom blit, streaming tick, theme swap).
 

@@ -1,5 +1,7 @@
 # gui/interaction.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 `InteractionMixin` — the entire interactive chart subsystem: pan,

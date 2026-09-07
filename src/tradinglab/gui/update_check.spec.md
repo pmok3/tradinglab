@@ -1,5 +1,7 @@
 # gui/update_check.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 `UpdateCheckMixin` extracted from `ChartApp`. Owns the **"update

@@ -1,5 +1,7 @@
 # dialog_manager.py specification
 
+Last updated: 2026-09-07
+
 ## Purpose
 - Provide one registry for modeless GUI dialogs that behave like singletons.
 - Replace repeated `winfo_exists()` / `deiconify()` / `lift()` / `focus_set()` blocks.

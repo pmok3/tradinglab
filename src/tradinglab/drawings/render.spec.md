@@ -1,5 +1,7 @@
 # `drawings/render.py` — drawing render + hit-test (Feature C)
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Stateless helpers for translating a `Drawing` list into matplotlib

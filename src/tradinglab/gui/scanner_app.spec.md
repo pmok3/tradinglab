@@ -1,5 +1,7 @@
 # `gui/scanner_app.py` — Scanner-tab construction + per-row action routing
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 `ScannerAppMixin` is a `ChartApp` mixin extracted in wave-3 of the

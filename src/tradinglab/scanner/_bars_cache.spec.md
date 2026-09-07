@@ -1,5 +1,7 @@
 # BarsKeyedCache
 
+Last updated: 2026-09-07
+
 Tiny LRU cache shared by per-`BarsNp` field derivations in
 `scanner/fields.py` (session-day masks, Heikin-Ashi arrays, flat-HA arrays,
 and key-bar arrays). Replaces the ad-hoc `OrderedDict + Lock` blocks that

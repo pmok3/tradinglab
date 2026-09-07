@@ -1,5 +1,7 @@
 # entries/model.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Pure-data model for one saved entry strategy. Tk-free, side-effect-

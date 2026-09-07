@@ -1,5 +1,7 @@
 # core/reference_data.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Cross-symbol reference-data registry for indicators that need OHLCV for a *second* symbol (e.g. RRVOL divides the primary's RVOL by SPY's RVOL of the same flavor). Bridges the synchronous indicator-compute path with the app's async fetch machinery.
 

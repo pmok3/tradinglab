@@ -1,5 +1,7 @@
 # `gui/readout_legend.py` — pure enumeration for the in-readout overlay legend
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Computes the **rows** for the TradingView-style overlay-indicator legend

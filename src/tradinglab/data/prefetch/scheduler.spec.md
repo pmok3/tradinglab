@@ -1,5 +1,7 @@
 # data/prefetch/scheduler.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 The pure, headless **policy state machine** of the prefetch scheduler: priority
 heap, per-tier generations, dedup/promotion, and the dispatch decision

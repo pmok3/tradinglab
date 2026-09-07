@@ -1,5 +1,7 @@
 # `core/view_intent` — chart X-window preservation intent
 
+Last updated: 2026-09-07
+
 Single source of truth for what happens to the chart's visible X window
 (matplotlib `xlim`) on the next render. Replaces the scattered `ChartApp`
 booleans (`_preserve_xlim_on_render`, `_preserve_xlim_by_time_on_render`,

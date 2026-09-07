@@ -1,5 +1,7 @@
 # indicators/atr.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Average True Range as a pane indicator with user-selectable smoothing
 kernel and **mode**: classical rolling average (Wilder/SMA/EMA/WMA)

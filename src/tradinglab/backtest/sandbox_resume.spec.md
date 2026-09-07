@@ -1,5 +1,7 @@
 # `sandbox_resume.py` — last-session metadata persistence (Feature B)
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 When a sandbox session is active and the user closes the app cleanly,

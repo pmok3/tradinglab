@@ -1,5 +1,7 @@
 # indicators/prior_day.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Prior Day High / Low / Close (PDH / PDL / PDC) reference lines for intraday charts. Draws three horizontal lines at the previous completed regular-session trading day's high, low, and close. These are the most fundamental S/R levels for discretionary intraday trading: PDH/PDL define yesterday's range (breakout/rejection setups), PDC defines the gap (above/below yesterday's close).
 

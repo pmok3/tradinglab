@@ -18,6 +18,20 @@ under 30 seconds.
 - Do **not** use the dotted form (`# indicators.rsi`), and do **not**
   embed the indicator's display name (`# RSI — Wilder's …`). Display
   names belong in the body.
+- Follow the title and one blank line with `Last updated: YYYY-MM-DD`,
+  then another blank line. Update the date whenever the paired `.py`
+  changes. A date-only spec edit explicitly acknowledges a code change
+  that does not alter the documented behavior.
+
+Example:
+
+```text
+# indicators/rsi.py — Spec
+
+Last updated: 2026-09-07
+
+## Purpose
+```
 
 ## 3. H2 sections (canonical order)
 Skip a section only with a one-line "N/A — <reason>". Never reorder.

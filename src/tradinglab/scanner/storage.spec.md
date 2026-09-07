@@ -1,5 +1,7 @@
 # scanner/storage.py — spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Per-scan JSON persistence under `<cache_dir>/scans/`. One file per

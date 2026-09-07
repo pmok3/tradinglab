@@ -1,5 +1,7 @@
 # `indicators/preset_store` — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Auto-persisted on-disk store for **named indicator presets** so a preset the
 user saves via *Indicators → Save Preset…* survives an app restart **without**

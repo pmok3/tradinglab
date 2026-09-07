@@ -1,5 +1,7 @@
 # backtest/sandbox_feed.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 `SandboxFeedWarmer` registers a replay session's *observable universe* —
 the union of pinned watchlist tickers and the prepared "Download Replay

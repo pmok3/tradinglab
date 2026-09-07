@@ -1,5 +1,7 @@
 # `indicators/_palette.py` — spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Single source of truth for **indicator default colors** (and the

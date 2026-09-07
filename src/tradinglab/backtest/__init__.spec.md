@@ -1,5 +1,7 @@
 # backtest/__init__.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Aggregates the headless sandbox kernel and re-exports its public surface. The kernel is a deterministic, synchronous, dependency-free (no Tk, no matplotlib) bar-replay engine: feed it a `SessionSpec` plus per-symbol `BarSeries` and the same input always produces a byte-identical `SessionResult`. The Tk-side controller (`replay.SandboxController`) and the GUI dialogs / panels live elsewhere.
 

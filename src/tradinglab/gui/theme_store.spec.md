@@ -1,5 +1,7 @@
 # `gui/theme_store.py` — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 JSON-per-file persistence for **user-saved colour themes**, accessed

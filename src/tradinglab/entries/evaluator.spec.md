@@ -1,5 +1,7 @@
 # entries/evaluator.py — live entry-strategy evaluator
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Orchestrator that turns price / indicator / scanner-alert data into

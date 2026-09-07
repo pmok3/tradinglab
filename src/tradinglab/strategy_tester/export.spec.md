@@ -1,5 +1,7 @@
 # strategy_tester/export.py — spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Generate shareable artifacts from a completed Strategy Tester Run

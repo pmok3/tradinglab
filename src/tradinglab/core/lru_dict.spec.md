@@ -1,5 +1,7 @@
 # lru_dict.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Provide a single bounded-capacity LRU dictionary primitive so
 unbounded process-lifetime caches don't drift back into the codebase.

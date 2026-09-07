@@ -1,5 +1,7 @@
 # core/bars.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Canonical OHLCV columnar view. The single source of truth for "candle list as NumPy columns", replacing parallel evolutions in scanner / fetch / chart-render code that each used to have their own `np.fromiter` paths.
 

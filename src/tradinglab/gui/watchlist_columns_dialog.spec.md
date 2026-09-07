@@ -1,5 +1,7 @@
 # gui/watchlist_columns_dialog.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 The per-watchlist **"Columns…" dialog** — the primary surface for
 choosing which signal columns a watchlist shows. A right pane (reusing

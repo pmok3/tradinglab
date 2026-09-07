@@ -1,5 +1,7 @@
 # gui/sandbox_menu
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Menu-callback handlers for the **Sandbox** cascade — Start, End,

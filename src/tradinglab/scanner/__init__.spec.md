@@ -1,5 +1,7 @@
 # scanner package — spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Continuous block-tree scanner driven by sandbox replay (and, in

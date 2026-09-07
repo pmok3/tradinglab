@@ -1,5 +1,7 @@
 # `chartstack/settings_adapter.py` — Defaults + parsing for `chartstack.*` keys
 
+Last updated: 2026-09-07
+
 ## Purpose
 One canonical defaults table for the ChartStack settings keys, plus
 helpers (`is_enabled`, `card_count`, `binding_mode`) that apply the

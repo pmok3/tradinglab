@@ -1,5 +1,7 @@
 # gui/events_overlay.py — Spec
 
+Last updated: 2026-09-07
+
 ## Overview
 
 Chart artist layer for the historical earnings & dividends feature.

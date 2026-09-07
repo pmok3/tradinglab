@@ -1,5 +1,7 @@
 # `_single_instance.py` — single-instance protection (Feature B)
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Stop a second `TradingLab.exe` double-click (Windows) — or a second launch of the

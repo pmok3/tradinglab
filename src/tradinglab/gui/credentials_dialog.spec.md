@@ -1,5 +1,7 @@
 # `gui/credentials_dialog.py` — Configure-credentials dialog + DPAPI bootstrap
 
+Last updated: 2026-09-07
+
 ## Purpose
 End users running the frozen `.exe` cannot edit `.env` — there is
 no `pyproject.toml` next to the executable for the dotenv

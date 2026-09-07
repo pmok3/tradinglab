@@ -1,5 +1,7 @@
 # `gui/named_fonts.py`
 
+Last updated: 2026-09-07
+
 ## Purpose
 Pin every Tk named font (`TkDefaultFont` / `TkTextFont` / `TkMenuFont` / `TkHeadingFont` / `TkCaptionFont` / `TkSmallCaptionFont` / `TkIconFont` / `TkTooltipFont` / `TkFixedFont`) to a known proportional + fixed family at a known size, with an optional UI-scale multiplier for accessibility / hi-DPI displays. Without this, Tk falls back to whatever the OS / X-resources happen to pick, which on some Linux container images is a 1990s-shareware bitmap monospace.
 

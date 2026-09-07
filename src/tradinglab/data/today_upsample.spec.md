@@ -1,5 +1,7 @@
 # `data/today_upsample.py` — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Synthesise today's running daily bar from cached intraday data so the

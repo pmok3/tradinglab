@@ -1,5 +1,7 @@
 # indicators/adx.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Wilder's Average Directional Index — a trend-strength oscillator in
 `[0, 100]` with two companion direction lines (`+DI`, `-DI`). Drawn

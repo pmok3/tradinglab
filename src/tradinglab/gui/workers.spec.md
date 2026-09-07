@@ -1,5 +1,7 @@
 # gui/workers.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Mixin adding thread-pool lifecycle (`ThreadPoolExecutor`) sizing/apply behavior to `ChartApp`. Stateless — relies on attributes set by `ChartApp.__init__` (`_worker_count`, `_executor`, `_fetch_executor`) and class attrs `_WORKER_COUNT_MIN`/`_WORKER_COUNT_MAX`.
 

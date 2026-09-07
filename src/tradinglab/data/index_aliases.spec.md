@@ -1,5 +1,7 @@
 # data/index_aliases.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 **Source-aware index-symbol aliases** — let the user type the shorthand they
 actually say out loud (`VIX`, `SPX`) and have it resolve to whatever the

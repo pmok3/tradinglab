@@ -1,5 +1,7 @@
 # data/auto_source.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 The **"Auto"** data source — the startup default — which resolves to the
 **globally best available source** per the tier-aware priority in

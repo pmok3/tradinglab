@@ -1,5 +1,7 @@
 # data/yfinance_source.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Live-data fetcher backed by yfinance. Thin adapter: pulls a DataFrame via `yf.Ticker(t).history(...)` and delegates to the vectorized `candles_from_dataframe` normalizer.
 

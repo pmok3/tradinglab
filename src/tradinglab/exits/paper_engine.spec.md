@@ -1,5 +1,7 @@
 # exits/paper_engine.spec.md — `PaperBrokerEngine`
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Live in-app paper broker that fills exit orders against incoming bar

@@ -1,5 +1,7 @@
 # backtest/session.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Reproducibility-grade record types for the sandbox kernel: `SessionSpec` is everything needed to deterministically replay a session; `SessionResult` is the full output (fills + journals + equity curve + final cash). Both round-trip through `to_dict` / `from_dict` with byte-stable JSON, locked in as the contract that Phase 2 leaderboards / walk-forward analysis will rely on.
 

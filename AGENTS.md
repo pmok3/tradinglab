@@ -44,8 +44,10 @@ Environment facts and agent-workflow rules for this machine (**Windows on ARM**)
   explicit file list.
 - **Spec-driven HARD RULE** (§2): every `.py` you change under
   `src/tradinglab/` needs its colocated `.spec.md` updated in the same
-  change. `tests/unit/test_codebase_invariants.py` gates that a spec
-  *exists*; whether it is *true* is on you.
+  change. `tools/check_spec_freshness.py` blocks CI/release when the
+  paired spec is absent from the Git diff. Every spec carries
+  `Last updated: YYYY-MM-DD`; for a non-behavioral code change, updating
+  only that date is the explicit acknowledgement.
 - **Commit trailer:** add
   `Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>`
   (see §9) unless the user opts out.
@@ -303,10 +305,12 @@ The canonical end-to-end gate is `test_smoke_full.py`.
 
 ## 6. CI / GitHub Actions
 
-`.github/workflows/ci.yml` defines seven jobs:
+`.github/workflows/ci.yml` defines eight jobs. Every test/lint job depends on
+`spec-freshness`, so a drift failure stops the rest of the pipeline:
 
 | Job | OS × Python | Command(s) |
 |---|---|---|
+| `spec-freshness` | ubuntu-latest × 3.12 | `python tools/check_spec_freshness.py --base <event-base> --head <event-head>` |
 | `lint` | ubuntu-latest × 3.12 | `ruff check src tests` |
 | `unit` | windows-latest × {3.11, 3.12} | `pytest tests/unit -q`; the logic suites (`core`/`data`/`entries`/`exits`/`positions`/`streaming`); `tests/gui` in its own interpreter |
 | `coverage` | windows-latest × 3.12 | unit + scanner + logic + oracles with `--cov=tradinglab` (informational, `continue-on-error`) |
@@ -612,11 +616,13 @@ scanner `BarsRegistry` (that's §7.18's mechanism). Specs: `indicators/rrvol.spe
 
 ### 7.30 Spec-drift audit methodology (when asked to "update the specs")
 
-`tests/unit/test_codebase_invariants.py` gates spec *structure*: every non-`__init__`
-module needs a colocated `.spec.md` and orphan specs fail. **Content** drift is still
-manual: use `.py`-newer-than-`.spec.md` git timestamps as a noisy candidate list (it
-also flags pure-format commits), root-cause to cross-cutting refactor commits, then fan
-out parallel per-subsystem agents that fix only factual inaccuracies. Forbid stylistic
+`tests/unit/test_codebase_invariants.py` gates spec *structure*: every module needs a
+colocated `.spec.md` and orphan specs fail. `tools/check_spec_freshness.py` gates
+*freshness* in CI and release: each changed production `.py` must have its paired spec
+in the same Git range, and all specs must carry a valid `Last updated: YYYY-MM-DD`
+header. A behavior change updates the contract and date; a non-behavioral change may
+update only the date. **Factual accuracy remains a manual audit:** fan out parallel
+per-subsystem agents that fix only demonstrated inaccuracies. Forbid stylistic
 rewrites — most files should come back unchanged.
 
 ### 7.31 Classic Tk widgets need explicit dark theming — use `gui/native_theme.py`
@@ -798,8 +804,9 @@ Specs: `gui/source_registry_app.spec.md`, `data/auto_source.spec.md`,
 
 **Releases are cut by pushing a tag — you do NOT build locally.**
 `.github/workflows/release.yml` builds x64 (`windows-latest`) and ARM64
-(`windows-11-arm`) in parallel on native runners, each gated by the full
-unit / scanner / logic / gui / smoke battery, then publishes both zips to a
+(`windows-11-arm`) in parallel on native runners. A blocking spec-freshness job
+runs before either build; each build is then gated by the full unit / scanner /
+logic / gui / smoke battery. The publish job collects both zips and creates a
 GitHub Release with the CHANGELOG section as the body. ~12 minutes end to end.
 
 ```powershell
@@ -809,6 +816,7 @@ GitHub Release with the CHANGELOG section as the body. ~12 minutes end to end.
 #    fails without it, and the release body is built from it.
 
 # 2. Validate locally — there is no PR gate (§9).
+python tools/check_spec_freshness.py --base origin/main
 python -m ruff check src tests
 python -m pytest tests/unit tests/data -q
 

@@ -1,5 +1,7 @@
 # gui/sandbox_panel.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Sidebar widget shown only while a sandbox session is active. Mounts to the right of the chart and surfaces the live state of the [`SandboxController`](../backtest/replay.spec.md): clock, cash, positions, focus list, Buy / Sell, Next-bar, optional manual decision logging, per-day watch-notes box, End-session.
 

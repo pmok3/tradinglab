@@ -1,5 +1,7 @@
 # gui/recent_menus.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 `RecentMenusMixin` extracted from `ChartApp`. Thin pass-through to

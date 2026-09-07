@@ -1,5 +1,7 @@
 # data/__init__.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Aggregates the data-source plugins (yfinance, synthetic, synthetic-stream bootstrap) into a single importable registry. Also re-exports the normalization helpers (`candles_from_dataframe`, `CandleArrays`, `stash_arrays`/`pop_prebuilt_arrays`) and the parallel-fetch primitive, all at `tradinglab.data.*` for backward compatibility with the flat pre-split layout (`tradinglab.data_sources`).
 

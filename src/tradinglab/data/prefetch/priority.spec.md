@@ -1,5 +1,7 @@
 # data/prefetch/priority.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 The ordering value types the scheduler heaps on: `PriorityKey` (total order) and
 `FetchJob` (immutable work unit).

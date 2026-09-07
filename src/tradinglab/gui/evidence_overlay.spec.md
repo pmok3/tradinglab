@@ -1,5 +1,7 @@
 # gui/evidence_overlay.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Chart overlay drawing vertical dashed markers at "within-last-N-bars"

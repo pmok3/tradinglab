@@ -1,5 +1,7 @@
 # `gui/crash_dialog.py` — Unhandled-exception trap
 
+Last updated: 2026-09-07
+
 ## Purpose
 The frozen `--windowed` `.exe` has no console — exceptions printed
 to `sys.stderr` are invisible to end users. This module installs

@@ -1,5 +1,7 @@
 # indicators/ma_kernels.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Catalogue of four moving-average kernels — `SMA`, `EMA`, `WMA`, `RMA`
 — under a single `apply_ma(kind, arr, length)` dispatcher. Used by

@@ -1,5 +1,7 @@
 # backtest/heatmap.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Pure metric + geometry layer for the sandbox heatmap. Turns candles,
 per-symbol classification, and a replay-clock timestamp into a

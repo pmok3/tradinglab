@@ -1,5 +1,7 @@
 # gui/export_cache_dialog.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 The dialog opened by **Tools → Export Bars to CSV…**. Enumerates every
 `(source, ticker, interval)` tuple currently in the disk cache and

@@ -1,5 +1,7 @@
 # gui/dialogs.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Modal Tk dialogs owned by `ChartApp`: the Settings dialog (worker count, dark mode, log price axis) and the Watchlists dialog (CRUD + import/export). Split out of `app.py` to keep that file focused on chart + data orchestration.
 

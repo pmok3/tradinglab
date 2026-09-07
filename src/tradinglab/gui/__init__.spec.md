@@ -1,5 +1,7 @@
 # gui/__init__.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Marker for the `gui` subpackage. Holds widgets and event subsystems that would otherwise bloat `app.py`: dialogs, the interaction mixin (pan/zoom/hover/crosshair/click-to-type), the watchlist-tab mixin, the worker-pool mixin.
 

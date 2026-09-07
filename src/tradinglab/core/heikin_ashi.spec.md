@@ -1,5 +1,7 @@
 # `core/heikin_ashi`
 
+Last updated: 2026-09-07
+
 Pure-NumPy Heikin-Ashi transform.
 
 ## Purpose

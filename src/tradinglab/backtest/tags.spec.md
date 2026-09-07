@@ -1,5 +1,7 @@
 # backtest/tags.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Tiny in-memory store for the setup-tag taxonomy (`"breakout"`, `"pullback"`, `"reversal"`, …). The pre-trade form surfaces the list as a Combobox; the post-trade review records which tag was used so `performance.build_setup_aggregates` can group by tag.
 

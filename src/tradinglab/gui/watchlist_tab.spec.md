@@ -1,5 +1,7 @@
 # gui/watchlist_tab.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Mixin owning the Watchlist tab's **pinned sub-tab container**,

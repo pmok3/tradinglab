@@ -1,5 +1,7 @@
 # data/schwab_source.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Charles Schwab Market Data API (`/pricehistory`) → `List[Candle]`. Two-layer module: a pure response-mapper that is fully testable offline, plus an OAuth-gated HTTP fetcher.
 

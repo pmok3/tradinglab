@@ -1,5 +1,7 @@
 # entries/dispatch.py — shared entry-trigger dispatch registry
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Single source of truth for the per-bar "does this entry trigger fire?"

@@ -1,5 +1,7 @@
 # backtest/engine.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 The `SandboxEngine` — headless replay kernel composing [`Clock`](clock.spec.md), [`Portfolio`](portfolio.spec.md), the pending-order queue, and the per-symbol MAE/MFE tracker. Drives the locked contract: market-only fills at the next bar's open ± slippage, multi-ticker / multi-position with all symbols advancing in lockstep, fully synchronous, every observable captured in [`SessionResult`](session.spec.md).
 

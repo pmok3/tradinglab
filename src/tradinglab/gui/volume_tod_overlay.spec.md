@@ -1,5 +1,7 @@
 # gui/volume_tod_overlay.py — Spec
 
+Last updated: 2026-09-07
+
 ## Overview
 
 Chart artist layer for **time-of-day volume shading**. On top of the

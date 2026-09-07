@@ -1,5 +1,7 @@
 # `chartstack/controller.py` — Per-card FSM + subscription refcounting
 
+Last updated: 2026-09-07
+
 ## Purpose
 Owns the data-lifecycle state machine for one card (idle → fetching
 → ready → live → halted → error) and the refcount table that lets

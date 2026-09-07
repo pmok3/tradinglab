@@ -1,5 +1,7 @@
 # entries/audit.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Append-only JSONL audit log for the entry-strategies subsystem. Mirrors `exits.audit` precisely — same atomic-write pattern, Tk-thread invariant, on-disk schema. Differences: directory (`entries/audit`), `KNOWN_KINDS` whitelist (entry-flavored kinds), and `symbol` / `order_id` columns (entries resolve symbol explicitly).

@@ -1,5 +1,7 @@
 # diagnostics.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 One-shot "Export Diagnostic Bundle…" backend. Bundles recent logs + crash dumps

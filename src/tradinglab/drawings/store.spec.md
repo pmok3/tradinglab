@@ -1,5 +1,7 @@
 # `drawings/store.py` — drawing store + persistence (Feature C)
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 `DrawingStore` is the single source of truth for the user's drawings

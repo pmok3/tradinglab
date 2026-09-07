@@ -1,5 +1,7 @@
 # __init__.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Package entry point. Exposes `ChartApp` and `main()` LAZILY at the `tradinglab` namespace so consumers can write `from tradinglab import ChartApp` or `python -m tradinglab` without paying the cost of importing the full GUI stack (matplotlib + Tk + every subsystem `app.py` pulls in transitively) on bare `import tradinglab`.
 

@@ -1,5 +1,7 @@
 # scanner/engine.py — spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Pure-Python tri-valued (Kleene) scan evaluator. Takes a

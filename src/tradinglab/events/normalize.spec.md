@@ -1,5 +1,7 @@
 # events/normalize.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Provider-agnostic, column-tolerant translation between pandas-DataFrame-shaped provider payloads and the canonical `EarningsRecord` / `DividendRecord` types. Lifted out of `events.yfinance_events` so the variant matrix is unit-testable without yfinance.
 

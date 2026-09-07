@@ -1,5 +1,7 @@
 # data/prefetch/appglue.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Pure, Tk-free helpers for the (flagged) ChartApp integration, keeping the
 app-coupled surface thin + testable.

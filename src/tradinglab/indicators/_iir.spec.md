@@ -1,5 +1,7 @@
 # indicators/_iir.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Shared, vectorised evaluation of the **first-order linear recurrence**
 `out[k] = q*out[k-1] + b[k]` that dominates the runtime of several

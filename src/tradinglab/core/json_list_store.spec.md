@@ -1,5 +1,7 @@
 # core/json_list_store.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Generic single-file JSON store for the "list-with-versioned-envelope"

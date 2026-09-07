@@ -1,5 +1,7 @@
 # `strategy_tester/report.py` — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Whole-Run statistical aggregation: walks per-symbol `SessionResult`
 JSON on disk, computes the headline metrics + per-symbol + per-year +

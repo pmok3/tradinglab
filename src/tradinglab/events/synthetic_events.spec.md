@@ -1,5 +1,7 @@
 # events/synthetic_events.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Deterministic in-memory events fetcher for headless smoke tests (no network, no provider drift) and as fallback when the configured provider is unavailable. Seed derives from the ticker so different tickers yield different — but reproducible — timelines.
 

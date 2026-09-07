@@ -1,5 +1,7 @@
 # data/controller.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Own the app's in-memory candle cache plus the active primary/compare candle lists. This isolates cache staleness, LRU trimming, worker stash handling, pair filtering, and fetch-token bookkeeping from `ChartApp`.
 

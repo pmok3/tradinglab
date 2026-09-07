@@ -1,5 +1,7 @@
 # events/gating.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Pure (no Tk/mpl) sandbox gating layer for events. Mirrors `SandboxController.daily_visible_for`'s strictly-less-than discipline: only events at-or-before the current clock are visible, and blind-mode replays receive a *relative* "in N trading days" badge instead of an absolute forward date.
 

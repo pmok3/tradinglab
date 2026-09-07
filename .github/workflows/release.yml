@@ -31,8 +31,24 @@ permissions:
   contents: write  # required by softprops/action-gh-release
 
 jobs:
+  spec-freshness:
+    name: Spec freshness
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Require colocated spec updates
+        shell: bash
+        run: python tools/check_spec_freshness.py --base "${GITHUB_SHA}^" --head "$GITHUB_SHA"
+
   build-windows:
     name: Build Windows ${{ matrix.arch }} redistributable
+    needs: spec-freshness
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     strategy:

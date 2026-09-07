@@ -1,5 +1,7 @@
 # exits/storage.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 JSON persistence for exit strategies. One file per strategy at

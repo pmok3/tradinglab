@@ -1,5 +1,7 @@
 # `backtest/sandbox_app_methods.py` — Sandbox thin-delegator mixin
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 `SandboxAppMixin` is a `ChartApp` mixin extracted in wave-3 of the

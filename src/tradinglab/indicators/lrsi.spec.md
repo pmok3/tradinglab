@@ -1,5 +1,7 @@
 # indicators/lrsi.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 John F. Ehlers' Laguerre RSI (2002). A 4-pole Laguerre filter applied
 to closes, then converted to an RSI-shaped oscillator. Reaches OB/OS

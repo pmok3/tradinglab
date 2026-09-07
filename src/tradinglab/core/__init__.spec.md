@@ -1,5 +1,7 @@
 # core/__init__.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Marker for the `core` subpackage: pure-compute primitives (candle pair filtering/alignment, vectorized numpy series views, y-limit/viewport math). The invariant enforced by this module's docstring: **no module under `core/` imports Tkinter, matplotlib, or `tradinglab.app`**. This is the layer backtesters, replay engines, and headless strategy simulations can consume without the GUI.
 

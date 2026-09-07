@@ -1,5 +1,7 @@
 # gui/expression_builder.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 The visual **"+" token-stacker** for composing an *expression operand* — a
 `FieldRef(kind="expression")` (see [`scanner/model`](../scanner/model.spec.md)).

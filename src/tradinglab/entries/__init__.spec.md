@@ -1,5 +1,7 @@
 # entries package — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Symbol-keyed entry strategies that **create new positions**. Mirrors the `exits` package structure but inverted in lifecycle: exits modify an existing `Position`; entries `open_from_fill` a fresh one.

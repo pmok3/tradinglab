@@ -1,5 +1,7 @@
 # `gui/fields.py` — Shared labeled-field widgets for modal dialogs
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Composable toolkit to build `[label] [content] [error]` form rows

@@ -1,5 +1,7 @@
 # gui/quant_tab.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Renders the **Quant** side-notebook tab: a grouped, double-clickable list of
 market-internals series drawn from `quant/catalog.py`. The tab is a launcher —

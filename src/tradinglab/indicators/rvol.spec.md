@@ -1,5 +1,7 @@
 # `indicators/rvol.py` — unified Relative Volume
 
+Last updated: 2026-09-07
+
 A single `RVOL` factory replacing six legacy classes (three modes ×
 {raw, z-score}). All behaviour discriminated by params. Answers "is
 this stock trading at an unusual rate vs its recent normal pace?".

@@ -1,5 +1,7 @@
 # strategy_tester/evaluator.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Headless trigger-evaluation kernel for the Strategy Tester. The live `EntryEvaluator` / `ExitEvaluator` are Tk-thread-guarded (they touch `PaperBrokerEngine`, journal, indicator-manager, audit log). The mechanical tester builds its own worker-safe context, delegates trigger decisions to the shared entry / exit dispatch registries, and emits `Order`s directly into a fresh per-symbol `SandboxEngine`.
 

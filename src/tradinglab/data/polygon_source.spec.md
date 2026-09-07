@@ -1,5 +1,7 @@
 # data/polygon_source.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Polygon.io Aggregates v2 → `List[Candle]`. Two-layer module: a pure response-mapper for offline tests and an HTTP fetcher gated on credentials.
 

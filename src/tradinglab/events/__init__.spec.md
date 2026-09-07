@@ -1,5 +1,7 @@
 # events/__init__.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Package entry point for the **Earnings & Dividends** ambient-context feature. Mirrors `tradinglab.data` in shape: provider-pluggable fetchers register against a global `EVENT_SOURCES` dict; consumers (`SandboxController`, `events.render`) iterate / resolve by name.
 

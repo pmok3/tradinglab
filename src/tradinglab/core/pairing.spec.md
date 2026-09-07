@@ -1,5 +1,7 @@
 # core/pairing.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Compare-mode primitive: given primary + compare raw candle lists, coordinate the Pre/Post toggle across the pair and timestamp-align the two series so they share an index. Pure data, no Tk/mpl. Used by `ChartApp._apply_pair_filter_and_align` and any headless replay/backtest.
 

@@ -1,5 +1,7 @@
 # `gui/indicator_acronyms.py`
 
+Last updated: 2026-09-07
+
 ## Purpose
 Single source of truth for the per-indicator tooltip blurbs surfaced by the Manage Indicators dialog and the per-indicator popup. Users new to technical analysis (or to a niche indicator like LRSI / RRVOL) see a fog of acronyms with no explanation; this module supplies a one-line full-name + brief-description blurb keyed by `IndicatorFactory.kind_id`.
 

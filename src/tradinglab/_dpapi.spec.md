@@ -1,5 +1,7 @@
 # `_dpapi.py` — Windows DPAPI ctypes wrapper
 
+Last updated: 2026-09-07
+
 ## Purpose
 Encrypt small secrets (broker credentials) at rest using the
 Windows Data Protection API. Each cipher blob is bound to the

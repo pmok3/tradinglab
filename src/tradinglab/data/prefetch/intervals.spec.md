@@ -1,5 +1,7 @@
 # data/prefetch/intervals.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 The **dual-interval policy**: map the on-screen interval to the ordered set of
 intervals a symbol should warm, so the two one-click escape hatches

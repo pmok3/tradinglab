@@ -1,5 +1,7 @@
 # exits package — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Position-attached exit strategies: trailing stops, brackets, OCO,

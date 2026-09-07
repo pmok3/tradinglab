@@ -1,5 +1,7 @@
 # `gui/colors.py` — Centralized semantic color tokens
 
+Last updated: 2026-09-07
+
 ## Purpose
 Single source of truth for UI-affordance colors (positive/negative
 sentiment, neutral warnings, error/help text). Eliminates ad-hoc hex

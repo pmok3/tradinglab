@@ -1,5 +1,7 @@
 # backtest/fills.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Pure-function fill model. Given a list of pending market orders and the next bar's open price for each symbol, return the resulting fills with slippage applied in the worse direction (BUY pays more, SELL receives less).
 

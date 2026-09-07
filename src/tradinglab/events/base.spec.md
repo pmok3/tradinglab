@@ -1,5 +1,7 @@
 # events/base.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Canonical record types + fetcher protocol + registry for the earnings/dividends feature. Sparse point-in-time records (NaN for unknown), not dense series — events aren't a candle stream.
 

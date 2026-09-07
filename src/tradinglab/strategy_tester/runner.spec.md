@@ -1,5 +1,7 @@
 # strategy_tester/runner.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Top-level orchestrator for a Strategy Tester Run. Fans out per-symbol workers on a `ThreadPoolExecutor`, integrates results, mutates the on-disk `manifest.json` after every completion so the GUI can poll progress, and finalises status as `DONE` / `CANCELLED` / `FAILED`.
 

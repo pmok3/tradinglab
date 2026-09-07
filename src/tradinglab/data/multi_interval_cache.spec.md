@@ -1,5 +1,7 @@
 # `data/multi_interval_cache.py` — design notes
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 A registry that owns `(symbol, interval) → BarsBuffer`, lazy-loaded

@@ -1,5 +1,7 @@
 # indicators/moving_averages.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Three overlay-indicator classes that share the same `ma_kernels.apply_ma`
 dispatcher:

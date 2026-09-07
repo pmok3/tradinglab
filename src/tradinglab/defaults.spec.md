@@ -1,5 +1,7 @@
 # defaults.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Single canonical registry of every user-tweakable default. Replaces inline
 literals scattered across `app.py`, `gui/interaction.py`, `core/viewport.py`.

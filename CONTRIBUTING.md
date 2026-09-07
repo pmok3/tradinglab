@@ -37,6 +37,10 @@ registry.**
 ## Style
 
 - `ruff check src tests` must pass
+- `python tools/check_spec_freshness.py --base <base-ref>` must pass.
+  Every changed `src/tradinglab/**/*.py` needs its colocated `.spec.md`
+  changed in the same Git range, with a valid `Last updated: YYYY-MM-DD`
+  header. A date-only spec change is sufficient for non-behavioral code edits.
 - Match existing patterns; prefer surgical edits over refactors
 - No new dependencies without discussion in an issue first
 

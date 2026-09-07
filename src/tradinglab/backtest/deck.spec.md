@@ -1,5 +1,7 @@
 # backtest/deck.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Eligible-day enumeration + seeded shuffle for sandbox sessions. Two parallel APIs:
 

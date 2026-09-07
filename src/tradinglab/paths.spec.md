@@ -1,5 +1,7 @@
 # paths.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Single source of truth for the user-data directory layout used by every
 subsystem that persists state (settings, watchlists, candle cache, event

@@ -1,5 +1,7 @@
 # gui/exits_app.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 `ExitsAppMixin` — glue layer that wires the exits subsystem into

@@ -1,5 +1,7 @@
 # `strategy_tester/screenshot.py`
 
+Last updated: 2026-09-07
+
 Headless per-trade screenshot rendering for the Strategy Tester
 Report. One PNG per closed trade, composed via the same
 `tradinglab.rendering` primitives as the live chart so visual parity

@@ -36,11 +36,11 @@ Audit ``codebase-invariants``.
 
 Spec-drift workflow
 -------------------
-This file enforces only structural completeness: every non-``__init__`` module
-under ``src/tradinglab`` has a sibling ``.spec.md``, and no sibling spec is
-orphaned. Content drift is still a manual audit: compare module/spec git
-timestamps as a noisy candidate list, trace real drift to cross-cutting
-refactors, and make surgical spec edits only where facts are missing or wrong.
+This file enforces structural completeness: every module under
+``src/tradinglab`` has a sibling ``.spec.md``, and no sibling spec is orphaned.
+``tools/check_spec_freshness.py`` separately blocks CI/release when a changed
+module's spec is absent from the Git range or any spec lacks its date header.
+Factual content accuracy remains a manual, surgical audit.
 """
 from __future__ import annotations
 
@@ -62,7 +62,7 @@ def _all_py_files() -> list[Path]:
     return [
         p
         for p in sorted(_SRC.rglob("*.py"))
-        if "__pycache__" not in p.parts and p.name != "__init__.py"
+        if "__pycache__" not in p.parts
     ]
 
 
@@ -80,7 +80,7 @@ _SPEC_COVERAGE_EXEMPTIONS: dict[str, str] = {
 
 def test_every_module_has_colocated_spec_md():
     """HARD RULE per AGENTS.md §2: every `.py` under `src/tradinglab/`
-    (excluding `__init__.py`) has a colocated `.spec.md`.
+    has a colocated `.spec.md`.
 
     Audit ``codebase-invariants``.
     """

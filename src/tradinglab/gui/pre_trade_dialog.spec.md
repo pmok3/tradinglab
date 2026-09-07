@@ -1,5 +1,7 @@
 # `gui/pre_trade_dialog.py` — Mandatory pre-trade journal modal
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Captures the trader's intent **before** the sandbox engine records

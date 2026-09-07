@@ -1,5 +1,7 @@
 # backtest/aggregation.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Pure-Python aggregator that derives higher-timeframe candles from a single primary intraday series. Consumed by the sandbox controller so the user can fetch one tick interval (e.g. `5m`) and view it as `15m`, `30m`, or `1h` without a second yfinance round-trip. Buckets are session-anchored so a `5m → 1h` aggregation of regular-trading-hours data produces a leading bar at 09:30 → 10:30 (matching how Yahoo / TradingView present 1h RTH bars), not the 09:00 → 10:00 a fixed UTC-modulo bucketing would emit.
 

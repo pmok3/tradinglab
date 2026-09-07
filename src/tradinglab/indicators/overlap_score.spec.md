@@ -1,5 +1,7 @@
 # indicators/overlap_score.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Overlap Score Inverted (OSI) measures how much of the current candle's
 price range is in "new territory" relative to recent candles, with

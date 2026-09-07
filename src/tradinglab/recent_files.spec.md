@@ -1,5 +1,7 @@
 # recent_files.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 LRU "most recently used" list of configuration / watchlist file paths,

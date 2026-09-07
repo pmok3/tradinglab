@@ -1,5 +1,7 @@
 # events/cache.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Disk-backed cache for fetched `EventBundle`s, mirroring `tradinglab.disk_cache` in API and contract. Keyed by `(source, ticker)` (events are timeframe-agnostic). Lives under `$TRADINGLAB_CACHE_DIR/events/`.
 

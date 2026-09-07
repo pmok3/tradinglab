@@ -1,5 +1,7 @@
 # scanner/fields.py — spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Catalog of scannable fields. Single source of truth consumed by:

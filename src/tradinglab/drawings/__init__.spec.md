@@ -1,5 +1,7 @@
 # `drawings/__init__.py`
 
+Last updated: 2026-09-07
+
 ## Purpose
 Package facade for **Feature C** — user-drawn chart annotations. v1 ships horizontal price lines only (`Drawing.kind == "hline"`). The package is laid out so a future "trend line" / "rectangle" expansion is a polymorphism on `kind` rather than a parallel subsystem: same store, same persistence envelope, same hit-test interface.
 

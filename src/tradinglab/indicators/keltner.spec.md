@@ -1,5 +1,7 @@
 # indicators/keltner.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Keltner Channels — three concurrent overlay lines (`middle` / `upper`
 / `lower`) drawn on the price axis around a moving-average centerline.

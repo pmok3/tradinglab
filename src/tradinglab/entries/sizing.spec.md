@@ -1,5 +1,7 @@
 # entries/sizing.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Pure qty resolution from a `SizingRule` + reference price. Stateless;

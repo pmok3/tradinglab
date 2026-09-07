@@ -1,5 +1,7 @@
 # indicators/sessions.py — Spec
 
+Last updated: 2026-09-07
+
 Shared helpers for session-aware indicators (VWAP, Anchored VWAP,
 Relative Volume). One place for DST / half-days / missing-bars / gap
 edge cases.

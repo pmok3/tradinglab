@@ -1,5 +1,7 @@
 # `gui/schwab_connect_dialog.py` — Interactive Schwab OAuth sign-in
 
+Last updated: 2026-09-07
+
 ## Purpose
 In-app, guided replacement for the terminal-only
 `python -m tradinglab.data.schwab_login` flow. Opened via

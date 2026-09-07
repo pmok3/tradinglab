@@ -1,5 +1,7 @@
 # indicators/cache.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Identity-keyed memoization of indicator compute results across pan,
 zoom, theme swap, and streaming-tick re-renders. Keyed by

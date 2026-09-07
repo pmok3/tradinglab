@@ -1,5 +1,7 @@
 # gui/config_menu.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 `ConfigMenuMixin` extracted from `ChartApp`. Owns the File-menu

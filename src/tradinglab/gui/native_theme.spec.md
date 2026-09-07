@@ -1,5 +1,7 @@
 # gui/native_theme.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Centralizes dark/light theming for classic Tk widgets that are not reached by the global `ttk.Style` sweep.

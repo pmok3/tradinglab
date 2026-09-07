@@ -1,5 +1,7 @@
 # data/rate_limiter.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 A small, thread-safe **token-bucket rate limiter** used to *proactively* pace
 outbound vendor API calls so we stay under a per-minute quota instead of

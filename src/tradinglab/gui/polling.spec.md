@@ -1,5 +1,7 @@
 # gui/polling.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 `PollingMixin` extracted from `ChartApp`. Owns three concerns sharing

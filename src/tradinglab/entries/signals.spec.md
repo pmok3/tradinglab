@@ -1,5 +1,7 @@
 # entries/signals.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Broker-agnostic entry-signal protocol + concrete sinks. The `EntryEvaluator` decides *when* and *what* to enter; sinks deliver the resulting `EntrySignal` to a paper engine, manual notifier, or eventually a real broker.

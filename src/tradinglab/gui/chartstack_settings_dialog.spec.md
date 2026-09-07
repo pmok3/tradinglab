@@ -1,5 +1,7 @@
 # `gui/chartstack_settings_dialog.py` — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Small modal popup, reachable from `View → ChartStack Settings…`, that
 edits the per-slot fixed-preset symbols persisted under

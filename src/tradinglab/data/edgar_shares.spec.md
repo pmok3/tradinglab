@@ -1,5 +1,7 @@
 # data/edgar_shares.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 SEC EDGAR XBRL provider for historical shares outstanding — the
 `edgar` entry in the [`shares_sources`](shares_sources.spec.md)

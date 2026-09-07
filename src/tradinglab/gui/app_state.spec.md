@@ -1,5 +1,7 @@
 # gui/app_state.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Owns the Tk variable registry for `ChartApp`. This extracts `StringVar` / `BooleanVar` construction out of `app.py` while preserving the historic `self.ticker_var`, `self.compare_var`, `self.status`, and related attribute names through aliases created by `ChartApp.__init__`.
 

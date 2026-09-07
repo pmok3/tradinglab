@@ -1,5 +1,7 @@
 # indicators/bollinger.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Bollinger Bands volatility envelopes. Three concurrent overlay lines
 (`middle` / `upper` / `lower`) on the price axis. The centerline can

@@ -1,5 +1,7 @@
 # status.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Single-line status bar at the bottom of the main window plus an in-memory ring buffer (history window) and a daily on-disk log file. All three sinks fed by a single logger-style API: `info(msg)`, `warn(msg)`, `error(msg)`. Every emission is also mirrored to stdout for terminal visibility under `python scripts/run_dev.py`.
 

@@ -1,5 +1,7 @@
 # data/local_export.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Symmetric companion to `data/local_source.py`. Writes selected
 `(source, ticker, interval, candles)` tuples from the disk cache to CSV

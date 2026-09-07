@@ -1,5 +1,7 @@
 # tradinglab.templates
 
+Last updated: 2026-09-07
+
 First-run seeding of bundled "starter pack" strategy templates into the
 user-local libraries.
 

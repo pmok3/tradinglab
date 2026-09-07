@@ -1,5 +1,7 @@
 # data/prefetch/buckets.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Per-source rate limiting for the scheduler: a **single accounting gate**
 (`SourceBucketRegistry`, Decision 1) plus a self-tuning `AIMDRateController`

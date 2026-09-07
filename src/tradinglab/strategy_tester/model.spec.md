@@ -1,5 +1,7 @@
 # strategy_tester/model.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Tk-free, side-effect-free pure-data model for the Strategy Tester feature. Owns the on-disk and in-memory schema for `UniverseSpec`, `CostModel`, `TestConfig`, and `TestRun`, plus the deterministic `make_run_id()` derivation that gives the feature its reproducibility envelope.
 

@@ -1,5 +1,7 @@
 # `gui/_modal_base.py` — Shared base classes for modal Toplevels
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Collapses repeating modal-Toplevel boilerplate (transient + grab_set

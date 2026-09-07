@@ -1,5 +1,7 @@
 # core/key_bar.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Detect/characterize **key bars** (wide-range / igniting / elephant bars, RDT canonical bar #1 of the 1-2-3). Pure NumPy. Consumed by the scanner (9 builtin fields) and the chart's *View → Highlight Key Bars* toggle (renders via `hollow_indices=set(KeyBarArrays.signed.nonzero())`).
 

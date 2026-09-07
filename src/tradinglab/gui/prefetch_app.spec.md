@@ -1,5 +1,7 @@
 # gui/prefetch_app.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 `PrefetchAppMixin` — the ChartApp glue for the flagged background prefetch
 scheduler (`data/prefetch/*`), extracted from `app.py` to keep it under its LOC

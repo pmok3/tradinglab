@@ -1,5 +1,7 @@
 # `strategy_tester/warmup.py`
 
+Last updated: 2026-09-07
+
 Compute the minimum warmup-bar requirement for every indicator referenced
 by an EntryStrategy + ExitStrategy pair, so the runner can pre-load enough
 historical bars before `start_date` for **every** referenced indicator to

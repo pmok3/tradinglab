@@ -1,5 +1,7 @@
 # gui/heatmap_context.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 The clock + session context the heatmap window runs against, in two
 flavours: replay (sandbox controller) and live (wall clock).

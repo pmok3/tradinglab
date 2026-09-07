@@ -1,5 +1,7 @@
 # data/stream_controller.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Encapsulates ChartApp's main-chart live-stream lifecycle: subscribe/unsubscribe, token gating, queue draining, tick in-place mutation, and rollover append/upsert persistence.
 

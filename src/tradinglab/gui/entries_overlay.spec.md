@@ -1,5 +1,7 @@
 # gui/entries_overlay.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Draws horizontal price-axis lines on the chart for armed entry

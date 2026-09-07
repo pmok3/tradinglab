@@ -1,5 +1,7 @@
 # gui/entries_app.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 `EntriesAppMixin` — glue wiring the entries subsystem into

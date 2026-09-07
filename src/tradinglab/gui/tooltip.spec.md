@@ -1,5 +1,7 @@
 # `gui/tooltip.py` — Lightweight hover-tooltip helper
 
+Last updated: 2026-09-07
+
 ## Purpose
 Tkinter has no native tooltip widget. The UI/UX audit (May 2026)
 asked for short hover hints on drag handles, destructive buttons,

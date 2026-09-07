@@ -1,5 +1,7 @@
 # `data/credential_store.py` — versioned per-vendor credential store
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Own the on-disk representation of saved credentials, so that

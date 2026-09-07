@@ -1,5 +1,7 @@
 # `gui/chart_renderer.py` — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Own TradingLab's panel rendering state and the helper methods that mutate candle, volume, indicator, event, and blit-related artists without taking over full render orchestration from `ChartApp`.
 

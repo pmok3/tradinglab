@@ -1,5 +1,7 @@
 # streaming/schwab.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Schwab WebSocket streaming source. Implements the `streaming.base.StreamSource` protocol against Schwab's streamer API. One persistent WS connection per process, with multiplexed per-symbol subscriptions on top. Delegates bar-aggregation to the pure `streaming/schwab_aggregator.py`.
 

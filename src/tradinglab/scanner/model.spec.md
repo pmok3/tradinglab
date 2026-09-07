@@ -1,5 +1,7 @@
 # scanner/model.py — spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Pure-data dataclasses for one saved scan. No registry lookups, no

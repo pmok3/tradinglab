@@ -1,5 +1,7 @@
 # indicators/vwap.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Session-anchored intraday Volume-Weighted Average Price. Cumulative
 `Σ(price·volume) / Σ(volume)` accumulates from the start of each

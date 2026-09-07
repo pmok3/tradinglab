@@ -1,5 +1,7 @@
 # positions/tracker.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Tk-thread-owned registry of open positions plus a re-entrancy-safe subscriber dispatch. Every mutation appends a `PositionEvent` to a per-tracker queue; the queue is drained synchronously after the mutator returns, so subscribers that call back into another mutator can't crash on list-mutation-during-iter and don't reorder events.
 

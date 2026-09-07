@@ -1,5 +1,7 @@
 # strategy_tester/__init__.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Public re-export surface for the Strategy Tester package. Lets callers `from tradinglab.strategy_tester import TestConfig, run, AcceptanceToken` without knowing the module structure.
 

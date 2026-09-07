@@ -1,5 +1,7 @@
 # gui/snapshot.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 `SnapshotMixin` extracted from `ChartApp`. Owns the chart-snapshot

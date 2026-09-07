@@ -1,5 +1,7 @@
 # gui/exits_tab.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Right-side notebook tab for exits operations: per-position attach

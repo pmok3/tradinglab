@@ -1,5 +1,7 @@
 # gui/entries_dialog.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Modal editor for one `EntryStrategy`. A single scrollable form groups

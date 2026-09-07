@@ -1,5 +1,7 @@
 # gui/entries_tab.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Right-side notebook tab dedicated to entry-strategies management:

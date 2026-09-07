@@ -1,5 +1,7 @@
 # __main__.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Enables `python -m tradinglab` and the PyInstaller entry point to launch the GUI. Uses absolute imports so the file works both as a package module and as the frozen bootloader's top-level script, calls `multiprocessing.freeze_support()` defensively, then delegates to `app.main()` after acquiring the single-instance guard.
 

@@ -1,5 +1,7 @@
 # `updates.py` — Background GitHub Releases update checks
 
+Last updated: 2026-09-07
+
 ## Purpose
 Surface "a newer release is available" to users who never visit GitHub
 directly. This module is the single source of truth for both startup

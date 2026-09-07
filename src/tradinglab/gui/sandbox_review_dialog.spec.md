@@ -1,5 +1,7 @@
 # gui/sandbox_review_dialog.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Sandbox journaling modals: optional `DecisionLogDialog`, mandatory-on-close `PostTradeReviewDialog`, and the `TagsEditorDialog` taxonomy editor.
 

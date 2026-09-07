@@ -1,5 +1,7 @@
 # core/io_helpers.py — Spec
 
+Last updated: 2026-09-07
+
 Tiny I/O primitives. Three functions: an atomic JSON writer plus
 symmetric `read_json` / `read_jsonl` readers used to dedupe ~30
 ad-hoc JSON-read patterns across the codebase.

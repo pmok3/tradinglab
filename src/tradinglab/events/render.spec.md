@@ -1,5 +1,7 @@
 # events/render.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Pure renderer-helper that projects an `EventsView` onto a visible-candle window, producing `EventGlyph` descriptors that the GUI overlay layer turns into matplotlib artists. Keeping descriptor build pure makes placement testable without X and lets Compare panes, the primary chart, and any future thumbnail share one code path.
 

@@ -1,5 +1,7 @@
 # data/prefetch/planner.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Per-source **band planning**: "band = one maximal API request." Maps
 `(symbol, interval, band_index)` → a `FetchWindow` request descriptor,

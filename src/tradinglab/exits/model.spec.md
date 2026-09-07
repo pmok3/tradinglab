@@ -1,5 +1,7 @@
 # `exits/model.py`
 
+Last updated: 2026-09-07
+
 Pure-logic data model for exit strategies. Tk-free, side-effect-free.
 
 ## Aggregates

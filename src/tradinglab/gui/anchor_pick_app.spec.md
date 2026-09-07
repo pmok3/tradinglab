@@ -1,5 +1,7 @@
 # gui/anchor_pick_app.py — Spec
 
+Last updated: 2026-09-07
+
 `AnchorPickAppMixin` — the AVWAP "Pick Anchor…" click flow, extracted from
 `ChartApp` (mixin-extraction wave, AGENTS.md §7.24). Pure method-bag: no
 `__init__`, no `super()`; reads/writes state owned by `ChartApp.__init__`.

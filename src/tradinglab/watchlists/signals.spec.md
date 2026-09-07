@@ -1,5 +1,7 @@
 # watchlists/signals.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Headless **batch evaluator** for watchlist signal columns. Turns
 `(symbols × WatchlistColumn[])` into per-cell values at the **latest

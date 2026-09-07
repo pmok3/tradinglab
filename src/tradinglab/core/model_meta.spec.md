@@ -1,5 +1,7 @@
 # model_meta.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Single definition of `CreatedWith`, the provenance metadata attached to
 saved user records (entry strategies, exit strategies, scans). Replaces

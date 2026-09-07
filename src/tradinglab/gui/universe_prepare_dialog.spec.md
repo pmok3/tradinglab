@@ -1,5 +1,7 @@
 # universe_prepare_dialog.py — spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Modal Tk dialog driving `preload.service.preload_universe()` for a

@@ -1,5 +1,7 @@
 # timezones.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Single source of truth for :class:`zoneinfo.ZoneInfo` resolution.
 Replaces ad-hoc ``ZoneInfo("America/New_York")`` and display-timezone

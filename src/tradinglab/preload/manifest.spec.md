@@ -1,5 +1,7 @@
 # preload/manifest.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Durable JSON sidecar describing a prepared sandbox universe (which symbols, which intervals, when), plus coverage queries against the disk cache. Single source of truth a sandbox session reads at session-start to know which tickers are inside the universe (strict-offline gating).
 

@@ -1,5 +1,7 @@
 # streaming/base.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Declares the `StreamSource` protocol and the `STREAM_SOURCES` registry. A stream source emits **tick** (in-progress bar changed — replace rightmost) or **rollover** (new bar — append) events for a `(ticker, interval)` subscription.
 

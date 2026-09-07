@@ -1,5 +1,7 @@
 # scanner/runner.py — spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Multi-scan orchestrator. Drives `engine` evaluation across a universe

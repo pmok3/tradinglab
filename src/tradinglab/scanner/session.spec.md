@@ -1,5 +1,7 @@
 # scanner/session.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Session-boundary helper for the within-last-N-bars look-back walk

@@ -1,5 +1,7 @@
 # data/local_source.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 BYOD (Bring Your Own Data) fetcher. Reads CSV files the user has placed
 on disk (one root → many `<SOURCE>/<TICKER>_<INTERVAL>.csv` files) and

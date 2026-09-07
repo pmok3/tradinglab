@@ -1,5 +1,7 @@
 # gui/_trigger_field_renderer.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Shared schema-driven renderer for trigger-parameter widget rows

@@ -1,5 +1,7 @@
 # exits.dispatch
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Shared trigger-dispatch registry for exit strategies. Both the live

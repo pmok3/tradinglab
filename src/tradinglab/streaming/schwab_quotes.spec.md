@@ -1,5 +1,7 @@
 # streaming/schwab_quotes.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 [`QuoteSource`](quotes.spec.md) implementation over Schwab's
 `LEVELONE_EQUITIES` streamer service — the breadth adapter that lets the

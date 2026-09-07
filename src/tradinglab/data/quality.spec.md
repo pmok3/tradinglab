@@ -1,5 +1,7 @@
 # data/quality.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Source-agnostic **quality / capability metadata** for the registered data
 sources. Two consumers:

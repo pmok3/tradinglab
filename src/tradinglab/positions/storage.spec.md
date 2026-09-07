@@ -1,5 +1,7 @@
 # positions/storage.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Atomic JSON persistence for two artefacts under `<cache_dir>/positions/`:
 

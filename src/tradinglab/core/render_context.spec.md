@@ -1,5 +1,7 @@
 # core/render_context.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Thread-local opt-in context for indicators that need info the `compute_arr(bars)` protocol doesn't surface. Today the only consumer is the RRVOL family, which needs:
 

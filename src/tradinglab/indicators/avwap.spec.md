@@ -1,5 +1,7 @@
 # indicators/avwap.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Anchored Volume-Weighted Average Price. Cumulates
 `Σ(price·volume) / Σ(volume)` from a user-chosen anchor bar instead of

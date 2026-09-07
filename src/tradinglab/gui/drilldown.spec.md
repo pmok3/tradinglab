@@ -1,5 +1,7 @@
 # DrilldownMixin
 
+Last updated: 2026-09-07
+
 Mixin extracted from `ChartApp` (Phase 3 of god-class decomposition). Owns the
 dbl-click → 5-minute drilldown flow.
 

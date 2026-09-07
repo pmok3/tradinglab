@@ -1,5 +1,7 @@
 # `data/verify.py` — credential verification
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Answer the question a new user actually asks after pasting an API key:

@@ -1,5 +1,7 @@
 # `strategy_tester/interval_compat.py`
 
+Last updated: 2026-09-07
+
 Pre-Run guard that detects when a strategy references an **intraday-only**
 indicator while the Strategy Tester run interval is daily / weekly / monthly.
 Such a Run silently produces **zero trades** (the indicator is NaN every bar,

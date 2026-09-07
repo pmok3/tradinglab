@@ -1,5 +1,7 @@
 # gui/scanner_block_editor.py — spec
 
+Last updated: 2026-09-07
+
 > ⚠ **Tk-coupled module** — imports `tkinter`.
 
 ## Purpose

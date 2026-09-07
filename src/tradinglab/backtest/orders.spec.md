@@ -1,5 +1,7 @@
 # backtest/orders.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 The `Order` and `Fill` dataclasses plus the `Side` enum that flow through the engine. Phase 1 is **market-orders-only** — limits, stops, and brackets are deferred to Phase 2 per locked decision Q2.
 

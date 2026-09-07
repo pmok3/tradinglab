@@ -1,5 +1,7 @@
 # data/fetch_service.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Owns TradingLab's general worker pool, dedicated foreground fetch pool, and the background prefetch/reference-data orchestration that used to live in `ChartApp`.
 

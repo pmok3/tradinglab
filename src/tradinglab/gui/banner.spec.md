@@ -1,5 +1,7 @@
 # `gui/banner.py` — First-run onboarding banner
 
+Last updated: 2026-09-07
+
 ## Purpose
 Brand-new users get a single dismissable one-row banner above the chart
 pointing them at Help → Getting Started, Settings, and two undiscoverable

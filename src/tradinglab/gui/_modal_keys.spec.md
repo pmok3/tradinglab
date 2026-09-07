@@ -1,5 +1,7 @@
 # `gui/_modal_keys.py` — Shared ESC / Return key bindings for modal dialogs
 
+Last updated: 2026-09-07
+
 ## Purpose
 The UI/UX audit (May 2026) found that `<Escape>` and `<Return>`
 behaviour was inconsistent across the 12+ modal Toplevels in the

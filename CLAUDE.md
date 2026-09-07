@@ -19,9 +19,10 @@ renumber a section in `AGENTS.md`; add new landmines at the end.
 If you read nothing else before touching code:
 
 1. **Specs are part of the change.** Every `.py` under `src/tradinglab/` has a
-   colocated `.spec.md`. Change behaviour, update the spec in the same commit.
-   `tests/unit/test_codebase_invariants.py` gates that a spec exists; whether
-   it is *true* is on you. (§2, §7.30)
+   colocated `.spec.md`. Every changed module needs its spec in the same commit;
+   CI/release enforce this with `tools/check_spec_freshness.py`. Update the
+   behavior contract and `Last updated` date, or update only the date for a
+   non-behavioral code change. (§2, §7.30)
 2. **No pull requests.** pmok3 is the only contributor; work lands directly on
    `main`. Because there is no PR gate, validate before you push:
    `ruff check src tests` and `pytest tests/unit tests/data -q`. (§9)

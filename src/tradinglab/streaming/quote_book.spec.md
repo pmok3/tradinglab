@@ -1,5 +1,7 @@
 # streaming/quote_book.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 The coalescing store between a quote stream and a UI: stream threads
 write, a UI timer samples. Holds the current merged

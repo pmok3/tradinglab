@@ -1,5 +1,7 @@
 # `drawings/model.py` — drawing data model (Feature C)
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Immutable record type for a single user-placed chart drawing. v1 ships

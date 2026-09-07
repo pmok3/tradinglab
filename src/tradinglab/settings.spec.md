@@ -1,5 +1,7 @@
 # settings.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 In-memory configuration store with **explicit** JSON file import/export. No

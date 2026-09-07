@@ -1,5 +1,7 @@
 # `_param_widgets.py` — Shared ParamDef widget construction
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Single source of truth for the bool / choice / int / float / str

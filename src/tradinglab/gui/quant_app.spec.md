@@ -1,5 +1,7 @@
 # gui/quant_app.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 `ChartApp` glue for the **Quant** side tab: tab lifecycle, the View → Quant
 toggle, double-click routing onto the chart, and the lazy refresh that fills

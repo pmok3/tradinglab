@@ -1,5 +1,7 @@
 # `chartstack/card.py` — Per-slot card view-model
 
+Last updated: 2026-09-07
+
 ## Purpose
 Pairs a single matplotlib `Axes` with a `CardController` + current
 `CardBinding` for one card slot. This is **not** a Tk widget — the

@@ -1,5 +1,7 @@
 # core/json_collection_store.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Generic per-id JSON collection store. Hosts the shared implementation

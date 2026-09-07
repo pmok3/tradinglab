@@ -1,5 +1,7 @@
 # backtest/actions.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Corporate-action records for sandbox replay: `CorporateAction` is the
 engine-input schedule registered from event bundles, while

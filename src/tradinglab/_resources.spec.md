@@ -1,5 +1,7 @@
 # `_resources.py`
 
+Last updated: 2026-09-07
+
 ## Purpose
 Frozen-bundle-aware resource path resolution. Hides the difference between source / dev install (where bundled resources live at the repo root) and PyInstaller `--onedir` builds (where they're extracted under `sys._MEIPASS`).
 

@@ -1,5 +1,7 @@
 # `chartstack/binding.py` — Mode-by-mode card binding resolution
 
+Last updated: 2026-09-07
+
 ## Purpose
 Pure-data layer answering "what symbol does slot N show right
 now?". No Tk, no matplotlib, no app state — snapshot inputs only.

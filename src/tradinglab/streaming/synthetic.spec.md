@@ -1,5 +1,7 @@
 # streaming/synthetic.py — Spec
 
+Last updated: 2026-09-07
+
 > ⚠ `SyntheticStreamSource` is an offline simulator (seeded log-normal random walk). NOT a real feed. Never use for live trading or signals against real instruments. For smoke tests, UI dev, sandbox replay only.
 
 ## Purpose

@@ -1,5 +1,7 @@
 # indicators/wilder.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 J. Welles Wilder's recursive smoothing primitives plus the True-Range
 definition — shared by ADX, ATR, Chandelier Stops, Keltner (atr

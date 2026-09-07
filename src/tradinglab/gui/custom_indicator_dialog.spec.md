@@ -1,5 +1,7 @@
 # gui/custom_indicator_dialog
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 A modeless Toplevel reachable from **Indicators → Custom Indicator

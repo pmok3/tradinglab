@@ -1,5 +1,7 @@
 # `chartstack/panel.py` — Top-level Tk container for the mini-chart strip
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Owns the single shared `Figure` + `FigureCanvasTkAgg` and partitions N

@@ -1,5 +1,7 @@
 # gui/sandbox_heatmap.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Non-modal pop-out window that renders the Finviz-style market heatmap,
 in **two modes behind one window**:

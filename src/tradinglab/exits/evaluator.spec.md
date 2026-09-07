@@ -1,5 +1,7 @@
 # `exits/evaluator.py` — live exit-strategy evaluator
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Orchestrator that turns price/indicator data into broker instructions

@@ -1,5 +1,7 @@
 # data/prefetch/driver.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 The thin orchestration layer over `PrefetchScheduler` — the seam `ChartApp`
 wires into. Turns the scheduler's decisions into fetches and routes results

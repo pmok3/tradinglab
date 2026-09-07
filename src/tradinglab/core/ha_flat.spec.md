@@ -1,5 +1,7 @@
 # `core/ha_flat`
 
+Last updated: 2026-09-07
+
 Pure-NumPy detection of **direction-aware Heikin-Ashi flat-edge patterns** (bull-flat-bottom and bear-flat-top).
 
 ## Purpose

@@ -1,5 +1,7 @@
 # `chartstack/series_cache.py` — Bounded per-card bar buffer
 
+Last updated: 2026-09-07
+
 ## Purpose
 Tiny, pure-Python buffer for one card's recent OHLCV bars (default
 60 — the §2.1 sparkline window). M2 wires this to fetched data;

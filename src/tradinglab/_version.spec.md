@@ -1,5 +1,7 @@
 # `_version.py`
 
+Last updated: 2026-09-07
+
 ## Purpose
 Single source of truth for the package's PEP-440 semantic version. Five external systems read this file; keep the format `__version__ = "X.Y.Z"` literal so the bump-script regex matches.
 

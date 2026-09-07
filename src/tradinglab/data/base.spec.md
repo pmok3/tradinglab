@@ -1,5 +1,7 @@
 # data/base.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Defines the `DataFetcher` protocol (a `(ticker, interval) -> Optional[List[Candle]]` callable, optionally range-capable) and the `DATA_SOURCES` registry. Provides `register_source` as the plug-in hook, `user_visible_sources` for UI surfaces that must hide internal-only sources, `fetch_range` for targeted range fetching, and `fetch_page` for one-request backward pagination (the prefetch scheduler's deepening primitive).
 

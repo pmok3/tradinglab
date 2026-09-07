@@ -1,5 +1,7 @@
 # gui/sandbox_dialog.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Modal `BaseModalDialog` start dialog for the sandbox subsystem:
 `SandboxStartDialog` configures an open-universe Phase 1c-redux

@@ -1,5 +1,7 @@
 # watchlists/__init__.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Aggregates the watchlist data layer — manager + storage + dataclass + import/export helpers. Pure data; no UI wiring.
 

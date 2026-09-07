@@ -1,5 +1,7 @@
 # data/alpaca_source.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Alpaca Market Data v2 → `List[Candle]`. Two-layer module: a pure response-mapper for offline tests and an HTTP fetcher gated on credentials.
 

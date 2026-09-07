@@ -1,5 +1,7 @@
 # core/series.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Vectorized numpy view of a `List[Candle]` plus a lazy per-candle tooltip-text cache. The OHLCV arrays are built up-front because autoscale slices them on every pan; tooltip strings are built **on demand** because most candles are never hovered. Shared by `core/viewport.y_limits_for_slice`, `ChartApp._series`, `gui/interaction._show_hover`.
 

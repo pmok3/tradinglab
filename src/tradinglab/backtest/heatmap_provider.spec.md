@@ -1,5 +1,7 @@
 # backtest/heatmap_provider.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Classification + membership + shares/split provider feeding the sandbox
 heatmap. Loads sector / industry / `Date added` / CIK for the

@@ -1,5 +1,7 @@
 # gui/exits_dialog_widgets.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Re-usable Tk widgets composing the `ExitsDialog` editor pane:

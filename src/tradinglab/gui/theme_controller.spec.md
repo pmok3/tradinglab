@@ -1,5 +1,7 @@
 # `gui/theme_controller.py` — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Owns TradingLab's resolved theme palette and persisted per-mode overrides.
 Moves the theme application pipeline out of `app.py` while keeping `ChartApp._theme`, `ChartApp._theme_overrides`, and the existing theming entrypoints available for backward compatibility.

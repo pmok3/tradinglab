@@ -1,5 +1,7 @@
 # data/normalize.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Format-specific vectorized translators from provider native shapes to `List[Candle]`, plus a **prebuilt-arrays side channel** so `core/series.SeriesArrays` construction doesn't re-extract the same columns. Two translators today: `candles_from_dataframe` (pandas, used by yfinance) and `candles_from_json_rows` (generic vendor-JSON, used by Schwab / Alpaca / Polygon adapters via `data/__init__.py`).
 

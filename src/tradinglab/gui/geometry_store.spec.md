@@ -1,5 +1,7 @@
 # `gui/geometry_store.py` — Persistent window geometry + sash positions
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Persists Tk geometry (`WxH+X+Y`) and `ttk.PanedWindow` sash

@@ -1,5 +1,7 @@
 # `gui/config_manager.py`
 
+Last updated: 2026-09-07
+
 ## Purpose
 Owns configuration-file I/O, startup-default resolution, recent-files dropdown maintenance, the window title computation, and the "unsaved changes" confirm-on-quit prompt. Extracted from `ChartApp` as a controller to keep `app.py` from owning every File / Settings / Recent-list operation.
 

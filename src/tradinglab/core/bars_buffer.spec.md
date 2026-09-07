@@ -1,5 +1,7 @@
 # core/bars_buffer.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Append-only mutable column store that emits `Bars` snapshots. Shifts the per-tick cost of rebuilding `Bars.from_candles` from O(n) extraction-every-tick to amortised O(1) per `append`.
 

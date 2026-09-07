@@ -1,5 +1,7 @@
 # strategy_tester/storage.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 On-disk persistence for Strategy Tester Runs. Atomic writes only — no in-flight corruption if the user closes the app mid-save. Reuses `core.io_helpers.atomic_write_json` and `disk_cache._cache_dir` for path resolution.
 

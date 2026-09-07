@@ -1,5 +1,7 @@
 # core/risk_gate.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Pre-submit risk gate consulted by the entry evaluator just before an `EntrySignal` is sent to the paper broker. Returns a structured `RiskBlock` to refuse with auditable metadata, or `None` to allow.
 

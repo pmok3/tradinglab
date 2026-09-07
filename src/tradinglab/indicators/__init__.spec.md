@@ -1,5 +1,7 @@
 # indicators/__init__.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Aggregates the technical-indicator package (compute layer + config /
 cache / loader facilities) and re-exports the public surface. Pure

@@ -1,5 +1,7 @@
 # data/parallel.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Shared primitive for running I/O-bound fetch chunks concurrently. Rationale: the GIL is released during network syscalls, so splitting one logical fetch into N independent sub-requests and joining the results is a real speedup for any provider with a date-range or page API. CPU-bound work (Candle construction, session tagging) does **not** benefit and should stay serialized after the merge.
 

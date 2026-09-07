@@ -1,5 +1,7 @@
 # backtest/journal.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Immutable journal records for explicit replay decisions, order submission, and position close.
 

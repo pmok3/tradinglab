@@ -1,5 +1,7 @@
 # data/prefetch/live.py — Spec
 
+Last updated: 2026-09-07
+
 ## Purpose
 Live-mode fetch translation for the prefetch scheduler: map a `FetchWindow` to a
 concrete registry fetch, and derive the deepening `oldest_ts`. The app's live

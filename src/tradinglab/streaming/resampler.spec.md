@@ -1,5 +1,7 @@
 # `streaming/resampler.py` — design notes
 
+Last updated: 2026-09-07
+
 ## Purpose
 
 Layer −1 of the exit-strategies plan. The streaming source only emits

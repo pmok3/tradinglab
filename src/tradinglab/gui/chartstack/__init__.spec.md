@@ -1,5 +1,7 @@
 # `gui/chartstack/` — Mini-chart strip subpackage
 
+Last updated: 2026-09-07
+
 ## Purpose
 Persistent vertical strip of 3–6 miniature chart cards docked on
 the left of `ChartApp`'s main window. Each card renders one
