@@ -54,6 +54,8 @@ Environment facts and agent-workflow rules for this machine (**Windows on ARM**)
 - **Don't over-edit.** This repo prizes surgical diffs. When auditing, most
   files should come back unchanged. Match existing tone/structure; never do
   stylistic rewrites.
+- **Coverage work follows §7.39.** Measure a comparable baseline, add behavioral
+  regressions, and keep test-fixture coverage separate from production evidence.
 
 ---
 
@@ -262,7 +264,8 @@ pytest tests/smoke -k some_check --count=10
   matplotlib code.
 - `test_smoke_full` overrides via `@pytest.mark.timeout(300)` because
   the mega-test is slow on macOS CI.
-- Strict markers; only `smoke` is registered.
+- Strict markers; the registry is `[tool.pytest.ini_options].markers`.
+  `perf` and `longhaul` are excluded from the default selection.
 
 ---
 
@@ -352,6 +355,14 @@ The canonical end-to-end gate is `test_smoke_full.py`.
   measurement environment define compatibility; even a harmless config edit
   may reset the baseline. Repository retention limits/deletion can shorten the
   90-day window. No global threshold or external coverage service is used.
+- **Artifact identity belongs to the producer.** The gate downloads
+  `coverage-xml` and `needs.coverage.outputs.summary_artifact` from the same run.
+  Do not reconstruct the summary name using the consumer's `run_attempt`:
+  rerunning only a failed consumer can reuse an earlier successful producer.
+- **`runner.temp` belongs in step context.** GitHub rejects it in job-level
+  `env` before any jobs start. The GUI measurement sets `COVERAGE_FILE` in its
+  step's `env`; artifact paths also use step context. Local workflow-text tests
+  are not a substitute for GitHub accepting and executing the workflow.
 - **`unit` mirrors the release gate (Windows-only).** `release.yml` runs
   `pytest tests/unit` on Windows BEFORE building the redistributable, but CI
   historically did NOT — so a broken unit test passed a green CI and only
@@ -830,6 +841,75 @@ Specs: `gui/source_registry_app.spec.md`, `data/auto_source.spec.md`,
 `tests/unit/gui/test_source_registry_app.py`,
 `tests/unit/data/test_auto_source.py`,
 `tests/unit/gui/test_credentials_dialog_verify.py`.
+
+---
+
+### 7.39 Coverage improvement methodology — measure, exercise, isolate, prove
+
+Coverage is execution evidence, not proof of correct assertions. Keep measured
+percentages, test counts and run IDs in reports/artifacts, not this standing guide.
+The gates and measurement scopes live in §6; use this process when improving them:
+
+1. **Record a comparable baseline.** Pin the worktree's `PYTHONPATH` and confirm
+   `tradinglab.__file__` (§3). Record the commit, exact test selection, platform,
+   configuration, skips and separate statement/branch counts. With branch
+   measurement enabled, coverage.py's `Cover` / `percent_covered` is a combined
+   score, not statement coverage. Use covered/total counts for each metric.
+   Save before/after data under distinct session-artifact paths; compare the
+   same selection and never present a targeted subset as the full CI scope.
+2. **Target behavior and risk, not the lowest percentage.** Rank substantial
+   missing paths, then read their specs and existing tests. Exercise real
+   callbacks and entry points with dependencies stubbed, rather than copying
+   implementation logic into an assertion. Cover cancellation, stale work,
+   cleanup, validation and error paths. Reproduce exposed defects before a
+   surgical fix; update paired specs and user-visible smoke checks (§2, §5).
+   Preserve independent oracle laws and anti-vacuity guards (§7.35).
+3. **Give parallel work explicit ownership.** For a broad campaign, split
+   independent areas; keep simple edits local. Give each child a known base,
+   owned files, a bounded target and targeted validation. Assign shared CI
+   wiring and provenance helpers one owner rather than creating competing
+   formats. Collect scoped commits into the coordinating branch before one
+   push to `main`; no child PRs or competing pushes. After an interruption,
+   inspect and resume the existing child/commit instead of duplicating its work.
+4. **Test the measurement fixtures under coverage too.** A subprocess alone
+   does not isolate nested coverage: strip inherited `COV_CORE_*` and
+   `COVERAGE_*` variables from fixture subprocesses and use their own data paths.
+   Fake failure/reporting tests must clear or redirect `GITHUB_STEP_SUMMARY`.
+   Restore mocked modules, registries and GUI state. Verify that the outer
+   report contains only the measured checkout's production files; never hide
+   leaked temporary packages by weakening the shared `XmlPaths` validator.
+5. **Re-measure after integration.** Start with the smallest relevant tests;
+   after merging a broad campaign, repeat the baseline's complete selection
+   with branch coverage and inspect its XML/JSON scope. Keep `tests/gui` in a
+   separate interpreter and use focused smoke checks for changed wiring.
+   Investigate timing failures both with and without instrumentation; do not
+   relax performance budgets or exclusions merely to make coverage green.
+6. **Prove the published pipeline, not just a local report.** Follow the pushed
+   SHA through all relevant jobs, including informational coverage jobs.
+   The separate gate enforces **70% of changed executable production lines**;
+   it is not a global coverage target or changed-branch metric. Missing/stale
+   evidence fails; a valid empty executable diff is N/A, not 100%. If a later
+   CI-only repair narrows the latest push diff, also check the original change
+   range using the successful run's genuine XML/provenance.
+
+For that last comparison, `$artifacts` is the directory containing matching
+downloaded `coverage.xml` and `coverage-summary.json`, `$originalBase` is the
+commit before the entire change, and `$measuredHead` is the CI-tested SHA:
+
+```powershell
+python tools\check_changed_coverage.py `
+  --xml "$artifacts\coverage.xml" --provenance "$artifacts\coverage-summary.json" `
+  --base $originalBase --head $measuredHead `
+  --expected-suite unit-scanner-logic-oracles-v1 --minimum 70 --enforce
+```
+
+The producer is Actions-context-only: **do not manufacture hosted run identity
+for local coverage**. The consumer needs Python + Git, reads immutable Git
+snapshots, and shares source-path validation with the sole producer.
+Contract: `tools/check_changed_coverage.spec.md`. Regression anchors:
+`tests/unit/test_changed_coverage.py`, `test_coverage_trend.py`,
+`test_changed_coverage_workflow.py`, `test_gui_coverage_workflow.py`,
+`test_main_entrypoint.py`, and `tests/oracles/test_rrvol_alignment.py`.
 
 ---
 

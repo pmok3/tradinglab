@@ -14,7 +14,7 @@ Roughly a hundred docstrings, tests, docs and CI comments cite this guide as
 `AGENTS.md` is identical, so `CLAUDE.md §7.19` means `AGENTS.md §7.19`. Never
 renumber a section in `AGENTS.md`; add new landmines at the end.
 
-## The five rules worth repeating here
+## Core rules worth repeating here
 
 If you read nothing else before touching code:
 
@@ -31,8 +31,14 @@ If you read nothing else before touching code:
    without discussion. (§9)
 4. **Windows + PowerShell.** Backslash paths, fresh process per shell call,
    `gh` needs git on `PATH`. (§0, §3)
-5. **Read §7 before debugging something weird.** Thirty-eight documented
-   landmines, each pointing at the spec and the test that pin it.
+5. **Read §7 before debugging something weird.** The documented landmines
+   point at the specs and tests that pin them; existing section numbers stay fixed.
+6. **Coverage improvements follow the canonical methodology.** Read
+   `AGENTS.md` §7.39 for comparable baselines, behavioral regressions, parallel
+   ownership, fixture isolation and end-to-end CI evidence. §6 defines the
+   **70% changed-executable-line gate**; whole-suite coverage stays informational.
+   Keep statement and branch metrics separate, and never invent CI provenance
+   for a local report.
 
 Everything else — project overview, layout, commands, smoke-test rules, CI,
 landmines, build/release flow, conventions, cheatsheet — is in
