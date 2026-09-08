@@ -7,13 +7,23 @@ background token-exchange worker — without any network or real browser.
 """
 from __future__ import annotations
 
+import threading
+import urllib.error
 from types import SimpleNamespace
 
 import pytest
 
 import tradinglab.gui.schwab_connect_dialog as scd
+from tradinglab.data import schwab_auth as auth
 from tradinglab.gui.schwab_connect_dialog import SchwabConnectDialog
 
+
+@pytest.fixture(autouse=True)
+def isolate_tokens(tmp_path, monkeypatch):
+    monkeypatch.setenv("TRADINGLAB_TOKEN_DIR", str(tmp_path))
+    monkeypatch.setenv("TRADINGLAB_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(auth, "_WINDOWS", False)
+    monkeypatch.setattr(auth, "credentialed_opener", lambda: pytest.fail("unexpected real network"))
 
 def _creds(*, configured=True, redirect_uri="https://127.0.0.1"):
     c = SimpleNamespace(
@@ -123,7 +133,7 @@ def test_open_browser_blocked_when_unconfigured(root, monkeypatch):
         dlg.destroy()
 
 
-def test_exchange_worker_success_saves_tokens(root, monkeypatch):
+def test_exchange_worker_only_publishes_tokens(root, monkeypatch):
     creds = _creds()
     dlg = _make_dialog(root, monkeypatch, creds)
     saved = {}
@@ -131,13 +141,13 @@ def test_exchange_worker_success_saves_tokens(root, monkeypatch):
                         lambda c, uri, code: {"access_token": "AT",
                                               "refresh_token": "RT",
                                               "expires_in": 1800})
-    monkeypatch.setattr(scd, "build_token_cache", lambda resp: dict(resp))
     monkeypatch.setattr(scd, "save_token_cache",
-                        lambda cache: saved.setdefault("cache", cache))
+                        lambda cache: pytest.fail("worker must never persist"))
     try:
-        dlg._exchange_worker(creds, "https://127.0.0.1", "CODE")
-        assert dlg._exchange_result == {"ok": True}
-        assert saved["cache"]["access_token"] == "AT"
+        result = {}
+        dlg._exchange_worker(creds, "https://127.0.0.1", "CODE", result)
+        assert result["ok"] is True and result["cache"]["access_token"] == "AT"
+        assert auth.load_token_cache() is None
     finally:
         dlg.destroy()
 
@@ -147,13 +157,162 @@ def test_exchange_worker_failure_is_captured(root, monkeypatch):
     dlg = _make_dialog(root, monkeypatch, creds)
 
     def _boom(*a, **k):
-        raise RuntimeError("token endpoint 400")
+        raise urllib.error.HTTPError("secret-redirect", 400, "secret", {}, None)
 
     monkeypatch.setattr(scd, "exchange_code_for_tokens", _boom)
     try:
-        dlg._exchange_worker(creds, "https://127.0.0.1", "CODE")
-        assert dlg._exchange_result["ok"] is False
-        assert "400" in dlg._exchange_result["error"]
+        result = {}
+        dlg._exchange_worker(creds, "https://127.0.0.1", "CODE", result)
+        assert result["ok"] is False
+        assert "400" in result["error"] and "secret" not in result["error"]
+    finally:
+        dlg.destroy()
+
+
+def _connect(dlg, creds):
+    dlg._state_nonce = "NONCE"
+    dlg._authorization_credentials = (creds.app_key, creds.app_secret)
+    dlg._paste_var.set("https://127.0.0.1/?code=CODE&state=NONCE")
+    dlg._on_connect()
+
+
+def _finish(dlg):
+    dlg._exchange_thread.join(5)
+    assert not dlg._exchange_thread.is_alive()
+    if dlg._poll_job is not None:
+        dlg.after_cancel(dlg._poll_job)
+    dlg._poll_exchange()
+
+
+def test_check_schwab_connect_persists_and_notifies_only_on_tk_thread(root, monkeypatch):
+    creds = _creds()
+    dlg = _make_dialog(root, monkeypatch, creds)
+    called = []
+    owner = threading.get_ident()
+    dlg._on_connection_changed = lambda: called.append((threading.get_ident(), auth.load_token_cache()))
+    monkeypatch.setattr(scd, "exchange_code_for_tokens",
+                        lambda *a: {"access_token": "AT", "refresh_token": "RT"})
+    try:
+        _connect(dlg, creds)
+        assert dlg._state_nonce is None  # single-use even if exchange fails
+        dlg._exchange_thread.join(5)
+        assert auth.load_token_cache() is None and called == []
+        _finish(dlg)
+        assert called[0][0] == owner and called[0][1]["access_token"] == "AT"
+        assert "tokens saved" in dlg._progress_var.get()
+    finally:
+        dlg.destroy()
+
+
+@pytest.mark.parametrize("action", ["close", "disconnect", "destroy"])
+def test_inflight_exchange_after_close_or_disconnect_cannot_resurrect(root, monkeypatch, action):
+    creds = _creds()
+    dlg = _make_dialog(root, monkeypatch, creds)
+    started, release = threading.Event(), threading.Event()
+    changed = []
+    dlg._on_connection_changed = lambda: changed.append(1)
+    monkeypatch.setattr(scd.messagebox, "askyesno", lambda *a, **k: True)
+
+    def exchange(*a):
+        started.set()
+        assert release.wait(5)
+        return {"access_token": "AT", "refresh_token": "RT"}
+
+    monkeypatch.setattr(scd, "exchange_code_for_tokens", exchange)
+    try:
+        _connect(dlg, creds)
+        assert started.wait(5)
+        if action == "disconnect":
+            dlg._on_disconnect()
+        elif action == "destroy":
+            dlg.destroy()
+        else:
+            dlg._on_close()
+        release.set()
+        dlg._exchange_thread.join(5)
+        assert not dlg._exchange_thread.is_alive()
+        dlg._poll_exchange()
+        assert auth.load_token_cache() is None
+        assert changed == ([1] if action == "disconnect" else [])
+    finally:
+        release.set()
+        dlg._exchange_thread.join(5)
+        if not dlg._closed:
+            dlg.destroy()
+
+
+def test_external_clear_invalidates_completed_exchange_before_poll(root, monkeypatch):
+    creds = _creds()
+    dlg = _make_dialog(root, monkeypatch, creds)
+    monkeypatch.setattr(scd, "exchange_code_for_tokens",
+                        lambda *a: {"access_token": "AT", "refresh_token": "RT"})
+    try:
+        _connect(dlg, creds)
+        auth.clear_token_cache()
+        _finish(dlg)
+        assert auth.load_token_cache() is None
+        assert "not saved" in dlg._progress_var.get()
+    finally:
+        dlg.destroy()
+
+
+def test_credential_change_invalidates_completed_exchange(root, monkeypatch):
+    creds = _creds()
+    dlg = _make_dialog(root, monkeypatch, creds)
+    monkeypatch.setattr(scd, "exchange_code_for_tokens",
+                        lambda *a: {"access_token": "AT", "refresh_token": "RT"})
+    try:
+        _connect(dlg, creds)
+        dlg._exchange_thread.join(5)
+        monkeypatch.setattr(scd, "get_credentials", lambda: SimpleNamespace(schwab=_creds(configured=False)))
+        _finish(dlg)
+        assert auth.load_token_cache() is None
+        assert "credentials changed" in dlg._progress_var.get()
+    finally:
+        dlg.destroy()
+
+
+def test_disconnect_removes_all_cache_versions(root, monkeypatch, tmp_path):
+    creds = _creds()
+    dlg = _make_dialog(root, monkeypatch, creds)
+    auth.save_token_cache({"access_token": "AT", "refresh_token": "RT"})
+    (tmp_path / "schwab.dat").write_bytes(b"protected counterpart")
+    monkeypatch.setattr(scd.messagebox, "askyesno", lambda *a, **k: True)
+    calls = []
+    dlg._on_connection_changed = lambda: calls.append(1)
+    try:
+        dlg._on_disconnect()
+        assert not (tmp_path / "schwab.json").exists() and not (tmp_path / "schwab.dat").exists()
+        assert calls == [1]
+    finally:
+        dlg.destroy()
+
+
+def test_callback_failure_does_not_mislabel_saved_tokens(root, monkeypatch):
+    creds = _creds()
+    dlg = _make_dialog(root, monkeypatch, creds)
+    monkeypatch.setattr(scd, "exchange_code_for_tokens",
+                        lambda *a: {"access_token": "AT", "refresh_token": "RT"})
+
+    def callback():
+        raise RuntimeError("possibly sensitive context")
+
+    dlg._on_connection_changed = callback
+    try:
+        _connect(dlg, creds)
+        _finish(dlg)
+        assert auth.load_token_cache()["access_token"] == "AT"
+        assert "Tokens updated" in dlg._progress_var.get()
+        assert "sensitive" not in dlg._progress_var.get()
+    finally:
+        dlg.destroy()
+
+
+def test_cache_errors_are_visible_in_status(root, monkeypatch, tmp_path):
+    dlg = _make_dialog(root, monkeypatch, _creds())
+    (tmp_path / "schwab.json").write_text("invalid json")
+    try:
+        assert "cache unavailable" in dlg._compute_status_text()
     finally:
         dlg.destroy()
 

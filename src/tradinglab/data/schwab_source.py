@@ -22,19 +22,14 @@ Schwab's API uses OAuth 2.0:
 * Refresh token must be re-issued by walking the user through the
   browser flow once a week.
 
-The interactive flow is owned by :mod:`tradinglab.data.schwab_login`
-(one-time CLI) and :mod:`tradinglab.data.schwab_auth` (refresh
-+ persistence). The fetcher below reads cached tokens from
-``~/.tradinglab/tokens/schwab.json``; until that file exists,
-:func:`fetch_schwab_data` returns ``None``.
+The browser flow is available in the Connect to Schwab dialog and the
+``schwab_login`` CLI. ``schwab_auth`` owns protected persistence + refresh.
 
 REST price-history endpoint
 ---------------------------
 
-:func:`_http_get_pricehistory` is the remaining gap — it currently
-raises ``NotImplementedError``. The dispatcher in ``data/__init__.py``
-keeps the "schwab" source de-registered until that GET is wired up,
-so users never see a broken option in the source dropdown.
+The stdlib HTTP adapter is offline-tested. Registration stays disabled until
+live commissioning; implementing transport does not establish entitlements.
 
 Reference response shape (Market Data v1, ``/pricehistory``)::
 
@@ -49,14 +44,21 @@ Reference response shape (Market Data v1, ``/pricehistory``)::
 
 from __future__ import annotations
 
+import json
 import logging
+import urllib.parse
+import urllib.request
+from datetime import datetime, timedelta, timezone
+from functools import partial
 from typing import Any
 
 from ..core.timezones import ET
 from ..models import Candle
 from . import verify as _verify
+from ._http import MAX_RESPONSE_BYTES, credentialed_opener
 from .credentials import SchwabCredentials, get_credentials
 from .normalize import candles_from_json_rows
+from .schwab_auth import TokenCacheError, _post_token, get_access_token, schwab_failure_result
 
 LOG = logging.getLogger(__name__)
 
@@ -71,6 +73,7 @@ _SCHWAB_KEYMAP = {
 
 def candles_from_schwab_response(
     payload: dict[str, Any], *, interval: str,
+    start: datetime | None = None, end: datetime | None = None,
 ) -> list[Candle]:
     """Map a parsed Schwab ``/pricehistory`` response to candles.
 
@@ -82,6 +85,10 @@ def candles_from_schwab_response(
     to **US Eastern** (``core.timezones.ET``) so ``classify_session`` and
     the chart read the correct exchange wall-clock, matching yfinance /
     Alpaca. Omitting the conversion would shift the intraday session +5h.
+
+    For ``interval="1h"`` the payload must contain genuine one-minute bars.
+    Aggregation never crosses an ET date/session boundary; trailing partial
+    buckets are kept, but buckets starting before ``start`` are omitted.
     """
     if isinstance(payload, list):
         rows = payload
@@ -89,14 +96,29 @@ def candles_from_schwab_response(
         if payload.get("empty"):
             return []
         rows = payload.get("candles") or []
-    return candles_from_json_rows(
-        rows, interval=interval, keymap=_SCHWAB_KEYMAP, ts_unit="ms", tz=ET,
+    candles = candles_from_json_rows(
+        rows, interval="1m" if interval == "1h" else interval,
+        keymap=_SCHWAB_KEYMAP, ts_unit="ms", tz=ET,
     )
+    candles = sorted({c.date: c for c in candles}.values(), key=lambda c: c.date)
+    candles = [c for c in candles if (start is None or c.date >= start) and (end is None or c.date < end)]
+    if interval != "1h":
+        return candles
+    # Anchor regular hours at 09:30 ET, independent of the response's first
+    # timestamp. Separate extended sessions so a 16:00 tick cannot alter RTH.
+    from ..streaming.resampler import BarResampler
+    resampler = BarResampler("1h", session_segments=True)
+    hourly: list[Candle] = []
+    for candle in candles:
+        hourly.extend(event.candle for event in resampler.on_1m_tick(candle, forming=False) if event.closed)
+    trailing = resampler.current_forming()
+    if trailing is not None:
+        hourly.append(trailing)
+    return [c for c in hourly if (start is None or c.date >= start) and (end is None or c.date < end)]
 
 
 # ---------------------------------------------------------------------------
-# Fetcher (HTTP) — OAuth lifecycle is complete (see schwab_auth + schwab_login);
-# the remaining gap is _http_get_pricehistory below.
+# Fetcher (HTTP) — registration remains separately commissioning-gated.
 # ---------------------------------------------------------------------------
 
 
@@ -106,45 +128,82 @@ def candles_from_schwab_response(
 _INTERVAL_TO_SCHWAB = {
     "1m":  ("day",   "minute", 1),
     "5m":  ("day",   "minute", 5),
+    "10m": ("day",   "minute", 10),
     "15m": ("day",   "minute", 15),
     "30m": ("day",   "minute", 30),
-    "1h":  ("day",   "minute", 30),  # Schwab has no 60m; downsample later if needed
+    "1h":  ("day",   "minute", 1),  # aggregate genuine 1m with the shared resampler
     "1d":  ("year",  "daily",  1),
     "1wk": ("year",  "weekly", 1),
     "1mo": ("year",  "monthly", 1),
 }
+PRICE_HISTORY_URL = "https://api.schwabapi.com/marketdata/v1/pricehistory"
+
+
+def price_history_params(
+    ticker: str, interval: str, *,
+    start: datetime | None = None, end: datetime | None = None,
+) -> dict[str, str | int]:
+    """Pure request mapping; date ranges are aware, paired, and half-open."""
+    if interval not in _INTERVAL_TO_SCHWAB:
+        raise ValueError("Unsupported Schwab interval.")
+    if not isinstance(ticker, str) or not ticker.strip():
+        raise ValueError("A symbol is required.")
+    period_type, frequency_type, frequency = _INTERVAL_TO_SCHWAB[interval]
+    params: dict[str, str | int] = {
+        "symbol": ticker.strip(),
+        "periodType": period_type,
+        "frequencyType": frequency_type,
+        "frequency": frequency,
+        "needExtendedHoursData": "true",
+        "needPreviousClose": "false",
+    }
+    if start is None and end is None:
+        params["period"] = 10 if period_type == "day" else 1
+    else:
+        if start is None or end is None:
+            raise ValueError("Schwab ranges require both start and end.")
+        if start.utcoffset() is None or end.utcoffset() is None:
+            raise ValueError("Schwab range bounds must be timezone-aware.")
+        if start >= end:
+            raise ValueError("Schwab range start must precede end.")
+        params["startDate"] = int(start.timestamp() * 1000)
+        params["endDate"] = int(end.timestamp() * 1000) - 1
+    return params
 
 
 def fetch_schwab_data(
     ticker: str = "AAPL", interval: str = "1d",
+    *, start: datetime | None = None, end: datetime | None = None,
 ) -> list[Candle] | None:
     """``DataFetcher``-compatible Schwab fetcher.
 
     Returns ``None`` whenever the request can't be made — missing
     credentials, missing refresh token, network error, or bad
-    response. **Never raises** so app startup and the data-source
-    dropdown stay robust.
+    response. Expected operational failures are surfaced in logs/credential
+    health, not raised. No retries or REST polling are scheduled here.
     """
     creds = get_credentials().schwab
     if not creds.is_configured():
         LOG.debug("schwab: not configured, skipping fetch")
         return None
-    if interval not in _INTERVAL_TO_SCHWAB:
-        LOG.warning("schwab: unsupported interval %r", interval)
-        return None
-    access_token = _maybe_get_access_token(creds)
-    if access_token is None:
-        # The user hasn't completed the one-time OAuth dance yet.
-        LOG.info(
-            "schwab: no cached refresh token. Run the one-time auth "
-            "script to populate ~/.tradinglab/tokens/schwab.json")
+    try:
+        price_history_params(ticker, interval, start=start, end=end)
+    except ValueError as exc:
+        LOG.warning("schwab: invalid price-history request: %s", exc)
         return None
     try:
-        payload = _http_get_pricehistory(ticker, interval, access_token)
-    except Exception as exc:  # pragma: no cover - network path
-        LOG.warning("schwab: fetch failed for %s %s: %s", ticker, interval, exc)
+        access_token = _maybe_get_access_token(creds)
+        if access_token is None:
+            LOG.info("schwab: OAuth sign-in required via Connect to Schwab.")
+            return None
+        payload = _http_get_pricehistory(ticker, interval, access_token, start=start, end=end)
+        return candles_from_schwab_response(payload, interval=interval, start=start, end=end)
+    except (OSError, ValueError, TypeError, KeyError, OverflowError, TokenCacheError) as exc:
+        result = schwab_failure_result(exc)
+        if result.is_credential_problem:
+            _verify.record_result(result)
+        LOG.warning("%s", result.as_log_line())
         return None
-    return candles_from_schwab_response(payload, interval=interval)
 
 
 def _maybe_get_access_token(creds: SchwabCredentials) -> str | None:
@@ -155,19 +214,10 @@ def _maybe_get_access_token(creds: SchwabCredentials) -> str | None:
     ``python -m tradinglab.data.schwab_login`` yet, or if the
     refresh token has expired (7+ days since last login).
     """
-    from .schwab_auth import get_access_token
-    return get_access_token(creds)
+    return get_access_token(creds, raise_errors=True)
 
 
-# Registry-eligibility flag. Audit ``schwab-credentials-gated``: the
-# real ``register_source("schwab", ...)`` call in ``data/__init__.py``
-# is commented out because :func:`_http_get_pricehistory` still
-# raises ``NotImplementedError``. Until that's wired up,
-# ``SCHWAB_REGISTRATION_ENABLED`` stays ``False`` and downstream
-# UI surfaces (credentials dialog, source-selector dropdown) gate
-# themselves off this constant. When the OAuth/REST plumbing
-# lands, flip this to ``True`` AND uncomment the registration
-# line in :mod:`tradinglab.data.__init__` in the same change.
+# Offline implementation is not live commissioning. Keep this gate closed.
 SCHWAB_REGISTRATION_ENABLED: bool = False
 
 
@@ -176,47 +226,47 @@ def verify_schwab(
     timeout: float = _verify.DEFAULT_TIMEOUT_S,
     opener: Any | None = None,
 ) -> _verify.VerifyResult:
-    """Report what can honestly be said about Schwab credentials today.
-
-    Registered as the ``schwab`` verifier so the section gets a "Test
-    connection" button like Alpaca and Polygon. Leaving Schwab as the one
-    vendor with no button was itself a UX bug: the user cannot tell "this
-    provider has no check" from "the check is missing", and silence reads as
-    "probably fine".
-
-    This deliberately makes **no network call**. :func:`_http_get_pricehistory`
-    still raises ``NotImplementedError`` and the OAuth flow has not shipped
-    (see :data:`SCHWAB_REGISTRATION_ENABLED`), so there is nothing to probe —
-    a fabricated request would either fail for the wrong reason or, worse,
-    return ``ok`` for a provider that cannot actually fetch a bar.
-
-    Instead it answers the two questions that *are* decidable locally:
-
-    * fields empty → ``not_configured``, same as every other vendor.
-    * fields present → ``unsupported``, with remediation naming the missing
-      piece. ``unsupported`` renders muted rather than red, because nothing
-      is wrong with the key.
-
-    When OAuth lands, replace the ``unsupported`` branch with a real probe
-    (token refresh + a one-symbol price-history call) and flip
-    ``SCHWAB_REGISTRATION_ENABLED``; the dialog needs no change.
-    """
+    """Explicit one-symbol OAuth probe; never called by source registration."""
     creds = creds if creds is not None else get_credentials().schwab
     if not creds.is_configured():
         return _verify.not_configured(
             "schwab", detail="An app key and app secret are required.")
 
-    return _verify.VerifyResult(
+    oauth_required = _verify.VerifyResult(
         status=_verify.STATUS_UNSUPPORTED,
         vendor="schwab",
-        summary="Saved. Schwab sign-in is not available in this build yet.",
+        summary="Schwab OAuth sign-in is required before testing.",
         detail=(
-            "Your app key and secret are stored, but Schwab needs a one-time "
-            "browser sign-in (OAuth) that this build does not ship yet, so "
-            "the connection cannot be tested. Nothing is wrong with your "
-            "credentials — they will be used automatically once the sign-in "
-            "flow lands."
+            "Save the app credentials, then use Tools > Connect to Schwab. "
+            "This check does not register or enable the uncommissioned data source."
         ),
+    )
+    current = get_credentials().schwab
+    if (creds.app_key, creds.app_secret) != (current.app_key, current.app_secret):
+        return oauth_required
+    try:
+        token = get_access_token(
+            creds, raise_errors=True,
+            _post=partial(_post_token, timeout=timeout, opener=opener),
+        )
+        if token is None:
+            return oauth_required
+        now = datetime.now(timezone.utc)
+        payload = _http_get_pricehistory(
+            "AAPL", "1d", token, start=now - timedelta(days=7), end=now,
+            timeout=timeout, opener=opener,
+        )
+        if not candles_from_schwab_response(payload, interval="1d"):
+            return _verify.VerifyResult(
+                status=_verify.STATUS_ERROR, vendor="schwab",
+                summary="Schwab responded but returned no usable probe candles.",
+            )
+    except (OSError, ValueError, TypeError, KeyError, OverflowError, TokenCacheError) as exc:
+        return schwab_failure_result(exc)
+    return _verify.VerifyResult(
+        status=_verify.STATUS_OK, vendor="schwab",
+        summary="Schwab OAuth price-history access verified.",
+        detail="AAPL daily bars are accessible. This does not commission streaming or validate other entitlements.",
     )
 
 
@@ -225,11 +275,24 @@ _verify.register_verifier("schwab", verify_schwab)
 
 def _http_get_pricehistory(
     ticker: str, interval: str, access_token: str,
-) -> dict[str, Any]:  # pragma: no cover - network path
-    """Issue the GET against Schwab's price-history endpoint.
-
-    Implementation deferred until OAuth lands; see module docstring.
-    """
-    raise NotImplementedError(
-        "Schwab HTTP fetch requires OAuth tokens; finish "
-        "_maybe_get_access_token first.")
+    *, start: datetime | None = None, end: datetime | None = None,
+    timeout: float = 15, opener: Any | None = None,
+) -> dict[str, Any]:
+    """One credential-safe, bounded GET; HTTP errors retain their status codes."""
+    params = price_history_params(ticker, interval, start=start, end=end)
+    if not access_token:
+        raise ValueError("A Schwab access token is required.")
+    request = urllib.request.Request(
+        PRICE_HISTORY_URL + "?" + urllib.parse.urlencode(params),
+        headers={"Authorization": "Bearer " + access_token, "Accept": "application/json"},
+    )
+    with (opener or credentialed_opener()).open(request, timeout=timeout) as response:
+        raw = response.read(MAX_RESPONSE_BYTES + 1)
+    if len(raw) > MAX_RESPONSE_BYTES:
+        raise ValueError("Schwab price-history response exceeds the size limit.")
+    payload = json.loads(raw.decode("utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("Schwab price-history response must be an object.")
+    if payload.get("empty") is not True and not isinstance(payload.get("candles"), list):
+        raise ValueError("Schwab price-history response has no candle array.")
+    return payload

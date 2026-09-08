@@ -25,16 +25,21 @@ import secrets
 import threading
 import tkinter as tk
 import webbrowser
+from collections.abc import Callable
 from tkinter import messagebox, ttk
 
 from ..data.credentials import get_credentials
 from ..data.schwab_auth import (
+    TokenCacheError,
     build_token_cache,
+    cache_matches_credentials,
+    clear_token_cache,
     is_access_token_fresh,
     is_refresh_token_alive,
     load_token_cache,
     save_token_cache,
-    token_cache_path,
+    schwab_failure_result,
+    token_cache_generation,
 )
 from ..data.schwab_login import (
     build_authorize_url,
@@ -51,7 +56,10 @@ _DEFAULT_REDIRECT_URI = "https://127.0.0.1"
 class SchwabConnectDialog(BaseModalDialog):
     """Guided, browser-based Schwab OAuth sign-in (no embedded webview)."""
 
-    def __init__(self, parent: tk.Misc) -> None:
+    def __init__(
+        self, parent: tk.Misc, *,
+        on_connection_changed: Callable[[], None] | None = None,
+    ) -> None:
         super().__init__(
             parent,
             title="Connect to Schwab",
@@ -62,6 +70,10 @@ class SchwabConnectDialog(BaseModalDialog):
         # OAuth handshake state for the current attempt.
         self._state_nonce: str | None = None
         self._redirect_uri: str | None = None
+        self._authorization_credentials: tuple[str | None, str | None] | None = None
+        self._on_connection_changed = on_connection_changed
+        self._closed = False
+        self._exchange_generation: int | None = None
         # Background token-exchange plumbing (§7.15: worker writes a result
         # dict, the Tk main thread polls it via ``after`` — never call
         # ``after`` from the worker).
@@ -162,17 +174,16 @@ class SchwabConnectDialog(BaseModalDialog):
                     "via Tools → Configure Credentials.")
         try:
             cache = load_token_cache()
-        except Exception:  # noqa: BLE001
-            cache = None
+        except TokenCacheError:
+            return "Token cache unavailable — check file access/protection or reconnect."
         if not cache:
             return "Configured, not connected — sign in below to get tokens."
-        try:
-            if is_access_token_fresh(cache):
-                return "Connected ✓ — access token valid."
-            if is_refresh_token_alive(cache):
-                return "Connected ✓ — access token will auto-refresh."
-        except Exception:  # noqa: BLE001
-            pass
+        if not cache_matches_credentials(cache, creds):
+            return "App credentials changed — sign in again to reconnect."
+        if is_access_token_fresh(cache):
+            return "Connected ✓ — access token valid."
+        if is_refresh_token_alive(cache):
+            return "Connected ✓ — access token will auto-refresh."
         return "Tokens expired — sign in again to reconnect."
 
     def _refresh_status(self) -> None:
@@ -189,6 +200,8 @@ class SchwabConnectDialog(BaseModalDialog):
 
     # ------------------------------------------------------------------ step 1
     def _on_open_browser(self) -> None:
+        if self._closed or self._exchange_result is not None:
+            return
         creds = self._creds()
         if not creds.is_configured():
             messagebox.showinfo(
@@ -204,6 +217,7 @@ class SchwabConnectDialog(BaseModalDialog):
         state = secrets.token_urlsafe(24)
         self._state_nonce = state
         self._redirect_uri = redirect_uri
+        self._authorization_credentials = (creds.app_key, creds.app_secret)
         url = build_authorize_url(creds.app_key or "", redirect_uri, state=state)
         self._url_var.set(url)
         opened = False
@@ -251,7 +265,7 @@ class SchwabConnectDialog(BaseModalDialog):
             return None, ("Click \"Open Schwab sign-in\" first to start a "
                           "login, then paste the redirected address.")
         echoed = extract_state(pasted)
-        if echoed is None or not secrets.compare_digest(echoed, nonce):
+        if echoed is None or not secrets.compare_digest(echoed.encode("utf-8"), nonce.encode("utf-8")):
             return None, ("Security check failed (state mismatch). This URL is "
                           "from a different or tampered login — click \"Open "
                           "Schwab sign-in\" to start a fresh one.")
@@ -262,7 +276,7 @@ class SchwabConnectDialog(BaseModalDialog):
         return code, None
 
     def _on_connect(self) -> None:
-        if self._exchange_thread is not None and self._exchange_thread.is_alive():
+        if self._closed or self._exchange_result is not None:
             return  # already exchanging
         code, error = self._verify_and_extract(
             self._paste_var.get(), self._state_nonce)
@@ -270,38 +284,46 @@ class SchwabConnectDialog(BaseModalDialog):
             self._set_progress(error)
             return
         creds = self._creds()
+        if not creds.is_configured() or self._authorization_credentials != (creds.app_key, creds.app_secret):
+            self._set_progress("App credentials changed — open a fresh Schwab sign-in.")
+            return
         redirect_uri = (self._redirect_uri or creds.redirect_uri
                         or _DEFAULT_REDIRECT_URI)
-        self._exchange_result = None
+        self._exchange_result = {}
+        self._exchange_generation = token_cache_generation()
+        self._state_nonce = None
+        self._paste_var.set("")
         try:
             self._connect_btn.configure(state="disabled")
+            self._open_btn.configure(state="disabled")
         except tk.TclError:
             pass
         self._set_progress("Connecting to Schwab…")
         self._exchange_thread = threading.Thread(
             target=self._exchange_worker,
-            args=(creds, redirect_uri, code),
+            args=(creds, redirect_uri, code, self._exchange_result),
             name="SchwabTokenExchange",
             daemon=True,
         )
         self._exchange_thread.start()
         self._poll_job = self.after(120, self._poll_exchange)
 
-    def _exchange_worker(self, creds, redirect_uri: str, code: str) -> None:
-        """Daemon-thread token exchange. Writes ``_exchange_result`` only —
-        never touches Tk (§7.15)."""
+    @staticmethod
+    def _exchange_worker(creds, redirect_uri: str, code: str, result: dict) -> None:
+        """Only publish into this attempt's dict; no Tk object or disk writes."""
         try:
             response = exchange_code_for_tokens(creds, redirect_uri, code)
-            cache = build_token_cache(response)
-            save_token_cache(cache)
-            self._exchange_result = {"ok": True}
-        except Exception as exc:  # noqa: BLE001 - surfaced to the user
-            self._exchange_result = {"ok": False, "error": str(exc)}
+            cache = build_token_cache(response, creds=creds)
+            result.update({"ok": True, "cache": cache})
+        except (OSError, ValueError, TypeError, KeyError, OverflowError, TokenCacheError) as exc:
+            result.update({"ok": False, "error": schwab_failure_result(exc).summary})
 
     def _poll_exchange(self) -> None:
         self._poll_job = None
+        if self._closed or self._exchange_result is None:
+            return
         result = self._exchange_result
-        if result is None:
+        if not result:
             alive = (self._exchange_thread is not None
                      and self._exchange_thread.is_alive())
             if alive:
@@ -309,16 +331,27 @@ class SchwabConnectDialog(BaseModalDialog):
                 return
             # Thread gone without a result — treat as a soft failure.
             result = {"ok": False, "error": "exchange ended unexpectedly"}
+        self._exchange_result = None
         try:
             self._connect_btn.configure(state="normal")
+            self._open_btn.configure(state="normal")
         except tk.TclError:
             pass
         if result.get("ok"):
-            self._state_nonce = None
-            self._paste_var.set("")
+            cache = result["cache"]
+            if not cache_matches_credentials(cache, self._creds()):
+                self._set_progress("App credentials changed — tokens were not saved. Sign in again.")
+                return
+            try:
+                save_token_cache(cache, expected_generation=self._exchange_generation)
+            except TokenCacheError as exc:
+                self._set_progress("Connection not saved: " + schwab_failure_result(exc).summary)
+                self._refresh_status()
+                return
             self._set_progress(
                 "Connected ✓ — tokens saved. Access token refreshes "
                 "automatically; the refresh token lasts ~7 days.")
+            self._notify_connection_changed()
         else:
             self._set_progress(
                 "Connection failed: " + str(result.get("error", "unknown error")))
@@ -333,41 +366,65 @@ class SchwabConnectDialog(BaseModalDialog):
             parent=self,
         ):
             return
+        self._cancel_exchange()
         try:
-            path = token_cache_path()
-            if path.exists():
-                path.unlink()
-        except OSError as exc:
+            clear_token_cache()
+        except TokenCacheError:
             messagebox.showerror(
                 "Disconnect Schwab",
-                f"Could not remove the token cache:\n{exc}",
+                "Could not remove all token files. Check file access and try again.",
                 parent=self,
             )
             return
         self._state_nonce = None
         self._refresh_status()
         self._set_progress("Disconnected — local tokens removed.")
+        self._notify_connection_changed()
 
-    def _on_close(self) -> None:
+    def _notify_connection_changed(self) -> None:
+        if self._on_connection_changed is not None:
+            try:
+                self._on_connection_changed()
+            except Exception:  # noqa: BLE001 - external UI hook; persisted auth already succeeded
+                self._set_progress("Tokens updated, but the live connection could not be updated. Restart the app.")
+
+    def _cancel_exchange(self) -> None:
+        self._exchange_result = None
+        self._state_nonce = None
+        self._authorization_credentials = None
         if self._poll_job is not None:
             try:
                 self.after_cancel(self._poll_job)
             except tk.TclError:
                 pass
             self._poll_job = None
+        self._paste_var.set("")
+        self._url_var.set("")
+        self._connect_btn.configure(state="normal")
+        self._open_btn.configure(state="normal")
+
+    def destroy(self) -> None:
+        if not self._closed:
+            self._closed = True
+            self._cancel_exchange()
+        super().destroy()
+
+    def _on_close(self) -> None:
         try:
             self.destroy()
         except tk.TclError:
             pass
 
 
-def open_schwab_connect_dialog(parent: tk.Misc) -> SchwabConnectDialog | None:
+def open_schwab_connect_dialog(
+    parent: tk.Misc, *, on_connection_changed: Callable[[], None] | None = None,
+) -> SchwabConnectDialog | None:
     """Open the Schwab Connect dialog as a modal child of ``parent``.
 
     Returns the dialog instance (or ``None`` if Tk is unavailable).
     """
     try:
-        dlg = SchwabConnectDialog(parent)
+        dlg = SchwabConnectDialog(parent, on_connection_changed=on_connection_changed)
         parent.wait_window(dlg)
         return dlg
     except tk.TclError:

@@ -184,8 +184,8 @@ def test_schwab_unconfigured_reports_not_configured():
     assert result.status == verify.STATUS_NOT_CONFIGURED
 
 
-def test_schwab_configured_reports_unsupported_without_a_probe(monkeypatch):
-    """OAuth has not shipped; a fabricated 'ok' would be a lie."""
+def test_schwab_configured_reports_unsupported_without_a_probe(monkeypatch, tmp_path):
+    """Keys alone are not OAuth authorization; a fabricated 'ok' would be a lie."""
     from tradinglab.data import schwab_source
     from tradinglab.data.credentials import SchwabCredentials
 
@@ -193,6 +193,7 @@ def test_schwab_configured_reports_unsupported_without_a_probe(monkeypatch):
         raise AssertionError("verify_schwab must not make a network call")
 
     monkeypatch.setattr(schwab_source, "_http_get_pricehistory", _boom)
+    monkeypatch.setenv("TRADINGLAB_TOKEN_DIR", str(tmp_path))
     result = schwab_source.verify_schwab(
         SchwabCredentials(app_key="k", app_secret="s"))
 

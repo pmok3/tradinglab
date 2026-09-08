@@ -76,3 +76,39 @@ def test_secrets_token_urlsafe_is_unique_across_calls() -> None:
     """
     nonces = {secrets.token_urlsafe(24) for _ in range(1000)}
     assert len(nonces) == 1000, "secrets.token_urlsafe must produce unique nonces"
+
+
+def test_malformed_redirect_has_safe_error():
+    url = "https://[broken-secret?code=secret"
+    assert schwab_login.extract_state(url) is None
+    with pytest.raises(ValueError, match="Invalid redirected URL") as exc:
+        schwab_login.extract_code(url)
+    assert "secret" not in str(exc.value)
+
+
+@pytest.mark.parametrize("failure", ["http", "save"])
+def test_cli_surfaces_safe_exchange_and_persistence_errors(monkeypatch, capsys, failure):
+    from types import SimpleNamespace
+    from urllib.error import HTTPError
+
+    from tradinglab.data.credentials import SchwabCredentials
+    from tradinglab.data.schwab_auth import TokenCacheError
+
+    creds = SchwabCredentials(app_key="APP_KEY", app_secret="SECRET")
+    monkeypatch.setattr(schwab_login, "get_credentials", lambda: SimpleNamespace(schwab=creds))
+    monkeypatch.setattr(schwab_login.secrets, "token_urlsafe", lambda n: "NONCE")
+
+    def exchange(*args):
+        if failure == "http":
+            raise HTTPError("SECRET_URL", 403, "SECRET", {}, None)
+        return {"access_token": "AT", "refresh_token": "RT"}
+
+    def save(*args, **kwargs):
+        raise TokenCacheError("SECRET persistence context")
+
+    monkeypatch.setattr(schwab_login, "exchange_code_for_tokens", exchange)
+    monkeypatch.setattr(schwab_login, "save_token_cache", save)
+    assert schwab_login.main(["--redirect-url", "https://127.0.0.1/?state=NONCE&code=CODE"]) == 1
+    error = capsys.readouterr().err
+    assert "SECRET" not in error
+    assert "403" in error if failure == "http" else "token cache" in error

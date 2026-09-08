@@ -18,7 +18,7 @@ The flow:
 4. You copy the **entire URL** from the address bar back into this
    terminal. We extract ``code``, exchange it for tokens at
    ``/oauth/token``, and write
-   ``~/.tradinglab/tokens/schwab.json``.
+   the platform-appropriate protected/private token cache.
 
 After that the REST fetcher and streaming source can use the cached
 tokens; they'll auto-refresh access tokens for the next ~7 days
@@ -38,9 +38,12 @@ import urllib.parse
 from .credentials import get_credentials
 from .schwab_auth import (
     AUTHORIZE_URL,
+    TokenCacheError,
     _post_token,
     build_token_cache,
     save_token_cache,
+    schwab_failure_result,
+    token_cache_generation,
 )
 
 
@@ -72,7 +75,10 @@ def extract_code(redirect_url: str) -> str:
     Raises ``ValueError`` if not present — a clearer message than the
     generic KeyError urllib.parse would surface.
     """
-    parsed = urllib.parse.urlparse(redirect_url.strip())
+    try:
+        parsed = urllib.parse.urlparse(redirect_url.strip())
+    except ValueError as exc:
+        raise ValueError("Invalid redirected URL; paste the full browser address.") from exc
     qs = urllib.parse.parse_qs(parsed.query)
     code_list = qs.get("code")
     if not code_list:
@@ -90,7 +96,10 @@ def extract_state(redirect_url: str) -> str | None:
     older test fixtures that never set one shouldn't break on
     upgrade.
     """
-    parsed = urllib.parse.urlparse(redirect_url.strip())
+    try:
+        parsed = urllib.parse.urlparse(redirect_url.strip())
+    except ValueError:
+        return None
     qs = urllib.parse.parse_qs(parsed.query)
     state_list = qs.get("state")
     if not state_list:
@@ -113,7 +122,7 @@ def exchange_code_for_tokens(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="One-time Schwab OAuth login. "
-                    "Writes ~/.tradinglab/tokens/schwab.json.")
+                    "Writes the protected/private TradingLab token cache.")
     parser.add_argument(
         "--redirect-url", help="Skip the prompt; pass the redirected URL "
                                "directly (useful for scripted runs).")
@@ -155,7 +164,7 @@ def main(argv: list[str] | None = None) -> int:
             return 130
 
     echoed_state = extract_state(redirect_url)
-    if echoed_state is None or not secrets.compare_digest(echoed_state, state):
+    if echoed_state is None or not secrets.compare_digest(echoed_state.encode("utf-8"), state.encode("utf-8")):
         # Constant-time compare avoids leaking the nonce through
         # timing — overkill here because the secret never round-trips,
         # but cheap and habit-forming.
@@ -175,13 +184,14 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     try:
+        generation = token_cache_generation()
         response = exchange_code_for_tokens(creds, redirect_uri, code)
-    except Exception as exc:  # pragma: no cover - network path
-        print(f"ERROR: token exchange failed: {exc}", file=sys.stderr)
+        cache = build_token_cache(response, creds=creds)
+        save_token_cache(cache, expected_generation=generation)
+    except (OSError, ValueError, TypeError, KeyError, OverflowError, TokenCacheError) as exc:
+        print("ERROR: " + schwab_failure_result(exc).summary, file=sys.stderr)
         return 1
 
-    cache = build_token_cache(response)
-    save_token_cache(cache)
     print()
     print("Success. Tokens saved.")
     print("  Access token expires in ~30 minutes (auto-refreshed).")

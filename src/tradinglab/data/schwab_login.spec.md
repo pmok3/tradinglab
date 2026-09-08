@@ -1,6 +1,6 @@
 # data/schwab_login.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-08
 
 ## Purpose
 One-time Schwab OAuth-code login CLI. Walks the user through the browser-redirect dance, exchanges the resulting auth code for tokens, and writes the persistent cache that `schwab_auth` then auto-refreshes for ~7 days.
@@ -18,7 +18,7 @@ One-time Schwab OAuth-code login CLI. Walks the user through the browser-redirec
 - `main(argv=None) -> int` — CLI entry. Invoked via `python -m tradinglab.data.schwab_login`. Optional `--redirect-url` flag skips the interactive prompt (useful for scripted runs).
 
 ## Dependencies
-- Internal: `.credentials.get_credentials`, `.schwab_auth.{AUTHORIZE_URL, _post_token, build_token_cache, save_token_cache}`.
+- Internal: `.credentials.get_credentials`, `.schwab_auth` authorization endpoint, cache builder/writer/generation, and secret-free failure classification.
 - External: stdlib only (`argparse`, `secrets`, `urllib.parse`, `sys`).
 
 ## Design Decisions
@@ -38,16 +38,18 @@ One-time Schwab OAuth-code login CLI. Walks the user through the browser-redirec
   initiated code, binding the attacker's Schwab account to the
   operator's local cache.
 - **Returns shell exit codes**: 0 success, 1 token-exchange or parse failure, 2 missing credentials, 130 user-aborted. State mismatch returns 1.
+- **Secure persistence**: initial tokens bind the current app key/secret fingerprint. The cache generation is captured before exchange; clear/replacement during HTTP cancels the save. Windows uses the DPAPI-protected cache, non-Windows private JSON, via `schwab_auth`.
+- **Visible safe failures**: exchange, malformed token responses and cache-write errors all return 1 with sanitized status text. No vendor body/exception text or pasted redirect is printed on failure. Malformed redirect URLs get a fixed safe error; Unicode state values fail comparison safely rather than raising `TypeError`.
 
 ## Invariants
-- After a successful run, `token_cache_path()` exists and contains both `access_token` and `refresh_token` (atomic write via `schwab_auth.save_token_cache`).
-- `main()` is the only function that performs I/O / writes the cache. The other helpers are pure.
+- After a successful run, the platform cache contains both tokens (protected `.dat` on Windows, logical `.json` elsewhere).
+- `main()` owns prompting/persistence. URL helpers are pure; `exchange_code_for_tokens` performs HTTP unless `_post` is injected.
 - When `state` is generated, it is verified before any token
   exchange occurs. A mismatched or missing state aborts the run.
 
 ## Testing
 - `build_authorize_url`, `extract_code`, `extract_state` are
   unit-testable with no I/O. The `state`-mismatch abort path is
-  covered in `tests/unit/data/test_schwab_login_state.py`. Network
-  path is `# pragma: no cover` (exercised manually).
-
+  covered in `tests/unit/data/test_schwab_login_state.py`, along with safe
+  malformed URL handling and CLI HTTP/persistence errors. Token POST request
+  shape and bounded reading are covered offline in `test_schwab_source.py`.
