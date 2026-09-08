@@ -245,6 +245,13 @@ class BarResampler:
         candle, _ = self._build_effective()
         return candle
 
+    def retained_events(self) -> tuple[BarEvent, ...]:
+        """Fresh snapshots of the bounded correction-mode buckets, oldest first."""
+        return tuple(
+            self._retained_event(start, closed=start != self._bucket_start)
+            for start in sorted(self._minutes)
+        )
+
     def bucket_start_for(self, stamp: datetime) -> datetime:
         """Return the configured session-anchored boundary without mutating state."""
         return self._bucket_start_for(stamp)

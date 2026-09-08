@@ -87,7 +87,7 @@ class IntradayAdapter:
             self._pending_bucket = None
             self.needs_reconcile = False
             self.reconcile_revision += 1
-            self.observe_history(history)
+            self.observe_history(fresh)
             self._refresh_readiness()
         return not self.needs_reconcile
 
@@ -131,6 +131,19 @@ class IntradayAdapter:
         )
         if self.ready:
             self.message = "Live stream"
+
+    def safe_snapshots(self) -> list[Candle]:
+        """Reconstruct covered retained buckets before applying an in-flight REST result."""
+        if self._hard_reconcile or self._latest is None:
+            return []
+        return [
+            event.candle
+            for event in self.resampler.retained_events()
+            if self._bucket_safe(
+                event.candle.date,
+                min(self._latest, self.resampler.bucket_end_for(event.candle.date) - timedelta(minutes=1)),
+            )
+        ]
 
     def apply(self, kind: str, bar: Candle) -> list[tuple[str, Candle]]:
         if self._hard_reconcile:

@@ -27,6 +27,8 @@ historical fetcher. This module only fills the intraday gap.
 * `on_1m_tick(candle, *, forming) -> List[BarEvent]` — main entry.
 * `current_forming() -> Optional[Candle]` — peek at the in-progress
   bucket.
+* `retained_events() -> tuple[BarEvent, ...]` — fresh oldest-first snapshots
+  of correction-mode buckets, without advancing or mutating the resampler.
 * `reset()` — drop state on session boundary.
 * `bucket_start_for(stamp)` — expose the configured boundary calculation.
 * `bucket_end_for(stamp)` — end-exclusive boundary, clipped at the session end

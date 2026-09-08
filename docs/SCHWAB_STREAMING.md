@@ -97,6 +97,13 @@ its fresh result is applied. An earlier in-flight request arriving late, a faile
 fetch, or loading existing memory/disk cache does not count. Current-bucket
 minute contributions survive this reconciliation rather than restarting warm-up.
 
+Before a delayed REST result can replace or persist the chart cache, safely
+retained newer stream buckets and appends are merged into it. The fresh provider
+result still repairs the owed earlier bucket. For example, a response containing
+09:35 volume 400 cannot overwrite its completed streamed volume 500 or remove a
+new 09:40 bar. If post-request changes have already left the bounded two-bucket
+window, discard the response and keep polling/reconciling instead of guessing.
+
 A known older correction replaces its timestamp in place, invalidates affected
 indicators/series, redraws the visible slice without moving the viewport, and
 persists corrected history. It cannot regress the current-price overlay.

@@ -428,3 +428,31 @@ def test_chart_only_native_source_can_publish_without_any_provisional_tick():
         assert ctrl.apply_tick(ctrl.drain()[0], cache, None)
         assert ctrl.latest_price == ("AMD", price)
         assert ctrl.active
+
+
+def test_native_history_merge_preserves_post_request_updates_and_appends():
+    ctrl = StreamController()
+    stream = FakeStream()
+    key, cache, _sources = _start(ctrl, stream)
+    stamp = cache[key][0].date
+    request = ctrl.history_request()
+    for minute, close in ((1, 20), (2, 30)):
+        stream.callbacks[0][2]("rollover", _bar(stamp + timedelta(minutes=minute), close=close))
+        assert ctrl.apply_tick(ctrl.drain()[0], cache, None)
+    merged = ctrl.prepare_history(
+        key, [_bar(stamp, close=11), _bar(stamp + timedelta(minutes=1), close=15)], request=request)
+    assert [bar.close for bar in merged] == [11, 20, 30]
+    assert len(ctrl._native_snapshots) == 2
+
+
+def test_history_merge_rejects_mixed_timezone_instead_of_dropping_a_side():
+    ctrl = StreamController()
+    stream = FakeStream()
+    key, cache, _sources = _start(ctrl, stream)
+    stamp = cache[key][0].date
+    request = ctrl.history_request()
+    stream.callbacks[0][2]("tick", _bar(stamp, close=20))
+    ctrl.apply_tick(ctrl.drain()[0], cache, None)
+    assert ctrl.prepare_history(key, [_bar(stamp.replace(tzinfo=ET))], request=request) is None
+    assert cache[key][0].close == 20
+    assert ctrl.needs_reconcile and not ctrl.active

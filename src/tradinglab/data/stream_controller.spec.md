@@ -23,7 +23,12 @@ correction and append/upsert persistence.
 - Adapter construction failure leaves no committed subscription or context.
 - `needs_reconcile`, `claim_reconcile()` — coalesced real fallback-fetch handoff.
 - `history_request() -> StreamHistoryRequest` — frozen subscription token,
-  connection generation and controller/adapter reconciliation revisions.
+  connection generation, controller/adapter reconciliation revisions and a
+  stream-mutation watermark. Scope equality excludes the mutation watermark
+  because newer stream data can be safely merged while the request is pending.
+- `prepare_history(key, fresh, *, request) -> list[Candle] | None` — reapply
+  covered retained stream changes and newer appends before load/persistence;
+  reject unsafe or too-old responses without replacing the current cache.
 - `history_refreshed(key, full_cache, *, request=None, fresh=None)` — acknowledge
   only a matching request after its fresh result is applied. GUI always supplies
   the submission-time request and actual provider response, not merged cache.
@@ -60,6 +65,17 @@ correction and append/upsert persistence.
   invalidate backfill owed to an incomplete prior bucket. Submission-time
   reconciliation revisions reject late pre-boundary acknowledgements; the owed
   timestamp must appear in the fresh response, not merely the merged cache.
+- **Bounded in-flight merge.** Track mutation revisions for only the two newest
+  stream-updated target timestamps. Higher-interval snapshots come from the
+  existing resampler; native streams retain at most two copied output bars.
+  A retirement watermark rejects a request if post-submission mutations have
+  already left that bounded window. Rejection keeps polling/reconciliation
+  active rather than trusting future ticks to repair a lossy replacement.
+- **Fresh REST keeps its role.** The owed historical bucket still comes from the
+  provider. Covered stream updates made after request submission overwrite its
+  stale overlapping snapshot, and newer stream appends survive. Mixed naive/
+  aware dates are rejected before the legacy merge fallback could discard a
+  side. Replaced/discarded provider-list array stashes are explicitly released.
 - **Price publication is timestamped.** Accepted latest `closed` observations
   advance the overlay, including a same-minute authoritative final correction.
   The publication watermark includes its connection generation and never moves
@@ -86,3 +102,7 @@ correction and append/upsert persistence.
   snapshot. `tests/unit/gui/test_stream_reconciliation_polling.py` exercises the
   actual poll/readiness hooks, delayed futures, post-boundary success and
   None/error worker results with cached fallback.
+- Delayed-response tests capture 09:35 at volume 400, deliver it after the
+  stream reached 500 and opened 09:40, and assert both loaded and persisted
+  values before takeover and after 09:35 leaves stream retention. Requests
+  arriving after their changed bucket was evicted must not load or persist.

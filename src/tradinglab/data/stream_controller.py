@@ -6,7 +6,7 @@ import queue
 import time
 from bisect import bisect_left
 from collections.abc import Callable, Mapping, MutableMapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import Enum
 from typing import Any, Protocol, runtime_checkable
@@ -15,6 +15,7 @@ from ..models import Candle
 from ..streaming.base import StreamSource, StreamState, StreamStatus
 from ..streaming.intraday import IntradayAdapter
 from ..streaming.registry import resolve_chart_stream
+from .normalize import pop_prebuilt_arrays
 
 LOG = logging.getLogger(__name__)
 StreamEvent = tuple[Any, ...]
@@ -44,6 +45,8 @@ class StreamHistoryRequest:
     generation: int | None
     revision: int
     adapter_revision: int
+    # Scope equality fences debt/epochs; stream writes are merged independently.
+    stream_revision: int = field(default=0, compare=False)
 
 
 class StreamController:
@@ -70,6 +73,10 @@ class StreamController:
         self._native_startup: datetime | None = None
         self._published_at: datetime | None = None
         self._published_generation: int | None = None
+        self._stream_revision = 0
+        self._retired_revision = 0
+        self._recent_changes: dict[datetime, int] = {}
+        self._native_snapshots: dict[datetime, Candle] = {}
         self.last_mutation = StreamMutation.REJECTED
         self.appended = False
         self.latest_price: tuple[str, float] | None = None
@@ -106,7 +113,54 @@ class StreamController:
         return StreamHistoryRequest(
             self._token, self._generation, self._reconcile_revision,
             self._adapter.reconcile_revision if self._adapter is not None else 0,
+            self._stream_revision,
         )
+
+    def prepare_history(
+        self, key: CacheKey, fresh: list[Candle], *, request: StreamHistoryRequest,
+    ) -> list[Candle] | None:
+        """Merge stream-owned state before the loader can overwrite or persist it."""
+        from ..disk_cache import merge_candles
+
+        self.refresh_health()
+        if (key != self._context or request != self.history_request()
+                or request.stream_revision < self._retired_revision):
+            return self._reject_history(fresh)
+        snapshots = (
+            self._adapter.safe_snapshots() if self._adapter is not None
+            else [replace(bar) for bar in self._native_snapshots.values()]
+        )
+        covered = {bar.date for bar in snapshots}
+        if any(stamp not in covered and revision > request.stream_revision
+               for stamp, revision in self._recent_changes.items()):
+            return self._reject_history(fresh)
+        # merge_candles' legacy mixed-timezone fallback discards a side. That is
+        # never safe for reconciliation: preserve the live cache and retry instead.
+        if snapshots:
+            naive = snapshots[0].date.tzinfo is None
+            if any((bar.date.tzinfo is None) != naive for bar in fresh):
+                return self._reject_history(fresh)
+        latest_fresh = fresh[-1].date if fresh else None
+        snapshots = [
+            bar for bar in snapshots
+            if self._recent_changes.get(bar.date, 0) > request.stream_revision
+            or latest_fresh is None or bar.date > latest_fresh
+        ]
+        if not snapshots:
+            return fresh
+        merged = merge_candles(fresh, snapshots)
+        pop_prebuilt_arrays(fresh)
+        return merged
+
+    def _reject_history(self, fresh: list[Candle]) -> None:
+        pop_prebuilt_arrays(fresh)
+        self._active = False
+        if not self.needs_reconcile:
+            self._require_history()
+        self._reconcile_claimed = False
+        self.message = "History response cannot preserve newer stream bars; retrying while polling"
+        LOG.warning(self.message)
+        return None
 
     def history_refreshed(
         self, key: CacheKey, full_cache: Mapping[CacheKey, list[Candle]], *,
@@ -128,7 +182,7 @@ class StreamController:
             self._reconcile = False
             self._reconcile_claimed = False
         elif self._adapter is not None:
-            self._adapter.observe_history(full_cache.get(key, []))
+            self._adapter.observe_history(fresh if fresh is not None else full_cache.get(key, []))
         self.refresh_health()
 
     def _require_history(self, *, force: bool = False) -> None:
@@ -218,6 +272,9 @@ class StreamController:
                 self._require_history(force=True)
                 self._first_provisional = True
                 self._native_startup = None
+                self._recent_changes.clear()
+                self._native_snapshots.clear()
+                self._retired_revision = self._stream_revision
                 if self._adapter is not None:
                     self._adapter.reset_connection()
             self._generation = status.generation
@@ -269,6 +326,10 @@ class StreamController:
         self._native_startup = None
         self._published_at = None
         self._published_generation = None
+        self._stream_revision = 0
+        self._retired_revision = 0
+        self._recent_changes.clear()
+        self._native_snapshots.clear()
         self.latest_price = None
         self.message = ""
         self._clear_stopped_events()
@@ -360,6 +421,7 @@ class StreamController:
                 return StreamMutation.REJECTED
             mutation = StreamMutation.LAST if index == len(raw) - 1 else StreamMutation.CORRECTION
             self._copy_bar(dst=raw[index], src=bar)
+        self._record_stream_update(bar)
         if indicators is not None:
             indicators.invalidate_for_candles(raw)
         if save is not None and (
@@ -371,6 +433,16 @@ class StreamController:
             except OSError:
                 LOG.exception("Could not persist stream correction")
         return mutation
+
+    def _record_stream_update(self, bar: Candle) -> None:
+        self._stream_revision += 1
+        self._recent_changes[bar.date] = self._stream_revision
+        if self._adapter is None:
+            self._native_snapshots[bar.date] = replace(bar)
+        while len(self._recent_changes) > 2:
+            oldest = min(self._recent_changes)
+            self._retired_revision = max(self._retired_revision, self._recent_changes.pop(oldest))
+            self._native_snapshots.pop(oldest, None)
 
     def drain(self) -> list[StreamEvent]:
         out: list[StreamEvent] = []

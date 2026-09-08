@@ -896,6 +896,14 @@ class PollingMixin:
                 p_disk, c_disk = None, None
             else:
                 p_raw, c_raw, p_disk, c_disk = result
+            fresh_primary = p_raw
+            if ctrl is not None and ctrl.subscribed and p_raw:
+                p_raw = ctrl.prepare_history(
+                    (src, raw_primary, interval), p_raw, request=stream_request)
+                if p_raw is None:
+                    self._schedule_next_bar_fetch()
+                    self._update_stream_health()
+                    return
             self._prefetched_raw = {
                 "token": token,
                 "src": src,
@@ -913,7 +921,7 @@ class PollingMixin:
                 if ctrl is not None and p_raw:
                     ctrl.history_refreshed(
                         (src, raw_primary, interval), self._full_cache,
-                        request=stream_request, fresh=p_raw,
+                        request=stream_request, fresh=fresh_primary,
                     )
             finally:
                 self._prefetched_raw = None

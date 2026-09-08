@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from tradinglab import disk_cache
 from tradinglab.core.timezones import ET
 from tradinglab.core.view_intent import ViewController
 from tradinglab.data import DATA_SOURCES
@@ -138,9 +139,10 @@ def test_new_bucket_cannot_cancel_prior_bucket_post_boundary_backfill(monkeypatc
     assert app._poll_job is not None
     assert app.jobs[app._poll_job][0] == 0
 
-    # Even an old request completed after the boundary cannot acknowledge debt.
+    # An old request cannot replace the cache before its debt fence rejects it.
     app.complete(0, [_bar(0, volume=950)])
-    assert app.loads[-1][0].volume == 950
+    assert not app.loads
+    assert app._full_cache[app.key][0].volume == 900
     assert app._stream_ctrl.needs_reconcile
     assert not app._stream_active
     app._next_bar_fetch_tick()  # This request carries the post-boundary debt revision.
@@ -181,3 +183,81 @@ def test_failed_post_boundary_fetch_cannot_discharge_debt_via_cached_fallback(mo
     assert app._stream_ctrl.needs_reconcile
     assert not app._stream_active
     assert app._poll_job is not None
+
+
+class _PersistingHarness(_Harness):
+    def __init__(self):
+        super().__init__()
+        self.ready_at_save = []
+
+    def _load_data(self):
+        super()._load_data()
+        self.ready_at_save.append(self._stream_ctrl.active)
+        disk_cache.save(*self.key, self._full_cache[self.key])
+
+
+def _start_delayed_debt_fetch(app):
+    for kind, minute in (("rollover", 3), ("closed", 3), ("closed", 4), ("rollover", 5)):
+        app.emit(kind, minute)
+    for minute in range(5, 9):
+        app.emit("closed", minute)
+    assert app._full_cache[app.key][-1].volume == 400
+    app._next_bar_fetch_tick()
+    app.emit("closed", 9)
+    app.emit("rollover", 10)
+
+
+def _volumes(bars):
+    return {bar.date: bar.volume for bar in bars}
+
+
+def test_history_merge_persists_newer_stream_buckets_before_takeover_and_eviction(monkeypatch, tmp_path):
+    monkeypatch.setitem(DATA_SOURCES, "schwab", lambda *_args: [])
+    monkeypatch.setattr("tradinglab.gui.polling._compute_fetch_delay_ms", lambda **kwargs: 1000)
+    monkeypatch.setattr(disk_cache, "_cache_dir", lambda: tmp_path)
+    app = _PersistingHarness()
+    _start_delayed_debt_fetch(app)
+    assert _volumes(app._full_cache[app.key])[_bar(5).date] == 500
+    assert not app._stream_active
+
+    response = [_bar(0, volume=1400), _bar(5, volume=400)]
+    app.complete(0, response)
+    expected = {_bar(0).date: 1400, _bar(5).date: 500, _bar(10).date: 100}
+    assert _volumes(app.loads[0]) == expected, "Merge must precede the loader's write"
+    assert _volumes(disk_cache.load(*app.key)) == expected
+    assert _volumes(app._full_cache[app.key]) == expected
+    assert app.ready_at_save == [False], "Persistence must precede debt discharge/takeover"
+    assert response[1].volume == 400, "Keep the original provider response as separate provenance"
+    app._update_stream_health()
+    assert app._stream_active and app._poll_job is None
+
+    # Never send a later correction for 09:35: its value must already be durable.
+    for minute in range(10, 15):
+        app.emit("closed", minute)
+    app.emit("rollover", 15)
+    retained = app._stream_ctrl._adapter.resampler.retained_events()
+    assert _bar(5).date not in {event.candle.date for event in retained}
+    assert _volumes(app._full_cache[app.key])[_bar(5).date] == 500
+    assert _volumes(disk_cache.load(*app.key))[_bar(5).date] == 500
+
+
+def test_response_outliving_changed_bucket_retention_never_replaces_or_persists_cache(monkeypatch, tmp_path):
+    monkeypatch.setitem(DATA_SOURCES, "schwab", lambda *_args: [])
+    monkeypatch.setattr("tradinglab.gui.polling._compute_fetch_delay_ms", lambda **kwargs: 1000)
+    monkeypatch.setattr(disk_cache, "_cache_dir", lambda: tmp_path)
+    app = _PersistingHarness()
+    _start_delayed_debt_fetch(app)
+    for minute in range(10, 15):
+        app.emit("closed", minute)
+    app.emit("rollover", 15)
+    before = _volumes(app._full_cache[app.key])
+    disk_cache.save(*app.key, app._full_cache[app.key])
+    app.complete(0, [_bar(0, volume=1400), _bar(5, volume=400)])
+    assert not app.loads
+    assert not app.ready_at_save
+    assert _volumes(app._full_cache[app.key]) == before
+    assert _volumes(disk_cache.load(*app.key)) == before
+    assert before[_bar(5).date] == 500
+    assert app._stream_ctrl.needs_reconcile and not app._stream_active
+    assert app._poll_job is not None
+    assert len(app._stream_ctrl._recent_changes) <= 2

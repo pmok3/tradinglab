@@ -20,6 +20,8 @@ No history fetching, socket, worker, full chart cache, or Tk ownership.
   matching post-debt fetch, requiring the owed bucket in its fresh response.
 - `reset_connection()`: discard prior-epoch minute contributions but retain
   any unpaid incomplete-bucket debt.
+- `safe_snapshots() -> list[Candle]`: reconstruct safely covered retained
+  buckets for merging into a pending REST result before cache replacement.
 
 ## Dependencies
 - Internal: `models.Candle`, `core.timezones.ET`, `streaming.resampler`.
@@ -48,6 +50,11 @@ No history fetching, socket, worker, full chart cache, or Tk ownership.
   until a fresh post-boundary response actually replaces the owed history.
   Reconciliation of this debt preserves current minute contributions rather
   than restarting warm-up on every REST response.
+- **Merge before acknowledging.** Safely covered stream buckets are reapplied
+  before the history loader writes or persists. The original provider response
+  remains separate evidence of owed history. Only its timestamps advance the
+  opaque REST boundary; a preserved newer stream append is not reclassified as
+  a partial REST bucket.
 
 ## Invariants
 - Startup partial data never overwrites a complete historical bucket.

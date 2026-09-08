@@ -102,6 +102,12 @@ Also hosts the pure scheduler helpers (only caller is here).
   applied through `_load_data` acknowledges debt. `_load_data` completing with
   cached fallback is not success. A pre-boundary in-flight request cannot
   discharge debt created by a later bucket rollover, even if it completes late.
+- Before handing a nonempty streaming response to `_load_data`, call
+  `prepare_history` to merge safely retained stream buckets and post-request
+  appends into the payload. This precedes disk persistence and readiness
+  acknowledgement. Keep the original provider list for debt/provenance checks.
+  An unsafe response is discarded and polling re-armed without invoking the
+  loader; a later tick must never be required to restore overwritten history.
 - `_stream_event_applied(applied)` publishes only controller-accepted latest
   prices and invalidates the focused visible series. Stale tokens/epochs and
   historical correction never regress the overlay.
