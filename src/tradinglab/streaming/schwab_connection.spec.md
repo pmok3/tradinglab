@@ -32,6 +32,16 @@ not own chart UI, REST history, bar aggregation or quote book state.
 - Worker is the only writer of connection/protocol state and socket I/O.
   Source desired sets/image revisions are snapshotted under its lock;
   no network operation executes inside that lock or on Tk subscribe/close.
+- A process-wide **Schwab ownership lock** serializes connection attempts
+  across distinct source instances, including terminal-close/recreate on
+  registry credential changes. This is a vendor lifetime permit, not a
+  subscription-state lock: only workers acquire it, with interruptible
+  0.25s timed acquisition. Waiting sources remain CONNECTING.
+  Ownership spans auth/preferences, connect/serve, and socket `finally`
+  cleanup; it is released before reconnect backoff. A cancelled waiter
+  exits without auth or dialing, including cancellation just after acquire.
+  Registry/UI callers can replace a source immediately without joins,
+  polling for physical closure, or timing-dependent registration hacks.
 - Login request ID 0; wait for its correlated ACK, tolerating intervening
   heartbeat frames. Initial **SUBS independently for each service**.
   LEVELONE wants bar+quote union; CHART wants bar symbols only.
@@ -67,10 +77,13 @@ not own chart UI, REST history, bar aggregation or quote book state.
   and handled specifically. No success-shaped send failures.
 
 ## Invariants
-- One socket per source, all bar/quote consumers multiplexed.
+- One socket process-wide across Schwab source instances, all consumers
+  of an instance multiplexed. An active owner must close before another
+  source can serve; accidental overlapping instances wait rather than
+  evicting the established vendor socket.
 - The connection may not reconnect or deliver further batch entries after
   terminal close; last-symbol removal cancels the worker.
-- No retained token fallback, raw-frame logging or lock-held I/O.
+- No retained token fallback, raw-frame logging or subscription-state-lock-held I/O.
 - Protocol state size is bounded by active symbols and at most two service
   requests; connection attempts discard old state.
 
@@ -81,6 +94,9 @@ union updates, bar/quote joining, re-image, pending changes, service rejection,
 deadlines/heartbeat, reconnect/token reset, backoff, epoch/health gating,
 callback close, cleanup and worker-only auth/shutdown races. No real keys,
 credentials, sockets or HTTP.
+Distinct-source churn tests hold old auth/preferences/connect or socket
+cleanup at explicit barriers, prove replacements wait through cleanup,
+and cancel queued replacements before releasing ownership.
 
 ## Known limitations
 Live vendor behavior still needs verification: entitlements/delayed delivery,

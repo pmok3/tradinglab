@@ -19,7 +19,10 @@ in [`schwab_aggregator`](schwab_aggregator.spec.md).
   capability, not a new requirement on the `StreamSource` protocol.
 - `close()`: idempotent, terminal, marks all bar/quote handles closed and
   signals worker shutdown. To re-enable a terminal-closed registry entry,
-  construct/register a new `SchwabStreamSource`.
+  construct/register a new `SchwabStreamSource`. Replacement is safe
+  immediately: worker-side process-wide Schwab ownership keeps its status
+  CONNECTING until any previous instance completes socket cleanup, without
+  blocking registry/UI callers.
 - `seed_lookup` is retained for call compatibility, deprecated with a
   warning, and **never invoked**. A prior close cannot establish a minute's
   true open. Subscription emits no synchronous seed/placeholder callback.
@@ -68,6 +71,9 @@ in [`schwab_aggregator`](schwab_aggregator.spec.md).
   timer or pointless UNSUBS before close). Normal last-unsubscribe is
   reusable. If a subscriber arrives during shutdown, its successor worker
   starts only after the old worker's socket cleanup completes.
+  The worker ownership permit additionally prevents overlap across different
+  source instances during registry reset/churn; closed queued instances
+  cannot dial after the old owner releases.
 - Each bar subscription has its own builder. Subscription state, builders,
   symbol generations and health share the source lock; only one worker
   dispatches. Callbacks run outside locks and are isolated with sanitized

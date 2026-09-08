@@ -27,6 +27,9 @@ LOG = logging.getLogger(__name__)
 _BACKOFF = (1, 2, 4, 8, 16, 30)
 _ACK_TIMEOUT = 15.0
 _STALE_TIMEOUT = 30.0
+# Vendor ownership, not a subscription-state lock. Only workers acquire it;
+# keep it through socket cleanup when a registry replaces a source instance.
+_STREAMER_OWNER = threading.Lock()
 USER_PREFERENCE_URL = "https://api.schwabapi.com/trader/v1/userPreference"
 LEVELONE_FIELD_IDS = ["0", "1", "2", "3", "4", "5", "8", "10", "11", "12", "35"]
 CHART_EQUITY_FIELD_IDS = ["0", "1", "2", "3", "4", "5", "6", "7", "8"]
@@ -266,6 +269,21 @@ class _Connection:
 
     def _connect_and_serve(self) -> None:
         self._source._new_epoch(self)
+        self._source._set_status(self, StreamState.CONNECTING, "Waiting for the shared Schwab streamer")
+        while not self.stopping:
+            if _STREAMER_OWNER.acquire(timeout=0.25):
+                break
+        else:
+            return
+        try:
+            if self.stopping:
+                return
+            self._source._set_status(self, StreamState.CONNECTING, "Connecting to Schwab")
+            self._serve_owned()
+        finally:
+            _STREAMER_OWNER.release()
+
+    def _serve_owned(self) -> None:
         self._logged_in = False
         self._pending.clear()
         self._wire = {s: set() for s in _FIELDS}

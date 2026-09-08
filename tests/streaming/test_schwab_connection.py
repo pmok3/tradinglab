@@ -616,3 +616,186 @@ def test_last_unsubscribe_then_new_subscription_waits_for_old_socket_finally(mon
     assert len(sockets) == 2
     assert all(s.closed for s in sockets)
     assert commands(sockets[1])[1:][0] == ("LEVELONE_EQUITIES", "SUBS", "MSFT")
+
+
+def _observe_ownership_wait(source, monkeypatch):
+    entered = threading.Event()
+    set_status = source._set_status
+
+    def status(conn, state, message):
+        set_status(conn, state, message)
+        if message == "Waiting for the shared Schwab streamer":
+            entered.set()
+
+    monkeypatch.setattr(source, "_set_status", status)
+    return entered
+
+
+def test_distinct_source_churn_waits_through_socket_cleanup_and_cancels_queued_source(monkeypatch):
+    old, replacement, cancelled = (SchwabStreamSource() for _ in range(3))
+    old_receiving, release_receive = threading.Event(), threading.Event()
+    old_cleaning, release_cleanup = threading.Event(), threading.Event()
+    new_receiving, release_new = threading.Event(), threading.Event()
+    waiting = _observe_ownership_wait(replacement, monkeypatch)
+    cancelled_waiting = _observe_ownership_wait(cancelled, monkeypatch)
+    sockets, token_calls, connections = [], [], []
+    live_counts = []
+
+    def token():
+        token_calls.append(threading.get_ident())
+        return "fake-token"
+
+    def socket_factory(url):
+        live_counts.append(1 + sum(not s.closed for s in sockets))
+        sock = ScriptSocket()
+        if not sockets:
+            def idle(s):
+                old_receiving.set()
+                assert release_receive.wait(3)
+                raise TimeoutError
+
+            def close():
+                old_cleaning.set()
+                assert release_cleanup.wait(3)
+                sock.closed = True
+
+            sock.idle, sock.close = idle, close
+        else:
+            def idle(s):
+                new_receiving.set()
+                assert release_new.wait(3)
+                raise TimeoutError
+
+            sock.idle = idle
+        sockets.append(sock)
+        return sock
+
+    monkeypatch.setattr(wire, "_access_token", token)
+    monkeypatch.setattr(wire, "fetch_streamer_info", lambda token: INFO)
+    monkeypatch.setattr(wire, "_Socket", socket_factory)
+    try:
+        old.subscribe("AAPL", "1m", lambda *args: None)
+        connections.append(old._connection)
+        assert old_receiving.wait(3)
+        old.close()
+        replacement.subscribe("MSFT", "1m", lambda *args: None)
+        connections.append(replacement._connection)
+        assert waiting.wait(3)
+        assert replacement.get_status().state == StreamState.CONNECTING
+        assert len(sockets) == len(token_calls) == 1
+
+        cancelled.subscribe("NVDA", "1m", lambda *args: None)
+        cancelled_conn = cancelled._connection
+        connections.append(cancelled_conn)
+        assert cancelled_waiting.wait(3)
+        cancelled.close()
+        cancelled_conn._ws_thread.join(3)
+        assert not cancelled_conn._ws_thread.is_alive()
+        assert len(token_calls) == 1, "a cancelled waiter must never start auth"
+
+        release_receive.set()
+        assert old_cleaning.wait(3)
+        assert len(sockets) == 1
+        assert not sockets[0].closed
+        assert replacement.get_status().state == StreamState.CONNECTING
+
+        release_cleanup.set()
+        assert new_receiving.wait(3)
+        assert replacement.get_status().state == StreamState.LIVE
+        assert cancelled.get_status().state == StreamState.CLOSED
+        assert len(sockets) == len(token_calls) == 2
+        assert commands(sockets[1])[1] == ("LEVELONE_EQUITIES", "SUBS", "MSFT")
+        assert live_counts == [1, 1], "at most one socket across distinct sources"
+    finally:
+        for src in (old, replacement, cancelled):
+            src.close()
+        release_receive.set()
+        release_cleanup.set()
+        release_new.set()
+        for conn in connections:
+            conn._ws_thread.join(3)
+    assert all(not conn._ws_thread.is_alive() for conn in connections)
+    assert all(sock.closed for sock in sockets)
+
+
+@pytest.mark.parametrize("blocked_step", ["auth", "preferences", "connect"])
+def test_replacement_waits_for_closed_instances_inflight_connection_attempt(monkeypatch, blocked_step):
+    old, replacement = SchwabStreamSource(), SchwabStreamSource()
+    blocked, release_old = threading.Event(), threading.Event()
+    new_receiving, release_new = threading.Event(), threading.Event()
+    waiting = _observe_ownership_wait(replacement, monkeypatch)
+    calls = {"auth": 0, "preferences": 0, "connect": 0}
+    sockets, connections = [], []
+
+    def step(name):
+        calls[name] += 1
+        if name == blocked_step and calls[name] == 1:
+            blocked.set()
+            assert release_old.wait(3)
+
+    def token():
+        step("auth")
+        return "fake-token"
+
+    def preferences(token):
+        step("preferences")
+        return INFO
+
+    def socket_factory(url):
+        step("connect")
+        assert all(s.closed for s in sockets)
+
+        def idle(sock):
+            new_receiving.set()
+            assert release_new.wait(3)
+            raise TimeoutError
+
+        sock = ScriptSocket(idle=idle)
+        sockets.append(sock)
+        return sock
+
+    monkeypatch.setattr(wire, "_access_token", token)
+    monkeypatch.setattr(wire, "fetch_streamer_info", preferences)
+    monkeypatch.setattr(wire, "_Socket", socket_factory)
+    try:
+        old.subscribe("AAPL", "1m", lambda *args: None)
+        connections.append(old._connection)
+        assert blocked.wait(3)
+        old.close()
+        replacement.subscribe("MSFT", "1m", lambda *args: None)
+        connections.append(replacement._connection)
+        assert waiting.wait(3)
+        assert calls["auth"] == 1
+        assert replacement.get_status().state == StreamState.CONNECTING
+        release_old.set()
+        assert new_receiving.wait(3)
+        assert replacement.get_status().state == StreamState.LIVE
+        assert calls["auth"] == 2
+        assert len(sockets) == (2 if blocked_step == "connect" else 1)
+        if blocked_step == "connect":
+            assert sockets[0].closed and not sockets[0].sent, "closed connect must not send LOGIN"
+    finally:
+        old.close()
+        replacement.close()
+        release_old.set()
+        release_new.set()
+        for conn in connections:
+            conn._ws_thread.join(3)
+    assert all(not conn._ws_thread.is_alive() for conn in connections)
+    assert all(sock.closed for sock in sockets)
+
+
+def test_cancellation_immediately_after_ownership_acquire_releases_without_auth(monkeypatch, offline):
+    offline.subscribe("AAPL", "1m", lambda *args: None)
+    released = []
+
+    def acquire(*, timeout):
+        offline.close()
+        return True
+
+    owner = SimpleNamespace(acquire=acquire, release=lambda: released.append(True))
+    monkeypatch.setattr(wire, "_STREAMER_OWNER", owner)
+    monkeypatch.setattr(wire, "_access_token", lambda: pytest.fail("cancelled owner started auth"))
+    offline._connection._connect_and_serve()
+    assert released == [True]
+    assert offline.get_status().state == StreamState.CLOSED
