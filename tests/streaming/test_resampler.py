@@ -14,6 +14,9 @@ import pytest
 from tradinglab.models import Candle
 from tradinglab.streaming.resampler import (
     BarResampler,
+    CorrectionUnavailable,
+    equity_bucket_bounds,
+    session_anchor,
     supported_intervals,
 )
 
@@ -285,3 +288,72 @@ def test_session_open_time_override_aligns_to_custom_anchor():
     events = r.on_1m_tick(_mk(8, 7), forming=False)
     forming = _last_forming(events)
     assert forming.candle.date == datetime(2026, 5, 4, 8, 5)
+
+
+def test_correction_mode_replaces_locked_extrema_and_volume():
+    r = BarResampler("5m", correction_buckets=2)
+    r.on_1m_tick(_mk(9, 30, hi=200, lo=1, v=800), forming=False)
+    r.on_1m_tick(_mk(9, 31, hi=110, lo=90, v=200), forming=True)
+    corrected = _mk(9, 30, o=105, hi=108, lo=95, c=106, v=50)
+    for _ in range(2):
+        event = r.on_1m_tick(corrected, forming=False)[-1]
+        assert (event.candle.open, event.candle.high, event.candle.low) == (105, 110, 90)
+        assert event.candle.volume == 250
+        assert event.source_minute_count == 2
+    assert r.on_1m_tick(_mk(9, 30, v=999), forming=True) == []
+
+
+def test_correction_mode_previous_bucket_and_retention():
+    r = BarResampler("5m", correction_buckets=2)
+    for minute in range(30, 41):
+        r.on_1m_tick(_mk(9, minute, v=10), forming=False)
+    assert r.retained_minute_count == 6
+    event = r.on_1m_tick(_mk(9, 36, v=20), forming=False)[-1]
+    assert event.closed
+    assert event.candle.volume == 60
+    assert r.current_forming().date == _mk(9, 40).date
+    with pytest.raises(CorrectionUnavailable):
+        r.on_1m_tick(_mk(9, 30), forming=False)
+    r.reset()
+    assert r.retained_minute_count == 0
+    assert r.current_forming() is None
+
+
+def test_correction_mode_coverage_and_copies():
+    r = BarResampler("5m", correction_buckets=2)
+    c = _mk(9, 30, v=10)
+    r.on_1m_tick(c, forming=True)
+    c.volume = 500
+    assert r.current_forming().volume == 10
+    assert r.covers(c.date, c.date)
+    assert not r.covers(c.date, c.date, sealed=True)
+    r.on_1m_tick(c, forming=False)
+    assert r.covers(c.date, c.date, sealed=True)
+    assert not r.covers(c.date, _mk(9, 31).date)
+
+
+@pytest.mark.parametrize(("session", "hour", "minute"), [
+    ("pre", 4, 0), ("regular", 9, 30), ("post", 16, 0),
+])
+def test_shared_session_anchor(session, hour, minute):
+    from datetime import timezone
+
+    from tradinglab.core.timezones import ET
+
+    candle = _mk(12, 0, session=session)
+    candle.date = candle.date.replace(tzinfo=ET).astimezone(timezone.utc)
+    assert session_anchor(candle) == datetime(2026, 5, 4, hour, minute, tzinfo=ET)
+
+
+def test_hourly_segment_boundaries_match_rest_and_never_mix_sessions():
+    r = BarResampler("1h", correction_buckets=2, session_segments=True)
+    r.on_1m_tick(_mk(15, 59, v=20), forming=False)
+    events = r.on_1m_tick(_mk(16, 0, v=30, session="post"), forming=False)
+    assert events[0].candle.date == datetime(2026, 5, 4, 15, 30)
+    assert events[0].candle.volume == 20
+    assert events[1].candle.date == datetime(2026, 5, 4, 16, 0)
+    assert events[1].candle.volume == 30
+    assert equity_bucket_bounds(_mk(15, 59).date, "1h") == (
+        datetime(2026, 5, 4, 15, 30), datetime(2026, 5, 4, 16, 0))
+    assert equity_bucket_bounds(_mk(9, 15).date, "1h") == (
+        datetime(2026, 5, 4, 9, 0), datetime(2026, 5, 4, 9, 30))

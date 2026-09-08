@@ -40,9 +40,17 @@ Design notes
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 
+from ..core.session_calendar import (
+    POST_CLOSE_MIN,
+    PRE_OPEN_MIN,
+    RTH_CLOSE_MIN,
+    RTH_OPEN_MIN,
+    classify_session,
+)
+from ..core.timezones import ET
 from ..models import Candle
 
 # Supported target intervals → minutes. Matches the plan's Layer −1
@@ -63,6 +71,45 @@ _SUPPORTED_INTERVALS: dict[str, int] = {
 def supported_intervals() -> tuple[str, ...]:
     """Return the tuple of target intervals this module can resample to."""
     return tuple(_SUPPORTED_INTERVALS.keys())
+
+
+_SEGMENTS = {
+    "pre": (PRE_OPEN_MIN, RTH_OPEN_MIN),
+    "regular": (RTH_OPEN_MIN, RTH_CLOSE_MIN),
+    "post": (RTH_CLOSE_MIN, POST_CLOSE_MIN),
+}
+
+
+def session_anchor(candle: Candle) -> datetime:
+    """Exchange-local start of the candle's date/session segment."""
+    start, _end = _SEGMENTS[candle.session]
+    stamp = candle.date
+    if stamp.tzinfo is not None:
+        if ET is None:
+            raise ValueError("Exchange timezone unavailable")
+        stamp = stamp.astimezone(ET)
+    hour, minute = divmod(start, 60)
+    return stamp.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+
+def equity_bucket_bounds(stamp: datetime, interval: str) -> tuple[datetime, datetime]:
+    """Session-anchored, session-clipped US equity bucket [start, end)."""
+    if stamp.tzinfo is not None:
+        if ET is None:
+            raise ValueError("Exchange timezone unavailable")
+        stamp = stamp.astimezone(ET)
+    minute = stamp.hour * 60 + stamp.minute
+    if not PRE_OPEN_MIN <= minute < POST_CLOSE_MIN:
+        raise ValueError("Timestamp is outside the US equity extended session")
+    session = classify_session(stamp.hour, stamp.minute)
+    anchor = session_anchor(Candle(stamp, 0, 0, 0, 0, 0, session))
+    width = _SUPPORTED_INTERVALS[interval]
+    offset = int((stamp - anchor).total_seconds() // 60) // width * width
+    start = anchor + timedelta(minutes=offset)
+    _open, close = _SEGMENTS[session]
+    hour, minute = divmod(close, 60)
+    end = stamp.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    return start, min(start + timedelta(minutes=width), end)
 
 
 @dataclass(frozen=True)
@@ -89,6 +136,10 @@ class BarEvent:
     closed: bool
     candle: Candle
     source_minute_count: int
+
+
+class CorrectionUnavailable(ValueError):
+    """A correction cannot be reconstructed from retained minute contributions."""
 
 
 class BarResampler:
@@ -128,6 +179,10 @@ class BarResampler:
         "_locked_last_session",
         # In-progress 1m within this bucket (reference, may mutate)
         "_pending_1m",
+        "_correction_buckets",
+        "_minutes",
+        "_sealed_minutes",
+        "_session_segments",
     )
 
     def __init__(
@@ -135,6 +190,8 @@ class BarResampler:
         target_interval: str,
         *,
         session_open_time: tuple[int, int] = (9, 30),
+        correction_buckets: int = 0,
+        session_segments: bool = False,
     ) -> None:
         if target_interval not in _SUPPORTED_INTERVALS:
             raise ValueError(
@@ -150,6 +207,12 @@ class BarResampler:
             )
         self._open_h: int = int(h)
         self._open_m: int = int(m)
+        if correction_buckets not in (0, 2):
+            raise ValueError("correction_buckets must be 0 (legacy) or 2 (current and previous)")
+        self._correction_buckets = correction_buckets
+        self._session_segments = session_segments
+        self._minutes: dict[datetime, dict[datetime, Candle]] = {}
+        self._sealed_minutes: set[datetime] = set()
         self._reset_state()
 
     # ------------------------------------------------------------------ public
@@ -165,6 +228,8 @@ class BarResampler:
     def reset(self) -> None:
         """Drop all in-progress bucket state. Next tick seeds fresh."""
         self._reset_state()
+        self._minutes.clear()
+        self._sealed_minutes.clear()
 
     def current_forming(self) -> Candle | None:
         """Return the current in-progress higher-interval bar, if any.
@@ -175,8 +240,33 @@ class BarResampler:
         """
         if self._bucket_start is None:
             return None
+        if self._correction_buckets:
+            return self._retained_event(self._bucket_start, closed=False).candle
         candle, _ = self._build_effective()
         return candle
+
+    def bucket_start_for(self, stamp: datetime) -> datetime:
+        """Return the configured session-anchored boundary without mutating state."""
+        return self._bucket_start_for(stamp)
+
+    def bucket_end_for(self, stamp: datetime) -> datetime:
+        if self._session_segments:
+            return equity_bucket_bounds(stamp, self._target_interval)[1]
+        return self._bucket_start_for(stamp) + timedelta(minutes=self._target_min)
+
+    def covers(self, start: datetime, through: datetime, *, sealed: bool = False) -> bool:
+        """Whether retained contributions cover every minute in this inclusive span."""
+        minutes = self._minutes.get(start, {})
+        stamp = start
+        while stamp <= through:
+            if stamp not in minutes or (sealed and stamp not in self._sealed_minutes):
+                return False
+            stamp += timedelta(minutes=1)
+        return True
+
+    @property
+    def retained_minute_count(self) -> int:
+        return sum(len(minutes) for minutes in self._minutes.values())
 
     def on_1m_tick(
         self, candle: Candle, *, forming: bool
@@ -196,6 +286,8 @@ class BarResampler:
           bucket; the second is the brand-new bucket seeded by
           ``candle``.
         """
+        if self._correction_buckets:
+            return self._upsert_minute(candle, forming=forming)
         bucket_start = self._bucket_start_for(candle.date)
         events: list[BarEvent] = []
 
@@ -225,6 +317,46 @@ class BarResampler:
         return events
 
     # --------------------------------------------------------------- internals
+
+    def _retained_event(self, start: datetime, *, closed: bool) -> BarEvent:
+        # Reuse the canonical OHLCV/session reducer; no second aggregation formula.
+        reducer = BarResampler(
+            self._target_interval, session_open_time=(self._open_h, self._open_m))
+        reducer._seed_bucket(start)
+        for _stamp, candle in sorted(self._minutes[start].items()):
+            reducer._lock(candle)
+        candle, count = reducer._build_effective()
+        return BarEvent(closed, candle, count)
+
+    def _upsert_minute(self, candle: Candle, *, forming: bool) -> list[BarEvent]:
+        stamp = candle.date
+        if stamp.second or stamp.microsecond:
+            raise ValueError("Correction-aware resampling requires whole-minute timestamps")
+        start = self._bucket_start_for(stamp)
+        current = self._bucket_start
+        if current is not None and start < current:
+            if stamp not in self._minutes.get(start, {}):
+                raise CorrectionUnavailable("Correction is outside retained minute coverage")
+        known = self._minutes.get(start, {})
+        if known and stamp < max(known) and stamp not in known:
+            raise CorrectionUnavailable("Correction refers to a missing minute contribution")
+        minutes = self._minutes.setdefault(start, {})
+        if forming and stamp in self._sealed_minutes:
+            return []
+        minutes[stamp] = replace(candle)
+        if not forming:
+            self._sealed_minutes.add(stamp)
+        events: list[BarEvent] = []
+        if current is None or start > current:
+            if current is not None:
+                events.append(self._retained_event(current, closed=True))
+            self._bucket_start = start
+            keep = sorted(self._minutes)[-self._correction_buckets:]
+            self._minutes = {key: self._minutes[key] for key in keep}
+            retained = {key for bars in self._minutes.values() for key in bars}
+            self._sealed_minutes.intersection_update(retained)
+        events.append(self._retained_event(start, closed=start < self._bucket_start))
+        return events
 
     def _reset_state(self) -> None:
         self._bucket_start: datetime | None = None
@@ -260,6 +392,8 @@ class BarResampler:
         on a boundary (e.g. 5m bucket for 09:25 with anchor 09:30 →
         09:25; for 09:23 → 09:20).
         """
+        if self._session_segments:
+            return equity_bucket_bounds(t, self._target_interval)[0]
         anchor = t.replace(
             hour=self._open_h, minute=self._open_m,
             second=0, microsecond=0,
@@ -404,4 +538,7 @@ class BarResampler:
         return BarEvent(closed=True, candle=candle, source_minute_count=count)
 
 
-__all__ = ["BarEvent", "BarResampler", "supported_intervals"]
+__all__ = [
+    "BarEvent", "BarResampler", "CorrectionUnavailable", "supported_intervals",
+    "session_anchor", "equity_bucket_bounds",
+]

@@ -18,12 +18,29 @@ historical fetcher. This module only fills the intraday gap.
 * `BarResampler(target_interval: str, *, session_open_time=(9, 30))`
   — raises `ValueError` on unsupported targets or an out-of-range
   `session_open_time`.
+  Optional `correction_buckets=2` enables current/previous-bucket minute
+  replacement; default `0` preserves the history/scanner API and event behavior.
+  Optional `session_segments=True` chooses US equity pre/regular/post anchors
+  rather than the default fixed `session_open_time`.
 * `target_interval` / `target_minutes` — read-only properties exposing
   the configured interval string and minute width.
 * `on_1m_tick(candle, *, forming) -> List[BarEvent]` — main entry.
 * `current_forming() -> Optional[Candle]` — peek at the in-progress
   bucket.
 * `reset()` — drop state on session boundary.
+* `bucket_start_for(stamp)` — expose the configured boundary calculation.
+* `bucket_end_for(stamp)` — end-exclusive boundary, clipped at the session end
+  when `session_segments=True`.
+* `session_anchor(candle) -> datetime` — exchange-local start of the date/session
+  segment, shared by REST and live aggregation. Session boundary constants come
+  from `core.session_calendar`; aware times normalize through `core.timezones.ET`.
+* `equity_bucket_bounds(stamp, interval)` — shared session-anchored `[start,end)`;
+  rejects timestamps outside extended market hours.
+* `covers(start, through, *, sealed=False)` — inclusive retained-minute coverage;
+  `sealed=True` additionally requires authoritative `forming=False` contributions.
+* `retained_minute_count` — bounded correction-mode diagnostic.
+* `CorrectionUnavailable` — correction outside the retained known minutes;
+  chart callers must reconcile history instead of guessing missing contributions.
 * `BarEvent(closed, candle, source_minute_count)` — frozen dataclass.
 * `supported_intervals() -> Tuple[str, ...]` — canonical list of
   `target_interval` values accepted by `BarResampler(...)`. Used by
@@ -68,3 +85,24 @@ event for the boundary minute can't leak data forward.
 
 Out-of-order ticks whose bucket is older than the current bucket are
 ignored and emit no events.
+
+### Opt-in correction mode
+
+With `correction_buckets=2`, whole-minute contributions are copied and keyed by
+timestamp in exactly the current and previous target buckets. Repeated final
+minutes replace rather than add; final minutes cannot be downgraded by later
+forming updates. Recomputing through the existing scalar reducer allows high
+to shrink, low to rise, and volume/open/close/session to be corrected.
+Known previous-bucket corrections emit `closed=True`; unknown or evicted older
+minutes raise `CorrectionUnavailable`. No arbitrary historical insertion.
+`reset()` discards contributions and finality. Retention is bounded by twice
+the target interval's minute count. Default callers remain unchanged.
+
+Session-segment anchors are pre 04:00, regular 09:30 and post 16:00 ET. Each
+bucket ends no later than its segment boundary (regular 15:30 hourly bucket
+ends at 16:00, not 16:30). The next date/session cannot inherit its contributions.
+
+## Testing
+
+`tests/streaming/test_resampler.py` covers default history behavior and opt-in
+replacement, finality, extrema corrections, retention, and reset.
