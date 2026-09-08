@@ -1,6 +1,6 @@
 # data/__init__.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-08
 
 ## Purpose
 Aggregates the data-source plugins (yfinance, synthetic, synthetic-stream bootstrap) into a single importable registry. Also re-exports the normalization helpers (`candles_from_dataframe`, `CandleArrays`, `stash_arrays`/`pop_prebuilt_arrays`) and the parallel-fetch primitive, all at `tradinglab.data.*` for backward compatibility with the flat pre-split layout (`tradinglab.data_sources`).
@@ -16,7 +16,7 @@ Aggregates the data-source plugins (yfinance, synthetic, synthetic-stream bootst
 - `source_supports_page(name) -> bool`, `fetch_page(source, ticker, interval, *, end_ts=None, limit=10_000) -> FetchPageResult`, and `FetchPageResult` — the newest-`limit`-bars-before-`end` page primitive re-exported from `.base` (Alpaca registers `fetch_alpaca_page`).
 - `fetch_live_data` (yfinance), `fetch_synthetic_data`, `fetch_synthetic_stream_bootstrap` — the three deterministically-registered built-in fetchers. **Synthetic sources are registered with `internal=True`** so the end user never sees an option meant for offline testing / sandbox replay.
 - `fetch_auto_data`, `AUTO_SOURCE_NAME` (`"Auto"`) — the always-registered **"Auto"** pseudo-source (see `auto_source.spec.md`): resolves to the globally best available source per `data/source_ranking` and delegates to it. Registered **right after yfinance** so `user_visible_sources()[0]` stays `"yfinance"`; it is the **startup default** (`constants.BUILTIN_STARTUP_DEFAULTS["source"] = "Auto"`).
-- `fetch_schwab_data`, `fetch_alpaca_data`, `fetch_polygon_data` — vendor adapters. `"alpaca"` and `"polygon"` are registered when their respective credentials are available, else inert. **`"schwab"` is currently NOT registered** even when credentials are configured — `schwab_source._http_get_pricehistory` is still a `NotImplementedError` stub, so the registration line in `data/__init__.py` is commented out to keep a broken option out of the source-selector dropdown. Re-enable once the REST GET lands. Each adapter builds requests against the vendor's REST endpoint and routes the response through `candles_from_json_rows` for normalization.
+- `fetch_schwab_data`, `fetch_alpaca_data`, `fetch_polygon_data` — vendor adapters. `"alpaca"` and `"polygon"` are registered when their respective credentials are available, else inert. `"schwab"` additionally requires `schwab_source.SCHWAB_REGISTRATION_ENABLED`, which remains **False pending live commissioning**. Its implemented REST adapter registers with `supports_range=True` only when both the gate and credential presence allow it; registration never refreshes tokens or probes the network. Each adapter routes vendor responses through shared candle normalization.
 - `candles_from_schwab_response`, `candles_from_alpaca_response`, `candles_from_polygon_response` — vendor-specific response-shape adapters that call `candles_from_json_rows` and return `List[Candle]`. Exported for unit-testing parity with the live adapters.
 - `fetch_hybrid_data`, `HYBRID_SOURCE_NAME` (`"yfinance+alpaca"`) — the **composite** source (see `hybrid_source.spec.md`): yfinance (recent + live, full volume) stitched over Alpaca (deep IEX history), yfinance winning every overlapping bar. Registered **only when Alpaca is configured** (yfinance is always available), period-style (no `supports_range`). It is ranked by `data/source_ranking.py` above plain yfinance and below the full-volume deep vendors (`alpaca@paid`, `schwab`, `polygon`).
 - `GLOBAL_SOURCE_PRIORITY`, `global_rank`, `rank_sources`, `best_source`, `preferred_source` — re-exported from `.source_ranking`, the authoritative **global, tier-aware source priority** (`alpaca@paid > schwab > … > alpaca@free`; see `source_ranking.spec.md`). `data.quality`'s ranking helpers are thin shims delegating here.
@@ -39,7 +39,7 @@ Aggregates the data-source plugins (yfinance, synthetic, synthetic-stream bootst
 - External: transitive (numpy, yfinance-lazy).
 
 ## Design Decisions
-- **Registration order matters**: `yfinance` registers first so `next(iter(DATA_SOURCES))` (and `user_visible_sources()[0]`) stays `"yfinance"`. Order: yfinance → **Auto** → synthetic → synthetic-stream → credentialed vendors (alpaca, then the `yfinance+alpaca` composite, polygon) → BYOD local sources. Auto is second (visible, but not first) — it is the startup *default* via `BUILTIN_STARTUP_DEFAULTS`, not via first-visible.
+- **Registration order matters**: `yfinance` registers first so `next(iter(DATA_SOURCES))` (and `user_visible_sources()[0]`) stays `"yfinance"`. Order: yfinance → **Auto** → synthetic → synthetic-stream → credentialed vendors (Schwab only after commissioning, alpaca, then the `yfinance+alpaca` composite, polygon) → BYOD local sources. Auto is second (visible, but not first) — it is the startup *default* via `BUILTIN_STARTUP_DEFAULTS`, not via first-visible.
 - Re-export everything at `tradinglab.data.*` so the split from the old `tradinglab.data_sources` module is backward-compatible; no caller code needs to change import paths.
 - **BYOD sources register last** so the source-selector combobox shows
   built-in vendors first; BYOD entries appear at the bottom of the
@@ -94,6 +94,10 @@ connectivity would break offline configuration and add latency to every
 launch. Whether the keys actually *work* is a separate, explicit question
 answered by `data/verify.py`. A test asserts this function never calls
 `verify_vendor`.
+
+Schwab also requires its explicit commissioning flag, read on every
+registration call. The flag stays off by default even with saved OAuth tokens.
+Closing the gate or clearing credentials unregisters its range capability.
 
 **Removal on clear.** `_VENDOR_SOURCE_KEYS` (`schwab`, `alpaca`, `polygon`,
 `yfinance+alpaca`) lists the keys this function owns. Any key not

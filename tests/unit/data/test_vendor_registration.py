@@ -14,7 +14,7 @@ from __future__ import annotations
 import pytest
 
 import tradinglab.data as tld
-from tradinglab.data import base
+from tradinglab.data import base, schwab_source
 from tradinglab.data.credentials import (
     AlpacaCredentials,
     Credentials,
@@ -24,9 +24,12 @@ from tradinglab.data.credentials import (
 from tradinglab.data.hybrid_source import HYBRID_SOURCE_NAME
 
 
-def _creds(*, alpaca: bool = False, polygon: bool = False) -> Credentials:
+def _creds(*, alpaca: bool = False, polygon: bool = False, schwab: bool = False) -> Credentials:
     return Credentials(
-        schwab=SchwabCredentials(),
+        schwab=SchwabCredentials(
+            app_key="k" if schwab else None,
+            app_secret="s" if schwab else None,
+        ),
         alpaca=AlpacaCredentials(
             api_key_id="k" if alpaca else None,
             api_secret_key="s" if alpaca else None,
@@ -84,6 +87,42 @@ class TestUnregisterSource:
 
 
 class TestRegisterVendorSources:
+    @pytest.mark.parametrize(("enabled", "configured"), [
+        (False, False), (False, True), (True, False), (True, True),
+    ])
+    def test_schwab_requires_commissioning_and_presence_without_network(
+        self, monkeypatch, enabled, configured,
+    ):
+        monkeypatch.setattr(schwab_source, "SCHWAB_REGISTRATION_ENABLED", enabled)
+        monkeypatch.setattr(tld, "get_credentials", lambda: _creds(schwab=configured))
+        monkeypatch.setattr(
+            schwab_source, "get_access_token",
+            lambda *_a, **_k: pytest.fail("registration must not obtain OAuth tokens"),
+        )
+        monkeypatch.setattr(
+            schwab_source, "_http_get_pricehistory",
+            lambda *_a, **_k: pytest.fail("registration must not request history"),
+        )
+
+        registered = tld.register_vendor_sources()
+
+        expected = enabled and configured
+        assert ("schwab" in registered) is expected
+        assert ("schwab" in tld.user_visible_sources()) is expected
+        assert base.source_supports_range("schwab") is expected
+        assert not base.source_supports_page("schwab")
+
+    def test_closing_schwab_commissioning_gate_removes_range_capability(self, monkeypatch):
+        monkeypatch.setattr(tld, "get_credentials", lambda: _creds(schwab=True))
+        monkeypatch.setattr(schwab_source, "SCHWAB_REGISTRATION_ENABLED", True)
+        tld.register_vendor_sources()
+        assert base.source_supports_range("schwab")
+
+        monkeypatch.setattr(schwab_source, "SCHWAB_REGISTRATION_ENABLED", False)
+        assert "schwab" not in tld.register_vendor_sources()
+        assert "schwab" not in base.DATA_SOURCES
+        assert not base.source_supports_range("schwab")
+
     def test_alpaca_configured_registers_alpaca_and_hybrid(self, monkeypatch):
         monkeypatch.setattr(tld, "get_credentials",
                             lambda: _creds(alpaca=True))

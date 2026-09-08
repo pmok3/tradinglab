@@ -179,14 +179,13 @@ def register_vendor_sources() -> list[str]:
     creds = get_credentials()
     registered: list[str] = []
 
-    # Schwab REST `_http_get_pricehistory` is not yet implemented — see
-    # ``schwab_source._http_get_pricehistory``. Registration is gated off
-    # even when credentials are configured so the source-selector dropdown
-    # never offers a "schwab" option that would silently return no data.
-    # Re-enable the block below once the price-history GET is wired up.
-    # if creds.schwab.is_configured():
-    #     register_source("schwab", fetch_schwab_data)
-    #     registered.append("schwab")
+    from .schwab_source import SCHWAB_REGISTRATION_ENABLED
+
+    # Offline implementation is not live commissioning; credentials alone
+    # must not enable the source while this explicit gate remains closed.
+    if SCHWAB_REGISTRATION_ENABLED and creds.schwab.is_configured():
+        register_source("schwab", fetch_schwab_data, supports_range=True)
+        registered.append("schwab")
 
     if creds.alpaca.is_configured():
         register_source("alpaca", fetch_alpaca_data, supports_range=True,
@@ -357,4 +356,3 @@ __all__ = [
     "PolygonCredentials",
     "get_credentials",
 ]
-
