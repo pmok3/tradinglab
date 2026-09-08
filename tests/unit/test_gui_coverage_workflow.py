@@ -83,10 +83,12 @@ def test_gui_coverage_runs_only_gui_in_one_fresh_interpreter(gui_job: str) -> No
 
 
 def test_gui_coverage_outputs_are_named_and_outside_the_checkout(gui_job: str) -> None:
-    assert re.search(
-        r"(?m)^      COVERAGE_FILE: \$\{\{ runner.temp \}\}\\\.coverage\.gui$", gui_job,
-    )
     command, = _pytest_commands(gui_job)
+    run_step = next(step for step in _steps(gui_job) if "run: " + command in step)
+    assert not re.search(r"(?m)^      COVERAGE_FILE:", gui_job), "runner context is unavailable in job env"
+    assert re.search(
+        r"(?m)^          COVERAGE_FILE: \$\{\{ runner.temp \}\}\\\.coverage\.gui$", run_step,
+    )
     assert r'--cov-report="xml:$env:RUNNER_TEMP\coverage-gui.xml"' in command
 
 

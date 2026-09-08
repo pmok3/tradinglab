@@ -174,7 +174,6 @@ jobs:
     env:
       MPLBACKEND: Agg
       PYTHONIOENCODING: utf-8
-      COVERAGE_FILE: ${{ runner.temp }}\.coverage.gui
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -193,6 +192,9 @@ jobs:
           '@ | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
       - name: Run GUI-only coverage (isolated interpreter; show skip reasons)
         shell: pwsh
+        env:
+          # runner context is available to steps, not job-level env.
+          COVERAGE_FILE: ${{ runner.temp }}\.coverage.gui
         run: python -m pytest tests\gui --cov=tradinglab --cov-report="xml:$env:RUNNER_TEMP\coverage-gui.xml" --cov-report=term-missing:skip-covered -q -ra
       - name: Upload GUI-only raw coverage data
         if: always()
