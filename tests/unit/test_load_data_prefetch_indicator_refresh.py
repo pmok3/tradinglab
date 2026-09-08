@@ -9,6 +9,7 @@ import numpy as np
 import tradinglab.app as app_mod
 from tradinglab.app import ChartApp
 from tradinglab.core.bars import Bars
+from tradinglab.data.stream_controller import StreamController
 from tradinglab.indicators.cache import IndicatorCache, config_hash
 from tradinglab.indicators.moving_averages import SMA
 from tradinglab.models import Candle
@@ -63,6 +64,7 @@ def _changed_inside_same_fingerprint(old: list[Candle], close: float) -> list[Ca
 def _install_load_data_harness(app, *, primary, compare) -> None:
     from tradinglab.core.view_intent import ViewController
     app._view = ViewController()
+    app._stream_ctrl = StreamController()
     app._primary = primary
     app._compare = compare
     app._primary_raw = primary
