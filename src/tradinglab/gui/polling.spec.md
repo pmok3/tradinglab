@@ -98,9 +98,15 @@ Also hosts the pure scheduler helpers (only caller is here).
 - Same-context fallback fetches preserve the writable stream cache and
   subscription warm-up. Successful history arrival resets requested coverage;
   late poll results are rejected after stream takeover.
+- Poll submission records `StreamHistoryRequest`; only a matching fresh response
+  applied through `_load_data` acknowledges debt. `_load_data` completing with
+  cached fallback is not success. A pre-boundary in-flight request cannot
+  discharge debt created by a later bucket rollover, even if it completes late.
 - `_stream_event_applied(applied)` publishes only controller-accepted latest
   prices and invalidates the focused visible series. Stale tokens/epochs and
   historical correction never regress the overlay.
+  It also updates the actual live-price artist immediately, so a newer
+  authoritative `closed` append does not depend on a subsequent provisional tick.
 - `_request_tick_repaint(slot)` / `_do_tick_repaint(slot)` — adaptive
   live-tick repaint coalescer (audit `tick-repaint-coalesce`). The first
   tick after an idle gap paints immediately; ticks arriving inside the

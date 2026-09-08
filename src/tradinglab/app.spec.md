@@ -117,6 +117,12 @@ Interval- and session-aware:
 - Only accepted own-symbol data plus source health and safe aggregate coverage
   suppress polling. No-op subscriptions, warm-up and disconnected/stale sources
   remain polling-backed; a late fallback fetch cannot overwrite live takeover.
+- Native authoritative-minute sources protect their startup/reconnect snapshot
+  until that minute's `closed` bar. Incomplete prior higher-interval buckets
+  retain post-boundary reconciliation debt even when the next bucket is safe.
+- The overlay publishes the newest accepted timestamp, including authoritative
+  closes, and cannot regress behind a newer provisional minute. Both the cached
+  value and actual line/label update without waiting for another tick.
 - `card:N` traffic retains its existing dedicated dispatch.
 
 ### Rendering (`_render`)

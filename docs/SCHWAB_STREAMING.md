@@ -60,6 +60,12 @@ or is warming its higher-interval coverage. A callable unsubscribe is **not**
 proof that the chart is live. Typed source health and accepted data must both
 be ready before polling is suppressed.
 
+Native 1m charts also protect startup completeness: the first provisional minute
+after subscribing or reconnecting cannot overwrite an existing REST candle with
+its partial OHLCV/zero-volume snapshot. Polling continues until that minute's
+authoritative closed bar arrives. An authoritative-only CHART stream does not
+need a LEVELONE tick to publish its latest completed-minute price.
+
 Status messages distinguish waiting for data, coverage warm-up, history
 reconciliation and transport/authentication failures. Own-symbol inactivity and
 a dead connection are different conditions. A quiet ticker is not proof the
@@ -84,11 +90,23 @@ one additionally requires the complete target bucket, not an observed prefix.
 **Initial activation can wait until a subsequent complete bucket. Polling keeps
 the actual chart updated throughout that wait.**
 
+If a partially observed bucket is left behind, it remains reconciliation debt.
+A safe newer bucket cannot cancel its required backfill. Debt clears only after
+a request started after that boundary successfully returns the owed bucket and
+its fresh result is applied. An earlier in-flight request arriving late, a failed
+fetch, or loading existing memory/disk cache does not count. Current-bucket
+minute contributions survive this reconciliation rather than restarting warm-up.
+
 A known older correction replaces its timestamp in place, invalidates affected
 indicators/series, redraws the visible slice without moving the viewport, and
 persists corrected history. It cannot regress the current-price overlay.
 Repeated minute corrections replace volume rather than adding it, and corrected
 high/low extrema can shrink.
+
+A newer authoritative close advances the actual live-price line and label even
+without another LEVELONE tick. Same-minute authoritative final corrections can
+revise that price, but an older correction cannot replace a newer provisional
+minute's price or make old data appear freshly received.
 
 An unknown/evicted minute, coverage gap or connection epoch change requires a
 real coalesced historical refresh and polling fallback. No missing minute is

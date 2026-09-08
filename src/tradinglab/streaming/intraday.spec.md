@@ -15,6 +15,11 @@ No history fetching, socket, worker, full chart cache, or Tk ownership.
   connection epoch change. `ready`, `needs_reconcile`, `message` expose state.
 - `observe_history(history)`: protect newly polled opaque aggregates without
   losing existing minute warm-up.
+- `reconcile_revision`: monotonic revision used to fence pending history requests.
+- `history_refreshed(history=..., fresh=..., seed=...) -> bool`: acknowledge a
+  matching post-debt fetch, requiring the owed bucket in its fresh response.
+- `reset_connection()`: discard prior-epoch minute contributions but retain
+  any unpaid incomplete-bucket debt.
 
 ## Dependencies
 - Internal: `models.Candle`, `core.timezones.ET`, `streaming.resampler`.
@@ -37,6 +42,12 @@ No history fetching, socket, worker, full chart cache, or Tk ownership.
 - **Real fallback.** A missing minute or unavailable historical correction sets
   `needs_reconcile`; callers must perform an actual history refresh and continue
   polling. Merely logging is insufficient.
+- **Incomplete prior buckets are debt.** Rolling past a partially observed
+  bucket preserves a bounded owed-bucket marker. Safe new-bucket events may
+  continue updating data, but cannot establish readiness or suppress polling
+  until a fresh post-boundary response actually replaces the owed history.
+  Reconciliation of this debt preserves current minute contributions rather
+  than restarting warm-up on every REST response.
 
 ## Invariants
 - Startup partial data never overwrites a complete historical bucket.
@@ -44,6 +55,8 @@ No history fetching, socket, worker, full chart cache, or Tk ownership.
 - Reconciliation resets readiness and subscription-minute safety.
 - Authoritative source minutes cannot be downgraded by provisional updates.
 - Retained contributions are bounded by two target intervals.
+- Cached fallback, empty/error responses and pre-boundary requests completed
+  late cannot discharge incomplete-bucket debt.
 
 ## Testing
 `tests/streaming/test_intraday.py`: interval matrix, startup correction,

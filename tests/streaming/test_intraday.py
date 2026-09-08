@@ -37,6 +37,9 @@ def test_mid_bucket_partial_keeps_history_until_next_safe_bucket():
     result = adapter.apply("rollover", bar(5))
     assert len(result) == 1
     assert result[0][1].date == bar(5).date
+    assert not adapter.ready
+    assert adapter.needs_reconcile
+    assert adapter.history_refreshed(history=[bar(0, volume=1200)], fresh=[bar(0, volume=1200)])
     assert adapter.ready
 
 
@@ -100,3 +103,25 @@ def test_poll_history_update_preserves_minutes_but_protects_new_opaque_bucket():
     for minute in range(1, 4):
         assert adapter.apply("closed", bar(minute)) == []
     assert adapter.apply("closed", bar(4))[-1][1].volume == 50
+
+
+def test_abandoned_bucket_debt_requires_that_bar_in_fresh_history():
+    adapter = IntradayAdapter("5m", history=[bar(0, volume=900)])
+    adapter.apply("tick", bar(3))
+    adapter.apply("closed", bar(3))
+    adapter.apply("closed", bar(4))
+    revision = adapter.reconcile_revision
+    assert adapter.apply("rollover", bar(5))
+    assert adapter.reconcile_revision > revision
+    assert not adapter.ready
+    for minute in range(5, 10):
+        adapter.apply("closed", bar(minute))
+    assert not adapter.ready, "A fully covered new bucket does not repay earlier history debt"
+    assert not adapter.history_refreshed(
+        history=[bar(0, volume=900), bar(5, volume=50)], fresh=[bar(5, volume=50)])
+    assert adapter.needs_reconcile
+    assert adapter.history_refreshed(
+        history=[bar(0, volume=1200), bar(5, volume=50)],
+        fresh=[bar(0, volume=1200), bar(5, volume=50)])
+    assert adapter.ready
+    assert adapter.resampler.retained_minute_count == 7

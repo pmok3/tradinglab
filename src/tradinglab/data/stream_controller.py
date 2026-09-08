@@ -6,7 +6,8 @@ import queue
 import time
 from bisect import bisect_left
 from collections.abc import Callable, Mapping, MutableMapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
+from datetime import datetime
 from enum import Enum
 from typing import Any, Protocol, runtime_checkable
 
@@ -37,6 +38,14 @@ class StreamMutation(Enum):
     CORRECTION = "correction"
 
 
+@dataclass(frozen=True)
+class StreamHistoryRequest:
+    token: int
+    generation: int | None
+    revision: int
+    adapter_revision: int
+
+
 class StreamController:
     """Subscription lifetime, own-symbol readiness and timestamp-safe mutation."""
 
@@ -55,6 +64,12 @@ class StreamController:
         self._adapter: IntradayAdapter | None = None
         self._reconcile = False
         self._reconcile_claimed = False
+        self._reconcile_revision = 0
+        self._protect_native_startup = False
+        self._first_provisional = True
+        self._native_startup: datetime | None = None
+        self._published_at: datetime | None = None
+        self._published_generation: int | None = None
         self.last_mutation = StreamMutation.REJECTED
         self.appended = False
         self.latest_price: tuple[str, float] | None = None
@@ -86,21 +101,41 @@ class StreamController:
         self._reconcile_claimed = True
         return True
 
-    def history_refreshed(self, key: CacheKey, full_cache: Mapping[CacheKey, list[Candle]]) -> None:
+    def history_request(self) -> StreamHistoryRequest:
+        """Fence a fetch against debt or connection changes after its submission."""
+        return StreamHistoryRequest(
+            self._token, self._generation, self._reconcile_revision,
+            self._adapter.reconcile_revision if self._adapter is not None else 0,
+        )
+
+    def history_refreshed(
+        self, key: CacheKey, full_cache: Mapping[CacheKey, list[Candle]], *,
+        request: StreamHistoryRequest | None = None, fresh: list[Candle] | None = None,
+    ) -> None:
         """A successful fallback fetch supplies a real reconciliation baseline."""
-        if key != self._context:
+        if key != self._context or (request is not None and request != self.history_request()):
             return
         if self.needs_reconcile:
             if self._adapter is not None:
-                self._adapter.reconcile(
+                if not self._adapter.history_refreshed(
                     history=full_cache.get(key, []),
-                    seed=full_cache.get((key[0], key[1], "1m"), []))
-            self._last_good = None
+                    fresh=fresh if fresh is not None else full_cache.get(key, []),
+                    seed=full_cache.get((key[0], key[1], "1m"), []),
+                ):
+                    return
+            if self._reconcile:
+                self._last_good = None
             self._reconcile = False
             self._reconcile_claimed = False
         elif self._adapter is not None:
             self._adapter.observe_history(full_cache.get(key, []))
         self.refresh_health()
+
+    def _require_history(self, *, force: bool = False) -> None:
+        if force or not self._reconcile:
+            self._reconcile_revision += 1
+            self._reconcile_claimed = False
+        self._reconcile = True
 
     def matches(self, source_name: str, ticker: str, interval: str, *, compare_on: bool) -> bool:
         return not compare_on and self._context == (source_name, ticker.strip().upper(), interval)
@@ -135,6 +170,7 @@ class StreamController:
         self._context = key
         self._source = selection.source
         self._adapter = adapter
+        self._protect_native_startup = selection.authoritative_minutes and interval == "1m"
         token = self._token
         source = selection.source
 
@@ -179,10 +215,11 @@ class StreamController:
             )
             if epoch_changed or lost_connection:
                 self._last_good = None
-                self._reconcile = True
-                self._reconcile_claimed = False
+                self._require_history(force=True)
+                self._first_provisional = True
+                self._native_startup = None
                 if self._adapter is not None:
-                    self._adapter.reconcile(history=[])
+                    self._adapter.reset_connection()
             self._generation = status.generation
             self._health_state = status.state
             self.message = status.message
@@ -194,6 +231,9 @@ class StreamController:
             return False
         if self.needs_reconcile:
             self.message = self._adapter.message if self._adapter else "Stream reconnected; reconciling history"
+            return False
+        if self._native_startup is not None:
+            self.message = "Waiting for authoritative startup minute; polling"
             return False
         if self._adapter is not None and not self._adapter.ready:
             self.message = self._adapter.message
@@ -223,6 +263,12 @@ class StreamController:
         self._adapter = None
         self._reconcile = False
         self._reconcile_claimed = False
+        self._reconcile_revision = 0
+        self._protect_native_startup = False
+        self._first_provisional = True
+        self._native_startup = None
+        self._published_at = None
+        self._published_generation = None
         self.latest_price = None
         self.message = ""
         self._clear_stopped_events()
@@ -263,6 +309,15 @@ class StreamController:
             return self.last_mutation
         if self._reconcile and self._adapter is not None:
             return self.last_mutation
+        if self._protect_native_startup:
+            if kind != "closed" and self._first_provisional:
+                self._first_provisional = False
+                self._native_startup = bar.date
+            if bar.date == self._native_startup:
+                if kind != "closed":
+                    self.refresh_health()
+                    return self.last_mutation
+                self._native_startup = None
         updates = self._adapter.apply(kind, bar) if self._adapter is not None else [(kind, bar)]
         for update_kind, candle in updates:
             mutation = self._mutate(key, candle, update_kind, full_cache, indicator_cache, disk_save_fn, trim_fn)
@@ -273,8 +328,10 @@ class StreamController:
             if priority[mutation] > priority[self.last_mutation]:
                 self.last_mutation = mutation
             if mutation in (StreamMutation.LAST, StreamMutation.APPEND):
-                self._last_good = self._clock()
-                if kind != "closed":
+                if self._published_at is None or bar.date >= self._published_at:
+                    self._last_good = self._clock()
+                    self._published_at = bar.date
+                    self._published_generation = self._generation
                     self.latest_price = (ticker, float(bar.close))
         self.refresh_health()
         return self.last_mutation
@@ -299,7 +356,7 @@ class StreamController:
             index = bisect_left(raw, bar.date, key=lambda c: c.date)
             if index == len(raw) or raw[index].date != bar.date:
                 if self._source is not None and kind == "closed":
-                    self._reconcile = True
+                    self._require_history()
                 return StreamMutation.REJECTED
             mutation = StreamMutation.LAST if index == len(raw) - 1 else StreamMutation.CORRECTION
             self._copy_bar(dst=raw[index], src=bar)

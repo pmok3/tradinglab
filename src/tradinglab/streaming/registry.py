@@ -24,6 +24,7 @@ class ChartStreamCapability:
     native_intervals: frozenset[str]
     adapted_intervals: frozenset[str] = frozenset()
     equities_only: bool = False
+    authoritative_minutes: bool = False
 
 
 @dataclass(frozen=True)
@@ -31,9 +32,10 @@ class ChartStreamSelection:
     source: StreamSource
     provider: str
     native_interval: str
+    authoritative_minutes: bool = False
 
 
-_SCHWAB = ChartStreamCapability("schwab-stream", frozenset({"1m"}), CHART_INTERVALS, True)
+_SCHWAB = ChartStreamCapability("schwab-stream", frozenset({"1m"}), CHART_INTERVALS, True, True)
 CHART_STREAM_CAPABILITIES = {"schwab": _SCHWAB, "schwab-stream": _SCHWAB}
 _QUOTE_STREAM_OWNERS = {"schwab-quotes": "schwab-stream"}
 _registered_identity: tuple[str | None, str | None, str | None] | None = None
@@ -77,7 +79,9 @@ def resolve_chart_stream(
     else:
         return None
     source = stream_sources.get(capability.stream_name)
-    return ChartStreamSelection(source, provider, native_interval) if source is not None else None
+    return ChartStreamSelection(
+        source, provider, native_interval, capability.authoritative_minutes,
+    ) if source is not None else None
 
 
 def close_vendor_streams() -> bool:

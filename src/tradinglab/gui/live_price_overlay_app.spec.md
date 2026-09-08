@@ -37,10 +37,12 @@ mixin is purely the wiring.
   delegated call) paints the line at the fresh price instead of lagging
   one tick. The resolved price equals the close the tick is about to
   write, so updating first introduces no staleness.
+  The stream-application hook also invokes it after accepted timestamp-gated
+  publication, including newer authoritative closed bars without LEVELONE.
 
 ## Dependencies
 
-- Internal (lazy import inside both methods): `.gui.live_price_overlay
+- Internal (lazy import inside both methods): `.live_price_overlay
   .resolve_price` — kept lazy to avoid pulling matplotlib into the
   mixin's module-level import graph.
 - External: `logging` (module-level `logger`).
@@ -66,3 +68,5 @@ mixin is purely the wiring.
   before the first `_render` (overlay no-ops).
 - Neither method raises out of the mixin — all exceptions are
   swallowed (and the failed update logged for the in-place path).
+- Both imports resolve the sibling overlay module, not nonexistent `gui.gui`.
+  Streaming smoke asserts the real line's y-data after an authoritative append.

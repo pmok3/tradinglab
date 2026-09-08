@@ -9,6 +9,7 @@ from tradinglab.core.timezones import ET
 from tradinglab.data.stream_controller import StreamController, StreamMutation
 from tradinglab.models import Candle
 from tradinglab.streaming.base import StreamState, StreamStatus
+from tradinglab.streaming.schwab_aggregator import MinuteBarBuilder
 
 
 class FakeStream:
@@ -346,3 +347,84 @@ def test_higher_interval_is_protected_across_history_seed_and_connection_epoch()
     assert ctrl.apply_tick(ctrl.drain()[0], cache, None)
     assert ctrl.active
     assert cache[key][-1].close == 25
+
+
+@pytest.mark.parametrize("reconnect", [False, True])
+def test_native_minute_keeps_rest_ohlcv_until_authoritative_startup_close(reconnect):
+    stream = HealthyStream()
+    stream.status = replace(stream.status, state=StreamState.LIVE)
+    ctrl = StreamController()
+    key, cache, _sources = _start(ctrl, stream, source="schwab")
+    stamp = datetime(2026, 9, 8, 9, 33, tzinfo=ET)
+    cached = Candle(stamp, 100, 112, 98, 108, 900)
+    callback = stream.callbacks[0][2]
+    if reconnect:
+        old = cache[key][0]
+        callback("rollover", old)
+        assert not ctrl.apply_tick(ctrl.drain()[0], cache, None)
+        callback("closed", old)
+        assert ctrl.apply_tick(ctrl.drain()[0], cache, None)
+        assert ctrl.active
+    cache[key][:] = [cached]
+    if reconnect:
+        stream.status = replace(stream.status, generation=2)
+        ctrl.refresh_health()
+        ctrl.history_refreshed(key, cache)
+    snapshot = MinuteBarBuilder().apply_levelone({
+        "trade_time_ms": int(stamp.replace(second=35).timestamp() * 1000),
+        "last_price": 110,
+        "total_volume": 50000,
+    })
+    assert len(snapshot) == 1 and snapshot[0][1].volume == 0
+    callback(*snapshot[0])
+    assert not ctrl.apply_tick(ctrl.drain()[0], cache, None)
+    assert cache[key][0] == Candle(stamp, 100, 112, 98, 108, 900)
+    assert not ctrl.active
+    assert ctrl.latest_price is None
+    callback("closed", Candle(stamp, 100, 115, 97, 111, 1400))
+    assert ctrl.apply_tick(ctrl.drain()[0], cache, None)
+    assert cache[key][0].volume == 1400
+    assert ctrl.active
+    assert ctrl.latest_price == ("AMD", 111)
+
+
+def test_authoritative_price_advances_without_levelone_and_never_regresses_newer_minute():
+    stream = HealthyStream()
+    stream.status = replace(stream.status, state=StreamState.LIVE)
+    ctrl = StreamController()
+    key, cache, _sources = _start(ctrl, stream)
+    callback = stream.callbacks[0][2]
+    stamp = cache[key][0].date
+
+    def apply(kind, minute, price):
+        callback(kind, _bar(stamp + timedelta(minutes=minute), close=price))
+        assert ctrl.apply_tick(ctrl.drain()[0], cache, None)
+        return ctrl.latest_price
+
+    assert apply("tick", 0, 101) == ("AMD", 101)
+    assert apply("closed", 1, 110) == ("AMD", 110)
+    assert apply("closed", 0, 102) is None
+    assert apply("closed", 1, 111) == ("AMD", 111)
+    assert apply("tick", 2, 115) == ("AMD", 115)
+    assert apply("closed", 1, 109) is None
+    assert ctrl._published_at == stamp + timedelta(minutes=2)
+    callback("closed", _bar(stamp + timedelta(minutes=3), close=999))
+    stream.status = replace(stream.status, generation=2)
+    assert not ctrl.apply_tick(ctrl.drain()[0], cache, None)
+    assert ctrl._published_at == stamp + timedelta(minutes=2)
+    ctrl.history_refreshed(key, cache)
+    assert apply("closed", 3, 120) == ("AMD", 120)
+    assert ctrl._published_generation == 2
+
+
+def test_chart_only_native_source_can_publish_without_any_provisional_tick():
+    stream = HealthyStream()
+    stream.status = replace(stream.status, state=StreamState.LIVE)
+    ctrl = StreamController()
+    key, cache, _sources = _start(ctrl, stream, source="schwab")
+    stamp = cache[key][0].date
+    for minute, price in ((0, 101), (1, 110)):
+        stream.callbacks[0][2]("closed", _bar(stamp + timedelta(minutes=minute), close=price))
+        assert ctrl.apply_tick(ctrl.drain()[0], cache, None)
+        assert ctrl.latest_price == ("AMD", price)
+        assert ctrl.active

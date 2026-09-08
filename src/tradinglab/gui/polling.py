@@ -486,6 +486,7 @@ class PollingMixin:
             price = self._stream_ctrl.latest_price
             if price is not None:
                 self._last_stream_price[price[0]] = price[1]
+                self._update_live_price_overlay_for_slot("primary")
             self._invalidate_focused_panels(self._primary)
         return applied
 
@@ -846,6 +847,7 @@ class PollingMixin:
         # Bump token BEFORE submitting so a ticker-switch that happens
         # while this fetch is in-flight supersedes it cleanly.
         token = self._bump_fetch_token()
+        stream_request = ctrl.history_request() if ctrl is not None else None
 
         def _work():
             p: list = []
@@ -909,7 +911,10 @@ class PollingMixin:
             try:
                 self._load_data()
                 if ctrl is not None and p_raw:
-                    ctrl.history_refreshed((src, raw_primary, interval), self._full_cache)
+                    ctrl.history_refreshed(
+                        (src, raw_primary, interval), self._full_cache,
+                        request=stream_request, fresh=p_raw,
+                    )
             finally:
                 self._prefetched_raw = None
 

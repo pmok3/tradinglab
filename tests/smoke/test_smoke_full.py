@@ -504,6 +504,7 @@ def check_96_stream_readiness_and_corrections(app) -> None:
             app._sync_stream_aliases()
             app._full_cache[key] = raws
             app._set_data_state(primary_raw=raws, primary=raws)
+            app._confirmed_primary_ticker = "STREAMSMOKE"
             app.candles = raws
             app._render()
             app._start_stream_if_applicable()
@@ -517,6 +518,18 @@ def check_96_stream_readiness_and_corrections(app) -> None:
             assert _pump_until(app, lambda: app._stream_active, timeout=2)
             assert app._poll_job is None
             assert app._last_stream_price["STREAMSMOKE"] == newest.close
+            newest = replace(
+                newest, date=newest.date + timedelta(minutes=5),
+                close=newest.close + 2, high=newest.high + 2)
+            source.callback("closed", newest)
+
+            def authoritative_price_painted():
+                artists = app._live_price_overlay.get_artists("primary")
+                return (app._last_stream_price.get("STREAMSMOKE") == newest.close
+                        and artists is not None and artists[0].get_ydata()[0] == newest.close)
+
+            assert _pump_until(app, authoritative_price_painted, timeout=2), (
+                "A newer authoritative CHART close must update the actual live-price line")
             before_xlim = app._panel_state["primary"]["price_ax"].get_xlim()
             corrected = replace(raws[-3], high=raws[-3].high + 10, volume=12345)
             source.callback("closed", corrected)

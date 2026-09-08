@@ -170,7 +170,7 @@ line is never truncated/misaligned. Sector-ETF auto-fetch is deferred (v2).
 | ratio | range-fetch legs | as legs |
 | local / BYOD | filter in-memory | edge-of-data |
 | synthetic | deterministic filter | test-only |
-| schwab | deferred (not wired) | — |
+| schwab | range adapter implemented; commissioning flag off | unavailable while commissioning is disabled |
 
 ### 4.7 UX states (see UI/UX council notes)
 

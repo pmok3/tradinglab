@@ -7,10 +7,11 @@ Resolve main-chart streaming capabilities separately from historical provider
 names and reconcile credential-gated bar/quote registration without network I/O.
 
 ## Public API
-- `ChartStreamCapability(stream_name, native_intervals, adapted_intervals, equities_only)`.
+- `ChartStreamCapability(stream_name, native_intervals, adapted_intervals, equities_only,
+  authoritative_minutes=False)`.
 - `CHART_STREAM_CAPABILITIES`: explicit provider bindings.
 - `resolve_chart_stream(source_name, ticker, interval, stream_sources=...)`
-  returns `ChartStreamSelection(source, provider, native_interval)` or `None`.
+  returns `ChartStreamSelection(source, provider, native_interval, authoritative_minutes)` or `None`.
 - `reconcile_vendor_streams(reset=False, oauth_connected=None) -> bool`: presence-based registration,
   identity-preserving refresh, or terminal reset of the shared Schwab instance.
 - `close_vendor_streams() -> bool`: terminally close/unregister both axes
@@ -29,6 +30,10 @@ names and reconcile credential-gated bar/quote registration without network I/O.
 - **Explicit capabilities.** `schwab` maps to `schwab-stream`; native 1m and the
   four chart-adapted intervals are declared rather than inferred from suffixes.
   Unmapped exact-name plugins retain their legacy contract.
+- **Authoritative minute capability.** Schwab declares authoritative closed
+  minutes explicitly. Native 1m charts therefore protect the first provisional
+  minute after subscribe/reconnect; legacy tick/rollover-only plugins do not
+  accidentally acquire a requirement for an event they cannot emit.
 - **Provider provenance.** Auto uses the existing tier-aware resolver and must
   agree with recorded cache provenance. Event cache keys still use the chart's
   chosen historical name.

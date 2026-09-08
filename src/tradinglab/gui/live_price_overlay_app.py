@@ -40,7 +40,7 @@ class LivePriceOverlayAppMixin:
         overlay = getattr(self, "_live_price_overlay", None)
         if overlay is None:
             return
-        from .gui.live_price_overlay import resolve_price as _resolve_live_price
+        from .live_price_overlay import resolve_price as _resolve_live_price
         ax_by_slot: dict[str, Any] = {}
         price_by_slot: dict[str, Any] = {}
         for slot_key, ps in self._panel_state.items():
@@ -100,7 +100,7 @@ class LivePriceOverlayAppMixin:
             ticker = self._slot_symbol(slot)
         except Exception:  # noqa: BLE001
             ticker = ""
-        from .gui.live_price_overlay import resolve_price as _resolve_live_price
+        from .live_price_overlay import resolve_price as _resolve_live_price
         try:
             price = _resolve_live_price(
                 ticker,
@@ -115,7 +115,6 @@ class LivePriceOverlayAppMixin:
             logger.exception(
                 "LivePriceOverlay: update_in_place raised for slot %s", slot
             )
-
 
 
 
