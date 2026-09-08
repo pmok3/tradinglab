@@ -1,33 +1,14 @@
 """Credentials configuration dialog (DPAPI-backed on Windows).
 
-Replaces the dev-only flow of hand-editing ``.env``. End users open
-Help \u2192 "Configure Credentials…" and fill in three sections —
-Schwab, Alpaca, Polygon — with hide/show password fields. On save:
+Tools -> Configure Credentials edits Schwab, Alpaca and Polygon credentials.
+Windows saves per-vendor DPAPI records; the credential resolver reads that store
+as its own layer without priming secrets into the environment. Other platforms
+can apply session-only environment values, with an explicit persistence notice.
 
-* **Windows**: serialize to JSON, DPAPI-encrypt with the current
-  user's master key, atomic-write to
-  ``%LOCALAPPDATA%\\TradingLab\\credentials.dat``.
-* **macOS / Linux**: refuse to persist (we don't implement Keychain
-  / libsecret in this iteration) and inform the user. They can
-  still configure via env vars / dotenv on dev installs.
-
-The dialog never persists plaintext to disk. Loading on next launch
-reads the DPAPI blob, decrypts, and injects into ``os.environ``
-**before** :func:`tradinglab.data.credentials.get_credentials`
-gets its first call — see :func:`prime_environment_from_dpapi`.
-
-Why ``os.environ`` injection
-----------------------------
-The existing :mod:`tradinglab.data.credentials` module reads
-env vars + dotenv. Injecting DPAPI-decrypted values into
-``os.environ`` before any vendor module imports keeps the
-"credentials live as env vars at runtime" contract intact, with
-zero changes to call sites (Schwab / Alpaca / Polygon constructors
-all read ``os.environ.get(...)``). The trade-off: a crash dump
-that captures the process environment can leak the secret; we
-accept this because (a) DPAPI already prevents persistence leaks,
-and (b) every Python process has the same exposure when env vars
-hold secrets.
+Save and Remove reconcile historical and streaming registry presence. Changing
+the effective Schwab identity closes its connection and invalidates OAuth tokens;
+an unchanged identity preserves both. Interactive authorization is a separate
+Tools -> Connect to Schwab action.
 """
 from __future__ import annotations
 
@@ -167,7 +148,8 @@ _VENDOR_BLURB: dict[str, str] = {
                "feed with full volume; the free plan is IEX-only and delayed "
                "15 minutes."),
     "polygon": "Polygon — deep historical intraday history.",
-    "schwab": "Schwab — brokerage integration (OAuth flow not shipped yet).",
+    "schwab": "Schwab — configure keys, then use Tools → Connect to Schwab. "
+              "Market data remains gated pending live commissioning.",
 }
 
 
@@ -354,6 +336,8 @@ class CredentialsDialog(BaseModalDialog):
         # read a programmatic populate as a user edit.
         self._populating = False
         self._initial_values: dict[str, str] = {}
+        from ..data.credentials import get_credentials
+        self._schwab_identity = get_credentials().schwab
         self._form_canvas: tk.Canvas | None = None
         self._sources_before: tuple[str, ...] = self._current_sources()
         self._build_widgets()
@@ -696,6 +680,12 @@ class CredentialsDialog(BaseModalDialog):
             _creds.reload()
         except Exception:  # noqa: BLE001
             pass
+        if not self._refresh_stream_credentials():
+            return
+        from ..data import register_vendor_sources
+        register_vendor_sources()
+        if self._on_changed is not None:
+            self._on_changed()
         self._set_verify_text(vendor, "Not tested yet.", MUTED_GREY, "")
         self._refresh_vendor_header(vendor)
 
@@ -1266,6 +1256,8 @@ class CredentialsDialog(BaseModalDialog):
             _creds.reload()
         except Exception:  # noqa: BLE001
             pass
+        if not self._refresh_stream_credentials():
+            return
         # Cached verdicts describe the PREVIOUS credentials — drop them so a
         # stale "verified" can't outlive the keys it was measured against.
         try:
@@ -1289,6 +1281,28 @@ class CredentialsDialog(BaseModalDialog):
             except Exception:  # noqa: BLE001
                 pass
         self.destroy()
+
+    def _refresh_stream_credentials(self) -> bool:
+        """Retire old authorization only when the effective Schwab identity changes."""
+        from ..data.credentials import get_credentials
+        from ..streaming.registry import close_vendor_streams, reconcile_vendor_streams
+
+        current = get_credentials().schwab
+        previous = getattr(self, "_schwab_identity", current)
+        try:
+            if previous != current:
+                from ..data.schwab_auth import clear_token_cache
+                close_vendor_streams()
+                clear_token_cache()
+            reconcile_vendor_streams()
+        except (OSError, RuntimeError, ValueError) as exc:
+            messagebox.showerror(
+                "Configure Credentials",
+                f"Credentials were saved, but Schwab authorization could not be reset:\n{exc}",
+                parent=self)
+            return False
+        self._schwab_identity = current
+        return True
 
     def _on_cancel(self) -> None:
         self.destroy()

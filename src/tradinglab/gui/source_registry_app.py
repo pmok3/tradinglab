@@ -29,6 +29,7 @@ from ..data.auto_source import (
     note_resolved_source,
     resolve_auto_source,
 )
+from ..streaming.registry import reconcile_vendor_streams
 
 
 class SourceRegistryAppMixin:
@@ -49,14 +50,30 @@ class SourceRegistryAppMixin:
         :meth:`_reload_if_auto_source_changed`), because a vendor that just
         appeared may outrank the one Auto is currently serving.
         """
+        reconcile_vendor_streams()
+        win = getattr(self, "_live_heatmap_win", None)
+        if win is not None and win.winfo_exists():
+            win.refresh_quote_feed()
         try:
             self._toolbar.set_sources(tuple(user_visible_sources()))
         except Exception:  # noqa: BLE001
             pass
         try:
-            self._reload_if_auto_source_changed()
+            reloaded = self._reload_if_auto_source_changed()
         except Exception:  # noqa: BLE001
             pass
+        else:
+            if (not reloaded and getattr(self, "_stream_ctrl", None) is not None
+                    and not self._is_sandbox_active()):
+                self._start_stream_if_applicable()
+                self._schedule_next_bar_fetch()
+
+    def _on_schwab_connection_changed(self) -> None:
+        """OAuth save/clear changes the connection, never the newly saved token."""
+        from ..data.schwab_auth import load_token_cache
+
+        reconcile_vendor_streams(reset=True, oauth_connected=bool(load_token_cache()))
+        self._refresh_data_source_combobox()
 
     def _reload_if_auto_source_changed(self) -> bool:
         """Reload the chart when ``"Auto"`` now resolves to a different source.
@@ -95,6 +112,8 @@ class SourceRegistryAppMixin:
         except Exception:  # noqa: BLE001
             return False
 
+        if getattr(self, "_stream_ctrl", None) is not None:
+            self._stop_stream()
         self._drop_auto_source_cache()
         try:
             self._status.info(

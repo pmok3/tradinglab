@@ -10,6 +10,10 @@ Aggregates bar and quote streaming-source plugins into the `STREAM_SOURCES` and
 - `STREAM_SOURCES: Dict[str, StreamSource]` — registry.
 - `StreamSource`, `StreamCallback`, `EventKind` — protocol and aliases.
 - `register_stream(name, source)` — imperative registration.
+- `reconcile_vendor_streams(reset=False)` — re-run presence-gated registration;
+  retain the existing bar/quote singleton on unchanged effective credentials.
+- `resolve_chart_stream(...)` — explicit provider/interval chart capability
+  resolution; see `registry.spec.md`.
 - `SyntheticStreamSource` — the built-in deterministic offline bar stream.
 - `SchwabStreamSource` — the Schwab bar-stream adapter, registered as
   `"schwab-stream"` when Schwab credentials are configured.
@@ -39,6 +43,8 @@ Aggregates bar and quote streaming-source plugins into the `STREAM_SOURCES` and
 - With configured Schwab credentials, `"schwab-stream"` is in
   `STREAM_SOURCES` and `"schwab-quotes"` is in `QUOTE_SOURCES`; without them,
   neither source is registered.
+- Credential refresh and OAuth callbacks call the same public reconciliation
+  entry point used at import. Registration never enables the REST source gate.
 
 ## Testing
 - `check_90_streaming_dispatch` / `check_90b_stream_refresh` / `check_95_stream_queue_coalescing` exercise the full subscribe→tick→rollover path.

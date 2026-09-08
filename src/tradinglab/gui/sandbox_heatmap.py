@@ -636,6 +636,7 @@ class SandboxHeatmapWindow(tk.Toplevel):
         self._quote_book: Any = None
         self._quote_sub: Any = None
         self._quote_source_name = ""
+        self._quote_binding: tuple | None = None
         if price_source is not None:
             self.price_source = price_source
         else:
@@ -700,7 +701,7 @@ class SandboxHeatmapWindow(tk.Toplevel):
         except Exception:
             return 120.0
 
-    def _start_quote_feed(self) -> None:
+    def _start_quote_feed(self, resolved=None) -> None:
         """Subscribe to the configured quote source, if any.
 
         Resolution happens **here**, at the window level, for the same
@@ -717,8 +718,10 @@ class SandboxHeatmapWindow(tk.Toplevel):
         try:
             from ..streaming.quote_book import QuoteBook
             from ..streaming.quotes import NullQuoteSource, resolve_quote_source
+            from ..streaming.registry import quote_registry_binding
 
-            name, source = resolve_quote_source()
+            name, source = resolved if resolved is not None else resolve_quote_source()
+            self._quote_binding = (name, *quote_registry_binding(name))
             if isinstance(source, NullQuoteSource):
                 self._quote_source_name = ""
                 return
@@ -739,6 +742,34 @@ class SandboxHeatmapWindow(tk.Toplevel):
             self._quote_source_name = ""
             if self._session_prices is not None:
                 self.price_source = self._session_prices
+
+    def refresh_quote_feed(self) -> bool:
+        """Rebind an open live window after credentials/OAuth registry changes."""
+        if not self._live or self._session_prices is None:
+            return False
+        from ..streaming.quotes import resolve_quote_source
+        from ..streaming.registry import quote_registry_binding
+
+        resolved = resolve_quote_source()
+        name, _source = resolved
+        binding = (name, *quote_registry_binding(name))
+        if binding == self._quote_binding:
+            return False
+        sub = self._quote_sub
+        self._quote_sub = None
+        if sub is not None:
+            sub.close()
+        # Trailing callbacks can only reach their old book, never the new one.
+        self._quote_book = None
+        self._quote_prices = None
+        self._quote_source_name = ""
+        self.price_source = self._session_prices
+        self._start_quote_feed(resolved)
+        self._sync_quote_symbols(tile.symbol for tile in self._tiles)
+        clock = self._clock()
+        if clock is not None:
+            self._recolor(clock, self._pcts_only(clock))
+        return True
 
     def _sync_quote_symbols(self, members: Iterable[str]) -> None:
         """Point the subscription at the current membership.

@@ -1,12 +1,21 @@
 from __future__ import annotations
 
+import logging
+import math
 import queue
+import time
+from bisect import bisect_left
 from collections.abc import Callable, Mapping, MutableMapping
-from typing import Any, Protocol
+from dataclasses import replace
+from enum import Enum
+from typing import Any, Protocol, runtime_checkable
 
 from ..models import Candle
-from ..streaming import StreamSource
+from ..streaming.base import StreamSource, StreamState, StreamStatus
+from ..streaming.intraday import IntradayAdapter
+from ..streaming.registry import resolve_chart_stream
 
+LOG = logging.getLogger(__name__)
 StreamEvent = tuple[Any, ...]
 CacheKey = tuple[str, str, str]
 DiskSaveFn = Callable[[str, str, str, list[Candle]], None]
@@ -16,15 +25,40 @@ class IndicatorCacheLike(Protocol):
     def invalidate_for_candles(self, candles: list[Candle]) -> int: ...
 
 
-class StreamController:
-    """Manages live-data WebSocket subscriptions and tick application."""
+@runtime_checkable
+class HealthSource(Protocol):
+    def get_status(self, ticker: str | None = None) -> StreamStatus: ...
 
-    def __init__(self) -> None:
+
+class StreamMutation(Enum):
+    REJECTED = "rejected"
+    LAST = "last"
+    APPEND = "append"
+    CORRECTION = "correction"
+
+
+class StreamController:
+    """Subscription lifetime, own-symbol readiness and timestamp-safe mutation."""
+
+    def __init__(self, *, clock: Callable[[], float] = time.monotonic) -> None:
         self._queue: queue.Queue[StreamEvent] = queue.Queue()
-        self._token: int = 0
+        self._token = 0
         self._unsubs: list[Callable[[], None]] = []
         self._subs: dict[str, dict[str, Any]] = {}
-        self._active: bool = False
+        self._active = False
+        self._clock = clock
+        self._source: StreamSource | None = None
+        self._context: CacheKey | None = None
+        self._generation: int | None = None
+        self._health_state: StreamState | None = None
+        self._last_good: float | None = None
+        self._adapter: IntradayAdapter | None = None
+        self._reconcile = False
+        self._reconcile_claimed = False
+        self.last_mutation = StreamMutation.REJECTED
+        self.appended = False
+        self.latest_price: tuple[str, float] | None = None
+        self.message = ""
 
     @property
     def active(self) -> bool:
@@ -34,205 +68,275 @@ class StreamController:
     def token(self) -> int:
         return self._token
 
+    @property
+    def context(self) -> CacheKey | None:
+        return self._context
+
+    @property
+    def subscribed(self) -> bool:
+        return self._source is not None
+
+    @property
+    def needs_reconcile(self) -> bool:
+        return self._reconcile or bool(self._adapter and self._adapter.needs_reconcile)
+
+    def claim_reconcile(self) -> bool:
+        if not self.needs_reconcile or self._reconcile_claimed:
+            return False
+        self._reconcile_claimed = True
+        return True
+
+    def history_refreshed(self, key: CacheKey, full_cache: Mapping[CacheKey, list[Candle]]) -> None:
+        """A successful fallback fetch supplies a real reconciliation baseline."""
+        if key != self._context:
+            return
+        if self.needs_reconcile:
+            if self._adapter is not None:
+                self._adapter.reconcile(
+                    history=full_cache.get(key, []),
+                    seed=full_cache.get((key[0], key[1], "1m"), []))
+            self._last_good = None
+            self._reconcile = False
+            self._reconcile_claimed = False
+        elif self._adapter is not None:
+            self._adapter.observe_history(full_cache.get(key, []))
+        self.refresh_health()
+
+    def matches(self, source_name: str, ticker: str, interval: str, *, compare_on: bool) -> bool:
+        return not compare_on and self._context == (source_name, ticker.strip().upper(), interval)
+
     def start(
-        self,
-        source_name: str,
-        ticker: str,
-        interval: str,
-        *,
-        compare_on: bool,
-        compare_ticker: str,
+        self, source_name: str, ticker: str, interval: str, *,
+        compare_on: bool, compare_ticker: str,
         full_cache: Mapping[CacheKey, list[Candle]],
         stream_sources: Mapping[str, StreamSource],
         is_intraday_fn: Callable[[str], bool],
     ) -> bool:
-        """Subscribe to the active source when streaming is applicable."""
-        self.stop()
-
         _ = compare_ticker
-        stream = stream_sources.get(source_name)
-        if stream is None:
+        ticker = (ticker or "").strip().upper()
+        key = (source_name, ticker, interval)
+        selection = resolve_chart_stream(source_name, ticker, interval, stream_sources)
+        if compare_on or not ticker or not is_intraday_fn(interval) or selection is None or not full_cache.get(key):
+            self.stop()
             return False
-        if not is_intraday_fn(interval):
+        if self._context == key and self._source is selection.source:
+            self.refresh_health()
+            return True
+        self.stop()
+        adapter = None
+        try:
+            if selection.native_interval != interval:
+                adapter = IntradayAdapter(
+                    interval, history=full_cache[key], seed=full_cache.get((source_name, ticker, "1m"), []))
+        except (ValueError, TypeError):
+            LOG.exception("Chart stream history cannot be safely resampled")
+            self.message = "Stream history alignment unavailable; polling"
             return False
-
-        primary_ticker = (ticker or "").strip().upper()
-        if not primary_ticker:
-            return False
-        if (source_name, primary_ticker, interval) not in full_cache:
-            return False
-        if compare_on:
-            return False
-
-        self._token += 1
+        self._context = key
+        self._source = selection.source
+        self._adapter = adapter
         token = self._token
-        new_unsubs: list[Callable[[], None]] = []
-        new_subs: dict[str, dict[str, Any]] = {}
+        source = selection.source
 
-        def _make_cb(
-            slot: str,
-            live_ticker: str,
-            _src: str = source_name,
-            _interval: str = interval,
-            _tok: int = token,
-        ) -> Callable[[str, Candle], None]:
-            def _cb(kind: str, bar: Candle) -> None:
-                self._queue.put((_tok, slot, _src, live_ticker, _interval, kind, bar))
-
-            return _cb
+        def callback(kind: str, bar: Candle) -> None:
+            event = (token, "primary", source_name, ticker, interval, kind, replace(bar))
+            if isinstance(source, HealthSource):
+                event += (source.get_status(ticker).generation,)
+            self._queue.put(event)
 
         try:
-            unsub = stream.subscribe(primary_ticker, interval, _make_cb("primary", primary_ticker))
-            new_unsubs.append(unsub)
-            new_subs["primary"] = {
-                "unsub": unsub,
-                "ctx": (source_name, primary_ticker, interval),
-            }
-        except Exception:  # noqa: BLE001
-            for release in new_unsubs:
-                try:
-                    release()
-                except Exception:  # noqa: BLE001
-                    pass
-            self._token += 1
+            unsub = source.subscribe(ticker, selection.native_interval, callback)
+        except (OSError, ValueError, RuntimeError):
+            LOG.exception("Chart stream subscription failed")
+            self.stop()
+            self.message = "Stream unavailable; polling"
             return False
-
-        self._unsubs = new_unsubs
-        self._subs = new_subs
-        self._active = True
+        self._unsubs.append(unsub)
+        self._subs["primary"] = {"unsub": unsub, "ctx": key}
+        self.refresh_health()
         return True
 
+    def refresh_health(self) -> bool:
+        self._active = False
+        source = self._source
+        if source is None:
+            return False
+        if isinstance(source, HealthSource):
+            try:
+                status = source.get_status(self._context[1])
+                if not isinstance(status, StreamStatus):
+                    raise TypeError("Stream health capability returned an invalid status")
+            except (OSError, RuntimeError, ValueError, TypeError):
+                if self.message != "Stream status unavailable; polling":
+                    LOG.exception("Chart stream status unavailable")
+                self.message = "Stream status unavailable; polling"
+                self._last_good = None
+                return False
+            epoch_changed = self._generation is not None and self._generation != status.generation
+            lost_connection = self._health_state is StreamState.LIVE and status.state in (
+                StreamState.STALE, StreamState.DISCONNECTED, StreamState.AUTH_REQUIRED,
+                StreamState.ERROR, StreamState.CLOSED,
+            )
+            if epoch_changed or lost_connection:
+                self._last_good = None
+                self._reconcile = True
+                self._reconcile_claimed = False
+                if self._adapter is not None:
+                    self._adapter.reconcile(history=[])
+            self._generation = status.generation
+            self._health_state = status.state
+            self.message = status.message
+            if status.state is not StreamState.LIVE:
+                self._last_good = None
+                return False
+        elif self._last_good is None or self._clock() - self._last_good > 90:
+            self.message = "Waiting for fresh stream data; polling"
+            return False
+        if self.needs_reconcile:
+            self.message = self._adapter.message if self._adapter else "Stream reconnected; reconciling history"
+            return False
+        if self._adapter is not None and not self._adapter.ready:
+            self.message = self._adapter.message
+            return False
+        self._active = self._last_good is not None
+        if self._active:
+            self.message = "Live stream"
+        elif not self.message:
+            self.message = "Waiting for this symbol's stream data; polling"
+        return self._active
+
     def stop(self) -> None:
+        self._token += 1
+        self._active = False
         for unsub in self._unsubs:
             try:
                 unsub()
-            except Exception:  # noqa: BLE001
-                pass
+            except (OSError, ValueError, RuntimeError):
+                LOG.exception("Chart stream unsubscribe failed")
         self._unsubs.clear()
         self._subs.clear()
+        self._source = None
+        self._context = None
+        self._generation = None
+        self._health_state = None
+        self._last_good = None
+        self._adapter = None
+        self._reconcile = False
+        self._reconcile_claimed = False
+        self.latest_price = None
+        self.message = ""
         self._clear_stopped_events()
-        self._active = False
-        self._token += 1
 
     def apply_tick(
-        self,
-        evt: StreamEvent,
-        full_cache: MutableMapping[CacheKey, list[Candle]],
-        indicator_cache: IndicatorCacheLike | None,
+        self, evt: StreamEvent, full_cache: MutableMapping[CacheKey, list[Candle]],
+        indicator_cache: IndicatorCacheLike | None, disk_save_fn: DiskSaveFn | None = None,
     ) -> bool:
-        """Replace the rightmost cached bar in place when dates match."""
-        try:
-            token, _slot, src, ticker, interval, _kind, bar = evt
-        except (TypeError, ValueError):
-            return False
-        if token != self._token:
-            return False
-        raw = full_cache.get((src, ticker, interval))
-        if not raw:
-            return False
-        last = raw[-1]
-        bar_date = getattr(bar, "date", None)
-        if bar_date != last.date:
-            if bar_date is not None and bar_date > last.date:
-                raw.append(bar)
-                return True
-            return False
-        self._copy_bar(dst=last, src=bar)
-        self._invalidate_indicator_cache(indicator_cache, raw)
-        return True
+        return self._apply(evt, full_cache, indicator_cache, disk_save_fn) is not StreamMutation.REJECTED
 
     def apply_rollover(
-        self,
-        evt: StreamEvent,
-        full_cache: MutableMapping[CacheKey, list[Candle]],
-        trim_fn: Callable[[], None],
-        disk_save_fn: DiskSaveFn,
+        self, evt: StreamEvent, full_cache: MutableMapping[CacheKey, list[Candle]],
+        trim_fn: Callable[[], None], disk_save_fn: DiskSaveFn,
         indicator_cache: IndicatorCacheLike | None = None,
     ) -> bool:
-        """Append or upsert the cached bar sequence for a rollover event."""
-        try:
-            token, _slot, src, ticker, interval, _kind, bar = evt
-        except (TypeError, ValueError):
-            return False
-        if token != self._token:
-            return False
+        return self._apply(evt, full_cache, indicator_cache, disk_save_fn, trim_fn) is not StreamMutation.REJECTED
+
+    def _apply(
+        self, evt: StreamEvent, full_cache: MutableMapping[CacheKey, list[Candle]],
+        indicator_cache: IndicatorCacheLike | None, disk_save_fn: DiskSaveFn | None,
+        trim_fn: Callable[[], None] | None = None,
+    ) -> StreamMutation:
+        self.last_mutation = StreamMutation.REJECTED
+        self.appended = False
+        self.latest_price = None
+        if len(evt) not in (7, 8):
+            return self.last_mutation
+        token, slot, src, ticker, interval, kind, bar = evt[:7]
         key = (src, ticker, interval)
-        raw = full_cache.get(key)
+        if token != self._token or slot != "primary" or (self._context is not None and key != self._context):
+            return self.last_mutation
+        if kind not in ("tick", "rollover", "closed") or not isinstance(bar, Candle):
+            return self.last_mutation
+        if bar.is_gap or not all(math.isfinite(v) for v in (bar.open, bar.high, bar.low, bar.close, bar.volume)):
+            return self.last_mutation
+        self.refresh_health()
+        if len(evt) == 8 and evt[7] != self._generation:
+            return self.last_mutation
+        if self._reconcile and self._adapter is not None:
+            return self.last_mutation
+        updates = self._adapter.apply(kind, bar) if self._adapter is not None else [(kind, bar)]
+        for update_kind, candle in updates:
+            mutation = self._mutate(key, candle, update_kind, full_cache, indicator_cache, disk_save_fn, trim_fn)
+            self.appended = self.appended or mutation is StreamMutation.APPEND
+            # Preserve the strongest repaint requirement in a multi-event batch.
+            priority = {StreamMutation.REJECTED: 0, StreamMutation.LAST: 1,
+                        StreamMutation.APPEND: 2, StreamMutation.CORRECTION: 3}
+            if priority[mutation] > priority[self.last_mutation]:
+                self.last_mutation = mutation
+            if mutation in (StreamMutation.LAST, StreamMutation.APPEND):
+                self._last_good = self._clock()
+                if kind != "closed":
+                    self.latest_price = (ticker, float(bar.close))
+        self.refresh_health()
+        return self.last_mutation
+
+    def _mutate(
+        self, key: CacheKey, bar: Candle, kind: str,
+        cache: MutableMapping[CacheKey, list[Candle]], indicators: IndicatorCacheLike | None,
+        save: DiskSaveFn | None, trim: Callable[[], None] | None,
+    ) -> StreamMutation:
+        raw = cache.get(key)
         if raw is None:
-            full_cache[key] = [bar]
-            trim_fn()
+            if kind != "rollover" or trim is None:
+                return StreamMutation.REJECTED
+            raw = []
+            cache[key] = raw
+            trim()
+        old_length = len(raw)
+        if not raw or bar.date > raw[-1].date:
+            raw.append(replace(bar))
+            mutation = StreamMutation.APPEND
+        else:
+            index = bisect_left(raw, bar.date, key=lambda c: c.date)
+            if index == len(raw) or raw[index].date != bar.date:
+                if self._source is not None and kind == "closed":
+                    self._reconcile = True
+                return StreamMutation.REJECTED
+            mutation = StreamMutation.LAST if index == len(raw) - 1 else StreamMutation.CORRECTION
+            self._copy_bar(dst=raw[index], src=bar)
+        if indicators is not None:
+            indicators.invalidate_for_candles(raw)
+        if save is not None and (
+            mutation is StreamMutation.CORRECTION or kind == "closed"
+            or (mutation is StreamMutation.APPEND and (old_length > 0 or kind == "rollover"))
+        ):
             try:
-                disk_save_fn(*key, full_cache[key])
-            except Exception:  # noqa: BLE001
-                pass
-            return True
-        if not raw:
-            raw.append(bar)
-            try:
-                disk_save_fn(*key, raw)
-            except Exception:  # noqa: BLE001
-                pass
-            return True
-        last = raw[-1]
-        bar_date = getattr(bar, "date", None)
-        if bar_date is None:
-            return False
-        if bar_date > last.date:
-            raw.append(bar)
-            self._invalidate_indicator_cache(indicator_cache, raw)
-            try:
-                disk_save_fn(*key, raw)
-            except Exception:  # noqa: BLE001
-                pass
-            return True
-        if bar_date == last.date:
-            self._copy_bar(dst=last, src=bar)
-            self._invalidate_indicator_cache(indicator_cache, raw)
-            return True
-        return False
+                save(*key, raw)
+            except OSError:
+                LOG.exception("Could not persist stream correction")
+        return mutation
 
     def drain(self) -> list[StreamEvent]:
         out: list[StreamEvent] = []
-        try:
-            while True:
+        for _ in range(min(self._queue.qsize(), 512)):
+            try:
                 out.append(self._queue.get_nowait())
-        except queue.Empty:
-            return out
+            except queue.Empty:
+                break
+        return out
 
     def _clear_stopped_events(self) -> None:
-        """Drop main-chart events while preserving shared ChartStack traffic."""
         preserved: list[StreamEvent] = []
-        try:
-            while True:
-                evt = self._queue.get_nowait()
-                slot = evt[1] if len(evt) > 1 else ""
-                if isinstance(slot, str) and slot.startswith("card:"):
-                    preserved.append(evt)
-        except queue.Empty:
-            pass
-        for evt in preserved:
+        for _ in range(self._queue.qsize()):
             try:
-                self._queue.put_nowait(evt)
-            except Exception:  # noqa: BLE001
-                self._queue.put(evt)
+                evt = self._queue.get_nowait()
+            except queue.Empty:
+                break
+            if len(evt) > 1 and isinstance(evt[1], str) and evt[1].startswith("card:"):
+                preserved.append(evt)
+        for evt in preserved:
+            self._queue.put(evt)
 
     @staticmethod
     def _copy_bar(*, dst: Candle, src: Candle) -> None:
-        dst.open = src.open
-        dst.high = src.high
-        dst.low = src.low
-        dst.close = src.close
-        dst.volume = src.volume
-        dst.session = src.session
-
-    @staticmethod
-    def _invalidate_indicator_cache(
-        indicator_cache: IndicatorCacheLike | None,
-        candles: list[Candle],
-    ) -> None:
-        if indicator_cache is None:
-            return
-        try:
-            indicator_cache.invalidate_for_candles(candles)
-        except Exception:  # noqa: BLE001
-            pass
+        dst.open, dst.high, dst.low, dst.close = src.open, src.high, src.low, src.close
+        dst.volume, dst.session = src.volume, src.session

@@ -763,7 +763,7 @@ class HelpMenuMixin:
             )
             return
         try:
-            open_schwab_connect_dialog(self)
+            open_schwab_connect_dialog(self, on_connection_changed=self._on_schwab_connection_changed)
         except Exception as e:  # noqa: BLE001
             messagebox.showerror(
                 "Connect to Schwab",

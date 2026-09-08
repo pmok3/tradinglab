@@ -442,6 +442,136 @@ def check_95_stream_queue_coalescing(app) -> None:
     print("  [OK] §5.5 stream drain loop present + H5 _after_jobs bounded")
 
 
+def check_96_stream_readiness_and_corrections(app) -> None:
+    """A synthetic chart stays polling-backed until data, and paints old corrections."""
+    from dataclasses import replace
+    from unittest.mock import patch
+
+    from tradinglab import disk_cache
+    from tradinglab.data import DATA_SOURCES
+    from tradinglab.data.stream_controller import StreamController
+    from tradinglab.streaming import STREAM_SOURCES
+    from tradinglab.streaming.base import StreamState, StreamStatus
+
+    class Source:
+        status = StreamStatus(StreamState.CONNECTING, "Connecting", 0, generation=1)
+        callback = None
+        subscriptions = 0
+
+        def get_status(self, ticker=None):
+            return self.status
+
+        def subscribe(self, ticker, interval, callback):
+            self.subscriptions += 1
+            self.callback = callback
+            return lambda: None
+
+    variables = (app.source_var, app.ticker_var, app.interval_var, app.compare_var, app.prepost_var)
+    old_values = [var.get() for var in variables]
+    old_cache = app._full_cache.copy()
+    old_primary, old_candles = app._primary, app.candles
+    old_raw = app._data_ctrl.primary_raw
+    old_prices = dict(app._last_stream_price)
+    old_ctrl = app._stream_ctrl
+    old_confirmed = (app._confirmed_primary_ticker, app._confirmed_compare_ticker)
+    source = Source()
+    source_name = "smoke-chart-stream"
+    raws = _fake_candles(40, start_price=50, session_pattern="regular")
+    key = (source_name, "STREAMSMOKE", "5m")
+    saved = []
+    poll_bars = raws
+
+    def save(_src, _ticker, _interval, bars):
+        saved.append([replace(bar) for bar in bars])
+
+    def cancel_job(name):
+        job = getattr(app, name, None)
+        if job is not None:
+            app.after_cancel(job)
+            setattr(app, name, None)
+
+    with patch.dict(STREAM_SOURCES, {source_name: source}), patch.dict(
+        DATA_SOURCES, {source_name: lambda *_args: [replace(bar) for bar in poll_bars]}
+    ), patch.object(disk_cache, "save", save):
+        try:
+            app._stop_stream()
+            app._bump_fetch_token()
+            for var, value in zip(variables, (source_name, "STREAMSMOKE", "5m", False, True), strict=True):
+                var.set(value)
+            cancel_job("_reload_job")
+            cancel_job("_poll_job")
+            app._stream_ctrl = StreamController()
+            app._sync_stream_aliases()
+            app._full_cache[key] = raws
+            app._set_data_state(primary_raw=raws, primary=raws)
+            app.candles = raws
+            app._render()
+            app._start_stream_if_applicable()
+            app._schedule_next_bar_fetch()
+            assert not app._stream_active and app._poll_job is not None
+            source.status = replace(source.status, state=StreamState.LIVE)
+            app._update_stream_health()
+            assert not app._stream_active, "Transport LIVE alone must not suppress polling"
+            newest = replace(raws[-1], close=raws[-1].close + 1, high=raws[-1].high + 2)
+            source.callback("tick", newest)
+            assert _pump_until(app, lambda: app._stream_active, timeout=2)
+            assert app._poll_job is None
+            assert app._last_stream_price["STREAMSMOKE"] == newest.close
+            before_xlim = app._panel_state["primary"]["price_ax"].get_xlim()
+            corrected = replace(raws[-3], high=raws[-3].high + 10, volume=12345)
+            source.callback("closed", corrected)
+
+            def painted_correction():
+                ps = app._panel_state["primary"]
+                return (raws[-3].high == corrected.high
+                        and abs(ps["price_wicks"]._sc_segments[-3][1][1] - corrected.high) < 1e-8)
+
+            assert _pump_until(app, painted_correction, timeout=2), "Historical wick was not repainted"
+            assert app._panel_state["primary"]["price_ax"].get_xlim() == before_xlim
+            assert app._last_stream_price["STREAMSMOKE"] == newest.close
+            assert any(bars[-3].volume == 12345 for bars in saved)
+            source.status = replace(source.status, state=StreamState.DISCONNECTED, message="Disconnected")
+            app._update_stream_health()
+            assert not app._stream_active and app._poll_job is not None
+            cancel_job("_poll_job")
+            token = app._stream_ctrl.token
+            poll_bars = [replace(bar) for bar in raws]
+            poll_bars[-1] = replace(poll_bars[-1], close=newest.close + 3, high=newest.high + 4)
+            app._next_bar_fetch_tick()
+            assert app._full_cache[key] is raws, "Fallback fetch must leave a writable stream cache"
+            assert _pump_until(
+                app, lambda: app._primary[-1].close == poll_bars[-1].close, timeout=3
+            ), "A fresh REST result was hidden behind the stream's retained memory cache"
+            assert source.subscriptions == 1 and app._stream_ctrl.token == token
+            callback = source.callback
+            app._stop_stream()
+            callback("tick", replace(newest, close=999))
+            event = app._stream_ctrl.drain()[0]
+            assert not app._apply_stream_tick(event)
+            assert "STREAMSMOKE" not in app._last_stream_price
+        finally:
+            app._stop_stream()
+            app._bump_fetch_token()
+            cancel_job("_poll_job")
+            cancel_job("_tick_repaint_job")
+            app._tick_repaint_pending = False
+            for var, value in zip(variables, old_values, strict=True):
+                var.set(value)
+            cancel_job("_reload_job")
+            app._full_cache.clear()
+            app._full_cache.update(old_cache)
+            app._stream_ctrl = old_ctrl
+            app._sync_stream_aliases()
+            app._set_data_state(primary_raw=old_raw, primary=old_primary)
+            app._confirmed_primary_ticker, app._confirmed_compare_ticker = old_confirmed
+            app.candles = old_candles
+            app._last_stream_price.clear()
+            app._last_stream_price.update(old_prices)
+            app._render()
+            app._schedule_next_bar_fetch()
+    print("  [OK] stream readiness/fallback, visible historical correction and stale overlay guard")
+
+
 def check_a0_hover_and_crosshair(app) -> None:
     """spec §11 — blit background, hover annotation, crosshair artists + behavior."""
     assert hasattr(app, "_blit_bg"), "§11.2 missing _blit_bg"
@@ -23934,6 +24064,7 @@ def _run_all_checks(app) -> None:
     check_90_streaming_dispatch(app)
     check_90b_stream_refresh(app)
     check_95_stream_queue_coalescing(app)
+    check_96_stream_readiness_and_corrections(app)
     check_a0_hover_and_crosshair(app)
     check_b0_click_to_type(app)
     check_b0a_click_to_type_scaled_symbol(app)
@@ -24238,6 +24369,7 @@ def _build_check_sequence():
         ("check_90_streaming_dispatch", check_90_streaming_dispatch),
         ("check_90b_stream_refresh", check_90b_stream_refresh),
         ("check_95_stream_queue_coalescing", check_95_stream_queue_coalescing),
+        ("check_96_stream_readiness_and_corrections", check_96_stream_readiness_and_corrections),
         ("check_a0_hover_and_crosshair", check_a0_hover_and_crosshair),
         ("check_b0_click_to_type", check_b0_click_to_type),
         ("check_b0a_click_to_type_scaled_symbol",

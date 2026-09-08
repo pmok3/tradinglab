@@ -41,6 +41,95 @@ class _StubFallback:
         return set(self._stale)
 
 
+def test_open_window_rebinds_on_auth_reset_and_discards_old_book(monkeypatch):
+    from types import SimpleNamespace
+
+    from tradinglab.gui.sandbox_heatmap import SandboxHeatmapWindow
+    from tradinglab.streaming import registry
+    from tradinglab.streaming.quotes import NullQuoteSource
+
+    class Subscription:
+        def __init__(self, callback):
+            self.callback = callback
+            self.closed = False
+            self.symbols = []
+
+        def close(self):
+            self.closed = True
+
+        def set_symbols(self, symbols):
+            self.symbols = list(symbols)
+
+    class Source:
+        def subscribe_quotes(self, _symbols, callback):
+            return Subscription(callback)
+
+    class Window:
+        _start_quote_feed = SandboxHeatmapWindow._start_quote_feed
+        refresh_quote_feed = SandboxHeatmapWindow.refresh_quote_feed
+        _sync_quote_symbols = SandboxHeatmapWindow._sync_quote_symbols
+        _feed_status = SandboxHeatmapWindow._feed_status
+        def _stale_after_s(self):
+            return 120
+
+        def _clock(self):
+            return 1000
+
+        def _pcts_only(self, _clock):
+            return {}
+
+        def _recolor(self, *_args):
+            self.recolors += 1
+
+    selected = [Source()]
+    def factory():
+        return selected[0]
+    monkeypatch.setattr(registry, "QUOTE_SOURCES", {"schwab-quotes": factory})
+    monkeypatch.setattr(registry, "STREAM_SOURCES", {"schwab-stream": object()})
+    monkeypatch.setattr("tradinglab.streaming.quotes.resolve_quote_source",
+                        lambda: ("schwab-quotes", selected[0]))
+    win = Window()
+    win._live = True
+    win._session_prices = _StubFallback({"AAPL": (99, 98)})
+    win.price_source = win._session_prices
+    win._quote_binding = None
+    win._quote_sub = None
+    win._quote_book = None
+    win._quote_prices = None
+    win._tiles = (SimpleNamespace(symbol="AAPL"),)
+    win.recolors = 0
+    win._start_quote_feed()
+    old_sub = win._quote_sub
+    old_book = win._quote_book
+    old_sub.callback(Quote("AAPL", last=120, prev_close=100, ts=1000))
+    assert not win.refresh_quote_feed()
+    assert not old_sub.closed
+    registry.STREAM_SOURCES["schwab-stream"] = object()
+    assert win.refresh_quote_feed()
+    assert old_sub.closed
+    assert win._quote_book is not old_book
+    assert win._quote_sub.symbols == ["AAPL"]
+    old_sub.callback(Quote("AAPL", last=999, prev_close=100, ts=1001))
+    assert win._quote_book.get("AAPL") is None
+    assert win.price_source("AAPL", 0) == (99, 98)
+
+    registry.QUOTE_SOURCES.clear()
+    registry.STREAM_SOURCES.clear()
+    selected[0] = NullQuoteSource()
+    assert win.refresh_quote_feed()
+    assert win._quote_prices is None
+    assert "cached bars" in win._feed_status()
+    assert win.recolors == 2
+    registry.QUOTE_SOURCES["schwab-quotes"] = factory
+    registry.STREAM_SOURCES["schwab-stream"] = object()
+    selected[0] = Source()
+    assert win.refresh_quote_feed(), "An open null-feed window must attach after OAuth registration"
+    assert win._quote_sub.symbols == ["AAPL"]
+    assert win._quote_book.get("AAPL") is None
+    win._live = False
+    assert not win.refresh_quote_feed()
+
+
 # -- price legs --------------------------------------------------------------
 
 

@@ -824,6 +824,7 @@ class ChartApp(
         self._poll_job: str | None = None
         # Streaming state (spec §5)
         self._stream_ctrl = StreamController()
+        self._stream_status_message = ""
         self._sync_stream_aliases()
         self._renderer = ChartRenderer()
         # Render topology state (spec §6.3/§7)
@@ -3149,6 +3150,8 @@ class ChartApp(
         interval = self.interval_var.get()
         raw_primary = self.ticker_var.get().strip().upper()
         compare_on = bool(self.compare_var.get())
+        if not self._stream_ctrl.matches(src, raw_primary, interval, compare_on=compare_on):
+            self._stop_stream()
         # Re-arm the (flagged) prefetch scheduler for the new active context —
         # deferred off this perf-critical path; no-op when the feature is off.
         self._prefetch_observe_soon()
@@ -3342,19 +3345,14 @@ class ChartApp(
             return
         # Bump fetch token: any in-flight callbacks become stale (spec §9.1).
         self._bump_fetch_token()
-        # Any active stream is for the *previous* (src, ticker, interval) —
-        # stop it now so the early-return paths below (bad ticker, etc.)
-        # don't leave a stale subscription running.
-        try:
-            self._stop_stream()
-        except Exception:  # noqa: BLE001
-            pass
         self._reresolve_symbols_for_source()
         src = self.source_var.get()
         interval = self.interval_var.get()
         raw_primary = self.ticker_var.get().strip().upper()
         primary_key = (src, raw_primary, interval)
         compare_on = bool(self.compare_var.get())
+        if not self._stream_ctrl.matches(src, raw_primary, interval, compare_on=compare_on):
+            self._stop_stream()
         compare_key: tuple[str, str, str] | None = None
         raw_compare: str = ""
         if compare_on:
@@ -3453,7 +3451,7 @@ class ChartApp(
         compare_failed = False
         prefetched_primary_used = False
         prefetched_compare_used = False
-        if primary_raw is None and fetcher is not None:
+        if (primary_raw is None or (prefetched_valid and self._stream_ctrl.subscribed)) and fetcher is not None:
             if prefetched_valid:
                 primary_raw = prefetched.get("primary") or []
                 prefetched_primary_used = bool(primary_raw)
@@ -3880,59 +3878,31 @@ class ChartApp(
     # ------------------------------------------------------------------
 
     def _apply_stream_tick(self, evt: tuple[Any, ...]) -> bool:
-        """Delegate tick mutation to ``StreamController``.
-
-        Also extracts the latest trade price from the event payload and
-        records it in ``_last_stream_price`` so the live-price overlay
-        can read the freshest known price without re-walking the
-        candles. The event shape is ``(token, slot, src, ticker,
-        interval, kind, bar)`` (see ``data/stream_controller.apply_tick``),
-        and the bar's ``close`` is the latest trade price.
-        """
-        # Capture the latest stream price BEFORE delegating, so a later
-        # branch in apply_tick that rejects (token mismatch, gap) doesn't
-        # block the live-price overlay from learning the latest tick.
-        try:
-            _token, _slot, _src, ticker, _interval, _kind, bar = evt
-            sym = (str(ticker) or "").strip().upper()
-            if sym:
-                px = float(getattr(bar, "close", float("nan")))
-                if math.isfinite(px):
-                    self._last_stream_price[sym] = px
-        except Exception:  # noqa: BLE001
-            pass
-        return self._stream_ctrl.apply_tick(
+        """Apply a generation-gated update before publishing its latest price."""
+        applied = self._stream_ctrl.apply_tick(
             evt,
             full_cache=self._full_cache,
             indicator_cache=self._indicator_cache,
+            disk_save_fn=disk_cache.save,
         )
+        return self._stream_event_applied(applied)
 
     def _apply_stream_rollover(self, evt: tuple[Any, ...]) -> bool:
-        """Delegate rollover append/upsert handling to ``StreamController``.
-
-        Same ``_last_stream_price`` capture as :meth:`_apply_stream_tick`
-        — a rollover boundary still carries a closing price for the
-        sealed bar, which represents the latest known trade.
-        """
-        try:
-            _token, _slot, _src, ticker, _interval, _kind, bar = evt
-            sym = (str(ticker) or "").strip().upper()
-            if sym:
-                px = float(getattr(bar, "close", float("nan")))
-                if math.isfinite(px):
-                    self._last_stream_price[sym] = px
-        except Exception:  # noqa: BLE001
-            pass
-        return self._stream_ctrl.apply_rollover(
+        """Delegate timestamp upsert and sealed-history persistence."""
+        applied = self._stream_ctrl.apply_rollover(
             evt,
             full_cache=self._full_cache,
             indicator_cache=self._indicator_cache,
             trim_fn=self._trim_full_cache,
             disk_save_fn=disk_cache.save,
         )
+        return self._stream_event_applied(applied)
 
     def _start_stream_if_applicable(self) -> None:
         """Spec §5.4 — transactional, per-slot stream subscribe."""
+        if self._is_sandbox_active():
+            self._stop_stream()
+            return
         self._stream_ctrl.start(
             self.source_var.get(),
             self.ticker_var.get(),
@@ -3945,6 +3915,8 @@ class ChartApp(
         )
         self._sync_stream_aliases()
 
+        if self._stream_ctrl.subscribed:
+            self._stream_status_message = ""
         # Cancel any armed poll job — streaming replaces polling (§9.3).
         if self._poll_job is not None and self._stream_active:
             try:
@@ -3954,7 +3926,10 @@ class ChartApp(
             self._poll_job = None
 
     def _stop_stream(self) -> None:
+        context = self._stream_ctrl.context
         self._stream_ctrl.stop()
+        if context is not None:
+            self._last_stream_price.pop(context[1], None)
         self._sync_stream_aliases()
 
     # ------------------------------------------------------------------

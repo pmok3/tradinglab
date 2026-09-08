@@ -41,21 +41,9 @@ from .synthetic_quotes import SyntheticQuoteSource
 register_stream("synthetic-stream", SyntheticStreamSource())
 register_quote_source("synthetic-quotes", SyntheticQuoteSource)
 
-# Register Schwab streaming only when REST credentials are present.
-# The source itself will still no-op if OAuth isn't completed yet —
-# this just keeps the stream-source dropdown clean for users who
-# haven't configured Schwab at all. Registration is cheap (no
-# network); the WS connection only opens on first subscribe.
-from ..data.credentials import get_credentials as _get_credentials  # noqa: E402
+from .registry import reconcile_vendor_streams, resolve_chart_stream  # noqa: E402
 
-if _get_credentials().schwab.is_configured():
-    register_stream("schwab-stream", SchwabStreamSource())
-    # The quote axis rides the SAME connection (Schwab allows one
-    # streamer session per user), so it is registered together with the
-    # bar source and resolves the singleton lazily at subscribe time.
-    from .schwab_quotes import make_source as _make_schwab_quotes  # noqa: E402
-
-    register_quote_source("schwab-quotes", _make_schwab_quotes)
+reconcile_vendor_streams()
 
 __all__ = [
     "EventKind",
@@ -63,6 +51,8 @@ __all__ = [
     "StreamSource",
     "STREAM_SOURCES",
     "register_stream",
+    "reconcile_vendor_streams",
+    "resolve_chart_stream",
     "SyntheticStreamSource",
     "SchwabStreamSource",
     # quote axis

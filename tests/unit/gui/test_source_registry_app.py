@@ -231,3 +231,16 @@ def test_refresh_still_resyncs_when_the_auto_reconcile_fails(monkeypatch, _flip)
     app._load_data_async = _boom
     app._refresh_data_source_combobox()
     assert app._toolbar.sources == ("yfinance", "Auto")
+
+
+def test_registry_refresh_never_starts_chart_stream_during_replay(_flip):
+    _flip("yfinance", "yfinance")
+    app = _App(sandbox=True)
+    app._stream_ctrl = object()
+
+    def fail():
+        raise AssertionError("Replay must not start a chart stream")
+
+    app._start_stream_if_applicable = fail
+    app._schedule_next_bar_fetch = fail
+    app._refresh_data_source_combobox()

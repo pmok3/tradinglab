@@ -132,8 +132,11 @@ not an exhaustive enumeration.**
 | Spec | Covers |
 |---|---|
 | `streaming/__init__.spec.md` | `STREAM_SOURCES` registry. |
-| `streaming/base.spec.md` | `StreamSubscription` protocol. |
+| `streaming/base.spec.md` | Subscribe-only `StreamSource` protocol and optional typed health/status. |
 | `streaming/synthetic.spec.md` | Synthetic tick generator on a background thread. |
+| `streaming/registry.spec.md` | Explicit chart capabilities and shared vendor/quote registration lifecycle. |
+| `streaming/resampler.spec.md` | Shared REST/live session alignment and opt-in bounded minute corrections. |
+| `streaming/intraday.spec.md` | Conservative chart-only 1m-to-intraday adapter, coverage and reconciliation. |
 
 ## `watchlists/`
 | Spec | Covers |

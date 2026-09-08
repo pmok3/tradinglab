@@ -39,6 +39,12 @@ the pure [`backtest/heatmap.py`](../backtest/heatmap.spec.md) layer. See
     universe change.
   - `close()` — drop the quote subscription, then tear down canvas + mpl
     callbacks; idempotent.
+  - `refresh_quote_feed() -> bool` — on registry/OAuth change, re-resolve the
+    configured quote factory and shared transport identity. Unchanged binding
+    is a no-op; changed binding closes the prior subscription, discards its
+    book/freshness, subscribes current members and recolors from new quotes or
+    cached-bar fallback. Replay and explicitly injected price sources are
+    unchanged. Trailing callbacks can only update the discarded old book.
 - `class SessionPriceSource` — clock-bounded `(price, prior_close)`
   provider. `__init__(*, source, interval, loader=None)`;
   `build(symbols, as_of_ts)` parses one session's bars (call it off the

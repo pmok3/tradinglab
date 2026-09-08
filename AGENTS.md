@@ -682,8 +682,8 @@ richer themer (it also repaints the preview figure) — don't "DRY it up". Spec:
 ### 7.32 Credential verification is a registry capability — and vendor sources re-register without a restart
 
 `is_configured()` is presence; `verify.verify_vendor()` is validity — gate registration
-on presence only, so startup never depends on the network. Every vendor has a verifier
-(Schwab answers `unsupported` without a network call — silence would read as "fine").
+on presence only, so startup never depends on the network. Every vendor has a verifier;
+Schwab's explicit probe uses OAuth plus a minimal history request, never a startup probe.
 **HTTP 403 maps to `forbidden`, not `invalid_credentials`**: the key is usually valid
 and the plan isn't. Saving or clearing credentials must call `register_vendor_sources()`
 so the source dropdown updates without a restart. Specs: `data/verify.spec.md`,
@@ -756,6 +756,12 @@ Rules that are easy to get wrong:
   11 low, **12 prev close**). Field 35 is epoch **milliseconds** (§7.7).
 - The Schwab adapter is **written but never exercised against a live
   feed** — see its spec's "Known limitations" for what to verify first.
+- Chart subscriptions are not proof of readiness: own-symbol health and accepted
+  data gate polling takeover. Authoritative `closed` events correct known prior
+  bars; connection generations reject old callbacks. The optional higher-interval
+  chart adapter retains two buckets and keeps polling during conservative warm-up.
+  REST registration remains disabled pending commissioning; see
+  `docs/SCHWAB_STREAMING.md` for the supported surface and live checklist.
 
 Specs: `streaming/{quotes,quote_book,synthetic_quotes,schwab_quotes}.spec.md`,
 `gui/heatmap_context.spec.md`. Tests: `tests/streaming/test_quotes.py`,
@@ -1063,6 +1069,7 @@ These files are **never** committed to git. Use them for working memory.
 | Live vs replay heatmap clock/context | `src/tradinglab/gui/heatmap_context.py` (§7.36) |
 | Quant side tab (market internals) | `src/tradinglab/gui/quant_app.py` (QuantAppMixin) + `gui/quant_tab.py` (widget); rows live in `src/tradinglab/quant/catalog.py`. Menu entry is **View → Quant** |
 | Quote-level streaming (breadth axis) | `src/tradinglab/streaming/quotes.py` (protocol + registry), `streaming/quote_book.py` (coalescing store), `streaming/schwab_quotes.py` (LEVELONE adapter); see §7.36 |
+| Chart stream resolution / readiness / aggregation | `streaming/registry.py`, `data/stream_controller.py`, `streaming/intraday.py`; commissioning runbook: `docs/SCHWAB_STREAMING.md` |
 | Update-check banner + banner cleanup | `src/tradinglab/gui/update_check.py` (UpdateCheckMixin, wave 2) |
 | Sandbox property aliases | `src/tradinglab/backtest/sandbox_app_aliases.py` (SandboxAliasMixin, wave 2) |
 | Fetch executor / cache | `src/tradinglab/data/fetch_service.py`, `app.py` `_load_data_async` / `_load_events_async` |

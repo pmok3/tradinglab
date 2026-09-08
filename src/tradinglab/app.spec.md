@@ -105,9 +105,19 @@ Interval- and session-aware:
 - **Daily+**: `now − last_ts > 2 × interval_sec` (1d → 2 days, absorbs weekend visits).
 
 ### Streaming dispatch
-- `_start_stream_if_applicable()`: intraday only; bumps `_stream_token`; subscribes; transactional on error.
+- `_start_stream_if_applicable()`: resolves explicit provider/interval capability;
+  intraday primary only. Same-context polling reloads preserve the subscription
+  and adapter warm-up; actual context changes stop and stale the generation.
 - Stream callbacks enqueue `(token, slot, src, ticker, interval, kind, bar)` to `_stream_queue`.
-- `_drain_stream_queue` (Tk-thread, `after(30)`): dispatches `"tick"` → `_apply_stream_tick` (rightmost in-place mutation, preserves identity), `"rollover"` → `_apply_stream_rollover` (upsert/append). Stale-token events silently dropped. Slot prefix `"card:N"` routes to ChartStack panel.
+- Typed sources add their connection generation as an eighth field. The
+  50ms Tk drain handles tick/rollover and authoritative `closed` updates.
+  Known historical correction preserves list identity, invalidates indicators,
+  persists corrected data and rebuilds the visible slice without moving xlim.
+  Token/epoch/context rejection happens before live-price capture.
+- Only accepted own-symbol data plus source health and safe aggregate coverage
+  suppress polling. No-op subscriptions, warm-up and disconnected/stale sources
+  remain polling-backed; a late fallback fetch cannot overwrite live takeover.
+- `card:N` traffic retains its existing dedicated dispatch.
 
 ### Rendering (`_render`)
 - `figure.clear()` lives here only — and only in the SLOW path (see fast path below).

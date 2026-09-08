@@ -110,6 +110,12 @@ straight up without the user having to re-enter anything.
 - Non-Windows (no DPAPI) → `_apply_session_only(values)` writes
   `os.environ` for this process only, and says so in a message box.
 - Cancel → no on-disk change; `os.environ` also untouched.
+- Successful save/reload and immediate Remove both reconcile stream registries.
+  An effective Schwab key/secret/redirect identity change first closes/unregisters
+  the old connection, then clears protected/legacy tokens and reconciles presence.
+  Unchanged keys or another vendor's edit preserve tokens and the shared socket.
+  Token-reset errors are shown explicitly and leave the prior identity checkpoint
+  intact so retry still performs the required reset.
 
 ## Atomic write
 Delegates to `_dpapi.save_json_object` (via `credential_store`) which

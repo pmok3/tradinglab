@@ -45,6 +45,7 @@ from .. import disk_cache as _disk_cache
 from ..constants import interval_minutes, is_intraday
 from ..core.view_intent import ViewMode
 from ..data import DATA_SOURCES
+from ..data.stream_controller import StreamMutation
 
 # Adaptive live-tick repaint coalescing (audit ``tick-repaint-coalesce``).
 # A sub-minute LEVELONE stream (Schwab) can enqueue many ticks/second; the
@@ -405,6 +406,8 @@ class PollingMixin:
         """
         ticked = False
         rolled = False
+        corrected = False
+        self._update_stream_health()
         drain = getattr(getattr(self, "_stream_ctrl", None), "drain", None)
         if callable(drain):
             try:
@@ -438,13 +441,22 @@ class PollingMixin:
                 except Exception:  # noqa: BLE001
                     pass
                 continue
-            if kind == "tick":
+            applied = False
+            if kind in ("tick", "closed"):
                 if self._apply_stream_tick(evt):
                     ticked = True
+                    applied = True
             elif kind == "rollover":
                 if self._apply_stream_rollover(evt):
                     rolled = True
-        if rolled:
+                    applied = True
+            ctrl = getattr(self, "_stream_ctrl", None)
+            if applied and ctrl is not None:
+                rolled = rolled or ctrl.appended
+                corrected = corrected or ctrl.last_mutation is StreamMutation.CORRECTION
+        if corrected or (rolled and getattr(self, "_stream_ctrl", None) is not None):
+            self._refresh_stream_slice(corrected=corrected, appended=rolled)
+        elif rolled:
             try:
                 # Rewire the slot so _panel_state['candles'] sees the
                 # now-grown list (object identity is preserved by tick
@@ -466,7 +478,61 @@ class PollingMixin:
                     pass
         elif ticked:
             self._request_tick_repaint("primary")
+        self._update_stream_health()
         self._schedule_drain()
+
+    def _stream_event_applied(self, applied: bool) -> bool:
+        if applied:
+            price = self._stream_ctrl.latest_price
+            if price is not None:
+                self._last_stream_price[price[0]] = price[1]
+            self._invalidate_focused_panels(self._primary)
+        return applied
+
+    def _refresh_stream_slice(self, *, corrected: bool, appended: bool = False) -> None:
+        key = (self.source_var.get(), self.ticker_var.get().strip().upper(), self.interval_var.get())
+        raw = self._full_cache.get(key)
+        if raw is None:
+            return
+        primary, _compare = self._apply_pair_filter_and_align(raw, None)
+        self._set_data_state(primary_raw=raw, primary=primary)
+        self.candles = primary
+        self._rewire_slot_candles("primary", primary)
+        self._invalidate_focused_panels(primary)
+        if appended:
+            self._refresh_view_after_append("primary")
+        if corrected:
+            ps = self._panel_state.get("primary")
+            if ps is not None:
+                self._draw_slice("primary", ps["render_start"], ps["render_end"])
+                self._autoscale_y_to_visible()
+                self._canvas.draw_idle()
+
+    def _update_stream_health(self) -> None:
+        ctrl = getattr(self, "_stream_ctrl", None)
+        if ctrl is None:
+            return
+        was_active = self._stream_active
+        ctrl.refresh_health()
+        self._sync_stream_aliases()
+        if self._stream_active:
+            if not was_active:
+                # A polled result started before takeover must not replace live bars.
+                self._bump_fetch_token()
+            if self._poll_job is not None:
+                self.after_cancel(self._poll_job)
+                self._poll_job = None
+        elif was_active:
+            self._schedule_next_bar_fetch()
+        if ctrl.message and ctrl.message != getattr(self, "_stream_status_message", None):
+            self._stream_status_message = ctrl.message
+            self._status.info(ctrl.message)
+        if (ctrl.subscribed and not self._stream_active and not self._view.load_pending
+                and not self._is_sandbox_active() and not self._live_updates_delayed_for_source()
+                and ctrl.claim_reconcile()):
+            if self._poll_job is not None:
+                self.after_cancel(self._poll_job)
+            self._poll_job = self._track_after(0, self._next_bar_fetch_tick)
 
     def _request_tick_repaint(self, slot: str = "primary") -> None:
         """Rate-limit live-tick repaints so a fast stream can't saturate Tk.
@@ -683,6 +749,9 @@ class PollingMixin:
         if self._is_sandbox_active():
             self._poll_job = None
             return
+        if getattr(self, "_stream_active", False):
+            self._poll_job = None
+            return
         if self._live_updates_delayed_for_source():
             # A tier auto-downgrade (paid→free) can land after a poll was
             # already armed; drop the tick so delayed data never renders live.
@@ -756,10 +825,13 @@ class PollingMixin:
                 pass
             return
 
-        # Drop the active primary/compare entries so fresh data is fetched.
-        for tic in (raw_primary, raw_compare):
-            if tic:
-                self._full_cache.pop((src, tic, interval), None)
+        # An existing stream may take over while REST is in flight. Its current
+        # cache must remain writable; the prefetched payload still forces refresh.
+        ctrl = getattr(self, "_stream_ctrl", None)
+        if ctrl is None or not ctrl.subscribed:
+            for tic in (raw_primary, raw_compare):
+                if tic:
+                    self._full_cache.pop((src, tic, interval), None)
 
         fetcher = DATA_SOURCES.get(src)
         executor = getattr(self, "_fetch_executor", None)
@@ -773,8 +845,7 @@ class PollingMixin:
 
         # Bump token BEFORE submitting so a ticker-switch that happens
         # while this fetch is in-flight supersedes it cleanly.
-        self._fetch_token += 1
-        token = self._fetch_token
+        token = self._bump_fetch_token()
 
         def _work():
             p: list = []
@@ -837,6 +908,8 @@ class PollingMixin:
             }
             try:
                 self._load_data()
+                if ctrl is not None and p_raw:
+                    ctrl.history_refreshed((src, raw_primary, interval), self._full_cache)
             finally:
                 self._prefetched_raw = None
 

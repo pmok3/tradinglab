@@ -89,6 +89,18 @@ Also hosts the pure scheduler helpers (only caller is here).
   A `tick`-only drain requests a repaint via `_request_tick_repaint`
   (rate-limited); a `rollover` repaints synchronously via
   `_refresh_view_after_append`.
+- Explicit `closed` events use the timestamp-correction path. Known historical
+  changes rebuild the visible slice/indicators and invalidate blits without
+  moving xlim. Append wiring reapplies the existing pre/post filter.
+- `_update_stream_health()` runs even on empty drains: only healthy own-symbol
+  readiness suppresses polling. Loss of readiness re-arms polling; epoch/coverage
+  reconciliation requests one immediate existing background history fetch.
+- Same-context fallback fetches preserve the writable stream cache and
+  subscription warm-up. Successful history arrival resets requested coverage;
+  late poll results are rejected after stream takeover.
+- `_stream_event_applied(applied)` publishes only controller-accepted latest
+  prices and invalidates the focused visible series. Stale tokens/epochs and
+  historical correction never regress the overlay.
 - `_request_tick_repaint(slot)` / `_do_tick_repaint(slot)` — adaptive
   live-tick repaint coalescer (audit `tick-repaint-coalesce`). The first
   tick after an idle gap paints immediately; ticks arriving inside the
@@ -183,7 +195,7 @@ Also hosts the pure scheduler helpers (only caller is here).
 
 - `_track_after` doesn't raise if root is alive; callers wrap in
   `_silent_tcl` for tearing-down case.
-- Streaming and bar-close polling mutually exclusive:
+- Healthy-ready streaming and bar-close polling mutually exclusive:
   `_schedule_next_bar_fetch` is a no-op while `_stream_active`.
 - Free-tier Alpaca (15-min-delayed IEX) never live-polls:
   `_schedule_next_bar_fetch` and `_next_bar_fetch_tick` both

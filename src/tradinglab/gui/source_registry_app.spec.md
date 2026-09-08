@@ -24,6 +24,9 @@ Two consequences, both owned here:
   moved, drop the stale cache and reload. `True` when a reload was triggered.
 - `_drop_auto_source_cache()` — evict every `("Auto", …)` key from
   `_full_cache` and clear the indicator cache.
+- `_on_schwab_connection_changed()` — auth-owned Tk callback: terminally reset
+  the shared source and reconcile connected/disconnected state from the local
+  token cache (no network probe), then resync sources/chart readiness.
 
 ## Contract
 - **The `"Auto"` reload is the fix for a restart-only upgrade.** `"Auto"` is a
@@ -42,6 +45,13 @@ Two consequences, both owned here:
 - **Evict before reload.** `_load_data_async`'s cache-hit fast path
   short-circuits to a re-render when both sides are fresh in `_full_cache`, so
   without the eviction the reload silently redraws the old provider's bars.
+- Stop old Auto subscriptions before eviction. Every source UI refresh also
+  reconciles vendor streams. When Auto did not reload, re-evaluate streaming for
+  the current explicit context and keep polling if it is not healthy/ready.
+  Unchanged registrations preserve the raw shared singleton.
+- An existing live heatmap receives `refresh_quote_feed()` after registration
+  or OAuth changes; replay windows remain untouched. This refresh is
+  identity-sensitive and does not churn an unchanged healthy quote subscription.
 - **The on-disk `Auto__*` cache is deliberately NOT purged.**
   `disk_cache.merge_candles` gives the new provider every overlapping bar while
   retaining accumulated history — which is exactly what a restart does, so

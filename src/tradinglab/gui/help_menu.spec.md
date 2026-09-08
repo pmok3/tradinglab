@@ -73,9 +73,12 @@ Schwab connect, local data, and CSV export.
   is currently serving (AGENTS.md §7.38). Swallows hook exceptions so a
   refresh failure can't break the dialog.
 - `_on_help_connect_schwab` —
-  `gui.schwab_connect_dialog.open_schwab_connect_dialog(self)` (guarded
+  `gui.schwab_connect_dialog.open_schwab_connect_dialog(self,
+  on_connection_changed=self._on_schwab_connection_changed)` (guarded
   import). Interactive Schwab OAuth sign-in (system browser + paste-back; no
   embedded webview). Wired as **Tools → "Connect to Schwab…"**.
+  The Tk callback reconciles the shared stream after successful OAuth save/clear;
+  it never deletes a newly saved token.
 - `_on_help_configure_local_data` —
   `gui.local_data_dialog.open_local_data_dialog(self, on_changed=...)`
   and refreshes the data-source combobox after BYOD roots change.
