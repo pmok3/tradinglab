@@ -9,14 +9,19 @@ import tkinter as tk
 
 import pytest
 
+from tradinglab.data import base, verify
 from tradinglab.data import credential_store as cs
 from tradinglab.data import credentials as creds_mod
-from tradinglab.data import verify
 from tradinglab.gui import credentials_dialog as cd
 
 
 @pytest.fixture(autouse=True)
 def _clean(monkeypatch):
+    # Remove now refreshes vendor registration; keep fake keys local to each test.
+    registries = {
+        name: getattr(base, name).copy()
+        for name in ("DATA_SOURCES", "_INTERNAL_SOURCES", "_RANGE_CAPABLE", "_PAGE_FETCHERS")
+    }
     verify.clear_results()
     for name in creds_mod.MANAGED_FIELDS:
         monkeypatch.delenv(name, raising=False)
@@ -27,6 +32,10 @@ def _clean(monkeypatch):
     monkeypatch.setattr(cs, "get_vendor", lambda v, **k: cs.VendorRecord(vendor=v))
     creds_mod.reload()
     yield
+    for name, saved in registries.items():
+        registry = getattr(base, name)
+        registry.clear()
+        registry.update(saved)
     verify.clear_results()
     creds_mod._cache = None
     creds_mod._origins_cache = None
