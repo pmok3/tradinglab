@@ -7,7 +7,7 @@ import sys
 import threading
 from collections import deque
 from dataclasses import FrozenInstanceError
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -249,6 +249,53 @@ def test_usable_symbol_data_authoritative_kind_and_old_provisional_suppression(m
     assert got[-1][1].close == 101
     assert quotes[0].prev_close == 9
     assert statuses == [StreamState.CONNECTING, StreamState.CONNECTING, StreamState.LIVE, StreamState.LIVE]
+
+
+@pytest.mark.parametrize("finalized,changed_second,forward_second,volume,intermediate_volume_only", [
+    (False, 10, 30, 200, False),
+    (True, 10, 60, 200, False),
+    (True, 30, 60, 100, False),
+    (False, 10, 30, 200, True),
+    (True, 10, 60, 200, True),
+])
+def test_suppressed_price_delta_is_retained_for_next_timestamp_only_update(
+    monkeypatch, offline, finalized, changed_second, forward_second, volume, intermediate_volume_only,
+):
+    bars, quotes = [], []
+    offline.subscribe("AAPL", "1m", lambda kind, candle: bars.append((kind, candle)))
+    offline.subscribe_quotes(["AAPL"], quotes.append)
+    sent = False
+
+    def ms(second):
+        return int((AT + timedelta(seconds=second)).timestamp() * 1000)
+
+    def idle(sock):
+        nonlocal sent
+        if sent:
+            return
+        sent = True
+        sock.incoming.append(levelone(**{"35": ms(20), "3": 100, "8": 1000}))
+        if finalized:
+            sock.incoming.append(chart())
+        sock.incoming.append(levelone(**{"35": ms(changed_second), "3": 101, "8": 1100}))
+        if intermediate_volume_only:
+            sock.incoming.append(levelone(**{"8": 1150}))
+        sock.incoming.append(levelone(**{"35": ms(forward_second), "8": 1200}))
+
+    serve(monkeypatch, offline, ScriptSocket(idle=idle))
+    merged_quote = quotes[0]
+    for delta in quotes[1:]:
+        merged_quote = delta.merged_onto(merged_quote)
+    assert merged_quote.last == 101
+    assert [kind for kind, candle in bars] == (
+        ["rollover", "closed", "rollover"] if finalized else ["rollover", "tick"]
+    )
+    assert bars[0][1].close == 100 and bars[0][1].volume == 0
+    assert bars[-1][1].close == merged_quote.last
+    assert bars[-1][1].volume == volume
+    assert bars[-1][1].date == AT + timedelta(minutes=1 if finalized else 0)
+    if finalized:
+        assert bars[1][1].high == 102 and bars[1][1].volume == 50
 
 
 def test_reconnect_resets_subs_and_generation_and_requires_fresh_token(monkeypatch, offline):

@@ -41,8 +41,15 @@ prove true minute OHLC. CHART_EQUITY is authoritative by timestamp.
   price/volume-only deltas remain at the last vendor trade timestamp.
   Missing initial timestamps never fall back to receive time. Bid/ask or
   unrelated day-high/previous-close changes emit nothing.
-- Reject invalid numeric values and backwards trade timestamps before
-  mutating state. Trade time must be weekday 04:00-20:00 ET for US equity
+- Invalid numeric values do not mutate state. Valid wire price/timestamp
+  deltas are retained separately from bar-emission eligibility: a backwards
+  timestamp changes the cached snapshot, but not the eligible-trade watermark,
+  OHLC or cumulative volume baseline. A later forward-time delta with price
+  omitted therefore uses the retained price, matching the merged quote.
+  Price/volume-only deltas after a backwards timestamp remain ineligible
+  until a forward timestamp arrives; they cannot reuse the newer emission
+  watermark as if it were the wire timestamp.
+- Trade time must be weekday 04:00-20:00 ET for US equity
   provisional bars. Holidays need no speculative clock calendar: no feed
   event means no bar on a holiday, weekend, disconnect or quiet minute.
 - Cumulative volume uses a persistent baseline across adjacent observed
@@ -77,3 +84,9 @@ close is **12**, not TDA's 15; trade time is epoch milliseconds at **35**.
 ET winter/summer classification, trade-time versus receive-time, partial
 images/deltas, adjacent-minute cumulative volume, day reset/regressions,
 long gaps, no midpoint or quiet/session/holiday clock bars.
+`tests/streaming/test_schwab_connection.py` additionally drives actual
+LEVELONE envelopes with suppressed backwards price changes followed by
+timestamp-only/volume deltas. Bars and merged quotes converge without
+backwards emissions or volume-baseline corruption, including after CHART
+finalization suppresses provisional events. Source dispatch must apply
+snapshot updates before filtering CHART-superseded provisional candles.

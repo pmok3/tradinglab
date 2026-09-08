@@ -116,6 +116,7 @@ class MinuteBarBuilder:
     """
 
     _bar: _Bar | None = field(default=None, init=False)
+    _snapshot_at: datetime | None = field(default=None, init=False)
     _trade_at: datetime | None = field(default=None, init=False)
     _price: float | None = field(default=None, init=False)
     _cumulative: int | None = field(default=None, init=False)
@@ -128,18 +129,20 @@ class MinuteBarBuilder:
         if not {"last_price", "trade_time_ms", "total_volume"}.intersection(decoded):
             return []
         try:
-            at = _trade_time(decoded["trade_time_ms"]) if "trade_time_ms" in decoded else self._trade_at
+            at = _trade_time(decoded["trade_time_ms"]) if "trade_time_ms" in decoded else self._snapshot_at
             price = _number(decoded["last_price"], positive=True) if "last_price" in decoded else self._price
             cumulative = (int(_number(decoded["total_volume"])) if "total_volume" in decoded
                           else self._initial_cumulative)
         except (ValueError, TypeError, OverflowError, OSError):
             LOG.warning("schwab-stream: invalid trade snapshot")
             return []
+        # Retain valid wire deltas even when their timestamp cannot update
+        # a bar. Omitted fields in later snapshots will not be retransmitted.
+        self._snapshot_at, self._price = at, price
         if at is not None and self._trade_at is not None and at < self._trade_at:
             return []
         if at is None:
             # A separate timestamp delta can complete this initial image.
-            self._price = price
             self._initial_cumulative = cumulative
             return []
         if at.weekday() >= 5 or not PRE_OPEN_MIN <= at.hour * 60 + at.minute < POST_CLOSE_MIN:
@@ -162,7 +165,7 @@ class MinuteBarBuilder:
             # A backwards correction must not lower the baseline and count
             # the same volume twice when the cumulative value catches up.
             self._cumulative = max(cumulative, self._cumulative or 0)
-        self._trade_at, self._price = at, price
+        self._trade_at = at
         self._initial_cumulative = None
         if rollover:
             self._bar = _Bar(start, price, price, price, price, delta)
