@@ -36,10 +36,9 @@ Field 35 is epoch **milliseconds**; :attr:`Quote.ts` is epoch seconds
 Testability
 -----------
 
-Everything except the delegation call is pure: :func:`quote_from_levelone`
-and :func:`plan_symbol_change` are unit-tested. The socket path lives in
-``streaming/schwab.py`` and is ``# pragma: no cover`` there, matching the
-convention established for the bar source.
+The decoders and symbol planning are pure. Subscription edits share the
+source lock and never perform I/O. The socket worker lives in
+``streaming/schwab_connection.py`` and is covered with scripted fake sockets.
 
 See ``streaming/schwab_quotes.spec.md``.
 """
@@ -47,6 +46,7 @@ See ``streaming/schwab_quotes.spec.md``.
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Iterable, Sequence
 from typing import Any
 
@@ -85,9 +85,9 @@ def quote_from_levelone(symbol: str, decoded: dict[str, Any]) -> Quote:
             return None
         try:
             value = float(decoded[key])
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return None
-        return None if value != value else value
+        return value if math.isfinite(value) else None
 
     ts = _f("trade_time_ms")
     return Quote(
@@ -129,13 +129,18 @@ class SchwabQuoteSubscription:
     other's symbols.
     """
 
-    __slots__ = ("_source", "_on_quote", "symbols", "_closed")
+    __slots__ = ("_source", "_on_quote", "_symbols", "_closed")
 
     def __init__(self, source: Any, on_quote: QuoteCallback) -> None:
         self._source = source
         self._on_quote = on_quote
-        self.symbols: set[str] = set()
+        self._symbols: set[str] = set()
         self._closed = False
+
+    @property
+    def symbols(self) -> set[str]:
+        with self._source._lock:
+            return set(self._symbols)
 
     def set_symbols(self, symbols: Iterable[str]) -> None:
         if self._closed:
@@ -150,27 +155,17 @@ class SchwabQuoteSubscription:
                 "reject the excess (error 19 REACHED_SYMBOL_LIMIT).",
                 len(wanted), ADVISORY_SYMBOL_LIMIT,
             )
-        self.symbols = wanted
-        try:
-            self._source._apply_quote_symbols()
-        except Exception:  # noqa: BLE001
-            LOG.exception("schwab-quotes: symbol reconcile failed")
+        self._source._set_quote_symbols(self, wanted)
 
     def deliver(self, quote: Quote) -> None:
         """Called from the connection thread. Filters to our symbols."""
-        if self._closed or quote.symbol not in self.symbols:
-            return
+        with self._source._lock:
+            if self._closed or quote.symbol not in self._symbols:
+                return
         self._on_quote(quote)
 
     def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        self.symbols = set()
-        try:
-            self._source._drop_quote_subscription(self)
-        except Exception:  # noqa: BLE001
-            LOG.exception("schwab-quotes: unsubscribe failed")
+        self._source._drop_quote_subscription(self)
 
 
 class SchwabQuoteSource:

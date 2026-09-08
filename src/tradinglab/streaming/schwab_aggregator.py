@@ -1,138 +1,92 @@
-"""Pure aggregator for Schwab streaming feeds.
+"""Schwab snapshot decoding and provisional, trade-time-driven minute bars.
 
-Two Schwab streaming services, both rolled up to 1-minute Candles
-that match the rest of the chart pipeline:
-
-* **LEVELONE_EQUITIES** — sub-minute quote/trade ticks. We drive the
-  in-progress 1-minute bar from these. Each incoming tick advances
-  ``close``, expands ``high``/``low``, and accumulates ``volume``.
-  When the wall clock crosses a minute boundary, we seal the bar and
-  open a new one seeded at the previous close.
-
-* **CHART_EQUITY** — 1-minute OHLCV bars from Schwab's tape, arriving
-  ~5–30 seconds after the minute closes. These are the *source of
-  truth* for closed minutes. The chart writes them straight into the
-  BarsBuffer, silently overwriting whatever LEVELONE synthesized
-  (per design: corrections aren't surfaced as a distinct event; the
-  next paint picks them up).
-
-This module is **pure**: no threads, no sockets, no time.time(). The
-state machine is :class:`MinuteBarBuilder` and consumers feed it
-parsed tick dicts + the current wall clock. Tests drive it directly.
+LEVELONE is a change-only quote snapshot, NOT a time-and-sales feed. Its
+observed trades can update a forming bar but cannot recover missed highs,
+lows or trades. CHART_EQUITY remains authoritative by timestamp. No receive
+clock, prior-close seed, midpoint or synthetic gap bar enters OHLC.
 """
 
 from __future__ import annotations
 
+import logging
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any
 
 from ..constants import classify_session, floor_to_interval
+from ..core.session_calendar import POST_CLOSE_MIN, PRE_OPEN_MIN
+from ..core.timezones import ET
 from ..models import Candle
 
-# ---------------------------------------------------------------------------
-# LEVELONE field decoding
-# ---------------------------------------------------------------------------
+LOG = logging.getLogger(__name__)
 
-# Schwab's streaming API uses numeric field IDs in the wire payload to
-# save bytes. The spec at https://developer.schwab.com/streamer-api
-# documents these explicitly. We only consume the few fields we need
-# for bar synthesis. Unknown/extra fields are ignored.
-#
-# Field map for LEVELONE_EQUITIES content dicts:
+# Current Schwab IDs, not legacy TDA QUOTE IDs (whose previous close was 15).
 LEVELONE_FIELDS = {
-    "0":  "symbol",
-    "1":  "bid_price",
-    "2":  "ask_price",
-    "3":  "last_price",
-    "4":  "bid_size",
-    "5":  "ask_size",
-    "8":  "total_volume",       # cumulative day volume (not per-tick)
-    # 10-12 are consumed by the *quote* axis (streaming/schwab_quotes.py),
-    # not the bar builder, which ignores keys it doesn't read. Field 12 is
-    # the PREVIOUS session's close — the denominator of 1-Day %.
-    #
-    # These IDs are the current Schwab map and differ from the legacy TDA
-    # ``QUOTE`` map from field 10 onward (TDA: 10/11 were times since
-    # midnight, previous close was 15). Mixing the two silently yields
-    # "previous close = exchange ID".
-    "10": "high_price",         # session high
-    "11": "low_price",          # session low
-    "12": "close_price",        # PREVIOUS day's close
-    "35": "trade_time_ms",      # epoch ms of last trade
+    "0": "symbol", "1": "bid_price", "2": "ask_price", "3": "last_price",
+    "4": "bid_size", "5": "ask_size", "8": "total_volume",
+    "10": "high_price", "11": "low_price", "12": "close_price",
+    "35": "trade_time_ms",
 }
+
+# Verified against schwab-py's ChartEquityFields and realistic key/seq
+# envelopes: https://schwab-py.readthedocs.io/en/latest/streaming.html
+CHART_EQUITY_FIELDS = {
+    "0": "symbol", "1": "sequence", "2": "open", "3": "high",
+    "4": "low", "5": "close", "6": "volume", "7": "chart_time_ms",
+    "8": "chart_day",
+}
+
+
+def _decode(content: Mapping[str, Any], fields: dict[str, str]) -> dict[str, Any]:
+    out = {fields[str(k)]: v for k, v in content.items() if str(k) in fields}
+    if "key" in content:
+        out["symbol"] = content["key"]
+    if "symbol" in out:
+        out["symbol"] = str(out["symbol"]).strip().upper()
+    return out
 
 
 def decode_levelone_content(content: Mapping[str, Any]) -> dict[str, Any]:
-    """Translate one LEVELONE_EQUITIES content dict to logical names.
-
-    Schwab sends partial updates (only changed fields), so the result
-    may be missing any key. Numeric fields are coerced to ``float`` /
-    ``int`` only when present; absent keys stay absent.
-    """
-    out: dict[str, Any] = {}
-    for raw_key, val in content.items():
-        name = LEVELONE_FIELDS.get(str(raw_key), None)
-        if name is None:
-            continue
-        out[name] = val
-    return out
-
-
-# ---------------------------------------------------------------------------
-# CHART_EQUITY field decoding
-# ---------------------------------------------------------------------------
-
-# CHART_EQUITY content dicts represent one finished 1-minute bar.
-CHART_EQUITY_FIELDS = {
-    "0": "symbol",
-    "1": "sequence",
-    "2": "open",
-    "3": "high",
-    "4": "low",
-    "5": "close",
-    "6": "volume",
-    "7": "chart_time_ms",   # epoch ms of bar start
-}
+    """Decode a partial snapshot; absent fields stay absent."""
+    return _decode(content, LEVELONE_FIELDS)
 
 
 def decode_chart_equity_content(content: Mapping[str, Any]) -> dict[str, Any]:
-    out: dict[str, Any] = {}
-    for raw_key, val in content.items():
-        name = CHART_EQUITY_FIELDS.get(str(raw_key), None)
-        if name is None:
-            continue
-        out[name] = val
-    return out
+    return _decode(content, CHART_EQUITY_FIELDS)
 
 
-def chart_equity_to_candle(
-    decoded: Mapping[str, Any], *, tz=timezone.utc,
-) -> Candle | None:
-    """Map a decoded CHART_EQUITY bar into our :class:`Candle`.
+def _number(value: Any, *, positive: bool = False) -> float:
+    n = float(value)
+    if not math.isfinite(n) or n < 0 or (positive and n == 0):
+        raise ValueError("invalid market number")
+    return n
 
-    Returns ``None`` if any required OHLCV/timestamp field is missing
-    — partial chart-equity messages are rare but defensible to skip.
-    """
+
+def _trade_time(value: Any) -> datetime:
+    if ET is None:
+        raise ValueError("Eastern timezone unavailable")
+    return datetime.fromtimestamp(_number(value, positive=True) / 1000, ET)
+
+
+def chart_equity_to_candle(decoded: Mapping[str, Any]) -> Candle | None:
+    """Validate an authoritative bar, preserving its exchange-local timestamp."""
     required = ("open", "high", "low", "close", "volume", "chart_time_ms")
     if not all(k in decoded for k in required):
+        LOG.warning("schwab-stream: incomplete chart bar")
         return None
-    ts = datetime.fromtimestamp(int(decoded["chart_time_ms"]) / 1000.0, tz=tz)
-    return Candle(
-        date=ts,
-        open=float(decoded["open"]),
-        high=float(decoded["high"]),
-        low=float(decoded["low"]),
-        close=float(decoded["close"]),
-        volume=int(decoded["volume"]),
-        session=classify_session(ts.hour, ts.minute),
-    )
-
-
-# ---------------------------------------------------------------------------
-# MinuteBarBuilder — drives LEVELONE → in-progress 1-min bar
-# ---------------------------------------------------------------------------
+    try:
+        ts = _trade_time(decoded["chart_time_ms"])
+        o, h, low, c = (_number(decoded[k], positive=True) for k in required[:4])
+        v = int(_number(decoded["volume"]))
+        if low > min(o, c) or h < max(o, c) or low > h:
+            raise ValueError("invalid OHLC envelope")
+    except (ValueError, TypeError, OverflowError, OSError):
+        LOG.warning("schwab-stream: invalid chart bar")
+        return None
+    return Candle(date=floor_to_interval(ts, 1), open=o, high=h, low=low, close=c,
+                  volume=v, session=classify_session(ts.hour, ts.minute))
 
 
 @dataclass
@@ -143,124 +97,83 @@ class _Bar:
     low: float
     close: float
     volume: int = 0
-    # Volume baseline lets us turn LEVELONE's *cumulative day* volume
-    # into per-bar volume by subtracting the cumulative value at bar
-    # open. Set to None until the first cumulative we observe in the
-    # bar, then frozen for the bar's lifetime.
-    _cum_volume_at_open: int | None = None
 
     def to_candle(self) -> Candle:
         return Candle(
-            date=self.start,
-            open=self.open, high=self.high, low=self.low, close=self.close,
-            volume=int(self.volume),
+            date=self.start, open=self.open, high=self.high, low=self.low,
+            close=self.close, volume=self.volume,
             session=classify_session(self.start.hour, self.start.minute),
         )
 
 
 @dataclass
 class MinuteBarBuilder:
-    """Stateful 1-minute aggregator for one symbol.
+    """Provisional bars from observed trades only; owned by the socket worker.
 
-    Feeds: per-tick :meth:`apply_levelone` calls. Outputs: events
-    matching the existing :class:`StreamSource` protocol —
-    ``("tick", Candle)`` or ``("rollover", Candle)`` (or both, if a
-    single LEVELONE message advances time across a boundary).
-
-    Seeding: pass the last close from REST history into
-    :meth:`open_initial_bar`. The first emitted event is a
-    ``rollover`` carrying the in-progress bar at the current minute.
+    First cumulative volume is a baseline, not volume traded this minute.
+    Adjacent-minute deltas are attributed to the newer observed snapshot;
+    gaps/day changes rebaseline instead of assigning unknown volume to it.
     """
 
-    seed_close: float
     _bar: _Bar | None = field(default=None, init=False)
-
-    def open_initial_bar(self, now: datetime) -> tuple[str, Candle]:
-        """Open the very first in-progress bar at ``now`` floored to 1-min.
-
-        Returns the ``("rollover", Candle)`` event the source should
-        emit so the consumer adds the in-progress bar to its buffer.
-        """
-        start = floor_to_interval(now, 1)
-        self._bar = _Bar(
-            start=start,
-            open=self.seed_close, high=self.seed_close,
-            low=self.seed_close, close=self.seed_close,
-        )
-        return ("rollover", self._bar.to_candle())
+    _trade_at: datetime | None = field(default=None, init=False)
+    _price: float | None = field(default=None, init=False)
+    _cumulative: int | None = field(default=None, init=False)
+    _initial_cumulative: int | None = field(default=None, init=False)
 
     def apply_levelone(
-        self, decoded: Mapping[str, Any], *, now: datetime,
+        self, decoded: Mapping[str, Any], *, now: datetime | None = None,
     ) -> list[tuple[str, Candle]]:
-        """Apply one decoded LEVELONE update. Returns the events to emit.
+        """Merge trade fields; ``now`` is compatibility-only, never a bucket clock."""
+        if not {"last_price", "trade_time_ms", "total_volume"}.intersection(decoded):
+            return []
+        try:
+            at = _trade_time(decoded["trade_time_ms"]) if "trade_time_ms" in decoded else self._trade_at
+            price = _number(decoded["last_price"], positive=True) if "last_price" in decoded else self._price
+            cumulative = (int(_number(decoded["total_volume"])) if "total_volume" in decoded
+                          else self._initial_cumulative)
+        except (ValueError, TypeError, OverflowError, OSError):
+            LOG.warning("schwab-stream: invalid trade snapshot")
+            return []
+        if at is not None and self._trade_at is not None and at < self._trade_at:
+            return []
+        if at is None:
+            # A separate timestamp delta can complete this initial image.
+            self._price = price
+            self._initial_cumulative = cumulative
+            return []
+        if at.weekday() >= 5 or not PRE_OPEN_MIN <= at.hour * 60 + at.minute < POST_CLOSE_MIN:
+            return []
+        if price is None:
+            self._trade_at = at
+            self._initial_cumulative = cumulative
+            return []
 
-        Multiple events can come back in one call if the wall clock
-        already crossed a minute boundary since the last update.
-        """
-        events: list[tuple[str, Candle]] = []
-        if self._bar is None:
-            events.append(self.open_initial_bar(now))
-
-        # Roll past any boundaries we've crossed since the last call.
-        # Each boundary seals the current bar and seeds a fresh one.
-        events.extend(self._roll_to(now))
-
-        bar = self._bar
-        assert bar is not None  # narrowed by _roll_to
-
-        # Pick the price that drives the close. Prefer last trade
-        # price; fall back to mid of bid/ask if no trade has printed.
-        last = decoded.get("last_price")
-        if last is None:
-            bid = decoded.get("bid_price")
-            ask = decoded.get("ask_price")
-            if bid is not None and ask is not None:
-                last = (float(bid) + float(ask)) / 2.0
-        if last is not None:
-            px = float(last)
-            bar.close = px
-            if px > bar.high:
-                bar.high = px
-            if px < bar.low:
-                bar.low = px
-
-        # Volume: LEVELONE's "total_volume" is cumulative for the day.
-        # Per-bar volume = current cumulative − snapshot taken at bar open.
-        cum = decoded.get("total_volume")
-        if cum is not None:
-            cum_int = int(cum)
-            if bar._cum_volume_at_open is None:
-                bar._cum_volume_at_open = cum_int
-                bar.volume = 0
-            else:
-                bar.volume = max(0, cum_int - bar._cum_volume_at_open)
-
-        # Only emit a tick if anything actually changed. With no
-        # last/bid/ask and no volume, a heartbeat-y update is silent.
-        if last is not None or cum is not None:
-            events.append(("tick", bar.to_candle()))
-        return events
+        start = floor_to_interval(at, 1)
+        old = self._bar
+        rollover = old is None or start > old.start
+        reset = old is None or start.date() != old.start.date() or start - old.start > timedelta(minutes=1)
+        delta = 0
+        if reset:
+            self._cumulative = None
+        if cumulative is not None:
+            if self._cumulative is not None:
+                delta = max(0, cumulative - self._cumulative)
+            # A backwards correction must not lower the baseline and count
+            # the same volume twice when the cumulative value catches up.
+            self._cumulative = max(cumulative, self._cumulative or 0)
+        self._trade_at, self._price = at, price
+        self._initial_cumulative = None
+        if rollover:
+            self._bar = _Bar(start, price, price, price, price, delta)
+        else:
+            assert old is not None
+            old.close = price
+            old.high, old.low = max(old.high, price), min(old.low, price)
+            old.volume += delta
+        assert self._bar is not None
+        return [("rollover" if rollover else "tick", self._bar.to_candle())]
 
     def maybe_rollover(self, now: datetime) -> list[tuple[str, Candle]]:
-        """Force boundary check (no LEVELONE update). Used by the
-        per-source clock thread so quiet symbols still roll over."""
-        if self._bar is None:
-            return [self.open_initial_bar(now)]
-        return self._roll_to(now)
-
-    def _roll_to(self, now: datetime) -> list[tuple[str, Candle]]:
-        events: list[tuple[str, Candle]] = []
-        bar = self._bar
-        assert bar is not None
-        target = floor_to_interval(now, 1)
-        while target > bar.start:
-            # Open the next minute, seeded by the previous close.
-            new_start = bar.start + timedelta(minutes=1)
-            self._bar = _Bar(
-                start=new_start,
-                open=bar.close, high=bar.close,
-                low=bar.close, close=bar.close,
-            )
-            bar = self._bar
-            events.append(("rollover", bar.to_candle()))
-        return events
+        """A quiet clock is not evidence of a trade, on any session or holiday."""
+        return []

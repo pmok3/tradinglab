@@ -7,6 +7,8 @@ subscription:
   should *replace* their rightmost bar.
 * ``("rollover", bar)`` — a new interval has opened; consumers should
   *append*.
+* ``("closed", bar)`` — optional authoritative closed-minute upsert
+  (Schwab); consumers must match timestamps, including older corrections.
 
 The subscribe call returns an ``unsubscribe`` callable. Callbacks run on
 the source's own thread (typically a daemon), so consumers are expected
@@ -19,12 +21,36 @@ calls :func:`register_stream` at import time.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
+from enum import Enum
 from typing import Protocol
 
 from ..models import Candle
 
-EventKind = str  # "tick" | "rollover"
+EventKind = str  # "tick" | "rollover" | "closed"
 StreamCallback = Callable[[EventKind, Candle], None]
+
+
+class StreamState(str, Enum):
+    IDLE = "idle"
+    CONNECTING = "connecting"
+    LIVE = "live"
+    STALE = "stale"
+    DISCONNECTED = "disconnected"
+    AUTH_REQUIRED = "auth_required"
+    ERROR = "error"
+    CLOSED = "closed"
+
+
+@dataclass(frozen=True)
+class StreamStatus:
+    """Optional source health snapshot; timestamps use time.monotonic()."""
+
+    state: StreamState
+    message: str
+    changed_at: float
+    last_received_at: float | None = None
+    generation: int = 0
 
 
 class StreamSource(Protocol):
@@ -42,6 +68,8 @@ class StreamSource(Protocol):
                              consumer should *replace* the rightmost bar.
           - ``"rollover"`` → a new bar has opened; consumer should
                              *append*.
+          - ``"closed"``   → optional authoritative closed-bar upsert
+                             by timestamp, not replace-rightmost.
     """
 
     def subscribe(

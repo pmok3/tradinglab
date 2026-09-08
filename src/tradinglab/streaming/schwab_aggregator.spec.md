@@ -1,42 +1,79 @@
-# streaming/schwab_aggregator.py — Spec
+# streaming/schwab_aggregator.py - Spec
 
 Last updated: 2026-09-07
 
 ## Purpose
-Pure, threadless aggregator that rolls Schwab streamer events into 1-minute `Candle`s. Two services are decoded here:
-* **LEVELONE_EQUITIES** (sub-minute quote/trade ticks) → drives an in-progress bar.
-* **CHART_EQUITY** (already-closed 1-minute bars from the tape) → the authoritative source for sealed minutes.
-
-The module owns no threads, sockets, or `time.time()` — consumers feed it parsed dicts plus a wall-clock `datetime`. Drives unit tests directly.
+Pure Schwab field decoding and provisional 1-minute aggregation. LEVELONE
+is a change-only snapshot, **not** time-and-sales; observed prints do not
+prove true minute OHLC. CHART_EQUITY is authoritative by timestamp.
 
 ## Public API
-- `LEVELONE_FIELDS: Dict[str, str]` — Schwab numeric-field-ID → logical name. Subset we consume: symbol / bid_price / ask_price / last_price / bid_size / ask_size / total_volume / high_price / low_price / close_price / trade_time_ms. Fields 10 (session high), 11 (session low) and 12 (**previous** day's close) are consumed by the quote axis ([`schwab_quotes`](schwab_quotes.spec.md)), not the bar builder, which ignores keys it does not read. **These IDs are the current Schwab map and differ from the legacy TDA `QUOTE` map from field 10 onward** — under TDA, 10/11 were times-since-midnight and previous close was 15.
-- `decode_levelone_content(content: Mapping) -> Dict[str, Any]` — translate one wire content dict to logical names; missing keys stay missing.
-- `CHART_EQUITY_FIELDS: Dict[str, str]` — symbol / sequence / open / high / low / close / volume / chart_time_ms.
-- `decode_chart_equity_content(content: Mapping) -> Dict[str, Any]`.
-- `chart_equity_to_candle(decoded: Mapping, *, tz=timezone.utc) -> Optional[Candle]` — returns `None` if any required OHLCV/timestamp field is missing; otherwise coerces fields into a `Candle`.
-- `class MinuteBarBuilder(seed_close: float)` — stateful per-symbol aggregator.
-  - `open_initial_bar(now: datetime) -> Tuple[str, Candle]` — emits the first `("rollover", Candle)` event seeded at `seed_close`.
-  - `apply_levelone(decoded: Mapping, *, now: datetime) -> List[Tuple[str, Candle]]` — applies one tick. Returns 0+ `("tick", Candle)` and/or `("rollover", Candle)` events (multiple if a single update crossed minute boundaries).
-  - `maybe_rollover(now: datetime) -> List[Tuple[str, Candle]]` — boundary check without a tick; used by a per-source clock thread so quiet symbols still roll.
+- `LEVELONE_FIELDS`: numeric IDs to symbol, bid/ask prices/sizes, last price,
+  cumulative day volume, high/low, previous close, trade timestamp.
+- `CHART_EQUITY_FIELDS`: `0` symbol, `1` sequence, `2` open, `3` high,
+  `4` low, `5` close, `6` volume, `7` chart time (epoch ms), `8` chart day.
+- `decode_levelone_content(content)` and `decode_chart_equity_content(content)`
+  translate numeric keys. Actual Schwab `key` takes precedence over numeric
+  `0`; symbol is stripped/uppercased. Unknown fields (including envelope
+  `seq`) are ignored. Missing values stay absent; no invented zero values.
+- `chart_equity_to_candle(decoded) -> Candle | None`: validates complete,
+  finite-positive OHLC, nonnegative volume, coherent OHLC envelope and
+  timestamp; logs a sanitized warning for missing/invalid data and returns
+  `None`. Timestamp is floored to a minute in **aware ET**, never host-local
+  time. Session classification is ET in both DST and standard time.
+- `MinuteBarBuilder()` owns one provisional bar/snapshot.
+- `apply_levelone(decoded, *, now=None) -> list[tuple[str, Candle]]`.
+  `now` is compatibility-only and never used as an event timestamp.
+- `maybe_rollover(now)` always returns `[]`. A wall clock supplies no
+  evidence of trading. No `open_initial_bar`/prior-close seeding remains.
 
 ## Dependencies
-- Internal: `..constants.{classify_session, floor_to_interval}`, `..models.Candle`.
-- External: stdlib only (`dataclasses`, `datetime`).
+- `constants.classify_session`, `floor_to_interval`, `core.timezones.ET`,
+  `core.session_calendar` boundaries, `models.Candle`; stdlib only.
 
 ## Design Decisions
-- **`last_price` drives `close`; falls back to bid/ask mid** when the current LEVELONE update has no `last_price`.
-- **Per-bar volume from a cumulative day total**: LEVELONE reports `total_volume` cumulatively. We snapshot the cumulative value at first observation in the bar, then `bar.volume = current_cum - snapshot`. Negative deltas are clamped to 0 (defensive against late corrections).
-- **Heartbeat-y ticks are silent**: a LEVELONE update with no `last_price`, no bid/ask, and no `total_volume` produces no `("tick", ...)` event. Avoids spamming consumers on quiet channels.
-- **Boundary rolls seed `open=high=low=close=prev.close`**: matches the synthetic source's semantics. The next tick will move `close` and expand `high`/`low`.
-- **No threads, no time.time()**: callers supply `now`. Lets unit tests advance the clock deterministically.
-- **CHART_EQUITY corrections aren't a separate event kind**: callers re-emit them as `("tick", Candle)` and rely on the BarsBuffer's match-by-timestamp to overwrite the prior LEVELONE-synthesized bar. (See `streaming/schwab.py:_dispatch_chart_equity`.)
+- First finite-positive last trade plus vendor field 35 initializes all
+  OHLC at the **observed** trade price and emits a single `rollover`.
+  Same-minute snapshot changes emit `tick`. A newer minute emits only its
+  observed bar; missing minutes are never manufactured.
+- Trade timestamp, price and cumulative volume can arrive as separate
+  deltas. Timestamp-only changes reuse last trade price, not midpoint;
+  price/volume-only deltas remain at the last vendor trade timestamp.
+  Missing initial timestamps never fall back to receive time. Bid/ask or
+  unrelated day-high/previous-close changes emit nothing.
+- Reject invalid numeric values and backwards trade timestamps before
+  mutating state. Trade time must be weekday 04:00-20:00 ET for US equity
+  provisional bars. Holidays need no speculative clock calendar: no feed
+  event means no bar on a holiday, weekend, disconnect or quiet minute.
+- Cumulative volume uses a persistent baseline across adjacent observed
+  minutes. First cumulative is baseline (zero known delta). Later nonnegative
+  deltas accumulate; same-day backwards totals do not lower the baseline
+  or double-count recovered volume. Day changes and multi-minute gaps
+  rebaseline rather than attribute unseen trading to the latest minute.
+- Missing cumulative volume at a reset stays unknown until a new report;
+  it is never treated as zero cumulative or inherited across sessions.
+- Missing ET timezone support rejects bars instead of misclassifying UTC
+  hours as ET.
 
 ## Invariants
-- `MinuteBarBuilder._bar.start` is always floored to a 1-minute boundary in the source-thread's local timezone (caller chooses by passing a tz-aware `now`).
-- `apply_levelone`/`maybe_rollover` emit at most one `("rollover", ...)` per boundary crossed; multiple boundaries crossed in one call yield multiple rollovers.
-- Volume monotonically non-decreasing within a bar (clamped at 0 if Schwab's cumulative goes backwards).
-- `chart_equity_to_candle` returns `None` for partial messages; malformed present fields may raise during numeric/timestamp coercion.
+- At most one event per LEVELONE content update, bounded regardless of gap.
+- No zero/NaN/inf OHLC, midpoint trades, previous-close fake opens, receive
+  time buckets or fabricated intervening candles.
+- Approximation is explicit: first bar starts mid-minute when subscribing,
+  snapshot cadence can miss extrema, and volume deltas are not exact tape
+  allocation across boundaries. Consumers finalize using CHART `closed`.
+
+## Field-map evidence
+Current `schwab-py` documentation, checked 2026-09-07:
+https://schwab-py.readthedocs.io/en/latest/streaming.html
+Its Data Field Relabeling example uses `CHART_EQUITY` `key`/`seq` with the
+numeric OHLCV/time table above. This corroborates the original numeric map;
+the missing real-world `key` identifier was the decode defect.
+LEVELONE differs from legacy TDA from field 10 onward: Schwab previous
+close is **12**, not TDA's 15; trade time is epoch milliseconds at **35**.
 
 ## Testing
-- Unit-tested directly in `tests/unit/test_schwab_streaming.py`: build a `MinuteBarBuilder`, feed it decoded dicts, advance `now`, assert the emitted event sequence.
+`tests/unit/test_schwab_streaming.py`: realistic field map, finite OHLC,
+ET winter/summer classification, trade-time versus receive-time, partial
+images/deltas, adjacent-minute cumulative volume, day reset/regressions,
+long gaps, no midpoint or quiet/session/holiday clock bars.

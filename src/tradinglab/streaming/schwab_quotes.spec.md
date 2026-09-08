@@ -14,7 +14,7 @@ REST quota.
 - `quote_from_levelone(symbol, decoded) -> Quote` — pure.
 - `plan_symbol_change(current, desired) -> (to_add, to_remove)` — pure,
   sorted, normalized.
-- `class SchwabQuoteSubscription(source, on_quote)` — `symbols` set,
+- `class SchwabQuoteSubscription(source, on_quote)` — `symbols` snapshot set,
   `set_symbols(symbols)`, `deliver(quote)` (connection thread),
   `close()`.
 - `class SchwabQuoteSource(stream_source=None)` —
@@ -27,7 +27,7 @@ REST quota.
   [`streaming/schwab`](schwab.spec.md) (the shared connection, resolved
   lazily), [`core/timezones`](../core/timezones.spec.md)
   (`normalize_epoch_to_seconds`).
-- External: stdlib only. The socket lives in `streaming/schwab.py`.
+- External: stdlib only. The socket lives in `streaming/schwab_connection.py`.
 
 ## Design Decisions
 - **One connection, two axes.** Schwab permits a single streamer
@@ -58,16 +58,20 @@ REST quota.
   price-only delta and blank every percent on the map.
 - **Per-subscriber symbol filtering.** Two consumers with overlapping
   but different universes share one socket; each sees only its own.
-- **`set_symbols` is incremental** (`plan_symbol_change` → ADD/UNSUBS),
-  and batched into one message per service. Index membership moves by a
+- **`set_symbols` publishes desired state, never does network work.**
+  The shared worker reconciles it incrementally to batched ADD/UNSUBS.
+  Index membership moves by a
   name or two, and a close-and-resubscribe would blank the map for as
   long as the re-image takes.
-- **The union is read under the source's lock, not passed in.**
-  `_apply_quote_symbols()` takes no argument: a subscriber assigns its
-  own `symbols` before calling in, so trusting that snapshot let a
-  `close()` interleaving between the assignment and the lock
-  acquisition resurrect a dead subscriber's symbols permanently — which
-  would also keep the idle check false forever and leak the connection.
+- **Symbol edits and close are atomic under the source lock.**
+  `_set_quote_symbols` replaces `_symbols` only while the handle is alive.
+  `symbols` returns a copy, so external mutation cannot alter desired wire
+  state. A racing close prevents stale symbol edits resurrecting a handle.
+  Delivery snapshots eligibility under the same lock and calls the consumer
+  outside it; at most one already-in-flight callback may complete after close.
+- **Every newly added consumer needs an image**, including a second quote
+  consumer for an existing quote/bar symbol. Image revisions request an
+  ADD re-image so `prev_close` is not lost to change-only delta delivery.
 - **Closing one subscriber keeps symbols another still wants**, and the
   same rule applies across axes: dropping the last *bar* subscriber for
   a symbol does not unsubscribe it if the quote axis still wants it.
@@ -81,11 +85,12 @@ REST quota.
 
 ## Invariants
 - `quote_from_levelone` never raises; unparseable values become `None`.
+- Nonfinite floats (NaN and positive/negative infinity) become `None`.
 - `Quote.ts` is epoch **seconds**.
 - `close()` is idempotent, and a closed subscription delivers nothing.
 - A raising subscriber does not stop delivery to the others.
-- The wire symbol set is the union of the bar subscriptions and every
-  quote subscriber's set.
+- LEVELONE's wire symbol set is the union of bars and every quote set;
+  quote-only symbols never subscribe to CHART_EQUITY or create builders.
 
 ## Testing
 `tests/streaming/test_schwab_quotes.py` — field-map pins (including the
@@ -94,27 +99,23 @@ full-image decode, ms→s normalization, delta leaves fields `None`,
 delta-merges-onto-image keeps previous close, unparseable values,
 symbol normalization, unknown wire fields dropped; `plan_symbol_change`
 delta / normalization / ordering; and socket-free subscription
-bookkeeping — add, incremental change, per-subscriber filtering, union
+bookkeeping — desired-state edits, per-subscriber filtering, union
 of two subscribers, close keeps another's symbols, idempotent close,
 raising subscriber isolated, no-subscriber dispatch, null degradation;
-plus the review regressions — batched ADD/UNSUBS at 500-symbol scale, a
-symbol already on the wire for bars still gets a quote image, a
-returning symbol is re-imaged, teardown never opens a connection,
-closing the last subscriber shuts down without unsubscribing, a bar
-subscription keeps the connection alive, and the lock is not held
-across connect.
+plus close/late-edit idempotence, copied symbol snapshots, returning/second
+consumers requesting images, and no network during edits/teardown.
+`tests/streaming/test_schwab_connection.py` covers actual worker ACKs,
+batched 500-symbol wire reconciliation, shared service membership,
+reconnect and lock-free worker auth using fake sockets/tokens.
 
 ## Known limitations / Future work
-- **Unexercised against a live feed.** Written before Schwab OAuth was
-  available; the pure layer is tested, the socket path is not. The first
+- **Unexercised against a live feed.** The pure layer and scripted socket
+  path are tested offline. The first
   live run should verify (a) that the initial SUBS image really does
   carry field 12, (b) the real symbol ceiling, and (c) throughput at
   ~500 names.
-- Quote symbols are also subscribed to `CHART_EQUITY`, because
-  `_send_subs` sends both services for one symbol list. Wasteful at
-  universe scale. Splitting the per-service symbol sets is the fix, but
-  it restructures untested reconnect code and was deferred until the
-  path can actually be exercised.
+- Duplicate ADD re-image behavior must still be confirmed with a live login;
+  the local client requests it explicitly without replacing other consumers.
 - No entitlement probe: whether a given login receives real-time or
   delayed LEVELONE is not detectable here.
 
