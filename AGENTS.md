@@ -246,6 +246,11 @@ tradinglab --version
 # One smoke check by name
 & '...\Python312-arm64\python.exe' -m pytest tests/smoke -k n7_async_load -v
 
+# Ad-hoc coverage reports (not revision-bound evidence for the CI gate):
+& '...\Python312-arm64\python.exe' -m pytest tests\unit tests\scanner --cov=tradinglab --cov-report=term-missing -q
+# Keep the distinct GUI suite in its own interpreter; do not append its data.
+& '...\Python312-arm64\python.exe' -m pytest tests\gui --cov=tradinglab --cov-report=term-missing -q
+
 # Flake hunting (install pytest-repeat first, NOT in dev extras)
 pip install pytest-repeat
 pytest tests/smoke -k some_check --count=10
@@ -305,7 +310,7 @@ The canonical end-to-end gate is `test_smoke_full.py`.
 
 ## 6. CI / GitHub Actions
 
-`.github/workflows/ci.yml` defines eight jobs. Every test/lint job depends on
+`.github/workflows/ci.yml` defines the jobs below. Every test/lint job depends on
 `spec-freshness`, so a drift failure stops the rest of the pipeline:
 
 | Job | OS × Python | Command(s) |
@@ -313,12 +318,40 @@ The canonical end-to-end gate is `test_smoke_full.py`.
 | `spec-freshness` | ubuntu-latest × 3.12 | `python tools/check_spec_freshness.py --base <event-base> --head <event-head>` |
 | `lint` | ubuntu-latest × 3.12 | `ruff check src tests` |
 | `unit` | windows-latest × {3.11, 3.12} | `pytest tests/unit -q`; the logic suites (`core`/`data`/`entries`/`exits`/`positions`/`streaming`); `tests/gui` in its own interpreter |
-| `coverage` | windows-latest × 3.12 | unit + scanner + logic + oracles with `--cov=tradinglab` (informational, `continue-on-error`) |
+| `coverage` | windows-latest × 3.12 | unit + scanner + logic + oracles with `--cov=tradinglab`; revision-bound XML/summary and historical regression report (informational, `continue-on-error`) |
+| `gui-coverage` | windows-latest × 3.12 | `tests/gui` only, isolated interpreter; separate raw/XML artifacts (informational) |
+| `changed-line-coverage` | windows-latest × 3.12 | blocking 70% minimum on changed executable production lines; consumes the same run's mixed-suite XML/provenance on push/PR events |
 | `smoke` | {ubuntu, windows, macos}-latest × {3.11, 3.12} | `pytest tests/smoke tests/scanner -v --tb=short` (Linux via `xvfb-run -a`) |
 | `oracles` | ubuntu-latest × 3.12 | `pytest tests/oracles -m oracle`; `pytest tests/unit/test_market_sim.py` |
 | `longhaul` | {ubuntu, windows}-latest × 3.12 | `pytest tests/longhaul -m longhaul` (schedule + manual dispatch only) |
 | `perf-gate` | ubuntu-latest × 3.12 | `pytest tests/perf -m perf` |
 
+- **Coverage scopes are distinct.** `gui-coverage` measures only `tests/gui`,
+  not `tests/unit/gui` or the mixed suite; do not compare its percentage with
+  the unit baseline or merge its raw data into that baseline. Tk skips supply
+  no execution and are listed in the job log. The existing isolated `tests/gui`
+  invocation in `unit` remains blocking.
+- **Only changed executable lines have a coverage threshold.** The separate
+  `changed-line-coverage` consumer enforces 70% for added/modified Python lines
+  under `src/tradinglab/`, not whole files or the whole repository. It compares
+  the event base with the actual tested SHA (the merge commit for PR runs).
+  Missing/stale evidence is an error, not a pass; a valid diff with no changed
+  executable lines is explicitly N/A. Scheduled/manual runs have no event diff
+  and skip this consumer. Production entry-point guards excluded by the shared
+  coverage config still need behavioral tests; see `test_main_entrypoint.py`.
+  Measurement must resolve XML sources to the actual measured checkout;
+  coverage from another editable checkout (§3) cannot be stamped with the
+  current commit. Producer and consumer share the same source-path mapper.
+- **Trend reports are informational and finite.** The mixed-suite measurement
+  summary records separate statement/branch counts, revision and scope identity.
+  Per-run summary artifacts are retained for 90 days; only compatible successful
+  ancestor runs on `main` among the latest 100 completed workflow runs can be a
+  baseline. Missing history (rollout, deletion or expiry), incompatible scopes
+  and retrieval errors are distinguished without inventing zero coverage.
+  The entire `pyproject.toml` Git blob, exact command, runtime/tool versions and
+  measurement environment define compatibility; even a harmless config edit
+  may reset the baseline. Repository retention limits/deletion can shorten the
+  90-day window. No global threshold or external coverage service is used.
 - **`unit` mirrors the release gate (Windows-only).** `release.yml` runs
   `pytest tests/unit` on Windows BEFORE building the redistributable, but CI
   historically did NOT — so a broken unit test passed a green CI and only
@@ -889,6 +922,14 @@ gh release view v<version> --json isPrerelease,assets
   ```
 
   CI still runs on `main` afterwards as a backstop, not as the gate.
+  The changed-line coverage minimum in §6 is also a post-push CI result:
+  it does not prevent a direct push and does not install a local Git hook.
+  Ad-hoc `pytest --cov` reports are not revision-bound provenance for that
+  check; its CI measurement wrapper captures a clean checkout before and
+  after the exact mixed-suite run. The producer currently requires real
+  GitHub Actions run context; there is no local provenance-capture mode.
+  The standalone checker can consume matching downloaded CI XML/metadata,
+  but do not invent hosted run identifiers for locally collected coverage.
 - Push with the **`pmok3`** credential. An agent session may be authenticated
   as a different account with read-only access, and the CLI's injected
   credential helper wins over the usual override — full recipe in §3.

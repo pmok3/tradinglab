@@ -701,6 +701,7 @@ def test_clean_guard_includes_untracked_sources_tests_and_config(monkeypatch):
 @pytest.mark.parametrize("wrong_checkout", [False, True])
 def test_real_pytest_producer_in_temporary_clean_repository(tmp_path, monkeypatch, capsys, wrong_checkout):
     """Exercise actual pytest-cov XML/raw output and Git provenance, without Actions."""
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
     monkeypatch.chdir(tmp_path)
     source = tmp_path / "src" / "tradinglab"
     source.mkdir(parents=True)

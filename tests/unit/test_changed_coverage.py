@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
@@ -657,15 +658,21 @@ def test_real_coverage_xml_preserves_exclusions_and_empty_modules(tmp_path):
     xml = repo / "coverage.xml"
     script = (
         "import sys; from pathlib import Path; import coverage; "
+        "assert coverage.Coverage.current() is None; "
         "package=Path(sys.argv[1]); source=package/'sample.py'; "
         "cov=coverage.Coverage(source=[str(package)],branch=True,config_file=False); "
         "cov.exclude('if TYPE_CHECKING:'); cov.start(); "
         "exec(compile(source.read_text(encoding='utf-8'),str(source),'exec'),{}); "
         "cov.stop(); cov.xml_report(outfile=sys.argv[2])"
     )
+    # Keep this fixture's collector and temporary sources out of outer pytest-cov data.
+    environment = {
+        key: value for key, value in os.environ.items()
+        if not key.startswith(("COV_CORE_", "COVERAGE_"))
+    }
     result = subprocess.run(
         [sys.executable, "-c", script, str(repo / "src" / "tradinglab"), str(xml)],
-        cwd=repo, capture_output=True, text=True, timeout=30,
+        cwd=repo, env=environment, capture_output=True, text=True, timeout=30,
     )
     assert result.returncode == 0, result.stderr
     tree = ET.fromstring(xml.read_bytes())

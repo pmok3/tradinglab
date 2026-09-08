@@ -107,9 +107,9 @@ jobs:
     # read true), prints a term-missing summary, and uploads coverage.xml.
     # Main runs also retain separate statement/branch counts for 90 days and
     # compare only trustworthy, compatible ancestor runs in the step summary.
-    # ``continue-on-error`` keeps it purely informational:
-    # the ``unit`` job stays the real gate, and there is intentionally no
-    # ``--cov-fail-under`` threshold (see pyproject ``[tool.coverage]``).
+    # ``continue-on-error`` keeps this producer/report informational. Unit
+    # tests and the separate changed-line consumer remain blocking; there
+    # is no global ``--cov-fail-under`` threshold.
     runs-on: windows-latest
     timeout-minutes: 30
     continue-on-error: true
@@ -208,6 +208,58 @@ jobs:
         with:
           name: coverage-gui-xml
           path: ${{ runner.temp }}\coverage-gui.xml
+          if-no-files-found: error
+
+  changed-line-coverage:
+    name: Changed executable lines (70% minimum)
+    needs: [spec-freshness, coverage]
+    # The producer is informational; this independent consumer must fail
+    # on insufficient coverage or missing/invalid evidence. Scheduled and
+    # manual runs have no event diff, so they do not invent a comparison.
+    if: ${{ !cancelled() && needs.spec-freshness.result == 'success' && (github.event_name == 'push' || github.event_name == 'pull_request') }}
+    runs-on: windows-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    env:
+      PYTHONIOENCODING: utf-8
+      BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
+      HEAD_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Require measurement provenance identity
+        shell: pwsh
+        env:
+          PROVENANCE_ARTIFACT: ${{ needs.coverage.outputs.summary_artifact }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:PROVENANCE_ARTIFACT)) {
+            throw "The coverage producer did not publish a measurement artifact identity."
+          }
+      - name: Download measured coverage XML
+        uses: actions/download-artifact@v8
+        with:
+          name: coverage-xml
+      - name: Download matching measurement provenance
+        uses: actions/download-artifact@v8
+        with:
+          # Use the producer's attempt, including when only this job is rerun.
+          name: ${{ needs.coverage.outputs.summary_artifact }}
+      - name: Enforce changed-line coverage
+        shell: pwsh
+        run: python tools\check_changed_coverage.py --xml coverage.xml --provenance coverage-summary.json --base "$env:BASE_SHA" --head "$env:HEAD_SHA" --expected-suite unit-scanner-logic-oracles-v1 --minimum 70 --enforce --json-out "$env:RUNNER_TEMP\coverage-changed.json"
+      - name: Upload changed-line coverage result
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: changed-line-coverage
+          path: ${{ runner.temp }}\coverage-changed.json
           if-no-files-found: error
 
   smoke:
