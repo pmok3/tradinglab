@@ -1,19 +1,21 @@
 """Offline Schwab HTTP mapping, verification and real hourly OHLCV aggregation."""
 from __future__ import annotations
 
+import http.client
 import io
 import json
 import urllib.error
 import urllib.parse
+import weakref
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
 
 from tradinglab.core.timezones import ET
+from tradinglab.data import normalize, verify
 from tradinglab.data import schwab_auth as auth
 from tradinglab.data import schwab_source as source
-from tradinglab.data import verify
 from tradinglab.data.credentials import SchwabCredentials
 
 CREDS = SchwabCredentials(app_key="test-key", app_secret="test-secret")
@@ -46,6 +48,25 @@ class Opener:
         return Response(self.raw)
 
 
+class TruncatedChunkedOpener:
+    """Exercise urllib's real HTTP body parser without a socket or server."""
+
+    def __init__(self):
+        self.requests = []
+        self.responses = []
+
+    def open(self, request, *, timeout):
+        self.requests.append(request)
+        wire = io.BytesIO(
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+            b"100\r\nPARTIAL_TOKEN_SECRET"
+        )
+        response = http.client.HTTPResponse(SimpleNamespace(makefile=lambda *a: wire))
+        response.begin()
+        self.responses.append(response)
+        return response
+
+
 @pytest.fixture(autouse=True)
 def isolate(monkeypatch, tmp_path):
     monkeypatch.setenv("TRADINGLAB_TOKEN_DIR", str(tmp_path))
@@ -54,6 +75,7 @@ def isolate(monkeypatch, tmp_path):
     monkeypatch.setattr(source, "get_credentials", lambda: SimpleNamespace(schwab=CREDS))
     monkeypatch.setattr(source, "credentialed_opener", lambda: pytest.fail("unexpected live HTTP"))
     monkeypatch.setattr(auth, "credentialed_opener", lambda: pytest.fail("unexpected live token HTTP"))
+    monkeypatch.setattr(normalize, "_PREBUILT_ARRAYS", {})
 
 
 def save_tokens(*, now=None):
@@ -254,6 +276,140 @@ def test_explicit_verify_preserves_refresh_http_taxonomy(code, status):
 def test_invalid_fetch_request_is_visible_before_token_or_http_lookup(caplog):
     assert source.fetch_schwab_data(interval="2h") is None
     assert "Unsupported Schwab interval" in caplog.text
+
+
+def test_truncated_refresh_fails_soft_unless_propagation_is_requested(monkeypatch, caplog):
+    save_tokens(now=0)
+    cache = auth.load_token_cache()
+    cache["refresh_token_expires_at"] = 9999999999
+    auth.save_token_cache(cache)
+    opener = TruncatedChunkedOpener()
+    monkeypatch.setattr(auth, "credentialed_opener", lambda: opener)
+    assert auth.get_access_token(CREDS) is None
+    assert auth.load_token_cache() == cache
+    assert "network_error" in caplog.text
+    assert "PARTIAL_TOKEN_SECRET" not in caplog.text
+    with pytest.raises(http.client.IncompleteRead):
+        auth.get_access_token(CREDS, raise_errors=True)
+    assert all(response.closed for response in opener.responses)
+
+
+@pytest.mark.parametrize("refresh", [False, True])
+def test_truncated_runtime_history_or_refresh_fails_soft(monkeypatch, caplog, refresh):
+    save_tokens(now=0 if refresh else None)
+    if refresh:
+        cache = auth.load_token_cache()
+        cache["refresh_token_expires_at"] = 9999999999
+        auth.save_token_cache(cache)
+    opener = TruncatedChunkedOpener()
+    monkeypatch.setattr(auth if refresh else source, "credentialed_opener", lambda: opener)
+    assert source.fetch_schwab_data() is None
+    assert opener.requests[0].get_method() == ("POST" if refresh else "GET")
+    assert "network_error" in caplog.text and "PARTIAL_TOKEN_SECRET" not in caplog.text
+    assert all(response.closed for response in opener.responses)
+
+
+@pytest.mark.parametrize("refresh", [False, True])
+def test_truncated_explicit_probe_returns_sanitized_network_failure(refresh):
+    save_tokens(now=0 if refresh else None)
+    if refresh:
+        cache = auth.load_token_cache()
+        cache["refresh_token_expires_at"] = 9999999999
+        auth.save_token_cache(cache)
+    opener = TruncatedChunkedOpener()
+    result = source.verify_schwab(CREDS, opener=opener)
+    assert result.status == "network_error" and not result.is_credential_problem
+    assert "PARTIAL_TOKEN_SECRET" not in str(result)
+    assert opener.requests[0].get_method() == ("POST" if refresh else "GET")
+    assert all(response.closed for response in opener.responses)
+
+
+def test_protocol_exception_text_is_not_exposed():
+    result = auth.schwab_failure_result(http.client.BadStatusLine("ACCESS_TOKEN must not appear"))
+    assert result.status == "network_error" and "ACCESS_TOKEN" not in str(result)
+
+
+def test_native_array_stash_matches_final_sorted_deduped_clipped_list(monkeypatch):
+    original_ids = []
+    normalizer = source.candles_from_json_rows
+
+    def capture(*args, **kwargs):
+        candles = normalizer(*args, **kwargs)
+        original_ids.append(id(candles))
+        return candles
+
+    monkeypatch.setattr(source, "candles_from_json_rows", capture)
+    rows = [
+        row(START + timedelta(minutes=2), price=102, volume=20),
+        row(START, price=100, volume=10),
+        row(START + timedelta(minutes=1), price=101, volume=11),
+        row(START + timedelta(minutes=1), price=201, volume=21),
+        row(START + timedelta(minutes=3), price=103, volume=30),
+        row(START + timedelta(minutes=4), price=float("nan")),
+    ]
+    candles = source.candles_from_schwab_response(
+        {"candles": rows}, interval="1m", start=START + timedelta(minutes=1),
+        end=START + timedelta(minutes=3),
+    )
+    assert [c.open for c in candles] == [201, 102]
+    assert set(normalize._PREBUILT_ARRAYS) == {id(candles)}
+    assert all(original_id not in normalize._PREBUILT_ARRAYS for original_id in original_ids)
+    arrays = normalize.pop_prebuilt_arrays(candles)
+    assert arrays is not None
+    for column, attribute in [
+        ("opens", "open"), ("highs", "high"), ("lows", "low"),
+        ("closes", "close"), ("volumes", "volume"),
+    ]:
+        assert getattr(arrays, column).tolist() == [getattr(c, attribute) for c in candles]
+    assert not normalize._PREBUILT_ARRAYS
+
+
+def test_empty_native_range_does_not_stash_discarded_candles():
+    candles = source.candles_from_schwab_response(
+        {"candles": [row()]}, interval="1m",
+        start=START + timedelta(hours=1), end=START + timedelta(hours=2),
+    )
+    assert candles == []
+    normalize.pop_prebuilt_arrays(candles)
+    assert not normalize._PREBUILT_ARRAYS
+
+
+def test_hourly_repeated_conversions_release_all_original_minutes(monkeypatch):
+    original_samples = []
+    normalizer = source.candles_from_json_rows
+
+    def capture(*args, **kwargs):
+        candles = normalizer(*args, **kwargs)
+        original_samples.append(weakref.ref(candles[0]))
+        return candles
+
+    monkeypatch.setattr(source, "candles_from_json_rows", capture)
+    rows = [
+        row(START.replace(hour=4, minute=0) + timedelta(days=day, minutes=minute))
+        for day in range(8) for minute in range(960)
+    ]
+    assert len(rows) == 7680
+    for _ in range(32):
+        candles = source.candles_from_schwab_response({"candles": rows}, interval="1h")
+        assert len(candles) == 17 * 8
+        assert sum(c.volume for c in candles) == 76800
+        normalize.pop_prebuilt_arrays(candles)
+    assert not normalize._PREBUILT_ARRAYS
+    assert len(original_samples) == 32 and all(ref() is None for ref in original_samples)
+
+
+def test_failed_hourly_aggregation_releases_original_stash():
+    with pytest.raises(ValueError, match="outside"):
+        source.candles_from_schwab_response(
+            {"candles": [row(START.replace(hour=3))]}, interval="1h",
+        )
+    assert not normalize._PREBUILT_ARRAYS
+
+
+def test_explicit_verification_consumes_its_probe_stash():
+    save_tokens()
+    assert source.verify_schwab(CREDS, opener=Opener()).ok
+    assert not normalize._PREBUILT_ARRAYS
 
 
 def test_explicit_verify_refreshes_with_same_injected_opener_and_timeout():

@@ -50,6 +50,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from functools import partial
+from http.client import HTTPException
 from typing import Any
 
 from ..core.timezones import ET
@@ -57,7 +58,7 @@ from ..models import Candle
 from . import verify as _verify
 from ._http import MAX_RESPONSE_BYTES, credentialed_opener
 from .credentials import SchwabCredentials, get_credentials
-from .normalize import candles_from_json_rows
+from .normalize import CandleArrays, candles_from_json_rows, pop_prebuilt_arrays, stash_arrays
 from .schwab_auth import TokenCacheError, _post_token, get_access_token, schwab_failure_result
 
 LOG = logging.getLogger(__name__)
@@ -100,10 +101,24 @@ def candles_from_schwab_response(
         rows, interval="1m" if interval == "1h" else interval,
         keymap=_SCHWAB_KEYMAP, ts_unit="ms", tz=ET,
     )
-    candles = sorted({c.date: c for c in candles}.values(), key=lambda c: c.date)
-    candles = [c for c in candles if (start is None or c.date >= start) and (end is None or c.date < end)]
+    # The stash owns the original list by identity; consume it before any
+    # replacement or aggregation so discarded minute bars cannot be retained.
+    arrays = pop_prebuilt_arrays(candles)
+    by_date = {c.date: i for i, c in enumerate(candles)}
+    indices = [
+        by_date[stamp] for stamp in sorted(by_date)
+        if (start is None or stamp >= start) and (end is None or stamp < end)
+    ]
+    candles = [candles[i] for i in indices]
     if interval != "1h":
+        if arrays is not None and candles:
+            stash_arrays(candles, CandleArrays(
+                opens=arrays.opens[indices], highs=arrays.highs[indices],
+                lows=arrays.lows[indices], closes=arrays.closes[indices],
+                volumes=arrays.volumes[indices],
+            ))
         return candles
+    del arrays
     # Anchor regular hours at 09:30 ET, independent of the response's first
     # timestamp. Separate extended sessions so a 16:00 tick cannot alter RTH.
     from ..streaming.resampler import BarResampler
@@ -198,7 +213,7 @@ def fetch_schwab_data(
             return None
         payload = _http_get_pricehistory(ticker, interval, access_token, start=start, end=end)
         return candles_from_schwab_response(payload, interval=interval, start=start, end=end)
-    except (OSError, ValueError, TypeError, KeyError, OverflowError, TokenCacheError) as exc:
+    except (OSError, HTTPException, ValueError, TypeError, KeyError, OverflowError, TokenCacheError) as exc:
         result = schwab_failure_result(exc)
         if result.is_credential_problem:
             _verify.record_result(result)
@@ -256,12 +271,14 @@ def verify_schwab(
             "AAPL", "1d", token, start=now - timedelta(days=7), end=now,
             timeout=timeout, opener=opener,
         )
-        if not candles_from_schwab_response(payload, interval="1d"):
+        candles = candles_from_schwab_response(payload, interval="1d")
+        pop_prebuilt_arrays(candles)
+        if not candles:
             return _verify.VerifyResult(
                 status=_verify.STATUS_ERROR, vendor="schwab",
                 summary="Schwab responded but returned no usable probe candles.",
             )
-    except (OSError, ValueError, TypeError, KeyError, OverflowError, TokenCacheError) as exc:
+    except (OSError, HTTPException, ValueError, TypeError, KeyError, OverflowError, TokenCacheError) as exc:
         return schwab_failure_result(exc)
     return _verify.VerifyResult(
         status=_verify.STATUS_OK, vendor="schwab",

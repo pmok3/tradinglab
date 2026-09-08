@@ -54,6 +54,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
+from http.client import HTTPException
 from pathlib import Path
 from typing import Any
 
@@ -114,7 +115,7 @@ def schwab_failure_result(exc: Exception) -> _verify.VerifyResult:
         # Vendor bodies can echo tokens we have not seen (including rotated ones).
         safe = urllib.error.HTTPError("", exc.code, "", exc.headers, None)
         exc.close()
-    elif isinstance(exc, (OSError, urllib.error.URLError)):
+    elif isinstance(exc, (OSError, urllib.error.URLError, HTTPException)):
         safe = OSError("Schwab request failed; check connectivity and retry.")
     else:
         safe = ValueError("Schwab returned an invalid response.")
@@ -457,7 +458,7 @@ def get_access_token(
             new_cache = build_token_cache(response, now=_now, previous=cache, creds=creds)
             save_token_cache(new_cache, path, expected_generation=generation)
             return new_cache["access_token"]
-    except (OSError, ValueError, TypeError, OverflowError, TokenCacheError) as exc:
+    except (OSError, HTTPException, ValueError, TypeError, OverflowError, TokenCacheError) as exc:
         if raise_errors:
             raise
         LOG.warning("%s", schwab_failure_result(exc).as_log_line())

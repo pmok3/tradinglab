@@ -28,7 +28,10 @@ fresh OAuth grant, other entitlements, streaming, or source commissioning.
 Empty/malformed successful responses are not reported as ready.
 
 HTTP 401 is rejected authorization with reconnect guidance, 403 is forbidden,
-429 is rate-limited, and timeout/5xx is network-error. Raw response bodies,
+429 is rate-limited, and timeout/5xx/HTTP protocol errors (including truncated
+chunked replies) are network-error. Both the high-level fetcher and explicit
+verifier catch `http.client.HTTPException`, including during token refresh.
+Raw response bodies,
 exception strings, and tokens never enter logs/status messages.
 
 ## Dependencies
@@ -42,6 +45,7 @@ exception strings, and tokens never enter logs/status messages.
 - **REST GET**: `https://api.schwabapi.com/marketdata/v1/pricehistory`, symbol in encoded query, bearer only in Authorization header. The shared credential-safe opener strips credentials on cross-host redirects. Response reads use the shared 8 MB cap plus one-byte overflow sentinel; oversized, non-object or missing-candle responses are rejected.
 - **Windows/ranges**: default lookback is day/10 intraday and year/1 daily+. Explicit bounds must be paired, aware, ascending; sent as UTC epoch milliseconds with `endDate=end_ms-1`, omitting `period`. Extended hours explicitly included, previous-close metadata not requested. No pagination, retries or polling are created here.
 - **Non-finite OHLC rows are dropped by the shared normalizer**: `candles_from_json_rows` skips provider rows whose open/high/low/close are NaN or infinite before building `Candle` objects.
+- **Array-stash ownership**: consume `pop_prebuilt_arrays(original)` before replacing the normalized list. Native intervals apply the same sorted/deduplicated/range-filtered indices to all five columns and stash only the final nonempty list; hourly conversion discards the original minute arrays, including on aggregation failure. Verification consumes its own probe's final stash because no chart-series consumer follows. Discarded input lists must never remain pinned by the normalization side channel.
 
 ## Invariants
 - The high-level fetcher returns `None` or candles for expected operational outcomes; lower-level HTTP/request helpers raise precise failures.
@@ -52,6 +56,7 @@ exception strings, and tokens never enter logs/status messages.
 - `tests/unit/data/test_schwab_source.py`: native interval/request mapping, encoded endpoint/auth/timeout/body bounds, HTTP taxonomy, explicit refresh+probe, empty/error handling, disabled registration, real hourly OHLCV, DST/session boundaries, exclusive range clipping.
 - `tests/unit/data/test_credential_health.py`: keys alone never imply OAuth authorization.
 - `tests/unit/test_vendor_mappers.py`: shared vendor normalization compatibility.
+- `test_schwab_source.py` also reproduces real stdlib chunked-body truncation without a socket, checks native list/array identity and column alignment, and repeats 32 conversions of 7,680 minute rows while asserting zero retained original minute lists/candles. Empty ranges and failed aggregation also leave no original stash.
 
 ## Reference and commissioning limits
 Parameter names, endpoint, native frequencies and allowed period combinations

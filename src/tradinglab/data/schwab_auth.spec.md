@@ -39,6 +39,7 @@ Owns the **on-disk Schwab OAuth token cache** and the **POST-to-refresh** flow. 
   `data._http.MAX_RESPONSE_BYTES + 1` (8 MB plus overflow sentinel);
   oversized responses are rejected rather than parsed as truncated JSON.
 - **Public token lookup fails soft by default** with sanitized logging. Lower-level `refresh_access_token` still raises `RuntimeError` for unconfigured credentials. Explicit verifiers opt into error propagation, so refresh 401/403/429/timeout retains its actual category.
+- **HTTP protocol failures**: `http.client.HTTPException` (including truncated chunked-body `IncompleteRead`) is an expected network failure. Default token lookup returns `None` without changing the cache; `raise_errors=True` propagates the original exception. Shared classification reports sanitized `network_error`, never partial response bytes or protocol exception text.
 
 ## Invariants
 - Windows tokens use current-user DPAPI, never plaintext fallback. Non-Windows uses 0600 JSON; chmod failures are surfaced.
@@ -51,3 +52,4 @@ Owns the **on-disk Schwab OAuth token cache** and the **POST-to-refresh** flow. 
 - `refresh_access_token` and `get_access_token` accept a `_post` injection hook for test parity.
 - `tests/unit/test_schwab_auth.py`, `tests/unit/data/test_schwab_token_cache.py`, and `tests/unit/data/test_schwab_source.py` cover schema/expiry, mocked DPAPI round-trip/failures/migration, POSIX permissions, deletion/replacement during refresh, serialized refresh, and bounded HTTP with injected openers. No real credentials or network.
 - Live token rotation and account-specific authorization remain uncommissioned.
+- `test_schwab_source.py` additionally uses the real stdlib `HTTPResponse` over an in-memory truncated chunked reply to pin refresh fail-soft behavior, explicit propagation and response closure; malformed-status text must not reach diagnostics.
