@@ -1,8 +1,17 @@
 # `gui/credentials_dialog.py` — Configure-credentials dialog + DPAPI bootstrap
 
-Last updated: 2026-09-07
+Last updated: 2026-09-14
 
 ## Purpose
+The Schwab section also embeds `SchwabConnectPanel`: developer app settings,
+account sign-in and disconnect share this window. **Save Schwab settings &
+sign in** persists only that vendor's draft, without closing the window or
+saving unrelated vendor edits. Unchanged effective settings preserve tokens;
+overriding credential layers are reported before any browser opens. Field edits
+or window closure cancel pending authorization. An optional
+`on_schwab_connection_changed` callback routes OAuth save/clear to the existing
+app stream-lifecycle hook; ordinary credential saves retain `on_changed`.
+
 End users running the frozen `.exe` cannot edit `.env` — there is
 no `pyproject.toml` next to the executable for the dotenv
 discovery walk to find (`data/credentials.py` short-circuits on

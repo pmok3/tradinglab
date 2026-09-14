@@ -1,23 +1,8 @@
-"""Interactive Schwab OAuth sign-in dialog.
+"""Inline Schwab account authorization for the Credentials window.
 
-Replaces the terminal-only ``python -m tradinglab.data.schwab_login`` flow
-with an in-app, guided popup (Tools → "Connect to Schwab…"). It does NOT
-embed Schwab's login page in a webview — that is an OAuth anti-pattern
-(RFC 8252: native apps must use the system browser) and Schwab blocks
-embedded webviews anyway. Instead it drives the standard, secure flow:
-
-1. Open Schwab's authorization URL in the user's **system browser** (where
-   the password manager / 2FA / passkeys all work).
-2. Schwab redirects to the registered ``https://127.0.0.1`` redirect URI;
-   the browser shows a "can't reach this page" error — expected, because we
-   run no local listener.
-3. The user copies that full redirected URL from the address bar and pastes
-   it into the dialog. We verify the OAuth ``state`` nonce (CSRF defence),
-   extract the code, exchange it for tokens on a background thread, and save
-   the DPAPI-protected token cache.
-
-All the OAuth crypto is reused from :mod:`tradinglab.data.schwab_login` and
-:mod:`tradinglab.data.schwab_auth` — this module is purely the GUI shell.
+The system browser owns login/MFA; a temporary HTTPS loopback listener returns
+the authorization code. Tk alone publishes the resulting token cache. Manual
+paste-back remains an explicit fallback, not the normal flow.
 """
 from __future__ import annotations
 
@@ -26,7 +11,9 @@ import threading
 import tkinter as tk
 import webbrowser
 from collections.abc import Callable
+from http.client import HTTPException
 from tkinter import messagebox, ttk
+from urllib.parse import urlsplit
 
 from ..data.credentials import get_credentials
 from ..data.schwab_auth import (
@@ -41,37 +28,31 @@ from ..data.schwab_auth import (
     schwab_failure_result,
     token_cache_generation,
 )
+from ..data.schwab_callback import CallbackListener, callback_response
 from ..data.schwab_login import (
     build_authorize_url,
     exchange_code_for_tokens,
-    extract_code,
-    extract_state,
 )
-from ._modal_base import BaseModalDialog, protect_combobox_wheel
 from .colors import MUTED_GREY
 
 _DEFAULT_REDIRECT_URI = "https://127.0.0.1"
 
 
-class SchwabConnectDialog(BaseModalDialog):
-    """Guided, browser-based Schwab OAuth sign-in (no embedded webview)."""
+class SchwabConnectPanel(ttk.Frame):
+    """Reusable account sign-in controls; no modal or application ownership."""
 
     def __init__(
         self, parent: tk.Misc, *,
         on_connection_changed: Callable[[], None] | None = None,
+        on_prepare: Callable[[], bool] | None = None,
     ) -> None:
-        super().__init__(
-            parent,
-            title="Connect to Schwab",
-            geometry_key="dlg.schwab_connect",
-            default_geometry="620x500",
-            resizable=(False, False),
-        )
+        super().__init__(parent)
         # OAuth handshake state for the current attempt.
         self._state_nonce: str | None = None
         self._redirect_uri: str | None = None
-        self._authorization_credentials: tuple[str | None, str | None] | None = None
+        self._authorization_credentials: tuple[str | None, str | None, str] | None = None
         self._on_connection_changed = on_connection_changed
+        self._on_prepare = on_prepare
         self._closed = False
         self._exchange_generation: int | None = None
         # Background token-exchange plumbing (§7.15: worker writes a result
@@ -80,87 +61,92 @@ class SchwabConnectDialog(BaseModalDialog):
         self._exchange_thread: threading.Thread | None = None
         self._exchange_result: dict | None = None
         self._poll_job: str | None = None
+        self._callback: CallbackListener | None = None
+        self._callback_job: str | None = None
 
-        self._url_var = tk.StringVar(value="")
-        self._paste_var = tk.StringVar(value="")
-        self._status_var = tk.StringVar(value="")
-        self._progress_var = tk.StringVar(value="")
+        self._url_var = tk.StringVar(master=self, value="")
+        self._paste_var = tk.StringVar(master=self, value="")
+        self._status_var = tk.StringVar(master=self, value="")
+        self._progress_var = tk.StringVar(master=self, value="")
+        self._manual_var = tk.BooleanVar(master=self, value=False)
 
         self._build_widgets()
         self._refresh_status()
-        protect_combobox_wheel(self)
-        self._finalize_modal(primary=self._on_connect, cancel=self._on_close)
+        self.bind("<Destroy>", self._on_destroy, add="+")
 
     # ------------------------------------------------------------------ build
     def _build_widgets(self) -> None:
-        frm = ttk.Frame(self, padding=12)
+        frm = ttk.Frame(self)
         frm.pack(fill="both", expand=True)
         frm.columnconfigure(0, weight=1)
 
         ttk.Label(
             frm,
-            text="Sign in to Schwab in your browser, then paste the "
-                 "redirected address back here.",
-            wraplength=580, justify="left",
+            text="These app settings identify your developer application, not your "
+                 "Schwab account login. Sign in on Schwab's website; TradingLab "
+                 "receives the return and saves both OAuth tokens automatically.",
+            wraplength=490, justify="left",
         ).grid(row=0, column=0, sticky="w")
 
         ttk.Label(frm, textvariable=self._status_var, foreground=MUTED_GREY,
-                  wraplength=580, justify="left").grid(
+                  wraplength=490, justify="left").grid(
             row=1, column=0, sticky="w", pady=(4, 8))
 
-        ttk.Separator(frm, orient="horizontal").grid(
-            row=2, column=0, sticky="ew", pady=(0, 8))
-
-        # --- Step 1 -------------------------------------------------------
-        ttk.Label(frm, text="Step 1 — Open the Schwab sign-in page",
-                  font=("TkDefaultFont", 10, "bold")).grid(
-            row=3, column=0, sticky="w")
+        buttons = ttk.Frame(frm)
+        buttons.grid(row=2, column=0, sticky="w")
         self._open_btn = ttk.Button(
-            frm, text="Open Schwab sign-in in your browser",
+            buttons, text="Save Schwab settings & sign in" if self._on_prepare else "Sign in with Schwab",
             command=self._on_open_browser)
-        self._open_btn.grid(row=4, column=0, sticky="w", pady=(4, 4))
+        self._open_btn.pack(side="left")
+        ttk.Button(buttons, text="Cancel sign-in", command=self.cancel).pack(side="left", padx=4)
+        ttk.Button(buttons, text="Disconnect", command=self._on_disconnect).pack(side="left")
+        ttk.Label(
+            frm, text="A temporary HTTPS listener runs only on this computer. Your "
+            "browser may show a certificate prompt for the local callback, never "
+            "for Schwab's website. No Windows trust settings are changed.",
+            foreground=MUTED_GREY, wraplength=490, justify="left",
+        ).grid(row=3, column=0, sticky="w", pady=(4, 0))
+        ttk.Checkbutton(frm, text="Use manual URL paste-back instead",
+                        variable=self._manual_var, command=self._manual_changed).grid(
+                            row=4, column=0, sticky="w", pady=(4, 0))
 
-        url_row = ttk.Frame(frm)
-        url_row.grid(row=5, column=0, sticky="ew", pady=(0, 8))
+        self._manual_frame = ttk.Frame(frm)
+        self._manual_frame.grid(row=5, column=0, sticky="ew")
+        self._manual_frame.columnconfigure(0, weight=1)
+        url_row = ttk.Frame(self._manual_frame)
+        url_row.grid(row=0, column=0, sticky="ew", pady=(0, 4))
         url_row.columnconfigure(0, weight=1)
         url_entry = ttk.Entry(url_row, textvariable=self._url_var, state="readonly")
         url_entry.grid(row=0, column=0, sticky="ew")
         ttk.Button(url_row, text="Copy URL", command=self._on_copy_url).grid(
             row=0, column=1, padx=(6, 0))
 
-        ttk.Separator(frm, orient="horizontal").grid(
-            row=6, column=0, sticky="ew", pady=(0, 8))
-
-        # --- Step 2 -------------------------------------------------------
-        ttk.Label(frm, text="Step 2 — Paste the redirected address",
-                  font=("TkDefaultFont", 10, "bold")).grid(
-            row=7, column=0, sticky="w")
         ttk.Label(
-            frm,
-            text=("After you sign in, your browser will show a \"this site "
-                  "can't be reached\" page — that's expected. Copy the full "
-                  "address from the address bar (it starts with "
-                  "https://127.0.0.1/?code=…) and paste it below."),
-            foreground=MUTED_GREY, wraplength=580, justify="left",
-        ).grid(row=8, column=0, sticky="w", pady=(2, 4))
-
-        paste_entry = ttk.Entry(frm, textvariable=self._paste_var)
-        paste_entry.grid(row=9, column=0, sticky="ew")
+            self._manual_frame, text="In manual mode the redirected page may be unreachable. "
+            "Paste its complete address below (not your password or a token).",
+            foreground=MUTED_GREY, wraplength=490, justify="left",
+        ).grid(row=1, column=0, sticky="w", pady=(2, 4))
+        self._paste_entry = ttk.Entry(self._manual_frame, textvariable=self._paste_var)
+        self._paste_entry.grid(row=2, column=0, sticky="ew")
+        self._paste_entry.bind("<Return>", self._manual_return)
+        self._paste_entry.bind("<KP_Enter>", self._manual_return)
         self._connect_btn = ttk.Button(
-            frm, text="Connect", command=self._on_connect)
-        self._connect_btn.grid(row=10, column=0, sticky="w", pady=(6, 0))
+            self._manual_frame, text="Finish sign-in", command=self._on_connect)
+        self._connect_btn.grid(row=3, column=0, sticky="w", pady=(4, 0))
+        self._manual_frame.grid_remove()
+        ttk.Label(frm, textvariable=self._progress_var, wraplength=490,
+                  justify="left").grid(row=6, column=0, sticky="w", pady=(6, 0))
 
-        ttk.Label(frm, textvariable=self._progress_var, wraplength=580,
-                  justify="left").grid(row=11, column=0, sticky="w", pady=(8, 0))
+    def _manual_changed(self) -> None:
+        self.cancel()
+        if self._manual_var.get():
+            self._manual_frame.grid()
+        else:
+            self._manual_frame.grid_remove()
 
-        # --- Footer -------------------------------------------------------
-        footer = ttk.Frame(frm)
-        footer.grid(row=12, column=0, sticky="ew", pady=(12, 0))
-        footer.columnconfigure(0, weight=1)
-        ttk.Button(footer, text="Disconnect", command=self._on_disconnect).grid(
-            row=0, column=0, sticky="w")
-        ttk.Button(footer, text="Close", command=self._on_close).grid(
-            row=0, column=1, sticky="e")
+    def _manual_return(self, _event) -> str:
+        self._on_connect()
+        return "break"  # Do not invoke the parent's Save & Close on other drafts.
 
     # ----------------------------------------------------------------- status
     @staticmethod
@@ -170,8 +156,7 @@ class SchwabConnectDialog(BaseModalDialog):
     def _compute_status_text(self) -> str:
         creds = self._creds()
         if not creds.is_configured():
-            return ("Not configured — add your Schwab App Key + Secret first "
-                    "via Tools → Configure Credentials.")
+            return "Not configured — enter your developer app key, secret and registered redirect URI above."
         try:
             cache = load_token_cache()
         except TokenCacheError:
@@ -200,14 +185,15 @@ class SchwabConnectDialog(BaseModalDialog):
 
     # ------------------------------------------------------------------ step 1
     def _on_open_browser(self) -> None:
-        if self._closed or self._exchange_result is not None:
+        if self._closed or self._exchange_result is not None or self._callback is not None:
+            return
+        if self._on_prepare is not None and not self._on_prepare():
             return
         creds = self._creds()
         if not creds.is_configured():
             messagebox.showinfo(
                 "Connect to Schwab",
-                "Enter your Schwab App Key and App Secret first via "
-                "Tools → Configure Credentials, then try again.",
+                "Enter your developer App Key and App Secret in the Schwab section first.",
                 parent=self,
             )
             return
@@ -217,27 +203,84 @@ class SchwabConnectDialog(BaseModalDialog):
         state = secrets.token_urlsafe(24)
         self._state_nonce = state
         self._redirect_uri = redirect_uri
-        self._authorization_credentials = (creds.app_key, creds.app_secret)
+        self._authorization_credentials = (creds.app_key, creds.app_secret, redirect_uri)
+        self._exchange_generation = token_cache_generation()
         url = build_authorize_url(creds.app_key or "", redirect_uri, state=state)
         self._url_var.set(url)
-        opened = False
+        if self._manual_var.get():
+            self._launch_browser()
+            return
         try:
-            opened = bool(webbrowser.open(url))
-        except Exception:  # noqa: BLE001
+            self._callback = CallbackListener(redirect_uri, state)
+            self._callback.start()
+        except (ValueError, OSError, RuntimeError):
+            self._callback = None
+            self._state_nonce = None
+            self._set_progress("Cannot start automatic sign-in. Use the exact registered HTTPS loopback "
+                               "URI above, or select manual URL paste-back.")
+            return
+        self._open_btn.configure(state="disabled")
+        self._set_progress("Preparing the local HTTPS callback…")
+        self._callback_job = self.after(100, self._poll_callback)
+
+    def _launch_browser(self) -> None:
+        try:
+            opened = bool(webbrowser.open(self._url_var.get(), new=1, autoraise=True))
+        except (webbrowser.Error, OSError):
             opened = False
         if opened:
-            self._set_progress(
-                "Opened your browser. Sign in to Schwab, then paste the "
-                "redirected address into Step 2.")
+            self._set_progress("Sign in in the browser window. " + (
+                "Paste the redirected address below to finish." if self._manual_var.get()
+                else f"TradingLab is waiting for the return to {self._redirect_uri}."
+            ))
         else:
-            self._set_progress(
-                "Couldn't open a browser automatically — click \"Copy URL\" "
-                "and open it yourself, then continue with Step 2.")
+            self._stop_callback()
+            self._set_progress("Couldn't open your browser. Select manual URL paste-back, "
+                               "start sign-in again, and use Copy URL.")
+
+    def _identity_matches(self) -> bool:
+        creds = self._creds()
+        return self._authorization_credentials == (
+            creds.app_key, creds.app_secret, creds.redirect_uri or _DEFAULT_REDIRECT_URI
+        ) and self._exchange_generation == token_cache_generation()
+
+    def _poll_callback(self) -> None:
+        self._callback_job = None
+        if self._closed or self._callback is None:
+            return
+        if not self._identity_matches():
+            self.cancel()
+            self._set_progress("App settings or authorization changed. Start a fresh sign-in.")
+            return
+        event = self._callback.poll()
+        if event is not None:
+            if event.kind == "ready":
+                self._launch_browser()
+            elif event.kind == "authorized":
+                self._stop_callback()
+                self._begin_exchange(event.code)
+                return
+            else:
+                self._stop_callback()
+                self._state_nonce = None
+                self._set_progress(event.message)
+                return
+        if self._callback is not None:
+            self._callback_job = self.after(100, self._poll_callback)
+
+    def _stop_callback(self) -> None:
+        if self._callback is not None:
+            self._callback.close()
+            self._callback = None
+        if self._callback_job is not None:
+            self.after_cancel(self._callback_job)
+            self._callback_job = None
+        self._open_btn.configure(state="normal")
 
     def _on_copy_url(self) -> None:
         url = self._url_var.get()
         if not url:
-            self._set_progress("Click \"Open Schwab sign-in\" first to "
+            self._set_progress("Click Sign in first to "
                                "generate the URL.")
             return
         try:
@@ -262,18 +305,12 @@ class SchwabConnectDialog(BaseModalDialog):
         if not pasted:
             return None, "Paste the redirected address from your browser first."
         if not nonce:
-            return None, ("Click \"Open Schwab sign-in\" first to start a "
-                          "login, then paste the redirected address.")
-        echoed = extract_state(pasted)
-        if echoed is None or not secrets.compare_digest(echoed.encode("utf-8"), nonce.encode("utf-8")):
-            return None, ("Security check failed (state mismatch). This URL is "
-                          "from a different or tampered login — click \"Open "
-                          "Schwab sign-in\" to start a fresh one.")
+            return None, "Click Sign in first, then paste the redirected address."
         try:
-            code = extract_code(pasted)
+            response = callback_response(urlsplit(pasted).query, nonce)
         except ValueError as exc:
             return None, str(exc)
-        return code, None
+        return (response.code, None) if response.kind == "authorized" else (None, response.message)
 
     def _on_connect(self) -> None:
         if self._closed or self._exchange_result is not None:
@@ -283,14 +320,26 @@ class SchwabConnectDialog(BaseModalDialog):
         if error is not None:
             self._set_progress(error)
             return
-        creds = self._creds()
-        if not creds.is_configured() or self._authorization_credentials != (creds.app_key, creds.app_secret):
-            self._set_progress("App credentials changed — open a fresh Schwab sign-in.")
+        try:
+            actual, expected = urlsplit(self._paste_var.get().strip()), urlsplit(self._redirect_uri or "")
+            if (actual.scheme, actual.hostname, actual.port or 443, actual.path or "/") != (
+                expected.scheme, expected.hostname, expected.port or 443, expected.path or "/"
+            ) or actual.username is not None or actual.fragment:
+                raise ValueError
+        except ValueError:
+            self._set_progress("The returned address does not match this sign-in's registered redirect URI.")
             return
-        redirect_uri = (self._redirect_uri or creds.redirect_uri
-                        or _DEFAULT_REDIRECT_URI)
+        self._stop_callback()
+        self._begin_exchange(code)
+
+    def _begin_exchange(self, code: str) -> None:
+        if not self._identity_matches():
+            self.cancel()
+            self._set_progress("App settings or authorization changed — start a fresh sign-in.")
+            return
+        creds = self._creds()
+        redirect_uri = self._redirect_uri or _DEFAULT_REDIRECT_URI
         self._exchange_result = {}
-        self._exchange_generation = token_cache_generation()
         self._state_nonce = None
         self._paste_var.set("")
         try:
@@ -315,7 +364,7 @@ class SchwabConnectDialog(BaseModalDialog):
             response = exchange_code_for_tokens(creds, redirect_uri, code)
             cache = build_token_cache(response, creds=creds)
             result.update({"ok": True, "cache": cache})
-        except (OSError, ValueError, TypeError, KeyError, OverflowError, TokenCacheError) as exc:
+        except (OSError, HTTPException, ValueError, TypeError, KeyError, OverflowError, TokenCacheError) as exc:
             result.update({"ok": False, "error": schwab_failure_result(exc).summary})
 
     def _poll_exchange(self) -> None:
@@ -339,7 +388,7 @@ class SchwabConnectDialog(BaseModalDialog):
             pass
         if result.get("ok"):
             cache = result["cache"]
-            if not cache_matches_credentials(cache, self._creds()):
+            if not self._identity_matches() or not cache_matches_credentials(cache, self._creds()):
                 self._set_progress("App credentials changed — tokens were not saved. Sign in again.")
                 return
             try:
@@ -366,7 +415,7 @@ class SchwabConnectDialog(BaseModalDialog):
             parent=self,
         ):
             return
-        self._cancel_exchange()
+        self.cancel()
         try:
             clear_token_cache()
         except TokenCacheError:
@@ -388,6 +437,13 @@ class SchwabConnectDialog(BaseModalDialog):
             except Exception:  # noqa: BLE001 - external UI hook; persisted auth already succeeded
                 self._set_progress("Tokens updated, but the live connection could not be updated. Restart the app.")
 
+    def cancel(self) -> None:
+        if self._closed:
+            return
+        self._stop_callback()
+        self._cancel_exchange()
+        self._set_progress("Sign-in cancelled. Saved tokens are unchanged.")
+
     def _cancel_exchange(self) -> None:
         self._exchange_result = None
         self._state_nonce = None
@@ -405,30 +461,24 @@ class SchwabConnectDialog(BaseModalDialog):
 
     def destroy(self) -> None:
         if not self._closed:
-            self._closed = True
+            self._stop_callback()
             self._cancel_exchange()
+            self._closed = True
         super().destroy()
 
-    def _on_close(self) -> None:
-        try:
-            self.destroy()
-        except tk.TclError:
-            pass
+    def _on_destroy(self, event) -> None:
+        if event.widget is self:
+            self._closed = True
+            if self._callback is not None:
+                self._callback.close()
+            self._exchange_result = None
+            for job in (self._poll_job, self._callback_job):
+                if job is not None:
+                    try:
+                        self.after_cancel(job)
+                    except tk.TclError:
+                        pass
+            self._poll_job = self._callback_job = None
 
 
-def open_schwab_connect_dialog(
-    parent: tk.Misc, *, on_connection_changed: Callable[[], None] | None = None,
-) -> SchwabConnectDialog | None:
-    """Open the Schwab Connect dialog as a modal child of ``parent``.
-
-    Returns the dialog instance (or ``None`` if Tk is unavailable).
-    """
-    try:
-        dlg = SchwabConnectDialog(parent, on_connection_changed=on_connection_changed)
-        parent.wait_window(dlg)
-        return dlg
-    except tk.TclError:
-        return None
-
-
-__all__ = ["SchwabConnectDialog", "open_schwab_connect_dialog"]
+__all__ = ["SchwabConnectPanel"]

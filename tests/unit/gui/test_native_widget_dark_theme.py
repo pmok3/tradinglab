@@ -645,11 +645,6 @@ def _build_export_cache(dark_root, _monkeypatch):
     return ExportCacheDialog(dark_root)
 
 
-def _build_schwab_connect(dark_root, _monkeypatch):
-    from tradinglab.gui.schwab_connect_dialog import SchwabConnectDialog
-    return SchwabConnectDialog(dark_root)
-
-
 def _build_local_data(dark_root, _monkeypatch):
     from tradinglab.gui.local_data_dialog import LocalDataDialog
     return LocalDataDialog(dark_root)
@@ -800,7 +795,6 @@ _DARK_WINDOWS = {
     "ChartStackSettingsDialog": _build_chartstack_settings,
     "CredentialsDialog": _build_credentials,
     "ExportCacheDialog": _build_export_cache,
-    "SchwabConnectDialog": _build_schwab_connect,
     "LocalDataDialog": _build_local_data,
     "_BracketDialog": _build_bracket,
     "WatchlistColumnsDialog": _build_watchlist_columns,

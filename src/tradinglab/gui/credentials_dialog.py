@@ -7,8 +7,8 @@ can apply session-only environment values, with an explicit persistence notice.
 
 Save and Remove reconcile historical and streaming registry presence. Changing
 the effective Schwab identity closes its connection and invalidates OAuth tokens;
-an unchanged identity preserves both. Interactive authorization is a separate
-Tools -> Connect to Schwab action.
+an unchanged identity preserves both. The Schwab section contains browser
+authorization; account login is separate from the developer app settings.
 """
 from __future__ import annotations
 
@@ -148,7 +148,7 @@ _VENDOR_BLURB: dict[str, str] = {
                "feed with full volume; the free plan is IEX-only and delayed "
                "15 minutes."),
     "polygon": "Polygon — deep historical intraday history.",
-    "schwab": "Schwab — configure keys, then use Tools → Connect to Schwab. "
+    "schwab": "Schwab — save app settings and sign in below using your browser. "
               "Market data remains gated pending live commissioning.",
 }
 
@@ -297,6 +297,7 @@ class CredentialsDialog(BaseModalDialog):
     def __init__(
         self, parent: tk.Misc,
         on_changed: Callable[[], None] | None = None,
+        *, on_schwab_connection_changed: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(
             parent,
@@ -307,6 +308,8 @@ class CredentialsDialog(BaseModalDialog):
         )
 
         self._on_changed = on_changed
+        self._on_schwab_connection_changed = on_schwab_connection_changed
+        self._schwab_panel = None
         self._entries: dict[str, tk.Entry] = {}
         # Field textvariables MUST be kept referenced. A ttk widget stores
         # only the Tcl variable *name*; if the Python ``StringVar`` is
@@ -696,11 +699,19 @@ class CredentialsDialog(BaseModalDialog):
     ) -> int:
         """Append ``section``'s "Test connection" block. Returns the next row.
 
-        No-op for a vendor without a registered verifier (Schwab today), so
-        the dialog never offers a button that cannot answer.
+        Schwab account authorization lives directly beside its developer fields.
         """
         vendor = next(
             (v for _p, s, v in _SECTIONS if s == section), None)
+        if vendor == "schwab":
+            from .schwab_connect_panel import SchwabConnectPanel
+
+            self._schwab_panel = SchwabConnectPanel(
+                frm, on_prepare=self._save_schwab_for_sign_in,
+                on_connection_changed=self._schwab_auth_changed,
+            )
+            self._schwab_panel.grid(row=row, column=0, columnspan=3, sticky="ew", pady=(6, 4))
+            row += 1
         if vendor is None or not verify.has_verifier(vendor):
             return row
 
@@ -755,6 +766,8 @@ class CredentialsDialog(BaseModalDialog):
         """Drop a stale verdict after an edit (no-op while a probe is live)."""
         if self._populating:
             return
+        if vendor == "schwab" and self._schwab_panel is not None:
+            self._schwab_panel.cancel()
         if self._verify_boxes.get(vendor, {}).get("inflight"):
             return
         if vendor not in self._verify_status_vars:
@@ -932,6 +945,66 @@ class CredentialsDialog(BaseModalDialog):
             except (tk.TclError, ValueError):
                 pass
         self._verify_jobs.clear()
+
+    def _save_schwab_for_sign_in(self) -> bool:
+        """Save only this vendor's draft before authorizing, leaving the form open."""
+        from .. import _dpapi
+        from ..data import credential_store
+        from ..data import credentials as creds
+
+        desired = self._vendor_credentials_from_form("schwab")
+        if not desired.is_configured():
+            messagebox.showinfo("Schwab", "Enter the developer app key and secret above first.", parent=self)
+            return False
+        if desired != creds.get_credentials().schwab:
+            values = {key: value for key, value in self._collect().items() if key.startswith("SCHWAB_")}
+            if sys.platform == "win32":
+                try:
+                    if not _dpapi.is_available():
+                        raise _dpapi.DpapiError("Unavailable")
+                    credential_store.save_vendor("schwab", values)
+                except (_dpapi.DpapiError, OSError):
+                    messagebox.showerror("Schwab", "Could not securely save the Schwab app settings.", parent=self)
+                    return False
+            else:
+                if not messagebox.askyesno(
+                    "Schwab", "App settings cannot be stored securely on this platform. "
+                    "Use them for this process only?", parent=self,
+                ):
+                    return False
+                for key, _label, _secret in _FIELDS:
+                    if key.startswith("SCHWAB_"):
+                        if key in values:
+                            os.environ[key] = values[key]
+                        else:
+                            os.environ.pop(key, None)
+            creds.reload()
+            if not self._refresh_stream_credentials():
+                return False
+            verify.clear_results()
+            if self._on_changed is not None:
+                self._on_changed()
+            if creds.get_credentials().schwab != desired:
+                messagebox.showerror(
+                    "Schwab", "Another credential layer overrides these app settings. "
+                    "Update the source shown above before signing in.", parent=self,
+                )
+                return False
+        self._refresh_vendor_header("schwab")
+        return True
+
+    def _schwab_auth_changed(self) -> None:
+        verify.clear_results()
+        self._refresh_vendor_header("schwab")
+        if self._on_schwab_connection_changed is not None:
+            self._on_schwab_connection_changed()
+        else:
+            from ..data.schwab_auth import load_token_cache
+            from ..streaming.registry import reconcile_vendor_streams
+
+            reconcile_vendor_streams(reset=True, oauth_connected=bool(load_token_cache()))
+            if self._on_changed is not None:
+                self._on_changed()
 
     # ---- helpers -------------------------------------------------------
 
@@ -1302,6 +1375,10 @@ class CredentialsDialog(BaseModalDialog):
                 parent=self)
             return False
         self._schwab_identity = current
+        if self._schwab_panel is not None:
+            if previous != current:
+                self._schwab_panel.cancel()
+            self._schwab_panel._refresh_status()
         return True
 
     def _on_cancel(self) -> None:
@@ -1310,6 +1387,7 @@ class CredentialsDialog(BaseModalDialog):
 
 def open_credentials_dialog(
     parent: tk.Misc, on_changed: Callable[[], None] | None = None,
+    *, on_schwab_connection_changed: Callable[[], None] | None = None,
 ) -> CredentialsDialog | None:
     """Open the credentials dialog as a modal child of ``parent``.
 
@@ -1323,7 +1401,8 @@ def open_credentials_dialog(
     ``grab_set`` and destroys itself on Save / Cancel.
     """
     try:
-        dlg = CredentialsDialog(parent, on_changed=on_changed)
+        dlg = CredentialsDialog(parent, on_changed=on_changed,
+                                on_schwab_connection_changed=on_schwab_connection_changed)
         parent.wait_window(dlg)
         return dlg
     except tk.TclError:

@@ -1005,6 +1005,74 @@ def check_d0_dialogs(app) -> None:
     print("  [OK] dialogs open/close")
 
 
+def check_d0b_schwab_credentials_sign_in(app) -> None:
+    """The Credentials window owns browser return and saves both fake tokens."""
+    if sys.platform == "darwin":
+        print("  [SKIP] d0b: headless macOS modal transient deadlock; unit-covered")
+        return
+    import tempfile
+    from collections import deque
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    import pytest
+
+    from tradinglab.data import credentials, schwab_auth
+    from tradinglab.data.schwab_callback import CallbackEvent
+    from tradinglab.gui import schwab_connect_panel
+    from tradinglab.gui.credentials_dialog import CredentialsDialog
+
+    class Receiver:
+        def __init__(self, uri, state):
+            self.events = deque([CallbackEvent("ready"), CallbackEvent("authorized", code="FAKE-CODE")])
+        def start(self):
+            pass
+        def poll(self):
+            return self.events.popleft() if self.events else None
+        def close(self):
+            pass
+
+    with tempfile.TemporaryDirectory(prefix="tl-oauth-smoke-") as folder, pytest.MonkeyPatch.context() as mp:
+        fake = SimpleNamespace(schwab=credentials.SchwabCredentials("APP", "SECRET", "https://127.0.0.1:8182"))
+        mp.setattr(schwab_auth, "token_cache_path", lambda: Path(folder) / "schwab.json")
+        mp.setattr(schwab_auth, "_WINDOWS", False)
+        mp.setattr(credentials, "get_credentials", lambda: fake)
+        mp.setattr(credentials, "effective_values", lambda: {})
+        mp.setattr(schwab_connect_panel, "get_credentials", lambda: fake)
+        mp.setattr(schwab_connect_panel, "CallbackListener", Receiver)
+        opened, changed = [], []
+        mp.setattr(schwab_connect_panel.webbrowser, "open",
+                   lambda url, **kw: opened.append(kw) or True)
+        mp.setattr(schwab_connect_panel, "exchange_code_for_tokens",
+                   lambda *a: {"access_token": "FAKE-ACCESS", "refresh_token": "FAKE-REFRESH"})
+        dlg = CredentialsDialog(app)
+        try:
+            panel = dlg._schwab_panel
+            assert panel.winfo_toplevel() is dlg and not panel._manual_var.get()
+            assert not panel._manual_frame.grid_info()
+            panel._on_prepare = None  # No user data/credential writes in the acceptance probe.
+            panel._on_connection_changed = lambda: changed.append(True)
+            panel._open_btn.invoke()
+            _pump_until(app, lambda: bool(changed), timeout=5)
+            assert changed and opened == [{"new": 1, "autoraise": True}]
+            cache = schwab_auth.load_token_cache()
+            assert cache["access_token"] == "FAKE-ACCESS" and cache["refresh_token"] == "FAKE-REFRESH"
+            menubar = app.nametowidget(app.cget("menu"))
+            for index in range(menubar.index("end") + 1):
+                if menubar.type(index) == "cascade" and menubar.entrycget(index, "label") == "Tools":
+                    tools = app.nametowidget(menubar.entrycget(index, "menu"))
+                    labels = [tools.entrycget(i, "label") for i in range(tools.index("end") + 1)
+                              if tools.type(i) == "command"]
+                    assert "Configure Credentials…" in labels
+                    assert "Connect to Schwab…" not in labels
+                    break
+            else:
+                raise AssertionError("Tools menu missing")
+        finally:
+            dlg.destroy()
+    print("  [OK] inline Schwab browser sign-in and automatic token persistence")
+
+
 def check_d3_adaptive_x_formatter(app) -> None:
     """TradingView-style adaptive timestamps: ticks land exactly on
     calendar boundary bars (day / month / year) and those ticks show
@@ -24086,6 +24154,7 @@ def _run_all_checks(app) -> None:
     check_c6_bad_ticker(app)
     check_c7_watchlist_columns(app)
     check_d0_dialogs(app)
+    check_d0b_schwab_credentials_sign_in(app)
     check_d1_log_price_scale(app)
     check_d2_preserve_xlim_across_compare_toggle(app)
     check_d3_adaptive_x_formatter(app)
@@ -24392,6 +24461,7 @@ def _build_check_sequence():
         ("check_c6_bad_ticker", check_c6_bad_ticker),
         ("check_c7_watchlist_columns", check_c7_watchlist_columns),
         ("check_d0_dialogs", check_d0_dialogs),
+        ("check_d0b_schwab_credentials_sign_in", check_d0b_schwab_credentials_sign_in),
         ("check_d1_log_price_scale", check_d1_log_price_scale),
         ("check_d2_preserve_xlim_across_compare_toggle",
          check_d2_preserve_xlim_across_compare_toggle),

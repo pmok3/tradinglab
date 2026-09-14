@@ -1,6 +1,6 @@
 # data/schwab_auth.py — Spec
 
-Last updated: 2026-09-08
+Last updated: 2026-09-14
 
 ## Purpose
 Owns the **on-disk Schwab OAuth token cache** and the **POST-to-refresh** flow. Stdlib-only and importable from anywhere — does NOT own the browser-redirect login flow (that lives in `schwab_login.py`).

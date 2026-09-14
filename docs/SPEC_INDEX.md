@@ -46,6 +46,7 @@ not an exhaustive enumeration.**
 | `data/base.spec.md` | `DataFetcher` protocol. |
 | `data/verify.spec.md` | Credential verification ("Test connection") — vendor-agnostic `VerifyResult` + status taxonomy + `register_verifier` / `verify_vendor`. |
 | `data/credential_store.spec.md` | Versioned per-vendor DPAPI credential store — v2 schema, v1 auto-migration, persisted verification verdicts (status + timestamp only). |
+| `data/schwab_callback.spec.md` | Temporary HTTPS loopback OAuth receiver, local certificate, exact state/URI validation and cancellation. |
 | `data/coverage.spec.md` | Per-`(source,ticker,interval)` fetch-coverage sidecar — merged fetched range segments + data-start watermark; underpins the targeted intraday fetch. See [`TARGETED_FETCH.md`](TARGETED_FETCH.md). |
 | `data/normalize.spec.md` | `candles_from_dataframe` + `_PREBUILT_ARRAYS` side-channel (identity-paired). |
 | `data/parallel.spec.md` | Parallel multi-ticker fetch helper. |
@@ -148,6 +149,9 @@ not an exhaustive enumeration.**
 | `watchlists/signals.spec.md` | **API skeleton.** `WatchlistSignalEvaluator` — latest-bar batch eval of column `FieldRef`s via `scanner.engine.evaluate_field_at`; headless, cached. |
 
 ## `gui/`
+Schwab account sign-in is embedded in Credentials; its reusable panel contract
+is `gui/schwab_connect_panel.spec.md` (formerly the standalone connect dialog).
+
 | Spec | Covers |
 |---|---|
 | `gui/__init__.spec.md` | Subpackage marker; avoids `tradinglab.app` back-imports. |

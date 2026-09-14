@@ -61,7 +61,7 @@ bars a vendor happened to give us.
 | `heatmap_stale_after_s` | Seconds since a symbol's last print before its tile is dimmed. Default 120. |
 
 Schwab is currently the only real quote adapter, and it requires a
-completed OAuth login (**Tools → Connect to Schwab…**). Without a
+completed OAuth login (**Tools → Configure Credentials → Schwab**). Without a
 configured feed the live map still opens and reads from cached bars —
 it simply says so in the footer rather than pretending to be live.
 

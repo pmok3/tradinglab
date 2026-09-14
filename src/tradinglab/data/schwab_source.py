@@ -22,7 +22,7 @@ Schwab's API uses OAuth 2.0:
 * Refresh token must be re-issued by walking the user through the
   browser flow once a week.
 
-The browser flow is available in the Connect to Schwab dialog and the
+The browser flow is available in the Credentials window's Schwab section and the
 ``schwab_login`` CLI. ``schwab_auth`` owns protected persistence + refresh.
 
 REST price-history endpoint
@@ -209,7 +209,7 @@ def fetch_schwab_data(
     try:
         access_token = _maybe_get_access_token(creds)
         if access_token is None:
-            LOG.info("schwab: OAuth sign-in required via Connect to Schwab.")
+            LOG.info("schwab: OAuth sign-in required in Tools > Configure Credentials > Schwab.")
             return None
         payload = _http_get_pricehistory(ticker, interval, access_token, start=start, end=end)
         return candles_from_schwab_response(payload, interval=interval, start=start, end=end)
@@ -252,7 +252,7 @@ def verify_schwab(
         vendor="schwab",
         summary="Schwab OAuth sign-in is required before testing.",
         detail=(
-            "Save the app credentials, then use Tools > Connect to Schwab. "
+            "Use Tools > Configure Credentials > Schwab to save app settings and sign in. "
             "This check does not register or enable the uncommissioned data source."
         ),
     )

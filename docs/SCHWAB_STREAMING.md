@@ -13,14 +13,42 @@ Schwab charts are available in this build.
 
 Registration only reads credential presence. It never probes a server, refreshes
 a token or opens a socket. The optional dependency remains the existing
-`tradinglab[schwab]` extra (`websocket-client`); no new dependency is introduced.
+`tradinglab[schwab]` extra (`websocket-client` and `cryptography`). The latter
+generates a temporary certificate for automatic browser return; the 46.x range
+is used for available native Windows ARM64 wheels.
 
 ## Configure, connect and disconnect
 
-Use **Tools -> Configure Credentials** to save the app key, secret and registered
-redirect URI, then **Tools -> Connect to Schwab** for the browser/paste-back OAuth
-flow. On Windows, credentials and OAuth tokens use protected local storage.
+Use **Tools -> Configure Credentials -> Schwab** for app settings and account
+sign-in in one place. **Save Schwab settings & sign in** saves only Schwab's
+settings and opens the system browser for manual login/MFA. The developer app
+key and secret identify the application; they are not account passwords or
+OAuth tokens. A temporary local HTTPS listener captures the browser return,
+then TradingLab exchanges the code and saves both the access and refresh tokens.
+On Windows, credentials and OAuth tokens use protected local storage.
 Never put a secret or token in a screenshot, diagnostic note or issue.
+
+The saved redirect URI must exactly match the developer portal, including path
+and trailing slash. Automatic return accepts HTTPS `127.0.0.1`, `localhost`, or
+`[::1]`; it never binds a public interface or changes the registered URI.
+For a new registration, schwab-py recommends `https://127.0.0.1:8182`; an existing
+URI without a port uses 443 and may need a different registered port if occupied
+or restricted. Do not change an existing registration just to match this example.
+
+The browser may display a certificate prompt for the **local callback only**:
+each attempt uses a short-lived self-signed certificate, not a globally installed
+certificate. TradingLab never changes Windows trust settings or disables browser
+certificate verification. Login on Schwab's domain must retain its normal valid
+certificate. The listener is ready before the browser opens, times out after
+five minutes and closes on cancel, credential edit, or window close.
+**Use manual URL paste-back instead** remains an explicit fallback if local TLS,
+the port or browser policy prevents automatic return. The browser may choose
+a tab despite the application's request for a new window.
+
+As with [schwab-py's client helpers](https://schwab-py.readthedocs.io/en/latest/auth.html),
+saved tokens are reused and access tokens refreshed in the background. A raw
+unauthenticated data request does not itself log the user in; account consent
+is initiated by the user, never by a background poll opening unexpected windows.
 
 A harmless save with the same effective Schwab identity preserves tokens and the
 shared connection. Changing the effective app key, secret or redirect URI, or

@@ -1,6 +1,6 @@
 # `gui/menu_builder.py` — menubar extraction
 
-Last updated: 2026-09-07
+Last updated: 2026-09-14
 
 ## Purpose
 - Move the large menubar-construction block out of `app.py` while preserving TradingLab's existing menubar surface across these top-level cascades, **in display order**:
@@ -10,7 +10,7 @@ Last updated: 2026-09-07
   4. **Sandbox** — Start / End Session, Download Replay Data…, Performance, Market Heatmap, Save / Load Session, Tags.
   5. **Strategies** — one consolidated cascade (audit `strategies-menu-consolidation`): Entries (New Entry Strategy… / Manage Entry Strategies… / Disarm All Entries), Exits (Edit Exit Strategies…), and Strategy Tester….
   6. **View** — Heikin-Ashi (cascade: Show Heikin-Ashi Candles + Highlight Flat Bars), Highlight Key Bars, Volume time-of-day shading, Ratio charts (A/B), ChartStack (cascade: Show ChartStack + Settings…), Quant, Live Market Heatmap, Heatmap (Finviz).
-  7. **Tools** — Credentials, Connect to Schwab, Local Data, Export CSV, Status History, Reveal Data Folder, Restore Templates.
+  7. **Tools** — Credentials (including Schwab sign-in), Local Data, Export CSV, Status History, Reveal Data Folder, Restore Templates.
   8. **Help** — built by `HelpMenuMixin._build_help_menu`.
 - Keep menu commands routed back into `ChartApp` through a narrow callback protocol so the builder owns widget construction, not app business logic.
 

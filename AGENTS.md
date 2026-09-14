@@ -700,6 +700,13 @@ don't re-add cwd. *Exception:* non-DPAPI hosts have no secure store, so the dial
 `_apply_session_only()` writes to `os.environ` for that process only. Specs:
 `data/credentials.spec.md`, `data/credential_store.spec.md`.
 
+Schwab account sign-in belongs inside **Tools → Configure Credentials → Schwab**.
+The inline panel opens the system browser only on a user action; background
+fetches never launch login windows. Automatic return uses a temporary loopback
+HTTPS listener/certificate without changing OS trust settings; manual paste-back
+is explicit fallback. See `data/schwab_callback.spec.md`,
+`gui/schwab_connect_panel.spec.md` and `docs/SCHWAB_STREAMING.md`.
+
 ### 7.34 Consolidated primitives — use them, don't re-copy them
 
 A DRY audit retired ~2,500 lines of duplication that had already drifted into real bugs
@@ -1109,6 +1116,7 @@ These files are **never** committed to git. Use them for working memory.
 | Encrypted credential store (v2, per-vendor) | `src/tradinglab/data/credential_store.py`; see §7.33 |
 | Credential provenance (which layer supplied a key) | `src/tradinglab/data/credentials.py` (`describe`, `origin_of`, `vendor_origin`); see §7.33 |
 | Credentials dialog + vendor re-registration | `src/tradinglab/gui/credentials_dialog.py`, `data/__init__.py:register_vendor_sources` |
+| Schwab account sign-in + automatic browser return | `gui/schwab_connect_panel.py`, `data/schwab_callback.py`; token persistence remains `data/schwab_auth.py` |
 | Onboarding docs | `docs/ONBOARDING.md` |
 | Build docs | `docs/BUILDING_EXE.md` |
 | Paint-pipeline refactor scope | `docs/PAINT_PIPELINE_REFACTOR.md` (multi-week, requires user-design session) |

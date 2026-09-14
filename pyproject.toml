@@ -50,12 +50,17 @@ dev = [
     # explicitly via ``pytest --cov=tradinglab`` and the CI coverage jobs.
     "pytest-cov>=5",
     "ruff>=0.15,<0.16",
+    # Exercise the optional Schwab HTTPS return with real local TLS in CI.
+    "cryptography>=46.0.3,<47",
 ]
 schwab = [
     # Required for the Schwab streaming WebSocket source. Base install
     # stays lean; only users who configure Schwab + want live streaming
     # need to opt in via `pip install tradinglab[schwab]`.
     "websocket-client>=1.7",
+    # 46.x ships the native Windows ARM64 wheel used by the frozen build.
+    # Short-lived localhost TLS certificate for automatic OAuth browser return.
+    "cryptography>=46.0.3,<47",
 ]
 
 [project.scripts]

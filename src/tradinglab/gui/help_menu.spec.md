@@ -1,6 +1,6 @@
 # `gui/help_menu.py` — Help cascade for the ChartApp menubar
 
-Last updated: 2026-09-07
+Last updated: 2026-09-14
 
 ## Purpose
 
@@ -72,13 +72,11 @@ Schwab connect, local data, and CSV export.
   re-resolves `"Auto"`, which may now rank the new vendor above whatever it
   is currently serving (AGENTS.md §7.38). Swallows hook exceptions so a
   refresh failure can't break the dialog.
-- `_on_help_connect_schwab` —
-  `gui.schwab_connect_dialog.open_schwab_connect_dialog(self,
-  on_connection_changed=self._on_schwab_connection_changed)` (guarded
-  import). Interactive Schwab OAuth sign-in (system browser + paste-back; no
-  embedded webview). Wired as **Tools → "Connect to Schwab…"**.
-  The Tk callback reconciles the shared stream after successful OAuth save/clear;
-  it never deletes a newly saved token.
+- Schwab OAuth is embedded in Credentials, not a separate Tools command.
+  `_on_help_configure_credentials` also passes
+  `on_schwab_connection_changed=self._on_schwab_connection_changed`; this
+  callback reconciles the shared stream after OAuth save/clear without deleting
+  a newly saved token.
 - `_on_help_configure_local_data` —
   `gui.local_data_dialog.open_local_data_dialog(self, on_changed=...)`
   and refreshes the data-source combobox after BYOD roots change.

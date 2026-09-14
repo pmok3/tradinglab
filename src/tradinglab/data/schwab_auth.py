@@ -124,7 +124,7 @@ def schwab_failure_result(exc: Exception) -> _verify.VerifyResult:
         return _verify.VerifyResult(
             status=result.status, vendor="schwab", http_status=result.http_status,
             summary="Schwab rejected authorization (HTTP 401).",
-            detail="Reconnect via Connect to Schwab; check the app credentials if sign-in fails.",
+            detail="Reconnect in Tools > Configure Credentials > Schwab; check app settings if sign-in fails.",
         )
     return result
 
@@ -450,7 +450,7 @@ def get_access_token(
                 if is_access_token_fresh(cache, now=_now):
                     return cache["access_token"]
             if not is_refresh_token_alive(cache, now=_now):
-                LOG.info("schwab: OAuth sign-in required via Connect to Schwab.")
+                LOG.info("schwab: OAuth sign-in required in Tools > Configure Credentials > Schwab.")
                 return None
             response = refresh_access_token(
                 creds, cache["refresh_token"], _post=_post,

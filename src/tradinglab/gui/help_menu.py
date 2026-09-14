@@ -743,34 +743,14 @@ class HelpMenuMixin:
                 pass
 
         try:
-            open_credentials_dialog(self, on_changed=_on_changed)
+            open_credentials_dialog(self, on_changed=_on_changed,
+                                    on_schwab_connection_changed=self._on_schwab_connection_changed)
         except Exception as e:  # noqa: BLE001
             messagebox.showerror(
                 "Credentials",
                 f"Could not open credentials dialog: {e}",
                 parent=self,
             )
-    # ---- Connect to Schwab (interactive OAuth sign-in) ----------------
-
-    def _on_help_connect_schwab(self) -> None:
-        try:
-            from .schwab_connect_dialog import open_schwab_connect_dialog
-        except ImportError as e:
-            messagebox.showerror(
-                "Connect to Schwab",
-                f"Schwab Connect dialog is unavailable: {e}",
-                parent=self,
-            )
-            return
-        try:
-            open_schwab_connect_dialog(self, on_connection_changed=self._on_schwab_connection_changed)
-        except Exception as e:  # noqa: BLE001
-            messagebox.showerror(
-                "Connect to Schwab",
-                f"Could not open the Schwab Connect dialog: {e}",
-                parent=self,
-            )
-
     # ---- Configure local data (BYOD) ---------------------------------
 
     def _on_help_configure_local_data(self) -> None:

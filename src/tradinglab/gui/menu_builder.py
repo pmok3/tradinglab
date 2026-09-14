@@ -393,10 +393,6 @@ class MenuBuilder:
             command=self._cb._on_help_configure_credentials,
         )
         tools_menu.add_command(
-            label="Connect to Schwab…",
-            command=self._cb._on_help_connect_schwab,
-        )
-        tools_menu.add_command(
             label="Configure Local Data…",
             command=self._cb._on_help_configure_local_data,
         )

@@ -12,7 +12,7 @@ from tradinglab.gui.credentials_dialog import CredentialsDialog
 def test_identity_refresh_clears_only_changed_effective_schwab_credentials(monkeypatch, changed):
     old = SchwabCredentials("key", "secret", "uri")
     new = SchwabCredentials("new", "secret", "uri") if changed else old
-    dialog = SimpleNamespace(_schwab_identity=old)
+    dialog = SimpleNamespace(_schwab_identity=old, _schwab_panel=None)
     calls = []
     monkeypatch.setattr("tradinglab.data.credentials.get_credentials", lambda: SimpleNamespace(schwab=new))
     monkeypatch.setattr("tradinglab.streaming.registry.close_vendor_streams", lambda: calls.append("close"))
@@ -25,7 +25,7 @@ def test_identity_refresh_clears_only_changed_effective_schwab_credentials(monke
 
 def test_token_reset_failure_is_visible_and_retry_still_required(monkeypatch):
     old = SchwabCredentials("key", "secret")
-    dialog = SimpleNamespace(_schwab_identity=old)
+    dialog = SimpleNamespace(_schwab_identity=old, _schwab_panel=None)
     calls = []
     monkeypatch.setattr("tradinglab.data.credentials.get_credentials",
                         lambda: SimpleNamespace(schwab=SchwabCredentials()))
