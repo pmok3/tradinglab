@@ -77,6 +77,33 @@ def test_destroy_cancels_owned_callback(root):
     root.update()
 
 
+def test_explicit_initially_hidden_control_can_join_flow(root):
+    root.geometry("260x400")
+    row, buttons = _row(root)
+    buttons[0].pack_forget()
+    wrap_controls(row, controls=buttons)
+    with mapped_window(root):
+        assert not buttons[0].winfo_manager()
+        buttons[0].pack(side="left")
+        root.update()
+        root.geometry("240x400")
+        root.update()
+        assert_window_width(root)
+        assert buttons[0].winfo_ismapped()
+        assert buttons[0].winfo_rooty() <= buttons[1].winfo_rooty()
+
+
+def test_flow_uses_row_allocation_inside_padding(root):
+    root.geometry("320x400")
+    row, buttons = _row(root)
+    row.configure(padding=30)
+    wrap_controls(row)
+    with mapped_window(root):
+        root.update()
+        assert_window_width(root)
+        assert all(button.winfo_ismapped() for button in buttons)
+
+
 def test_other_rows_are_unchanged_and_single_oversize_control_is_honest(root):
     row, buttons = _row(root)
     original = [button.pack_info() for button in buttons]

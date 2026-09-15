@@ -2,15 +2,20 @@
 from __future__ import annotations
 
 import tkinter as tk
+from collections.abc import Sequence
 from tkinter import ttk
 
 
 class FlowLayout:
     """Keep packed controls intact while moving them between measured rows."""
 
-    def __init__(self, container: tk.Misc, *, gap: int = 4) -> None:
+    def __init__(
+        self, container: tk.Misc, *, controls: Sequence[tk.Misc] | None = None, gap: int = 4,
+    ) -> None:
         self.container = container
-        self.controls = tuple(container.pack_slaves())
+        self.controls = tuple(container.pack_slaves() if controls is None else controls)
+        if any(widget.master is not container for widget in self.controls):
+            raise ValueError("Flow controls must be children of their container")
         self.gap = max(0, gap)
         self._rows: list[ttk.Frame] = []
         self._job: str | None = None
@@ -36,6 +41,8 @@ class FlowLayout:
             if widget.winfo_exists() and widget.winfo_manager() == "pack"
         ]
         available = max(1, self.container.winfo_width())
+        if self._rows and self._rows[0].winfo_manager() and self._rows[0].winfo_width() > 1:
+            available = min(available, self._rows[0].winfo_width())
         signature = (available, tuple((str(widget), widget.winfo_reqwidth()) for widget in active))
         if signature == self._signature:
             return
@@ -73,12 +80,17 @@ class FlowLayout:
                 widget.unbind("<Configure>", binding)
 
 
-def wrap_controls(container: tk.Misc, *, gap: int = 4) -> FlowLayout:
+def wrap_controls(
+    container: tk.Misc, *, controls: Sequence[tk.Misc] | None = None, gap: int = 4,
+) -> FlowLayout:
     """Wrap the currently packed controls; never manage explicitly hidden ones.
 
     Controls retain their original parent, identity, tab order, state and
     callbacks. ``pack_forget`` continues to hide them; re-packing shows them.
+    Supply ``controls`` in logical order to include initially hidden controls.
+    This compact-row layout replaces per-child pack alignment/padding with
+    left-aligned rows and the explicit uniform gap; it is not a form layout.
     A control wider than the available row still needs a minimum or viewport
     policy from its owner rather than being silently compressed by this helper.
     """
-    return FlowLayout(container, gap=gap)
+    return FlowLayout(container, controls=controls, gap=gap)

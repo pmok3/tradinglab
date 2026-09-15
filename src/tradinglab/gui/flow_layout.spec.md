@@ -9,8 +9,9 @@ when their pane narrows or UI fonts grow. Does not alter the main toolbar.
 
 ## Public API
 
-- `wrap_controls(container, *, gap=4) -> FlowLayout` captures the currently
-  packed controls in packing order and installs a resize-reactive layout.
+- `wrap_controls(container, *, controls=None, gap=4) -> FlowLayout` captures the
+  currently packed controls in packing order, or an explicit ordered sequence
+  including initially hidden controls, and installs a resize-reactive layout.
 - `FlowLayout` retains the container, controls and owned idle/binding state.
 
 ## Behavior
@@ -18,11 +19,17 @@ when their pane narrows or UI fonts grow. Does not alter the main toolbar.
 Controls remain children of their original container. Packing them into child
 row frames with `in_` preserves widget identity, callbacks, focus and tab order.
 The helper greedily wraps their actual requested widths against the allocated
-container width. Rows reuse their frames and controls are never reconstructed.
+row width (inside container padding). Rows reuse their frames and controls are
+never reconstructed. This is for compact action rows: per-child pack alignment
+and external padding become left-aligned rows with the explicit uniform gap.
+Callers supply logical order explicitly when their original right-packing order
+differs from the desired reading order. Do not apply it to arbitrary forms.
 
 Only controls whose geometry manager is still `pack` participate. An initially
 hidden control is not captured; a captured control hidden with `pack_forget`
 remains hidden on subsequent resizes. Re-packing it makes it eligible again.
+With an explicit `controls` sequence, initially hidden items also become eligible
+when first shown; they are never automatically shown by resize.
 Disabled state is never changed.
 
 Configure events coalesce through one owned idle callback. Identical width/
