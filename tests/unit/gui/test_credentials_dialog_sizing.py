@@ -28,20 +28,8 @@ from tradinglab.gui import _modal_base, credentials_dialog
 from tradinglab.gui.geometry_store import GeometryStore
 
 
-@pytest.fixture(scope="module")
-def credentials_root():
-    try:
-        root = tk.Tk()
-    except tk.TclError as exc:
-        pytest.skip(f"Tk unavailable: {exc}")
-    root.withdraw()
-    yield root
-    root.destroy()
-
-
 @pytest.fixture
-def dialog(credentials_root, tmp_path, monkeypatch, request):
-    root = credentials_root
+def dialog(root, tmp_path, monkeypatch, request):
     sizes = {name: font.nametofont(name, root=root).actual("size") for name in ("TkDefaultFont", "TkTextFont")}
     geometry = GeometryStore(tmp_path / "geometry.json")
     geometry.load()
