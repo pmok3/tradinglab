@@ -2,6 +2,9 @@
 
 These cases reuse the smoke app's interpreter, but map it for meaningful bounds.
 No strategy run, replay session, export, network provider or credential is needed.
+The module pauses history dispatch while real worker-pool fences and inbox drains
+settle earlier work before snapshots. ChartStack receives deterministic card-only
+data; the original main-cache and primary/compare assertions remain unchanged.
 
 Settings, Performance and Strategy use transient Toplevels. Those cases retain
 the headless-macOS guard from AGENTS.md sections 5 and 7.1, before construction
@@ -32,6 +35,99 @@ from tests._application_window_cases import (
 from tests._window_width import assert_window_width, enlarged_fonts, mapped_window
 
 _TRANSIENT_CASE_NAMES = frozenset({"settings", "performance", "strategy"})
+
+
+def _settle_fetch_workers(app):
+    """Fence existing workers, then apply their Tk callbacks before taking snapshots."""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    from tests.smoke._helpers import _pump_until, _timeout_scale
+
+    service = app._fetch_svc
+    executors = {app._executor, app._fetch_executor, service._prefetch_executor}
+    timeout = 5 * _timeout_scale()
+    for executor in executors:
+        assert isinstance(executor, ThreadPoolExecutor), "Width probes require restored application executors"
+        release = Event()
+        ready = [Event() for _ in range(executor._max_workers)]
+
+        def fence(entered, release=release):
+            entered.set()
+            assert release.wait(timeout + 1), "Fetch-worker fence was not released"
+
+        try:
+            futures = [executor.submit(fence, entered) for entered in ready]
+            assert _pump_until(app, lambda ready=ready: all(entered.is_set() for entered in ready), timeout=5), (
+                "Earlier application fetches did not finish before the width probe"
+            )
+            release.set()
+            for future in futures:
+                future.result(timeout=timeout)
+        finally:
+            release.set()
+    # Future polling is 5ms and worker-inbox delivery is 80ms. Workers have
+    # finished above; let those real callbacks apply rather than discarding data.
+    settle(app)
+    assert _pump_until(app, app._worker_inbox.empty, timeout=5), (
+        "Earlier fetch results did not drain before the width probe"
+    )
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _pause_width_background_fetches(app):
+    """Keep live/history work outside this module's geometry-only measurements."""
+    from tests.smoke._helpers import _fake_candles
+    from tradinglab.core import reference_data
+    from tradinglab.gui.chartstack.controller import CardController
+
+    provider, arrival = reference_data._provider, reference_data._on_arrival
+    timers = {name: getattr(app, name) is not None for name in ("_poll_job", "_reload_job")}
+    retry = app._poll_retry_count, app._poll_retry_expected_min_ts
+    for name in timers:
+        job = getattr(app, name)
+        if job is not None:
+            app.after_cancel(job)
+            app._after_jobs.discard(job)
+            setattr(app, name, None)
+    driver = app._prefetch_driver
+    original_card_start = CardController.start
+    card_bars = _fake_candles(20)
+
+    def provide_card_data(controller):
+        if controller.owner_app is not app:
+            return original_card_start(controller)
+        if controller.binding is not None:
+            app._worker_inbox.put_nowait(("card_stash", (
+                controller.slot_index, controller.token, controller.binding.symbol, card_bars,
+            )))
+
+    try:
+        with pytest.MonkeyPatch.context() as patches:
+            reference_data.set_provider(None, on_arrival=arrival)
+            for name in (
+                "_submit_quant_fetches", "_kick_watchlist_preloads",
+                "_preload_watchlist", "_preload_watchlist_events",
+                "_preload_watchlist_daily", "_preload_watchlist_signals",
+                "_schedule_next_bar_fetch", "_schedule_reload",
+            ):
+                patches.setattr(app, name, lambda *_args, **_kwargs: None)
+            patches.setattr(app._fetch_svc, "prefetch", lambda *_args, **_kwargs: None)
+            if driver is not None:
+                patches.setattr(driver, "pump", lambda: None)
+            patches.setattr(CardController, "start", provide_card_data)
+            _settle_fetch_workers(app)
+            yield
+            _settle_fetch_workers(app)
+    finally:
+        reference_data.set_provider(provider, on_arrival=arrival)
+        if timers["_poll_job"]:
+            app._schedule_next_bar_fetch()
+            app._poll_retry_count, app._poll_retry_expected_min_ts = retry
+        if timers["_reload_job"]:
+            app._schedule_reload(0)
+        if driver is not None and driver.scheduler.pending_count:
+            app._track_after(1, app._prefetch_pump)
 
 
 @contextmanager
@@ -363,6 +459,7 @@ def check_w0_application_window_width(app, case, scenario, font_size, monkeypatc
             "(AGENTS.md sections 5 and 7.1); the full width case runs on Windows"
         )
     store = isolate_geometry(monkeypatch, tmp_path, case, scenario)
+    _settle_fetch_workers(app)
     fonts = enlarged_fonts(app, size=font_size) if font_size else nullcontext()
     failures = []
     with _preserve_app_layout(app, monkeypatch), mapped_window(app), fonts:
@@ -396,3 +493,106 @@ def check_w0_application_window_width(app, case, scenario, font_size, monkeypatc
 @pytest.mark.parametrize("font_size", [None, 16], ids=["normal-font", "large-font"])
 def test_application_window_width(app, case, scenario, font_size, monkeypatch, tmp_path):
     check_w0_application_window_width(app, case, scenario, font_size, monkeypatch, tmp_path)
+
+
+@pytest.mark.window_width(window_id="tradinglab.app.ChartApp")
+def test_main_window_width_with_cold_cache_and_prior_fetch(app, monkeypatch, tmp_path):
+    from threading import Event
+
+    from tests.smoke._helpers import _fake_candles, _pump_until
+    from tradinglab.data import DATA_SOURCES
+    from tradinglab.gui import quant_app
+
+    assert _pump_until(
+        app, lambda: not app._quant_fetch_inflight and app._worker_inbox.empty(), timeout=5,
+    )
+    original_cache = dict(app._full_cache)
+    original_snapshot = dict(app._watchlist_snapshot)
+    original_visible = app._quant_visible_var.get()
+    original_timer = app._quant_refresh_job is not None
+    case = next(case for case in HEAVY_CASES if case.name == "main")
+    source = app.source_var.get()
+    bars = _fake_candles(20)
+    prior_key = (source, "WIDTHPRIOR", "1d")
+    started, release = Event(), Event()
+    requests = []
+    fetch_quant = app._fetch_quant_last
+
+    def record_quant(symbol, src):
+        requests.append((symbol, src))
+        fetch_quant(symbol, src)
+
+    def prior_fetch():
+        started.set()
+        try:
+            assert release.wait(5), "Prior width-fixture fetch was never released"
+            app._worker_inbox.put_nowait(("stash", (prior_key, bars)))
+        finally:
+            app._quant_fetch_inflight.discard("WIDTHPRIOR")
+
+    future = None
+    release_job = None
+    try:
+        with monkeypatch.context() as patches:
+            patches.setitem(DATA_SOURCES, source, lambda _symbol, _interval: bars)
+            patches.setattr(quant_app, "QUANT_REFRESH_MS", 20)
+            patches.setattr(app._quant_tab, "symbols", lambda: ["SPY", "QQQ"])
+            patches.setattr(app, "_fetch_quant_last", record_quant)
+            app._full_cache.clear()
+            app._quant_fetch_inflight.add("WIDTHPRIOR")
+            future = app._fetch_executor.submit(prior_fetch)
+            assert started.wait(2), "Prior fetch did not enter its worker"
+            release_job = app.after(20, release.set)
+            app._quant_visible_var.set(True)
+            app._start_quant_refresh_loop()
+            check_w0_application_window_width(app, case, "default", None, patches, tmp_path)
+            assert requests == [], "Width-only Quant selection started history fetches"
+            assert dict(app._full_cache) == {prior_key: bars}, (
+                "Prior work must settle before the snapshot; width probes must leave cold Quant keys absent"
+            )
+    finally:
+        release.set()
+        app._stop_quant_refresh_loop()
+        if release_job is not None:
+            app.after_cancel(release_job)
+        try:
+            if future is not None:
+                future.result(timeout=5)
+            else:
+                app._quant_fetch_inflight.discard("WIDTHPRIOR")
+            assert _pump_until(
+                app, lambda: not app._quant_fetch_inflight and app._worker_inbox.empty(), timeout=5,
+            )
+        finally:
+            app._quant_visible_var.set(original_visible)
+            app._full_cache.clear()
+            app._full_cache.update(original_cache)
+            app._watchlist_snapshot.clear()
+            app._watchlist_snapshot.update(original_snapshot)
+            assert dict(app._full_cache) == original_cache, (
+                "Cold-cache fixture failed to restore its temporary data"
+            )
+            assert app._watchlist_snapshot == original_snapshot
+            if original_timer:
+                app._quant_refresh_job = app.after(quant_app.QUANT_REFRESH_MS, app._quant_refresh_tick)
+
+
+def test_width_cache_guard_still_rejects_new_stashes(app, monkeypatch):
+    from tests.smoke._helpers import _fake_candles, _pump_until
+
+    _settle_fetch_workers(app)
+    original = dict(app._full_cache)
+    key = next(iter(original), ("yfinance", "WIDTHUNEXPECTED", "1d"))
+    changed = [*original.get(key, ()), *_fake_candles(1)]
+    try:
+        with pytest.raises(AssertionError, match="Width probes changed the chart candle cache"):
+            with _preserve_app_layout(app, monkeypatch):
+                app._worker_inbox.put_nowait(("stash", (key, changed)))
+                assert _pump_until(app, lambda: app._full_cache.get(key) == changed, timeout=5), (
+                    "The controlled cache mutation was not applied inside the guarded scope"
+                )
+    finally:
+        _settle_fetch_workers(app)
+        app._full_cache.clear()
+        app._full_cache.update(original)
+        assert dict(app._full_cache) == original
