@@ -325,6 +325,8 @@ class StatusHistoryWindow(tk.Toplevel):
         vsb = ttk.Scrollbar(self, orient="vertical",
                             command=self._tree.yview)
         self._tree.configure(yscrollcommand=vsb.set)
+        hsb = ttk.Scrollbar(self, orient="horizontal", command=self._tree.xview)
+        self._tree.configure(xscrollcommand=hsb.set)
         btns = ttk.Frame(self)
         ttk.Button(btns, text="Copy all",
                    command=self._on_copy_all).pack(side="left", padx=2)
@@ -338,9 +340,12 @@ class StatusHistoryWindow(tk.Toplevel):
                           padx=4, pady=(4, 0))
         self._tree.grid(row=1, column=0, sticky="nsew")
         vsb.grid(row=1, column=1, sticky="ns")
-        btns.grid(row=2, column=0, columnspan=2, sticky="ew", padx=4, pady=4)
+        hsb.grid(row=2, column=0, sticky="ew")
+        btns.grid(row=3, column=0, columnspan=2, sticky="ew", padx=4, pady=4)
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
+        self.update_idletasks()
+        self.minsize(max(400, filter_frame.winfo_reqwidth() + 8, btns.winfo_reqwidth() + 8), 240)
         self._refresh()
         self._schedule_poll()
         self.protocol("WM_DELETE_WINDOW", self._on_close)

@@ -201,9 +201,10 @@ class PerformanceView(BaseModalDialog):
 
         # Summary line.
         self._summary_var = tk.StringVar(value="")
-        ttk.Label(outer, textvariable=self._summary_var,
-                  font=("TkDefaultFont", 10, "bold"))\
-            .grid(row=0, column=0, sticky="w", pady=(0, 4))
+        summary = ttk.Label(outer, textvariable=self._summary_var,
+                            font=("TkDefaultFont", 10, "bold"), wraplength=900)
+        summary.grid(row=0, column=0, sticky="ew", pady=(0, 4))
+        summary.bind("<Configure>", lambda event: summary.configure(wraplength=max(1, event.width)))
 
         # ----- Equity chart pane (hidden when no data).
         self._equity_frame = ttk.Frame(outer)
@@ -302,6 +303,13 @@ class PerformanceView(BaseModalDialog):
                                 command=self._journal_tree.yview)
         jscroll.grid(row=0, column=1, sticky="ns")
         self._journal_tree.configure(yscrollcommand=jscroll.set)
+        for frame, tree in (
+            (trades_frame, self._trades), (agg_frame, self._aggs_tree),
+            (prox_frame, self._prox_tree), (journal_frame, self._journal_tree),
+        ):
+            scroll_x = ttk.Scrollbar(frame, orient="horizontal", command=tree.xview)
+            scroll_x.grid(row=1, column=0, sticky="ew")
+            tree.configure(xscrollcommand=scroll_x.set)
 
         # ----- Button bar.
         bar = ttk.Frame(outer)
@@ -326,6 +334,8 @@ class PerformanceView(BaseModalDialog):
         self._copy_btn.grid(row=0, column=3, padx=(0, 6))
         ttk.Button(bar, text="Close",
                    command=self.destroy).grid(row=0, column=4)
+        self.update_idletasks()
+        self.minsize(max(640, bar.winfo_reqwidth() + 12), 480)
 
     # ----------------------------------------------------------- equity chart
     def _build_equity_chart(self, parent: ttk.Frame) -> None:

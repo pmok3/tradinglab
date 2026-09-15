@@ -445,6 +445,9 @@ class _SettingsDialog(BaseModalDialog):
 
         # BaseModalDialog: wires WM_DELETE_WINDOW + ESC → _on_cancel
         # (override below restores snapshots) and Enter → _on_ok.
+        width = self._fit_form_width(form=frm, viewport=canvas, minimum=720)
+        max_width, max_height = self.maxsize()
+        self.maxsize(max(max_width, width), max_height)
         self._finalize_modal(primary=self._on_ok, cancel=self._on_cancel)
 
     def _on_open_theme_editor(self) -> None:
@@ -1014,8 +1017,8 @@ class _WatchlistDialog(BaseModalDialog):
         # used the dialog purely as a viewer (or who want to discard
         # an in-flight change by exiting before pressing Save) keep
         # that affordance.
-        btn_row = ttk.Frame(frm)
-        btn_row.pack(side=tk.BOTTOM, anchor="e", pady=(8, 0))
+        btn_row = ttk.Frame(self, padding=(8, 0, 8, 8))
+        btn_row.pack(side=tk.BOTTOM, fill=tk.X, before=frm)
         ttk.Button(btn_row, text="Close", command=self._on_close).pack(
             side=tk.RIGHT)
         ttk.Button(
@@ -1024,6 +1027,7 @@ class _WatchlistDialog(BaseModalDialog):
         ).pack(side=tk.RIGHT, padx=(0, 6))
 
         self._refresh_names()
+        self._fit_form_width(minimum=720)
         # BaseModalDialog: wires WM_DELETE_WINDOW + ESC → _on_close
         # (rebuilds pinned sub-tabs if pin state changed) and
         # Enter → _on_save_and_close. Both routes pass through the

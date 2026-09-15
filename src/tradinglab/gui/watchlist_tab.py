@@ -643,7 +643,7 @@ class WatchlistTabMixin:
         except Exception:  # noqa: BLE001
             pass
         dlg.resizable(False, False)
-        # Geometry persistence (position only — fixed size).
+        # Restore geometry, then clamp to the actual controls after construction.
         try:
             from .geometry_store import attach_persistent_geometry
             attach_persistent_geometry(dlg, "dlg.load_watchlist", "320x300")
@@ -691,6 +691,8 @@ class WatchlistTabMixin:
         lb.bind("<Return>", _ok)
         dlg.bind("<Escape>", _cancel)
         dlg.protocol("WM_DELETE_WINDOW", _cancel)
+        dlg.update_idletasks()
+        dlg.minsize(max(320, dlg.winfo_reqwidth()), dlg.winfo_reqheight())
         try:
             dlg.grab_set()
         except Exception:  # noqa: BLE001

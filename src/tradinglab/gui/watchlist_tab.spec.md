@@ -1,6 +1,6 @@
 # gui/watchlist_tab.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-14
 
 ## Purpose
 
@@ -362,6 +362,10 @@ larger; pinning makes a list reachable from the main UI.
   `docs/WATCHLIST_COLUMNS.md`.
 
 ## Invariants
+- The fixed-size Load watchlist picker clamps restored geometry to its laid-out
+  content request (with a 320px width floor), so enlarged fonts cannot clip its
+  instruction or Load/Cancel buttons. The mapped default and stale-narrow cases
+  are exercised by `tests/unit/gui/test_application_window_width.py`.
 
 - `_watchlist_snapshot` keys are upper-cased ticker symbols.
 - Row tags are `("bull",)`, `("bear",)`, or `()` only.

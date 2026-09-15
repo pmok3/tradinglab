@@ -1,6 +1,6 @@
 # gui/dialogs.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-15
 
 ## Purpose
 Modal Tk dialogs owned by `ChartApp`: the Settings dialog (worker count, dark mode, log price axis) and the Watchlists dialog (CRUD + import/export). Split out of `app.py` to keep that file focused on chart + data orchestration.
@@ -61,6 +61,13 @@ Modal Tk dialogs owned by `ChartApp`: the Settings dialog (worker count, dark mo
   them); the mixin re-exposes them on `ChartApp` to avoid importing this.
 
 ## Invariants
+- Settings derives its minimum width from the actual Canvas-embedded form plus
+  viewport chrome, not the outer Canvas request; the width cap never defeats that
+  measured floor. Watchlists reserves its dismissal footer outside the two side
+  panes and fits the simple form before restoring geometry. Both use
+  `BaseModalDialog._fit_form_width`, preserving larger defaults and accommodating
+  enlarged fonts and stale narrow geometry. The shared standard sweep covers
+  Watchlists; `tests/smoke/test_smoke_window_width.py` covers Settings.
 - `_SettingsDialog._on_cancel` fully reverts dark mode, log-price preview,
   scroll-zoom invert, snap-to-OHLC, UI-scale, color-blind palette,
   volume time-of-day, theme overrides, and startup defaults (from

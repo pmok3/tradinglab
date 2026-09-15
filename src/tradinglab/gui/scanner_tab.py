@@ -1197,6 +1197,7 @@ class _LoadScanDialog(BaseModalDialog):
                    command=self._on_ok).pack(side=tk.RIGHT, padx=(0, 4))
 
         protect_combobox_wheel(self)
+        self._fit_form_width(minimum=420)
         self._finalize_modal(primary=self._on_ok, cancel=self._on_cancel)
 
     def _on_ok(self) -> None:

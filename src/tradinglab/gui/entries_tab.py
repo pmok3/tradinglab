@@ -300,7 +300,10 @@ class EntriesTab(ttk.Frame):
             width = 140 if col == "name" else 70
             self._tree.column(col, width=width, anchor="w", stretch=True)
         sb = ttk.Scrollbar(tree_lf, orient="vertical", command=self._tree.yview)
+        hsb = ttk.Scrollbar(tree_lf, orient="horizontal", command=self._tree.xview)
         self._tree.configure(yscrollcommand=sb.set)
+        self._tree.configure(xscrollcommand=hsb.set)
+        hsb.pack(side="bottom", fill="x")
         self._tree.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
 

@@ -1,6 +1,6 @@
 # gui/scanner_tab.py — spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-15
 
 > ⚠ **Tk-coupled module** — imports `tkinter`.
 
@@ -74,6 +74,10 @@ Modal `Toplevel` with a sorted `Listbox` of library scans not in
 height = `min(15, max(5, n))`. Returns chosen scan id or `None`.
 The classic Tk Listbox is explicitly themed from the active palette
 (`tree_bg`, `tree_fg`, `spine`) because ttk.Style does not reach it.
+The simple chooser opts into `_fit_form_width` before restoring geometry,
+with a 420px floor, so its heading and Load/Cancel buttons remain visible
+under enlarged fonts and stale narrow geometry. The shared standard-window
+width sweep exercises the actual mapped controls.
 
 ### Right-click context menu on sub-tab strip
 

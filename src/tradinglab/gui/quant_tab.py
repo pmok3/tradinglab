@@ -95,6 +95,9 @@ class QuantTab(ttk.Frame):
         self._tree.configure(yscrollcommand=vsb.set)
         self._tree.grid(row=0, column=0, sticky="nsew")
         vsb.grid(row=0, column=1, sticky="ns")
+        hsb = ttk.Scrollbar(self, orient="horizontal", command=self._tree.xview)
+        self._tree.configure(xscrollcommand=hsb.set)
+        hsb.grid(row=1, column=0, sticky="ew")
         self.rowconfigure(0, weight=1)
         self.columnconfigure(0, weight=1)
 

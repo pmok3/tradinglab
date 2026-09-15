@@ -248,7 +248,10 @@ class ExitsTab(ttk.Frame):
             width = 70 if col not in ("strategy", "leg", "trigger") else 100
             self._tree.column(col, width=width, anchor="w", stretch=True)
         sb = ttk.Scrollbar(status_lf, orient="vertical", command=self._tree.yview)
+        hsb = ttk.Scrollbar(status_lf, orient="horizontal", command=self._tree.xview)
         self._tree.configure(yscrollcommand=sb.set)
+        self._tree.configure(xscrollcommand=hsb.set)
+        hsb.pack(side="bottom", fill="x")
         self._tree.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
 

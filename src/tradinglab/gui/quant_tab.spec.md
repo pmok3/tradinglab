@@ -1,6 +1,6 @@
 # gui/quant_tab.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-15
 
 ## Purpose
 Renders the **Quant** side-notebook tab: a grouped, double-clickable list of
@@ -50,6 +50,10 @@ daily value, and one-line meaning.
   covers for classic widgets (AGENTS.md §7.31).
 
 ## Invariants
+- The catalog's rightmost columns remain reachable through a functional
+  horizontal scrollbar when the side notebook is narrower than the table.
+  The mapped main-window cases in `tests/smoke/test_smoke_window_width.py`
+  exercise the scrollbar with the shared width checker.
 - Every catalog row appears exactly once; group order and row order match
   `QUANT_CATALOG`.
 - `symbols()` returns only available rows and never an empty string.

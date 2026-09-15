@@ -1,6 +1,6 @@
 # status.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-14
 
 ## Purpose
 Single-line status bar at the bottom of the main window plus an in-memory ring buffer (history window) and a daily on-disk log file. All three sinks fed by a single logger-style API: `info(msg)`, `warn(msg)`, `error(msg)`. Every emission is also mirrored to stdout for terminal visibility under `python scripts/run_dev.py`.
@@ -15,7 +15,7 @@ Single-line status bar at the bottom of the main window plus an in-memory ring b
   - `log_file_path() -> Path` — today's daily log file (recomputed every call so a session running across midnight rolls correctly).
 - `prune_old_logs(log_dir: Path, *, keep_days: int = _LOG_RETENTION_DAYS) -> int` — module-level function. Removes any `status-*.log` whose file mtime is older than `keep_days` days. Returns count removed. `keep_days <= 0` is a no-op (returns 0). Tolerates missing directory + per-file unlink errors (best-effort). Uses file mtime (not parsed filename date) so hand-edited filenames still get pruned eventually.
 - `_LOG_RETENTION_DAYS: int = 30` — module constant for the default retention window. Set on `StatusLog` construction unless an explicit `retention_days` kwarg overrides.
-- `StatusHistoryWindow(master, status_log)` — `tk.Toplevel` showing the history as a `Treeview` (Time / Level / Message). Polls `status_log.history()` every 500 ms (`_POLL_MS`). A `ttk.Combobox` filter strip at the top selects one of `_LEVEL_FILTERS = {"All", "WARN+", "ERROR only"}`; only matching entries render. The ring buffer keeps every level — the filter is render-time only so toggling "All" → "ERROR only" → "All" never loses data. Geometry is persisted via `gui.geometry_store` when available. Buttons: Copy all (to clipboard), Open log file (OS-native), Clear (memory only), Close. The grid layout is `filter_frame=row 0, tree=row 1, btns=row 2`.
+- `StatusHistoryWindow(master, status_log)` — `tk.Toplevel` showing the history as a `Treeview` (Time / Level / Message). Polls `status_log.history()` every 500 ms (`_POLL_MS`). A `ttk.Combobox` filter strip at the top selects one of `_LEVEL_FILTERS = {"All", "WARN+", "ERROR only"}`; only matching entries render. The ring buffer keeps every level — the filter is render-time only so toggling "All" → "ERROR only" → "All" never loses data. Geometry is persisted via `gui.geometry_store` when available. Buttons: Copy all (to clipboard), Open log file (OS-native), Clear (memory only), Close. The grid layout is `filter_frame=row 0, tree=row 1, horizontal scrollbar=row 2, btns=row 3`.
 
 ## Dependencies
 - Internal: `paths.logs_dir`, `diagnostics.redact_log_line`, and `gui.geometry_store.attach_persistent_geometry`.
@@ -48,6 +48,12 @@ Single-line status bar at the bottom of the main window plus an in-memory ring b
   - `_status_history_win: Optional[Toplevel]` is the single-instance handle; `<Destroy>` clears it so the next open creates a fresh window.
 
 ## Invariants
+- The minimum width fits the measured filter and action rows (at least 400px),
+  including enlarged fonts and restored narrow geometry. Table columns remain
+  reachable through the horizontal scrollbar rather than forcing the full
+  table's natural width onto the window. Mapped normal/enlarged-font and stale
+  geometry cases use the shared checker in
+  `tests/unit/gui/test_application_window_width.py`.
 - `StatusLog.info/warn/error(msg)` updates `self.status` (Tk var), appends to history, appends one line to today's log file, and prints to stdout — all best-effort.
 - `StatusEntry` is immutable and safe to share.
 - Closing `StatusHistoryWindow` cancels its `after` poll job so a closed window doesn't continue polling.

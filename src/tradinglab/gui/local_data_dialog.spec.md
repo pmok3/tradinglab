@@ -1,6 +1,6 @@
 # gui/local_data_dialog.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-15
 
 ## Purpose
 The dialog opened by **Tools → Configure Local Data…**. Lets the user
@@ -75,6 +75,11 @@ entries in the source-selector combobox.
   (yfinance, synthetic, alpaca, polygon, …) are NEVER stripped.
 
 ## Invariants
+- The configured-roots table has a working horizontal scrollbar, preserving
+  access to both columns at narrower widths. The simple form opts into
+  `_fit_form_width` before geometry restore, so its controls and buttons fit with
+  enlarged fonts or stale saved geometry; the shared standard-window width
+  sweep verifies mapped allocations.
 - A successfully-saved root list always satisfies: every name is
   alphanumeric+underscore, every path is a directory or `.zip` file at
   save time, every name is unique within the list.

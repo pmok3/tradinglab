@@ -1,6 +1,6 @@
 # gui/performance_view.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-14
 
 ## Purpose
 Phase 1d read-only Performance View Toplevel. Multi-pane window driven by a [`SessionResult`](../backtest/session.spec.md): summary, equity chart, trade and aggregate tables, and a daily journal that interleaves explicit decisions with trades beneath each day's watch note. Bottom controls export trades or decisions, copy trade TSV, and close.
@@ -33,6 +33,12 @@ Phase 1d read-only Performance View Toplevel. Multi-pane window driven by a [`Se
 - **Status feedback via `parent._status`** (best-effort; falls back silently if the parent has no status log).
 
 ## Invariants
+- The window minimum fits the measured action row (at least 640px), including
+  enlarged fonts and restored narrow geometry. The summary wraps to the available
+  width. All four tables expose functional horizontal scrollbars, so fixed-width
+  columns stay reachable without forcing their full natural width onto the window.
+  `tests/smoke/test_smoke_window_width.py` exercises mapped default/minimum/stale
+  geometry and enlarged-font cases using the shared width checker.
 - The Toplevel never mutates `result`.
 - Empty `result.post_trades` produces empty trade/aggregate tables. Trade export/copy disable independently; a decision-only session remains reviewable and exportable.
 - Empty `result.equity_curve` hides the chart pane entirely; the export-buttons row is unaffected.

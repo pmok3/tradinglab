@@ -1,6 +1,6 @@
 # gui/sandbox_heatmap.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-15
 
 ## Purpose
 Non-modal pop-out window that renders the Finviz-style market heatmap,
@@ -279,6 +279,11 @@ the pure [`backtest/heatmap.py`](../backtest/heatmap.spec.md) layer. See
   skip.
 
 ## Invariants
+- Header, coverage footer, and hover detail wrap to their allocated width.
+  The minimum width fits the measured size-basis toolbar (at least 400px);
+  the plot remains a resizable viewport rather than dictating the minimum.
+  `tests/smoke/test_smoke_window_width.py` covers mapped normal/enlarged-font
+  replay, blind, live, and hover states using the shared checker.
 - The window references an active controller only; `end_session`
   triggers `close()`.
 - **No value is read from any bar after the clock.** The price leg stops

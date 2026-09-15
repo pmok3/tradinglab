@@ -1,6 +1,6 @@
 # gui/entries_tab.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-15
 
 ## Purpose
 
@@ -125,6 +125,10 @@ class EntriesTab(ttk.Frame):
   Audit `watchlist-entries-full-dark`.
 
 ## Invariants
+- The strategy table has a functional horizontal scrollbar so rightmost
+  columns remain reachable in the main window's narrower notebook pane.
+  Mapped page selection and scrollbar movement are covered through the
+  shared checker in `tests/smoke/test_smoke_window_width.py`.
 
 - All callbacks run on the Tk thread.
 - Under the **All** filter, Library Treeview rows correspond 1:1 with the

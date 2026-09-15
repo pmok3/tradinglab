@@ -1,6 +1,6 @@
 # gui/exits_tab.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-15
 
 ## Purpose
 
@@ -93,6 +93,10 @@ class _AttachRow(ttk.Frame):
   entries into indented child lines.
 
 ## Invariants
+- The trigger-status table has a functional horizontal scrollbar so
+  rightmost columns remain reachable in the main window's notebook pane.
+  `tests/smoke/test_smoke_window_width.py` selects the real page and verifies
+  scrollbar movement with the shared width checker.
 
 - All callbacks run on the Tk thread.
 - Two-phase PANIC timer is single-flighted (clicking twice in the

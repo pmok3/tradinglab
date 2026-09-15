@@ -153,6 +153,7 @@ class LocalDataDialog(BaseModalDialog):
 
         self._build_widgets()
         protect_combobox_wheel(self)
+        self._fit_form_width(minimum=560)
         self._finalize_modal(primary=self._on_save, cancel=self._on_cancel)
 
     def _build_widgets(self) -> None:
@@ -196,9 +197,12 @@ class LocalDataDialog(BaseModalDialog):
         vsb = ttk.Scrollbar(list_frame, orient="vertical", command=self._tree.yview)
         self._tree.configure(yscrollcommand=vsb.set)
         vsb.grid(row=0, column=1, sticky="ns")
+        hsb = ttk.Scrollbar(list_frame, orient="horizontal", command=self._tree.xview)
+        self._tree.configure(xscrollcommand=hsb.set)
+        hsb.grid(row=1, column=0, sticky="ew")
 
         btn_row = ttk.Frame(list_frame)
-        btn_row.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        btn_row.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         ttk.Button(btn_row, text="Add…", command=self._on_add).pack(side="left")
         ttk.Button(btn_row, text="Edit…", command=self._on_edit).pack(side="left", padx=(6, 0))
         ttk.Button(btn_row, text="Remove", command=self._on_remove).pack(side="left", padx=(6, 0))

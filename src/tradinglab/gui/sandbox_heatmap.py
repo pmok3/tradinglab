@@ -683,6 +683,12 @@ class SandboxHeatmapWindow(tk.Toplevel):
             font=("TkDefaultFont", 8),
         )
         self._footer.pack(side=tk.BOTTOM, fill=tk.X, padx=6)
+        for label in (self._header, self._status, self._footer):
+            label.configure(wraplength=900, justify="left")
+            label.bind("<Configure>", lambda event, label=label:
+                       label.configure(wraplength=max(1, event.width)))
+        self.update_idletasks()
+        self.minsize(max(400, self._size_combo.master.winfo_reqwidth() + 12), 300)
 
         self.protocol("WM_DELETE_WINDOW", self.close)
         self._poll_alive = True
