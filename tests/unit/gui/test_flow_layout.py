@@ -20,6 +20,8 @@ def _row(root):
 def test_shrink_grow_preserves_controls_and_state(root):
     root.geometry("600x300")
     row, buttons = _row(root)
+    calls = []
+    buttons[0].configure(command=lambda: calls.append("new"))
     buttons[2].state(["disabled"])
     layout = wrap_controls(row)
     with mapped_window(root):
@@ -31,7 +33,11 @@ def test_shrink_grow_preserves_controls_and_state(root):
             assert [str(button) for button in buttons] == before
             assert buttons[2].instate(["disabled"])
             assert all(button.winfo_ismapped() for button in buttons)
+            if width == 600:
+                assert len({button.winfo_rooty() for button in buttons}) == 1
         assert len({button.winfo_rooty() for button in buttons}) > 1
+        buttons[0].invoke()
+        assert calls == ["new"]
         assert layout._job is None
 
 
