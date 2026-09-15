@@ -7,7 +7,7 @@ from tkinter import font, ttk
 import pytest
 
 from tests._window_width import _horizontal_scroll, assert_window_width, enlarged_fonts, mapped_window
-from tradinglab.gui._modal_base import make_scrollable_form
+from tradinglab.gui._modal_base import BaseModalDialog, make_scrollable_form
 
 
 def test_rejects_unmapped_one_pixel_window(root):
@@ -149,3 +149,36 @@ def test_empty_structural_frame_is_not_a_one_pixel_control(root):
     ttk.Button(root, text="Visible").pack()
     with mapped_window(root):
         assert assert_window_width(root) == 1
+
+
+@pytest.mark.parametrize("canvas_form", [False, True])
+def test_opt_in_form_floor_clamps_stale_width_without_changing_height(root, canvas_form):
+    dialog = BaseModalDialog(root, default_geometry="180x230+10+20")
+    try:
+        if canvas_form:
+            form, canvas = make_scrollable_form(dialog, bind_mousewheel=False)
+        else:
+            form, canvas = dialog, None
+        ttk.Button(form, text="A complete action label that must not be cut off").pack(fill="x")
+        width = dialog._fit_form_width(
+            **({"form": form, "viewport": canvas} if canvas_form else {}),
+        )
+        assert dialog._default_geometry == f"{width}x230+10+20"
+        dialog.geometry("120x230")
+        with mapped_window(dialog):
+            assert dialog.winfo_width() >= width
+            assert_window_width(dialog)
+    finally:
+        dialog.destroy()
+
+
+def test_form_sizing_is_opt_in_and_requires_both_canvas_arguments(root):
+    dialog = BaseModalDialog(root, default_geometry="220x180")
+    try:
+        tk.Canvas(dialog, width=3000).pack()
+        dialog._finalize_modal(grab=False)
+        assert dialog._default_geometry == "220x180"
+        with pytest.raises(ValueError, match="together"):
+            dialog._fit_form_width(form=dialog)
+    finally:
+        dialog.destroy()

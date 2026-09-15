@@ -124,6 +124,35 @@ class BaseModalDialog(tk.Toplevel):
     # ------------------------------------------------------------------
     # Lifecycle hooks
     # ------------------------------------------------------------------
+    def _fit_form_width(
+        self,
+        *,
+        form: tk.Misc | None = None,
+        viewport: tk.Misc | None = None,
+        minimum: int = 0,
+        margin: int = 16,
+    ) -> int:
+        """Opt in to a measured form minimum before restoring saved geometry.
+
+        Pass both ``form`` and ``viewport`` for Canvas-embedded forms.
+        Do not use this on responsive editors or chart/table natural sizes:
+        those need wrapping or reachable scrolling rather than wider windows.
+        """
+        if (form is None) != (viewport is None):
+            raise ValueError("form and viewport must be supplied together")
+        self.update_idletasks()
+        required = self.winfo_reqwidth()
+        if form is not None and viewport is not None:
+            required = form.winfo_reqwidth() + max(0, required - viewport.winfo_reqwidth())
+        old_minimum, height = self.minsize()
+        width = max(old_minimum, minimum, required + margin)
+        self.minsize(width, height)
+        default_width, separator, remainder = self._default_geometry.partition("x")
+        if not separator:
+            raise ValueError("form width fitting requires a width-by-height default geometry")
+        self._default_geometry = f"{max(width, int(default_width))}x{remainder}"
+        return width
+
     def _finalize_modal(
         self,
         *,

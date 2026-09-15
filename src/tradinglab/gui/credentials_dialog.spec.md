@@ -2,6 +2,10 @@
 
 Last updated: 2026-09-14
 
+Width measurement delegates to the opt-in `BaseModalDialog._fit_form_width`
+primitive with the actual embedded form and Canvas; the existing width floors,
+height sizing and expanding entry column are unchanged.
+
 ## Purpose
 The Schwab section also embeds `SchwabConnectPanel`: developer app settings,
 account sign-in and disconnect share this window. **Sign in with Schwab**

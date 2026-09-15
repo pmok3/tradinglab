@@ -354,11 +354,10 @@ class CredentialsDialog(BaseModalDialog):
         # Measure the form plus scrollbar/chrome so restored narrow windows
         # cannot clip fields and buttons behind the right edge.
         try:
-            self.update_idletasks()
-            chrome = self.winfo_reqwidth() - self._form_canvas.winfo_reqwidth()
-            req_w = self._form.winfo_reqwidth() + max(0, chrome)
+            width = self._fit_form_width(
+                form=self._form, viewport=self._form_canvas, minimum=640,
+            )
             req_h = self.winfo_reqheight()
-            width = max(640, req_w + 16)
             self.minsize(width, max(480, req_h + 16))
             self._default_geometry = f"{max(720, width)}x760"
         except tk.TclError:

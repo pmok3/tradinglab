@@ -1,6 +1,6 @@
 # `gui/_modal_base.py` — Shared base classes for modal Toplevels
 
-Last updated: 2026-09-07
+Last updated: 2026-09-14
 
 ## Purpose
 
@@ -12,6 +12,17 @@ helpers.
 ## Public API
 
 - `class BaseModalDialog(tk.Toplevel)`:
+  - `_fit_form_width(*, form=None, viewport=None, minimum=0, margin=16) -> int`
+    is an **opt-in** form-width floor, called after building controls and before
+    `_finalize_modal`. With no explicit form it measures the dialog request;
+    Canvas-backed callers supply both the inner form and viewport to measure
+    real form content plus outer scrollbar/chrome instead. It preserves larger
+    existing minimum/default widths and all height/position components. It does
+    not walk descendants, run automatically, or size charts/tables/responsive
+    editors from their natural request. Those surfaces need wrapping or real
+    horizontal scrolling. Mismatched form/viewport arguments raise `ValueError`.
+    `tests/unit/gui/test_window_width_checker.py` pins the primitive; mapped
+    standard window cases check that adopting defaults also fit the screen.
   - `__init__(parent, *, title="", geometry_key=None,
     default_geometry="640x480", resizable=(True, True),
     apply_dark_theme=True)`.
