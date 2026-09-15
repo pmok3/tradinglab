@@ -105,6 +105,14 @@ root in smoke tests). The popup wrapper + menubar wiring live in
   in an unallocated tail of the pack order.
   The action row likewise reserves its bottom allocation before the notebook,
   so showing wrapped notices cannot hide the export buttons.
+  When both warnings disappear, their container is also unpacked: an empty Tk
+  frame retains its previous request height otherwise. Returning warnings
+  restore that container immediately after the run-id header, before the
+  headline/table content. `test_strategy_tab_notice_layout.py` exercises repeated
+  warning-free -> warning-heavy -> warning-free transitions with a real mapped
+  420px report pane and enlarged fonts, verifying table/export reachability.
+  The shared application-width smoke check also clears and re-shows notices
+  inside the full Strategy popup across its geometry/font scenarios.
 
 ### Recent Runs sidebar (PR 5, bottom of Configure pane)
 - ``ttk.Treeview`` with ``selectmode="extended"`` listing the newest 50

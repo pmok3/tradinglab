@@ -580,8 +580,7 @@ class StrategyTab(ttk.Frame):
             "<Configure>", lambda event: self._lbl_run_id.configure(wraplength=max(1, event.width)),
         )
 
-        notices = ttk.Frame(parent)
-        notices.pack(fill="x")
+        notices = self._report_notices = ttk.Frame(parent)
         self._banner_sample = ttk.Label(
             notices, text="", foreground="#a06000", wraplength=420,
         )
@@ -1259,6 +1258,11 @@ class StrategyTab(ttk.Frame):
                 self._banner_interval.pack_forget()
             except Exception:  # noqa: BLE001
                 pass
+
+        if self._banner_sample.winfo_manager() or self._banner_interval.winfo_manager():
+            self._report_notices.pack(fill="x", after=self._lbl_run_id)
+        else:
+            self._report_notices.pack_forget()
 
         # Per-symbol Treeview
         for iid in self._tree_symbol.get_children():

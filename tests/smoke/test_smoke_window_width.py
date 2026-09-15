@@ -248,8 +248,9 @@ def _heavy_probe(case, app, monkeypatch, directory: Path) -> Iterator[WindowProb
                 from tradinglab.backtest.performance import build_trade_rows
                 from tradinglab.strategy_tester.report import compute_aggregate
 
+                rows = build_trade_rows(_session_result())
                 aggregate = compute_aggregate(
-                    run_id="width-report", rows_by_symbol={"AAPL": build_trade_rows(_session_result())},
+                    run_id="width-report", rows_by_symbol={"AAPL": rows},
                     starting_cash=100000, bootstrap_samples=20,
                     interval_overrides=["AAPL condition authored at 1m; evaluated at 5m"],
                 )
@@ -268,6 +269,14 @@ def _heavy_probe(case, app, monkeypatch, directory: Path) -> Iterator[WindowProb
                     for page in notebook.tabs():
                         notebook.select(page)
                         yield f"report-{notebook.tab(page, 'text')}"
+                clean = compute_aggregate(
+                    run_id="width-report", rows_by_symbol={"AAPL": rows * 150},
+                    starting_cash=100000, bootstrap_samples=20,
+                )
+                tab._render_aggregate(clean, directory)
+                yield "warnings-cleared"
+                tab._render_aggregate(aggregate, directory)
+                yield "warnings-restored"
 
         elif case.name == "settings":
             from tradinglab.gui.dialogs import _SettingsDialog
