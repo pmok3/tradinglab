@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -301,39 +302,29 @@ def test_naive_ts_treated_as_utc(audit_root: Path) -> None:
 
 def test_append_raises_from_worker_thread(audit_root: Path) -> None:
     log = AuditLog()
-    captured: list[BaseException] = []
-
-    def worker() -> None:
-        try:
-            log.append("arm", leg_id="x")
-        except BaseException as exc:  # pragma: no cover - asserted below
-            captured.append(exc)
-
-    t = threading.Thread(target=worker)
-    t.start()
-    t.join(timeout=2.0)
-    assert len(captured) == 1
-    assert isinstance(captured[0], TkThreadViolation)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with pytest.raises(TkThreadViolation):
+            pool.submit(log.append, "arm", leg_id="x").result()
+    log.close()
 
 
 def test_append_works_under_check_disabled(audit_root: Path) -> None:
     log = AuditLog()
-    captured: list[BaseException] = []
-    completed: list[bool] = []
 
-    def worker() -> None:
+    def worker() -> dict:
         with tk_thread_check_disabled():
-            try:
-                log.append("arm", leg_id="x")
-                completed.append(True)
-            except BaseException as exc:  # pragma: no cover
-                captured.append(exc)
+            return log.append("arm", leg_id="x")
 
-    t = threading.Thread(target=worker)
-    t.start()
-    t.join(timeout=2.0)
-    assert captured == []
-    assert completed == [True]
+    # This checks thread-guard semantics, not a two-second disk/fsync budget.
+    # Wait for completion (bounded by pytest's existing timeout), propagate any
+    # worker failure and close the file before inspecting the durable record.
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            record = pool.submit(worker).result()
+    finally:
+        log.close()
+    assert record["kind"] == "arm" and record["leg_id"] == "x"
+    assert log.tail(1) == [record]
 
 
 # ---------------------------------------------------------------------------
