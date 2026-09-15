@@ -93,6 +93,17 @@ class _AttachRow(ttk.Frame):
   entries into indented child lines.
 
 ## Invariants
+- Toolbar actions wrap through the opt-in measured flow layout when the notebook
+  narrows or fonts grow; the same widgets retain their callbacks and PANIC state.
+  Per-position attach controls use the same wrapping, preserving access to
+  Detach and the unprotected-position warning with real populated rows.
+  `_attach_holder` remains the row host inside a vertically scrollable form;
+  `_attach_canvas` exposes its viewport. Wrapped/multiple positions can be
+  scrolled without growing the main-window minimum. Every row refresh reapplies
+  `protect_combobox_wheel` so scrolling cannot change the selected strategy.
+  Theme changes repaint the new classic Canvas through `apply_canvas_theme`.
+  `test_exit_position_rows_remain_reachable_when_wrapped` proves last-row warning
+  reachability via the actual scrollbar, wheel routing, rebuilds and theme.
 - The trigger-status table has a functional horizontal scrollbar so
   rightmost columns remain reachable in the main window's notebook pane.
   `tests/smoke/test_smoke_window_width.py` selects the real page and verifies

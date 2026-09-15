@@ -362,6 +362,9 @@ larger; pinning makes a list reachable from the main UI.
   `docs/WATCHLIST_COLUMNS.md`.
 
 ## Invariants
+- Each pinned watchlist table has a functional horizontal scrollbar, including
+  rebuilt tables, so configurable rightmost columns remain reachable in narrow
+  notebook layouts. The populated main-window width smoke cases exercise it.
 - The fixed-size Load watchlist picker clamps restored geometry to its laid-out
   content request (with a 320px width floor), so enlarged fonts cannot clip its
   instruction or Load/Cancel buttons. The mapped default and stale-narrow cases

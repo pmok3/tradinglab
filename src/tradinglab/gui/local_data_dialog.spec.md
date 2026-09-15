@@ -80,6 +80,8 @@ entries in the source-selector combobox.
   `_fit_form_width` before geometry restore, so its controls and buttons fit with
   enlarged fonts or stale saved geometry; the shared standard-window width
   sweep verifies mapped allocations.
+  Save/Cancel reserve a separate footer before the flexible roots body is packed,
+  preventing enlarged-font table requests from starving the entire action row.
 - A successfully-saved root list always satisfies: every name is
   alphanumeric+underscore, every path is a directory or `.zip` file at
   save time, every name is unique within the list.

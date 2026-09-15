@@ -47,8 +47,11 @@ from ..exits.evaluator import ExitEvaluator
 from ..exits.model import ExitStrategy
 from ..positions.model import Position
 from ..positions.tracker import PositionTracker
+from ._modal_base import make_scrollable_form, protect_combobox_wheel
 from .colors import MUTED_GREY, WARN_AMBER
 from .exits_dialog import open_exits_dialog
+from .flow_layout import wrap_controls
+from .native_theme import apply_canvas_theme
 
 logger = logging.getLogger(__name__)
 
@@ -212,9 +215,10 @@ class ExitsTab(ttk.Frame):
 
         self._badge_var = tk.StringVar(value="")
         self._badge_lbl = ttk.Label(
-            bar, textvariable=self._badge_var, foreground=WARN_AMBER,
+            bar, textvariable=self._badge_var, foreground=WARN_AMBER, wraplength=300,
         )
         self._badge_lbl.pack(side="right")
+        wrap_controls(bar)
 
         # Body — paned: attach panel above, status + audit below
         paned = ttk.PanedWindow(self, orient="vertical")
@@ -224,8 +228,10 @@ class ExitsTab(ttk.Frame):
         self._attach_frame = ttk.LabelFrame(paned, text="Open positions")
         paned.add(self._attach_frame, weight=1)
 
-        self._attach_holder = ttk.Frame(self._attach_frame)
-        self._attach_holder.pack(fill="both", expand=True, padx=4, pady=4)
+        attach_body = ttk.Frame(self._attach_frame)
+        attach_body.pack(fill="both", expand=True, padx=4, pady=4)
+        self._attach_holder, self._attach_canvas = make_scrollable_form(attach_body)
+        self._attach_canvas.configure(height=150)
 
         self._no_positions_lbl = ttk.Label(
             self._attach_holder, text="(no open positions)", foreground=MUTED_GREY,
@@ -295,6 +301,9 @@ class ExitsTab(ttk.Frame):
                 )
             except tk.TclError:
                 pass
+        canvas = getattr(self, "_attach_canvas", None)
+        if canvas is not None:
+            apply_canvas_theme(canvas, theme)
 
     # ----- helpers -----
 
@@ -341,6 +350,7 @@ class ExitsTab(ttk.Frame):
                 )
                 row.pack(fill="x", pady=1)
                 self._attach_rows[p.id] = row
+        protect_combobox_wheel(self._attach_holder, scroll_target=self._attach_canvas)
 
     def _refresh_status_tree(self) -> None:
         # Snapshot current selection iids so we can restore.
@@ -573,6 +583,7 @@ class _AttachRow(ttk.Frame):
         self._warning_lbl.pack(side="left", fill="x", expand=True)
 
         self.update(position, attached, library)
+        wrap_controls(self)
 
     def update(
         self,

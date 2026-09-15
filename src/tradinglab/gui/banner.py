@@ -152,28 +152,31 @@ class FirstRunBannerMixin:
         self._build_first_run_banner(target)  # type: ignore[arg-type]
 
     def _build_first_run_banner(self, parent: tk.Misc) -> None:
+        packed = parent.pack_slaves()
         frame = ttk.Frame(parent, padding=(8, 4))
-        # ``pack(before=...)`` would let us slot in above a known
-        # widget; we go simpler and pack to the top so callers
-        # control ordering by call-site placement.
-        frame.pack(side="top", fill="x")
-        ttk.Label(frame, text=_BANNER_TEXT, anchor="w").pack(
-            side="left", fill="x", expand=True)
+        if packed:
+            frame.pack(side="top", fill="x", before=packed[0])
+        else:
+            frame.pack(side="top", fill="x")
+        label = ttk.Label(frame, text=_BANNER_TEXT, anchor="w", wraplength=900, justify="left")
         # Default to UNCHECKED: clicking the close button should
         # not silently silence the onboarding banner forever. A user
         # who genuinely wants it gone ticks the box first. This
         # respects the "don't infer destructive intent from a
         # navigational click" rule.
         self._banner_dont_show_var = tk.IntVar(master=frame, value=0)
-        ttk.Checkbutton(
+        checkbox = ttk.Checkbutton(
             frame, text="Don't show again",
             variable=self._banner_dont_show_var,
-        ).pack(side="left", padx=(6, 0))
+        )
         close_btn = ttk.Button(
             frame, text="\u00d7", width=3,
             command=self._dismiss_first_run_banner,
         )
         close_btn.pack(side="right", padx=(6, 0))
+        checkbox.pack(side="right", padx=(6, 0))
+        label.pack(side="left", fill="x", expand=True)
+        label.bind("<Configure>", lambda event: label.configure(wraplength=max(1, event.width)))
         self._first_run_banner = frame
 
     def _dismiss_first_run_banner(self) -> None:

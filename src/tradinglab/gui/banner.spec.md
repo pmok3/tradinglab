@@ -1,6 +1,6 @@
 # `gui/banner.py` — First-run onboarding banner
 
-Last updated: 2026-09-07
+Last updated: 2026-09-15
 
 ## Purpose
 Brand-new users get a single dismissable one-row banner above the chart
@@ -34,11 +34,16 @@ changes meaningfully in the future, ship a different sentinel
 name (`.first_run_dismissed_v2`).
 
 ## Visual contract
-- One row tall, packed to the top of the parent.
+- Packed to the top of the parent; text wraps when the available width narrows.
 - Left: tip text (`ttk.Label`, `anchor="w"`, `fill="x", expand=True`).
 - Middle-right: "Don't show again" checkbox (`ttk.Checkbutton`,
   default unchecked). Bound to `_banner_dont_show_var: tk.IntVar`.
 - Right: `×` close button (`ttk.Button`, `width=3`).
+- Close and checkbox reserve their space before the expanding text is packed, so
+  the first-run message cannot starve the "Don't show again" control. The mapped
+  main-window width smoke cases cover minimum geometry and enlarged fonts.
+  The banner itself is packed before the existing main content, so the expanding
+  chart/notebook cannot consume its entire allocation.
 
 ## Dismissal behavior
 - Checkbox unchecked (the default) + `×` clicked → hide the

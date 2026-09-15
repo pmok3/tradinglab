@@ -284,6 +284,8 @@ the pure [`backtest/heatmap.py`](../backtest/heatmap.spec.md) layer. See
   the plot remains a resizable viewport rather than dictating the minimum.
   `tests/smoke/test_smoke_window_width.py` covers mapped normal/enlarged-font
   replay, blind, live, and hover states using the shared checker.
+  Status and coverage rows reserve their allocation before the expanding plot,
+  so narrow wrapping cannot hide the footer behind the chart request.
 - The window references an active controller only; `end_session`
   triggers `close()`.
 - **No value is read from any bar after the clock.** The price leg stops

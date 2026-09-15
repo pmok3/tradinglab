@@ -1,6 +1,6 @@
 # `gui/strategy_tab.py` — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-15
 
 ## Purpose
 PR 4 of the Strategy Tester rollout. A self-contained Tk widget
@@ -93,6 +93,18 @@ root in smoke tests). The popup wrapper + menubar wiring live in
   - **Per-symbol** — Treeview rows from ``RunAggregate.per_symbol``.
   - **Per-year** — Treeview rows from ``RunAggregate.per_year``.
 - **Action row** — ``Open run folder`` + ``Export CSV…`` + ``Export HTML…`` + ``Export PDF…`` buttons, enabled after a successful Run.
+  Existing action widgets wrap through the opt-in measured flow layout; export
+  progress changing their labels never replaces widgets or callbacks. Headline
+  labels wrap within the report pane, and both report tables have functional
+  horizontal scrollbars. Mapped default/minimum/stale-width and enlarged-font
+  cases are covered in `tests/smoke/test_smoke_window_width.py`.
+  The populated run-id/directory header also wraps rather than truncating the
+  selected report's identity at a narrow report-pane width.
+  Sample-size and interval notices occupy a reserved container before the
+  expanding report notebook. Showing them after a run cannot strand the warnings
+  in an unallocated tail of the pack order.
+  The action row likewise reserves its bottom allocation before the notebook,
+  so showing wrapped notices cannot hide the export buttons.
 
 ### Recent Runs sidebar (PR 5, bottom of Configure pane)
 - ``ttk.Treeview`` with ``selectmode="extended"`` listing the newest 50

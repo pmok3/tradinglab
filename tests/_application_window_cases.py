@@ -120,6 +120,18 @@ def _initial_state() -> Iterator[str]:
     yield "initial"
 
 
+def width_scan():
+    from tradinglab.scanner.model import OP_GT, Condition, FieldRef, Group, ScanDefinition
+
+    return ScanDefinition(
+        id="width-probe", name="Width probe",
+        root=Group(children=[
+            Condition(left=FieldRef.builtin("close"), op=OP_GT,
+                      params={"right": FieldRef.literal(100)}, interval="5m"),
+        ]),
+    )
+
+
 def _new_child(parent: tk.Misc, previous: set[tk.Misc]) -> tk.Toplevel:
     new = [w for w in parent.winfo_children() if isinstance(w, tk.Toplevel) and w not in previous]
     assert len(new) == 1, f"Expected one new application window, got {len(new)}"
@@ -195,15 +207,9 @@ def popup_probe(
 
         elif case.name == "conditions":
             from tradinglab.gui.scanner_tab import _ScanSubTab
-            from tradinglab.scanner.model import OP_BETWEEN, OP_GT, Condition, FieldRef, Group, ScanDefinition
+            from tradinglab.scanner.model import OP_BETWEEN, Condition, FieldRef, Group
 
-            scan = ScanDefinition(
-                id="width-probe", name="Width probe",
-                root=Group(children=[
-                    Condition(left=FieldRef.builtin("close"), op=OP_GT,
-                              params={"right": FieldRef.literal(100)}, interval="5m"),
-                ]),
-            )
+            scan = width_scan()
             tab = _ScanSubTab(root, scan, on_change=lambda _tab: None)
             cleanup.callback(tab.destroy)
             tab.pack(fill="both", expand=True)
@@ -249,6 +255,9 @@ def popup_probe(
 
             def states():
                 assert bool(window.overrideredirect())
+                settle(window)
+                assert window.winfo_rootx() == host.winfo_rootx() + 12
+                assert window.winfo_rooty() == host.winfo_rooty() + host.winfo_height() + 4
                 yield "natural-wrapped-hint"
                 tip.set_text(
                     "A longer replacement hint explains the selected control, "

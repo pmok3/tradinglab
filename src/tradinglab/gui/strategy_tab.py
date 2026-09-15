@@ -49,6 +49,7 @@ from ..strategy_tester.report import RunAggregate, load_aggregate
 from ..strategy_tester.universe import list_presets
 from ..watchlists import storage as _watchlists_storage
 from .colors import MUTED_GREY
+from .flow_layout import wrap_controls
 
 logger = logging.getLogger(__name__)
 
@@ -573,16 +574,24 @@ class StrategyTab(ttk.Frame):
         ttk.Label(parent, text="Run Report", font=("", 12, "bold")).pack(
             anchor="w"
         )
-        self._lbl_run_id = ttk.Label(parent, text="(no run yet)")
-        self._lbl_run_id.pack(anchor="w", pady=(2, 6))
+        self._lbl_run_id = ttk.Label(parent, text="(no run yet)", wraplength=420, justify="left")
+        self._lbl_run_id.pack(fill="x", pady=(2, 6))
+        self._lbl_run_id.bind(
+            "<Configure>", lambda event: self._lbl_run_id.configure(wraplength=max(1, event.width)),
+        )
 
+        notices = ttk.Frame(parent)
+        notices.pack(fill="x")
         self._banner_sample = ttk.Label(
-            parent, text="", foreground="#a06000", wraplength=420,
+            notices, text="", foreground="#a06000", wraplength=420,
         )
         self._banner_interval = ttk.Label(
-            parent, text="", foreground="#1f3a73", wraplength=420,
+            notices, text="", foreground="#1f3a73", wraplength=420,
             font=("", 9),
         )
+        for label in (self._banner_sample, self._banner_interval):
+            label.bind("<Configure>", lambda event, label=label:
+                       label.configure(wraplength=max(1, event.width)))
         # Headline metrics grid
         hg = ttk.LabelFrame(parent, text="Headline", padding=6)
         hg.pack(fill="x", pady=(0, 6))
@@ -604,6 +613,19 @@ class StrategyTab(ttk.Frame):
         self._lbl_sharpe.grid(row=2, column=1, sticky="w", padx=(0, 12), pady=(2, 0))
         self._lbl_sortino = ttk.Label(hg, text="Sortino: 0.00")
         self._lbl_sortino.grid(row=2, column=2, sticky="w", pady=(2, 0))
+        headline_labels = tuple(hg.winfo_children())
+        for column in range(3):
+            hg.columnconfigure(column, weight=1)
+        for label in headline_labels:
+            label.configure(wraplength=130, justify="left")
+            label.grid_configure(sticky="ew")
+
+        def _wrap_headlines(event) -> None:
+            width = max(1, (event.width - 64) // 3)
+            for label in headline_labels:
+                label.configure(wraplength=width)
+
+        hg.bind("<Configure>", _wrap_headlines)
 
         # Notebook of per-symbol / per-year breakouts
         nb = ttk.Notebook(parent)
@@ -628,6 +650,9 @@ class StrategyTab(ttk.Frame):
         ):
             self._tree_symbol.heading(col, text=hdr)
             self._tree_symbol.column(col, width=w, anchor="w")
+        sym_scroll = ttk.Scrollbar(sym_frame, orient="horizontal", command=self._tree_symbol.xview)
+        self._tree_symbol.configure(xscrollcommand=sym_scroll.set)
+        sym_scroll.pack(side="bottom", fill="x")
         self._tree_symbol.pack(fill="both", expand=True)
 
         # Per-year Treeview
@@ -649,11 +674,14 @@ class StrategyTab(ttk.Frame):
         ):
             self._tree_year.heading(col, text=hdr)
             self._tree_year.column(col, width=w, anchor="w")
+        yr_scroll = ttk.Scrollbar(yr_frame, orient="horizontal", command=self._tree_year.xview)
+        self._tree_year.configure(xscrollcommand=yr_scroll.set)
+        yr_scroll.pack(side="bottom", fill="x")
         self._tree_year.pack(fill="both", expand=True)
 
         # Action row: open run folder, copy CSV path, export HTML/PDF
         action_row = ttk.Frame(parent)
-        action_row.pack(fill="x", pady=(6, 0))
+        action_row.pack(side="bottom", fill="x", pady=(6, 0), before=nb)
         self._btn_open_folder = ttk.Button(
             action_row, text="Open run folder", command=self._on_open_folder,
             state="disabled",
@@ -674,6 +702,7 @@ class StrategyTab(ttk.Frame):
             state="disabled",
         )
         self._btn_export_pdf.pack(side="left")
+        wrap_controls(action_row, gap=6)
 
     # ------------------------------------------------------------------
     # Population

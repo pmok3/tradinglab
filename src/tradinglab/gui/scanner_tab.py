@@ -49,6 +49,7 @@ from ..scanner.model import (
 )
 from ..scanner.runner import MatchRow, ScanResult
 from ._modal_base import BaseModalDialog, protect_combobox_wheel
+from .flow_layout import wrap_controls
 from .native_theme import apply_listbox_theme, current_theme
 from .scanner_block_editor import BlockEditor
 
@@ -283,6 +284,7 @@ class _ScanSubTab(ttk.Frame):
             variable=self._show_insuf_var,
             command=self._refresh_tree,
         ).pack(side=tk.LEFT, padx=(0, 8))
+        wrap_controls(hdr)
 
         # ---- conditions: summary row + popup editor --------------------
         # The full BlockEditor lives in a withdrawn Toplevel so users get
@@ -372,6 +374,9 @@ class _ScanSubTab(ttk.Frame):
         vsb = ttk.Scrollbar(tree_frame, orient="vertical",
                             command=self._tree.yview)
         self._tree.configure(yscrollcommand=vsb.set)
+        hsb = ttk.Scrollbar(tree_frame, orient="horizontal", command=self._tree.xview)
+        self._tree.configure(xscrollcommand=hsb.set)
+        hsb.pack(side=tk.BOTTOM, fill=tk.X)
         self._tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         vsb.pack(side=tk.RIGHT, fill=tk.Y)
         self._tree.tag_configure("new", foreground="#3fb950")
@@ -823,6 +828,7 @@ class ScannerTab(ttk.Frame):
                    width=8).pack(side=tk.LEFT)
         ttk.Button(bar, text="Export…", command=self._on_export,
                    width=8).pack(side=tk.LEFT, padx=(2, 0))
+        wrap_controls(bar, gap=2)
 
     def _build_empty_state(self) -> None:
         self._empty_frame = ttk.Frame(self._notebook)

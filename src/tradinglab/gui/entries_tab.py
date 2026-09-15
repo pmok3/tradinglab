@@ -48,6 +48,7 @@ from ..entries.model import (
 )
 from .colors import MUTED_GREY
 from .entries_dialog import EntriesDialog
+from .flow_layout import wrap_controls
 
 logger = logging.getLogger(__name__)
 
@@ -262,6 +263,8 @@ class EntriesTab(ttk.Frame):
             side="left", padx=(4, 0))
         ttk.Button(bar2, text="Refresh", command=self.refresh).pack(
             side="right")
+        wrap_controls(bar1)
+        wrap_controls(bar2)
 
         # Body: Treeview + bottom audit/stats split.
         paned = ttk.PanedWindow(self, orient="vertical")
@@ -288,9 +291,14 @@ class EntriesTab(ttk.Frame):
             )
             rb.pack(side="left", padx=(6, 0))
             self._filter_buttons[_value] = rb
+        wrap_controls(filt_row)
         self._filter_empty_hint = ttk.Label(
-            filt_row, text="", foreground=MUTED_GREY)
-        self._filter_empty_hint.pack(side="left", padx=(10, 0))
+            tree_lf, text="", foreground=MUTED_GREY, wraplength=320)
+        self._filter_empty_hint.pack(fill="x", padx=2)
+        self._filter_empty_hint.bind(
+            "<Configure>", lambda event:
+            self._filter_empty_hint.configure(wraplength=max(1, event.width)),
+        )
 
         self._tree = ttk.Treeview(
             tree_lf, columns=_TREEVIEW_COLS, show="headings", height=10,

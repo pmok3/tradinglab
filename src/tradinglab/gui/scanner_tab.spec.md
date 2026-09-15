@@ -56,6 +56,11 @@ most-recently-updated** scan (sort by `updated_at`, fallback
 `created_at`, then `name`). `initial_open_ids` is an opt-in for tests.
 
 ### Toolbar buttons
+The outer scanner action row uses opt-in measured flow layout: resizing the
+side notebook wraps existing buttons without rebuilding or losing commands.
+This keeps Import/Export reachable with enlarged fonts and narrow saved layouts.
+The per-scan ranking/interval header also wraps its existing controls, so a
+populated scan does not hide "Show insufficient" at enlarged font sizes.
 
 | button   | action                                                                          |
 | -------- | ------------------------------------------------------------------------------- |
@@ -118,7 +123,8 @@ non-empty, re-applies the most-recent-1 auto-open rule.
 4. **Treeview**: `Symbol | Match | Rank | Tick | Time`. `iid =
    symbol` so selection persists across diff-update ticks.
    `selectmode = browse`. `Symbol` anchors west; `Match`,
-   `Rank`, `Tick`, `Time` anchor center.
+   `Rank`, `Tick`, `Time` anchor center. A functional horizontal scrollbar
+   keeps the final columns reachable when the side notebook narrows.
 
 ## Rank presets
 

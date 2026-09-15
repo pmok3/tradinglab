@@ -125,6 +125,9 @@ class EntriesTab(ttk.Frame):
   Audit `watchlist-entries-full-dark`.
 
 ## Invariants
+- Toolbar actions and view filters wrap using the opt-in flow layout without
+  recreating widgets or changing enabled/armed state. Empty-view hints wrap on a
+  separate line rather than starving the filter controls.
 - The strategy table has a functional horizontal scrollbar so rightmost
   columns remain reachable in the main window's narrower notebook pane.
   Mapped page selection and scrollbar movement are covered through the

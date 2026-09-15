@@ -216,8 +216,8 @@ class LocalDataDialog(BaseModalDialog):
         ).pack(anchor="w", pady=(8, 0))
 
         # Save / cancel buttons at the bottom.
-        bottom = ttk.Frame(outer)
-        bottom.pack(fill="x", pady=(10, 0))
+        bottom = ttk.Frame(self, padding=(12, 0, 12, 12))
+        bottom.pack(side="bottom", fill="x", before=outer)
         ttk.Button(bottom, text="Cancel", command=self._on_cancel).pack(side="right", padx=(6, 0))
         ttk.Button(bottom, text="Save and Close", command=self._on_save).pack(side="right")
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 import tkinter as tk
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager, nullcontext
+from datetime import datetime, timezone
 from pathlib import Path
 from tkinter import ttk
 from types import SimpleNamespace
@@ -17,11 +18,11 @@ import pytest
 from tests._application_window_cases import (
     HEAVY_CASES,
     WindowProbe,
-    case_parameters,
     close_window,
     isolate_geometry,
     settle,
     widgets,
+    width_scan,
 )
 from tests._window_width import assert_window_width, enlarged_fonts, mapped_window
 
@@ -40,6 +41,8 @@ def _preserve_app_layout(app, monkeypatch):
     chartstack_setting = settings.get("chartstack.enabled", False)
     axes = [(ax, ax.get_xlim(), ax.get_ylim()) for ax in app._figure.axes]
     original_status = app.status.get()
+    primary, compare = list(app._primary), list(app._compare)
+    candles = {key: list(value) for key, value in app._full_cache.items()}
     geometry_store = getattr(app, "_geometry_store", None)
     saved_windows = dict(geometry_store._windows) if geometry_store is not None else None
     if geometry_store is not None:
@@ -72,6 +75,8 @@ def _preserve_app_layout(app, monkeypatch):
             geometry_store._pending_after.clear()
             geometry_store._windows.clear()
             geometry_store._windows.update(saved_windows)
+        assert app._primary == primary and app._compare == compare, "Width probes changed chart bars"
+        assert dict(app._full_cache) == candles, "Width probes changed the chart candle cache"
 
 
 def _session_result():
@@ -98,6 +103,88 @@ def _session_result():
 
 
 @contextmanager
+def _populated_main_data(app, monkeypatch):
+    from tradinglab.entries.model import EntryStrategy
+    from tradinglab.exits.model import ExitLeg, ExitStrategy, ExitTrigger, TriggerKind
+    from tradinglab.positions.model import Position
+    from tradinglab.watchlists import WatchlistManager
+
+    entries, exits, scanner = app._entries_tab, app._exits_tab, app._scanner_tab
+    original_filter = entries._filter_var.get()
+    original_selection = entries._tree.selection()
+    original_scans, open_scans = scanner.get_library(), list(scanner._open_ids)
+    selected_scan = scanner.current_scan_id()
+    original_watchlist = app.watchlist_var.get()
+    original_sort = dict(app._watchlist_sort_by_name)
+    quant = app._quant_tab
+    quant_values = {item: quant.tree.item(item, "values") for item in quant._rows_by_item}
+    exit_strategy = ExitStrategy(
+        id="width-exit", name="Width exit",
+        legs=[ExitLeg(id="width-leg", label="Protective stop",
+                      triggers=[ExitTrigger(id="width-stop", kind=TriggerKind.STOP, price=95)])],
+    )
+    position = Position(
+        id="width-position", symbol="AAPL", side="long", qty_initial=10, qty_open=10,
+        avg_entry_price=100, entry_time=datetime(2024, 6, 3, tzinfo=timezone.utc),
+        source="paper", last_price=101,
+    )
+    attached = {"value": True}
+    manager = WatchlistManager()
+    manager.create("Width watchlist", ["AAPL", "MSFT"])
+    manager.pin("Width watchlist")
+    try:
+        with monkeypatch.context() as patches:
+            patches.setattr(app, "_watchlists", manager)
+            patches.setattr(app, "_watchlist_row_cache", {})
+            patches.setattr(app, "_watchlist_snapshot", {
+                "AAPL": {"last": 101.0, "change_1d": 1.0, "pct_1d": 1.0},
+                "MSFT": {"last": 202.0, "change_1d": -2.0, "pct_1d": -1.0},
+            })
+            patches.setattr(app, "_kick_watchlist_preloads", lambda: None)
+            patches.setattr(app, "_schedule_reload", lambda *_args, **_kwargs: None)
+            patches.setattr(app, "_apply_theme", lambda: None)
+            patches.setattr(scanner, "_on_subtab_change", lambda _sub: None)
+            patches.setattr(entries, "_library", [EntryStrategy(id="width-entry", name="Width entry")])
+            patches.setattr(exits, "_library", [exit_strategy])
+            patches.setattr(exits, "_last_prices", dict(exits._last_prices))
+            patches.setattr(exits, "_tracker", SimpleNamespace(list_open=lambda: [position]))
+            patches.setattr(exits, "_evaluator", SimpleNamespace(
+                attached_strategy=lambda _id: exit_strategy if attached["value"] else None,
+                trigger_state=lambda *_args: None,
+            ))
+            entries._filter_var.set("all")
+            entries._refresh_tree()
+            exits._refresh_attach_panel()
+            exits._refresh_status_tree()
+            scanner.set_library({"width-probe": width_scan()})
+            app._rebuild_watchlist_subtabs()
+            quant.set_last_values({symbol: "123.45" for symbol in quant.symbols()})
+            assert entries._tree.get_children() and exits._tree.get_children()
+            assert app._watchlist_trees["Width watchlist"].get_children()
+            assert scanner._sub_tabs["width-probe"].scan.all_conditions()
+            yield attached
+    finally:
+        entries._filter_var.set(original_filter)
+        entries._refresh_tree()
+        if original_selection:
+            entries._tree.selection_set(original_selection)
+        exits._refresh_attach_panel()
+        exits._refresh_status_tree()
+        scanner._open_ids = open_scans
+        scanner.set_library(original_scans)
+        if selected_scan:
+            scanner.open_scan(selected_scan)
+        app.watchlist_var.set(original_watchlist)
+        app._watchlist_sort_by_name = original_sort
+        with monkeypatch.context() as patches:
+            patches.setattr(app, "_kick_watchlist_preloads", lambda: None)
+            patches.setattr(app, "_apply_theme", lambda: None)
+            app._rebuild_watchlist_subtabs()
+        for item, values in quant_values.items():
+            quant.tree.item(item, values=values)
+
+
+@contextmanager
 def _heavy_probe(case, app, monkeypatch, directory: Path) -> Iterator[WindowProbe]:
     with ExitStack() as cleanup:
         if case.name == "main":
@@ -107,6 +194,7 @@ def _heavy_probe(case, app, monkeypatch, directory: Path) -> Iterator[WindowProb
             panel = SandboxPanel(app._sandbox_tab_frame, _FakeSandboxController())
             panel.pack(fill="both", expand=True)
             cleanup.callback(panel.destroy)
+            attached = cleanup.enter_context(_populated_main_data(app, monkeypatch))
             window = app
 
             def states():
@@ -115,6 +203,14 @@ def _heavy_probe(case, app, monkeypatch, directory: Path) -> Iterator[WindowProb
                     app._notebook.select(tab)
                     settle(app)
                     yield str(app._notebook.tab(tab, "text"))
+                app._notebook.select(app._exits_tab)
+                attached["value"] = False
+                app._exits_tab._refresh_attach_panel()
+                yield "unprotected-position"
+                app._notebook.select(app._entries_tab)
+                app._entries_tab._filter_var.set("active")
+                app._entries_tab._on_filter_change()
+                yield "empty-active-entry-filter"
                 app._notebook.select(app._watchlist_outer_frame)
                 app._toggle_chartstack(target=True)
                 settle(app)
@@ -142,6 +238,17 @@ def _heavy_probe(case, app, monkeypatch, directory: Path) -> Iterator[WindowProb
 
             def states():
                 yield "initial-configure"
+                from tradinglab.backtest.performance import build_trade_rows
+                from tradinglab.strategy_tester.report import compute_aggregate
+
+                aggregate = compute_aggregate(
+                    run_id="width-report", rows_by_symbol={"AAPL": build_trade_rows(_session_result())},
+                    starting_cash=100000, bootstrap_samples=20,
+                    interval_overrides=["AAPL condition authored at 1m; evaluated at 5m"],
+                )
+                tab._render_aggregate(aggregate, directory)
+                assert tab._tree_symbol.get_children() and tab._tree_year.get_children()
+                yield "populated-report"
                 tab._var_advanced_open.set(True)
                 tab._on_advanced_toggle()
                 tab._var_date_preset.set(DatePreset.CUSTOM.value)
@@ -256,8 +363,15 @@ def check_w0_application_window_width(app, case, scenario, font_size, monkeypatc
     assert not failures, "\n".join(failures)
 
 
-@pytest.mark.parametrize("case", case_parameters(HEAVY_CASES))
-@pytest.mark.parametrize("scenario", ["default", "minimum", "saved"])
+@pytest.mark.parametrize("case,scenario", [
+    pytest.param(
+        case, scenario, id=f"{scenario}-{case.name}",
+        marks=pytest.mark.window_width(window_id=case.window_id),
+    )
+    for case in HEAVY_CASES
+    for scenario in ("default", "minimum", "saved")
+    if scenario != "saved" or case.geometry_key is not None
+])
 @pytest.mark.parametrize("font_size", [None, 16], ids=["normal-font", "large-font"])
 def test_application_window_width(app, case, scenario, font_size, monkeypatch, tmp_path):
     check_w0_application_window_width(app, case, scenario, font_size, monkeypatch, tmp_path)

@@ -407,6 +407,9 @@ class WatchlistTabMixin:
                 command=lambda c=col.id, n=name: self._sort_watchlist_by(n, c),
             )
             tree.column(col.id, width=col.width, anchor=col.anchor)
+        scrollbar = ttk.Scrollbar(parent, orient="horizontal", command=tree.xview)
+        tree.configure(xscrollcommand=scrollbar.set)
+        scrollbar.pack(side="bottom", fill="x")
         tree.bind("<Double-1>", self._on_watchlist_double)
         # Widget-level Space binding (highest priority — fires before
         # the Treeview class binding which otherwise toggles the

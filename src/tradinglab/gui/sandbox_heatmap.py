@@ -672,8 +672,6 @@ class SandboxHeatmapWindow(tk.Toplevel):
         self._header.pack(side=tk.TOP, fill=tk.X, padx=6, pady=(6, 2))
         self._build_toolbar()
 
-        self._build_canvas()
-
         self._status = ttk.Label(self, text="Hover a tile…", anchor="w")
         self._status.pack(side=tk.BOTTOM, fill=tk.X, padx=6, pady=(2, 4))
         self._footer = ttk.Label(
@@ -687,6 +685,7 @@ class SandboxHeatmapWindow(tk.Toplevel):
             label.configure(wraplength=900, justify="left")
             label.bind("<Configure>", lambda event, label=label:
                        label.configure(wraplength=max(1, event.width)))
+        self._build_canvas()
         self.update_idletasks()
         self.minsize(max(400, self._size_combo.master.winfo_reqwidth() + 12), 300)
 
