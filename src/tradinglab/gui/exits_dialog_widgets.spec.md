@@ -1,6 +1,10 @@
 # gui/exits_dialog_widgets.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-14
+
+`_BracketDialog` opts into `_fit_form_width` before restoring geometry so its
+fields and Create/Cancel buttons remain reachable at the WM minimum and under
+larger fonts. Leg/editor widgets retain their existing responsive layout.
 
 ## Purpose
 

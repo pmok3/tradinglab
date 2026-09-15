@@ -145,6 +145,7 @@ class PreTradeFormDialog(BaseModalDialog):
 
         self._thesis_text.focus_set()
         protect_combobox_wheel(self)
+        self._fit_form_width()
         self._finalize_modal(primary=self._on_submit, cancel=self._on_cancel)
 
     def _on_submit(self) -> None:

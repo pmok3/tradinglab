@@ -144,6 +144,8 @@ class DrawingDialog(BaseModalDialog):
         protect_combobox_wheel(self)
         # Modeless: no grab, no Return-key primary. WM_DELETE / ESC
         # both route through ``_close`` which flushes pending commits.
+        self._fit_form_width()
+        self.minsize(self.minsize()[0], max(self.minsize()[1], self.winfo_reqheight() + 16))
         self._finalize_modal(primary=None, cancel=self._close, grab=False)
 
     # ------------------------------------------------------------

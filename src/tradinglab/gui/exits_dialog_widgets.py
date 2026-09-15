@@ -224,6 +224,7 @@ class _BracketDialog(BaseModalDialog):
         # CLAUDE.md §7.11 — must come AFTER all widgets exist so the
         # walker can find the two ``state="readonly"`` Comboboxes.
         protect_combobox_wheel(self)
+        self._fit_form_width()
         self._finalize_modal(primary=self._ok, cancel=self._cancel)
 
     def _on_cancel(self) -> None:

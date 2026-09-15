@@ -1,6 +1,10 @@
 # gui/watchlist_columns_dialog.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-14
+
+The two-pane form calls `_fit_form_width` before restore. Its measured controls,
+including the field picker and system-column actions, set a font-aware minimum
+instead of letting a tiny restored width collapse a pane behind its sibling.
 
 ## Purpose
 The per-watchlist **"Columns…" dialog** — the primary surface for

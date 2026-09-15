@@ -158,6 +158,8 @@ class ThemeEditorDialog(BaseModalDialog):
 
         self._build_layout()
         protect_combobox_wheel(self)
+        self._fit_form_width()
+        self.minsize(self.minsize()[0], max(self.minsize()[1], self.winfo_reqheight() + 16))
         self._finalize_modal(primary=self._on_save_and_close, cancel=self._on_cancel)
 
     # ------------------------------------------------------------------

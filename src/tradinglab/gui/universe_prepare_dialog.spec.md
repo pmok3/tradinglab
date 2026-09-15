@@ -1,6 +1,11 @@
 # universe_prepare_dialog.py — spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-14
+
+The inner form is measured explicitly with `_fit_form_width(form=..., viewport=...)`
+before restoring geometry. Its default/minimum width includes scrollbar/chrome
+and tracks font-scaled universe choices and filter fields; the outer Canvas
+request alone is not width evidence. Vertical scrolling remains unchanged.
 
 ## Purpose
 

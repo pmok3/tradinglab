@@ -525,7 +525,9 @@ class _FieldRefPicker(ttk.Frame):
 
         # ----- value widgets (built lazily by _rebuild_value_pane) -----------
         self._value_pane = ttk.Frame(self)
-        self._value_pane.grid(row=0, column=1, sticky="nw")
+        self.columnconfigure(1, weight=1)
+        self._value_pane.columnconfigure(0, weight=1)
+        self._value_pane.grid(row=0, column=1, sticky="new")
         self._param_widgets: dict[str, tk.Variable] = {}
         self._output_var = tk.StringVar()
         self._field_id_var = tk.StringVar()
@@ -937,7 +939,7 @@ class _FieldRefPicker(ttk.Frame):
         if spec is None:
             return
         row = ttk.Frame(self._value_pane)
-        row.grid(row=0, column=0, sticky="w")
+        row.grid(row=0, column=0, sticky="ew")
 
         self._field_id_var = tk.StringVar(value=self._ref.id)
         ind_combo = ttk.Combobox(
@@ -970,6 +972,8 @@ class _FieldRefPicker(ttk.Frame):
         sym_wrap = self._build_symbol_combo(parent=row)
         sym_wrap.pack(side="left")
 
+        from .flow_layout import wrap_controls
+        wrap_controls(row)
         self._build_validation_label(row_index=1)
 
     def _compact_summary_text(self, spec: Any) -> str:
@@ -1030,7 +1034,9 @@ class _FieldRefPicker(ttk.Frame):
             textvariable=self._applicability_var,
             foreground="#666666",
         )
-        label.grid(row=row_index, column=0, sticky="w", pady=(2, 0))
+        label.grid(row=row_index, column=0,
+                   columnspan=2 if self._ref.kind == FIELD_KIND_BUILTIN else 1,
+                   sticky="w", pady=(2, 0))
         self._applicability_label = label
 
     def _refresh_applicability(self) -> None:
@@ -1789,6 +1795,11 @@ class _FieldRefParamDialog(BaseModalDialog):
         self._output_var: tk.StringVar | None = None
         self._error_var = tk.StringVar(value="")
         self._build_layout()
+        self.update_idletasks()
+        self._fit_form_width(
+            form=self._width_form, viewport=self._form_canvas,
+            minimum=self._width_footer.winfo_reqwidth() + 20,
+        )
         self._finalize_modal(primary=self._on_primary, cancel=self._on_cancel)
 
     # -- layout --------------------------------------------------------------
@@ -1804,6 +1815,7 @@ class _FieldRefParamDialog(BaseModalDialog):
         body.pack(side="top", fill="both", expand=True, padx=4, pady=2)
         inner, canvas = make_scrollable_form(body)
         self._form_canvas = canvas
+        self._width_form = inner
 
         if spec is not None:
             for pdef in spec.params_schema:
@@ -1814,6 +1826,7 @@ class _FieldRefParamDialog(BaseModalDialog):
 
         # Footer: validation message + Cancel / Apply.
         footer = ttk.Frame(self)
+        self._width_footer = footer
         footer.pack(side="bottom", fill="x", padx=10, pady=(4, 10))
         ttk.Label(footer, textvariable=self._error_var, foreground="#c0392b").pack(
             side="left", anchor="w"
@@ -2125,6 +2138,7 @@ class _ConditionFrame(ttk.Frame):
                 self._toplevel_for_resize = None
                 self._toplevel_resize_bind_id = None
         self.bind("<Destroy>", self._on_destroy_resize_binding)
+        self._on_toplevel_resize()
 
     # -- public API -----------------------------------------------------------
 
@@ -2230,6 +2244,9 @@ class _ConditionFrame(ttk.Frame):
                 w.grid_forget()
             except tk.TclError:
                 pass
+        for row in getattr(self, "_stacked_rows", []):
+            row.grid_forget()
+        self.columnconfigure(0, weight=1 if self._current_layout == "stacked" else 0)
 
         layout = self._current_layout
         if self._view_mode == VIEW_COMPACT:
@@ -2295,24 +2312,27 @@ class _ConditionFrame(ttk.Frame):
         3 — they vertically stack inside ``_params_fields_frame``
         for ops with multiple field params (e.g. ``between``).
         """
-        self._enabled_chk.grid(row=0, column=0, padx=(0, 4), sticky="nw")
-        self._left_picker.grid(
-            row=0, column=1, columnspan=3, padx=(0, 6), sticky="new")
-        self._interval_combo.grid(
-            row=0, column=4, padx=(0, 6), sticky="nw")
-        self._delete_btn.grid(
-            row=0, column=5, padx=(0, 0), sticky="nw")
-
-        self._op_combo.grid(
-            row=1, column=1, padx=(0, 6), pady=(2, 0), sticky="nw")
-        self._params_scalar_frame.grid(
-            row=1, column=2, padx=(0, 6), pady=(2, 0), sticky="nw")
-        self._lookback.grid(
-            row=1, column=3, padx=(0, 6), pady=(2, 0), sticky="nw")
-
-        self._params_fields_frame.grid(
-            row=2, column=1, columnspan=3, padx=(0, 6),
-            pady=(2, 0), sticky="new")
+        if not hasattr(self, "_stacked_rows"):
+            self._stacked_rows: list[ttk.Frame] = []
+        budget = self._get_available_width() or _DEFAULT_DIALOG_WIDTH_PX
+        groups = (
+            (self._enabled_chk, self._left_picker, self._interval_combo, self._delete_btn),
+            (self._op_combo, self._params_scalar_frame, self._lookback),
+            (self._params_fields_frame,),
+        )
+        row_index = 0
+        for group in groups:
+            widgets = [w for w in group if w is not self._left_picker or self.cond.op not in _NO_LEFT_OPS]
+            positions = _compute_flow_rows([w.winfo_reqwidth() for w in widgets], budget=budget, pad=6)
+            for widget, (row, column) in zip(widgets, positions, strict=True):
+                index = row_index + row
+                while len(self._stacked_rows) <= index:
+                    self._stacked_rows.append(ttk.Frame(self))
+                host = self._stacked_rows[index]
+                host.grid(row=index, column=0, sticky="ew", pady=(2, 0))
+                host.columnconfigure(column, weight=1 if isinstance(widget, _FieldRefPicker) else 0)
+                widget.grid(in_=host, row=0, column=column, sticky="new", padx=(0, 6))
+            row_index += max(row for row, _ in positions) + 1
 
     def _classify_layout(self) -> str:
         """Return ``"stacked"`` if the row should use the 3-row layout, else ``"inline"``.
@@ -2352,6 +2372,14 @@ class _ConditionFrame(ttk.Frame):
             return "stacked"
         try:
             inline_width = _estimate_condition_inline_width(self.cond)
+            if self.winfo_ismapped() and hasattr(self, "_delete_btn"):
+                widgets = (
+                    self._enabled_chk, self._op_combo, self._params_scalar_frame,
+                    self._params_fields_frame, self._lookback, self._interval_combo, self._delete_btn,
+                )
+                inline_width = sum(w.winfo_reqwidth() + 6 for w in widgets)
+                if self.cond.op not in _NO_LEFT_OPS:
+                    inline_width += self._left_picker.winfo_reqwidth() + 6
             available = self._get_available_width()
         except Exception:  # noqa: BLE001
             return getattr(self, "_current_layout", "inline")
@@ -2374,12 +2402,14 @@ class _ConditionFrame(ttk.Frame):
         """
         # Walk up looking for BlockEditor.
         try:
-            w: tk.Misc | None = self
+            w: tk.Misc | None = self.master
+            widths: list[int] = []
             while w is not None:
+                if w.winfo_width() > 100:
+                    widths.append(w.winfo_width())
                 if isinstance(w, BlockEditor):
-                    be_width = int(w.winfo_width())
-                    if be_width > 100:
-                        return be_width - 20  # small padding allowance
+                    if widths:
+                        return min(widths) - 12
                     break
                 w = w.master
         except tk.TclError:
@@ -2411,6 +2441,8 @@ class _ConditionFrame(ttk.Frame):
         """
         new_layout = self._classify_layout()
         if new_layout == self._current_layout:
+            if new_layout == "stacked":
+                self._apply_layout()
             return False
         self._current_layout = new_layout
         # Rebuild params so field-wrap orientation flips and the
@@ -2765,6 +2797,12 @@ class _GroupFrame(ttk.Frame):
         self._children_frame = ttk.Frame(self)
         self._children_frame.pack(fill="x", padx=(16, 0))
         self._render_children()
+        from .flow_layout import wrap_controls
+        # Capture the optional combinator too, then restore its visibility.
+        if not self._combinator_cb.winfo_manager():
+            self._combinator_cb.pack(side="left", before=self._add_condition_btn)
+        wrap_controls(header)
+        self._update_combinator_visibility()
 
     def _update_combinator_visibility(self) -> None:
         """Show the AND/OR combobox only when the group has 2+ children.

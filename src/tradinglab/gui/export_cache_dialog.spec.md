@@ -1,6 +1,15 @@
 # gui/export_cache_dialog.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-14
+
+After building the empty/populated state, `_fit_form_width` makes its actual
+header/filter/footer request a minimum/default width floor. The mapped regression
+factory includes real synthetic rows, not only the empty-cache message, and
+checks larger fonts and stale restores without exporting or loading user data.
+Destination/status/actions reserve their bottom allocation before the expanding
+Treeview, preserving their visual order and preventing entirely hidden footers.
+The populated dialog's minimum height reserves measured non-table chrome plus
+an 80-pixel table viewport; it does not require all natural Treeview rows to fit.
 
 ## Purpose
 The dialog opened by **Tools → Export Bars to CSV…**. Enumerates every

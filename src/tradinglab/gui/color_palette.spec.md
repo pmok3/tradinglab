@@ -1,6 +1,12 @@
 # gui/color_palette.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-14
+
+The chooser opts into `_fit_form_width` after building its controls. Existing
+geometry is a floor, not permission to restore a width that clips font-scaled
+fields/buttons. The standard mapped width matrix covers stale narrow restores.
+The small fixed chooser also floors height at its form request, preventing a
+fully hidden action row when enlarged fonts increase the form's height.
 
 ## Purpose
 Themed clone of the Windows Win32 ChooseColor dialog. Implemented

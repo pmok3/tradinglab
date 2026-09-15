@@ -309,7 +309,7 @@ class ExitsDialog(BaseEditorDialog):
 
         # Library pane
         lib = ttk.Frame(outer)
-        outer.add(lib, weight=1)
+        outer.add(lib, weight=0)
 
         ttk.Label(lib, text="Strategies", font=("", 10, "bold")).pack(anchor="w")
         # Mine | Templates | All filter — defaults to "All" each time the
@@ -348,6 +348,10 @@ class ExitsDialog(BaseEditorDialog):
         btnrow2.pack(fill="x", pady=(2, 0))
         ttk.Button(btnrow2, text="Import…",  command=self._on_import).pack(side="left", padx=(0, 2))
         ttk.Button(btnrow2, text="Export…",  command=self._on_export).pack(side="left", padx=2)
+        self._library_lb.pack_forget()
+        btnrow2.pack_configure(side="bottom")
+        btnrow.pack_configure(side="bottom", after=btnrow2)
+        self._library_lb.pack(fill="both", expand=True, padx=2, pady=(4, 4))
 
         # Editor pane
         editor_outer = ttk.Frame(outer)
@@ -768,5 +772,3 @@ class ExitsDialog(BaseEditorDialog):
             except Exception:  # noqa: BLE001
                 logger.exception("on_library_changed callback raised")
         self._status_var.set(f"Saved {self._draft.name!r}")
-
-

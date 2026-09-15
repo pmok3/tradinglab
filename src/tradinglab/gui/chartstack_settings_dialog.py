@@ -102,6 +102,7 @@ class ChartStackSettingsDialog(BaseModalDialog):
         # idempotent + future-proof if a binding-mode dropdown is
         # added later).
         protect_combobox_wheel(self)
+        self._fit_form_width()
         self._finalize_modal(primary=self._on_save, cancel=self._on_cancel)
 
     # ------------------------------------------------------------------

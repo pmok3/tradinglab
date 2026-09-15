@@ -229,6 +229,7 @@ class CustomIndicatorDialog(BaseModalDialog):
         self._build_layout()
         self._refresh_saved_list()
         self._set_status("")
+        self._fit_form_width(form=self._width_form, viewport=self._width_viewport)
         self._finalize_modal(grab=False)
         # Re-apply wheel guard AFTER finalize so the combobox is
         # discoverable (it lives inside scroll_frame).
@@ -281,6 +282,7 @@ class CustomIndicatorDialog(BaseModalDialog):
         right.pack(side="left", fill="both", expand=True)
 
         meta = ttk.Frame(right)
+        self._width_form, self._width_viewport = meta, right
         meta.pack(side="top", fill="x")
         ttk.Label(meta, text="Name:").grid(row=0, column=0, sticky="w", padx=(0, 4))
         ttk.Entry(meta, textvariable=self._name_var, width=22).grid(
@@ -354,11 +356,13 @@ class CustomIndicatorDialog(BaseModalDialog):
         self._preview_frame.pack(side="top", fill="x", expand=False, pady=(4, 2))
         self._preview_expanded = False
         self._preview_canvas: Any = None  # FigureCanvasTkAgg, lazy
-        ttk.Label(
+        preview_hint = ttk.Label(
             self._preview_frame,
             text="(Click Preview to render the indicator on the current chart's candles.)",
             foreground=FALLBACK_GRAY,
-        ).pack(side="top", anchor="w")
+        )
+        preview_hint.pack(side="top", fill="x")
+        preview_hint.bind("<Configure>", lambda event: preview_hint.configure(wraplength=max(1, event.width)))
 
         # Status bar.
         status = ttk.Frame(self)
@@ -582,7 +586,7 @@ class CustomIndicatorDialog(BaseModalDialog):
     def _render_conditions_body(self) -> None:
         from .scanner_block_editor import BlockEditor
 
-        ttk.Label(
+        hint = ttk.Label(
             self._compose_frame,
             text=(
                 "Build a condition tree (same editor used by entries/exits). "
@@ -590,7 +594,9 @@ class CustomIndicatorDialog(BaseModalDialog):
                 "0.0 when FALSE, NaN during warmup."
             ),
             foreground="#666666", justify="left", wraplength=740,
-        ).pack(side="top", anchor="w", pady=(0, 4))
+        )
+        hint.pack(side="top", fill="x", pady=(0, 4))
+        hint.bind("<Configure>", lambda event: hint.configure(wraplength=max(1, event.width)))
         ttk.Label(self._compose_frame, text="Condition tree:").pack(
             side="top", anchor="w",
         )
@@ -628,7 +634,10 @@ class CustomIndicatorDialog(BaseModalDialog):
             font=("Consolas", 9), foreground="#666666",
             justify="left",
         )
-        self._cheatsheet_lbl.pack(side="top", anchor="w", pady=(0, 6))
+        self._cheatsheet_lbl.pack(side="top", fill="x", pady=(0, 6))
+        self._cheatsheet_lbl.bind(
+            "<Configure>", lambda event: event.widget.configure(wraplength=max(1, event.width)),
+        )
         ttk.Label(self._compose_frame, text="Expression:").pack(
             side="top", anchor="w",
         )
@@ -640,7 +649,7 @@ class CustomIndicatorDialog(BaseModalDialog):
             self._expr_text.insert("1.0", self._expression_text_cached)
 
     def _render_python_body(self) -> None:
-        ttk.Label(
+        hint = ttk.Label(
             self._compose_frame,
             text=(
                 "⚠ Python mode executes arbitrary code every time the "
@@ -648,7 +657,9 @@ class CustomIndicatorDialog(BaseModalDialog):
                 "    Only save indicators you trust."
             ),
             foreground="#a02020", justify="left", wraplength=740,
-        ).pack(side="top", anchor="w", pady=(0, 6))
+        )
+        hint.pack(side="top", fill="x", pady=(0, 6))
+        hint.bind("<Configure>", lambda event: hint.configure(wraplength=max(1, event.width)))
         ttk.Label(self._compose_frame, text="Python source:").pack(
             side="top", anchor="w",
         )

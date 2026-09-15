@@ -1,6 +1,12 @@
 # gui/sandbox_review_dialog.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-14
+
+Decision, post-trade review and tag-editor forms each opt into
+`_fit_form_width` before restoring saved geometry. Measured content is a
+minimum/default width floor, so a stale narrow width or larger named fonts
+cannot hide their labels/actions. Height and journal submission semantics
+are unchanged. The standard mapped width matrix covers all three windows.
 
 ## Purpose
 Sandbox journaling modals: optional `DecisionLogDialog`, mandatory-on-close `PostTradeReviewDialog`, and the `TagsEditorDialog` taxonomy editor.

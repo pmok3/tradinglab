@@ -42,6 +42,7 @@ class DecisionLogDialog(BaseModalDialog):
         self._build()
         self._action_combo.focus_set()
         protect_combobox_wheel(self)
+        self._fit_form_width()
         self._finalize_modal(
             primary=self._on_submit,
             cancel=self._on_cancel,
@@ -175,6 +176,7 @@ class PostTradeReviewDialog(BaseModalDialog):
         # protocol to the supplied cancel callback. To preserve the
         # legacy "ESC is intentionally NOT bound" contract we unbind
         # ESC explicitly after finalize.
+        self._fit_form_width()
         self._finalize_modal(
             primary=self._on_submit,
             cancel=self._on_attempted_close,
@@ -271,6 +273,7 @@ class TagsEditorDialog(BaseModalDialog):
 
         self._new_var_entry.focus_set()
         protect_combobox_wheel(self)
+        self._fit_form_width()
         self._finalize_modal(primary=self._on_ok, cancel=self._on_cancel)
 
     def _build(self) -> None:

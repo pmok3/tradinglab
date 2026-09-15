@@ -1,6 +1,12 @@
 # `gui/theme_editor.py` — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-14
+
+`_fit_form_width` raises the initial/minimum width to the measured form request
+before restore, preserving larger sizes. This protects the preset and saved-theme
+action rows under enlarged fonts rather than relying on a fixed pixel floor.
+The form's natural height is also a minimum, preventing the preset and footer
+sections from being entirely unmapped behind a too-short fixed default.
 
 ## Purpose
 

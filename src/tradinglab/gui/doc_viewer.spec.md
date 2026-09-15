@@ -1,6 +1,11 @@
 # `gui/doc_viewer.py` — In-app scrollable Markdown documentation viewer
 
-Last updated: 2026-09-07
+Last updated: 2026-09-14
+
+The toolbar actions reserve space before the document-title label, which wraps
+within its remaining allocation. The minimum width measures toolbar chrome and
+sidebar plus a small document viewport, **not** the Text widget's natural width.
+Mapped stale/minimum/font regressions protect title and action reachability.
 
 ## Purpose
 

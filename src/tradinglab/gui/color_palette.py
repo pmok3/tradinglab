@@ -364,6 +364,8 @@ class ThemedColorChooser(BaseModalDialog):
         self._refresh_all_widgets()
         # Wheel-guard the 6 ttk.Spinbox numeric fields per §7.11.
         protect_combobox_wheel(self)
+        self._fit_form_width()
+        self.minsize(self.minsize()[0], self.winfo_reqheight() + 16)
         self._finalize_modal(primary=self._on_ok, cancel=self._on_cancel)
 
     # ------------------------------------------------------------------

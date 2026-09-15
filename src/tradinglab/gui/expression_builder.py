@@ -256,6 +256,7 @@ class _OperandDialog(BaseModalDialog):
         ttk.Button(bar, text="Cancel", command=self.destroy).pack(
             side="right", padx=6)
         protect_combobox_wheel(self)
+        self._fit_form_width()
         self._finalize_modal(primary=self._ok, cancel=self.destroy)
 
     def _ok(self) -> None:

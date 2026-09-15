@@ -1,6 +1,30 @@
 # gui/scanner_block_editor.py — spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-14
+
+## Mapped width and responsive rows
+
+Once mapped, condition classification uses actual requested control widths
+(including lookback, symbol and applicability chrome), not only the initial
+unmapped estimator. Its budget includes the nearest allocated group/container
+width, so nested indentation and larger fonts are accounted for. Newly built
+rows also schedule the existing debounced reclassification without waiting
+for another window resize; a layout flip still rebuilds field parameters and
+notifies the consumer to restore wheel guards.
+
+Stacked layouts place their logical LEFT/interval/delete, operator/lookback,
+and RHS groups in independent measured rows. Chrome can wrap onto extra rows
+at narrow widths rather than sharing incompatible grid-column minima. Compact
+indicator tokens and group headers opt into `flow_layout.wrap_controls`;
+picker/grid allocation can shrink so those explicit rows have a real budget.
+The optional group combinator is captured before restoring its hidden state.
+Builtin applicability text spans the value and symbol columns, instead of
+inflating the value column and pushing the symbol field beyond the row.
+
+`_FieldRefParamDialog` measures the actual Canvas-embedded form plus chrome
+and preserves a separately measured footer width floor. Regression evidence:
+the standard window width matrix, legacy classification/layout tests and
+the application's nonempty nested-condition popup at normal/enlarged fonts.
 
 > ⚠ **Tk-coupled module** — imports `tkinter`.
 

@@ -1,6 +1,12 @@
 # `gui/drawing_dialog.py` — drawing edit dialog (Feature C)
 
-Last updated: 2026-09-07
+Last updated: 2026-09-14
+
+The fixed form opts into `_fit_form_width` before geometry restore. Minimum and
+default widths expand only when its labels/style choices require them, including
+larger named fonts; the standard mapped width matrix pins complete controls.
+Its small fixed form also keeps a natural-height floor so Delete/Close cannot
+be entirely starved by preceding rows under larger fonts.
 
 ## Purpose
 

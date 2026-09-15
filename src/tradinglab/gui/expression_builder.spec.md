@@ -1,6 +1,10 @@
 # gui/expression_builder.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-14
+
+`_OperandDialog` measures its form with `_fit_form_width` before geometry restore.
+The popup's minimum/default width protects the picker and action labels at larger
+fonts; this does not impose natural-width minima on embedded expression editors.
 
 ## Purpose
 The visual **"+" token-stacker** for composing an *expression operand* — a

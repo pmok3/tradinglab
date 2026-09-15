@@ -104,6 +104,11 @@ class ExportCacheDialog(BaseModalDialog):
 
         self._build_widgets()
         protect_combobox_wheel(self)
+        self._fit_form_width()
+        if self._entries:
+            self.minsize(self.minsize()[0], max(
+                self.minsize()[1], self.winfo_reqheight() - self._tree.winfo_reqheight() + 80,
+            ))
         self._finalize_modal(primary=self._on_export, cancel=self._on_cancel)
 
     @staticmethod
@@ -209,7 +214,8 @@ class ExportCacheDialog(BaseModalDialog):
 
         # Status.
         self._status_var = tk.StringVar(value="")
-        ttk.Label(outer, textvariable=self._status_var, foreground=MUTED_GREY).pack(anchor="w", pady=(6, 0))
+        status = ttk.Label(outer, textvariable=self._status_var, foreground=MUTED_GREY)
+        status.pack(anchor="w", pady=(6, 0))
 
         # Bottom buttons.
         bottom = ttk.Frame(outer)
@@ -217,6 +223,11 @@ class ExportCacheDialog(BaseModalDialog):
         ttk.Button(bottom, text="Cancel", command=self._on_cancel).pack(side="right", padx=(6, 0))
         self._export_btn = ttk.Button(bottom, text="Export", command=self._on_export)
         self._export_btn.pack(side="right")
+        list_frame.pack_forget()
+        bottom.pack_configure(side="bottom", before=dest_frame)
+        status.pack_configure(side="bottom", before=dest_frame)
+        dest_frame.pack_configure(side="bottom")
+        list_frame.pack(fill="both", expand=True)
 
     # ---- helpers --------------------------------------------------------
 

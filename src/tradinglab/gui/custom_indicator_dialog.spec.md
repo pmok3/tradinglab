@@ -1,6 +1,13 @@
 # gui/custom_indicator_dialog
 
-Last updated: 2026-09-07
+Last updated: 2026-09-14
+
+The header form plus saved-list chrome supplies an opt-in measured width floor
+before restore; the Conditions editor and preview plot do **not** determine the
+minimum from their natural viewport requests. Conditions/Expression/Python
+explanations and the preview hint wrap to their allocated widths on resize.
+The standard window matrix exercises mapped minimum, enlarged-font and stale
+restore geometry.
 
 ## Purpose
 

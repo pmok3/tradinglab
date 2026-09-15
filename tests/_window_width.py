@@ -67,6 +67,32 @@ def _description(widget: tk.Misc) -> str:
     return f"{widget} {widget.winfo_class()} {text[:65]!r}"
 
 
+def _allocated_parent(widget: tk.Misc) -> tk.Misc | None:
+    manager = widget.winfo_manager()
+    if manager in ("pack", "grid", "place"):
+        return getattr(widget, f"{manager}_info")().get("in", widget.master)
+    return widget.master
+
+
+def _explicitly_hidden(widget: tk.Misc, window: tk.Misc) -> bool:
+    current: tk.Misc | None = widget
+    while current is not None and current is not window:
+        parent = _allocated_parent(current)
+        if not current.winfo_manager():
+            return True
+        if isinstance(parent, ttk.Notebook) and parent.select() != str(current):
+            return True
+        if isinstance(parent, tk.Canvas) and str(parent.cget("yscrollcommand")):
+            for item in parent.find_all():
+                if parent.type(item) == "window" and parent.itemcget(item, "window") == str(current):
+                    bounds = parent.bbox(item)
+                    if bounds and (bounds[3] <= parent.canvasy(0)
+                                   or bounds[1] >= parent.canvasy(parent.winfo_height())):
+                        return True
+        current = parent
+    return False
+
+
 def _horizontal_scroll(widget: tk.Canvas | ttk.Treeview, window: tk.Misc) -> bool:
     """Prove both scrollbar directions are wired, not merely that one exists."""
     start = tuple(map(float, widget.xview()))
@@ -172,11 +198,18 @@ def assert_window_width(
     errors: list[str] = []
     for widget in children:
         if not widget.winfo_ismapped():
+            if (
+                widget.winfo_manager() in ("pack", "grid", "place")
+                and not _explicitly_hidden(widget, window)
+                and isinstance(widget, text_controls)
+                and (str(widget.cget("text")) or "image" in widget.keys() and widget.cget("image"))
+            ):
+                errors.append(f"{_description(widget)}: managed control is not allocated/mapped")
             continue
         width = widget.winfo_width()
         left = widget.winfo_rootx()
         right = left + width
-        ancestor = widget.master
+        ancestor = _allocated_parent(widget)
         while ancestor is not None:
             if ancestor in scrollable:
                 break
@@ -190,7 +223,7 @@ def assert_window_width(
                 break
             if ancestor is window:
                 break
-            ancestor = ancestor.master
+            ancestor = _allocated_parent(ancestor)
         if isinstance(widget, text_controls):
             checked += 1
             if widget not in elided_labels and (

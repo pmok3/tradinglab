@@ -701,6 +701,9 @@ class DocViewerDialog(BaseModalDialog):
         else:
             self._show_no_docs_message()
 
+        self.update_idletasks()
+        self.minsize(max(self._width_toolbar.winfo_reqwidth() + 16, self._side_frame.winfo_reqwidth() + 60),
+                     self.minsize()[1])
         self._finalize_modal(grab=False)
         try:
             self._text.focus_set()
@@ -722,6 +725,7 @@ class DocViewerDialog(BaseModalDialog):
 
         # Top toolbar row: title label + "Open externally" + Close.
         top = tk.Frame(outer, bg=pal["bg"])
+        self._width_toolbar = top
         top.pack(fill="x", side="top", padx=8, pady=(8, 4))
         self._theme_tk_frames.append(top)
         top._dv_bg_key = "bg"  # type: ignore[attr-defined]
@@ -734,7 +738,7 @@ class DocViewerDialog(BaseModalDialog):
             bg=pal["bg"], fg=pal["fg"],
             anchor="w",
         )
-        title_label.pack(side="left", fill="x", expand=True)
+        title_label.bind("<Configure>", lambda event: title_label.configure(wraplength=max(1, event.width - 6)))
         self._theme_tk_labels.append(title_label)
         title_label._dv_bg_key = "bg"  # type: ignore[attr-defined]
         title_label._dv_fg_key = "fg"  # type: ignore[attr-defined]
@@ -760,6 +764,7 @@ class DocViewerDialog(BaseModalDialog):
             highlightthickness=0, cursor="hand2",
         )
         close_btn.pack(side="right", padx=(4, 0))
+        title_label.pack(side="left", fill="x", expand=True)
         close_btn._dv_bg_key = "btn_bg"  # type: ignore[attr-defined]
         close_btn._dv_fg_key = "btn_fg"  # type: ignore[attr-defined]
         self._theme_tk_buttons.append(close_btn)

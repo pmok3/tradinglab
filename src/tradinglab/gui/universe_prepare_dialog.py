@@ -294,6 +294,7 @@ class UniversePrepareDialog(BaseModalDialog):
         self._center_on_parent()
 
         protect_combobox_wheel(self, scroll_target=getattr(self, "_form_canvas", None))
+        self._fit_form_width(form=self._width_form, viewport=self._form_canvas)
         self._finalize_modal(
             primary=self._on_start,
             cancel=self._on_close_request,
@@ -430,6 +431,7 @@ class UniversePrepareDialog(BaseModalDialog):
         # (including the button row) grids into it, so tall content scrolls
         # rather than pushing the Start button off a small screen.
         outer, self._form_canvas = make_scrollable_form(container)
+        self._width_form = outer
         outer.configure(padding=12)
 
         # --- Data source ----------------------------------------------

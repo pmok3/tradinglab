@@ -1,6 +1,11 @@
 # `gui/chartstack_settings_dialog.py` — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-14
+
+The simple settings form opts into `_fit_form_width` before restoring geometry:
+default and minimum width cannot clip its font-scaled labels or buttons.
+Mapped default/minimum/enlarged-font/stale-restore cases live in
+`tests/unit/gui/test_window_width.py`.
 
 ## Purpose
 Small modal popup, reachable from `View → ChartStack Settings…`, that

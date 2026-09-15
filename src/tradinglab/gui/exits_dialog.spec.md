@@ -1,6 +1,13 @@
 # gui/exits_dialog.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-14
+
+The library pane has zero resize weight: its measured filter/button width is
+reserved while the editor receives resize slack. This prevents a stale narrow
+window with enlarged fonts from clipping the final library filter; it does not
+size the whole editor from an indicator tree's natural request.
+Library action rows reserve their bottom allocation before the expanding
+Listbox, which yields height instead of hiding New/Bracket/Delete/Import/Export.
 
 ## Purpose
 

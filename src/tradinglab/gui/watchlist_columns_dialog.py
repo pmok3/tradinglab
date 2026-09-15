@@ -105,6 +105,7 @@ class WatchlistColumnsDialog(BaseModalDialog):
         # (§7.11). Re-applied after picker rebuilds via the picker's
         # ``on_change`` callback below.
         protect_combobox_wheel(self)
+        self._fit_form_width()
         self._finalize_modal(primary=self._on_ok, cancel=self._on_cancel)
 
     # -- layout ---------------------------------------------------------

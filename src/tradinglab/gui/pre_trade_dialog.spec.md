@@ -1,6 +1,10 @@
 # `gui/pre_trade_dialog.py` — Mandatory pre-trade journal modal
 
-Last updated: 2026-09-07
+Last updated: 2026-09-14
+
+The form measures `_fit_form_width` before finalization: default/minimum width
+fits the actual labels, note fields and Submit/Cancel row at the active font
+size. It does not assume the historical 380-pixel width can fit the grid.
 
 ## Purpose
 
