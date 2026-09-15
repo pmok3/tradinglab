@@ -151,8 +151,9 @@ def discover_windows(package: Path) -> dict[str, WindowSite]:
         for name in added:
             found[name] = WindowSite(name, classes[name][0], "class")
 
+    raw_types = {"tkinter.Toplevel", "tkinter.Tk"} | (ABSTRACT_WINDOWS.keys() & window_types)
     raw = [(scope, target, path) for scope, target, callee, path in calls
-           if canonical(callee) in {"tkinter.Toplevel", "tkinter.Tk"}]
+           if canonical(callee) in raw_types]
     totals = Counter((scope, target) for scope, target, _ in raw)
     counts: Counter = Counter()
     for scope, target, path in raw:

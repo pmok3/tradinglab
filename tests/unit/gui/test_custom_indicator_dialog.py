@@ -25,9 +25,9 @@ from tradinglab.indicators import loader as ind_loader
 
 
 @pytest.fixture()
-def root():
+def root(_tk_root):
     try:
-        r = tk.Tk()
+        r = tk.Toplevel(_tk_root)
     except tk.TclError as exc:
         pytest.skip(f"Tk unavailable: {exc}")
     try:

@@ -11,13 +11,20 @@ width, so nested indentation and larger fonts are accounted for. Newly built
 rows also schedule the existing debounced reclassification without waiting
 for another window resize; a layout flip still rebuilds field parameters and
 notifies the consumer to restore wheel guards.
+Operator changes classify the new model without measuring the old parameter
+widgets, then schedule the same measured pass after the replacement controls
+are allocated. LEFT/RHS picker changes also schedule it. The mapped 850-pixel
+`inside_bar` to `>` regression in `test_window_width_rebuilds.py` verifies refit
+without a user resize and guards on the new RHS combobox.
 
 Stacked layouts place their logical LEFT/interval/delete, operator/lookback,
 and RHS groups in independent measured rows. Chrome can wrap onto extra rows
 at narrow widths rather than sharing incompatible grid-column minima. Compact
 indicator tokens and group headers opt into `flow_layout.wrap_controls`;
 picker/grid allocation can shrink so those explicit rows have a real budget.
-The optional group combinator is captured before restoring its hidden state.
+The optional group combinator is explicitly registered with the flow helper
+without showing it; adding a second child can reveal it later without escaping
+the measured row.
 Builtin applicability text spans the value and symbol columns, instead of
 inflating the value column and pushing the symbol field beyond the row.
 

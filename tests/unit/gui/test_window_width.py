@@ -63,6 +63,13 @@ def _check_pages(window):
         finally:
             if original:
                 notebook.select(original)
+    from tradinglab.gui.custom_indicator_dialog import CustomIndicatorDialog
+    if isinstance(window, CustomIndicatorDialog):
+        for mode in ("Expression", "Python", "Conditions"):
+            window._mode_var.set(mode)
+            window._on_mode_changed()
+            window.update()
+            assert_window_width(window)
 
 
 @pytest.mark.parametrize("window_id", [

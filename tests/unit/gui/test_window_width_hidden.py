@@ -69,3 +69,32 @@ def test_in_geometry_parent_not_only_widget_master_clips_controls(root):
     button.pack(in_=frame)
     with mapped_window(root), pytest.raises(AssertionError, match="usable width|outside"):
         assert_window_width(root)
+
+
+def test_hidden_notebook_ancestor_wins_over_canvas_child_mapped_flag(root, monkeypatch):
+    root.geometry("240x180")
+    notebook = ttk.Notebook(root)
+    notebook.pack(fill="both", expand=True)
+    first, second = ttk.Frame(notebook), ttk.Frame(notebook)
+    notebook.add(first, text="Visible")
+    notebook.add(second, text="Canvas")
+    ttk.Button(first, text="Visible action").pack()
+    canvas = tk.Canvas(second)
+    canvas.pack(fill="both", expand=True)
+    form = ttk.Frame(canvas)
+    canvas.create_window(0, 0, anchor="nw", window=form)
+    button = ttk.Button(form, text="An oversized action in an inactive canvas-backed notebook page")
+    button.pack()
+    with mapped_window(root):
+        notebook.select(second)
+        root.update()
+        notebook.select(first)
+        root.update()
+        # Windows Tk can retain mapped flags on embedded Canvas windows.
+        monkeypatch.setattr(form, "winfo_ismapped", lambda: True)
+        monkeypatch.setattr(button, "winfo_ismapped", lambda: True)
+        assert_window_width(root)
+        notebook.select(second)
+        root.update()
+        with pytest.raises(AssertionError, match="outside"):
+            assert_window_width(root)

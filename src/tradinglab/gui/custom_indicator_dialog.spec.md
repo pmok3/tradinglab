@@ -8,6 +8,10 @@ minimum from their natural viewport requests. Conditions/Expression/Python
 explanations and the preview hint wrap to their allocated widths on resize.
 The standard window matrix exercises mapped minimum, enlarged-font and stale
 restore geometry.
+The status row reserves its bottom allocation before the expanding editor body,
+including after a mode switch changes an initially empty status into visible text.
+Actions and preview chrome also reserve their allocation before the composition
+viewport, preserving their visual order while the editor yields available height.
 
 ## Purpose
 

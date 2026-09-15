@@ -2299,18 +2299,11 @@ class _ConditionFrame(ttk.Frame):
         self._delete_btn.grid(row=0, column=7, padx=(0, 0), sticky="nw")
 
     def _apply_stacked_layout(self) -> None:
-        """3-row layout used when the LEFT picker or any RHS picker is complex.
+        """Place LEFT/chrome, operator/lookback and RHS in independent rows.
 
-        Visual structure::
-
-            row 0: [enabled] [LEFT picker (columnspan 3) .........] [interval] [✕]
-            row 1:           [op]   [scalar params]   [lookback]
-            row 2:           [field params (RHS)]
-
-        The LEFT picker takes columnspan 3 so it expands all the way
-        to the interval combo. Field params (row 2) also columnspan
-        3 — they vertically stack inside ``_params_fields_frame``
-        for ops with multiple field params (e.g. ``between``).
+        Each logical group wraps by its measured control widths. Independent
+        row frames avoid one group's grid-column minima widening another.
+        Oversized pickers receive the row allocation and wrap internally.
         """
         if not hasattr(self, "_stacked_rows"):
             self._stacked_rows: list[ttk.Frame] = []
@@ -2334,7 +2327,7 @@ class _ConditionFrame(ttk.Frame):
                 widget.grid(in_=host, row=0, column=column, sticky="new", padx=(0, 6))
             row_index += max(row for row, _ in positions) + 1
 
-    def _classify_layout(self) -> str:
+    def _classify_layout(self, *, measure_widgets: bool = True) -> str:
         """Return ``"stacked"`` if the row should use the 3-row layout, else ``"inline"``.
 
         **Fit-based** classification (new generalised rule):
@@ -2372,7 +2365,7 @@ class _ConditionFrame(ttk.Frame):
             return "stacked"
         try:
             inline_width = _estimate_condition_inline_width(self.cond)
-            if self.winfo_ismapped() and hasattr(self, "_delete_btn"):
+            if measure_widgets and self.winfo_ismapped() and hasattr(self, "_delete_btn"):
                 widgets = (
                     self._enabled_chk, self._op_combo, self._params_scalar_frame,
                     self._params_fields_frame, self._lookback, self._interval_combo, self._delete_btn,
@@ -2394,11 +2387,9 @@ class _ConditionFrame(ttk.Frame):
     def _get_available_width(self) -> int:
         """Return the actual width available for the condition row.
 
-        Walks up the widget tree looking for the nearest
-        :class:`BlockEditor` ancestor (which is packed
-        ``fill="both", expand=True`` inside the dialog scroll
-        canvas). Falls back to the Toplevel width minus a small
-        chrome reservation when the BlockEditor is not yet realized.
+        The narrowest allocated ancestor up to BlockEditor accounts for nested
+        group indentation and canvas allocation. Falls back to the Toplevel
+        width minus chrome when the editor is not yet realized.
         """
         # Walk up looking for BlockEditor.
         try:
@@ -2611,6 +2602,7 @@ class _ConditionFrame(ttk.Frame):
         # LEFT picker is the dominant classifier — flipping rvol →
         # close MUST collapse the row back to inline (and vice versa).
         self._relayout_if_needed()
+        self._on_toplevel_resize()
         self._fire()
 
     def _on_op_change(self) -> None:
@@ -2634,9 +2626,10 @@ class _ConditionFrame(ttk.Frame):
         # (e.g. binary → between). Update the classification BEFORE
         # rebuilding the params row so the field-wrap orientation
         # matches the new layout.
-        self._current_layout = self._classify_layout()
+        self._current_layout = self._classify_layout(measure_widgets=False)
         self._build_params_row()
         self._apply_layout()
+        self._on_toplevel_resize()
         # Notify the look-back cluster so it can refresh its mode list
         # (and coerce 'all' → 'any' if the new op is a transition).
         try:
@@ -2660,6 +2653,7 @@ class _ConditionFrame(ttk.Frame):
         self._commit_params()
         if self._relayout_if_needed():
             self._fire()
+        self._on_toplevel_resize()
 
     def _on_interval_change(self) -> None:
         v = self._interval_var.get()
@@ -2798,11 +2792,10 @@ class _GroupFrame(ttk.Frame):
         self._children_frame.pack(fill="x", padx=(16, 0))
         self._render_children()
         from .flow_layout import wrap_controls
-        # Capture the optional combinator too, then restore its visibility.
-        if not self._combinator_cb.winfo_manager():
-            self._combinator_cb.pack(side="left", before=self._add_condition_btn)
-        wrap_controls(header)
-        self._update_combinator_visibility()
+        controls = list(header.pack_slaves())
+        if self._combinator_cb not in controls:
+            controls.insert(controls.index(self._add_condition_btn), self._combinator_cb)
+        wrap_controls(header, controls=controls)
 
     def _update_combinator_visibility(self) -> None:
         """Show the AND/OR combobox only when the group has 2+ children.

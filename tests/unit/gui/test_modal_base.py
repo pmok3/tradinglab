@@ -15,8 +15,8 @@ from tradinglab.gui import geometry_store as gs
 
 
 @pytest.fixture()
-def root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """Visible Tk root with isolated geometry-store path per test.
+def root(_tk_root, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Visible Toplevel in the shared interpreter, with an isolated store.
 
     NOTE: we don't ``withdraw`` here — focus delivery to child
     Toplevels requires a visible root on some Tk builds (Windows
@@ -26,7 +26,7 @@ def root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("TRADINGLAB_GEOMETRY_PATH", str(tmp_path / "geom.json"))
     gs._reset_singleton_for_tests()
     try:
-        r = tk.Tk()
+        r = tk.Toplevel(_tk_root)
     except tk.TclError as exc:
         pytest.skip(f"Tk unavailable: {exc}")
     # Park off-screen so the test root doesn't flash visibly. (1×1 +

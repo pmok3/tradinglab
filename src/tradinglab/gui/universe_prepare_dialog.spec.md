@@ -82,8 +82,9 @@ chosen basket / watchlist and writing the resulting
 
 - `geometry_key="dlg.universe_prepare_v3"`, `default_geometry="560x780"`,
   `resizable=(False, True)` (fixed width, growable height),
-  `minsize(540, 720)`. The natural content is ≈543×605, so 560×780 shows
-  the whole form incl. the bottom Start/Close row.
+  initial `minsize(540, 720)`. The measured embedded-form width raises the
+  minimum/default when needed; the vertical scrollbar reaches the bottom
+  Start/Close row without assuming a particular font's natural dimensions.
 - The `_v3` key suffix intentionally discards any older persisted geometry.
   Before the geometry-store fix, the size-only `default_geometry` fell
   through to the large module default (`1280x800`), so the dialog opened

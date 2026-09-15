@@ -363,10 +363,14 @@ class CustomIndicatorDialog(BaseModalDialog):
         )
         preview_hint.pack(side="top", fill="x")
         preview_hint.bind("<Configure>", lambda event: preview_hint.configure(wraplength=max(1, event.width)))
+        self._compose_frame.pack_forget()
+        self._preview_frame.pack_configure(side="bottom")
+        actions.pack_configure(side="bottom", after=self._preview_frame)
+        self._compose_frame.pack(side="top", fill="both", expand=True, pady=(8, 4))
 
         # Status bar.
         status = ttk.Frame(self)
-        status.pack(side="bottom", fill="x", padx=10, pady=(0, 6))
+        status.pack(side="bottom", fill="x", padx=10, pady=(0, 6), before=body)
         self._status_lbl = ttk.Label(
             status, textvariable=self._status_var, foreground="#444444",
         )

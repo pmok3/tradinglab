@@ -101,6 +101,7 @@ def _horizontal_scroll(widget: tk.Canvas | ttk.Treeview, window: tk.Misc) -> boo
     bars = [
         bar for bar in _descendants(window)
         if isinstance(bar, (tk.Scrollbar, ttk.Scrollbar)) and bar.winfo_ismapped()
+        and not _explicitly_hidden(bar, window)
         and str(bar.cget("orient")) == "horizontal"
     ]
 
@@ -173,13 +174,15 @@ def assert_window_width(
     elided_labels = elided_labels or {}
     children = list(_descendants(window))
     for widget, reason in elided_labels.items():
-        assert widget in children and widget.winfo_ismapped(), f"Stale elided label: {widget}"
+        assert widget in children and widget.winfo_ismapped() and not _explicitly_hidden(widget, window), (
+            f"Stale elided label: {widget}"
+        )
         assert isinstance(widget, (tk.Label, ttk.Label)) and reason.strip(), (
             f"Elision needs a label and a precise reason: {widget}"
         )
     scrollable: set[tk.Misc] = set()
     for widget in children:
-        if not widget.winfo_ismapped():
+        if not widget.winfo_ismapped() or _explicitly_hidden(widget, window):
             continue
         if isinstance(widget, ttk.Treeview):
             view = tuple(map(float, widget.xview()))
@@ -197,6 +200,8 @@ def assert_window_width(
     checked = 0
     errors: list[str] = []
     for widget in children:
+        if _explicitly_hidden(widget, window):
+            continue
         if not widget.winfo_ismapped():
             if (
                 widget.winfo_manager() in ("pack", "grid", "place")

@@ -55,8 +55,9 @@ review (`SandboxReviewDialog`) anchors to a stated plan.
 ## Geometry
 
 `BaseModalDialog` uses `geometry_key="dlg.pre_trade"` with default
-geometry `"380x420"`. `resizable(False, False)` — position-only
-restore.
+geometry floor `"380x420"`, with width raised by measured form content before
+restore. `resizable(False, False)` is preserved; stale saved widths are clamped
+by the measured minimum.
 
 ## Validation
 

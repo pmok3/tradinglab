@@ -84,8 +84,9 @@ calling `_apply_theme()`. **Save and Close** is a no-op besides
 ## Geometry
 
 `BaseModalDialog` uses `geometry_key="dlg.theme_editor"` with default
-geometry `"640x420"`. Minsize `(520, 360)` — accommodates the new
-**My themes** row + the expanded **Built-in presets** strip.
+geometry floor `"640x420"`. The minimum starts at `(520, 360)` and is raised
+to the measured form width and height so **My themes**, **Built-in presets**
+and footer actions remain allocated under larger fonts.
 
 ## Dependencies
 
