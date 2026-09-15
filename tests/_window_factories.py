@@ -122,14 +122,18 @@ def _build_credentials(root, _monkeypatch):
     return CredentialsDialog(root)
 
 
-def _build_export_cache(root, _monkeypatch):
-    from tradinglab.gui.export_cache_dialog import ExportCacheDialog
-    return ExportCacheDialog(root)
+def _build_export_cache(root, monkeypatch):
+    from tradinglab.gui import export_cache_dialog
+    monkeypatch.setattr(export_cache_dialog, "_load_cache_index", lambda: [
+        ("yfinance", "SPY", "1d"), ("yfinance", "AAPL", "5m"),
+    ])
+    return export_cache_dialog.ExportCacheDialog(root)
 
 
-def _build_local_data(root, _monkeypatch):
-    from tradinglab.gui.local_data_dialog import LocalDataDialog
-    return LocalDataDialog(root)
+def _build_local_data(root, monkeypatch):
+    from tradinglab.gui import local_data_dialog
+    monkeypatch.setattr(local_data_dialog, "_load_roots_from_settings", lambda: (False, []))
+    return local_data_dialog.LocalDataDialog(root)
 
 
 def _build_bracket(root, _monkeypatch):
@@ -188,8 +192,7 @@ def _build_drawing(root, _monkeypatch):
     return DrawingDialog(root, store=store, drawing=drawing)
 
 
-def _build_indicator_dialog(root, _monkeypatch):
-    from tradinglab.gui.indicator_dialog import IndicatorDialog
+def _indicator_app(root):
     from tradinglab.indicators.config import IndicatorConfig, IndicatorManager
     mgr = IndicatorManager()
     mgr.add(IndicatorConfig(kind_id="sma", params={"length": 20}, display_name="SMA(20)"))
@@ -201,7 +204,19 @@ def _build_indicator_dialog(root, _monkeypatch):
     if not hasattr(root, "interval_var"):
         root.interval_var = tk.StringVar(root, value="1d")
     root._on_menu_save_config = lambda *a, **k: None
+    return mgr
+
+
+def _build_indicator_dialog(root, _monkeypatch):
+    from tradinglab.gui.indicator_dialog import IndicatorDialog
+    _indicator_app(root)
     return IndicatorDialog(root)
+
+
+def _build_per_indicator(root, _monkeypatch):
+    from tradinglab.gui.per_indicator_dialog import _PerIndicatorDialog
+    mgr = _indicator_app(root)
+    return _PerIndicatorDialog(root, mgr.list()[0].id, slot="primary")
 
 
 def _build_custom_indicator(root, _monkeypatch):
@@ -251,6 +266,7 @@ WINDOW_FACTORIES = {
     "tradinglab.gui.sandbox_dialog.SandboxStartDialog": _build_sandbox_start,
     "tradinglab.gui.drawing_dialog.DrawingDialog": _build_drawing,
     "tradinglab.gui.indicator_dialog.IndicatorDialog": _build_indicator_dialog,
+    "tradinglab.gui.per_indicator_dialog._PerIndicatorDialog": _build_per_indicator,
     "tradinglab.gui.custom_indicator_dialog.CustomIndicatorDialog": _build_custom_indicator,
     "tradinglab.gui.theme_editor.ThemeEditorDialog": _build_theme_editor,
 }

@@ -728,30 +728,15 @@ def test_gutter_probe_accepts_painted_toplevel(dark_root) -> None:
 
 
 def _discover_dialog_class_names() -> set[str]:
-    """Every Toplevel/BaseModalDialog subclass under ``gui/`` (AST walk)."""
-    import ast
+    """All direct and indirect window subclasses under ``gui/``."""
     from pathlib import Path
 
-    gui_dir = Path(__file__).resolve().parents[3] / "src" / "tradinglab" / "gui"
-    found: set[str] = set()
-    for py in sorted(gui_dir.rglob("*.py")):
-        try:
-            tree = ast.parse(py.read_text(encoding="utf-8"))
-        except (SyntaxError, OSError):
-            continue
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.ClassDef):
-                continue
-            bases: list[str] = []
-            for base in node.bases:
-                if isinstance(base, ast.Name):
-                    bases.append(base.id)
-                elif isinstance(base, ast.Attribute):
-                    bases.append(base.attr)
-            if any(b in {"BaseModalDialog", "BaseEditorDialog", "Toplevel"}
-                   for b in bases):
-                found.add(node.name)
-    return found
+    from tests._window_discovery import discover_windows
+    package = Path(__file__).resolve().parents[3] / "src" / "tradinglab"
+    return {
+        name.rsplit(".", 1)[1] for name, site in discover_windows(package).items()
+        if site.kind == "class" and name.startswith("tradinglab.gui.")
+    }
 
 
 def test_every_dialog_is_probed_or_exempt() -> None:

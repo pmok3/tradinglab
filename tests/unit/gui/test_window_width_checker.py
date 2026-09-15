@@ -6,7 +6,7 @@ from tkinter import font, ttk
 
 import pytest
 
-from tests._window_width import assert_window_width, enlarged_fonts, mapped_window
+from tests._window_width import _horizontal_scroll, assert_window_width, enlarged_fonts, mapped_window
 from tradinglab.gui._modal_base import make_scrollable_form
 
 
@@ -106,3 +106,46 @@ def test_enlarged_fonts_restore_shared_interpreter_after_failure(root):
         assert font.nametofont("TkDefaultFont", root=root).actual("size") == 16
         raise RuntimeError("fixture body failed")
     assert font.nametofont("TkDefaultFont", root=root).actual("size") == before
+
+
+def test_horizontal_probe_does_not_scroll_an_unrelated_view(root):
+    root.geometry("260x400")
+    canvases = []
+    for _ in range(2):
+        host = ttk.Frame(root)
+        host.pack(fill="both", expand=True)
+        inner, canvas = make_scrollable_form(host, horizontal=True, bind_mousewheel=False)
+        ttk.Button(inner, text="A long action requiring horizontal scrolling to read in full").pack()
+        canvases.append(canvas)
+    with mapped_window(root):
+        canvases[0].xview_moveto(0.2)
+        before = [canvas.xview() for canvas in canvases]
+        assert _horizontal_scroll(canvases[1], root)
+        assert [canvas.xview() for canvas in canvases] == before
+
+
+@pytest.mark.parametrize("region_width", [500, 1000])
+def test_scrollregion_must_reach_actual_embedded_form(root, region_width):
+    root.geometry("250x200")
+    canvas = tk.Canvas(root, highlightthickness=0, scrollregion=(0, 0, region_width, 100))
+    bar = ttk.Scrollbar(root, orient="horizontal", command=canvas.xview)
+    bar.pack(side="bottom", fill="x")
+    canvas.pack(fill="both", expand=True)
+    canvas.configure(xscrollcommand=bar.set)
+    inner = ttk.Frame(canvas, width=1000, height=100)
+    inner.pack_propagate(False)
+    canvas.create_window(0, 0, anchor="nw", window=inner)
+    ttk.Button(inner, text="Far right action").pack(side="right")
+    with mapped_window(root):
+        if region_width == 1000:
+            assert_window_width(root)
+        else:
+            with pytest.raises(AssertionError, match="outside"):
+                assert_window_width(root)
+
+
+def test_empty_structural_frame_is_not_a_one_pixel_control(root):
+    ttk.Frame(root).pack()
+    ttk.Button(root, text="Visible").pack()
+    with mapped_window(root):
+        assert assert_window_width(root) == 1

@@ -72,15 +72,41 @@ def _horizontal_scroll(widget: tk.Canvas | ttk.Treeview, window: tk.Misc) -> boo
     start = tuple(map(float, widget.xview()))
     if start[0] <= 0 and start[1] >= 1:
         return False
-    for bar in _descendants(window):
-        if not isinstance(bar, (tk.Scrollbar, ttk.Scrollbar)):
-            continue
-        if str(bar.cget("orient")) != "horizontal" or not bar.winfo_ismapped():
-            continue
-        command = str(bar.cget("command"))
-        if not command or not str(widget.cget("xscrollcommand")):
-            continue
-        try:
+    bars = [
+        bar for bar in _descendants(window)
+        if isinstance(bar, (tk.Scrollbar, ttk.Scrollbar)) and bar.winfo_ismapped()
+        and str(bar.cget("orient")) == "horizontal"
+    ]
+
+    def agrees(first, second):
+        return all(abs(a - b) < 0.01 for a, b in zip(first, second, strict=True))
+
+    try:
+        # Identify the associated thumb by moving only the tested viewport.
+        # Calling unrelated scrollbar commands would mutate other app views.
+        widget.xview_moveto(0)
+        window.update_idletasks()
+        left = tuple(map(float, widget.xview()))
+        thumbs = {bar: tuple(map(float, bar.get())) for bar in bars}
+        canvas_left = widget.canvasx(0) if isinstance(widget, tk.Canvas) else 0
+        widget.xview_moveto(1)
+        window.update_idletasks()
+        right = tuple(map(float, widget.xview()))
+        if isinstance(widget, tk.Canvas):
+            canvas_right = widget.canvasx(widget.winfo_width())
+            for item in widget.find_all():
+                if widget.type(item) == "window":
+                    bounds = widget.bbox(item)
+                    if bounds and (bounds[0] < canvas_left - 2 or bounds[2] > canvas_right + 2):
+                        return False
+        for bar in bars:
+            if not agrees(left, thumbs[bar]) or not agrees(right, tuple(map(float, bar.get()))):
+                continue
+            if right[0] <= left[0] or thumbs[bar] == tuple(map(float, bar.get())):
+                continue
+            command = str(bar.cget("command"))
+            if not command or not str(widget.cget("xscrollcommand")):
+                continue
             widget.tk.call(*widget.tk.splitlist(command), "moveto", 0)
             window.update_idletasks()
             left = tuple(map(float, widget.xview()))
@@ -92,13 +118,12 @@ def _horizontal_scroll(widget: tk.Canvas | ttk.Treeview, window: tk.Misc) -> boo
             if (
                 left[0] <= 0.001 and right[1] >= 0.999
                 and right[0] > left[0]
-                and all(abs(a - b) < 0.01 for a, b in zip(left, left_thumb, strict=True))
-                and all(abs(a - b) < 0.01 for a, b in zip(right, right_thumb, strict=True))
+                and agrees(left, left_thumb) and agrees(right, right_thumb)
             ):
                 return True
-        finally:
-            widget.xview_moveto(start[0])
-            window.update_idletasks()
+    finally:
+        widget.xview_moveto(start[0])
+        window.update_idletasks()
     return False
 
 
@@ -175,7 +200,9 @@ def assert_window_width(
                     f"{_description(widget)}: usable width {width} < "
                     f"wrapped request {widget.winfo_reqwidth()}"
                 )
-        elif not widget.winfo_children():
+        elif not widget.winfo_children() and not isinstance(
+            widget, (tk.Frame, tk.LabelFrame, ttk.Frame, ttk.LabelFrame, ttk.Separator)
+        ):
             checked += 1
             if width <= 1:
                 errors.append(f"{_description(widget)}: unusable {width}px viewport")
