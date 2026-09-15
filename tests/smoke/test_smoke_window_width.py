@@ -2,9 +2,14 @@
 
 These cases reuse the smoke app's interpreter, but map it for meaningful bounds.
 No strategy run, replay session, export, network provider or credential is needed.
+
+Settings, Performance and Strategy use transient Toplevels. Those cases retain
+the headless-macOS guard from AGENTS.md sections 5 and 7.1, before construction
+can block. Main and Heatmap cases remain enabled there; Windows runs every case.
 """
 from __future__ import annotations
 
+import sys
 import tkinter as tk
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager, nullcontext
@@ -25,6 +30,8 @@ from tests._application_window_cases import (
     width_scan,
 )
 from tests._window_width import assert_window_width, enlarged_fonts, mapped_window
+
+_TRANSIENT_CASE_NAMES = frozenset({"settings", "performance", "strategy"})
 
 
 @contextmanager
@@ -341,6 +348,11 @@ def _heavy_probe(case, app, monkeypatch, directory: Path) -> Iterator[WindowProb
 
 
 def check_w0_application_window_width(app, case, scenario, font_size, monkeypatch, tmp_path):
+    if sys.platform == "darwin" and case.name in _TRANSIENT_CASE_NAMES:
+        pytest.skip(
+            f"{case.name}: Tk transient() can deadlock during construction on headless macOS "
+            "(AGENTS.md sections 5 and 7.1); the full width case runs on Windows"
+        )
     store = isolate_geometry(monkeypatch, tmp_path, case, scenario)
     fonts = enlarged_fonts(app, size=font_size) if font_size else nullcontext()
     failures = []
