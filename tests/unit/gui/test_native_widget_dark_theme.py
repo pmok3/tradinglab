@@ -10,6 +10,12 @@ pytest.importorskip("tkinter")
 import tkinter as tk  # noqa: E402
 from tkinter import ttk  # noqa: E402
 
+from tests._window_factories import (
+    WINDOW_FACTORIES,
+    _FakeSandboxController,
+    _FakeTagStore,
+    _FakeWatchlists,
+)
 from tradinglab.constants import DARK_THEME
 from tradinglab.gui import (
     dialogs,
@@ -19,51 +25,6 @@ from tradinglab.gui import (
     sandbox_review_dialog,
     scanner_tab,
 )
-
-
-class _FakeWatchlists:
-    MAX_PINNED = 5
-
-    def __init__(self) -> None:
-        self._wl = SimpleNamespace(tickers=["AAPL", "MSFT"])
-
-    def list_names(self) -> list[str]:
-        return ["Momentum"]
-
-    def pinned_names(self) -> list[str]:
-        return []
-
-    def get(self, _name: str):
-        return self._wl
-
-
-class _FakeSandboxController:
-    app = SimpleNamespace(_display_tz="", ticker_var=None)
-    focus_symbol = "AAPL"
-    blind = False
-
-    def set_post_trade_callback(self, _callback) -> None:
-        return None
-
-    def clock_ts(self) -> int:
-        return 1_700_000_000
-
-    def cash(self) -> float:
-        return 100_000.0
-
-    def is_active(self) -> bool:
-        return True
-
-    def tickers(self) -> list[str]:
-        return ["AAPL", "MSFT"]
-
-    def positions_snapshot(self) -> list[dict[str, object]]:
-        return []
-
-
-class _FakeTagStore:
-    def list(self) -> list[str]:
-        return ["Gap", "Pullback"]
 
 
 class _FakeDecisionSandboxController(_FakeSandboxController):
@@ -569,194 +530,6 @@ def _child_expansion(parent: tk.Misc, child: tk.Misc) -> tuple[bool, bool, str]:
 # --- window registry -------------------------------------------------------
 
 
-def _build_doc_viewer(dark_root, _monkeypatch):
-    from tradinglab.gui.doc_viewer import DocViewerDialog
-    return DocViewerDialog(dark_root)
-
-
-def _build_watchlist(dark_root, _monkeypatch):
-    dark_root._watchlists = _FakeWatchlists()  # type: ignore[attr-defined]
-    return dialogs._WatchlistDialog(dark_root)  # noqa: SLF001
-
-
-def _build_exits(dark_root, monkeypatch):
-    monkeypatch.setattr(exits_dialog._exits_storage, "load_all", lambda: ([], []))
-    return exits_dialog.ExitsDialog(dark_root)
-
-
-def _build_sandbox_panel(dark_root, _monkeypatch):
-    return sandbox_panel.SandboxPanel(dark_root, _FakeSandboxController())
-
-
-def _build_post_trade_review(dark_root, _monkeypatch):
-    post = SimpleNamespace(
-        side="long", symbol="AAPL", quantity=1.0,
-        entry_ts=1_700_000_000, exit_ts=1_700_000_060,
-        entry_price=100.0, exit_price=101.0, pnl=1.0, pnl_pct=0.01,
-        mae=0.5, mae_pct=0.005, mfe=1.5, mfe_pct=0.015,
-    )
-    return sandbox_review_dialog.PostTradeReviewDialog(dark_root, post)
-
-
-def _build_decision_log(dark_root, _monkeypatch):
-    return sandbox_review_dialog.DecisionLogDialog(
-        dark_root, "AAPL", setup_tags=["Gap"])
-
-
-def _build_tags_editor(dark_root, _monkeypatch):
-    return sandbox_review_dialog.TagsEditorDialog(dark_root, _FakeTagStore())
-
-
-def _build_load_scan(dark_root, _monkeypatch):
-    return scanner_tab._LoadScanDialog(  # noqa: SLF001
-        dark_root, [("scan-1", SimpleNamespace(name="Breakout"))],
-    )
-
-
-def _build_pre_trade(dark_root, _monkeypatch):
-    return pre_trade_dialog.PreTradeFormDialog(dark_root, "AAPL", setup_tags=["Gap"])
-
-
-def _build_color_chooser(dark_root, _monkeypatch):
-    from tradinglab.gui.color_palette import ThemedColorChooser
-    return ThemedColorChooser(dark_root, initial="#1f77b4")
-
-
-# --- roster additions: the rest of the reachable dialogs -------------------
-#
-# These were previously covered only by the *static* rule in
-# test_theme_invariant (a name-reference or a documented exemption), which
-# cannot see an unthemed container. Building them here puts every reachable
-# window through the same colour + gutter probe.
-
-
-def _build_chartstack_settings(dark_root, _monkeypatch):
-    from tradinglab.gui.chartstack_settings_dialog import ChartStackSettingsDialog
-    return ChartStackSettingsDialog(dark_root)
-
-
-def _build_credentials(dark_root, _monkeypatch):
-    from tradinglab.gui.credentials_dialog import CredentialsDialog
-    return CredentialsDialog(dark_root)
-
-
-def _build_export_cache(dark_root, _monkeypatch):
-    from tradinglab.gui.export_cache_dialog import ExportCacheDialog
-    return ExportCacheDialog(dark_root)
-
-
-def _build_local_data(dark_root, _monkeypatch):
-    from tradinglab.gui.local_data_dialog import LocalDataDialog
-    return LocalDataDialog(dark_root)
-
-
-def _build_bracket(dark_root, _monkeypatch):
-    from tradinglab.gui.exits_dialog_widgets import _BracketDialog
-    return _BracketDialog(dark_root)
-
-
-def _build_watchlist_columns(dark_root, _monkeypatch):
-    from tradinglab.gui.watchlist_columns_dialog import WatchlistColumnsDialog
-    from tradinglab.watchlists.columns import default_columns
-    return WatchlistColumnsDialog(
-        dark_root,
-        watchlist_name="Momentum",
-        columns=list(default_columns()),
-        on_apply=lambda _cols: None,
-    )
-
-
-def _build_operand(dark_root, _monkeypatch):
-    from tradinglab.gui.expression_builder import _OperandDialog
-    return _OperandDialog(dark_root, ref=None)
-
-
-def _build_fieldref_param(dark_root, _monkeypatch):
-    from tradinglab.gui.scanner_block_editor import _FieldRefParamDialog
-    from tradinglab.scanner.model import FieldRef
-    return _FieldRefParamDialog(
-        dark_root, ref=FieldRef.indicator("rsi", params={"length": 14}))
-
-
-def _build_entries(dark_root, _monkeypatch):
-    from tradinglab.gui.entries_dialog import EntriesDialog
-    return EntriesDialog(dark_root)
-
-
-def _build_universe_prepare(dark_root, _monkeypatch):
-    from tradinglab.gui.universe_prepare_dialog import UniversePrepareDialog
-    return UniversePrepareDialog(
-        dark_root, source_name="yfinance", fetcher=lambda _s, _i: [])
-
-
-def _build_sandbox_start(dark_root, _monkeypatch):
-    import datetime as _dt
-
-    from tradinglab.gui.sandbox_dialog import SandboxStartDialog
-    return SandboxStartDialog(
-        dark_root,
-        reference_symbol="SPY",
-        intervals=["1m", "5m", "15m", "1h"],
-        eligible_dates_provider=lambda _itv, _src: [_dt.date(2024, 6, 3)],
-    )
-
-
-def _build_drawing(dark_root, _monkeypatch):
-    from tradinglab.drawings.model import make_hline_drawing
-    from tradinglab.drawings.store import DrawingStore
-    from tradinglab.gui.drawing_dialog import DrawingDialog
-
-    store = DrawingStore(autosave=False)
-    drawing = make_hline_drawing(ticker="AAPL", price=150.0, color="#2962ff")
-    store.add(drawing)
-    return DrawingDialog(dark_root, store=store, drawing=drawing)
-
-
-def _build_indicator_dialog(dark_root, _monkeypatch):
-    from tradinglab.gui.indicator_dialog import IndicatorDialog
-    from tradinglab.indicators.config import IndicatorConfig, IndicatorManager
-
-    mgr = IndicatorManager()
-    mgr.add(IndicatorConfig(
-        kind_id="sma", params={"length": 20}, display_name="SMA(20)"))
-    dark_root._indicator_manager = mgr           # type: ignore[attr-defined]
-    dark_root._indicator_dialog = None           # type: ignore[attr-defined]
-    dark_root._per_indicator_dialogs = {}        # type: ignore[attr-defined]
-    # This dialog resolves its palette from ``app._theme`` rather than the
-    # shared ``_theme_ctrl`` seam (see ``IndicatorDialog._apply_theme``), so
-    # the fixture's ``_theme_ctrl`` alone would leave it on the light default
-    # and the probe would report a false positive.
-    dark_root._theme = dict(DARK_THEME)          # type: ignore[attr-defined]
-    if not hasattr(dark_root, "interval_var"):
-        dark_root.interval_var = tk.StringVar(dark_root, value="1d")  # type: ignore[attr-defined]
-    dark_root._on_menu_save_config = lambda *a, **k: None  # type: ignore[attr-defined]
-    return IndicatorDialog(dark_root)
-
-
-def _build_custom_indicator(dark_root, _monkeypatch):
-    import tempfile
-    from pathlib import Path
-
-    from tradinglab.gui.custom_indicator_dialog import CustomIndicatorDialog
-    directory = Path(tempfile.mkdtemp(prefix="tl_custom_ind_"))
-    return CustomIndicatorDialog(dark_root, directory=directory)
-
-
-def _build_theme_editor(dark_root, _monkeypatch):
-    from tradinglab.gui.theme_editor import ThemeEditorDialog
-
-    # The editor reaches into a small ChartApp-like surface; mirror the
-    # stub in test_theme_editor.py rather than booting a real app.
-    dark_root._theme_overrides = {"light": {}, "dark": {}}  # type: ignore[attr-defined]
-    if not hasattr(dark_root, "dark_var"):
-        dark_root.dark_var = tk.BooleanVar(master=dark_root, value=True)  # type: ignore[attr-defined]
-    dark_root.set_theme_override = lambda *a, **k: None      # type: ignore[attr-defined]
-    dark_root.clear_theme_overrides = lambda *a, **k: None   # type: ignore[attr-defined]
-    dark_root.replace_theme_overrides = lambda *a, **k: None  # type: ignore[attr-defined]
-    dark_root._apply_theme = lambda *a, **k: None            # type: ignore[attr-defined]
-    return ThemeEditorDialog(dark_root)
-
-
 #: Dialogs deliberately outside the live probe, with the reason. Enforced by
 #: :func:`test_every_dialog_is_probed_or_exempt` so the roster cannot rot.
 _PROBE_EXEMPTIONS: dict[str, str] = {
@@ -781,33 +554,7 @@ _PROBE_EXEMPTIONS: dict[str, str] = {
 }
 
 
-_DARK_WINDOWS = {
-    "DocViewerDialog": _build_doc_viewer,
-    "_WatchlistDialog": _build_watchlist,
-    "ExitsDialog": _build_exits,
-    "SandboxPanel": _build_sandbox_panel,
-    "DecisionLogDialog": _build_decision_log,
-    "PostTradeReviewDialog": _build_post_trade_review,
-    "TagsEditorDialog": _build_tags_editor,
-    "_LoadScanDialog": _build_load_scan,
-    "PreTradeFormDialog": _build_pre_trade,
-    "ThemedColorChooser": _build_color_chooser,
-    "ChartStackSettingsDialog": _build_chartstack_settings,
-    "CredentialsDialog": _build_credentials,
-    "ExportCacheDialog": _build_export_cache,
-    "LocalDataDialog": _build_local_data,
-    "_BracketDialog": _build_bracket,
-    "WatchlistColumnsDialog": _build_watchlist_columns,
-    "_OperandDialog": _build_operand,
-    "_FieldRefParamDialog": _build_fieldref_param,
-    "EntriesDialog": _build_entries,
-    "UniversePrepareDialog": _build_universe_prepare,
-    "SandboxStartDialog": _build_sandbox_start,
-    "DrawingDialog": _build_drawing,
-    "IndicatorDialog": _build_indicator_dialog,
-    "CustomIndicatorDialog": _build_custom_indicator,
-    "ThemeEditorDialog": _build_theme_editor,
-}
+_DARK_WINDOWS = {window_id.rsplit(".", 1)[1]: builder for window_id, builder in WINDOW_FACTORIES.items()}
 
 
 @pytest.mark.parametrize("window_name", sorted(_DARK_WINDOWS))

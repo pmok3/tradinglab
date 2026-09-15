@@ -86,6 +86,7 @@ python_files = ["test_*.py"]
 # survives the GIL in case the hang is in C-extension matplotlib code.
 addopts = "-ra --strict-markers --timeout=120 --timeout-method=thread -m 'not perf and not longhaul'"
 markers = [
+    "window_width(window_id): mapped behavioral width coverage for a discovered application window",
     "smoke: end-to-end smoke tests (slow, headless GUI)",
     "perf: indicator perf-budget regression gates (opt-in via `-m perf`; never run in default test session)",
     "oracle: differential / metamorphic oracles (deterministic, headless, fast)",
