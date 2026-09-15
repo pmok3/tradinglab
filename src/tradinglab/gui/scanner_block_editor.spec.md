@@ -36,6 +36,9 @@ the application's nonempty nested-condition popup at normal/enlarged fonts.
 > ⚠ **Tk-coupled module** — imports `tkinter`.
 
 ## Purpose
+Stacked row containers, as well as their controls, stay north-aligned. This
+preserves the same top-alignment contract as inline chrome on every Tk theme.
+
 
 Recursive Tk widget for authoring the AND/OR block tree of a
 `ScanDefinition.root`. Owns no model state — every edit mutates

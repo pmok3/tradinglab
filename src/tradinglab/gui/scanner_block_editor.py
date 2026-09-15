@@ -2322,7 +2322,7 @@ class _ConditionFrame(ttk.Frame):
                 while len(self._stacked_rows) <= index:
                     self._stacked_rows.append(ttk.Frame(self))
                 host = self._stacked_rows[index]
-                host.grid(row=index, column=0, sticky="ew", pady=(2, 0))
+                host.grid(row=index, column=0, sticky="new", pady=(2, 0))
                 host.columnconfigure(column, weight=1 if isinstance(widget, _FieldRefPicker) else 0)
                 widget.grid(in_=host, row=0, column=column, sticky="new", padx=(0, 6))
             row_index += max(row for row, _ in positions) + 1

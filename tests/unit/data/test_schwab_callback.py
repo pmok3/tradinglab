@@ -7,11 +7,15 @@ import socket
 import ssl
 import threading
 import time
+from types import SimpleNamespace
+from unittest.mock import Mock
 from urllib.parse import urlencode
 
 import pytest
 
 from tradinglab.data import schwab_callback as callback
+
+_NETWORK_SECONDS = 5.0
 
 
 @pytest.mark.parametrize("uri", [
@@ -66,18 +70,24 @@ def _wait(listener):
 
 
 @pytest.fixture
-def listener():
+def listener(monkeypatch):
+    # Protocol assertions are not latency assertions. Keep real TLS/timers, but
+    # reserve the tight production limits for the deadline-specific tests below.
+    monkeypatch.setattr(callback, "_IDLE_SECONDS", _NETWORK_SECONDS)
+    monkeypatch.setattr(callback, "_REQUEST_SECONDS", _NETWORK_SECONDS)
     # Request an available port without running a privileged port-443 test.
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
     receiver = callback.CallbackListener(f"https://127.0.0.1:{port}/return", "NONCE")
-    receiver.start()
-    assert _wait(receiver).kind == "ready"
-    yield receiver
-    receiver.close()
-    receiver._thread.join(3)
-    assert not receiver._thread.is_alive()
+    try:
+        receiver.start()
+        assert _wait(receiver).kind == "ready"
+        yield receiver
+    finally:
+        receiver.close()
+        receiver._thread.join(3)
+        assert not receiver._thread.is_alive()
 
 
 def _request(listener, path, host=None):
@@ -85,7 +95,8 @@ def _request(listener, path, host=None):
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     context.check_hostname = False
     context.verify_mode = ssl.CERT_NONE
-    connection = http.client.HTTPSConnection("127.0.0.1", listener.target.port, timeout=2, context=context)
+    connection = http.client.HTTPSConnection(
+        "127.0.0.1", listener.target.port, timeout=_NETWORK_SECONDS, context=context)
     try:
         headers = {} if host is None else {"Host": host}
         connection.request("GET", path, headers=headers)
@@ -189,8 +200,56 @@ def test_cancellation_releases_port_without_authorization(listener):
         sock.bind((listener.target.host, listener.target.port))
 
 
+@pytest.mark.parametrize("ending", ["request-timeout", "cancel", "handshake-error"])
+def test_production_deadlines_cover_the_published_handshake(monkeypatch, ending):
+    connection, wrapped, timer = Mock(), Mock(), Mock()
+    timer_factory = Mock(return_value=timer)
+    # Patch only this module's threading reference, not other workers' timers.
+    monkeypatch.setattr(callback, "threading", SimpleNamespace(**{
+        **vars(threading), "Timer": timer_factory,
+    }))
+    server = callback._LoopbackServer.__new__(callback._LoopbackServer)
+    server.owner = SimpleNamespace(_stop=threading.Event())
+    server.socket = Mock()
+    address = ("127.0.0.1", 12345)
+    server.socket.accept.return_value = connection, address
+    server.context = Mock()
+    server.context.wrap_socket.return_value = wrapped
+    server._active_lock = threading.Lock()
+    server._active = None
+    server._request_timer = None
+
+    def handshake():
+        assert server._active is wrapped
+        connection.settimeout.assert_called_once_with(1.0)
+        server.context.wrap_socket.assert_called_once_with(
+            connection, server_side=True, do_handshake_on_connect=False)
+        timer_factory.assert_called_once_with(2.0, server._interrupt, args=(wrapped,))
+        assert timer.daemon is True
+        timer.start.assert_called_once_with()
+        if ending == "request-timeout":
+            timer_factory.call_args.args[1](*timer_factory.call_args.kwargs["args"])
+        elif ending == "cancel":
+            server.interrupt()
+        else:
+            raise ssl.SSLError("fake handshake failure")
+        wrapped.shutdown.assert_called_once_with(socket.SHUT_RDWR)
+
+    wrapped.do_handshake.side_effect = handshake
+    if ending == "handshake-error":
+        with pytest.raises(ssl.SSLError, match="fake handshake failure"):
+            server.get_request()
+    else:
+        assert server.get_request() == (wrapped, address)
+        server.shutdown_request(wrapped)
+    timer.cancel.assert_called_once_with()
+    wrapped.close.assert_called_once_with()
+    assert server._active is None and server._request_timer is None
+
+
 @pytest.mark.parametrize("ending", ["cancel", "attempt-timeout", "request-timeout"])
 def test_trickled_headers_cannot_hold_callback_open(monkeypatch, ending):
+    request_seconds = callback._REQUEST_SECONDS
     if ending == "request-timeout":
         monkeypatch.setattr(callback, "_REQUEST_SECONDS", 0.4)
     with socket.socket() as sock:
@@ -226,6 +285,7 @@ def test_trickled_headers_cannot_hold_callback_open(monkeypatch, ending):
             peer.join(2)
             assert not peer.is_alive(), "absolute request deadline must interrupt active headers"
             assert listener._thread.is_alive(), "only the malformed request should end"
+            monkeypatch.setattr(callback, "_REQUEST_SECONDS", request_seconds)
             assert _request(listener, "/return?state=NONCE&code=OK")[0] == 200
             assert _wait(listener).kind == "authorized"
         elif ending == "attempt-timeout":

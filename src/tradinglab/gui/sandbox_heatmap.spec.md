@@ -3,6 +3,10 @@
 Last updated: 2026-09-15
 
 ## Purpose
+Responsive header/status/footer text reserves six pixels for ttk theme insets
+when computing its wrap width; the allocated rectangle is not all text space.
+The normal and enlarged-font minimum-width probes remain strict on macOS too.
+
 Non-modal pop-out window that renders the Finviz-style market heatmap,
 in **two modes behind one window**:
 

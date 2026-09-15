@@ -20,6 +20,7 @@ from typing import Literal
 from urllib.parse import parse_qs, urlsplit
 
 LOG = logging.getLogger(__name__)
+_IDLE_SECONDS = 1.0
 _REQUEST_SECONDS = 2.0
 _CLEAR_QUERY = 'history.replaceState(null, "", location.pathname);'
 _SCRIPT_HASH = base64.b64encode(hashlib.sha256(_CLEAR_QUERY.encode()).digest()).decode()
@@ -142,7 +143,7 @@ class _LoopbackServer(HTTPServer):
 
     def get_request(self):
         connection, address = self.socket.accept()
-        connection.settimeout(1.0)
+        connection.settimeout(_IDLE_SECONDS)
         try:
             # Wrap without I/O, then publish the cancellable socket before handshake.
             with self._active_lock:

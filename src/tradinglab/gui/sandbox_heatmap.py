@@ -683,8 +683,9 @@ class SandboxHeatmapWindow(tk.Toplevel):
         self._footer.pack(side=tk.BOTTOM, fill=tk.X, padx=6)
         for label in (self._header, self._status, self._footer):
             label.configure(wraplength=900, justify="left")
+            # The allocated label width includes theme padding (notably Aqua).
             label.bind("<Configure>", lambda event, label=label:
-                       label.configure(wraplength=max(1, event.width)))
+                       label.configure(wraplength=max(1, event.width - 6)))
         self._build_canvas()
         self.update_idletasks()
         self.minsize(max(400, self._size_combo.master.winfo_reqwidth() + 12), 300)

@@ -88,6 +88,10 @@ jobs:
           restore-keys: |
             pip-${{ runner.os }}-${{ matrix.arch }}-py312-
 
+      - name: Configure GUI test desktop
+        shell: pwsh
+        run: python tools/configure_test_display.py
+
       # Smoke gate runs BEFORE PyInstaller. PyInstaller takes ~8 minutes
       # on the windows-latest runner; failing fast here saves the time
       # (and the wasted GitHub Actions minutes) when the source tree is

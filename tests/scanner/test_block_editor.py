@@ -578,7 +578,8 @@ def test_field_ref_picker_rebuild_cancels_pending_reflow(root):
         picker.destroy()
 
 
-def test_condition_frame_chrome_uses_top_alignment(root):
+@pytest.mark.parametrize("layout", ["inline", "stacked"])
+def test_condition_frame_chrome_uses_top_alignment(root, layout):
     """When the left picker grows multi-row, ConditionFrame chrome
     cells must be top-anchored so the operator combo doesn't visually
     drift to the picker's vertical centre.
@@ -602,6 +603,10 @@ def test_condition_frame_chrome_uses_top_alignment(root):
             None,
         )
         assert cf is not None
+        # Force both paths instead of letting platform font metrics choose which
+        # half of the top-alignment contract is exercised.
+        cf._current_layout = layout
+        cf._apply_layout()
         # Walk row=0 columns; every child's grid_info should have
         # sticky containing 'n' (top-aligned).
         for child in cf.winfo_children():

@@ -1,6 +1,6 @@
 # data/schwab_callback.py — Temporary HTTPS OAuth return
 
-Last updated: 2026-09-14
+Last updated: 2026-09-15
 
 ## Purpose
 Capture one OAuth browser redirect on loopback without a web framework,
@@ -45,5 +45,10 @@ means callback received, not that token exchange or persistence succeeded.
 `tests/unit/data/test_schwab_callback.py`: exact-URI/parser matrix, live local
 TLS callback with fake codes, wrong host/path/state, duplicate/denied responses,
 timeout, cancellation, occupied port, missing crypto and certificate cleanup.
+Protocol-only TLS tests use explicit, finite test budgets so scheduler delays
+do not turn host/path/state assertions into unintended deadline tests. Separate
+tests pin the production one-second idle/two-second absolute limits and verify
+that the request deadline is armed before the cancellable TLS handshake.
 Slow-header regressions prove both cancellation and absolute deadlines release
-the listener without needing the peer to finish its request.
+the listener without needing the peer to finish its request; their shortened
+deadline is restored before testing a subsequent ordinary callback.

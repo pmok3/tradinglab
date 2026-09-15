@@ -239,7 +239,8 @@ git push origin main --tags
 
 CI then:
 1. Checks out at the tag.
-2. Runs the unit + smoke test gate (must be green before PyInstaller starts).
+2. Configures/verifies the hosted desktop at 1920x1080, then runs the unit +
+   scanner + logic + isolated GUI + smoke gates before PyInstaller starts.
 3. Runs `tools/build_exe.ps1`.
 4. Runs `tools/verify_frozen.ps1` against the result.
 5. Uploads the zip as both a workflow artifact and a GitHub Release
@@ -247,7 +248,10 @@ CI then:
 
 You can also trigger the workflow manually (`workflow_dispatch`) from
 the Actions tab to produce a one-off build from `main` without cutting
-a tag.
+a tag. Leave `publish_release=false` for this build-only verification.
+The hosted display setup (`tools/configure_test_display.py`) is not a local
+build requirement and refuses to change a non-Actions desktop. A local
+`--check-only` invocation only reports/verifies screen dimensions.
 
 ## Troubleshooting
 

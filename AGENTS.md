@@ -329,6 +329,15 @@ The canonical end-to-end gate is `test_smoke_full.py`.
 | `longhaul` | {ubuntu, windows}-latest × 3.12 | `pytest tests/longhaul -m longhaul` (schedule + manual dispatch only) |
 | `perf-gate` | ubuntu-latest × 3.12 | `pytest tests/perf -m perf` |
 
+- **GUI jobs have an explicit desktop.** Windows unit, coverage, GUI-coverage,
+  smoke and both release-build jobs run `tools/configure_test_display.py` before
+  tests. It sets a session-only 1920x1080 mode and verifies what Tk actually sees;
+  unsupported modes fail setup instead of skipping width assertions. Hosted
+  Windows images otherwise start at 1024x768, below the main window's minimum.
+  Linux smoke passes the same size to Xvfb. `TRADINGLAB_CI_DISPLAY` records the
+  verified Windows geometry in coverage scope provenance; changing the desktop
+  resets baseline compatibility. Local checks use `--check-only`, never change
+  the developer's display. See `tests/unit/test_ci_display.py`.
 - **Coverage scopes are distinct.** `gui-coverage` measures only `tests/gui`,
   not `tests/unit/gui` or the mixed suite; do not compare its percentage with
   the unit baseline or merge its raw data into that baseline. Tk skips supply
@@ -967,6 +976,9 @@ the guard.
 runs before either build; each build is then gated by the full unit / scanner /
 logic / gui / smoke battery. The publish job collects both zips and creates a
 GitHub Release with the CHANGELOG section as the body. ~12 minutes end to end.
+Both native build legs use the same verified GUI desktop setup as CI (§6).
+Manual validation runs leave `publish_release=false`: they build artifacts
+without creating a tag or publishing a release.
 
 ```powershell
 # 1. Bump the version (single source of truth) and write its CHANGELOG section.
