@@ -577,13 +577,19 @@ def test_main_window_width_with_cold_cache_and_prior_fetch(app, monkeypatch, tmp
                 app._quant_refresh_job = app.after(quant_app.QUANT_REFRESH_MS, app._quant_refresh_tick)
 
 
-def test_width_cache_guard_still_rejects_new_stashes(app, monkeypatch):
+@pytest.mark.parametrize("session_open", [False, True], ids=["closed-market", "open-market"])
+def test_width_cache_guard_still_rejects_new_stashes(app, monkeypatch, session_open):
     from tests.smoke._helpers import _fake_candles, _pump_until
 
     _settle_fetch_workers(app)
     original = dict(app._full_cache)
-    key = next(iter(original), ("yfinance", "WIDTHUNEXPECTED", "1d"))
-    changed = [*original.get(key, ()), *_fake_candles(1)]
+    # The real stash path intentionally refuses to replace a fresh cache entry
+    # (including intraday history outside market hours). Add a known-new key so
+    # this negative control tests the guard, not incidental cache age/order.
+    key = (app.source_var.get(), "WIDTHUNEXPECTED", "5m")
+    assert key not in original
+    changed = _fake_candles(1)
+    monkeypatch.setattr(app, "_intraday_session_open", lambda _now: session_open)
     try:
         with pytest.raises(AssertionError, match="Width probes changed the chart candle cache"):
             with _preserve_app_layout(app, monkeypatch):
