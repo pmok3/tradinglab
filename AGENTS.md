@@ -926,6 +926,39 @@ Contract: `tools/check_changed_coverage.spec.md`. Regression anchors:
 
 ---
 
+### 7.40 Window width guards measure real controls, not the outer canvas
+
+A Toplevel's requested width can reflect only its scrolling canvas, not the
+form inside it. Unmapped windows report one-pixel dimensions and are not
+layout evidence. Reuse `tests/_window_width.py::assert_window_width` with the
+mapped-window/font contexts and shared factories instead of adding another
+outer-window size assertion.
+
+Every project-owned Tk/Toplevel class and raw construction site needs runnable
+width cases. `tests/unit/gui/test_window_width_discovery.py` compares an
+all-package AST inventory with actual collected registrations from the standard,
+application-popup and application-smoke suites; a new unregistered window fails.
+Only the named lifecycle base classes are exempt, not concrete uses of them.
+Notebook pages and dynamic controls must be explicitly exercised by their cases.
+
+The checker follows layout parents (including `in_=`), detects completely starved
+action rows, and verifies that horizontal scrolling really reaches the content.
+Data/plot viewports may shrink; inaccessible form controls may not. Reserve
+actions before expandable viewports. Use `BaseModalDialog._fit_form_width` only
+for opted-in simple forms, with the inner form and viewport supplied for canvas
+forms; never impose a chart/table's natural size as a giant window minimum.
+`gui.flow_layout.wrap_controls` wraps compact action rows without recreating
+widgets; supply explicit controls when initially hidden actions can appear later.
+
+Standard cases live in `tests/unit/gui/test_window_width.py`, popup cases in
+`test_application_window_width.py`, and heavy/main-window cases in
+`tests/smoke/test_smoke_window_width.py`. Keep their mapping, geometry, fonts,
+callbacks and data isolated; use the shared Tk fixture in `tests/conftest.py`,
+not a second root. Preserve the adversarial checker/discovery tests when changing
+the guard.
+
+---
+
 ## 8. Build & release flow
 
 **Releases are cut by pushing a tag — you do NOT build locally.**
