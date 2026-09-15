@@ -1033,7 +1033,7 @@ def check_d0b_schwab_credentials_sign_in(app) -> None:
             pass
 
     with tempfile.TemporaryDirectory(prefix="tl-oauth-smoke-") as folder, pytest.MonkeyPatch.context() as mp:
-        fake = SimpleNamespace(schwab=credentials.SchwabCredentials("APP", "SECRET", "https://127.0.0.1:8182"))
+        fake = SimpleNamespace(schwab=credentials.SchwabCredentials("APP", None, "https://127.0.0.1:8182"))
         mp.setattr(schwab_auth, "token_cache_path", lambda: Path(folder) / "schwab.json")
         mp.setattr(schwab_auth, "_WINDOWS", False)
         mp.setattr(credentials, "get_credentials", lambda: fake)
@@ -1052,6 +1052,12 @@ def check_d0b_schwab_credentials_sign_in(app) -> None:
             assert not panel._manual_frame.grid_info()
             panel._on_prepare = None  # No user data/credential writes in the acceptance probe.
             panel._on_connection_changed = lambda: changed.append(True)
+            panel._open_btn.invoke()
+            _pump_until(app, lambda: panel._pending_code is not None, timeout=5)
+            assert opened == [{"new": 1, "autoraise": True}], "browser sign-in must not require an app secret"
+            assert panel._open_btn["text"] == "Finish connection" and not changed
+            assert schwab_auth.load_token_cache() is None
+            fake.schwab = credentials.SchwabCredentials("APP", "SECRET", "https://127.0.0.1:8182")
             panel._open_btn.invoke()
             _pump_until(app, lambda: bool(changed), timeout=5)
             assert changed and opened == [{"new": 1, "autoraise": True}]

@@ -4,13 +4,32 @@ Last updated: 2026-09-14
 
 ## Purpose
 The Schwab section also embeds `SchwabConnectPanel`: developer app settings,
-account sign-in and disconnect share this window. **Save Schwab settings &
-sign in** persists only that vendor's draft, without closing the window or
+account sign-in and disconnect share this window. **Sign in with Schwab**
+persists only that vendor's draft, without closing the window or
 saving unrelated vendor edits. Unchanged effective settings preserve tokens;
 overriding credential layers are reported before any browser opens. Field edits
 or window closure cancel pending authorization. An optional
 `on_schwab_connection_changed` callback routes OAuth save/clear to the existing
 app stream-lifecycle hook; ordinary credential saves retain `on_changed`.
+
+Schwab has no pre-login **Test connection** row or "not tested" header; its
+header points to the browser sign-in controls and OAuth status. An app key alone permits
+browser authorization; missing app-key setup opens the developer portal and
+focuses the relevant field instead of asking for a secret first. If the browser
+returns before an app secret is available, the inline panel guides completion.
+Adding the initially-missing secret preserves that active attempt and cache
+generation, but only for an unchanged app key/redirect and still-current
+authorization. Other identity changes retain normal token/stream invalidation.
+Return/keypad Enter in the secret field triggers sign-in/finish, never saves
+unrelated vendor drafts.
+
+Default width is at least 720 pixels, or the measured embedded form plus
+scrollbar/chrome and padding if wider. Minimum width is similarly content-based
+(at least 640); the outer canvas's requested width is not a proxy for its form.
+Narrow saved geometry is clamped by that minimum. Column 1 expands with the
+window so entries use extra width. Vertical scrolling and saved larger sizes
+remain unchanged. `test_credentials_dialog_sizing.py` checks real control bounds
+under both normal and enlarged fonts, fresh and stale-narrow saved geometry.
 
 End users running the frozen `.exe` cannot edit `.env` — there is
 no `pyproject.toml` next to the executable for the dotenv
@@ -96,9 +115,8 @@ vendor filter — historically (`schwab-credentials-gated`, retired
 that prevented users from configuring credentials in parallel with
 the OAuth plumbing work. The data-source registration is still
 gated by `SCHWAB_REGISTRATION_ENABLED` in `data/__init__.py` — the
-credentials UI is just persistence, so saving Schwab keys on a
-build that hasn't shipped the OAuth flow yet is harmless (the
-values sit in the DPAPI blob until the source starts reading them).
+credentials UI supports setup and OAuth independently of live-data commissioning.
+Saving app details or signing in does not open the historical-source gate.
 
 Existing stored Schwab keys are NOT erased between launches — they stay
 in the encrypted store and `data.credentials` resolves them on every
@@ -118,11 +136,14 @@ straight up without the user having to re-enter anything.
   `data.credentials.reload()` refreshes the in-process cache.
 - Non-Windows (no DPAPI) → `_apply_session_only(values)` writes
   `os.environ` for this process only, and says so in a message box.
-- Cancel → no on-disk change; `os.environ` also untouched.
+- Cancel does not save remaining drafts; explicit sign-in setup or Remove actions
+  already completed in the window are not undone.
 - Successful save/reload and immediate Remove both reconcile stream registries.
   An effective Schwab key/secret/redirect identity change first closes/unregisters
   the old connection, then clears protected/legacy tokens and reconciles presence.
   Unchanged keys or another vendor's edit preserve tokens and the shared socket.
+  Completing an initially-missing secret for the same active browser attempt is
+  also preserved, subject to the identity/generation guards above.
   Token-reset errors are shown explicitly and leave the prior identity checkpoint
   intact so retry still performs the required reset.
 
@@ -147,21 +168,14 @@ but they are out of the environment block that crash dumps and child
 processes inherit.
 
 ## Sizing (resizable + content-derived `minsize`)
-Opens at `default_geometry="600x660"`, `resizable=(True, True)`, and after
-layout (`_build_widgets` + `_populate_from_environment` + wheel guard) sets
-`self.minsize(max(540, reqwidth+16), max(480, reqheight+16))` from the
-*actual* laid-out request size. The dialog packs three sections (8 fields, a
-dropdown-with-help, a multi-line status line, buttons) that overflowed the old
-fixed `560x420` **non-resizable** window — the bottom (Polygon field, status,
-buttons) clipped on the reporter's Windows-on-ARM display (font/DPI scaling)
-with no way to enlarge. Deriving `minsize` from the request size makes the
-floor self-correcting under any font / DPI scaling (higher DPI ⇒ larger
-request ⇒ larger `minsize`), so the window can never open smaller than its
-content; resizable so the user can grow it; the persisted `dlg.credentials`
-geometry is bounded below by `minsize` (the WM clamps a stale-small saved size
-— e.g. the old `560x420` — back up). Mirrors `sandbox_dialog` (see its spec.md
-"Sizing" note). Pinned by `tests/unit/gui/test_credentials_dialog_sizing.py`
-(audit `credentials-dialog-sizing`).
+Opens resizable at a content-derived width (at least 720) and height 760.
+After layout it measures the **inner form**, not the canvas's default requested
+width, then includes scrollbar/chrome and a 16-pixel margin. This is the width
+minimum (at least 640); the minimum height stays at least 480 with vertical
+scrolling. `dlg.credentials` saved geometry cannot force controls below that
+width. The entry column expands when the window grows. The sizing tests check
+actual form/entry bounds under enlarged fonts and stale-small saved geometry,
+not merely the outer Toplevel's misleading requested dimensions.
 
 ## Modal keys and wheel guard
 `__init__` calls `protect_combobox_wheel(self)` and then
@@ -172,10 +186,12 @@ value changes.
 
 ## "Test connection" — credential verification
 
-Each vendor section with a registered verifier (Alpaca, Polygon, Schwab)
+Each API-key vendor section with a registered verifier (Alpaca, Polygon)
 gets a `[Test connection]` button plus a status line and a wrapped remediation
 line. The button answers the question a new user actually has after pasting a
 key: *is this thing going to work?*
+Schwab instead presents browser account sign-in and guided completion, never a
+separate pre-login probe. Its programmatic verifier remains available to callers.
 
 ### Verifies what is TYPED, not what is saved
 

@@ -350,22 +350,17 @@ class CredentialsDialog(BaseModalDialog):
         # Alpaca plan selector under the cursor.
         protect_combobox_wheel(self, scroll_target=self._form_canvas)
         self.bind("<Destroy>", self._on_destroy, add="+")
-        # Guarantee the window can never open smaller than its content. The
-        # dialog packs three sections (8 fields + a dropdown-with-help + a
-        # multi-line status line + buttons) that overflowed the old fixed
-        # 560x420 non-resizable window — the bottom (Polygon field, status,
-        # buttons) was clipped with no way to enlarge. Deriving ``minsize``
-        # from the *actual* laid-out request size makes it self-correcting
-        # under any font / DPI scaling (Windows-on-ARM display scaling in
-        # particular), and the WM clamps a stale-small persisted
-        # ``dlg.credentials`` geometry back up to it. Resizable so the user
-        # can still grow the window. Mirrors ``sandbox_dialog`` (see its
-        # spec.md "Sizing" note). A small margin absorbs border/rounding.
+        # The canvas's requested width does not include its embedded form.
+        # Measure the form plus scrollbar/chrome so restored narrow windows
+        # cannot clip fields and buttons behind the right edge.
         try:
             self.update_idletasks()
-            req_w = self.winfo_reqwidth()
+            chrome = self.winfo_reqwidth() - self._form_canvas.winfo_reqwidth()
+            req_w = self._form.winfo_reqwidth() + max(0, chrome)
             req_h = self.winfo_reqheight()
-            self.minsize(max(540, req_w + 16), max(480, req_h + 16))
+            width = max(640, req_w + 16)
+            self.minsize(width, max(480, req_h + 16))
+            self._default_geometry = f"{max(720, width)}x760"
         except tk.TclError:
             pass
         self._finalize_modal(primary=self._on_save, cancel=self._on_cancel)
@@ -380,7 +375,9 @@ class CredentialsDialog(BaseModalDialog):
         container = ttk.Frame(self)
         container.pack(fill="both", expand=True)
         frm, self._form_canvas = make_scrollable_form(container)
+        self._form = frm
         frm.configure(padding=12)
+        frm.columnconfigure(1, weight=1)
 
         # Section headers keyed by env-var prefix so we don't hardcode
         # the section boundary positions.
@@ -441,6 +438,9 @@ class CredentialsDialog(BaseModalDialog):
             entry.grid(row=row, column=1, sticky="we", pady=2)
             self._entries[env_name] = entry
             self._bind_invalidate(env_name, var)
+            if env_name == "SCHWAB_APP_SECRET":
+                entry.bind("<Return>", self._schwab_secret_return)
+                entry.bind("<KP_Enter>", self._schwab_secret_return)
 
             if is_secret:
                 show_var = tk.BooleanVar(master=self, value=False)
@@ -562,6 +562,8 @@ class CredentialsDialog(BaseModalDialog):
         """
         from ..data import credentials as _creds
 
+        if vendor == "schwab":
+            return "Account access: browser sign-in below", MUTED_GREY
         creds = _creds.get_credentials()
         vendor_creds = getattr(creds, vendor, None)
         configured = bool(vendor_creds is not None
@@ -709,9 +711,10 @@ class CredentialsDialog(BaseModalDialog):
             self._schwab_panel = SchwabConnectPanel(
                 frm, on_prepare=self._save_schwab_for_sign_in,
                 on_connection_changed=self._schwab_auth_changed,
+                on_need_secret=lambda: self._focus_schwab_field("SCHWAB_APP_SECRET"),
             )
             self._schwab_panel.grid(row=row, column=0, columnspan=3, sticky="ew", pady=(6, 4))
-            row += 1
+            return row + 1  # Account sign-in replaces the misleading pre-login Test row.
         if vendor is None or not verify.has_verifier(vendor):
             return row
 
@@ -760,14 +763,14 @@ class CredentialsDialog(BaseModalDialog):
         if vendor is None:
             return
         var.trace_add(
-            "write", lambda *_a, v=vendor: self._invalidate_verify(v))
+            "write", lambda *_a, v=vendor, name=env_name: self._invalidate_verify(v, name))
 
-    def _invalidate_verify(self, vendor: str) -> None:
+    def _invalidate_verify(self, vendor: str, env_name: str | None = None) -> None:
         """Drop a stale verdict after an edit (no-op while a probe is live)."""
         if self._populating:
             return
         if vendor == "schwab" and self._schwab_panel is not None:
-            self._schwab_panel.cancel()
+            self._schwab_panel.settings_edited(env_name)
         if self._verify_boxes.get(vendor, {}).get("inflight"):
             return
         if vendor not in self._verify_status_vars:
@@ -953,8 +956,9 @@ class CredentialsDialog(BaseModalDialog):
         from ..data import credentials as creds
 
         desired = self._vendor_credentials_from_form("schwab")
-        if not desired.is_configured():
-            messagebox.showinfo("Schwab", "Enter the developer app key and secret above first.", parent=self)
+        if not desired.app_key:
+            self._schwab_panel.open_developer_setup()
+            self._focus_schwab_field("SCHWAB_APP_KEY")
             return False
         if desired != creds.get_credentials().schwab:
             values = {key: value for key, value in self._collect().items() if key.startswith("SCHWAB_")}
@@ -992,6 +996,16 @@ class CredentialsDialog(BaseModalDialog):
                 return False
         self._refresh_vendor_header("schwab")
         return True
+
+    def _focus_schwab_field(self, name: str) -> None:
+        entry = self._entries[name]
+        self.update_idletasks()
+        self._form_canvas.yview_moveto(max(0, entry.winfo_y() - 12) / max(1, self._form.winfo_reqheight()))
+        entry.focus_set()
+
+    def _schwab_secret_return(self, _event) -> str:
+        self._schwab_panel._on_open_browser()
+        return "break"  # This field finishes sign-in, never saves other vendors' drafts.
 
     def _schwab_auth_changed(self) -> None:
         verify.clear_results()
@@ -1362,8 +1376,16 @@ class CredentialsDialog(BaseModalDialog):
 
         current = get_credentials().schwab
         previous = getattr(self, "_schwab_identity", current)
+        completing_secret = (
+            self._schwab_panel is not None
+            and self._schwab_panel.can_complete_secret
+            and self._schwab_panel._identity_matches()
+            and previous.app_key == current.app_key
+            and not previous.app_secret and bool(current.app_secret)
+            and previous.redirect_uri == current.redirect_uri
+        )
         try:
-            if previous != current:
+            if previous != current and not completing_secret:
                 from ..data.schwab_auth import clear_token_cache
                 close_vendor_streams()
                 clear_token_cache()
@@ -1376,7 +1398,7 @@ class CredentialsDialog(BaseModalDialog):
             return False
         self._schwab_identity = current
         if self._schwab_panel is not None:
-            if previous != current:
+            if previous != current and not completing_secret:
                 self._schwab_panel.cancel()
             self._schwab_panel._refresh_status()
         return True

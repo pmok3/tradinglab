@@ -26,6 +26,7 @@ def isolate_tokens(tmp_path, monkeypatch):
     monkeypatch.setenv("TRADINGLAB_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(auth, "_WINDOWS", False)
     monkeypatch.setattr(auth, "credentialed_opener", lambda: pytest.fail("unexpected real network"))
+    monkeypatch.setattr(scd.webbrowser, "open", lambda *a, **kw: True)
 
 def _creds(*, configured=True, redirect_uri="https://127.0.0.1"):
     c = SimpleNamespace(
@@ -123,15 +124,16 @@ def test_open_browser_sets_nonce_and_url(root, monkeypatch):
         dlg.destroy()
 
 
-def test_open_browser_blocked_when_unconfigured(root, monkeypatch):
+def test_unconfigured_sign_in_opens_guided_developer_setup(root, monkeypatch):
     dlg = _make_dialog(root, monkeypatch, _creds(configured=False))
     shown = {}
-    monkeypatch.setattr(scd.messagebox, "showinfo",
-                        lambda *a, **k: shown.setdefault("info", a))
+    monkeypatch.setattr(scd.webbrowser, "open",
+                        lambda url, **kw: shown.setdefault("url", url) or True)
     try:
         dlg._on_open_browser()
         assert dlg._state_nonce is None
-        assert "info" in shown
+        assert shown["url"] == "https://developer.schwab.com/"
+        assert "Ready For Use" in dlg._progress_var.get()
     finally:
         dlg.destroy()
 

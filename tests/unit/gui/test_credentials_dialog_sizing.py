@@ -20,23 +20,42 @@ These tests pin the two guarantees:
 from __future__ import annotations
 
 import tkinter as tk
+from tkinter import font, ttk
 
 import pytest
 
-from tradinglab.gui import credentials_dialog
+from tradinglab.gui import _modal_base, credentials_dialog
+from tradinglab.gui.geometry_store import GeometryStore
 
 
-@pytest.fixture
-def dialog():
+@pytest.fixture(scope="module")
+def credentials_root():
     try:
         root = tk.Tk()
     except tk.TclError as exc:
         pytest.skip(f"Tk unavailable: {exc}")
     root.withdraw()
+    yield root
+    root.destroy()
+
+
+@pytest.fixture
+def dialog(credentials_root, tmp_path, monkeypatch, request):
+    root = credentials_root
+    sizes = {name: font.nametofont(name, root=root).actual("size") for name in ("TkDefaultFont", "TkTextFont")}
+    geometry = GeometryStore(tmp_path / "geometry.json")
+    geometry.load()
+    options = getattr(request, "param", {})
+    if options.get("saved"):
+        geometry._windows["dlg.credentials"] = options["saved"]
+    if options.get("font_size"):
+        for name in ("TkDefaultFont", "TkTextFont"):
+            font.nametofont(name, root=root).configure(size=options["font_size"])
+    monkeypatch.setattr(_modal_base, "_gstore", lambda: geometry)
+    monkeypatch.setenv("TRADINGLAB_TOKEN_DIR", str(tmp_path))
     try:
         dlg = credentials_dialog.CredentialsDialog(root)
     except tk.TclError as exc:
-        root.destroy()
         pytest.skip(f"Tk unavailable: {exc}")
     try:
         dlg.update_idletasks()
@@ -46,10 +65,9 @@ def dialog():
             dlg.destroy()
         except tk.TclError:
             pass
-        try:
-            root.destroy()
-        except tk.TclError:
-            pass
+        for name, size in sizes.items():
+            font.nametofont(name, root=root).configure(size=size)
+        root.withdraw()
 
 
 def test_dialog_is_resizable_both_axes(dialog):
@@ -81,3 +99,33 @@ def test_minsize_is_positive_and_sane(dialog):
     min_w, min_h = dialog.minsize()
     assert min_w >= 540
     assert min_h >= 480
+
+
+@pytest.mark.parametrize("dialog", [
+    {}, {"saved": "340x480+20+20"},
+    {"font_size": 16}, {"font_size": 16, "saved": "600x760+20+20"},
+], indirect=True)
+def test_default_and_restored_width_fit_the_actual_inner_form(dialog):
+    dialog.master.deiconify()
+    dialog.update()
+    canvas, form = dialog._form_canvas, dialog._form
+    assert dialog.winfo_width() > 1
+    assert canvas.winfo_width() >= form.winfo_reqwidth()
+    assert int(dialog._default_geometry.split("x")[0]) >= 720
+    for entry in dialog._entries.values():
+        assert entry.winfo_rootx() >= canvas.winfo_rootx()
+        assert entry.winfo_rootx() + entry.winfo_width() <= canvas.winfo_rootx() + canvas.winfo_width()
+        assert entry.winfo_width() >= entry.winfo_reqwidth()
+    for widget in dialog._schwab_panel.winfo_children()[0].winfo_children():
+        if isinstance(widget, ttk.Frame) and widget.winfo_ismapped():
+            assert widget.winfo_reqwidth() <= canvas.winfo_width()
+
+
+def test_entry_column_uses_extra_window_width(dialog):
+    dialog.master.deiconify()
+    dialog.update()
+    entry = dialog._entries["SCHWAB_APP_KEY"]
+    before = entry.winfo_width()
+    dialog.geometry(f"{dialog.winfo_width() + 150}x760")
+    dialog.update()
+    assert entry.winfo_width() >= before + 140

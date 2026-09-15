@@ -20,13 +20,21 @@ is used for available native Windows ARM64 wheels.
 ## Configure, connect and disconnect
 
 Use **Tools -> Configure Credentials -> Schwab** for app settings and account
-sign-in in one place. **Save Schwab settings & sign in** saves only Schwab's
+sign-in in one place. **Sign in with Schwab** saves only Schwab's
 settings and opens the system browser for manual login/MFA. The developer app
 key and secret identify the application; they are not account passwords or
 OAuth tokens. A temporary local HTTPS listener captures the browser return,
 then TradingLab exchanges the code and saves both the access and refresh tokens.
 On Windows, credentials and OAuth tokens use protected local storage.
 Never put a secret or token in a screenshot, diagnostic note or issue.
+
+There is no separate Schwab **Test connection** prerequisite. With an app key,
+account sign-in opens in the browser even if the app secret is not entered yet.
+If needed, the returned authorization prompts you to enter the app secret and
+**Finish connection** in the same window. The code is short-lived: if it expires,
+enter the secret and sign in again. With no app key, the button instead opens
+Schwab developer setup and explains how to obtain the registered application's
+details. A developer-portal login alone does not authorize market-data access.
 
 The saved redirect URI must exactly match the developer portal, including path
 and trailing slash. Automatic return accepts HTTPS `127.0.0.1`, `localhost`, or

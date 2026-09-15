@@ -166,21 +166,19 @@ def _unconfigured_creds():
 
 class TestVerifyRowPresence:
     def test_only_vendors_with_a_verifier_get_a_button(self, dialog):
-        # Every vendor now registers a verifier, so every section gets a
-        # button. Schwab's answers "unsupported" without a network call
-        # rather than staying silent — the user cannot otherwise tell
-        # "no check exists" from "the check is missing", and silence reads
-        # as "probably fine".
-        assert set(dialog._verify_buttons) == {"alpaca", "polygon", "schwab"}
+        # Schwab has account sign-in rather than a misleading pre-login probe.
+        assert set(dialog._verify_buttons) == {"alpaca", "polygon"}
+        assert dialog._schwab_panel is not None
 
     def test_button_is_omitted_for_a_vendor_without_a_verifier(
             self, root, monkeypatch):
-        """The gate still exists — prove it by removing Schwab's verifier."""
+        """API-key probes still require a verifier; Schwab always has sign-in."""
         monkeypatch.setattr(verify, "has_verifier",
-                            lambda v: v in {"alpaca", "polygon"})
+                            lambda v: v == "alpaca")
         dlg = cd.CredentialsDialog(root)
         try:
-            assert "schwab" not in dlg._verify_buttons
+            assert "polygon" not in dlg._verify_buttons
+            assert dlg._schwab_panel is not None
         finally:
             dlg.destroy()
 

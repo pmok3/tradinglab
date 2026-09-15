@@ -36,6 +36,7 @@ from ..data.schwab_login import (
 from .colors import MUTED_GREY
 
 _DEFAULT_REDIRECT_URI = "https://127.0.0.1"
+_DEVELOPER_URL = "https://developer.schwab.com/"
 
 
 class SchwabConnectPanel(ttk.Frame):
@@ -45,6 +46,7 @@ class SchwabConnectPanel(ttk.Frame):
         self, parent: tk.Misc, *,
         on_connection_changed: Callable[[], None] | None = None,
         on_prepare: Callable[[], bool] | None = None,
+        on_need_secret: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(parent)
         # OAuth handshake state for the current attempt.
@@ -53,6 +55,9 @@ class SchwabConnectPanel(ttk.Frame):
         self._authorization_credentials: tuple[str | None, str | None, str] | None = None
         self._on_connection_changed = on_connection_changed
         self._on_prepare = on_prepare
+        self._on_need_secret = on_need_secret
+        self._pending_code: str | None = None
+        self._pending_code_job: str | None = None
         self._closed = False
         self._exchange_generation: int | None = None
         # Background token-exchange plumbing (§7.15: worker writes a result
@@ -82,9 +87,10 @@ class SchwabConnectPanel(ttk.Frame):
 
         ttk.Label(
             frm,
-            text="These app settings identify your developer application, not your "
-                 "Schwab account login. Sign in on Schwab's website; TradingLab "
-                 "receives the return and saves both OAuth tokens automatically.",
+            text="1. Sign in on Schwab's website with your usual account login and MFA.\n"
+                 "2. TradingLab receives the return and saves both tokens for you.\n"
+                 "Your app key identifies the registered application. The app secret "
+                 "is only needed to finish connecting, not to open account sign-in.",
             wraplength=490, justify="left",
         ).grid(row=0, column=0, sticky="w")
 
@@ -95,11 +101,13 @@ class SchwabConnectPanel(ttk.Frame):
         buttons = ttk.Frame(frm)
         buttons.grid(row=2, column=0, sticky="w")
         self._open_btn = ttk.Button(
-            buttons, text="Save Schwab settings & sign in" if self._on_prepare else "Sign in with Schwab",
+            buttons, text="Sign in with Schwab",
             command=self._on_open_browser)
         self._open_btn.pack(side="left")
         ttk.Button(buttons, text="Cancel sign-in", command=self.cancel).pack(side="left", padx=4)
         ttk.Button(buttons, text="Disconnect", command=self._on_disconnect).pack(side="left")
+        ttk.Button(frm, text="Need an app key? Open Schwab developer setup",
+                   command=self.open_developer_setup).grid(row=7, column=0, sticky="w", pady=(4, 0))
         ttk.Label(
             frm, text="A temporary HTTPS listener runs only on this computer. Your "
             "browser may show a certificate prompt for the local callback, never "
@@ -155,8 +163,10 @@ class SchwabConnectPanel(ttk.Frame):
 
     def _compute_status_text(self) -> str:
         creds = self._creds()
-        if not creds.is_configured():
-            return "Not configured — enter your developer app key, secret and registered redirect URI above."
+        if not creds.app_key:
+            return "Not configured — Sign in will open developer setup to help you obtain an app key."
+        if not creds.app_secret:
+            return "Ready to open browser sign-in. The app secret can be added when finishing the connection."
         try:
             cache = load_token_cache()
         except TokenCacheError:
@@ -189,13 +199,12 @@ class SchwabConnectPanel(ttk.Frame):
             return
         if self._on_prepare is not None and not self._on_prepare():
             return
+        if self._pending_code is not None:
+            self._begin_exchange(self._pending_code)
+            return
         creds = self._creds()
-        if not creds.is_configured():
-            messagebox.showinfo(
-                "Connect to Schwab",
-                "Enter your developer App Key and App Secret in the Schwab section first.",
-                parent=self,
-            )
+        if not creds.app_key:
+            self.open_developer_setup()
             return
         redirect_uri = creds.redirect_uri or _DEFAULT_REDIRECT_URI
         # Fresh single-use CSRF nonce per attempt; verified byte-for-byte
@@ -239,10 +248,42 @@ class SchwabConnectPanel(ttk.Frame):
                                "start sign-in again, and use Copy URL.")
 
     def _identity_matches(self) -> bool:
+        if self._authorization_credentials is None:
+            return False
         creds = self._creds()
-        return self._authorization_credentials == (
-            creds.app_key, creds.app_secret, creds.redirect_uri or _DEFAULT_REDIRECT_URI
-        ) and self._exchange_generation == token_cache_generation()
+        key, secret, redirect = self._authorization_credentials
+        return (
+            key == creds.app_key
+            and redirect == (creds.redirect_uri or _DEFAULT_REDIRECT_URI)
+            and (secret == creds.app_secret or not secret)
+            and self._exchange_generation == token_cache_generation()
+        )
+
+    @property
+    def can_complete_secret(self) -> bool:
+        return bool(
+            self._authorization_credentials is not None
+            and not self._authorization_credentials[1]
+            and self._exchange_result is None
+            and (self._state_nonce is not None or self._pending_code is not None)
+        )
+
+    def settings_edited(self, name: str | None) -> None:
+        if name == "SCHWAB_APP_SECRET" and self.can_complete_secret:
+            return
+        self.cancel()
+
+    def open_developer_setup(self) -> None:
+        try:
+            opened = webbrowser.open(_DEVELOPER_URL, new=1, autoraise=True)
+        except (webbrowser.Error, OSError):
+            opened = False
+        self._set_progress(
+            ("Developer setup opened. " if opened else f"Open {_DEVELOPER_URL} in your browser. ")
+            + "Sign in, create or open a Ready For Use app, then paste its App Key and exact "
+            "registered Redirect URI above. Click Sign in with Schwab to authorize your account. "
+            "TradingLab cannot request account access without a registered app key."
+        )
 
     def _poll_callback(self) -> None:
         self._callback_job = None
@@ -338,7 +379,22 @@ class SchwabConnectPanel(ttk.Frame):
             self._set_progress("App settings or authorization changed — start a fresh sign-in.")
             return
         creds = self._creds()
+        if not creds.app_secret:
+            self._pending_code = code
+            self._state_nonce = None
+            self._paste_var.set("")
+            if self._pending_code_job is None:
+                self._pending_code_job = self.after(30_000, self._expire_pending_code)
+            self._open_btn.configure(text="Finish connection", state="normal")
+            self._set_progress("Schwab returned your authorization. To finish, enter the developer app's "
+                               "App Secret above (not your account password), then click Finish connection. "
+                               "The return code is short-lived; if it expires, sign in again.")
+            if self._on_need_secret is not None:
+                self._on_need_secret()
+            return
         redirect_uri = self._redirect_uri or _DEFAULT_REDIRECT_URI
+        self._clear_pending_code()
+        self._authorization_credentials = (creds.app_key, creds.app_secret, redirect_uri)
         self._exchange_result = {}
         self._state_nonce = None
         self._paste_var.set("")
@@ -356,6 +412,19 @@ class SchwabConnectPanel(ttk.Frame):
         )
         self._exchange_thread.start()
         self._poll_job = self.after(120, self._poll_exchange)
+
+    def _clear_pending_code(self) -> None:
+        self._pending_code = None
+        if self._pending_code_job is not None:
+            self.after_cancel(self._pending_code_job)
+            self._pending_code_job = None
+        self._open_btn.configure(text="Sign in with Schwab")
+
+    def _expire_pending_code(self) -> None:
+        self._pending_code_job = None
+        self.cancel()
+        self._set_progress("The browser return expired. Add the app secret above, then sign in again "
+                           "to receive a fresh code. Your saved tokens are unchanged.")
 
     @staticmethod
     def _exchange_worker(creds, redirect_uri: str, code: str, result: dict) -> None:
@@ -445,6 +514,7 @@ class SchwabConnectPanel(ttk.Frame):
         self._set_progress("Sign-in cancelled. Saved tokens are unchanged.")
 
     def _cancel_exchange(self) -> None:
+        self._clear_pending_code()
         self._exchange_result = None
         self._state_nonce = None
         self._authorization_credentials = None
@@ -472,13 +542,15 @@ class SchwabConnectPanel(ttk.Frame):
             if self._callback is not None:
                 self._callback.close()
             self._exchange_result = None
-            for job in (self._poll_job, self._callback_job):
+            self._pending_code = None
+            for job in (self._poll_job, self._callback_job, self._pending_code_job):
                 if job is not None:
                     try:
                         self.after_cancel(job)
                     except tk.TclError:
                         pass
             self._poll_job = self._callback_job = None
+            self._pending_code_job = None
 
 
 __all__ = ["SchwabConnectPanel"]
