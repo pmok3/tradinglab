@@ -100,7 +100,7 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install --upgrade pip wheel
-          python -m pip install -e ".[dev,schwab]"
+          python -m pip install --only-binary=cryptography -e ".[dev,schwab]"
 
       # IMPORTANT: unit tests + scanner tests must run with a CLEAN
       # environment (no TRADINGLAB_* env vars set). They use

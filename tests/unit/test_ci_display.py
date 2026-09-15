@@ -167,6 +167,13 @@ def test_release_native_builds_share_display_precondition_without_publishing():
     assert 'default: "false"' in workflow
 
 
+def test_release_and_local_build_require_native_crypto_wheels():
+    workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    assert 'python -m pip install --only-binary=cryptography -e ".[dev,schwab]"' in workflow
+    build = (ROOT / "tools" / "build_exe.ps1").read_text(encoding="utf-8")
+    assert 'pip install --only-binary=cryptography ".[schwab]"' in build
+
+
 def test_changed_line_consumer_does_not_need_a_gui():
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     assert "configure_test_display" not in _job(workflow, "changed-line-coverage")

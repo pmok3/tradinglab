@@ -457,6 +457,11 @@ def measure(command: list[str], xml: Path, output: Path) -> int:
     require_clean()
     require(identity() == metadata, "Checkout/run identity changed during measurement")
     require(scope(command) == measurement_scope, "Measurement configuration changed during test execution")
+    require(
+        xml.is_file(),
+        f"Test command exited with code {result.returncode} without producing {xml}. "
+        "Inspect the test log for an aborted process; no measurement was published.",
+    )
     data = xml.read_bytes()
     overall, files = parse_measured_xml(data)
     summary = validate_summary({

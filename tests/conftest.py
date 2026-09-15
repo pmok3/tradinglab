@@ -13,6 +13,7 @@ fighting for ownership.
 from __future__ import annotations
 
 import os
+import sys
 
 os.environ.setdefault("MPLBACKEND", "Agg")
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
@@ -28,6 +29,15 @@ import tkinter as tk
 from pathlib import Path
 
 import pytest
+
+from tests._main_thread_gc import install_main_thread_gc
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_sessionstart(session):
+    # A function fixture is too late for module/session-scoped ChartApp setup.
+    install_main_thread_gc(session.config, platform=sys.platform)
+
 
 # ---------------------------------------------------------------------
 # Tk-finalizer landmine fix (CLAUDE.md §7.5 + cousin)

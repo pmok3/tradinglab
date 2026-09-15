@@ -28,37 +28,9 @@ monkeypatching once again resolves to ``tmp_path`` cleanly.
 """
 from __future__ import annotations
 
-import gc
 import os
 
 import pytest
-
-# ---------------------------------------------------------------------
-# Cross-thread cyclic-GC native crash mitigation (CLAUDE.md §7.5)
-# ---------------------------------------------------------------------
-# The release workflow runs ``pytest tests/unit -q`` as a single
-# process. Several unit tests construct a real ``ChartApp`` whose
-# background fetch executor runs the smoke ``fake_fetch`` stub; that
-# stub allocates ``Candle`` objects which can trip CPython's *automatic*
-# cyclic collector ON THE WORKER THREAD. When the collected cycle
-# contains a native (Tcl/Tk/matplotlib) object, finalizing it off the
-# main thread faults -> ``Windows fatal exception: access violation``.
-# Observed ONLY on the ``windows-11-arm`` release runner — x64 CI and
-# local ARM64 dev runs sit outside the timing window.
-#
-# Raising the gen-0 threshold ~70x (700 -> 50000) means a single
-# background fetch (~hundreds of small allocations) is extremely
-# unlikely to be the allocation that crosses the collection threshold,
-# so auto-GC overwhelmingly fires on the *main* thread (which allocates
-# far more) where native finalization is safe. We deliberately do NOT
-# ``gc.disable()`` — that lets the heap balloon across the 5700+ tests
-# and both slows the gate dramatically and risks OOM. Keeping the
-# collector ON (just less trigger-happy) bounds memory and is actually
-# faster than the default (fewer, larger collections). The existing
-# per-test ``gc.disable()`` guards in ``test_streaming_synthetic`` /
-# ``test_strategy_tab_async_export`` still apply locally around their
-# daemon-thread hot spots.
-gc.set_threshold(50000, 100, 100)
 
 # ---------------------------------------------------------------------
 # Live prefetch scheduler OFF for unit tests (companion to the §7.5 fix)
@@ -68,14 +40,14 @@ gc.set_threshold(50000, 100, 100)
 # ``fake_fetch`` stub — allocating ``Candle`` objects on WORKER threads
 # exactly like the regular fetch executor above. With the scheduler live,
 # a real-``ChartApp`` fixture (``test_tick_blit``/``test_indicator_live_pane``)
-# runs *multiple* concurrent Candle-allocating workers during ``_pump``,
-# which re-widens the cross-thread cyclic-GC crash window the
-# ``gc.set_threshold`` bump above was calibrated to close — reproducing the
-# ``Windows fatal exception: code 0x80000003`` even on local ARM64 dev.
+# runs multiple concurrent Candle-allocating workers during ``_pump``.
+# Cyclic-GC ownership is now enforced by ``tests/_main_thread_gc.py`` for
+# every Windows test selection, including module/session fixture setup;
+# raising allocation thresholds here was only a probabilistic mitigation.
 # Unit tests never assert on live prefetch (its logic is covered by
 # ``tests/unit/data/prefetch/*`` + ``test_prefetch_app_live.py`` via fakes,
-# and end-to-end by the smoke suite); disabling it here removes the extra
-# worker-thread allocation churn and restores the documented safety margin.
+# and end-to-end by the smoke suite); disabling it here avoids unrelated
+# background work during unit assertions.
 # ``setdefault`` so an explicit ``TRADINGLAB_PREFETCH_SCHEDULER`` override
 # still wins, and ``test_appglue`` (which monkeypatches the flag per-test)
 # is unaffected. Set at import time so it lands BEFORE any (possibly

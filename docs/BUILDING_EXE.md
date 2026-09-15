@@ -140,7 +140,9 @@ first-run banner, crash handler, etc.) to catch problems that
    temporary HTTPS callback used by in-window account sign-in. The latter is
    constrained to the 46.x native Windows ARM64 wheel series; do not substitute
    an x64 wheel in an ARM64 bundle. Dev dependencies also include it so local
-   HTTPS callback tests run in CI.
+   HTTPS callback tests run in CI. Both the release dev install and this script
+   use `--only-binary=cryptography`: source-only patch releases must not silently
+   require a Rust/OpenSSL toolchain on the ARM64 build runner.
 6. **Drop `_build_info.py`** with the captured commit + date (gitignored;
    the source `_version.py` falls back to empty strings when this file
    is absent, so dev installs are unaffected).

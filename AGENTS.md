@@ -447,6 +447,16 @@ zip is impossible, but the binary is still the wrong arch. Releases don't hit th
 Raised during teardown by background-thread Tk-Variable GC. **Noise — ignore it.**
 `tests/conftest.py` neuters the finalizers; don't chase it.
 
+The native `Tcl_AsyncDelete` / Windows `0x80000003` abort is **not** that harmless
+warning: it can terminate pytest before coverage XML is written. Windows test
+sessions install `tests/_main_thread_gc.py` before collection or application
+fixtures. Automatic cyclic GC is disabled, but the main thread collects gen-0
+after each full test protocol and all generations at module boundaries/cleanup.
+This bounds retention without gambling that a high allocation threshold will
+avoid worker-thread finalization. Non-Windows behavior and production GC are
+unchanged; tests restore the prior GC state. `test_main_thread_gc.py` pins worker
+allocation, fixture/error paths and nested-coverage isolation.
+
 ### 7.6 `gh release upload` is slow but reliable
 
 A ~60 MB asset can take 5+ minutes through the gh CLI. It will finish — don't kill
@@ -979,6 +989,10 @@ GitHub Release with the CHANGELOG section as the body. ~12 minutes end to end.
 Both native build legs use the same verified GUI desktop setup as CI (§6).
 Manual validation runs leave `publish_release=false`: they build artifacts
 without creating a tag or publishing a release.
+Release dependency setup and `tools/build_exe.ps1` require a binary
+`cryptography` distribution. Some allowed patch versions have no Windows ARM64
+wheel; pip must select a compatible wheel instead of attempting a Rust/OpenSSL
+source build on the native runner.
 
 ```powershell
 # 1. Bump the version (single source of truth) and write its CHANGELOG section.

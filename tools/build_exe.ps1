@@ -164,7 +164,9 @@ Write-Step "Installing runtime dependencies + PyInstaller"
 # extras so the frozen build can talk to the Schwab streamer out of the
 # box. Source-only ``pip install .`` leaves websocket-client out and the
 # packaged Schwab integration silently downgrades to REST.
-& $venvPython -m pip install ".[schwab]" 2>&1 | ForEach-Object { Write-Host $_ }
+# Not every cryptography patch publishes Windows ARM64 wheels. Select a
+# compatible wheel instead of silently attempting a Rust/OpenSSL source build.
+& $venvPython -m pip install --only-binary=cryptography ".[schwab]" 2>&1 | ForEach-Object { Write-Host $_ }
 if ($LASTEXITCODE -ne 0) { Write-Error "Runtime deps install failed" }
 & $venvPython -m pip install "pyinstaller>=6.0" 2>&1 | ForEach-Object { Write-Host $_ }
 if ($LASTEXITCODE -ne 0) { Write-Error "PyInstaller install failed" }

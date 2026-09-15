@@ -650,14 +650,18 @@ def test_measure_rejects_unsafe_overrides(measurement_environment, option):
         trend.measure(["pytest", option], Path("coverage.xml"), Path(trend.SUMMARY_NAME))
 
 
-def test_missing_new_xml_does_not_reuse_stale_measurement(measurement_environment, monkeypatch, capsys):
+@pytest.mark.parametrize("exit_code", [0, -1073741819, -2147483645])
+def test_missing_new_xml_does_not_reuse_stale_measurement(measurement_environment, monkeypatch, capsys, exit_code):
     root, _ = measurement_environment
     (root / "coverage.xml").write_bytes(XML)
     (root / trend.SUMMARY_NAME).write_text("stale", encoding="utf-8")
-    monkeypatch.setattr(trend.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0))
+    monkeypatch.setattr(trend.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=exit_code))
     assert trend.main(["measure", "--", "pytest"]) == 2
     assert not (root / trend.SUMMARY_NAME).exists()
-    assert "Coverage trend error" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "Coverage trend error" in output
+    assert f"exited with code {exit_code}" in output
+    assert "without producing coverage.xml" in output
 
 
 @pytest.mark.parametrize("when", ["before", "after", "identity", "config"])
