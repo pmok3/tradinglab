@@ -22,9 +22,12 @@ class FlowLayout:
         self._closed = False
         self._signature: tuple | None = None
         self._bindings = [
-            (widget, widget.bind("<Configure>", self._schedule, add="+"))
+            (widget, sequence, widget.bind(sequence, self._schedule, add="+"))
             for widget in (container, *self.controls)
+            for sequence in ("<Configure>", "<Map>")
         ]
+        top = container.winfo_toplevel()
+        self._bindings.append((top, "<Map>", top.bind("<Map>", self._schedule, add="+")))
         container.bind("<Destroy>", self._on_destroy, add="+")
         self._schedule()
 
@@ -35,6 +38,10 @@ class FlowLayout:
     def _reflow(self) -> None:
         self._job = None
         if self._closed:
+            return
+        # Canvas children can stay mapped under withdrawn tops or hidden tabs.
+        # Their provisional allocations must not feed back into requests.
+        if not self.container.winfo_viewable():
             return
         active = [
             widget for widget in self.controls
@@ -75,9 +82,9 @@ class FlowLayout:
         if self._job is not None:
             self.container.after_cancel(self._job)
             self._job = None
-        for widget, binding in self._bindings:
+        for widget, sequence, binding in self._bindings:
             if binding and widget.winfo_exists():
-                widget.unbind("<Configure>", binding)
+                widget.unbind(sequence, binding)
 
 
 def wrap_controls(

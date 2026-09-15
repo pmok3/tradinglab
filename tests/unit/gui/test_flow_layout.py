@@ -5,6 +5,7 @@ from tkinter import ttk
 import pytest
 
 from tests._window_width import assert_window_width, enlarged_fonts, mapped_window
+from tradinglab.gui._modal_base import make_scrollable_form
 from tradinglab.gui.flow_layout import wrap_controls
 
 
@@ -126,4 +127,82 @@ def test_other_rows_are_unchanged_and_single_oversize_control_is_honest(root):
         root.update()
         assert button.winfo_reqwidth() > button.winfo_width()
         with pytest.raises(AssertionError, match="usable width"):
+            assert_window_width(root)
+
+
+def test_unmapped_flow_preserves_natural_requests_and_resumes_on_map(root, monkeypatch):
+    root.geometry("240x400")
+    row, buttons = _row(root)
+    root.update_idletasks()
+    original_request = row.winfo_reqwidth()
+    layout = wrap_controls(row)
+    # Embedded Canvas children can retain this flag under a withdrawn top.
+    monkeypatch.setattr(row, "winfo_ismapped", lambda: True)
+    root.update_idletasks()
+    assert not root.winfo_ismapped()
+    assert layout._signature is None
+    assert layout._job is None
+    assert row.winfo_reqwidth() == original_request
+    assert all(button.pack_info()["in"] is row for button in buttons)
+    with mapped_window(root):
+        assert_window_width(root)
+        assert len({button.winfo_rooty() for button in buttons}) > 1
+        assert layout._job is None
+
+
+def test_remapping_reflows_font_changes_and_preserves_unrelated_map_binding(root):
+    root.geometry("320x500")
+    row, buttons = _row(root)
+    events = []
+    unrelated = root.bind("<Map>", lambda event: events.append(event.widget))
+    layout = wrap_controls(row)
+    with mapped_window(root):
+        root.withdraw()
+        root.update()
+        signature = layout._signature
+        with enlarged_fonts(root, size=16):
+            root.update_idletasks()
+            assert layout._signature == signature
+            root.deiconify()
+            root.update()
+            assert_window_width(root)
+            assert all(button.winfo_ismapped() for button in buttons)
+            assert layout._signature != signature
+            assert unrelated in root.bind("<Map>")
+            assert root in events
+            owned = next(binding for widget, sequence, binding in layout._bindings
+                         if widget is root and sequence == "<Map>")
+            row.destroy()
+            assert owned not in root.bind("<Map>")
+            assert unrelated in root.bind("<Map>")
+
+
+def test_inactive_notebook_canvas_waits_for_ancestor_map(root, monkeypatch):
+    root.geometry("320x500")
+    notebook = ttk.Notebook(root)
+    notebook.pack(fill="both", expand=True)
+    first, second = ttk.Frame(notebook), ttk.Frame(notebook)
+    notebook.add(first, text="First")
+    notebook.add(second, text="Flow")
+    ttk.Button(first, text="Visible first page").pack()
+    inner, _canvas = make_scrollable_form(second, horizontal=True, bind_mousewheel=False)
+    row, buttons = _row(inner)
+    layout = wrap_controls(row)
+    with mapped_window(root):
+        notebook.select(second)
+        root.update()
+        signature = layout._signature
+        assert signature is not None
+        notebook.select(first)
+        root.update()
+        monkeypatch.setattr(row, "winfo_ismapped", lambda: True)
+        assert not row.winfo_viewable()
+        with enlarged_fonts(root, size=16):
+            root.update_idletasks()
+            assert layout._signature == signature
+            notebook.select(second)
+            root.update()
+            assert row.winfo_viewable()
+            assert layout._signature != signature
+            assert all(button.winfo_viewable() for button in buttons)
             assert_window_width(root)

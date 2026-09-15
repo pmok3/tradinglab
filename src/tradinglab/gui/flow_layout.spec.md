@@ -35,6 +35,15 @@ Disabled state is never changed.
 Configure events coalesce through one owned idle callback. Identical width/
 control-request signatures do not repack. Destroy cancels that callback and
 removes the helper's Configure bindings without removing unrelated bindings.
+Reflow waits until the container is viewable (all of its ancestors mapped).
+Canvas window children can report mapped despite a withdrawn Toplevel or
+unselected notebook page; their provisional width must not drive wrapping
+and parent natural-size requests back and forth. Before mapping, original packed controls retain their natural
+requests for opt-in form measurement. Map events resume the same coalesced
+callback even without a resize, and their bindings are removed on destroy.
+The Toplevel's Map event is included: an embedded child's mapped flag may
+already be set and therefore cannot be the only wake-up signal. Destroying
+the row removes that top-level binding too, preserving unrelated bindings.
 
 ## Invariants
 
@@ -49,3 +58,7 @@ removes the helper's Configure bindings without removing unrelated bindings.
 `tests/unit/gui/test_flow_layout.py` covers shrink/grow, enlarged fonts, retained
 identity and disabled state, hidden controls, teardown and non-opted-in rows.
 Application cases use the same mapped width checker as standard dialogs.
+`test_window_width_rebuilds.py` exercises the legacy d81 EntriesDialog RVOL
+rebuild/classification path while withdrawn, then maps, shrinks and grows it.
+The unchanged `check_d81_rvol_rhs_reachable` smoke check must finish without
+idle geometry feedback; its normal timeout is not relaxed.
