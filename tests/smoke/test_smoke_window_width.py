@@ -577,26 +577,27 @@ def test_main_window_width_with_cold_cache_and_prior_fetch(app, monkeypatch, tmp
                 app._quant_refresh_job = app.after(quant_app.QUANT_REFRESH_MS, app._quant_refresh_tick)
 
 
-@pytest.mark.parametrize("session_open", [False, True], ids=["closed-market", "open-market"])
-def test_width_cache_guard_still_rejects_new_stashes(app, monkeypatch, session_open):
-    from tests.smoke._helpers import _fake_candles, _pump_until
+@pytest.mark.parametrize("mutation", ["insert", "replace"])
+def test_width_cache_guard_still_rejects_mutations(app, monkeypatch, mutation):
+    from tests.smoke._helpers import _fake_candles
 
     _settle_fetch_workers(app)
     original = dict(app._full_cache)
-    # The real stash path intentionally refuses to replace a fresh cache entry
-    # (including intraday history outside market hours). Add a known-new key so
-    # this negative control tests the guard, not incidental cache age/order.
+    # This canary targets the snapshot guard, not DataController's legitimate
+    # refusal of fresh replacements or eviction of unpinned entries when full.
+    # The preceding cold-cache test separately exercises the real worker inbox.
     key = (app.source_var.get(), "WIDTHUNEXPECTED", "5m")
-    assert key not in original
-    changed = _fake_candles(1)
-    monkeypatch.setattr(app, "_intraday_session_open", lambda _now: session_open)
+    if mutation == "replace":
+        assert original, "A replacement canary needs an existing cache entry"
+        key = next(iter(original))
+    else:
+        assert key not in original
+    changed = [*original.get(key, ()), *_fake_candles(1)]
     try:
         with pytest.raises(AssertionError, match="Width probes changed the chart candle cache"):
             with _preserve_app_layout(app, monkeypatch):
-                app._worker_inbox.put_nowait(("stash", (key, changed)))
-                assert _pump_until(app, lambda: app._full_cache.get(key) == changed, timeout=5), (
-                    "The controlled cache mutation was not applied inside the guarded scope"
-                )
+                app._full_cache[key] = changed
+                assert app._full_cache[key] == changed
     finally:
         _settle_fetch_workers(app)
         app._full_cache.clear()
