@@ -88,7 +88,7 @@ addopts = "-ra --strict-markers --timeout=120 --timeout-method=thread -m 'not pe
 markers = [
     "window_width(window_id): mapped behavioral width coverage for a discovered application window",
     "smoke: end-to-end smoke tests (slow, headless GUI)",
-    "perf: indicator perf-budget regression gates (opt-in via `-m perf`; never run in default test session)",
+    "perf: perf-budget regression gates (opt-in via `-m perf`; never run in default test session)",
     "oracle: differential / metamorphic oracles (deterministic, headless, fast)",
     "property: Hypothesis-driven property tests (deterministic CI profile)",
     "longhaul: multi-session soak tests (opt-in; excluded from the default session)",
