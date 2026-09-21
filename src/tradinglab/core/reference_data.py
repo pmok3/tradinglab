@@ -20,6 +20,14 @@ Design
   fetched from the prior source — different timestamp conventions and
   history depths.
 
+* **Bounded LRU cache** — ``_cache`` is an ``LRUDict`` capped at
+  ``_CACHE_MAX_SIZE`` (256) entries. Hits refresh recency; inserts past
+  the cap evict the least-recently-used entry, which re-fetches on its
+  next miss. The key space grows with every distinct reference symbol
+  the session touches, so an unbounded dict would leak memory over
+  long-running sessions. The generation counter still bumps on every
+  :func:`set_reference_bars`, so downstream invalidation is unaffected.
+
 * **Generation counter**. Every cache mutation bumps a monotonic
   counter that callers (e.g. :class:`IndicatorCache`) can include in
   their compute hash, OR that the on-arrival callback uses to clear
@@ -67,13 +75,22 @@ import threading
 from collections.abc import Callable
 
 from .bars import Bars
+from .lru_dict import LRUDict
 
 # ----------------------------------------------------------------------
 # Module state
 # ----------------------------------------------------------------------
 
+# Process-lifetime bound for the reference-bars cache. The key space
+# ``(source, symbol, interval)`` grows with every distinct reference
+# symbol the session touches (RRVOL cross-symbol fetches, scanner runs),
+# so an unbounded dict leaks memory over long sessions. 256 covers a
+# full day's worth of distinct reference pairs; LRU eviction re-fetches
+# on next miss — a correctness-preserving recompute cost.
+_CACHE_MAX_SIZE = 256
+
 _lock = threading.RLock()
-_cache: dict[tuple[str, str, str], Bars] = {}
+_cache: LRUDict[tuple[str, str, str], Bars] = LRUDict(maxsize=_CACHE_MAX_SIZE)
 _inflight: set[tuple[str, str, str]] = set()
 _provider: Callable[[str, str, str], None] | None = None
 _on_arrival: Callable[[], None] | None = None

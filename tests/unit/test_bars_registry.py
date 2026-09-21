@@ -187,3 +187,50 @@ def test_re_get_after_invalidate_returns_fresh_memo():
     view2 = reg.get_view("AAPL", "5m")
     assert view1 is not None and view2 is not None
     assert view1.memo is not view2.memo
+
+
+# --- bounded LRU memo maps (p1/bound-caches) --------------------------------
+
+
+def test_memo_maps_bounded_at_maxsize_under_load():
+    """10x-cap insertion must leave both memo maps at/below the cap."""
+    from tradinglab.core import bars_registry as br_mod
+
+    cap = br_mod._MEMO_CACHE_MAX_SIZE
+    assert cap == 512
+    reg = _make_registry()
+    for i in range(10 * cap):
+        sym = f"S{i}"
+        reg._cache.set_bars(sym, "5m", _candles(3))
+        assert reg.get_view(sym, "5m") is not None
+    assert len(reg._memos) <= cap
+    assert len(reg._fingerprints) <= cap
+
+
+def test_lru_hot_memo_survives_eviction_same_identity():
+    """A touched pair survives with the same memo identity; the untouched LRU pair is evicted."""
+    from tradinglab.core import bars_registry as br_mod
+
+    cap = br_mod._MEMO_CACHE_MAX_SIZE
+    reg = _make_registry()
+    reg._cache.set_bars("HOT", "5m", _candles(3))
+    reg._cache.set_bars("COLD", "5m", _candles(3))
+    assert reg.get_view("HOT", "5m") is not None
+    assert reg.get_view("COLD", "5m") is not None
+    for i in range(cap - 2):
+        reg._cache.set_bars(f"FILL{i}", "5m", _candles(3))
+        assert reg.get_view(f"FILL{i}", "5m") is not None
+    # Touch HOT — both maps refresh recency in the same order, leaving
+    # COLD (the second-oldest untouched pair) as the LRU entry.
+    hot_view = reg.get_view("HOT", "5m")
+    assert hot_view is not None
+    assert len(reg._memos) == cap
+    assert len(reg._fingerprints) == cap
+    # One more insert evicts COLD, not HOT.
+    reg._cache.set_bars("NEWP", "5m", _candles(3))
+    reg.get_view("NEWP", "5m")
+    again = reg.get_view("HOT", "5m")
+    assert again is not None
+    assert again.memo is hot_view.memo  # same identity, lazily surviving
+    assert ("COLD", "5m") not in reg._memos
+    assert ("COLD", "5m") not in reg._fingerprints

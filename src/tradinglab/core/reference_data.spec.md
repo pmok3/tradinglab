@@ -1,6 +1,6 @@
 # core/reference_data.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-20
 
 ## Purpose
 Cross-symbol reference-data registry for indicators that need OHLCV for a *second* symbol (e.g. RRVOL divides the primary's RVOL by SPY's RVOL of the same flavor). Bridges the synchronous indicator-compute path with the app's async fetch machinery.
@@ -16,7 +16,7 @@ Cross-symbol reference-data registry for indicators that need OHLCV for a *secon
 - `clear() -> None` — reset all module state. Tests only.
 
 ## Dependencies
-- Internal: `.bars.Bars`.
+- Internal: `.bars.Bars`, `.lru_dict.LRUDict`.
 - External: stdlib only (`threading`, `typing`).
 
 ## Design Decisions
@@ -26,6 +26,7 @@ Cross-symbol reference-data registry for indicators that need OHLCV for a *secon
 - **Synchronous read path**: indicators call `get_reference_bars` from inside `compute_arr`. Cache hit → immediate `Bars`. Miss → schedule fetch (deduped), return `None`; indicator emits all-NaN for this render and the on-arrival callback triggers a re-render once data arrives.
 - **Provider runs without the lock held**: registry acquires `_lock` only long enough to mark `_inflight`, then releases before invoking `provider(*key)`. Avoids long-held locks blocking the indicator path.
 - **Failed-provider hygiene**: a provider that raises has its in-flight slot released so a future read retries. `set_reference_bars` is the success path; `mark_fetch_failed` is the explicit failure path.
+- **Bounded LRU cache (2026-09-20)**: `_cache` is `core.lru_dict.LRUDict` capped at `_CACHE_MAX_SIZE` = 256 entries keyed by `(source, symbol, interval)`. `get_reference_bars` hits refresh recency (LRU touch); inserts past the cap evict the least-recently-used entry, which re-fetches on its next miss. The key space grows with every distinct reference symbol the session touches (RRVOL cross-symbol fetches, scanner runs), so the cap closes a process-lifetime memory leak. All access stays under the module `RLock` (`LRUDict` is not thread-safe alone). The generation counter still bumps on every `set_reference_bars`, so downstream invalidation is unaffected. No API or under-cap behavior change.
 - **On-arrival callback exceptions are swallowed**: a misbehaving callback must not corrupt cache state.
 
 ## Invariants
