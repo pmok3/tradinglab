@@ -344,6 +344,18 @@ class PollingMixin:
                     refresh_pending = True
                 elif kind == "reference":
                     reference_pending = True
+                elif kind == "quant_snapshot":
+                    # Worker-fetched daily bars for the Quant tab's Last
+                    # column; applied atomically on the Tk thread — the
+                    # worker never touches ``_watchlist_snapshot``
+                    # (AGENTS.md §7.15).
+                    try:
+                        apply = getattr(
+                            self, "_apply_quant_snapshot_from_bars", None)
+                        if callable(apply):
+                            apply(*payload)
+                    except Exception:  # noqa: BLE001
+                        pass
                 elif kind == "card_stash":
                     try:
                         slot_index, token, symbol, bars = payload

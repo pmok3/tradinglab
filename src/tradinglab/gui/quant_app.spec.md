@@ -1,6 +1,6 @@
 # gui/quant_app.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-20
 
 ## Purpose
 `ChartApp` glue for the **Quant** side tab: tab lifecycle, the View → Quant
@@ -21,6 +21,9 @@ the tab's Last column. Extracted as a mixin per AGENTS.md §7.24 — no
   `_quant_refresh_tick()` — the Last-column refresh loop.
 - `_paint_quant_last_values()` / `_submit_quant_fetches()` /
   `_fetch_quant_last(symbol, src)` — repaint, submit, worker body.
+- `_apply_quant_snapshot_from_bars(symbol, src, interval, bars)` —
+  Tk-thread apply of the `("quant_snapshot", …)` inbox item posted by the
+  worker; reuses `_apply_watchlist_snapshot_from_bars`.
 - `_quant_fetch_symbol(symbol, src) -> str` — best-effort vendor spelling for
   a catalog symbol under the active source.
 - `_quant_fetches_suppressed() -> bool` — true when the refresh tick must not
@@ -85,9 +88,16 @@ the tab's Last column. Extracted as a mixin per AGENTS.md §7.24 — no
   session. This honours the no-network promise; it is not a look-ahead fix,
   because `_apply_watchlist_snapshot_from_bars` already slices Last by the
   sandbox clock.
-- **The worker never calls `self.after`.** Bars cross to the Tk thread via
-  `_worker_inbox` (§7.15). The direct-stash branch exists for synchronous
-  test shims running on the main thread, matching `_preload_one_last`.
+- **The worker never touches the shared snapshot.** `_fetch_quant_last`
+  runs off the Tk thread; there it posts `("quant_snapshot", (symbol, src,
+  interval, bars))` — bars snapshotted with `list(bars)` at handoff — on
+  `_worker_inbox`, and the Tk-thread `_drain_worker_inbox` applies it via
+  `_apply_quant_snapshot_from_bars`. Calling
+  `_apply_watchlist_snapshot_from_bars` directly from the worker mutated
+  `_watchlist_snapshot` while Tk-thread paint paths read it, and read
+  `_full_cache` / queued a refresh off-thread (§7.15). On the Tk thread
+  itself (synchronous test shims) the apply runs directly, matching
+  `_preload_one_last`'s fast-path — as does the direct-stash branch.
 - **Last formatting scales with magnitude.** Quant rows span `BTC-USD` near
   80,000 and `RSP/SPY` near 0.29; one fixed precision is unreadable at one end
   or the other.
@@ -108,7 +118,9 @@ the tab's Last column. Extracted as a mixin per AGENTS.md §7.24 — no
   worker's `finally` always discards it.
 - The refresh loop stops when the checkbutton is unchecked, and re-arms only
   while `_quant_visible_var` is true.
-- `_fetch_quant_last` runs off the Tk thread and touches no Tk widget.
+- `_fetch_quant_last` runs off the Tk thread and touches no Tk widget
+  and never mutates `_watchlist_snapshot`; the snapshot handoff crosses
+  on `_worker_inbox` and is applied on the Tk thread.
 - Quant Last fetches are keyed by the active source's resolved symbol; catalog
   shorthand is only a display input.
 
@@ -119,6 +131,11 @@ unavailable rows warn instead of loading, `_format_quant_last` boundaries,
 fetch dedup + cache short-circuit, and that a missing tab makes every entry
 point inert. `tests/unit/test_quant_universe.py` covers resolved-symbol cache
 keys, strict-offline suppression, and canonical activation comparisons.
+`tests/unit/gui/test_quant_app_worker_race.py` proves the fetch worker
+never touches `_watchlist_snapshot` (results cross on `_worker_inbox` as
+`("quant_snapshot", …)` and merge on the Tk thread), including the
+downstream order effects (handoff-then-stash ordering, the refresh the
+apply queues, insulation of the posted bars from later buffer reuse).
 Smoke: `check_g5_quant_tab`.
 
 ## Known limitations / Future work
