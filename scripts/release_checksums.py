@@ -44,9 +44,16 @@ def sha256_file(path: Path) -> str:
 
 
 def iter_artifact_files(root: Path, *, exclude: Path | None = None) -> list[Path]:
-    """Sorted list of regular files under ``root`` (relative paths)."""
+    """Sorted list of regular files under ``root`` (relative paths).
+
+    Sorted by the POSIX relative-path *string* so manifest order is
+    deterministic on every platform: ``PurePath`` ordering is
+    case-insensitive on Windows (``normcase``), which would disagree
+    with a plain string sort of the manifest lines.
+    """
     files: list[Path] = []
-    for candidate in sorted(root.rglob("*")):
+    candidates = sorted(root.rglob("*"), key=lambda p: p.relative_to(root).as_posix())
+    for candidate in candidates:
         if not candidate.is_file() or candidate.is_symlink():
             continue
         rel = candidate.relative_to(root)

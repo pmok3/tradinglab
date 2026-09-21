@@ -111,3 +111,19 @@ def test_verify_rejects_malformed_and_traversal_lines(rc, tmp_path: Path) -> Non
         encoding="utf-8",
     )
     assert rc.main(["--verify", "--artifacts", str(dist), "--manifest", str(manifest)]) == 1
+
+
+def test_iter_artifact_files_sorts_by_posix_string(rc, tmp_path: Path) -> None:
+    # Manifest order must be deterministic across platforms. Sorting
+    # ``Path`` objects directly is case-insensitive on Windows
+    # (``PurePath`` uses ``normcase``), which disagrees with a plain
+    # string sort of the manifest lines — this failed
+    # ``test_generate_then_verify_clean`` on Windows CI.
+    dist = tmp_path / "dist"
+    (dist / "sub").mkdir(parents=True)
+    (dist / "sub" / "notes.txt").write_text("nested", encoding="utf-8")
+    (dist / "Zebra.zip").write_bytes(b"z")
+    (dist / "apple.zip").write_bytes(b"a")
+    got = [p.as_posix() for p in rc.iter_artifact_files(dist)]
+    assert got == sorted(got)
+    assert got == ["Zebra.zip", "apple.zip", "sub/notes.txt"]
