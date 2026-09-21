@@ -1,6 +1,6 @@
 # data/yfinance_source.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-20
 
 ## Purpose
 Live-data fetcher backed by yfinance. Thin adapter: pulls a DataFrame via `yf.Ticker(t).history(...)` and delegates to the vectorized `candles_from_dataframe` normalizer.
@@ -21,6 +21,7 @@ Live-data fetcher backed by yfinance. Thin adapter: pulls a DataFrame via `yf.Ti
 - **Uses `candles_from_dataframe` (not iterrows)**: 5–20× faster on typical intraday fetches; also populates the prebuilt-arrays side channel so the subsequent `SeriesArrays` build skips extraction.
 - **Non-finite OHLC rows are dropped by the shared normalizer**: Yahoo can emit a phantom current-session row before any trade prints (NaN OHLC, sometimes stray volume). `candles_from_dataframe` filters those rows before `Candle` construction; NaN volume on otherwise-valid bars is still coerced to `0`.
 - **Errors are caught at the source layer, never propagated** — a broad `except Exception` swallows yfinance's varied HTTP/JSON/KeyError failures and returns `None`. Diagnostics go via `print()` at `yfinance_source.py:43` (no `_status` available in this stateless module). This honours the `data/base.py` contract that fetchers MUST NOT raise.
+- **15 s network timeout** — `Ticker().history(...)` is called with `timeout=YFINANCE_TIMEOUT_S` (`15`), matching the 15 s timeout the other REST vendors use (alpaca / polygon / schwab). A stalled request raises inside yfinance, the broad `except` coerces it to `None`, and the fetch worker is released instead of being occupied indefinitely (pool starvation). The constant is read at call time (not bound as a default arg) so tests can monkeypatch it.
 
 ## Invariants
 - `fetch_live_data(t, i)` returns either `None` or a `List[Candle]` (possibly empty after non-finite-OHLC filtering). Empty frames are coerced to `None`.
@@ -29,6 +30,7 @@ Live-data fetcher backed by yfinance. Thin adapter: pulls a DataFrame via `yf.Ti
 
 ## Testing
 - Test conftest pins startup to `"yfinance"` and stubs the yfinance fetcher with deterministic offline candles, so the smoke suite exercises the registry path without network. Live fetch is exercised manually. `check_c6_bad_ticker` covers the failure path.
+- `tests/unit/data/test_yfinance_timeout.py` pins the 15 s fetch timeout: the `timeout` kwarg reaches `Ticker.history()`, a stalled fetch returns `None` promptly instead of hanging, and a timed-out fetch releases its pool worker so a queued fast fetch still completes (no pool starvation).
 
 ## Known limitations
 - **Asset-class scope** — Tested with US equities and ETFs only (USD-denominated). yfinance accepts crypto / FX / international tickers but our normalisation, session classification, and ET timestamping all assume US-equity conventions. Do not rely on those asset classes.
