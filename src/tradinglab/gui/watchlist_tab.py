@@ -1977,10 +1977,22 @@ class WatchlistTabMixin:
                 except Exception:  # noqa: BLE001
                     continue
             return sliced or None
-        return bars
+        # Copied for the same reason as the sandbox ``list(visible)``
+        # above: the evaluator iterates this list off-thread while the
+        # Tk-thread streaming path may append to the cached list in
+        # place. The clock-sliced branch already builds a fresh list.
+        return list(bars)
 
     def _compute_watchlist_signals(self, tickers, cols, src: str) -> None:
-        """Worker: evaluate signal columns and stash results in the snapshot."""
+        """Worker: evaluate signal columns; hand results to the Tk thread.
+
+        Never mutates ``_watchlist_snapshot`` here — the Tk thread reads
+        it in ``_populate_watchlist_tab`` / ``_watchlist_cell_text`` while
+        this runs. Results go on ``_worker_inbox`` as
+        ``("watchlist_signals", {sym: {col_id: ColumnValue}})`` for the
+        Tk-thread drain to apply atomically (same hand-off as the
+        preload ``("stash", …)`` / ``("refresh", …)`` items).
+        """
         try:
             from ..watchlists.signals import WatchlistSignalEvaluator
             ev = getattr(self, "_watchlist_signal_evaluator", None)
@@ -1991,13 +2003,11 @@ class WatchlistTabMixin:
                 self._watchlist_signal_evaluator = ev
                 self._watchlist_signal_evaluator_src = src
             results = ev.evaluate(list(tickers), list(cols))
-            for sym, cells in results.items():
-                snap = self._watchlist_snapshot.setdefault(sym, {})
-                existing = snap.get("_sig")
-                if not isinstance(existing, dict):
-                    existing = {}
-                    snap["_sig"] = existing
-                existing.update(cells)
+            try:
+                self._worker_inbox.put_nowait(
+                    ("watchlist_signals", dict(results)))
+            except Exception:  # noqa: BLE001
+                pass
         except Exception:  # noqa: BLE001
             pass
         finally:
@@ -2006,6 +2016,29 @@ class WatchlistTabMixin:
                 self._worker_inbox.put_nowait(("refresh", None))
             except Exception:  # noqa: BLE001
                 pass
+
+    def _apply_watchlist_signals(self, results: dict) -> None:
+        """Tk thread: merge worker-computed signal cells into the snapshot.
+
+        Applies the ``("watchlist_signals", …)`` inbox item. Each ticker's
+        ``_sig`` cell-dict is updated in place on the Tk thread only — the
+        worker builds the result dict and never touches
+        ``_watchlist_snapshot`` (AGENTS.md §7.15).
+        """
+        try:
+            snap_map = self._watchlist_snapshot
+        except AttributeError:
+            return
+        for sym, cells in (results or {}).items():
+            try:
+                snap = snap_map.setdefault(sym, {})
+                existing = snap.get("_sig")
+                if not isinstance(existing, dict):
+                    existing = {}
+                    snap["_sig"] = existing
+                existing.update(cells)
+            except Exception:  # noqa: BLE001
+                continue
 
     def _preload_one_last(self, ticker: str,
                           src: str | None = None,

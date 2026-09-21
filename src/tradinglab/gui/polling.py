@@ -342,6 +342,20 @@ class PollingMixin:
                         pass
                 elif kind == "refresh":
                     refresh_pending = True
+                elif kind == "watchlist_signals":
+                    # Worker-computed signal cells; applied atomically on
+                    # the Tk thread — the worker never touches
+                    # ``_watchlist_snapshot`` (AGENTS.md §7.15).
+                    try:
+                        wt = getattr(self, "watchlist_tab", None)
+                        if wt is not None and hasattr(
+                            wt, "_apply_watchlist_signals"
+                        ):
+                            wt._apply_watchlist_signals(payload)
+                        elif hasattr(self, "_apply_watchlist_signals"):
+                            self._apply_watchlist_signals(payload)
+                    except Exception:  # noqa: BLE001
+                        pass
                 elif kind == "reference":
                     reference_pending = True
                 elif kind == "card_stash":

@@ -1,6 +1,6 @@
 # gui/watchlist_tab.py — Spec
 
-Last updated: 2026-09-14
+Last updated: 2026-09-20
 
 ## Purpose
 
@@ -268,11 +268,14 @@ larger; pinning makes a list reachable from the main UI.
   The worker drives a cached `watchlists.signals.WatchlistSignalEvaluator`
   (rebuilt when `source_var` changes) whose `bars_provider` is
   `_signal_bars` (prefers `_full_cache`, else the data-source fetcher;
-  slices to `_sandbox_watchlist_clock()` during replay). Results are
-  written into `snap["_sig"]` directly (worker-owned snapshot write, same
-  pattern as `_preload_one_last`) then a `("refresh", None)` inbox nudge
-  repaints. Triggered from `_watchlist_poll_tick` (live + sandbox when
-  visible), `_kick_watchlist_preloads`, and `_refresh_watchlist_for_sandbox`.
+  slices to `_sandbox_watchlist_clock()` during replay). The worker never
+  touches `_watchlist_snapshot`: it posts
+  `("watchlist_signals", {sym: {col_id: ColumnValue}})` on `_worker_inbox`
+  and the Tk-thread drain applies it via `_apply_watchlist_signals`
+  (per-ticker `_sig` merge), followed by the `("refresh", None)` inbox
+  nudge (posted by the worker's `finally`) which repaints. Triggered from
+  `_watchlist_poll_tick` (live + sandbox when visible),
+  `_kick_watchlist_preloads`, and `_refresh_watchlist_for_sandbox`.
 - `_open_watchlist_columns_dialog(name)` — opens
   [`gui/watchlist_columns_dialog`](watchlist_columns_dialog.spec.md) via
   `open_columns_dialog(self, name)`; wired into the sub-tab right-click
@@ -350,7 +353,8 @@ larger; pinning makes a list reachable from the main UI.
   nothing.
 - **`_signal_bars` follows the same rules** — session visible list first
   (copied, because the Tk thread appends to it while the evaluator reads
-  off-thread), then `_full_cache` under the pinned source, then a
+  off-thread), then `_full_cache` under the pinned source (also copied —
+  the streaming path can append to the cached list in place), then a
   fetcher whose result is clock-sliced.
 - **Double-click preserves tab focus** (user-requested).
 - **Configurable signal columns** (feature `watchlist-columns`): a
@@ -388,7 +392,10 @@ larger; pinning makes a list reachable from the main UI.
 - **Signal columns are no-op-safe**: `_preload_watchlist_signals()` returns
   immediately when no pinned watchlist has a signal column, so the legacy
   system-only refresh path is unchanged. `snap["_sig"]` is a
-  `{col_id: ColumnValue}` dict written only by the signal worker.
+  `{col_id: ColumnValue}` dict merged only on the Tk thread by
+  `_apply_watchlist_signals` (from the worker's `("watchlist_signals", …)`
+  inbox payload); the signal worker itself never touches
+  `_watchlist_snapshot`.
 
 ## Data Flow
 
