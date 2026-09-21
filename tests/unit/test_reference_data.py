@@ -154,3 +154,32 @@ def test_concurrent_set_and_get_no_crash():
         t.join(timeout=5)
     assert not errors, errors
     assert rd.generation() == 8 * 50
+
+
+# --- bounded LRU cache (p1/bound-caches) -----------------------------------
+
+
+def test_cache_bounded_at_maxsize_under_load():
+    """10x-cap insertion must leave the process-lifetime cache at/below the cap."""
+    cap = rd._CACHE_MAX_SIZE
+    assert cap == 256
+    for i in range(10 * cap):
+        rd.set_reference_bars("yfinance", f"SYM{i}", "5m", _bars(2))
+    assert len(rd._cache) <= cap
+
+
+def test_lru_hot_entry_survives_eviction_same_identity():
+    """A touched entry survives; the untouched LRU entry is evicted."""
+    cap = rd._CACHE_MAX_SIZE
+    hot = _bars(2)
+    rd.set_reference_bars("yfinance", "HOT", "5m", hot)
+    rd.set_reference_bars("yfinance", "COLD", "5m", _bars(2))
+    for i in range(cap - 2):
+        rd.set_reference_bars("yfinance", f"FILL{i}", "5m", _bars(2))
+    assert len(rd._cache) == cap
+    # Touch HOT — the hit refreshes recency, leaving COLD as the LRU entry.
+    assert rd.get_reference_bars("yfinance", "HOT", "5m") is hot
+    # One more insert evicts COLD (untouched), not HOT.
+    rd.set_reference_bars("yfinance", "NEWP", "5m", _bars(2))
+    assert rd.get_reference_bars("yfinance", "HOT", "5m") is hot  # same identity
+    assert ("yfinance", "COLD", "5m") not in rd._cache
