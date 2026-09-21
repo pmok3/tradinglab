@@ -826,7 +826,10 @@ class TestDrainStreamQueue:
         assert h.refresh_after_tick_calls == ["primary"]
 
     def test_rollover_event_appends_and_refreshes(self):
-        h = _StreamHarness()
+        # The rollover path now routes through _set_data_state(), so the
+        # harness needs the data-state surface (real DataController +
+        # production ChartApp._set_data_state).
+        h = _DataStateHarness()
         h._full_cache[("yf", "SPY", "5m")] = [object()]
         h._stream_queue.put(_evt(1, "primary", "yf", "SPY", "5m", "rollover"))
         h._drain_stream_queue()
@@ -943,3 +946,115 @@ class TestLiveUpdatesDelayedForSource:
         h._schedule_next_bar_fetch()
         assert h._fake.scheduled == []  # no poll armed
         assert h._poll_job is None
+
+
+# ---------------------------------------------------------------------------
+# 9. Rollover / _set_data_state ordering — controller/alias sync (P0)
+# ---------------------------------------------------------------------------
+#
+# Regression: _drain_stream_queue's legacy rollover branch wrote
+# self._primary / self.candles directly, bypassing DataController. A later
+# bare _set_data_state() then restored the STALE controller lists over the
+# fresh rollover list — a dual-source-of-truth ordering bug whose outcome
+# depended on whether rollover or _set_data_state() ran last. The fix routes
+# the rollover through _set_data_state() so the controller and the legacy
+# aliases are updated atomically by construction.
+
+
+class _DataStateHarness(_StreamHarness):
+    """_StreamHarness + a real DataController with the production
+    ChartApp._set_data_state / ChartApp._sync_data_aliases bound in, so the
+    tests exercise the real state-setter rather than a copy."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        from tradinglab.app import ChartApp
+        from tradinglab.data.controller import DataController
+
+        self._data_ctrl = DataController()
+        self._set_data_state = ChartApp._set_data_state.__get__(self)
+        self._sync_data_aliases = ChartApp._sync_data_aliases.__get__(self)
+
+
+def _bars(n: int) -> list:
+    """Identity-stable stand-in bars (contents irrelevant — object
+    identity is the alias contract: _sync_data_aliases assigns, never
+    copies)."""
+    return [object() for _ in range(n)]
+
+
+def _loaded(h: _DataStateHarness, n: int = 3) -> list:
+    """Simulate an initial chart load: cache, controller and aliases agree."""
+    key = ("yf", "SPY", "5m")
+    bars = _bars(n)
+    h._data_ctrl._full_cache[key] = bars
+    h._set_data_state(primary_raw=bars, primary=bars)
+    return bars
+
+
+def _rollover_new_list(h: _DataStateHarness, bars: list) -> list:
+    """Simulate the stream controller sealing a bar where the rollover
+    builds a NEW list object (identity is not preserved across rollover —
+    see the rewire comment in _drain_stream_queue). This is exactly the
+    case that desynchronised the controller from the aliases."""
+    grown = bars + [object()]
+    h._data_ctrl._full_cache[("yf", "SPY", "5m")] = grown
+    h._stream_queue.put(_evt(1, "primary", "yf", "SPY", "5m", "rollover"))
+    h._drain_stream_queue()
+    return grown
+
+
+class TestRolloverDataStateSync:
+    def test_rollover_syncs_controller_and_aliases(self):
+        """After a rollover, the DataController and every legacy alias
+        point at the same grown list object."""
+        h = _DataStateHarness()
+        bars = _loaded(h)
+        grown = _rollover_new_list(h, bars)
+        assert h._data_ctrl.primary is grown
+        assert h._data_ctrl.primary_raw is grown
+        assert h._primary is grown
+        assert h._primary_raw is grown
+        assert h.candles is grown
+        assert len(h._primary) == 4
+
+    def test_rollover_then_set_data_state_does_not_clobber(self):
+        """The exact production failure: rollover followed by a bare
+        _set_data_state() (e.g. a prefetch completion or view switch)
+        must NOT restore the stale pre-rollover list over the fresh one."""
+        h = _DataStateHarness()
+        bars = _loaded(h)
+        grown = _rollover_new_list(h, bars)
+        h._set_data_state()
+        assert h._primary is grown
+        assert h.candles is grown
+        assert h._data_ctrl.primary is grown
+        assert len(h._primary) == 4
+
+    def test_set_data_state_then_rollover_stays_consistent(self):
+        """Reverse order: _set_data_state() before the rollover also leaves
+        the controller and the aliases in agreement."""
+        h = _DataStateHarness()
+        bars = _loaded(h)
+        h._set_data_state()  # no-op refresh while nothing changed
+        assert h._primary is bars
+        grown = _rollover_new_list(h, bars)
+        assert h._primary is grown
+        assert h.candles is grown
+        assert h._data_ctrl.primary is grown
+        assert h._data_ctrl.primary_raw is grown
+
+    def test_rollover_in_place_append_keeps_identity(self):
+        """When the stream controller grows the cached list in place (no
+        new list object), aliases and controller trivially agree — pins
+        the identity contract for the non-reallocating path too."""
+        h = _DataStateHarness()
+        bars = _loaded(h)
+        bars.append(object())
+        h._stream_queue.put(_evt(1, "primary", "yf", "SPY", "5m", "rollover"))
+        h._drain_stream_queue()
+        h._set_data_state()
+        assert h._primary is bars
+        assert h.candles is bars
+        assert h._data_ctrl.primary is bars
+        assert len(h._primary) == 4

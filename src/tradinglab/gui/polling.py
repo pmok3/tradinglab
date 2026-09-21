@@ -466,8 +466,11 @@ class PollingMixin:
                 tic = self.ticker_var.get().strip().upper()
                 raw = self._full_cache.get((src, tic, interval))
                 if raw is not None:
-                    self._primary = raw
-                    self.candles = raw
+                    # Route through the canonical setter so the
+                    # DataController and the legacy aliases stay in sync:
+                    # a later _set_data_state() must not restore the
+                    # pre-rollover controller state over this grown list.
+                    self._set_data_state(primary_raw=raw, primary=raw)
                     self._rewire_slot_candles("primary", raw)
                 self._refresh_view_after_append("primary")
             except Exception:  # noqa: BLE001
