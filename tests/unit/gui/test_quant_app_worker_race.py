@@ -290,3 +290,77 @@ def test_end_to_end_worker_inbox_drain_applies_quant_snapshot(_patch_data_source
     h._drain_worker_inbox()
     assert h.scheduled_refresh_calls == 1
     assert h._worker_inbox.empty()
+
+
+# ---------------------------------------------------------------------------
+# 4. The defensive swallows: inbox-full, seam failure, drain failure
+# ---------------------------------------------------------------------------
+
+
+class _FailingSnapshotInbox(queue.Queue):
+    """Inbox that rejects the ``quant_snapshot`` handoff (as if full) but
+    accepts everything else."""
+
+    def put_nowait(self, item) -> None:  # noqa: ANN001
+        if item[0] == "quant_snapshot":
+            raise queue.Full("inbox full")
+        super().put_nowait(item)
+
+
+def test_worker_handoff_failure_is_swallowed_and_stash_still_posts(
+    _patch_data_sources,
+):
+    """The ``quant_snapshot`` handoff is best-effort: when the inbox
+    rejects it, the worker swallows the failure (``except: pass``), still
+    posts the ``("stash", …)`` item, and releases the inflight marker."""
+    app = _App()
+    app._worker_inbox = _FailingSnapshotInbox()
+
+    _run_worker(app, "^VIX", "testsrc")  # must not raise
+
+    assert "^VIX" not in app._quant_fetch_inflight
+    assert app.apply_threads == []
+    items = _drain_all(app._worker_inbox)
+    assert [kind for kind, _ in items] == ["stash"]
+    key, bars = items[0][1]
+    assert key == ("testsrc", "^VIX", QUANT_LAST_INTERVAL)
+    assert [c.close for c in bars] == _state_closes(7)
+
+
+def test_apply_quant_snapshot_swallows_seam_failure():
+    """``_apply_quant_snapshot_from_bars`` is a defensive Tk-thread seam:
+    a raising ``_apply_watchlist_snapshot_from_bars`` must not propagate
+    to the drain."""
+
+    app = _App()
+
+    def _boom(*args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        raise RuntimeError("seam exploded")
+
+    app._apply_watchlist_snapshot_from_bars = _boom
+
+    # Must not raise.
+    app._apply_quant_snapshot_from_bars(
+        "^VIX", "testsrc", QUANT_LAST_INTERVAL, _daily_bars(7))
+
+    assert app._watchlist_snapshot == {}
+
+
+def test_drain_swallows_quant_snapshot_apply_failure(_patch_data_sources):
+    """The Tk-thread drain applies the posted handoff defensively: a
+    raising ``_apply_quant_snapshot_from_bars`` is swallowed and the drain
+    still re-arms its tick."""
+    h = _DrainHarness()
+
+    def _boom(*args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        raise RuntimeError("apply exploded")
+
+    h._apply_quant_snapshot_from_bars = _boom
+    h._worker_inbox.put_nowait(
+        ("quant_snapshot",
+         ("^VIX", "testsrc", QUANT_LAST_INTERVAL, _daily_bars(7))))
+
+    h._drain_worker_inbox()  # must not raise
+
+    assert h._worker_inbox.empty()
+    assert h.after_calls and h.after_calls[-1][0] == 80
