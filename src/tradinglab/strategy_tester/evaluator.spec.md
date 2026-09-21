@@ -1,12 +1,12 @@
 # strategy_tester/evaluator.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-21
 
 ## Purpose
 Headless trigger-evaluation kernel for the Strategy Tester. The live `EntryEvaluator` / `ExitEvaluator` are Tk-thread-guarded (they touch `PaperBrokerEngine`, journal, indicator-manager, audit log). The mechanical tester builds its own worker-safe context, delegates trigger decisions to the shared entry / exit dispatch registries, and emits `Order`s directly into a fresh per-symbol `SandboxEngine`.
 
 ## Public API
-- `evaluate_symbol(*, symbol, candles, interval, entry_strategy, exit_strategy, starting_cash, cost_model, deck_seed=0, cancel_token=None, warmup_until_ts=None, dependency_candles=None) -> SessionResult` — primary entry point. Side-effect-free apart from creating an engine in-process. Returns a standard `SessionResult` that the existing `performance.py` builders + Sandbox post-mortem renderer consume verbatim. When `cancel_token` is supplied the per-bar loop polls `cancel_token.is_cancelled()` every `_CANCEL_POLL_INTERVAL=256` bars (power-of-2 → bitmask AND on the hot path) and exits early on trip — the returned `SessionResult` is well-formed but truncated. A token whose `is_cancelled()` raises is swallowed (duck-typed contract; never gate evaluation on a probe failure). When `warmup_until_ts` is supplied (UTC epoch seconds) the per-bar loop **still ticks the engine** for bars with `ts < warmup_until_ts` (so indicators hydrate + scanner state stays consistent) but **no entry or exit triggers are checked** for those bars; the returned `SessionResult.equity_curve` is trimmed to entries with `ts >= warmup_until_ts`. `None` (the default) keeps the legacy behaviour (no warmup gate). When `dependency_candles` is supplied, it is a same-interval `{symbol: candles}` map used to build a scanner `BarsRegistry` for cross-symbol `FieldRef.symbol` conditions.
+- `evaluate_symbol(*, symbol, candles, interval, entry_strategy, exit_strategy, starting_cash, cost_model, deck_seed=0, cancel_token=None, warmup_until_ts=None, dependency_candles=None, use_vectorized=True) -> SessionResult` — primary entry point. Side-effect-free apart from creating an engine in-process. Returns a standard `SessionResult` that the existing `performance.py` builders + Sandbox post-mortem renderer consume verbatim. When `use_vectorized=True` (the default) the symbol runs the vectorized evaluation path (`vector_eval.build_plan` + `_run_vectorized_loop`) — bit-identical output to the legacy per-bar loop (pinned by `tests/unit/strategy_tester/test_vectorized_agreement.py`), with automatic fallback to the legacy loop whenever exact vectorization cannot be proven. `use_vectorized=False` forces the legacy per-bar loop; it is the reference implementation the vectorized path is tested against. When `cancel_token` is supplied the per-bar loop polls `cancel_token.is_cancelled()` every `_CANCEL_POLL_INTERVAL=256` bars (power-of-2 → bitmask AND on the hot path) and exits early on trip — the returned `SessionResult` is well-formed but truncated. A token whose `is_cancelled()` raises is swallowed (duck-typed contract; never gate evaluation on a probe failure). When `warmup_until_ts` is supplied (UTC epoch seconds) the per-bar loop **still ticks the engine** for bars with `ts < warmup_until_ts` (so indicators hydrate + scanner state stays consistent) but **no entry or exit triggers are checked** for those bars; the returned `SessionResult.equity_curve` is trimmed to entries with `ts >= warmup_until_ts`. `None` (the default) keeps the legacy behaviour (no warmup gate). When `dependency_candles` is supplied, it is a same-interval `{symbol: candles}` map used to build a scanner `BarsRegistry` for cross-symbol `FieldRef.symbol` conditions.
 - `EvalContext` — dataclass; mutable per-symbol state. Internal but exposed for test fixtures.
 - `class UnsupportedTriggerKind(NotImplementedError)` — typed signal for trigger kinds the headless path doesn't yet handle. Runner catches and marks the symbol as `error` without aborting the rest of the Run.
 - `collect_dependency_symbols(entry_strategy, exit_strategy) -> set[str]` — returns non-active ticker pins referenced by entry / exit conditions, including scanner-alert scans that can be loaded from disk. The runner uses this to companion-fetch cross-symbol dependencies once per run.
@@ -17,12 +17,72 @@ Headless trigger-evaluation kernel for the Strategy Tester. The live `EntryEvalu
 ## Decision contract
 For each bar `i`:
 1. `engine.tick()` advances clock to `i`, fills any pending orders at `i.open`, updates MAE/MFE on `i.H/L`, marks-to-market at `i.close`.
-2. **ET conversion**: bar timestamps (UTC epoch seconds) are converted to America/New_York via the **vectorized helper `_compute_et_arrays(bars.ts)`** called ONCE per symbol before the per-bar loop. It returns `(et_date_ints, rth_mask, et_offsets_sec)` — numpy arrays giving each bar's days-since-1970 in ET, Mon-Fri 09:30-16:00 RTH membership, and signed UTC offset (EST=-18000s, EDT=-14400s). The hot loop reads `et_date_ints[i]` / `rth_mask[i]` instead of calling `datetime.fromtimestamp(ts, _ET)` per bar (which walks the zoneinfo transition table). On a 25k-bar 5m × 1y run this trims ~25k slow zoneinfo allocations per symbol down to one numpy pass + ~250-500 zoneinfo probes (one per unique UTC day in the input). DST safety: each unique UTC day is probed at BOTH 00:00 UTC and 23:59:59 UTC; for the ~363 non-transition days/year the two probes agree and the offset broadcasts to every bar in that UTC day, while the ~2 transition days/year (where the probes disagree because the 02:00 ET switch = 07:00 UTC falls inside the day) get per-bar offset resolution so every bar lands on the right side of the switch. A real `datetime` is still constructed (via the cheap `_bar_ts_to_et(ts)` slow path) per bar **only when the strategy has an arm_window gate configured** — that's the one gate whose HH:MM compare can't be served by the precomputed ints. `require_market_open` is served by `rth_mask[i]` (no datetime construction). All time gates (`arm_window_start/end`, `require_market_open`, TIME_OF_DAY exit cutoff) still compare in ET — output is bit-for-bit identical to the prior per-bar implementation.
+2. **ET conversion**: bar timestamps (UTC epoch seconds) are converted to America/New_York via the **vectorized helper `_compute_et_arrays(bars.ts)`** called ONCE per symbol before the per-bar loop. It returns `(et_date_ints, rth_mask, et_offsets_sec)` — numpy arrays giving each bar's days-since-1970 in ET, Mon-Fri 09:30-16:00 RTH membership, and signed UTC offset (EST=-18000s, EDT=-14400s). The hot loop reads `et_date_ints[i]` / `rth_mask[i]` instead of calling `datetime.fromtimestamp(ts, _ET)` per bar (which walks the zoneinfo transition table). On a 25k-bar 5m × 1y run this trims ~25k slow zoneinfo allocations per symbol down to one numpy pass + ~250-500 zoneinfo probes (one per unique UTC day in the input). DST safety: each unique UTC day is probed at BOTH 00:00 UTC and 23:59:59 UTC; for the ~363 non-transition days/year the two probes agree and the offset broadcasts to every bar in that UTC day, while the ~2 transition days/year (where the probes disagree because the 02:00 ET switch = 07:00 UTC falls inside the day) get per-bar offset resolution so every bar lands on the right side of the switch. On the vectorized path the arm-window gate is additionally served by `(bars.ts + et_offsets_sec) % 86400` (seconds-since-ET-midnight, `int64`) — no per-bar `datetime` is ever constructed. The **legacy** loop still builds a real `datetime` per bar via the cheap `_bar_ts_to_et(ts)` slow path, but only when the strategy has an arm_window gate configured — that's the one gate whose HH:MM compare can't be served by the precomputed ints there. `require_market_open` is served by `rth_mask[i]` (no datetime construction) on both paths. All time gates (`arm_window_start/end`, `require_market_open`, TIME_OF_DAY exit cutoff) still compare in ET — output is bit-for-bit identical to the prior per-bar implementation.
 3. **Per-ET-day session reset**: if `et_date_ints[i] != ctx.current_session_et_date` (both stored as days-since-epoch ints — integer compare in the hot loop), reset `fires_total = 0` and `fires_by_symbol = 0` BEFORE checking entries. This mirrors the live `EntryEvaluator._roll_session_counters_if_needed` semantics (with ET correctness; live uses UTC). Without this, `max_fires_per_session_per_symbol=1` caps the entire backtest at 1 entry per symbol — the smoking-gun "AAPL/NVDA/SPY each have 1 trade on a year of 5m" bug.
 4. **Per-ET-day `eod_kill_switch` flatten**: if the ET date rolled AND `exit_strategy.eod_kill_switch=True` AND a position is still open from the prior trading day, synthesise an exit fill at the **last regular-session bar at or before `i-1`** (via `_find_last_rth_bar_at_or_before(bars, i-1, rth_mask=rth_mask)` — the precomputed numpy mask turns the walk-back into a single O(idx) `np.flatnonzero` scan instead of a Python loop of zoneinfo lookups) using the cost model's slippage + commission. The RTH-only walk-back is REQUIRED: 1-minute yfinance data routinely includes extended-hours bars (premarket 04:00 ET, postmarket up to 20:00 ET); without the RTH filter the kill would flatten at e.g. 19:55 ET postmarket close, producing incorrect P&L and screenshots dated at extended-hours prices ("market-on-close at 15:55 ET" is the documented behaviour). If no RTH bar exists in `[0, i-1]` (extremely rare: all prior bars premarket), the kill is **silently skipped** — the position stays open and the next bar's normal processing continues. Without per-day kill, a strategy with `position_already_open_policy=BLOCK` and no intraday-firing stop will hold a position across all days and the daily reset is moot. Same code path as the end-of-run kill switch.
 5. `_sync_position_state_from_engine` mirrors engine state into the EvalContext.
 6. If a position is open, check every enabled exit-leg trigger against `i.O/H/L/C`. First leg to fire wins; `submit_order` is queued and will fill at `i+1.open`.
 7. Otherwise check the entry trigger; **enforce the time-of-day gates in this order**: arm_window → require_market_open → cooldown_secs → fires_total/fires_by_symbol caps → trigger handler. Size via `_compute_quantity(decision_price=i.close)`; submit if `qty > 0`. On fire, set `ctx.last_fire_ts = ts`.
+
+## Vectorized strategy evaluation (`use_vectorized=True`, default)
+The default path precomputes every *decision fact* that does not depend on
+path-dependent engine state as NumPy arrays **once per symbol**, then runs
+`_run_vectorized_loop` — a single shared orchestration loop whose
+path-dependent bookkeeping (engine ticks, fills, per-day counter resets,
+EOD flatten, fire caps, cooldown, scanner-alert edge state,
+position-open transitions) is identical to the legacy loop. Only the
+decision predicates come from the precomputed plan instead of per-bar
+dispatch. Output is bit-identical to the legacy path (exact
+`SessionResult` equality incl. fills, equity curve, final cash, dtypes —
+see `vector_eval.spec.md` and
+`tests/unit/strategy_tester/test_vectorized_agreement.py`).
+
+What the plan precomputes (all `bool[n]` masks unless noted):
+- **Entry fire mask** — MARKET → all-True; LIMIT/STOP/STOP_LIMIT →
+  raw-NumPy touch comparisons over the `float64` OHLC arrays (same
+  `<=`/`>=` inclusive semantics and NaN-never-true behaviour as the
+  `entries.spec` predicates); INDICATOR/SCANNER_ALERT → all-bar
+  `is_true` masks from `scanner.engine.evaluate_group_vec`.
+- **Entry static-gate mask** — `enabled` AND intraday-only arm-window
+  (derived from `(bars.ts + et_offsets_sec) % 86400`, inclusive bounds,
+  midnight wrap) AND `require_market_open` (`rth_mask`). The legacy
+  path's per-bar ET `datetime` construction + `"HH:MM"` re-parse for the
+  arm-window gate is gone on this path; the legacy loop keeps it.
+- **Exit static masks** — MARKET/TIME_OF_DAY/INDICATOR legs become
+  `bool[n]` masks (TIME_OF_DAY compares precomputed ET
+  seconds-since-midnight against the parsed cutoff; malformed cutoffs →
+  all-False like the scalar silent no-fire).
+- **Exit price legs** (LIMIT/STOP/STOP_LIMIT) resolve their target from
+  the position's average entry price lazily at the first bar the leg is
+  checked (same raise timing as the legacy per-bar resolver), then use a
+  scalar touch comparison. Only valid while the entry policy is BLOCK
+  (average entry price constant per holding period) — see fallback.
+- **Exit TRAILING_STOP/CHANDELIER** advance the *real*
+  `exits.spec.update_*`/`evaluate_*` recurrences via a reusable dateless
+  spec-`Bar` (no per-bar `datetime`); CHANDELIER states are seeded at the
+  entry bar exactly like `_reset_trigger_states_on_activation`.
+
+Dtypes: bar timestamps `int64`, OHLC `float64`, ET offsets `int64`,
+seconds-since-ET-midnight `int64`, all decision masks `bool`.
+
+**Fallback (documented, not silent).** `vector_eval.build_plan` returns
+`None` — and the symbol runs the untouched legacy per-bar loop — when an
+entry/exit trigger kind is missing from the shared dispatch registry
+(preserves the typed `UnsupportedTriggerKind` contract), when any
+INDICATOR/SCANNER_ALERT tree is outside `evaluate_group_vec`'s supported
+subset (within-last quantifiers, cross-symbol/cross-interval refs —
+anything the vec evaluator reports as `None`), or when the entry
+`position_already_open_policy` is not BLOCK (mid-holding STACK adds would
+move the average entry price the exit targets resolve from; the entry
+side stays vectorized, exits fall back per-bar). The legacy loop remains
+callable via `use_vectorized=False` and is the agreement-test reference.
+
+Measured performance (2026-09-21, ~4,056 5m bars, INDICATOR entry + STOP
+exit + arm-window/RTH/EOD kill): min-of-7 interleaved wall-clock
+**2.9x speedup** over the legacy path (0.086s vs 0.250s). The floor is
+the stateful `engine.tick()` + mark-to-market, which neither path can
+remove. Pinned by `tests/perf/test_strategy_eval_perf.py` (`@pytest.mark.perf`,
+≥1.5x gate).
 
 ## Time-of-day gates (`_check_entry`)
 - **`arm_window_start/end`** — `"HH:MM"` strings; default `"09:35"/"15:30"` ET. Blank string disables the gate (mirrors live `_parse_hhmm("")` → None). Supports midnight wrap (start > end → "fire if t >= start OR t <= end").
@@ -138,6 +198,7 @@ mutated.
 Multi-leg OCO is reduced to first-leg-to-fire. Proper OCO semantics are still deferred.
 
 ## Dependencies
+- `.vector_eval` — vectorized evaluation plan (see `vector_eval.spec.md`); `evaluate_symbol` calls `vector_eval.build_plan(...)` and, when a plan is built, `_run_vectorized_loop(...)` instead of the legacy per-bar loop.
 - `backtest.engine.SandboxEngine`, `backtest.session.SessionResult / SessionSpec / ENGINE_VERSION`
 - `backtest.bars.from_candles`
 - `backtest.orders.Order / Side` (imported as `OrderSide` to disambiguate from `core.side.Side`)
@@ -188,6 +249,21 @@ Multi-leg OCO is reduced to first-leg-to-fire. Proper OCO semantics are still de
   `_compute_et_arrays` parity with the slow ET/RTH reference across
   DST transitions, RTH boundaries, weekends, empty input, and
   ET-midnight session-roll detection.
+- `tests/unit/strategy_tester/test_vectorized_agreement.py` — 66
+  old-vs-new exact-agreement tests: every entry/exit trigger kind ×
+  LONG/SHORT, INDICATOR + SCANNER_ALERT entries (incl. edge/no-edge),
+  multi-leg exit order, partial exits, STACK policy, arm-window
+  (incl. midnight wrap + malformed values), RTH gating, daily-interval
+  bypass, cooldown/caps, EOD kill switch, warmup mode, disabled entry,
+  single-bar / flat / NaN / gap inputs, vec-unsupported fallback
+  (within-last), `UnsupportedTriggerKind` in both paths, fixed-seed
+  randomized strategy fuzzing (3 seeds × 10 trials), and a deliberate
+  perturbation check (`test_limit_entry_exact_touch_boundary_agrees`
+  fails if the LIMIT touch comparison is weakened to `<`).
+- `tests/perf/test_strategy_eval_perf.py` (`@pytest.mark.perf`) —
+  ~4,056-bar INDICATOR-entry + STOP-exit benchmark; min-of-7
+  interleaved timing must show ≥1.5x speedup of the vectorized path
+  (measured 2.9x on 2026-09-21).
 - `tests/smoke/test_smoke_strategy.py::check_st0_kernel_only` — 3 synthetic tickers + MARKET entry + STOP exit, validates `SessionResult` has ≥1 fill and per-symbol JSON parses.
 
 ## See also

@@ -142,6 +142,7 @@ from ..scanner.model import ScanDefinition as _ScanDefinition
 from ..scanner.model import iter_conditions as _iter_conditions
 from ..scanner.model import iter_field_refs as _iter_field_refs
 from ..scanner.model import iter_tree_field_refs as _iter_tree_field_refs
+from . import vector_eval
 from .model import CostModel
 
 LOG = logging.getLogger(__name__)
@@ -1360,6 +1361,7 @@ def evaluate_symbol(
     cancel_token: Any | None = None,
     warmup_until_ts: int | None = None,
     dependency_candles: Mapping[str, Sequence[Candle]] | None = None,
+    use_vectorized: bool = True,
 ) -> SessionResult:
     """Run one symbol's mechanical-test session and return the SessionResult.
 
@@ -1470,157 +1472,198 @@ def evaluate_symbol(
     # ``datetime.fromtimestamp(ts, _ET)`` calls per symbol with a single
     # numpy pass (~250-500 zoneinfo lookups per year, broadcast to N
     # bars via np.searchsorted on UTC-day groups).
-    et_date_ints, rth_mask, _et_offsets = _compute_et_arrays(bars.ts)
+    et_date_ints, rth_mask, et_offsets_sec = _compute_et_arrays(bars.ts)
+    # Vectorized evaluation plan: entry fire masks + entry time gates are
+    # precomputed as NumPy boolean arrays; exit MARKET/TIME_OF_DAY/INDICATOR
+    # legs become per-bar masks while price/stateful legs resolve per-holding
+    # targets or advance the exact spec recurrences. build_plan returns None
+    # whenever exact vectorization cannot be proven (unsupported trigger
+    # kind, vec-unsupported scanner tree, non-BLOCK stacking policy), in
+    # which case the legacy per-bar loop below runs unchanged.
+    plan = None
+    if use_vectorized and n > 0:
+        et_tod_sec = (bars.ts.astype(np.int64) + et_offsets_sec) % 86400
+        plan = vector_eval.build_plan(
+            n=n,
+            bars=bars,
+            interval=interval,
+            entry_strategy=entry_strategy,
+            exit_strategy=exit_strategy,
+            et_tod_sec=et_tod_sec,
+            rth_mask=rth_mask,
+            eval_ctx=eval_ctx,
+            normalized_conditions=normalized_conditions,
+        )
+    if plan is not None:
+        _run_vectorized_loop(
+            engine=engine,
+            bars=bars,
+            ctx=ctx,
+            symbol=symbol,
+            entry_strategy=entry_strategy,
+            exit_strategy=exit_strategy,
+            cost_model=cost_model,
+            cancel_token=cancel_token,
+            in_warmup_mode=in_warmup_mode,
+            warmup_until_ts=warmup_until_ts,
+            n=n,
+            et_date_ints=et_date_ints,
+            rth_mask=rth_mask,
+            eval_ctx=eval_ctx,
+            normalized_conditions=normalized_conditions,
+            plan=plan,
+        )
+    else:
     # Decide once whether the strategy needs a real ET datetime per bar
-    # (arm_window gate). require_market_open / EOD-kill-rollover are
-    # served by the precomputed int/bool arrays directly.
-    _needs_et_now_for_arm = (
-        _parse_hhmm_to_time(entry_strategy.arm_window_start) is not None
-        and _parse_hhmm_to_time(entry_strategy.arm_window_end) is not None
-    )
-    for i in range(n):
-        if not engine.tick():
-            break
-        if cancel_token is not None and (i & (_CANCEL_POLL_INTERVAL - 1)) == 0:
-            try:
-                if cancel_token.is_cancelled():
-                    LOG.info(
-                        "evaluator: cancellation detected for %s at bar %d/%d",
-                        symbol, i, n,
+        # (arm_window gate). require_market_open / EOD-kill-rollover are
+        # served by the precomputed int/bool arrays directly.
+        _needs_et_now_for_arm = (
+            _parse_hhmm_to_time(entry_strategy.arm_window_start) is not None
+            and _parse_hhmm_to_time(entry_strategy.arm_window_end) is not None
+        )
+        for i in range(n):
+            if not engine.tick():
+                break
+            if cancel_token is not None and (i & (_CANCEL_POLL_INTERVAL - 1)) == 0:
+                try:
+                    if cancel_token.is_cancelled():
+                        LOG.info(
+                            "evaluator: cancellation detected for %s at bar %d/%d",
+                            symbol, i, n,
+                        )
+                        break
+                except Exception:  # noqa: BLE001 — duck-typed token; never gate on probe failure
+                    pass
+            bar = _bar_at(i, bars)
+            ts = int(bars.ts[i])
+            # NEW: warmup gate. During warmup the engine still ticks (so
+            # indicators hydrate + scanner eval_ctx state stays consistent)
+            # but no entry/exit triggers are checked and no synthetic EOD
+            # kill fills are produced. No position can be open during warmup
+            # because the entry handler is gated, so the day-roll kill and
+            # end-of-run kill blocks below are naturally inert; the explicit
+            # `is_active` check just makes that contract loud.
+            is_active = (not in_warmup_mode) or ts >= int(warmup_until_ts)
+            # Per-bar ET facts from the precomputed numpy arrays. ``et_date``
+            # is days-since-1970-01-01 in ET (int — compared by equality for
+            # the session-day-roll). ``is_rth`` is the Mon-Fri 09:30-16:00
+            # membership. ``et_now`` (real datetime) is only built when the
+            # strategy has an arm_window gate that needs HH:MM comparison.
+            et_date = int(et_date_ints[i])
+            is_rth = bool(rth_mask[i])
+            et_now = _bar_ts_to_et(ts) if _needs_et_now_for_arm else None
+
+            # Per-ET-trading-day counter reset. Mirrors the live
+            # ``EntryEvaluator._roll_session_counters_if_needed`` semantics.
+            # ``max_fires_per_session_per_symbol`` means "per trading day",
+            # not "per backtest"; without this reset, the default cap of 1
+            # caps the entire run at 1 entry per symbol (the smoking-gun
+            # "AAPL/NVDA/SPY each have 1 trade" bug).
+            if ctx.current_session_et_date != et_date:
+                # Per-ET-day ``eod_kill_switch`` flatten. Mirrors the live
+                # "market-on-close at 15:55 ET" behaviour: when the ET date
+                # rolls and a position is still open from the prior day,
+                # synthesise an exit fill at the **prior** bar's close
+                # (= EOD of prior trading day). Without this, a 3/8 EMA
+                # cross strategy in a trending market would never get a
+                # chance to re-enter the next day because the BLOCK policy
+                # holds the position open across the date boundary even
+                # though the user opted into ``eod_kill_switch``.
+                if (
+                    ctx.current_session_et_date is not None
+                    and exit_strategy.eod_kill_switch
+                    and ctx.position_open
+                    and ctx.position_qty > 0.0
+                    and i > 0
+                    and (prior_idx := _find_last_rth_bar_at_or_before(
+                        bars, i - 1, rth_mask=rth_mask,
+                    )) >= 0
+                ):
+                    _synthesize_eod_flatten_fills(
+                        ctx=ctx,
+                        engine=engine,
+                        bars=bars,
+                        idx=prior_idx,
+                        symbol=symbol,
+                        cost_model=cost_model,
                     )
-                    break
-            except Exception:  # noqa: BLE001 — duck-typed token; never gate on probe failure
-                pass
-        bar = _bar_at(i, bars)
-        ts = int(bars.ts[i])
-        # NEW: warmup gate. During warmup the engine still ticks (so
-        # indicators hydrate + scanner eval_ctx state stays consistent)
-        # but no entry/exit triggers are checked and no synthetic EOD
-        # kill fills are produced. No position can be open during warmup
-        # because the entry handler is gated, so the day-roll kill and
-        # end-of-run kill blocks below are naturally inert; the explicit
-        # `is_active` check just makes that contract loud.
-        is_active = (not in_warmup_mode) or ts >= int(warmup_until_ts)
-        # Per-bar ET facts from the precomputed numpy arrays. ``et_date``
-        # is days-since-1970-01-01 in ET (int — compared by equality for
-        # the session-day-roll). ``is_rth`` is the Mon-Fri 09:30-16:00
-        # membership. ``et_now`` (real datetime) is only built when the
-        # strategy has an arm_window gate that needs HH:MM comparison.
-        et_date = int(et_date_ints[i])
-        is_rth = bool(rth_mask[i])
-        et_now = _bar_ts_to_et(ts) if _needs_et_now_for_arm else None
+                    # Re-sync ctx so the position-state reflects the flatten
+                    # before the new day's processing begins.
+                    _sync_position_state_from_engine(ctx, engine, symbol)
+                ctx.fires_total = 0
+                ctx.fires_by_symbol = 0
+                ctx.current_session_et_date = et_date
 
-        # Per-ET-trading-day counter reset. Mirrors the live
-        # ``EntryEvaluator._roll_session_counters_if_needed`` semantics.
-        # ``max_fires_per_session_per_symbol`` means "per trading day",
-        # not "per backtest"; without this reset, the default cap of 1
-        # caps the entire run at 1 entry per symbol (the smoking-gun
-        # "AAPL/NVDA/SPY each have 1 trade" bug).
-        if ctx.current_session_et_date != et_date:
-            # Per-ET-day ``eod_kill_switch`` flatten. Mirrors the live
-            # "market-on-close at 15:55 ET" behaviour: when the ET date
-            # rolls and a position is still open from the prior day,
-            # synthesise an exit fill at the **prior** bar's close
-            # (= EOD of prior trading day). Without this, a 3/8 EMA
-            # cross strategy in a trending market would never get a
-            # chance to re-enter the next day because the BLOCK policy
-            # holds the position open across the date boundary even
-            # though the user opted into ``eod_kill_switch``.
-            if (
-                ctx.current_session_et_date is not None
-                and exit_strategy.eod_kill_switch
-                and ctx.position_open
-                and ctx.position_qty > 0.0
-                and i > 0
-                and (prior_idx := _find_last_rth_bar_at_or_before(
-                    bars, i - 1, rth_mask=rth_mask,
-                )) >= 0
-            ):
-                _synthesize_eod_flatten_fills(
-                    ctx=ctx,
-                    engine=engine,
-                    bars=bars,
-                    idx=prior_idx,
-                    symbol=symbol,
-                    cost_model=cost_model,
+            if eval_ctx is not None:
+                # Decision is made at bar ``i``'s close; reset the per-bar
+                # evidence collector so indicator look-back walks don't
+                # accumulate evidence across bars.
+                eval_ctx.current_index = i
+                if eval_ctx.evidence:
+                    eval_ctx.evidence.clear()
+
+            # Reflect engine-side fills into our context BEFORE checking new triggers.
+            # The engine processed any pending order at this tick's open — sync our
+            # position-state ledger from the engine portfolio so exit checks see
+            # the freshly-opened position on the very same bar (intentional —
+            # mirrors the live evaluator's "armed-on-fill" semantics).
+            _sync_position_state_from_engine(ctx, engine, symbol)
+
+            # Detect position-open transition (False→True) so stateful exit
+            # triggers (TRAILING_STOP, CHANDELIER) can seed their per-trigger
+            # :class:`exits.spec.TriggerState` at the entry bar. ``prev_position_open``
+            # is updated AFTER the activation reset so an immediate same-bar
+            # exit (e.g. take-profit hit on the activation bar) still sees
+            # the freshly-seeded chandelier state.
+            if ctx.position_open and not ctx.prev_position_open:
+                _reset_trigger_states_on_activation(ctx, bar, ts)
+            ctx.prev_position_open = ctx.position_open
+
+            # Exit-side first (an open position has priority over re-entry on the same bar).
+            if is_active and ctx.position_open:
+                exit_fired, exit_qty = _check_exits(
+                    ctx, bar,
+                    eval_ctx=eval_ctx,
+                    normalized_conditions=normalized_conditions,
+                    bar_ts=ts,
                 )
-                # Re-sync ctx so the position-state reflects the flatten
-                # before the new day's processing begins.
-                _sync_position_state_from_engine(ctx, engine, symbol)
-            ctx.fires_total = 0
-            ctx.fires_by_symbol = 0
-            ctx.current_session_et_date = et_date
+                if exit_fired:
+                    exit_side = Side.from_str(ctx.position_side).opposite().as_order_side()
+                    exit_order = Order(
+                        order_id=ctx.mint_order_id(),
+                        symbol=symbol,
+                        side=exit_side,
+                        quantity=float(exit_qty),
+                        submitted_ts=ts,
+                    )
+                    engine.submit_order(exit_order)
+                    # Don't also check entry on the same bar — let the exit clear first.
+                    continue
 
-        if eval_ctx is not None:
-            # Decision is made at bar ``i``'s close; reset the per-bar
-            # evidence collector so indicator look-back walks don't
-            # accumulate evidence across bars.
-            eval_ctx.current_index = i
-            if eval_ctx.evidence:
-                eval_ctx.evidence.clear()
-
-        # Reflect engine-side fills into our context BEFORE checking new triggers.
-        # The engine processed any pending order at this tick's open — sync our
-        # position-state ledger from the engine portfolio so exit checks see
-        # the freshly-opened position on the very same bar (intentional —
-        # mirrors the live evaluator's "armed-on-fill" semantics).
-        _sync_position_state_from_engine(ctx, engine, symbol)
-
-        # Detect position-open transition (False→True) so stateful exit
-        # triggers (TRAILING_STOP, CHANDELIER) can seed their per-trigger
-        # :class:`exits.spec.TriggerState` at the entry bar. ``prev_position_open``
-        # is updated AFTER the activation reset so an immediate same-bar
-        # exit (e.g. take-profit hit on the activation bar) still sees
-        # the freshly-seeded chandelier state.
-        if ctx.position_open and not ctx.prev_position_open:
-            _reset_trigger_states_on_activation(ctx, bar, ts)
-        ctx.prev_position_open = ctx.position_open
-
-        # Exit-side first (an open position has priority over re-entry on the same bar).
-        if is_active and ctx.position_open:
-            exit_fired, exit_qty = _check_exits(
+            # Entry-side
+            if not is_active:
+                continue
+            fired, side, qty = _check_entry(
                 ctx, bar,
                 eval_ctx=eval_ctx,
                 normalized_conditions=normalized_conditions,
                 bar_ts=ts,
+                et_now=et_now,
+                is_rth=is_rth,
+                interval=interval,
             )
-            if exit_fired:
-                exit_side = Side.from_str(ctx.position_side).opposite().as_order_side()
-                exit_order = Order(
+            if fired:
+                entry_order = Order(
                     order_id=ctx.mint_order_id(),
                     symbol=symbol,
-                    side=exit_side,
-                    quantity=float(exit_qty),
+                    side=side,
+                    quantity=float(qty),
                     submitted_ts=ts,
                 )
-                engine.submit_order(exit_order)
-                # Don't also check entry on the same bar — let the exit clear first.
-                continue
-
-        # Entry-side
-        if not is_active:
-            continue
-        fired, side, qty = _check_entry(
-            ctx, bar,
-            eval_ctx=eval_ctx,
-            normalized_conditions=normalized_conditions,
-            bar_ts=ts,
-            et_now=et_now,
-            is_rth=is_rth,
-            interval=interval,
-        )
-        if fired:
-            entry_order = Order(
-                order_id=ctx.mint_order_id(),
-                symbol=symbol,
-                side=side,
-                quantity=float(qty),
-                submitted_ts=ts,
-            )
-            engine.submit_order(entry_order)
-            ctx.fires_total += 1
-            ctx.fires_by_symbol += 1
-            ctx.last_fire_ts = ts
+                engine.submit_order(entry_order)
+                ctx.fires_total += 1
+                ctx.fires_by_symbol += 1
+                ctx.last_fire_ts = ts
 
     # EOD kill-switch: if the strategy mandates flatten-at-EOD and we still
     # have an open position when the timeline runs out, sweep on the last bar.
@@ -1655,6 +1698,195 @@ def evaluate_symbol(
             (ts_e, eq) for (ts_e, eq) in final_result.equity_curve if ts_e >= cutoff
         ]
     return final_result
+
+
+def _run_vectorized_loop(
+    *,
+    engine: SandboxEngine,
+    bars,
+    ctx: EvalContext,
+    symbol: str,
+    entry_strategy: EntryStrategy,
+    exit_strategy: ExitStrategy,
+    cost_model: CostModel,
+    cancel_token: Any | None,
+    in_warmup_mode: bool,
+    warmup_until_ts: int | None,
+    n: int,
+    et_date_ints,
+    rth_mask,
+    eval_ctx,
+    normalized_conditions,
+    plan: vector_eval.VectorEvalPlan,
+) -> None:
+    """Bar loop driven by a precomputed :class:`vector_eval.VectorEvalPlan`.
+
+    Path-dependent bookkeeping (engine ticks, fills, per-day counter
+    resets, EOD flatten, fire caps, cooldown, scanner-alert edge state,
+    position-open transitions) is identical to the legacy loop in
+    :func:`evaluate_symbol`; only the *decision predicates* come from
+    precomputed NumPy masks / per-holding exit runtime instead of
+    per-bar dispatch. Must produce bit-identical ``SessionResult``s —
+    pinned by ``tests/unit/strategy_tester/test_vectorized_agreement.py``.
+    """
+    ts_arr = np.asarray(bars.ts)
+    open_arr = bars.open
+    high_arr = bars.high
+    low_arr = bars.low
+    close_arr = bars.close
+    entry_fire = plan.entry_fire
+    entry_gate = plan.entry_static_gate
+    is_scanner_alert = plan.entry_is_scanner_alert
+    alert_trigger_id = plan.entry_trigger_id
+    entry_side = OrderSide.BUY if plan.entry_is_long else OrderSide.SELL
+    policy_block = (
+        entry_strategy.position_already_open_policy
+        is PositionAlreadyOpenPolicy.BLOCK
+    )
+    max_total = entry_strategy.max_fires_per_session_total
+    max_per_symbol = entry_strategy.max_fires_per_session_per_symbol
+    cooldown = entry_strategy.cooldown_secs or 0
+
+    for i in range(n):
+        if not engine.tick():
+            break
+        if cancel_token is not None and (i & (_CANCEL_POLL_INTERVAL - 1)) == 0:
+            try:
+                if cancel_token.is_cancelled():
+                    LOG.info(
+                        "evaluator: cancellation detected for %s at bar %d/%d",
+                        symbol, i, n,
+                    )
+                    break
+            except Exception:  # noqa: BLE001 — duck-typed token; never gate on probe failure
+                pass
+        ts = int(ts_arr[i])
+        is_active = (not in_warmup_mode) or ts >= int(warmup_until_ts)
+        et_date = int(et_date_ints[i])
+
+        # Per-ET-trading-day counter reset + eod_kill_switch flatten —
+        # identical to the legacy loop.
+        if ctx.current_session_et_date != et_date:
+            if (
+                ctx.current_session_et_date is not None
+                and exit_strategy.eod_kill_switch
+                and ctx.position_open
+                and ctx.position_qty > 0.0
+                and i > 0
+                and (prior_idx := _find_last_rth_bar_at_or_before(
+                    bars, i - 1, rth_mask=rth_mask,
+                )) >= 0
+            ):
+                _synthesize_eod_flatten_fills(
+                    ctx=ctx,
+                    engine=engine,
+                    bars=bars,
+                    idx=prior_idx,
+                    symbol=symbol,
+                    cost_model=cost_model,
+                )
+                _sync_position_state_from_engine(ctx, engine, symbol)
+            ctx.fires_total = 0
+            ctx.fires_by_symbol = 0
+            ctx.current_session_et_date = et_date
+
+        if eval_ctx is not None:
+            eval_ctx.current_index = i
+            if eval_ctx.evidence:
+                eval_ctx.evidence.clear()
+
+        _sync_position_state_from_engine(ctx, engine, symbol)
+
+        o = float(open_arr[i])
+        h = float(high_arr[i])
+        l = float(low_arr[i])
+        c = float(close_arr[i])
+
+        # Position-open transition (False→True): seed stateful exit
+        # state exactly like the legacy activation path.
+        if ctx.position_open and not ctx.prev_position_open:
+            if plan.exits_vectorized:
+                vector_eval.activate_holding(plan, ctx, o, h, l, c)
+            else:
+                _reset_trigger_states_on_activation(ctx, (o, h, l, c), ts)
+        ctx.prev_position_open = ctx.position_open
+
+        # Exit-side first (an open position has priority over re-entry
+        # on the same bar — same as the legacy loop).
+        if is_active and ctx.position_open:
+            if plan.exits_vectorized:
+                exit_fired, exit_qty = vector_eval.check_exits_vectorized(
+                    plan, ctx, i, o, h, l, c,
+                )
+            else:
+                exit_fired, exit_qty = _check_exits(
+                    ctx, (o, h, l, c),
+                    eval_ctx=eval_ctx,
+                    normalized_conditions=normalized_conditions,
+                    bar_ts=ts,
+                )
+            if exit_fired:
+                exit_side = Side.from_str(
+                    ctx.position_side).opposite().as_order_side()
+                exit_order = Order(
+                    order_id=ctx.mint_order_id(),
+                    symbol=symbol,
+                    side=exit_side,
+                    quantity=float(exit_qty),
+                    submitted_ts=ts,
+                )
+                engine.submit_order(exit_order)
+                # Don't also check entry on the same bar — let the exit clear first.
+                continue
+
+        # Entry-side (mirrors _check_entry's gate order/outcome; the
+        # static gates — enabled, arm-window, RTH — are folded into
+        # entry_gate, the dynamic ones stay scalar).
+        if not is_active:
+            continue
+        if not entry_gate[i]:
+            continue
+        if policy_block and ctx.position_open:
+            continue
+        if max_total is not None and ctx.fires_total >= max_total:
+            continue
+        if ctx.fires_by_symbol >= max_per_symbol:
+            continue
+        if (
+            cooldown > 0
+            and ctx.last_fire_ts is not None
+            and (ts - ctx.last_fire_ts) < cooldown
+        ):
+            continue
+        if is_scanner_alert:
+            # Mirrors entries.dispatch._h_scanner_alert exactly: match
+            # state updates whenever the entry gates pass; only a
+            # False/unknown → True edge fires.
+            matched_now = bool(entry_fire[i])
+            prev = ctx.scanner_alert_prev_match.get(alert_trigger_id)
+            ctx.scanner_alert_prev_match[alert_trigger_id] = matched_now
+            if prev is None or not matched_now or prev:
+                continue
+        elif not entry_fire[i]:
+            continue
+        qty = _compute_quantity(
+            strategy=entry_strategy,
+            decision_price=c,
+            starting_cash=ctx.starting_cash,
+        )
+        if qty <= 0.0:
+            continue
+        entry_order = Order(
+            order_id=ctx.mint_order_id(),
+            symbol=symbol,
+            side=entry_side,
+            quantity=float(qty),
+            submitted_ts=ts,
+        )
+        engine.submit_order(entry_order)
+        ctx.fires_total += 1
+        ctx.fires_by_symbol += 1
+        ctx.last_fire_ts = ts
 
 
 def _sync_position_state_from_engine(
