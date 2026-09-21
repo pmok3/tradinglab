@@ -18,8 +18,14 @@ def _write_plugin(tmp_path: Path, filename: str, source: str) -> Path:
 
 def _discover_plugin(tmp_path: Path, filename: str, source: str):
     plugin = _write_plugin(tmp_path, filename, source)
-    result = discover_user_indicators(tmp_path, register_globally=False)
+    result = discover_user_indicators(tmp_path, register_globally=False, approval_prompt=_APPROVE_ALL)
     return plugin, result
+
+
+def _APPROVE_ALL(_path, _digest):
+    """Auto-approve trust prompt for loader tests (approval is not under test)."""
+    return True
+
 
 
 def test_blocked_builtins_exec(tmp_path: Path) -> None:
@@ -137,7 +143,7 @@ def test_file_size_cap(tmp_path: Path) -> None:
     plugin = tmp_path / "too_large.py"
     plugin.write_text("#" * (_MAX_FILE_SIZE + 1), encoding="utf-8")
 
-    result = discover_user_indicators(tmp_path, register_globally=False)
+    result = discover_user_indicators(tmp_path, register_globally=False, approval_prompt=_APPROVE_ALL)
 
     assert result.loaded == []
     assert len(result.errors) == 1

@@ -248,6 +248,15 @@ CI then:
 5. Uploads the zip as both a workflow artifact and a GitHub Release
    asset attached to the tag.
 
+For a hand-built local release, generate and verify a SHA-256 manifest
+for the zips before handing them out — see
+[Release checksums](RELEASE_CHECKSUMS.md):
+
+```powershell
+python scripts/release_checksums.py --artifacts dist --manifest dist/SHA256SUMS
+python scripts/release_checksums.py --verify --artifacts dist --manifest dist/SHA256SUMS
+```
+
 You can also trigger the workflow manually (`workflow_dispatch`) from
 the Actions tab to produce a one-off build from `main` without cutting
 a tag. Leave `publish_release=false` for this build-only verification.

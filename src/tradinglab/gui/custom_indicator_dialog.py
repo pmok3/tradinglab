@@ -869,6 +869,25 @@ class CustomIndicatorDialog(BaseModalDialog):
             return
         self._set_status(f"Exported {path.stem!r} to {written}", level="ok")
 
+    def _prompt_indicator_trust(self, path: Path, digest: str) -> bool:
+        """First-load trust prompt for a custom-indicator file.
+
+        ``ApprovalPrompt``-shaped helper used by the import flow: shows
+        the file name and full SHA-256 digest so the user can verify
+        what they are approving. Mirrors the dialog's other
+        code-execution gates (warning icon, explicit trust wording).
+        """
+        return messagebox.askokcancel(
+            "Approve custom indicator",
+            "This indicator file contains Python code that will be "
+            "executed with the same privileges as TradingLab.\n\n"
+            f"File: {path.name}\n"
+            f"SHA-256: {digest}\n\n"
+            "Only approve files you authored or fully trust. You will "
+            "be asked again if the file changes.",
+            parent=self, icon="warning",
+        )
+
     def _on_import(self) -> None:
         src_str = filedialog.askopenfilename(
             parent=self,
@@ -887,18 +906,15 @@ class CustomIndicatorDialog(BaseModalDialog):
         meta = _read_header_metadata(src)
         mode = (meta.get("mode") or "").strip()
         is_builder = ind_loader.is_builder_file(text)
+        digest = ind_loader.hash_indicator_source(text)
         # Trust gate: any file that runs arbitrary Python (Python-mode
         # builder file, or a hand-authored plugin with no marker) is
-        # gated behind an explicit confirmation, mirroring the Save-time
-        # Python-mode prompt.
+        # gated behind an explicit first-load approval showing the
+        # file's SHA-256, mirroring the Save-time Python-mode prompt.
+        # The approval is recorded after the copy so registration
+        # below does not prompt a second time.
         if mode == "python" or not is_builder:
-            if not messagebox.askokcancel(
-                "Import custom indicator",
-                "This indicator file contains Python code that will be "
-                "executed when the indicator is computed.\n\n"
-                "Only import indicators you trust. Continue?",
-                parent=self, icon="warning",
-            ):
+            if not self._prompt_indicator_trust(src, digest):
                 return
 
         target_name = src.stem
@@ -921,6 +937,12 @@ class CustomIndicatorDialog(BaseModalDialog):
         except Exception as exc:  # noqa: BLE001
             self._set_status(f"Import failed: {exc}", level="error")
             return
+
+        # The user just approved this exact content (or it is a
+        # builder-managed file, which this dialog's generators
+        # authored); record the trust approval so registration — and
+        # later loads of the unchanged file — do not re-prompt.
+        ind_loader.record_indicator_approval(written, digest)
 
         ind_loader.unregister_indicator(target_name)
         result = ind_loader.register_user_indicator_file(written)
@@ -1288,6 +1310,14 @@ class CustomIndicatorDialog(BaseModalDialog):
         # Drop any prior in-process registration so the new file
         # supersedes it (handles edits + name reuse).
         ind_loader.unregister_indicator(name)
+        # The dialog authored this exact content (Python mode already
+        # passed its own confirmation gate above); record the trust
+        # approval so registration — and later loads of the unchanged
+        # file — do not prompt. A later hand-edit changes the hash and
+        # re-prompts.
+        ind_loader.record_indicator_approval(
+            target, ind_loader.hash_indicator_source(source),
+        )
         result = ind_loader.register_user_indicator_file(target)
         if result.errors:
             err = result.errors[0]

@@ -1,6 +1,6 @@
 # `updates.py` — Background GitHub Releases update checks
 
-Last updated: 2026-09-07
+Last updated: 2026-09-20
 
 ## Purpose
 Surface "a newer release is available" to users who never visit GitHub
@@ -16,8 +16,21 @@ auto-checks and Help → Check for Updates.
    `https://api.github.com/repos/pmok3/tradinglab/releases/latest`.
 
 Blank across all three returns `UpdateResult(status="disabled")`. Only
-`http://` and `https://` schemes are accepted; invalid schemes fail before
-`urlopen` is reached.
+`http://` and `https://` schemes are accepted at the transport layer;
+invalid schemes fail before `urlopen` is reached.
+
+## HTTPS-only overrides
+Any user-/config-supplied override — the `update_check_url` tunable or
+`TRADINGLAB_UPDATE_URL` — must be an `https://` URL with a host. A
+non-HTTPS override (`http://`, `file://`, a bare hostname, …) is
+**rejected**, not silently ignored: `check_now()` returns
+`UpdateResult(status="error")` naming the refused scheme, before any
+cache lookup or network I/O, so a misconfigured endpoint can never
+fall back to the built-in default unnoticed and release metadata is
+never fetched over plaintext HTTP. The built-in default is already
+`https://`. `_override_url()` mirrors the override half of
+`_resolve_url()` so the policy can distinguish user-supplied endpoints
+from the shipped one; `_is_https_url()` is the scheme predicate.
 
 ## Strictly RTH-suppressed
 The poll never makes an outbound HTTPS call during US regular trading hours
@@ -68,6 +81,9 @@ both caches but still honors disabled/RTH policy.
 ## Security
 - Response body reads are capped at 64 KiB (`_MAX_RESPONSE_BYTES`).
 - URL schemes are allow-listed to `http`/`https` before `urlopen`.
+- User-/config-supplied endpoint overrides must be `https://`
+  (see "HTTPS-only overrides"); anything else fails closed with
+  `status="error"` before cache or network work.
 - `HTTP_TIMEOUT_SECONDS = 8.0`; no retries.
 - All check failures become `UpdateResult(status="error")`; callers never see
   exceptions.

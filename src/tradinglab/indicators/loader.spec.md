@@ -1,6 +1,6 @@
 # indicators/loader.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-20
 
 ## Purpose
 Custom-indicator drop-in folder loader. When the user enables
@@ -15,16 +15,31 @@ shim become available in the Add menu.
   - Windows: `%LOCALAPPDATA%\TradingLab\indicators`
   - macOS:   `~/Library/Application Support/TradingLab/indicators`
   - Linux:   `~/.local/share/TradingLab/indicators`
-- `discover_user_indicators(directory=None, *, register_globally=True)
-  -> DiscoveryResult`
+- `discover_user_indicators(directory=None, *, register_globally=True,
+  approval_prompt=None, approvals_path=None) -> DiscoveryResult`
   - `DiscoveryResult(loaded: List[LoadedIndicator], errors:
     List[LoadError])`.
   - `LoadedIndicator(name, factory, source_path, source_hash)`.
   - `LoadError(source_path, error, traceback_text)`.
-- `register_user_indicator_file(path) -> DiscoveryResult` — single-file
-  hot-reload used by the Custom Indicator Builder dialog after a save.
-  Thin wrapper around `discover_user_indicators(path.parent)` that
-  filters results to the matching file only.
+  - `approval_prompt`: `(path: Path, sha256_hexdigest: str) -> bool`
+    invoked when a file has no recorded trust approval for its
+    current content hash. Re-prompts only on hash change; a declined
+    prompt — or no prompt — refuses the load and records a
+    `LoadError`.
+  - `approvals_path`: override for the trust-approval store (tests).
+- `register_user_indicator_file(path, *, approval_prompt=None,
+  approvals_path=None) -> DiscoveryResult` — single-file hot-reload
+  used by the Custom Indicator Builder dialog after a save. Thin
+  wrapper around `discover_user_indicators(path.parent)` that filters
+  results to the matching file only; forwards the approval params.
+- `hash_indicator_source(source) -> str` — full SHA-256 hex digest of
+  source text (64 chars); the trust-approval identifier.
+- `is_indicator_approved(path, digest, *, approvals_path=None) -> bool`
+  — True iff `path` has a recorded approval for exactly `digest`.
+- `record_indicator_approval(path, digest, *, approvals_path=None) -> None`
+  — persist (path → digest) approval; overwrites prior approvals for
+  the path; write failures are non-fatal.
+- `ApprovalPrompt` — the `(Path, str) -> bool` prompt callback type.
 - `unregister_indicator(name) -> bool` — best-effort removal from
   both `INDICATORS` and `_BY_KIND_ID`. Used by the dialog on Delete.
 - `is_builder_file(source: str) -> bool` — public alias of
@@ -87,10 +102,34 @@ shim become available in the Add menu.
   `source_hash = sha256(source.encode()).hexdigest()[:16]` recorded
   in `LoadedIndicator` so the user can verify "the file I trust" is
   the file that was loaded.
+- **First-load trust approval (fail closed).** Before exec'ing a
+  file, the loader requires a recorded approval for exactly its
+  current full SHA-256 digest:
+  - First encounter (no approval): invoke `approval_prompt(path,
+    digest)`; in the app this is a `messagebox.askokcancel` warning
+    dialog in the Custom Indicator Builder dialog, matching its
+    existing code-execution gates.
+  - Approval granted: record `(absolute path → digest)` in
+    `<app_data_dir>/custom_indicator_approvals.json` (atomic write),
+    then exec.
+  - Unchanged file (stored digest matches): loads silently, no
+    re-prompt.
+  - Changed file (digest differs): re-prompts; the old approval no
+    longer covers it.
+  - Declined prompt, raised prompt, or no prompt available: refuse
+    the load and record a `LoadError` ("trust approval declined" /
+    "no trust approval recorded"). Nothing is exec'd.
+  - The builder dialog records approvals itself for files it authors
+    (its save/import flows already carry their own trust gates), so
+    users are not prompted twice.
+  - This is friction against dropped-in / tampered files, not a
+    sandbox — see above.
 
 ## Dependencies
-- External: `builtins`, `hashlib`, `traceback`, `pathlib`.
-- Internal: `.base` (`INDICATORS`, `register_indicator`).
+- External: `builtins`, `hashlib`, `json`, `datetime`, `traceback`, `pathlib`.
+- Internal: `.base` (`INDICATORS`, `register_indicator`), `..paths`
+  (`app_data_dir` for the approval store; lazily imported so a
+  resolution failure fails closed).
 
 ## Design Decisions
 - **Opt-in trusted local extensions.** Caller is responsible for

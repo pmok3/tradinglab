@@ -7278,7 +7278,8 @@ def check_d39_indicators_phase1(app) -> None:
 
         # First, run with register_globally=False to verify capture
         # without polluting global state.
-        result = discover_user_indicators(tmp, register_globally=False)
+        result = discover_user_indicators(tmp, register_globally=False,
+                                          approval_prompt=lambda _p, _d: True)
         assert isinstance(result, DiscoveryResult)
         loaded_names = [li.name for li in result.loaded]
         assert "Trivial-d39" in loaded_names, \
@@ -7291,7 +7292,8 @@ def check_d39_indicators_phase1(app) -> None:
         assert "Trivial-d39" not in INDICATORS
 
         # Now register globally + verify cleanup is possible.
-        result2 = discover_user_indicators(tmp, register_globally=True)
+        result2 = discover_user_indicators(tmp, register_globally=True,
+                                           approval_prompt=lambda _p, _d: True)
         assert "Trivial-d39" in INDICATORS
         # Cleanup: pop manually for test hygiene.
         INDICATORS.pop("Trivial-d39", None)

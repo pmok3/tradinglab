@@ -9,7 +9,10 @@ The module is the single source of truth for both update surfaces:
 
 All outbound network calls are RTH-suppressed (09:30-16:00 ET, weekdays),
 use stdlib ``urllib`` with a hard timeout, validate the URL scheme, and cap
-response reads at 64 KiB. Results are cached for six hours in memory and on
+response reads at 64 KiB. User-/config-supplied endpoint overrides
+(``update_check_url`` tunable, ``TRADINGLAB_UPDATE_URL``) must use
+``https://`` — anything else is rejected with ``status="error"`` before
+any network or cache work. Results are cached for six hours in memory and on
 disk so a restart shortly after a check does not poll GitHub again.
 """
 from __future__ import annotations
@@ -263,6 +266,48 @@ def _resolve_url(explicit: str | None = None) -> str | None:
     return None
 
 
+def _override_url(explicit: str | None = None) -> str | None:
+    """Return the first non-empty user-/config-supplied override URL.
+
+    Mirrors the override half of :func:`_resolve_url` (explicit >
+    ``update_check_url`` tunable > ``TRADINGLAB_UPDATE_URL``) without
+    falling back to the built-in default, so callers can tell a
+    user-supplied endpoint apart from the shipped one.
+    """
+    for raw in (explicit, _configured_tunable_url(), os.environ.get(ENV_URL, "")):
+        if not isinstance(raw, str):
+            continue
+        url = raw.strip()
+        if url:
+            return url
+    return None
+
+
+def _is_https_url(url: str) -> bool:
+    """Return ``True`` only for ``https://`` URLs with a host.
+
+    Update-check *overrides* must be HTTPS: fetching release metadata
+    over plaintext HTTP would let a network adversary steer the update
+    banner and the release-page link. The broader
+    :func:`_is_http_url` transport gate below stays as-is on purpose —
+    it is the last line of defence, not the policy.
+    """
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except (TypeError, ValueError):
+        return False
+    return parsed.scheme == "https" and bool(parsed.netloc)
+
+
+def _override_scheme(url: str) -> str:
+    """Best-effort scheme label for override-rejection messages."""
+    try:
+        scheme = urllib.parse.urlparse(url).scheme
+    except (TypeError, ValueError):
+        return "(invalid)"
+    return scheme or "(missing)"
+
+
 def _is_http_url(url: str) -> bool:
     try:
         parsed = urllib.parse.urlparse(url)
@@ -394,6 +439,20 @@ def check_now(*, force: bool = False) -> UpdateResult:
             are policy, not caching.
     """
     current = _current_version()
+    # Reject non-HTTPS overrides before any cache or network work: a
+    # user-/config-supplied endpoint is trusted for release metadata
+    # and the release-page link, so plaintext HTTP (or any other
+    # scheme) is a hard failure, never a silent fallback to default.
+    override = _override_url()
+    if override is not None and not _is_https_url(override):
+        return UpdateResult(
+            status="error",
+            current=current,
+            error=(
+                "update-check URL override must use https://; "
+                f"refusing scheme {_override_scheme(override)!r}"
+            ),
+        )
     source_url = _resolve_url()
     if not source_url:
         return UpdateResult(status="disabled", current=current)

@@ -357,3 +357,114 @@ def test_schedule_check_async_uses_after_fn(monkeypatch) -> None:
     assert len(received) == 1
     assert received[0].status == "error"
     assert "RuntimeError" in received[0].error
+
+
+# ---------------------------------------------------------------------------
+# HTTPS-only overrides
+# ---------------------------------------------------------------------------
+
+
+def test_http_tunable_override_rejected(monkeypatch) -> None:
+    """An http:// ``update_check_url`` tunable must be refused, never fetched."""
+    monkeypatch.setattr(
+        updates_mod, "_configured_tunable_url", lambda: "http://mirror.example/latest"
+    )
+    monkeypatch.setattr(updates_mod, "_is_rth_now", lambda: False)
+
+    counter = {"n": 0}
+
+    def _boom(*_a, **_kw):
+        counter["n"] += 1
+        raise AssertionError("urlopen must not be called for an http:// override")
+
+    monkeypatch.setattr(urllib.request, "urlopen", _boom)
+
+    result = updates_mod.check_now(force=True)
+
+    assert result.status == "error"
+    assert "https" in result.error
+    assert counter["n"] == 0
+
+
+def test_http_env_override_rejected(monkeypatch) -> None:
+    """An http:// TRADINGLAB_UPDATE_URL must be refused, never fetched."""
+    monkeypatch.setenv(updates_mod.ENV_URL, "http://mirror.example/latest")
+    monkeypatch.setattr(updates_mod, "_is_rth_now", lambda: False)
+
+    counter = {"n": 0}
+
+    def _boom(*_a, **_kw):
+        counter["n"] += 1
+        raise AssertionError("urlopen must not be called for an http:// override")
+
+    monkeypatch.setattr(urllib.request, "urlopen", _boom)
+
+    result = updates_mod.check_now(force=True)
+
+    assert result.status == "error"
+    assert "https" in result.error
+    assert counter["n"] == 0
+
+
+@pytest.mark.parametrize(
+    "bad", ["file:///etc/passwd", "api.github.com/repos/x/latest", "ftp://x/y"]
+)
+def test_non_http_scheme_override_rejected(monkeypatch, bad) -> None:
+    """Non-http(s) override schemes (file://, bare hosts) are refused too."""
+    monkeypatch.setattr(updates_mod, "_configured_tunable_url", lambda: bad)
+    monkeypatch.setattr(updates_mod, "_is_rth_now", lambda: False)
+
+    counter = {"n": 0}
+
+    def _boom(*_a, **_kw):
+        counter["n"] += 1
+        raise AssertionError("urlopen must not be called for a bad override")
+
+    monkeypatch.setattr(urllib.request, "urlopen", _boom)
+
+    result = updates_mod.check_now(force=True)
+
+    assert result.status == "error"
+    assert "https" in result.error
+    assert counter["n"] == 0
+
+
+def test_https_override_still_works(monkeypatch) -> None:
+    """An https:// override keeps flowing through to a normal check."""
+    monkeypatch.setattr(
+        updates_mod,
+        "_configured_tunable_url",
+        lambda: "https://mirror.example/latest",
+    )
+    monkeypatch.setattr(updates_mod, "_is_rth_now", lambda: False)
+    monkeypatch.setattr(updates_mod, "_current_version", lambda: "0.1.1")
+
+    counter = {"n": 0}
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        _make_urlopen(
+            {"tag_name": "v0.2.0", "html_url": "https://mirror.example/r"}, counter
+        ),
+    )
+
+    result = updates_mod.check_now(force=True)
+
+    assert result.status == "available"
+    assert result.latest == "v0.2.0"
+    assert counter["n"] == 1
+
+
+def test_override_url_helper_ignores_builtin_default(monkeypatch) -> None:
+    """``_override_url`` reports only user-supplied endpoints."""
+    monkeypatch.setattr(updates_mod, "_configured_tunable_url", lambda: "")
+    monkeypatch.delenv(updates_mod.ENV_URL, raising=False)
+    assert updates_mod._override_url() is None
+
+    monkeypatch.setenv(updates_mod.ENV_URL, "https://env.example/latest")
+    assert updates_mod._override_url() == "https://env.example/latest"
+
+    assert updates_mod._is_https_url("https://example.invalid/x")
+    assert not updates_mod._is_https_url("http://example.invalid/x")
+    assert not updates_mod._is_https_url("https://")
+    assert not updates_mod._is_https_url("not a url")

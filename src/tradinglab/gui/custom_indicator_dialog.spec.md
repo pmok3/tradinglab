@@ -1,6 +1,6 @@
 # gui/custom_indicator_dialog
 
-Last updated: 2026-09-14
+Last updated: 2026-09-20
 
 The header form plus saved-list chrome supplies an opt-in measured width floor
 before restore; the Conditions editor and preview plot do **not** determine the
@@ -213,14 +213,24 @@ template that already defines a class and calls `register_indicator`.
 - **Import** reads a user-chosen `.py` via `filedialog.askopenfilename`.
   Files that execute arbitrary Python — a Python-mode builder file
   (`mode: python`) OR any file lacking the builder marker — are gated
-  behind an `askokcancel` trust confirmation (mirrors the Python-mode
-  save gate). A name collision with an existing indicators-dir file
-  triggers an `askyesno` overwrite prompt. On confirm it delegates to
-  `indicators.loader.import_indicator_file`, then
-  `unregister_indicator` + `register_user_indicator_file` to hot-load.
-  Registration errors surface in the status bar. Builder-managed
-  imports are loaded into the editor and selected in the saved list;
-  marker-less plugins register but are not shown in the list.
+  behind a first-load trust approval: an `askokcancel` warning dialog
+  showing the file name and full SHA-256 digest ("Approve custom
+  indicator"), via `_prompt_indicator_trust` (mirrors the Python-mode
+  save gate). On approval the dialog copies the file with
+  `indicators.loader.import_indicator_file` and records the trust
+  approval with `record_indicator_approval` (builder-managed files are
+  recorded without prompting, since this dialog's generators authored
+  them) so `register_user_indicator_file` does not prompt a second
+  time. A name collision with an existing indicators-dir file
+  triggers an `askyesno` overwrite prompt. Registration errors surface
+  in the status bar. Builder-managed imports are loaded into the
+  editor and selected in the saved list; marker-less plugins register
+  but are not shown in the list.
+- **Save** records a trust approval for the freshly-written file via
+  `record_indicator_approval` (the dialog authored the content; Python
+  mode already passed its own confirmation), so registration and
+  later loads of the unchanged file do not prompt. A later hand-edit
+  changes the hash and re-prompts on next load.
 - **List refresh** filters the indicators directory to files whose
   first ≤10 lines contain the `# tradinglab-custom-indicator` marker
   — hand-authored plugin files coexist in the same directory and are

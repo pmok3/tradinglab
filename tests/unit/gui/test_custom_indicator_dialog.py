@@ -336,7 +336,8 @@ def test_loader_hot_register_round_trip(tmp_dir) -> None:
     )
     (tmp_dir / "round_trip_test.py").write_text(src, encoding="utf-8")
     result = ind_loader.register_user_indicator_file(
-        tmp_dir / "round_trip_test.py"
+        tmp_dir / "round_trip_test.py",
+        approval_prompt=lambda _path, _digest: True,
     )
     try:
         assert not result.errors, result.errors
