@@ -122,6 +122,11 @@ class StrategyTab(ttk.Frame):
         self._worker: threading.Thread | None = None
         self._worker_result: dict[str, Any] = {}
         self._poll_after_id: str | None = None
+        # Latest ``(done, total)`` tick written by the runner worker thread
+        # via ``_on_progress``; picked up by the Tk-main-thread ``_on_poll``.
+        # Same hand-off shape as ``_export_latest_progress`` (never call
+        # ``self.after`` from the worker — AGENTS.md §7.15).
+        self._latest_progress: tuple[int, int] | None = None
         self._pbar_hide_after_id: str | None = None
         self._current_run_dir: Path | None = None
         self._current_aggregate: RunAggregate | None = None
@@ -983,6 +988,7 @@ class StrategyTab(ttk.Frame):
 
         self._token = AcceptanceToken()
         self._worker_result = {}
+        self._latest_progress = None
         self._set_running_ui(True)
         self._var_status.set("Run starting…")
 
@@ -1032,6 +1038,11 @@ class StrategyTab(ttk.Frame):
         self._poll_after_id = None
         if self._worker is None:
             return
+        # Pick up any progress tick the runner dropped since last poll.
+        progress = self._latest_progress
+        if progress is not None:
+            self._apply_progress(*progress)
+            self._latest_progress = None
         if self._worker.is_alive():
             self._schedule_poll()
             return
@@ -1142,29 +1153,38 @@ class StrategyTab(ttk.Frame):
     def _on_progress(self, test_run: Any) -> None:
         """Progress callback; invoked from the runner's worker thread.
 
-        Marshals the update onto the Tk main thread via ``after(0, ...)``.
-        The bar shows completed / total symbols; the status label is updated
-        with the same counts.
+        Writes the latest ``(done, total)`` tuple into
+        ``self._latest_progress`` for the Tk-main-thread poller
+        (``_on_poll``) to pick up and paint via ``_apply_progress``.
+        The bar shows completed / total symbols; the status label is
+        updated with the same counts.
+
+        Never touches Tk here: cross-thread ``self.after(0, ...)`` raises
+        ``RuntimeError("main thread is not in main loop")`` on stock
+        Windows CPython and the update is silently dropped (AGENTS.md
+        §7.15). We rely on CPython's GIL making the single attribute
+        assignment atomic; no lock needed because lost intermediate ticks
+        are acceptable (the latest one always wins).
         """
         try:
             done = getattr(test_run, "symbol_count_done", 0)
             total = getattr(test_run, "symbol_count_total", 0)
-            self.after(0, lambda d=done, t=total: self._apply_progress(d, t))
         except Exception:  # noqa: BLE001
-            pass
+            done, total = 0, 0
+        self._latest_progress = (done, total)
 
     def _apply_progress(self, done: int, total: int) -> None:
         """Apply a progress update on the Tk main thread.
 
         ``update_idletasks()`` at the end is mandatory: when symbols complete
         sub-second (e.g. cached data + simple strategies), the runner fires
-        ``progress(test_run)`` 12 times in <100ms, which queues 12
-        ``after(0, ...)`` callbacks. Tk processes them all in a single
-        batch BEFORE yielding to redraw, so without forcing idle-task
-        processing here the bar visually jumps straight from 0 to N/N at
-        the end of the run instead of advancing one symbol at a time.
-        ``update_idletasks()`` flushes pending paint requests synchronously
-        without re-entering the event loop, which is exactly what we want.
+        ``progress(test_run)`` many times per 250 ms poll tick. Each tick
+        overwrites ``_latest_progress`` (latest wins) and Tk batches the
+        resulting paint with the next redraw, so without forcing idle-task
+        processing here the bar visually jumps instead of advancing
+        steadily between poll ticks. ``update_idletasks()`` flushes pending
+        paint requests synchronously without re-entering the event loop,
+        which is exactly what we want.
         """
         try:
             if total > 0:

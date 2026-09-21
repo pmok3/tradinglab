@@ -434,12 +434,29 @@ def check_now(*, force: bool = False) -> UpdateResult:
 
 
 def schedule_check_async(
-    after_fn: Callable[[int, Callable[[], None]], object],
+    tk_widget: Any,
     callback: Callable[[UpdateResult], None],
     *,
     force: bool = False,
+    poll_ms: int = 250,
 ) -> None:
-    """Run :func:`check_now` on a daemon thread, deliver result via Tk."""
+    """Run :func:`check_now` on a daemon thread, deliver result on the Tk thread.
+
+    The worker writes the :class:`UpdateResult` into a hand-off slot; the
+    Tk main thread polls the slot via ``tk_widget.after`` and invokes
+    ``callback`` there. The worker never calls ``tk_widget.after`` itself:
+    cross-thread ``after`` raises ``RuntimeError("main thread is not in
+    main loop")`` on stock Windows CPython and the result is silently
+    dropped (AGENTS.md §7.15). The single slot assignment is atomic under
+    the GIL, so no lock is needed.
+
+    The poll re-arms while the worker is alive, plus one grace tick after
+    observing its death — so a result written in the microsecond window
+    between the empty slot-read and the ``is_alive()`` check is still
+    delivered. If the worker dies without writing (e.g. ``BaseException``),
+    polling stops instead of spinning forever.
+    """
+    slot: dict[str, UpdateResult] = {}
 
     def _worker() -> None:
         try:
@@ -450,13 +467,34 @@ def schedule_check_async(
                 current=_current_version(),
                 error=f"{type(e).__name__}: {e}",
             )
-        try:
-            after_fn(0, lambda r=result: callback(r))
-        except Exception:  # noqa: BLE001
-            pass
+        slot["result"] = result
 
     t = threading.Thread(target=_worker, name="tradinglab-update-poll", daemon=True)
     t.start()
+    seen_dead = False
+
+    def _rearm() -> None:
+        try:
+            tk_widget.after(poll_ms, _poll)
+        except Exception:  # noqa: BLE001
+            pass  # widget destroyed; drop the result
+
+    def _poll() -> None:
+        nonlocal seen_dead
+        result = slot.get("result")
+        if result is None:
+            if t.is_alive():
+                _rearm()
+            elif not seen_dead:
+                seen_dead = True
+                _rearm()
+            return
+        try:
+            callback(result)
+        except Exception:  # noqa: BLE001
+            pass
+
+    _rearm()
 
 
 __all__ = [

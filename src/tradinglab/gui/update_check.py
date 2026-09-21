@@ -9,7 +9,7 @@ Owns two methods previously on :class:`ChartApp`:
   :class:`FirstRunBannerMixin`.
 
 The CHECK-TRIGGERING call site
-(``updates.schedule_check_async(self.after, self._on_update_check_result,
+(``updates.schedule_check_async(self, self._on_update_check_result,
 force=False)``) stays in ``app.py`` — only the result-handler and
 banner method move here.
 

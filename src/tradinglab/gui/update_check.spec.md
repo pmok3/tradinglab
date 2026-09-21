@@ -1,6 +1,6 @@
 # gui/update_check.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-20
 
 ## Purpose
 
@@ -10,7 +10,7 @@ the passive one-line banner that surfaces a new release version
 under the chart title bar.
 
 The CHECK-TRIGGERING call site (``updates.schedule_check_async(
-self.after, self._on_update_check_result, force=False)``) stays in
+self, self._on_update_check_result, force=False)``) stays in
 ``app.py``; the mixin only handles the result + paints the banner.
 
 ## Public API

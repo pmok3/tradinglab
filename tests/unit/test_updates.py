@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 import urllib.error
 import urllib.request
 
@@ -304,7 +305,49 @@ def test_check_now_rejects_non_http_url_without_network(monkeypatch) -> None:
     assert "http or https" in result.error
 
 
-def test_schedule_check_async_uses_after_fn(monkeypatch) -> None:
+class _FakeTkWidget:
+    """Minimal Tk-widget double: records after() calls and their threads.
+
+    Callbacks are NOT auto-fired — the test pumps them via ``drain()``,
+    which mirrors the Tk event loop without needing a display.
+    """
+
+    def __init__(self) -> None:
+        self.after_calls: list[tuple[int, object]] = []
+        self.after_threads: list[int] = []
+
+    def after(self, ms: int, fn) -> int:  # noqa: ANN001, ANN202
+        self.after_calls.append((ms, fn))
+        self.after_threads.append(threading.get_ident())
+        return len(self.after_calls)
+
+    def drain(self) -> bool:
+        """Run all pending after() callbacks once. True if any ran."""
+        pending = [fn for _, fn in self.after_calls]
+        self.after_calls.clear()
+        for fn in pending:
+            fn()
+        return bool(pending)
+
+
+def _pump_until(widget: _FakeTkWidget, received: list, *, timeout: float = 5.0) -> None:
+    """Drive the fake event loop until the worker result is delivered."""
+    deadline = time.monotonic() + timeout
+    while not received and time.monotonic() < deadline:
+        if not widget.drain():
+            time.sleep(0.005)
+    assert received, "worker result was never delivered to the callback"
+
+
+def test_schedule_check_async_delivers_result_on_tk_thread(monkeypatch) -> None:
+    """Result is delivered via the widget's after() poll — and after() is
+    only ever called from the scheduling (Tk) thread, never the worker.
+
+    Regression: the worker used to call the raw ``after_fn`` itself, which
+    raises ``RuntimeError("main thread is not in main loop")`` on stock
+    Windows CPython — the startup update check silently never showed its
+    banner (AGENTS.md §7.15).
+    """
     monkeypatch.setattr(updates_mod, "RELEASES_URL", "https://example.invalid/releases.json")
     monkeypatch.setattr(updates_mod, "_is_rth_now", lambda: False)
 
@@ -318,42 +361,38 @@ def test_schedule_check_async_uses_after_fn(monkeypatch) -> None:
         ),
     )
 
-    after_calls: list[tuple] = []
-    after_done = threading.Event()
-
-    def fake_after(delay, fn):
-        after_calls.append((delay, fn))
-        after_done.set()
-
+    widget = _FakeTkWidget()
     received: list = []
+    main_thread = threading.get_ident()
 
-    def callback(r):
-        received.append(r)
+    updates_mod.schedule_check_async(widget, received.append)
 
-    updates_mod.schedule_check_async(fake_after, callback)
+    assert widget.after_calls, "initial poll was never scheduled"
+    _pump_until(widget, received)
 
-    assert after_done.wait(timeout=5.0), "worker never called after_fn"
-    assert len(after_calls) == 1
-    delay, marshaled = after_calls[0]
-    assert delay == 0
-
-    marshaled()
     assert len(received) == 1
     assert received[0].status in {"up_to_date", "available"}
+    # The worker must never touch the widget: every after() call came
+    # from the Tk (test) thread.
+    assert widget.after_threads, "no after() calls recorded"
+    assert all(t == main_thread for t in widget.after_threads), (
+        "after() called from a worker thread — the §7.15 violation"
+    )
 
-    after_calls.clear()
-    received.clear()
-    after_done.clear()
+
+def test_schedule_check_async_error_path(monkeypatch) -> None:
+    """check_now raising still delivers an error result via the poll."""
 
     def boom(*_a, **_kw):
         raise RuntimeError("explode")
 
     monkeypatch.setattr(updates_mod, "check_now", boom)
 
-    updates_mod.schedule_check_async(fake_after, callback)
-    assert after_done.wait(timeout=5.0), "worker swallowed both result and after_fn"
-    assert len(after_calls) == 1
-    after_calls[0][1]()
+    widget = _FakeTkWidget()
+    received: list = []
+    updates_mod.schedule_check_async(widget, received.append)
+    _pump_until(widget, received)
+
     assert len(received) == 1
     assert received[0].status == "error"
     assert "RuntimeError" in received[0].error

@@ -1,6 +1,6 @@
 # `updates.py` — Background GitHub Releases update checks
 
-Last updated: 2026-09-07
+Last updated: 2026-09-20
 
 ## Purpose
 Surface "a newer release is available" to users who never visit GitHub
@@ -42,8 +42,14 @@ tests can keep patching them at call time.
   `error`. Status is one of `"disabled"`, `"rth_suppressed"`, `"up_to_date"`,
   `"available"`, `"error"`.
 - `check_now(*, force=False) -> UpdateResult` — synchronous probe.
-- `schedule_check_async(after_fn, callback, *, force=False)` — run `check_now`
-  on a daemon thread and marshal the result back via `after_fn(0, ...)`.
+- `schedule_check_async(tk_widget, callback, *, force=False, poll_ms=250)` —
+  run `check_now` on a daemon thread; the worker writes the `UpdateResult`
+  into a hand-off slot and the Tk main thread polls the slot via
+  `tk_widget.after`, invoking `callback` there. The worker never calls
+  `after` itself (cross-thread `after` is banned, AGENTS.md §7.15). The
+  poll re-arms while the worker is alive plus one grace tick, so a result
+  written between the slot-read and the liveness check is still delivered;
+  if the worker dies without writing, polling stops.
 - `compare_versions(current, advertised) -> Optional[str]` — tolerant
   `MAJOR.MINOR.PATCH` comparison used by smoke tests and the poll.
 - `reset_cache_for_tests(clear_disk=False)` — clear in-memory cache; tests can
