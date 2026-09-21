@@ -364,9 +364,14 @@ class QuantAppMixin:
     def _fetch_quant_last(self, symbol: str, src: str) -> None:
         """Worker-thread body: fetch daily bars and record the snapshot.
 
-        Runs off the Tk thread, so it must not call ``self.after`` (§7.15).
-        Bars are handed to the Tk thread through ``_worker_inbox``; the
-        snapshot seam is called directly, matching ``_preload_one_last``.
+        Runs off the Tk thread, so it must not call ``self.after`` (§7.15)
+        and must not touch the shared ``_watchlist_snapshot`` — Tk-thread
+        paint paths read it concurrently. On a worker the fetched bars
+        cross on ``_worker_inbox`` as ``("quant_snapshot", …)`` and the
+        Tk-thread drain applies them via
+        :meth:`_apply_quant_snapshot_from_bars`; on the Tk thread itself
+        (e.g. test shims) the apply runs directly, matching
+        ``_preload_one_last``'s fast-path.
         """
         from ..data import DATA_SOURCES
 
@@ -377,11 +382,21 @@ class QuantAppMixin:
             bars = fetcher(symbol, QUANT_LAST_INTERVAL)
             if not bars:
                 return
-            try:
-                self._apply_watchlist_snapshot_from_bars(
+            # Snapshot at handoff: the worker must not call the snapshot
+            # seam — it mutates ``_watchlist_snapshot`` (read by Tk-thread
+            # paint paths), reads ``_full_cache`` and queues a refresh.
+            # The payload crosses on ``_worker_inbox``; the Tk-thread
+            # drain owns the shared snapshot.
+            if threading.current_thread() is threading.main_thread():
+                self._apply_quant_snapshot_from_bars(
                     symbol, src, QUANT_LAST_INTERVAL, bars)
-            except Exception:  # noqa: BLE001
-                pass
+            else:
+                try:
+                    self._worker_inbox.put_nowait(
+                        ("quant_snapshot",
+                         (symbol, src, QUANT_LAST_INTERVAL, list(bars))))
+                except Exception:  # noqa: BLE001
+                    pass
             key = (src, symbol, QUANT_LAST_INTERVAL)
             rows = list(bars)
             if threading.current_thread() is threading.main_thread():
@@ -392,6 +407,24 @@ class QuantAppMixin:
             logger.debug("Quant last fetch failed for %s", symbol, exc_info=True)
         finally:
             self._quant_fetch_inflight.discard(symbol)
+
+    def _apply_quant_snapshot_from_bars(
+        self, symbol: str, src: str, interval: str, bars: list
+    ) -> None:
+        """Tk thread: derive the snapshot from worker-fetched daily bars.
+
+        Applies the ``("quant_snapshot", …)`` inbox item posted by
+        :meth:`_fetch_quant_last`. The worker snapshots the fetched bars
+        at handoff and never touches ``_watchlist_snapshot`` — the seam
+        below mutates it (and reads ``_full_cache`` / queues a debounced
+        repaint) while Tk-thread paint paths read it, so it runs here on
+        the Tk thread only (AGENTS.md §7.15).
+        """
+        try:
+            self._apply_watchlist_snapshot_from_bars(
+                symbol, src, interval, bars)
+        except Exception:  # noqa: BLE001
+            pass
 
     # ------------------------------------------------------------------
     # Theming
