@@ -1,6 +1,6 @@
 # data/hybrid_source.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-20
 
 ## Purpose
 A composite data source that stitches **yfinance (recent + live)** over
@@ -28,10 +28,22 @@ window PLUS Alpaca's deep intraday reach (IEX, ~2016+). Registered as
   yfinance (full volume AND real-time). Alpaca only contributes the tail
   **older than yfinance's oldest bar**.
 - **Deep-leg disk reuse keeps the live poll cheap.** Alpaca's contribution is
-  immutable sealed history, so `_resolve_deep_leg` reuses the on-disk `alpaca`
-  cache when present and pays the slow paginated network fetch only on a cold
-  miss (then persists it). Each live poll therefore refetches ONLY the yfinance
-  leg and reuses the cached tail.
+  sealed history, so `_resolve_deep_leg` reuses the on-disk `alpaca` cache when
+  present and pays the slow paginated network fetch only on a cold miss (then
+  persists it). Each live poll therefore refetches ONLY the yfinance leg and
+  reuses the cached tail.
+- **Split/restatement invalidation heals the seam.** Both vendors restate
+  history retroactively after a stock split, so a pre-split deep cache stitched
+  to a fresh post-split recent leg would leave a permanent artificial price
+  cliff at the seam. Every fetch therefore revalidates the cached deep leg
+  against the fresh recent leg on overlapping timestamps: `_deep_leg_restated`
+  compares `close` on shared timestamps and, when the median fresh/cached
+  ratio falls outside `[0.8, 1.25]` (splits are large discrete rescalings —
+  the smallest common forward split is 3:2 — while dividend drift and
+  cross-vendor noise stay well inside), the cache is treated as pre-split and
+  the deep leg is refetched + re-saved. Needs ≥5 overlapping bars to judge;
+  fewer/disjoint timestamps skip the check (safe degradation). The comparison
+  is in-memory only, so the no-split common case costs zero extra network.
 - **Return-value semantics preserve the app's "`None` = failed fetch".** Returns
   the merged list (possibly empty); returns `None` **only** when the yfinance
   leg hard-failed (`None`) AND Alpaca yielded nothing. An Alpaca-only result
@@ -71,7 +83,9 @@ window PLUS Alpaca's deep intraday reach (IEX, ~2016+). Registered as
 ## Invariants
 - Merged output is date-ascending; overlapping dates carry the yfinance bar.
 - The deep (Alpaca) leg is fetched from the network at most once per
-  `(ticker, interval)` until its disk cache is cleared.
+  `(ticker, interval)` until its disk cache is cleared — unless the overlap
+  revalidation detects a wholesale restatement (split), in which case it is
+  refetched once and re-saved, healing the seam permanently.
 - Registered only when `AlpacaCredentials.is_configured()`; if Alpaca is later
   removed, `AppState._resolve_source` demotes a persisted `"yfinance+alpaca"`
   selection to the first user-visible source.
@@ -80,7 +94,18 @@ window PLUS Alpaca's deep intraday reach (IEX, ~2016+). Registered as
 `tests/unit/data/test_hybrid_source.py` — `merge_prefer_recent` overlap/empty;
 `fetch_hybrid_data` cold-stitch+persist, warm-cache-reuse (no network), recent-
 only, deep-only-on-yfinance-fail, `None`-vs-`[]` distinction, ratio short-
-circuit, deep-error swallow, name constant. Ranking is pinned in
+circuit, deep-error swallow, name constant. Split/restatement coverage:
+`test_split_restatement_invalidates_deep_and_heals_seam` (seeds a pre-split
+deep cache, presents restated post-split legs, asserts the deep leg is
+refetched + re-saved AND the merged output has no seam cliff via a
+max-adjacent-jump continuity assertion); `test_no_restatement_no_refetch`
+(same-scale legs with small vendor drift reuse the warm cache — zero extra
+fetches); `test_both_orderings_converge_to_same_continuous_series`
+(recent-refresh-first vs already-restated-deep-first both converge to the
+identical continuous series, and the healed cache stays stable on the next
+poll); plus `_deep_leg_restated` detector unit tests (forward/reverse split
+flagged, small drift ignored, minimum-overlap and disjoint-timestamp guards).
+Ranking is pinned in
 `tests/unit/data/test_source_ranking.py` (`test_hybrid_ranks_just_above_yfinance`);
 volume metadata is pinned in `tests/unit/data/test_quality.py`
 (`test_hybrid_volume_is_full`).

@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 
 from tradinglab.data.hybrid_source import (
     HYBRID_SOURCE_NAME,
+    _deep_leg_restated,
     fetch_hybrid_data,
     merge_prefer_recent,
 )
@@ -174,3 +175,180 @@ def test_deep_leg_errors_are_swallowed():
 
 def test_hybrid_source_name_constant():
     assert HYBRID_SOURCE_NAME == "yfinance+alpaca"
+
+
+# ---------------------------------------------------------------------------
+# Split / restatement invalidation — the deep leg is revalidated against the
+# fresh recent leg on overlapping bars every fetch.
+# ---------------------------------------------------------------------------
+
+
+def _leg(days, base_close: float, volume: int = 100, drift: float = 0.002):
+    """Build a leg of candles drifting ``drift``/bar — small realistic moves,
+    no artificial cliffs inside the leg itself."""
+    return [
+        _c(day, close=base_close * (1 + drift * i), volume=volume)
+        for i, day in enumerate(days)
+    ]
+
+
+def _max_adjacent_jump(closes: list[float]) -> float:
+    """Largest bar-to-bar relative move — the seam-cliff detector."""
+    return max(abs(b - a) / a for a, b in zip(closes, closes[1:], strict=False) if a)
+
+
+def test_split_restatement_invalidates_deep_and_heals_seam():
+    # 4:1 split discovered on a routine poll: the deep cache is pre-split
+    # (~400), the fresh yfinance leg is restated post-split (~100).
+    pre_split_deep = _leg(range(1, 21), base_close=400.0)      # days 1..20
+    post_split_recent = _leg(range(15, 26), base_close=100.0)  # days 15..25
+    post_split_deep = _leg(range(1, 21), base_close=100.0)     # Alpaca, restated
+
+    saved: dict[tuple[str, str], list[Candle]] = {}
+    calls = {"deep": 0}
+
+    def deep_fetcher(t, i):
+        calls["deep"] += 1
+        return list(post_split_deep)
+
+    out = fetch_hybrid_data(
+        "AAPL", "1d",
+        recent_fetcher=lambda t, i: list(post_split_recent),
+        deep_fetcher=deep_fetcher,
+        deep_loader=lambda t, i: list(pre_split_deep),        # stale cache
+        deep_saver=lambda t, i, b: saved.__setitem__((t, i), b),
+    )
+
+    assert calls["deep"] == 1, "stale pre-split deep leg must be refetched"
+    assert saved[("AAPL", "1d")] == post_split_deep  # restated deep persisted
+
+    closes = [c.close for c in out]
+    # Downstream effect: NO artificial cliff at the seam — every adjacent
+    # move is small (the buggy version leaves a ~75% drop at day 14 -> 15).
+    assert _max_adjacent_jump(closes) < 0.10
+    assert max(closes) < 150.0  # whole series in post-split scale
+
+
+def test_no_restatement_no_refetch():
+    # Ordinary day, no split: same-scale legs with small vendor drift must
+    # reuse the warm deep cache — no spurious Alpaca refetch.
+    deep = _leg(range(1, 21), base_close=100.0)
+    recent = _leg(range(15, 26), base_close=100.0)
+    calls = {"deep": 0}
+
+    def deep_fetcher(t, i):
+        calls["deep"] += 1
+        return []
+
+    out = fetch_hybrid_data(
+        "AAPL", "1d",
+        recent_fetcher=lambda t, i: list(recent),
+        deep_fetcher=deep_fetcher,
+        deep_loader=lambda t, i: list(deep),                  # warm cache
+        deep_saver=lambda t, i, b: None,
+    )
+    assert calls["deep"] == 0, "no restatement -> no deep refetch"
+    assert _days(out) == list(range(1, 26))
+    assert _max_adjacent_jump([c.close for c in out]) < 0.10
+
+
+def test_both_orderings_converge_to_same_continuous_series():
+    # Order A: the recent-leg refresh sees the split first (stale deep cache
+    # -> heal fires on this poll). Order B: the deep leg is already restated
+    # when the recent refresh arrives (cold-fetched post-split). Both must
+    # converge to the SAME continuous post-split series, and the healed
+    # cache must stay stable on the next poll (no flip-flopping).
+    pre_split_deep = _leg(range(1, 21), base_close=400.0)
+    post_split_deep = _leg(range(1, 21), base_close=100.0)
+    post_split_recent = _leg(range(15, 26), base_close=100.0)
+
+    # --- Order A: stale cache + fresh recent -> heal fires ---
+    disk_a: dict[tuple[str, str], list[Candle]] = {}
+    calls_a = {"deep": 0}
+
+    def deep_fetcher_a(t, i):
+        calls_a["deep"] += 1
+        return list(post_split_deep)
+
+    out_a = fetch_hybrid_data(
+        "AAPL", "1d",
+        recent_fetcher=lambda t, i: list(post_split_recent),
+        deep_fetcher=deep_fetcher_a,
+        deep_loader=lambda t, i: list(pre_split_deep),
+        deep_saver=lambda t, i, b: disk_a.__setitem__((t, i), b),
+    )
+
+    # --- Order B: deep cache already restated, then the recent refresh ---
+    calls_b = {"deep": 0}
+
+    def deep_fetcher_b(t, i):
+        calls_b["deep"] += 1
+        return list(post_split_deep)  # must never be called
+
+    out_b = fetch_hybrid_data(
+        "AAPL", "1d",
+        recent_fetcher=lambda t, i: list(post_split_recent),
+        deep_fetcher=deep_fetcher_b,
+        deep_loader=lambda t, i: list(post_split_deep),
+        deep_saver=lambda t, i, b: None,
+    )
+
+    assert calls_a["deep"] == 1
+    assert calls_b["deep"] == 0, "already-restated deep leg must not refetch"
+
+    closes_a = [c.close for c in out_a]
+    closes_b = [c.close for c in out_b]
+    assert closes_a == closes_b, "both orderings converge to the same series"
+    assert _max_adjacent_jump(closes_a) < 0.10
+    assert _max_adjacent_jump(closes_b) < 0.10
+
+    # Next poll with the healed cache: stable, no second refetch.
+    out_a2 = fetch_hybrid_data(
+        "AAPL", "1d",
+        recent_fetcher=lambda t, i: list(post_split_recent),
+        deep_fetcher=deep_fetcher_a,
+        deep_loader=lambda t, i: disk_a[("AAPL", "1d")],
+        deep_saver=lambda t, i, b: None,
+    )
+    assert calls_a["deep"] == 1, "healed deep leg must not refetch again"
+    assert [c.close for c in out_a2] == closes_a
+
+
+# ---------------------------------------------------------------------------
+# _deep_leg_restated — detector unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_detector_flags_forward_split():
+    cached = _leg(range(1, 11), base_close=400.0)
+    fresh = _leg(range(1, 11), base_close=100.0)   # 4:1 split
+    assert _deep_leg_restated(cached, fresh) is True
+
+
+def test_detector_flags_reverse_split():
+    cached = _leg(range(1, 11), base_close=10.0)
+    fresh = _leg(range(1, 11), base_close=100.0)   # 1:10 reverse split
+    assert _deep_leg_restated(cached, fresh) is True
+
+
+def test_detector_ignores_small_vendor_drift():
+    cached = _leg(range(1, 11), base_close=100.0)
+    fresh = _leg(range(1, 11), base_close=102.0)   # 2% systematic drift
+    assert _deep_leg_restated(cached, fresh) is False
+
+
+def test_detector_needs_minimum_overlap():
+    cached = _leg(range(1, 11), base_close=400.0)
+    fresh = _leg(range(9, 13), base_close=100.0)   # only 2 overlapping bars
+    assert _deep_leg_restated(cached, fresh) is False
+
+
+def test_detector_no_overlap_no_verdict():
+    cached = _leg(range(1, 11), base_close=400.0)
+    fresh = _leg(range(20, 26), base_close=100.0)  # disjoint timestamps
+    assert _deep_leg_restated(cached, fresh) is False
+
+
+def test_detector_empty_legs():
+    assert _deep_leg_restated([], _leg(range(1, 11), base_close=100.0)) is False
+    assert _deep_leg_restated(_leg(range(1, 11), base_close=100.0), []) is False

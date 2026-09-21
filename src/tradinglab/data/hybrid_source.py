@@ -16,9 +16,14 @@ volume quality — the user's rule). Consequences of that single rule:
 * Alpaca only contributes the deep tail **older than yfinance's oldest bar**,
   which yfinance can't reach.
 
-Because Alpaca's contribution is immutable sealed history, the deep leg is
+Because Alpaca's contribution is sealed history, the deep leg is
 reused from the on-disk ``alpaca`` cache after the first fetch, so the live
-poll never re-paginates Alpaca.
+poll never re-paginates Alpaca — with one exception: the cached tail is
+revalidated against the fresh yfinance leg on overlapping bars every fetch.
+Both vendors restate history retroactively after a stock split, so a
+wholesale price-scale disagreement there means the cache is pre-split and
+is refetched + re-saved (otherwise the merged series would keep a permanent
+artificial price cliff at the seam).
 
 Registered as :data:`HYBRID_SOURCE_NAME` (``"yfinance+alpaca"``) in
 :data:`DATA_SOURCES` only when Alpaca credentials are configured (yfinance is
@@ -49,6 +54,43 @@ _DEEP_SOURCE = "alpaca"
 CandleFetcher = Callable[..., "list[Candle] | None"]
 DeepLoader = Callable[[str, str], "list[Candle] | None"]
 DeepSaver = Callable[[str, str, "list[Candle]"], None]
+
+#: Median fresh/cached close ratio outside this band means the cached deep
+#: leg was restated wholesale (e.g. a stock split) and must be refetched.
+#: Splits are large discrete rescalings — the smallest common forward split
+#: is 3:2 (a 0.667 ratio) — while dividend drift and cross-vendor noise stay
+#: well inside this band, so a breach is a price-scale change, not noise.
+_RESTATED_RATIO_LO = 0.8
+_RESTATED_RATIO_HI = 1.25
+
+#: Minimum overlapping bars before the restatement check trusts its median
+#: (too few bars and one noisy print could force a needless refetch).
+_MIN_RESTATED_OVERLAP = 5
+
+
+def _deep_leg_restated(cached: list[Candle], recent: list[Candle]) -> bool:
+    """True if the cached deep leg looks restated vs the fresh recent leg.
+
+    Compares ``close`` on timestamps present in both legs. A stock split (or
+    any wholesale provider restatement) rescales the fresh leg's history, so
+    the median fresh/cached close ratio jumps far from 1.0; ordinary
+    cross-vendor noise and dividend drift stay near 1.0. Returns False when
+    the legs share too few timestamps to judge. Never raises.
+    """
+    try:
+        recent_close = {c.date: c.close for c in recent}
+        ratios = []
+        for c in cached:
+            fresh = recent_close.get(c.date)
+            if fresh and c.close:
+                ratios.append(fresh / c.close)
+        if len(ratios) < _MIN_RESTATED_OVERLAP:
+            return False
+        ratios.sort()
+        median = ratios[len(ratios) // 2]
+        return median < _RESTATED_RATIO_LO or median > _RESTATED_RATIO_HI
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def merge_prefer_recent(
@@ -87,21 +129,34 @@ def _resolve_deep_leg(
     deep_fetcher: CandleFetcher,
     deep_loader: DeepLoader,
     deep_saver: DeepSaver,
+    recent: list[Candle] | None = None,
 ) -> list[Candle]:
     """Return Alpaca's deep-history bars, reusing the disk cache when present.
 
     Alpaca's contribution is the OLD tail (yfinance owns the recent window),
-    which is immutable once sealed — so a cached copy is authoritative and the
-    slow paginated network fetch is paid only on a cold miss. This keeps the
-    live poll cheap: each tick refetches only the yfinance leg and reuses this
-    cached tail. Never raises.
+    which is sealed history — so a cached copy is authoritative and the slow
+    paginated network fetch is paid only on a cold miss, UNLESS the cache
+    fails revalidation: both vendors restate history retroactively after a
+    stock split, so when the fresh ``recent`` leg disagrees wholesale with
+    the cached tail on overlapping bars (see :func:`_deep_leg_restated`),
+    the cache is pre-split and is refetched + re-saved. Without this the
+    merged series would keep a permanent artificial price cliff at the seam.
+
+    This keeps the live poll cheap: each tick refetches only the yfinance
+    leg plus an in-memory overlap comparison, and re-paginates Alpaca only
+    when a restatement is actually detected. Never raises.
     """
     try:
         cached = deep_loader(ticker, interval)
     except Exception:  # noqa: BLE001
         cached = None
-    if cached:
+    if cached and not (recent and _deep_leg_restated(cached, recent)):
         return cached
+    if cached:
+        LOG.info(
+            "hybrid: deep leg for %s %s looks restated (split?) — refetching",
+            ticker, interval,
+        )
     try:
         fetched = deep_fetcher(ticker, interval) or []
     except Exception:  # noqa: BLE001
@@ -165,6 +220,7 @@ def fetch_hybrid_data(
         deep_fetcher=deep_fetcher,
         deep_loader=deep_loader,
         deep_saver=deep_saver,
+        recent=recent_list,
     )
 
     if not deep and not recent_list:
