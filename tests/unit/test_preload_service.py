@@ -91,9 +91,10 @@ class FakeDiskCache:
 
     def save(
         self, source: str, sym: str, itv: str, candles: list[Candle],
-    ) -> None:
+    ) -> bool:
         self.saves.append((source, sym, itv, list(candles)))
         self._store[(source, sym, itv)] = list(candles)
+        return True
 
 
 def _no_sleep(_evt: threading.Event, _s: float) -> None:
@@ -199,6 +200,41 @@ def test_run_one_l1_disk_fetch_ladder() -> None:
     assert (saved_source, saved_sym, saved_itv) == (
         "yfinance", "AAPL", "5m")
     assert len(saved_payload) == 2
+
+
+# ---------------------------------------------------------------------------
+# 1b. Explicit save failure surfaces as a failed interval
+# ---------------------------------------------------------------------------
+
+
+def test_run_one_save_false_marks_interval_failed() -> None:
+    """``cache_save`` returning ``False`` (the ``disk_cache.save``
+    failure contract) marks the interval failed instead of reporting a
+    phantom success — the old follow-up-read verification is gone, the
+    explicit return is the signal now."""
+    fetched = [_candle(datetime(2024, 1, 2, 9, 30))]
+    disk = FakeDiskCache()
+
+    def failing_save(source: str, sym: str, itv: str, candles: list) -> bool:
+        disk.saves.append((source, sym, itv, list(candles)))
+        return False  # write failed; nothing landed
+
+    outcome = _run_one(
+        "AAPL", "5m",
+        source_name="yfinance",
+        fetcher=FakeFetcher(returns=fetched),
+        cache_load=disk.load,
+        cache_save=failing_save,
+        merge=_newer_wins_merge,
+        cancel_event=threading.Event(),
+        l1_check=None,
+        sleep_fn=_no_sleep,
+        rate_limit_s=0.0,
+        max_retries=3,
+    )
+    assert outcome.status == "failed"
+    assert outcome.bars == 0
+    assert "persistence" in outcome.error
 
 
 # ---------------------------------------------------------------------------

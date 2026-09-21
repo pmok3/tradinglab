@@ -3240,14 +3240,26 @@ class ChartApp(
                     # universe) — ~450 ms saved per switch on a 115k-bar
                     # 5m file. See disk_cache.merge_adds_nothing.
                     if not disk_cache.merge_adds_nothing(p_disk, p_merged):
-                        disk_cache.save(src, raw_primary, interval, p_merged)
+                        if not disk_cache.save(src, raw_primary, interval, p_merged):
+                            # Keep the "p_merged set ⟹ on disk" invariant
+                            # the Tk phase relies on: drop the merged list
+                            # so _load_data re-merges instead of assuming
+                            # the worker's write landed.
+                            logger.warning(
+                                "disk_cache save failed for %s/%s/%s",
+                                src, raw_primary, interval)
+                            p_merged = None
             except Exception:  # noqa: BLE001
                 p_merged = None
             try:
                 if c:
                     c_merged = disk_cache.merge_candles(c_disk, c, presorted=True)
                     if not disk_cache.merge_adds_nothing(c_disk, c_merged):
-                        disk_cache.save(src, raw_compare, interval, c_merged)
+                        if not disk_cache.save(src, raw_compare, interval, c_merged):
+                            logger.warning(
+                                "disk_cache save failed for %s/%s/%s",
+                                src, raw_compare, interval)
+                            c_merged = None
             except Exception:  # noqa: BLE001
                 c_merged = None
             return p, c, p_disk, c_disk, p_merged, c_merged
@@ -3569,13 +3581,15 @@ class ChartApp(
             self._trim_full_cache()
             self._confirmed_primary_ticker = raw_primary
             if mem_primary is not primary_raw and not merge_preloaded:
-                disk_cache.save(*primary_key, primary_raw)
+                if not disk_cache.save(*primary_key, primary_raw):
+                    logger.warning("disk_cache save failed for %s", primary_key)
         if compare_key and compare_raw:
             self._full_cache[compare_key] = compare_raw
             self._trim_full_cache()
             self._confirmed_compare_ticker = raw_compare
             if mem_compare is not compare_raw and not merge_preloaded:
-                disk_cache.save(*compare_key, compare_raw)
+                if not disk_cache.save(*compare_key, compare_raw):
+                    logger.warning("disk_cache save failed for %s", compare_key)
 
         # Today's-bar upsampling for daily-class views: most providers
         # lag the live session by ~1 day, so 1d shows "everything up

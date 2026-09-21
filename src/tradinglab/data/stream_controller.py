@@ -20,7 +20,7 @@ from .normalize import pop_prebuilt_arrays
 LOG = logging.getLogger(__name__)
 StreamEvent = tuple[Any, ...]
 CacheKey = tuple[str, str, str]
-DiskSaveFn = Callable[[str, str, str, list[Candle]], None]
+DiskSaveFn = Callable[[str, str, str, list[Candle]], bool]
 
 
 class IndicatorCacheLike(Protocol):
@@ -428,10 +428,12 @@ class StreamController:
             mutation is StreamMutation.CORRECTION or kind == "closed"
             or (mutation is StreamMutation.APPEND and (old_length > 0 or kind == "rollover"))
         ):
-            try:
-                save(*key, raw)
-            except OSError:
-                LOG.exception("Could not persist stream correction")
+            # save() reports failure via an explicit False return (never
+            # raises); only that counts as failure so None-returning
+            # doubles keep working. The detailed error is already in
+            # disk_cache's own warning log.
+            if save(*key, raw) is False:
+                LOG.warning("Could not persist stream correction for %s", key)
         return mutation
 
     def _record_stream_update(self, bar: Candle) -> None:

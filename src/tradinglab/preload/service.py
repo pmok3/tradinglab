@@ -16,8 +16,9 @@ Per-symbol-per-interval contract:
        attempts on transient failure. Sleep ``rate_limit_s`` (via the
        cancellation-aware ``sleep_fn``) between retries.
     4. On success, ``merge`` against any existing disk cache, then
-       ``cache_save``, then verify with a follow-up ``cache_load`` so
-       a silent disk-cache failure surfaces in the result.
+       ``cache_save`` — an explicit ``False`` return surfaces the
+       interval as failed so a silent disk-cache failure can never be
+       reported as success.
     5. ``rate_limit_s`` cancellation-aware sleep before the next call.
 
 Cancellation is checked at every retry boundary and between symbols, so
@@ -37,7 +38,7 @@ from ..models import Candle
 # Type aliases — keep the long Callables readable in signatures.
 Fetcher = Callable[[str, str], list[Candle] | None]
 CacheLoad = Callable[[str, str, str], list[Candle] | None]
-CacheSave = Callable[[str, str, str, list[Candle]], None]
+CacheSave = Callable[[str, str, str, list[Candle]], bool]
 Merger = Callable[[list[Candle] | None, list[Candle] | None],
                   list[Candle]]
 SleepFn = Callable[[threading.Event, float], None]
@@ -186,7 +187,9 @@ def preload_universe(
             Synchronous; may raise; may return ``None`` or empty list
             on no-data.
         cache_load: ``(source, sym, interval) -> Optional[List[Candle]]``.
-        cache_save: ``(source, sym, interval, candles) -> None``.
+        cache_save: ``(source, sym, interval, candles) -> bool`` —
+            ``True`` when the bars landed on disk, explicit ``False``
+            on write failure (never raises).
         merge: ``(old, new) -> List[Candle]`` — must implement
             newer-wins-on-overlap semantics so accumulating fetches
             extend past the provider window cap.
@@ -324,21 +327,19 @@ def _run_one(
             last_err = repr(exc)
             fetched = []
         if fetched:
-            # Step 4: merge + persist + verify.
+            # Step 4: merge + persist. cache_save reports failure via
+            # an explicit False return (it logs and never raises) — only
+            # that is treated as failure, so older doubles returning None
+            # keep working. No follow-up read needed: save is atomic.
             try:
                 old = cache_load(source_name, sym, itv) or []
                 merged = merge(old, fetched)
-                cache_save(source_name, sym, itv, merged)
-                # Verify the save actually landed — disk_cache.save
-                # swallows OS errors silently, so without this check
-                # we could falsely report success.
-                verify = cache_load(source_name, sym, itv) or []
-                if not verify:
+                if cache_save(source_name, sym, itv, merged) is False:
                     return IntervalOutcome(
                         interval=itv, status="failed", bars=0,
-                        error="persistence verification failed")
+                        error="persistence failed")
                 return IntervalOutcome(
-                    interval=itv, status="fetched", bars=len(verify))
+                    interval=itv, status="fetched", bars=len(merged))
             except Exception as exc:  # noqa: BLE001
                 last_err = f"persist error: {exc!r}"
                 # Fall through to retry — the underlying fetch

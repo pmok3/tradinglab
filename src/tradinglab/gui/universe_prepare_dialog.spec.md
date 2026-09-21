@@ -1,6 +1,6 @@
 # universe_prepare_dialog.py — spec
 
-Last updated: 2026-09-14
+Last updated: 2026-09-20
 
 The inner form is measured explicitly with `_fit_form_width(form=..., viewport=...)`
 before restoring geometry. Its default/minimum width includes scrollbar/chrome
@@ -169,8 +169,9 @@ chosen basket / watchlist and writing the resulting
 
 - Worker-thread crash → synthetic `finish` event with
   `error="worker crashed: ..."`.
-- `disk_cache.save` OSErrors swallowed; service's post-save
-  verify reports `failed`; GUI shows count.
+- `disk_cache.save` failures are reported via its `False` return
+  (logged); the preload service's explicit-`False` check reports
+  `failed`; GUI shows count.
 
 ## Dependencies
 

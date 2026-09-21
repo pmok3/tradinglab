@@ -1,6 +1,6 @@
 # data/hybrid_source.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-20
 
 ## Purpose
 A composite data source that stitches **yfinance (recent + live)** over
@@ -23,6 +23,10 @@ window PLUS Alpaca's deep intraday reach (IEX, ~2016+). Registered as
   `alpaca_source.fetch_alpaca_data`, and the `alpaca`-keyed `disk_cache`).
 
 ## Contract
+- **`DeepSaver` is `Callable[[str, str, list[Candle]], bool]`** matching the
+  `disk_cache.save` contract: an explicit `False` return means the deep-leg
+  write failed. `_default_deep_saver` logs that failure as a warning; injected
+  doubles that return `None` keep working because only `False` is checked.
 - **yfinance wins overlaps (the user's quality rule).** On any bar both legs
   have, the yfinance value is kept — so the recent/visible window is pure
   yfinance (full volume AND real-time). Alpaca only contributes the tail
