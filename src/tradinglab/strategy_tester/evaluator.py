@@ -60,7 +60,7 @@ import logging
 import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import numpy as np
@@ -84,6 +84,7 @@ from ..core.session_calendar import (
 )
 from ..core.side import Side
 from ..core.timezones import ET
+from ..core.timezones import parse_hhmm as _parse_hhmm_to_time
 from ..data.multi_interval_cache import MultiIntervalCache
 from ..entries.dispatch import (
     _ENTRY_DISPATCH,
@@ -142,6 +143,7 @@ from ..scanner.model import ScanDefinition as _ScanDefinition
 from ..scanner.model import iter_conditions as _iter_conditions
 from ..scanner.model import iter_field_refs as _iter_field_refs
 from ..scanner.model import iter_tree_field_refs as _iter_tree_field_refs
+from . import vector_eval
 from .model import CostModel
 
 LOG = logging.getLogger(__name__)
@@ -191,22 +193,6 @@ def _bar_ts_to_et(ts: int) -> datetime:
     return datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(
         timezone(timedelta(hours=-5))
     )
-
-
-def _parse_hhmm_to_time(s: str | None) -> time | None:
-    """Parse an ``"HH:MM"`` string into a :class:`datetime.time`.
-
-    Returns ``None`` for blank/malformed input — mirrors the live
-    ``entries.evaluator._parse_hhmm`` semantics so blank arm windows
-    disable the gate cleanly.
-    """
-    if not s:
-        return None
-    try:
-        h, m = s.split(":")
-        return time(hour=int(h), minute=int(m))
-    except (ValueError, AttributeError):
-        return None
 
 
 def _within_arm_window(strategy: EntryStrategy, et_dt: datetime) -> bool:
@@ -1057,7 +1043,7 @@ def _bar_at(idx: int, bars) -> _BarTuple:
 
 def _check_entry(
     ctx: EvalContext,
-    bar: _BarTuple,
+    bar: _BarTuple | None,
     *,
     eval_ctx: _ScannerEvalContext | None = None,
     normalized_conditions: dict[str, _ScannerGroup] | None = None,
@@ -1065,6 +1051,8 @@ def _check_entry(
     et_now: datetime | None = None,
     is_rth: bool | None = None,
     interval: str = "",
+    plan: vector_eval.VectorEvalPlan | None = None,
+    bar_index: int = 0,
 ) -> tuple[bool, Side, float]:
     """Decide whether the entry trigger fires against ``bar``.
 
@@ -1112,7 +1100,10 @@ def _check_entry(
     # auto-skip on 1d / 1wk / 1mo (a daily bar's wall-clock is 00:00 ET
     # which would silently block every fire). Audit ``daily-rth-bypass``.
     intraday = is_intraday(interval) if interval else True
-    if intraday:
+    if plan is not None:
+        if not plan.entry_gate[bar_index]:
+            return False, OrderSide.BUY, 0.0
+    elif intraday:
         # Arm-window gate (ET HH:MM). Blank → no gate. The default template
         # cooks 09:35–15:30 ET, so without this gate a 24/7 fictional bar
         # series would fire pre-market.
@@ -1147,24 +1138,35 @@ def _check_entry(
     if trigger.kind not in _ENTRY_DISPATCH:
         _entry_unsupported(trigger, side="entry")
 
-    direction = (
-        EntryDirection.LONG
-        if ctx.entry_strategy.direction is EntryDirection.LONG
-        else EntryDirection.SHORT
-    )
-    trigger_ctx = _TriggerContext(
-        direction=direction,
-        bar=_BarView.from_any(bar),
-        is_close=True,
-        scanner_eval_ctx=eval_ctx,
-        normalized_conditions=normalized_conditions,
-        scanner_alert_prev_match=ctx.scanner_alert_prev_match,
-    )
-    fired, _evidence = _check_trigger_fires(trigger, trigger_ctx)
+    fired = None
+    if plan is not None and plan.entry is not None:
+        fired = plan.entry.fires(trigger, bar_index, ctx.scanner_alert_prev_match)
+    if fired is None:
+        if bar is None:
+            assert plan is not None
+            bar = _bar_at(bar_index, plan.bars)
+        direction = (
+            EntryDirection.LONG
+            if ctx.entry_strategy.direction is EntryDirection.LONG
+            else EntryDirection.SHORT
+        )
+        trigger_ctx = _TriggerContext(
+            direction=direction,
+            bar=_BarView.from_any(bar),
+            is_close=True,
+            scanner_eval_ctx=eval_ctx,
+            normalized_conditions=normalized_conditions,
+            scanner_alert_prev_match=ctx.scanner_alert_prev_match,
+        )
+        fired, _evidence = _check_trigger_fires(trigger, trigger_ctx)
     if not fired:
         return False, side, 0.0
 
-    _o, _h, _l, close_price = bar
+    if bar is None:
+        assert plan is not None
+        close_price = float(plan.bars.close[bar_index])
+    else:
+        close_price = bar[3]
     qty = _compute_quantity(
         strategy=ctx.entry_strategy,
         decision_price=close_price,
@@ -1175,11 +1177,13 @@ def _check_entry(
 
 def _check_exits(
     ctx: EvalContext,
-    bar: _BarTuple,
+    bar: _BarTuple | None,
     *,
     eval_ctx: _ScannerEvalContext | None = None,
     normalized_conditions: dict[str, _ScannerGroup] | None = None,
     bar_ts: int = 0,
+    plan: vector_eval.VectorEvalPlan | None = None,
+    bar_index: int = 0,
 ) -> tuple[bool, float]:
     """Walk every enabled leg looking for an exit trigger that fires.
 
@@ -1200,38 +1204,60 @@ def _check_exits(
     if ctx.position_qty <= 0.0:
         return False, 0.0
 
-    position = _ctx_to_position(ctx)
-    spec_bar = _bar_to_specbar(bar, bar_ts)
-    for leg in ctx.exit_strategy.legs:
+    if plan is None:
+        position = _ctx_to_position(ctx)
+    else:
+        key = (ctx.position_side, ctx.position_qty, ctx.position_avg_price, ctx.position_entry_ts)
+        if key != plan.position_key or plan.position is None:
+            plan.position = _ctx_to_position(ctx)
+            plan.position_key = key
+        position = plan.position
+    spec_bar = None
+    for leg_idx, leg in enumerate(ctx.exit_strategy.legs):
         if not leg.enabled:
             continue
-        for trigger in leg.triggers:
+        for trigger_idx, trigger in enumerate(leg.triggers):
             if not trigger.enabled:
                 continue
             if trigger.kind not in _EXIT_HANDLERS:
                 raise UnsupportedTriggerKind(trigger.kind, side="exit")
-            state = ctx.trigger_states.get(trigger.id)
-            if (
-                trigger.kind in (ExitTriggerKind.TRAILING_STOP, ExitTriggerKind.CHANDELIER)
-                and state is None
-            ):
-                state = _SpecTriggerState()
-                ctx.trigger_states[trigger.id] = state
-            now = _bar_ts_to_et(int(bar_ts)) if trigger.kind is ExitTriggerKind.TIME_OF_DAY else None
-            decision = _check_exit_decision(
-                trigger,
-                _ExitTriggerContext(
-                    position=position,
-                    bar=spec_bar,
-                    is_close=True,
-                    trigger_state=state,
-                    now=now,
-                    scanner_eval_ctx=eval_ctx,
-                    normalized_conditions=normalized_conditions,
-                    legacy_signed_offsets=True,
-                ),
-            )
-            if decision.fire:
+            fired = None
+            if plan is not None:
+                mask = plan.exits.get((leg_idx, trigger_idx))
+                if mask is not None:
+                    fired = mask.fires(trigger, bar_index, position)
+            if fired is None:
+                if plan is not None:
+                    # Scalar/custom handlers get the original adapter lifetime.
+                    plan.position = None
+                if spec_bar is None:
+                    if bar is None:
+                        assert plan is not None
+                        bar = _bar_at(bar_index, plan.bars)
+                    spec_bar = _bar_to_specbar(bar, bar_ts)
+                state = ctx.trigger_states.get(trigger.id)
+                if (
+                    trigger.kind in (ExitTriggerKind.TRAILING_STOP, ExitTriggerKind.CHANDELIER)
+                    and state is None
+                ):
+                    state = _SpecTriggerState()
+                    ctx.trigger_states[trigger.id] = state
+                now = _bar_ts_to_et(int(bar_ts)) if trigger.kind is ExitTriggerKind.TIME_OF_DAY else None
+                decision = _check_exit_decision(
+                    trigger,
+                    _ExitTriggerContext(
+                        position=position,
+                        bar=spec_bar,
+                        is_close=True,
+                        trigger_state=state,
+                        now=now,
+                        scanner_eval_ctx=eval_ctx,
+                        normalized_conditions=normalized_conditions,
+                        legacy_signed_offsets=True,
+                    ),
+                )
+                fired = decision.fire
+            if fired:
                 pct = max(0.0, min(100.0, float(trigger.qty_pct))) / 100.0
                 qty_to_close = ctx.position_qty * pct
                 if qty_to_close <= 0.0:
@@ -1360,6 +1386,7 @@ def evaluate_symbol(
     cancel_token: Any | None = None,
     warmup_until_ts: int | None = None,
     dependency_candles: Mapping[str, Sequence[Candle]] | None = None,
+    use_vectorized: bool = True,
 ) -> SessionResult:
     """Run one symbol's mechanical-test session and return the SessionResult.
 
@@ -1470,12 +1497,26 @@ def evaluate_symbol(
     # ``datetime.fromtimestamp(ts, _ET)`` calls per symbol with a single
     # numpy pass (~250-500 zoneinfo lookups per year, broadcast to N
     # bars via np.searchsorted on UTC-day groups).
-    et_date_ints, rth_mask, _et_offsets = _compute_et_arrays(bars.ts)
-    # Decide once whether the strategy needs a real ET datetime per bar
-    # (arm_window gate). require_market_open / EOD-kill-rollover are
-    # served by the precomputed int/bool arrays directly.
+    et_date_ints, rth_mask, et_offsets_sec = _compute_et_arrays(bars.ts)
+    # Optional dispatch-owned predicates; all orchestration stays in this loop.
+    plan = None
+    if use_vectorized and n > 0:
+        et_tod_sec = (bars.ts.astype(np.int64) + et_offsets_sec) % 86400
+        plan = vector_eval.build_plan(
+            n=n,
+            bars=bars,
+            interval=interval,
+            entry_strategy=entry_strategy,
+            exit_strategy=exit_strategy,
+            et_tod_sec=et_tod_sec,
+            rth_mask=rth_mask,
+            eval_ctx=eval_ctx,
+            normalized_conditions=normalized_conditions,
+        )
+    # Decide once whether scalar arm-window checks need an ET datetime.
     _needs_et_now_for_arm = (
-        _parse_hhmm_to_time(entry_strategy.arm_window_start) is not None
+        plan is None
+        and _parse_hhmm_to_time(entry_strategy.arm_window_start) is not None
         and _parse_hhmm_to_time(entry_strategy.arm_window_end) is not None
     )
     for i in range(n):
@@ -1491,7 +1532,7 @@ def evaluate_symbol(
                     break
             except Exception:  # noqa: BLE001 — duck-typed token; never gate on probe failure
                 pass
-        bar = _bar_at(i, bars)
+        bar = _bar_at(i, bars) if plan is None else None
         ts = int(bars.ts[i])
         # NEW: warmup gate. During warmup the engine still ticks (so
         # indicators hydrate + scanner eval_ctx state stays consistent)
@@ -1573,6 +1614,8 @@ def evaluate_symbol(
         # exit (e.g. take-profit hit on the activation bar) still sees
         # the freshly-seeded chandelier state.
         if ctx.position_open and not ctx.prev_position_open:
+            if bar is None:
+                bar = _bar_at(i, bars)
             _reset_trigger_states_on_activation(ctx, bar, ts)
         ctx.prev_position_open = ctx.position_open
 
@@ -1583,6 +1626,8 @@ def evaluate_symbol(
                 eval_ctx=eval_ctx,
                 normalized_conditions=normalized_conditions,
                 bar_ts=ts,
+                plan=plan,
+                bar_index=i,
             )
             if exit_fired:
                 exit_side = Side.from_str(ctx.position_side).opposite().as_order_side()
@@ -1608,6 +1653,8 @@ def evaluate_symbol(
             et_now=et_now,
             is_rth=is_rth,
             interval=interval,
+            plan=plan,
+            bar_index=i,
         )
         if fired:
             entry_order = Order(

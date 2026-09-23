@@ -1,6 +1,6 @@
 # entries/dispatch.py — shared entry-trigger dispatch registry
 
-Last updated: 2026-09-07
+Last updated: 2026-09-23
 
 ## Purpose
 
@@ -130,6 +130,18 @@ pops a handler from the registry to simulate "kind not yet wired"
 still works (see `tests/unit/strategy_tester/test_evaluator.py`).
 
 ## Helpers
+
+- `prepare_trigger_mask(trigger, *, n, eval_ctx, normalized_conditions)`
+  optionally prepares a mechanical close-bar kernel for the currently
+  registered canonical MARKET, INDICATOR or SCANNER_ALERT handler.
+  `PreparedEntryMask.fires(trigger, index, previous)` returns `bool`
+  or `None` to request scalar dispatch. Price handlers, missing scanner
+  inputs, unsupported scanner trees and custom handlers remain scalar.
+  Handler identity is checked both at preparation and consumption, so
+  registry replacements and newly registered kinds cannot be bypassed.
+  Scanner-alert edge bookkeeping is shared with the scalar handler and
+  runs only after the caller's entry gates pass. Evidence remains scalar-only;
+  the mechanical caller does not consume it.
 
 - `reference_price(trigger, bar)` — price used for sizing + risk-gate
   evaluation. Live evaluator's port. Mapping: MARKET / INDICATOR /
