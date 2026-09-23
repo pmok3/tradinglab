@@ -7,6 +7,11 @@ from ..models import Candle
 from .normalize import candles_from_dataframe
 from .ratio_source import fetch_ratio, parse_ratio_symbol
 
+#: Explicit history-request timeout, preserving yfinance 1.3.0's 10 s default.
+#: Not a whole-fetch deadline: bootstrap requests and internal retries can
+#: extend the operation beyond this timeout.
+YFINANCE_TIMEOUT_S = 10
+
 
 def fetch_live_data(ticker: str = "AMD", interval: str = "1d") -> list[Candle] | None:
     """Fetch OHLCV history for ``ticker`` at ``interval`` via yfinance.
@@ -41,6 +46,7 @@ def fetch_live_data(ticker: str = "AMD", interval: str = "1d") -> list[Candle] |
     try:
         df = yf.Ticker(ticker).history(
             period=period, interval=interval, prepost=intraday,
+            timeout=YFINANCE_TIMEOUT_S,
         )
         if df.empty:
             return None
