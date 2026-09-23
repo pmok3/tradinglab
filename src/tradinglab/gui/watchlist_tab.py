@@ -32,11 +32,17 @@ collisions. No back-import of ``tradinglab.app``.
 
 from __future__ import annotations
 
+import logging
 import threading
 import tkinter as tk
+from collections.abc import Callable, Sequence
+from copy import deepcopy
+from dataclasses import dataclass, replace
+from datetime import date
 from tkinter import ttk
 
 from ..data import DATA_SOURCES
+from ..models import Candle
 from ..watchlists import (
     DEFAULT_WATCHLIST_NAME as _DEFAULT_WATCHLIST_NAME_CANONICAL,
 )
@@ -45,6 +51,7 @@ from ..watchlists import (
 )
 from ..watchlists.columns import (
     KIND_SIGNAL,
+    WatchlistColumn,
     default_columns,
     header_label,
 )
@@ -70,6 +77,38 @@ _RESERVED_WATCHLIST_NAMES = {_ADD_TAB_LABEL, _EMPTY_TAB_LABEL}
 # duplicated here so the watchlist column avoids a circular import on
 # the GUI module path during early app boot.
 _MS_PER_DAY = 86_400_000
+
+
+@dataclass(frozen=True)
+class _SignalContext:
+    source: str
+    tickers: tuple[str, ...]
+    columns: tuple[WatchlistColumn, ...]
+    replay: bool
+    clock: int | None
+    session_date: date | None
+    session_id: int | None
+    interval: str | None
+    fetcher: Callable[[str, str], list[Candle]] | None
+
+
+def _copy_signal_bars(
+    bars: Sequence[Candle], context: _SignalContext, interval: str,
+) -> list[Candle]:
+    if not context.replay:
+        return [replace(c) for c in bars]
+    if context.clock is None:
+        return []
+    snapshot = []
+    for candle in bars:
+        if candle.date.timestamp() > context.clock:
+            continue
+        if interval == "1d":
+            day = _watchlist_candle_day(candle)
+            if day is None or context.session_date is None or day >= context.session_date:
+                continue
+        snapshot.append(replace(candle))
+    return snapshot
 
 
 def _format_next_earn(bundle: object, *, now_ms: int) -> tuple[str, int]:
@@ -1900,145 +1939,132 @@ class WatchlistTabMixin:
         return out
 
     def _preload_watchlist_signals(self) -> None:
-        """Evaluate configured signal columns off-thread for pinned lists.
-
-        No-op when no signal columns are configured (the default) — so a
-        watchlist with only system columns keeps its existing zero-cost
-        refresh path. Dedupes to a single in-flight job; the worker writes
-        ``snap["_sig"][col_id] = ColumnValue`` and posts a repaint.
-        """
+        """Tk thread: snapshot values and context before submitting one worker."""
         executor = getattr(self, "_executor", None)
         if executor is None:
             return
-        cols = self._pinned_signal_columns()
-        if not cols:
-            return
-        if getattr(self, "_watchlist_signals_inflight", False):
-            return
         try:
-            src = self.source_var.get()
+            context = self._capture_watchlist_signal_context()
         except Exception:  # noqa: BLE001
+            logging.getLogger(__name__).exception("Could not snapshot watchlist signal context")
+            return
+        if context != getattr(self, "_watchlist_signal_context", None):
+            self._watchlist_signal_context = context
+            self._watchlist_signal_generation = getattr(self, "_watchlist_signal_generation", 0) + 1
+            for snap in self._watchlist_snapshot.values():
+                snap.pop("_sig", None)
+        if (not context.columns or not context.tickers
+                or getattr(self, "_watchlist_signals_inflight", False)):
             return
         try:
-            tickers = list(self._pinned_ticker_union())
-        except Exception:  # noqa: BLE001
-            return
-        if not tickers:
-            return
-        self._watchlist_signals_inflight = True
-        try:
-            executor.submit(self._compute_watchlist_signals,
-                            tuple(tickers), tuple(cols), src)
+            from ..watchlists.signals import DEFAULT_INTERVAL
+
+            intervals = {col.ref.interval or DEFAULT_INTERVAL for col in context.columns if col.ref is not None}
+            bars = {
+                (symbol, interval): self._signal_bars(
+                    context.source, symbol, interval, context=context,
+                )
+                for symbol in context.tickers for interval in intervals
+            }
+            self._watchlist_signal_generation += 1
+            generation = self._watchlist_signal_generation
+            self._watchlist_signal_job = generation
+            self._watchlist_signals_inflight = True
+            future = executor.submit(self._compute_watchlist_signals, generation, context, bars)
+            inbox = self._worker_inbox
+            future.add_done_callback(
+                lambda done: inbox.put_nowait(("watchlist_signals", (generation, context, None)))
+                if done.cancelled() else None
+            )
         except Exception:  # noqa: BLE001
             self._watchlist_signals_inflight = False
+            self._watchlist_signal_job = None
+            logging.getLogger(__name__).exception("Could not submit watchlist signals")
 
-    def _signal_bars(self, source: str, symbol: str, interval: str):
-        """``bars_provider`` for the signal evaluator (worker thread).
+    def _capture_watchlist_signal_context(self) -> _SignalContext:
+        """Tk-only control state; deep-copy nested FieldRef parameters."""
+        replay = self._is_sandbox_active()
+        active, clock, session_date = self._sandbox_watchlist_clock()
+        source = self._sandbox_watchlist_source() if replay else self.source_var.get()
+        if source is None:
+            raise ValueError("Watchlist signal source is unavailable")
+        return _SignalContext(
+            source=source,
+            tickers=tuple(self._pinned_ticker_union()),
+            columns=deepcopy(tuple(self._pinned_signal_columns())),
+            replay=replay,
+            clock=clock if active else None,
+            session_date=session_date if isinstance(session_date, date) else None,
+            session_id=id(self._sandbox) if replay else None,
+            interval=self._sandbox_watchlist_interval() if replay else None,
+            fetcher=DATA_SOURCES.get(source),
+        )
 
-        During replay, prefers the session's own clock-synced visible
-        list, then ``_full_cache`` under the **session's pinned source**
-        (not ``source_var`` — see :meth:`_sandbox_watchlist_source`), and
-        only then the registered fetcher. Anything that does reach a
-        fetcher is sliced to the replay clock so signal columns carry no
-        look-ahead.
-        """
+    def _signal_bars(
+        self, source: str, symbol: str, interval: str, *, context: _SignalContext | None = None,
+    ) -> list[Candle] | None:
+        """Tk thread: own cached candle VALUES, never fetch or compute indicators."""
+        if context is None:
+            context = self._capture_watchlist_signal_context()
+            if not context.replay:
+                context = replace(context, source=source)
+        if context.replay and context.clock is None:
+            return []
         bars = None
-        sb_active, sb_ts, _sb_date = self._sandbox_watchlist_clock()
-        if sb_active:
-            visible = self._sandbox_visible_bars(symbol)
-            if visible:
-                # Already ends at the clock — no slice needed. Copied
-                # because the Tk thread appends to this list in place on
-                # every tick and the evaluator reads it off-thread.
-                return list(visible)
-            source = self._sandbox_pinned_source() or source
-        try:
-            bars = self._full_cache.get((source, symbol, interval))
-        except Exception:  # noqa: BLE001
-            bars = None
-        if not bars:
-            fetcher = DATA_SOURCES.get(source)
-            if fetcher is None:
-                return None
-            try:
-                bars = fetcher(symbol, interval)
-            except Exception:  # noqa: BLE001
-                return None
-        if not bars:
-            return None
-        if sb_active and sb_ts is not None:
-            sliced = []
-            for c in bars:
+        if context.replay:
+            if interval == context.interval:
+                bars = self._sandbox_visible_bars(symbol)
+            elif interval == "1d":
+                bars = self._sandbox_daily_bars(symbol)
+        if bars is None:
+            bars = self._full_cache.get((context.source, symbol, interval))
+        return _copy_signal_bars(bars, context, interval) if bars else None
+
+    def _compute_watchlist_signals(
+        self, generation: int, context: _SignalContext,
+        snapshots: dict[tuple[str, str], list[Candle] | None],
+    ) -> None:
+        """Worker: consume owned inputs and queue a generation-tagged completion."""
+        results = None
+
+        def bars_provider(source, symbol, interval):
+            bars = snapshots[(symbol, interval)]
+            if bars is None and context.fetcher is not None:
                 try:
-                    if int(c.date.timestamp()) <= sb_ts:
-                        sliced.append(c)
-                    else:
-                        break
+                    fetched = context.fetcher(symbol, interval)
+                    bars = _copy_signal_bars(fetched or [], context, interval)
                 except Exception:  # noqa: BLE001
-                    continue
-            return sliced or None
-        # Copied for the same reason as the sandbox ``list(visible)``
-        # above: the evaluator iterates this list off-thread while the
-        # Tk-thread streaming path may append to the cached list in
-        # place. The clock-sliced branch already builds a fresh list.
-        return list(bars)
+                    logging.getLogger(__name__).exception("Could not fetch watchlist signal bars")
+            return bars
 
-    def _compute_watchlist_signals(self, tickers, cols, src: str) -> None:
-        """Worker: evaluate signal columns; hand results to the Tk thread.
-
-        Never mutates ``_watchlist_snapshot`` here — the Tk thread reads
-        it in ``_populate_watchlist_tab`` / ``_watchlist_cell_text`` while
-        this runs. Results go on ``_worker_inbox`` as
-        ``("watchlist_signals", {sym: {col_id: ColumnValue}})`` for the
-        Tk-thread drain to apply atomically (same hand-off as the
-        preload ``("stash", …)`` / ``("refresh", …)`` items).
-        """
         try:
             from ..watchlists.signals import WatchlistSignalEvaluator
-            ev = getattr(self, "_watchlist_signal_evaluator", None)
-            ev_src = getattr(self, "_watchlist_signal_evaluator_src", None)
-            if ev is None or ev_src != src:
-                ev = WatchlistSignalEvaluator(
-                    bars_provider=self._signal_bars, source=src)
-                self._watchlist_signal_evaluator = ev
-                self._watchlist_signal_evaluator_src = src
-            results = ev.evaluate(list(tickers), list(cols))
-            try:
-                self._worker_inbox.put_nowait(
-                    ("watchlist_signals", dict(results)))
-            except Exception:  # noqa: BLE001
-                pass
+
+            # A timestamp-only cache cannot recognize a forming-bar correction.
+            ev = WatchlistSignalEvaluator(bars_provider=bars_provider, source=context.source)
+            results = ev.evaluate(context.tickers, context.columns)
         except Exception:  # noqa: BLE001
-            pass
+            logging.getLogger(__name__).exception("Could not evaluate watchlist signals")
         finally:
-            self._watchlist_signals_inflight = False
-            try:
-                self._worker_inbox.put_nowait(("refresh", None))
-            except Exception:  # noqa: BLE001
-                pass
+            self._worker_inbox.put_nowait(("watchlist_signals", (generation, context, results)))
 
-    def _apply_watchlist_signals(self, results: dict) -> None:
-        """Tk thread: merge worker-computed signal cells into the snapshot.
-
-        Applies the ``("watchlist_signals", …)`` inbox item. Each ticker's
-        ``_sig`` cell-dict is updated in place on the Tk thread only — the
-        worker builds the result dict and never touches
-        ``_watchlist_snapshot`` (AGENTS.md §7.15).
-        """
-        try:
-            snap_map = self._watchlist_snapshot
-        except AttributeError:
+    def _apply_watchlist_signals(self, payload) -> None:
+        """Tk thread: retire the matching job and reject obsolete contexts."""
+        generation, context, results = payload
+        if generation != getattr(self, "_watchlist_signal_job", None):
+            return
+        self._watchlist_signal_job = None
+        self._watchlist_signals_inflight = False
+        if (generation != self._watchlist_signal_generation
+                or context != self._capture_watchlist_signal_context()):
+            self._preload_watchlist_signals()
             return
         for sym, cells in (results or {}).items():
-            try:
-                snap = snap_map.setdefault(sym, {})
-                existing = snap.get("_sig")
-                if not isinstance(existing, dict):
-                    existing = {}
-                    snap["_sig"] = existing
-                existing.update(cells)
-            except Exception:  # noqa: BLE001
-                continue
+            snap = self._watchlist_snapshot.setdefault(sym, {})
+            existing = snap.get("_sig")
+            snap["_sig"] = {**(existing if isinstance(existing, dict) else {}), **cells}
+        if results:
+            self._queue_watchlist_snapshot_refresh()
 
     def _preload_one_last(self, ticker: str,
                           src: str | None = None,

@@ -355,7 +355,8 @@ class PollingMixin:
                         elif hasattr(self, "_apply_watchlist_signals"):
                             self._apply_watchlist_signals(payload)
                     except Exception:  # noqa: BLE001
-                        pass
+                        import logging
+                        logging.getLogger(__name__).exception("Could not apply watchlist signals")
                 elif kind == "reference":
                     reference_pending = True
                 elif kind == "card_stash":

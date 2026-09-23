@@ -1,6 +1,6 @@
 # gui/watchlist_tab.py — Spec
 
-Last updated: 2026-09-20
+Last updated: 2026-09-23
 
 ## Purpose
 
@@ -263,18 +263,28 @@ larger; pinning makes a list reachable from the main UI.
   `snap["_sig"][col].raw` (blanks last) for non-system columns.
 - **Off-thread evaluation** (no-op when no signal columns configured):
   `_preload_watchlist_signals()` collects the union of signal columns via
-  `_pinned_signal_columns()`, dedupes to one in-flight job
-  (`_watchlist_signals_inflight`), and submits `_compute_watchlist_signals`.
-  The worker drives a cached `watchlists.signals.WatchlistSignalEvaluator`
-  (rebuilt when `source_var` changes) whose `bars_provider` is
-  `_signal_bars` (prefers `_full_cache`, else the data-source fetcher;
-  slices to `_sandbox_watchlist_clock()` during replay). The worker never
-  touches `_watchlist_snapshot`: it posts
-  `("watchlist_signals", {sym: {col_id: ColumnValue}})` on `_worker_inbox`
-  and the Tk-thread drain applies it via `_apply_watchlist_signals`
-  (per-ticker `_sig` merge), followed by the `("refresh", None)` inbox
-  nudge (posted by the worker's `finally`) which repaints. Triggered from
-  `_watchlist_poll_tick` (live + sandbox when visible),
+  `_pinned_signal_columns()` and deep-copies their nested `FieldRef` parameters.
+  On Tk, it captures source/fetcher, ticker union, replay identity, clock/date
+  and session interval, then copies each required cached candle's values
+  with `dataclasses.replace` BEFORE executor submission. A list-only copy
+  is insufficient: stream ticks mutate existing Candle objects in place.
+  `_signal_bars` is now a Tk-only, cache-only snapshot seam.
+  `_compute_watchlist_signals` reads only these owned inputs; cache misses
+  fetch on the worker using the captured fetcher and replay cutoff.
+  Each job gets a fresh `WatchlistSignalEvaluator`, avoiding timestamp-only
+  cache reuse after a forming-bar correction.
+  Each submitted job has a unique generation. Completion is
+  `("watchlist_signals", (generation, context, results))`;
+  failure/cancellation carries `None` results. Workers never mutate the
+  GUI snapshot or in-flight bookkeeping. `_apply_watchlist_signals` retires
+  only the matching job on Tk and rejects changed source/provider, columns,
+  tickers, replay session or clock. Observed context changes advance the
+  generation and clear old signal cells; returning to an earlier context
+  does not resurrect that generation's results. Stale completion schedules
+  one replacement for the latest context, with at most one worker in flight.
+  Accepted cells merge on Tk, then queue the existing refresh nudge.
+  Submission/evaluation/fetch failures are logged; cancellation and failure
+  release the job for retry. Triggered from `_watchlist_poll_tick` (live),
   `_kick_watchlist_preloads`, and `_refresh_watchlist_for_sandbox`.
 - `_open_watchlist_columns_dialog(name)` — opens
   [`gui/watchlist_columns_dialog`](watchlist_columns_dialog.spec.md) via
@@ -351,11 +361,13 @@ larger; pinning makes a list reachable from the main UI.
   behaviour) is what turned a source-key miss into a permanently empty
   table: each tick wiped Last/Change everywhere and then refilled
   nothing.
-- **`_signal_bars` follows the same rules** — session visible list first
-  (copied, because the Tk thread appends to it while the evaluator reads
-  off-thread), then `_full_cache` under the pinned source (also copied —
-  the streaming path can append to the cached list in place), then a
-  fetcher whose result is clock-sliced.
+- **Signal snapshots respect replay intervals** — the session's visible
+  list is used only for its own interval; daily columns prefer the daily
+  session tape. Other cases use `_full_cache` under the pinned source,
+  then a worker-side fetch. All paths use the captured replay clock;
+  daily signals exclude the current replay session's unfinished daily bar.
+  Replay with no usable clock yields insufficient data, never live data.
+  Snapshot candle values belong to the job, not the cache or session.
 - **Double-click preserves tab focus** (user-requested).
 - **Configurable signal columns** (feature `watchlist-columns`): a
   watchlist's columns are user-chosen scanner `FieldRef`s evaluated at the

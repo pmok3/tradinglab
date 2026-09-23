@@ -1,404 +1,430 @@
-"""Watchlist signal worker races: snapshot-at-handoff + Tk-thread apply.
+"""Deterministic value ownership and stale-result tests using the real evaluator.
 
-Regression suite for the P0 "watchlist worker races shared GUI/cache
-data":
-
-1. ``_signal_bars`` returned the LIVE ``_full_cache`` list to the signal
-   evaluator running off-thread; the Tk-thread streaming path appends to
-   that list in place, so the evaluator could observe torn state (bars
-   from two different stream appends mixed in one evaluation) or raise
-   ``IndexError``. It now returns ``list(bars)`` — the same
-   snapshot-at-handoff the sandbox path already did with
-   ``list(visible)``.
-2. ``_compute_watchlist_signals`` mutated the shared
-   ``_watchlist_snapshot`` (``setdefault`` + in-place ``_sig`` dict
-   update) from the worker while the Tk thread reads it in
-   ``_populate_watchlist_tab`` / ``_watchlist_cell_text``. It now posts
-   ``("watchlist_signals", {sym: cells})`` on ``_worker_inbox``; the
-   Tk-thread drain applies it atomically via ``_apply_watchlist_signals``.
-
-The tests below capture the downstream order effects: a stream mutation
-landing between worker start and result delivery must not corrupt the
-delivered result, and the worker must never mutate the shared snapshot
-in place.
-
-See ``gui/watchlist_tab.spec.md`` and ``gui/polling.spec.md``.
+Submission is held at an executor boundary, not by sleeps. Cached Candle
+values must already be owned before a worker can start; real stream ticks
+must not alter them, including during Bars.from_candles conversion.
 """
 from __future__ import annotations
 
 import queue
+import sys
 import threading
-import time
-from typing import Any
+from concurrent.futures import Future
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
-from tradinglab.gui import polling as _polling
+from tradinglab.core.bars import Bars
+from tradinglab.data import DATA_SOURCES
+from tradinglab.data.stream_controller import StreamController
+from tradinglab.gui.polling import PollingMixin
 from tradinglab.gui.watchlist_tab import WatchlistTabMixin
 from tradinglab.models import Candle
-from tradinglab.watchlists.signals import ColumnValue
+from tradinglab.scanner.model import FieldRef
+from tradinglab.watchlists.columns import KIND_SIGNAL, WatchlistColumn
+from tradinglab.watchlists.signals import ColumnValue, WatchlistSignalEvaluator
 
 
-def _bars(state: int, n: int = 40) -> list[Candle]:
-    """40 bars whose closes identify ``state``: ``1000*state + i``."""
-    import datetime as _dt
-
-    out = []
-    base = _dt.datetime(2026, 6, 10, 14, 0, tzinfo=_dt.timezone.utc)
-    for i in range(n):
-        px = 1000.0 * state + i
-        out.append(Candle(date=base + _dt.timedelta(minutes=5 * i),
-                          open=px, high=px + 0.5, low=px - 0.5,
-                          close=px, volume=1000))
-    return out
+def _bars(n=3):
+    base = datetime(2026, 6, 10, 14, tzinfo=timezone.utc)
+    return [
+        Candle(base + timedelta(minutes=5 * i), 100 + i, 102 + i, 99 + i, 101 + i, 1000)
+        for i in range(n)
+    ]
 
 
-def _state_closes(state: int, n: int = 40) -> tuple[float, ...]:
-    return tuple(1000.0 * state + i for i in range(n))
+def _column(field="close", interval="5m"):
+    return WatchlistColumn(KIND_SIGNAL, field, FieldRef.builtin(field, interval=interval))
 
 
 class _Var:
-    def __init__(self, v: str) -> None:
-        self._v = v
+    def __init__(self, value):
+        self.value = value
 
-    def get(self) -> str:
-        return self._v
+    def get(self):
+        assert threading.current_thread() is threading.main_thread()
+        return self.value
 
 
-class _App(WatchlistTabMixin):
-    """Minimal harness satisfying the mixin attribute contract."""
+class _Executor:
+    def __init__(self):
+        self.jobs = []
 
-    def __init__(self, *, tickers: list[str]) -> None:
-        self._full_cache: dict[tuple, list[Candle]] = {}
-        self._watchlist_snapshot: dict[str, dict[str, Any]] = {}
-        self._events_cache: dict[str, Any] = {}
-        self._worker_inbox: queue.Queue = queue.Queue()
+    def submit(self, fn, *args):
+        assert threading.current_thread() is threading.main_thread()
+        future = Future()
+        self.jobs.append((future, fn, args))
+        return future
+
+    def run(self):
+        future, fn, args = self.jobs.pop(0)
+        errors = []
+
+        def worker():
+            if not future.set_running_or_notify_cancel():
+                return
+            try:
+                fn(*args)
+                future.set_result(None)
+            except BaseException as exc:
+                errors.append(exc)
+                future.set_exception(exc)
+
+        thread = threading.Thread(target=worker)
+        thread.start()
+        thread.join(10)
+        assert not thread.is_alive()
+        assert not errors
+
+
+class _App(WatchlistTabMixin, PollingMixin):
+    def __init__(self):
+        self._full_cache = {("yfinance", "AMD", "5m"): _bars()}
+        self._watchlist_snapshot = {}
+        self._worker_inbox = queue.Queue()
+        self._executor = _Executor()
         self.source_var = _Var("yfinance")
         self.interval_var = _Var("5m")
         self._sandbox = None
-        self._tickers = list(tickers)
-        self._watchlist_signals_inflight = False
+        self.tickers = ["AMD"]
+        self.columns = [_column()]
+        self._after_jobs = set()
         self.refresh_calls = 0
 
-    # -- mixin seams -------------------------------------------------
-    def _pinned_ticker_union(self) -> list[str]:
-        return list(self._tickers)
+    def _pinned_ticker_union(self):
+        assert threading.current_thread() is threading.main_thread()
+        return self.tickers
 
-    def _is_sandbox_active(self) -> bool:
-        return False
+    def _pinned_signal_columns(self):
+        assert threading.current_thread() is threading.main_thread()
+        return self.columns
 
-    def _queue_watchlist_snapshot_refresh(self) -> None:
+    def _is_sandbox_active(self):
+        assert threading.current_thread() is threading.main_thread()
+        return self._sandbox is not None
+
+    def _schedule_watchlist_tab_refresh(self):
         self.refresh_calls += 1
 
-    def _cache_is_stale(self, cached, itv) -> bool:  # noqa: ARG002
-        return False
+    def after(self, *args):
+        return "drain"
 
-    # -- test drivers ------------------------------------------------
-    def inbox_items(self) -> list[tuple[str, Any]]:
-        out = []
-        try:
-            while True:
-                out.append(self._worker_inbox.get_nowait())
-        except queue.Empty:
-            pass
-        return out
+    def complete(self):
+        self._executor.run()
+        self._drain_worker_inbox()
+        self._drain_worker_inbox()
+
+    def cell(self, field="close"):
+        return self._watchlist_snapshot["AMD"]["_sig"][field]
 
 
-class _RecordingEvaluator:
-    """Stand-in for WatchlistSignalEvaluator.
-
-    Records the exact bar closes handed to it per symbol and returns a
-    cell carrying the last close. ``on_snapshot`` / ``on_iterated``
-    hooks let tests interleave stream mutations deterministically.
-    """
-
-    def __init__(self, *, bars_provider, source,  # noqa: ANN001
-                 on_snapshot=None, on_iterated=None,  # noqa: ANN001
-                 iter_delay: float = 0.0005) -> None:
-        self._bars_provider = bars_provider
-        self._source = source
-        self._on_snapshot = on_snapshot
-        self._on_iterated = on_iterated
-        self._iter_delay = iter_delay
-        self.seen: list[tuple[float, ...]] = []
-
-    def evaluate(self, symbols, columns):  # noqa: ANN001, ANN202
-        out: dict[str, dict[str, ColumnValue]] = {}
-        for sym in symbols:
-            candles = self._bars_provider(self._source, sym, "5m")
-            if self._on_snapshot is not None:
-                self._on_snapshot()
-            closes = []
-            for c in candles:
-                closes.append(c.close)
-                if self._iter_delay:
-                    time.sleep(self._iter_delay)
-            if self._on_iterated is not None:
-                self._on_iterated(tuple(closes))
-            self.seen.append(tuple(closes))
-            last = closes[-1] if closes else None
-            out[sym] = {"sig1": ColumnValue(last, f"{last}", "ok")}
-        return out
-
-
-@pytest.fixture()
-def _patch_evaluator(monkeypatch):
-    """Install the recording evaluator; return its factory kwargs hook."""
-    hooks: dict[str, Any] = {}
-
-    def _factory(*, bars_provider, source):
-        return _RecordingEvaluator(bars_provider=bars_provider,
-                                   source=source, **hooks)
-
-    monkeypatch.setattr(
-        "tradinglab.watchlists.signals.WatchlistSignalEvaluator", _factory)
-    return hooks
-
-
-def _run_worker(app: _App) -> None:
-    """Run ``_compute_watchlist_signals`` on a real worker thread."""
-    errors: list[BaseException] = []
-
-    def _target() -> None:
-        try:
-            app._compute_watchlist_signals(["AMD"], [], "yfinance")
-        except BaseException as exc:  # noqa: BLE001
-            errors.append(exc)
-
-    t = threading.Thread(target=_target)
-    t.start()
-    t.join(timeout=30.0)
-    assert not t.is_alive(), "signal worker hung"
-    assert not errors, f"worker raised: {errors!r}"
-
-
-# ---------------------------------------------------------------------------
-# 1. The worker receives a snapshot, never the live list
-# ---------------------------------------------------------------------------
-
-
-def test_signal_bars_returns_a_copy_of_the_cached_list():
-    """``_signal_bars`` must not hand the live ``_full_cache`` list out."""
-    app = _App(tickers=["AMD"])
-    live = _bars(0)
-    app._full_cache[("yfinance", "AMD", "5m")] = live
-
-    bars = app._signal_bars("yfinance", "AMD", "5m")
-
-    assert bars is not live
-    assert [c.close for c in bars] == list(_state_closes(0))
-
-
-def test_worker_evaluation_sees_exactly_one_cache_state(_patch_evaluator):
-    """Churn the live list while the worker evaluates.
-
-    The evaluator's slow iteration widens any race window: with the old
-    live-list hand-off it would observe a mixture of two states (or
-    raise); with snapshot-at-handoff it must see exactly one complete
-    state — never a mix.
-    """
-    app = _App(tickers=["AMD"])
-    live = _bars(0)
-    app._full_cache[("yfinance", "AMD", "5m")] = live
-    exact = {_state_closes(k) for k in range(50)}
-
-    stop = threading.Event()
-
-    def _churn() -> None:
-        # In-place replace, mirroring how streaming mutates the cached
-        # list without swapping the object identity.
-        k = 1
-        while not stop.is_set():
-            live[:] = _bars(k % 50)
-            k += 1
-
-    churn = threading.Thread(target=_churn)
-    churn.start()
-    try:
-        _run_worker(app)
-    finally:
-        stop.set()
-        churn.join(timeout=30.0)
-
-    # The recording evaluator instance is cached on the app; fetch it.
-    ev = app._watchlist_signal_evaluator
-    assert len(ev.seen) == 1, f"expected one evaluation, saw {len(ev.seen)}"
-    assert ev.seen[0] in exact, (
-        "worker observed a torn mix of cache states "
-        f"(first/last closes: {ev.seen[0][:3]}…{ev.seen[0][-3:]})"
+def _replay(app, index=1):
+    bars = app._full_cache[("yfinance", "AMD", "5m")]
+    session = SimpleNamespace(
+        data_source="yfinance", interval="5m",
+        visible_candles_by_symbol={"AMD": bars[:index + 1]},
+        daily_full_by_symbol={},
+        timestamp=int(bars[index].date.timestamp()),
     )
+    session.clock_ts = lambda: session.timestamp
+    session.current_session_date = lambda: bars[index].date.date()
+    app._sandbox = session
+    return session
 
 
-# ---------------------------------------------------------------------------
-# 2. The shared snapshot is only ever touched on the Tk thread
-# ---------------------------------------------------------------------------
+def _tick(app, value=200):
+    controller = StreamController()
+    live = app._full_cache[("yfinance", "AMD", "5m")]
+    assert controller.apply_tick(
+        (controller.token, "primary", "yfinance", "AMD", "5m", "tick",
+         replace(live[-1], high=value, close=value, volume=2000)),
+        app._full_cache, None,
+    )
+    assert live[-1].close == value
 
 
-def test_worker_never_mutates_the_shared_snapshot(_patch_evaluator):
-    """Pre-existing ``_sig`` dict must be the identical, untouched object
-    after the worker run; results travel via the inbox instead."""
-    app = _App(tickers=["AMD"])
-    app._full_cache[("yfinance", "AMD", "5m")] = _bars(0)
-    old_sig = {"old_col": ColumnValue(1.0, "1.0", "ok")}
-    app._watchlist_snapshot["AMD"] = {"last": 100.0, "_sig": old_sig}
-
-    _run_worker(app)
-
-    snap = app._watchlist_snapshot["AMD"]
-    assert snap["_sig"] is old_sig, "worker mutated the shared _sig dict"
-    assert snap["_sig"] == {"old_col": old_sig["old_col"]}
-    assert snap["last"] == 100.0
-
-    kinds = [kind for kind, _payload in app.inbox_items()]
-    assert "watchlist_signals" in kinds
-    assert "refresh" in kinds
+def test_signal_bars_owns_values_after_real_stream_tick():
+    app = _App()
+    snapshot = app._signal_bars("yfinance", "AMD", "5m")
+    _tick(app)
+    cells = WatchlistSignalEvaluator(
+        bars_provider=lambda *_: snapshot,
+    ).evaluate(["AMD"], [_column(field) for field in ("high", "close", "volume")])["AMD"]
+    assert [cells[field].raw for field in ("high", "close", "volume")] == [104, 103, 1000]
 
 
-def test_tk_thread_apply_merges_cells_atomically(_patch_evaluator):
-    """Draining the inbox payload on the Tk thread merges, preserving
-    pre-existing cells and other snapshot keys."""
-    app = _App(tickers=["AMD"])
-    app._full_cache[("yfinance", "AMD", "5m")] = _bars(0)
-    old_cell = ColumnValue(1.0, "1.0", "ok")
-    app._watchlist_snapshot["AMD"] = {"last": 100.0,
-                                      "_sig": {"old_col": old_cell}}
-
-    _run_worker(app)
-    payloads = [p for k, p in app.inbox_items() if k == "watchlist_signals"]
-    assert len(payloads) == 1
-
-    # Tk-thread drain:
-    app._apply_watchlist_signals(payloads[0])
-
-    sig = app._watchlist_snapshot["AMD"]["_sig"]
-    assert sig["old_col"] is old_cell
-    assert sig["sig1"].raw == _state_closes(0)[-1]
-    assert app._watchlist_snapshot["AMD"]["last"] == 100.0
+@pytest.mark.parametrize("replay", [False, True])
+def test_submission_owns_all_values_before_worker_starts(replay):
+    app = _App()
+    app.columns = [_column(field) for field in ("high", "close", "volume")]
+    if replay:
+        _replay(app, index=2)
+    live = app._full_cache[("yfinance", "AMD", "5m")]
+    app._preload_watchlist_signals()
+    _tick(app)
+    live.append(replace(live[-1], date=live[-1].date + timedelta(minutes=5), close=300))
+    app.complete()
+    assert [app.cell(field).raw for field in ("high", "close", "volume")] == [104, 103, 1000]
+    assert not app._watchlist_signals_inflight
+    assert app.refresh_calls == 1
 
 
-def test_apply_creates_sig_dict_for_new_tickers():
-    """Tickers with no snapshot entry yet get one on the Tk thread."""
-    app = _App(tickers=["AMD"])
-    cell = ColumnValue(5.0, "5.0", "ok")
-
-    app._apply_watchlist_signals({"AMD": {"sig1": cell}})
-
-    assert app._watchlist_snapshot["AMD"]["_sig"] == {"sig1": cell}
-
-
-# ---------------------------------------------------------------------------
-# 3. End-to-end: worker → inbox → real Tk-thread drain → snapshot
-# ---------------------------------------------------------------------------
-
-
-class _DrainHarness(WatchlistTabMixin, _polling.PollingMixin):
-    """Combined harness wiring the real ``_drain_worker_inbox`` to the
-    real ``_apply_watchlist_signals`` (no Tk interpreter)."""
-
-    def __init__(self) -> None:
-        self._worker_inbox: queue.Queue = queue.Queue()
-        self._after_jobs: set[str] = set()
-        self._watchlist_snapshot: dict[str, dict[str, Any]] = {}
-        self._full_cache: dict[tuple, list[Candle]] = {}
-        self._sandbox = None
-        self._watchlist_signals_inflight = False
-        self.refresh_calls = 0
-        self.after_calls: list[tuple[int, Any]] = []
-
-    def _is_sandbox_active(self) -> bool:
-        return False
-
-    def _schedule_watchlist_tab_refresh(self) -> None:
-        self.refresh_calls += 1
-
-    def after(self, delay_ms: int, fn):  # noqa: ANN001, ANN202
-        self.after_calls.append((delay_ms, fn))
-        return f"job{len(self.after_calls)}"
-
-    def after_cancel(self, jid: str) -> None:  # noqa: ARG002
-        pass
-
-
-def test_end_to_end_worker_inbox_drain_applies_signals(_patch_evaluator):
-    """Downstream order: the worker's posted payload survives the real
-    drain and lands in the snapshot on the Tk thread, followed by the
-    refresh the worker's ``finally`` queued."""
-    h = _DrainHarness()
-    h._full_cache[("yfinance", "AMD", "5m")] = _bars(0)
-
-    errors: list[BaseException] = []
-
-    def _target() -> None:
-        try:
-            h._compute_watchlist_signals(["AMD"], [], "yfinance")
-        except BaseException as exc:  # noqa: BLE001
-            errors.append(exc)
-
-    t = threading.Thread(target=_target)
-    t.start()
-    t.join(timeout=30.0)
-    assert not t.is_alive()
-    assert not errors
-
-    # Tk-thread drain (main thread here).
-    h._drain_worker_inbox()
-
-    sig = h._watchlist_snapshot["AMD"]["_sig"]
-    assert sig["sig1"].raw == _state_closes(0)[-1]
-    assert h.refresh_calls == 1
-    # Drain re-armed itself for the next tick.
-    assert h.after_calls and h.after_calls[-1][0] == 80
-
-
-# ---------------------------------------------------------------------------
-# 4. Ordering: a stream mutation between handoff and delivery is harmless
-# ---------------------------------------------------------------------------
-
-
-def test_stream_mutation_after_handoff_does_not_corrupt_result(
-    _patch_evaluator,
-):
-    """The delivered result is anchored to the handoff snapshot.
-
-    The worker snapshots bars, the stream then appends newer bars to the
-    live list, and only then does the worker finish iterating. The
-    posted cells must reflect the snapshot (state 0's last close), not
-    the post-mutation tail.
-    """
-    app = _App(tickers=["AMD"])
-    live = _bars(0)
-    app._full_cache[("yfinance", "AMD", "5m")] = live
-
-    snapshotted = threading.Event()
+def test_real_tick_between_high_and_close_conversion_cannot_tear_values(monkeypatch):
+    app = _App()
+    app.columns = [_column("high"), _column("close")]
+    app._preload_watchlist_signals()
+    high_read = threading.Event()
     proceed = threading.Event()
-    _patch_evaluator["on_snapshot"] = lambda: (
-        snapshotted.set(), proceed.wait(timeout=30.0),
-    )
+    original = Bars.from_candles.__func__
 
-    errors: list[BaseException] = []
+    def convert(cls, candles):
+        # Pause the REAL converter immediately before its close assignment.
+        # This reproduces the reported high(old)/close(new) torn candle.
+        paused = False
 
-    def _target() -> None:
+        def trace(frame, event, arg):
+            nonlocal paused
+            if (not paused and event == "line"
+                    and frame.f_code is original.__code__
+                    and frame.f_locals.get("i") == len(candles) - 1):
+                import linecache
+                line = linecache.getline(frame.f_code.co_filename, frame.f_lineno).strip()
+                if line == "close[i] = c.close":
+                    paused = True
+                    high_read.set()
+                    assert proceed.wait(10)
+            return trace
+
+        previous_trace = sys.gettrace()
+        sys.settrace(trace)
         try:
-            app._compute_watchlist_signals(["AMD"], [], "yfinance")
-        except BaseException as exc:  # noqa: BLE001
-            errors.append(exc)
+            return original(cls, candles)
+        finally:
+            sys.settrace(previous_trace)
 
-    t = threading.Thread(target=_target)
-    t.start()
+    monkeypatch.setattr(Bars, "from_candles", classmethod(convert))
+    future, fn, args = app._executor.jobs.pop(0)
+    thread = threading.Thread(target=fn, args=args)
+    thread.start()
     try:
-        assert snapshotted.wait(timeout=30.0), "worker never snapshotted"
-        # Stream mutation lands between handoff and delivery.
-        live.extend(_bars(1))
-        proceed.set()
-        t.join(timeout=30.0)
+        assert high_read.wait(10)
+        _tick(app)
     finally:
         proceed.set()
-        t.join(timeout=30.0)
-    assert not t.is_alive()
-    assert not errors
+        thread.join(10)
+    assert not thread.is_alive()
+    app._drain_worker_inbox()
+    assert (app.cell("high").raw, app.cell().raw) == (104, 103)
 
-    payloads = [p for k, p in app.inbox_items() if k == "watchlist_signals"]
-    assert len(payloads) == 1
-    # State 0's last close (39.0), NOT the appended state-1 tail (1039.0).
-    assert payloads[0]["AMD"]["sig1"].raw == _state_closes(0)[-1] == 39.0
-    assert payloads[0]["AMD"]["sig1"].raw != _state_closes(1)[-1]
+
+def test_worker_never_mutates_snapshot_or_releases_inflight_before_drain():
+    app = _App()
+    app._preload_watchlist_signals()
+    old_sig = {"other": ColumnValue(42, "42")}
+    app._watchlist_snapshot["AMD"] = {"last": 7, "_sig": old_sig}
+    app._executor.run()
+    assert app._watchlist_snapshot["AMD"]["_sig"] is old_sig
+    assert set(old_sig) == {"other"}
+    assert app._watchlist_signals_inflight
+    app._preload_watchlist_signals()
+    assert not app._executor.jobs
+    app._drain_worker_inbox()
+    assert app._watchlist_snapshot["AMD"]["last"] == 7
+    assert app.cell("other").raw == 42
+    assert app.cell().raw == 103
+
+
+@pytest.mark.parametrize("change", ["source", "columns", "tickers", "enter", "exit", "clock", "session"])
+def test_stale_context_is_rejected_and_latest_context_resubmitted(change):
+    app = _App()
+    if change in ("exit", "clock", "session"):
+        _replay(app)
+    app._preload_watchlist_signals()
+    app._executor.run()
+    if change == "source":
+        app.source_var.value = "other"
+        app._full_cache[("other", "AMD", "5m")] = _bars()
+    elif change == "columns":
+        app.columns = [_column("high")]
+    elif change == "tickers":
+        app.tickers = ["MSFT"]
+        app._full_cache[("yfinance", "MSFT", "5m")] = _bars()
+    elif change == "enter":
+        _replay(app)
+    elif change == "exit":
+        app._sandbox = None
+    elif change == "clock":
+        app._sandbox.timestamp -= 300
+    else:
+        _replay(app)
+    app._drain_worker_inbox()
+    assert not any(snap.get("_sig") for snap in app._watchlist_snapshot.values())
+    assert app._watchlist_signals_inflight
+    assert len(app._executor.jobs) == 1
+    app.complete()
+    assert any(snap.get("_sig") for snap in app._watchlist_snapshot.values())
+    assert not app._watchlist_signals_inflight
+
+
+def test_old_generation_cannot_retire_a_new_job_even_after_context_returns():
+    app = _App()
+    app._preload_watchlist_signals()
+    app._executor.run()
+    item = app._worker_inbox.get_nowait()
+    app.source_var.value = "other"
+    app._preload_watchlist_signals()
+    app.source_var.value = "yfinance"
+    app._preload_watchlist_signals()
+    app._worker_inbox.put_nowait(item)
+    app._drain_worker_inbox()
+    assert len(app._executor.jobs) == 1
+    app._worker_inbox.put_nowait(item)
+    app._drain_worker_inbox()
+    assert app._watchlist_signals_inflight
+    assert len(app._executor.jobs) == 1
+    assert not app._watchlist_snapshot
+    app.complete()
+    assert app.cell().raw == 103
+
+
+def test_column_parameters_are_owned_and_changes_invalidate_results():
+    app = _App()
+    params = {"nested": {"value": 1}}
+    app.columns = [replace(app.columns[0], ref=FieldRef("builtin", "close", params=params, interval="5m"))]
+    app._preload_watchlist_signals()
+    context = app._executor.jobs[0][2][1]
+    params["nested"]["value"] = 2
+    assert context.columns[0].ref.params["nested"]["value"] == 1
+    app.complete()
+    assert not app._watchlist_snapshot
+    assert app._executor.jobs
+    app.complete()
+    assert app.cell().raw == 103
+
+
+def test_same_timestamp_correction_recomputes_on_next_job():
+    app = _App()
+    app._preload_watchlist_signals()
+    app.complete()
+    assert app.cell().raw == 103
+    _tick(app)
+    app._preload_watchlist_signals()
+    app.complete()
+    assert app.cell().raw == 200
+
+
+def test_duplicate_completion_cannot_overwrite_or_retire_later_same_context_job():
+    app = _App()
+    app._preload_watchlist_signals()
+    app._executor.run()
+    item = app._worker_inbox.get_nowait()
+    app._worker_inbox.put_nowait(item)
+    app._drain_worker_inbox()
+    _tick(app)
+    app._preload_watchlist_signals()
+    app._worker_inbox.put_nowait(item)
+    app._drain_worker_inbox()
+    assert app._watchlist_signals_inflight
+    app.complete()
+    assert app.cell().raw == 200
+    app._worker_inbox.put_nowait(item)
+    app._drain_worker_inbox()
+    assert app.cell().raw == 200
+
+
+@pytest.mark.parametrize("cached", [True, False])
+def test_replay_uses_pinned_source_clock_and_correct_interval(monkeypatch, cached):
+    app = _App()
+    session = _replay(app)
+    app.source_var.value = "Auto"
+    app.columns = [_column(), _column("high", interval=None)]
+    today = _bars()[0]
+    daily = [replace(today, date=today.date - timedelta(days=1), high=77),
+             replace(today, high=999)]
+    calls = []
+
+    def fetch(symbol, interval):
+        assert threading.current_thread() is not threading.main_thread()
+        calls.append((symbol, interval))
+        return _bars() if interval == "5m" else daily
+
+    monkeypatch.setitem(DATA_SOURCES, "yfinance", fetch)
+    if cached:
+        session.daily_full_by_symbol["AMD"] = daily
+    else:
+        session.visible_candles_by_symbol.clear()
+        app._full_cache.clear()
+    app._preload_watchlist_signals()
+    assert not calls
+    app.complete()
+    assert app.cell().raw == 102
+    assert app.cell("high").raw == 77
+    assert set(calls) == (set() if cached else {("AMD", "5m"), ("AMD", "1d")})
+
+
+def test_replay_without_clock_never_uses_or_fetches_live_data(monkeypatch):
+    app = _App()
+    session = _replay(app)
+    session.clock_ts = lambda: None
+    calls = []
+    monkeypatch.setitem(DATA_SOURCES, "yfinance", lambda *args: calls.append(args) or _bars())
+    app._preload_watchlist_signals()
+    app.complete()
+    assert app.cell().state == "insufficient"
+    assert not calls
+
+
+def test_worker_uses_frozen_fetcher_and_clock_after_replay_advances(monkeypatch):
+    app = _App()
+    session = _replay(app)
+    session.visible_candles_by_symbol.clear()
+    app._full_cache.clear()
+    calls = []
+    monkeypatch.setitem(DATA_SOURCES, "yfinance", lambda *args: calls.append(args) or _bars())
+    app._preload_watchlist_signals()
+    session.timestamp += 300
+    monkeypatch.setitem(DATA_SOURCES, "yfinance", lambda *_: pytest.fail("new fetcher used by old job"))
+    app._executor.run()
+    _, payload = app._worker_inbox.get_nowait()
+    assert payload[2]["AMD"]["close"].raw == 102
+    assert calls == [("AMD", "5m")]
+
+
+@pytest.mark.parametrize("failure", ["submit", "cancel", "evaluate", "fetch"])
+def test_failure_retires_job_and_allows_retry(monkeypatch, caplog, failure):
+    app = _App()
+    if failure == "submit":
+        monkeypatch.setattr(app._executor, "submit", lambda *_: (_ for _ in ()).throw(RuntimeError("closed")))
+    elif failure == "evaluate":
+        monkeypatch.setattr(WatchlistSignalEvaluator, "evaluate",
+                            lambda *_: (_ for _ in ()).throw(RuntimeError("bad evaluator")))
+    elif failure == "fetch":
+        app._full_cache.clear()
+        monkeypatch.setitem(DATA_SOURCES, "yfinance",
+                            lambda *_: (_ for _ in ()).throw(RuntimeError("offline")))
+    app._preload_watchlist_signals()
+    if failure == "cancel":
+        assert app._executor.jobs[0][0].cancel()
+    if failure != "submit":
+        app.complete()
+    assert not app._watchlist_signals_inflight
+    assert app._watchlist_signal_job is None
+    if failure != "cancel":
+        assert "Could not" in caplog.text
+    monkeypatch.undo()
+    app._full_cache[("yfinance", "AMD", "5m")] = _bars()
+    app._preload_watchlist_signals()
+    app.complete()
+    assert app.cell().raw == 103
+
+
+def test_removed_columns_discard_pending_results_without_resubmission():
+    app = _App()
+    app._preload_watchlist_signals()
+    app.columns = []
+    app.complete()
+    assert not app._watchlist_snapshot
+    assert not app._executor.jobs
+    assert not app._watchlist_signals_inflight
