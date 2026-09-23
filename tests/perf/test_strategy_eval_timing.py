@@ -34,6 +34,12 @@ per-bar cost — e.g. re-introducing per-bar allocations or Python-level
 work inside the loop (see CLAUDE.md §7.14 for the perf contracts that
 motivated this), not a precision instrument for 2× regressions.
 
+Every warmup and timed result must contain all 8,000 equity points,
+reach the final input timestamp, and close trades entered on multiple
+ET sessions. These checks run outside the timed region: early returns
+and no-trade runs cannot masquerade as speedups, even when selecting
+just one timing case.
+
 Budgets and rationale
 ---------------------
 Budgets are sized at roughly **20×+ the dev-box min-of-N baseline** so
@@ -44,6 +50,11 @@ this gate was written):
 
 - ``market-stop``: baseline ~22.5µs/bar → budget 0.5ms/bar (~22×)
 - ``close-gt-ema21-stop``: baseline ~35.9µs/bar → budget 2.0ms/bar (~55×)
+
+These are catastrophic-regression budgets, not latency targets. The
+timing tests have an explicit 180s timeout: eight evaluations (warmup
+plus seven samples) at the EMA budget take 128s, already exceeding the
+default 120s timeout before assertion and setup overhead.
 
 Per CLAUDE.md §7.26 we gate on ``min(samples)``, not the median, so the
 assertion represents best-case algorithmic timing and isn't tripped by
@@ -74,6 +85,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pytest
 
+from tradinglab.backtest.session import SessionResult
 from tradinglab.entries.model import (
     Direction,
     EntryStrategy,
@@ -230,7 +242,7 @@ def _stop_5pct_exit() -> ExitStrategy:
     )
 
 
-def _evaluate(entry: EntryStrategy, candles: list[Candle]):
+def _evaluate(entry: EntryStrategy, candles: list[Candle]) -> SessionResult:
     return evaluate_symbol(
         symbol="TEST",
         candles=candles,
@@ -251,6 +263,27 @@ def _entry_for(strategy_id: str) -> EntryStrategy:
                 f"budgeted strategies: {sorted(_BUDGETS_MS_PER_BAR)}")
 
 
+def _assert_complete_workload(
+    strategy_id: str, candles: list[Candle], result: SessionResult,
+) -> None:
+    assert len(candles) == 8_000, "perf gate requires the fixed 8,000-bar workload"
+    assert len(result.equity_curve) == len(candles), (
+        f"{strategy_id}: incomplete workload: expected {len(candles)} equity points, "
+        f"got {len(result.equity_curve)}"
+    )
+    assert result.equity_curve[-1][0] == int(candles[-1].date.timestamp()), (
+        f"{strategy_id}: equity curve did not reach the final input timestamp"
+    )
+    trade_sessions = {
+        datetime.fromtimestamp(trade.entry_ts, _ET).date()
+        for trade in result.post_trades
+    }
+    assert len(trade_sessions) > 1, (
+        f"{strategy_id}: workload must close trades entered on multiple ET sessions; "
+        f"got {len(trade_sessions)}. Fix the fixture or the strategy."
+    )
+
+
 @pytest.fixture(scope="module")
 def synthetic_candles() -> list[Candle]:
     return _synthetic_rth_5m_candles()
@@ -258,23 +291,20 @@ def synthetic_candles() -> list[Candle]:
 
 @pytest.mark.perf
 def test_eval_workloads_produce_trades(synthetic_candles: list[Candle]) -> None:
-    """Anti-vacuity guard: every budgeted strategy must actually trade.
+    """Every budgeted strategy must finish the workload and trade across sessions.
 
     A timing gate that only ever ticks bars with no entries/exits would
-    still catch loop-level regressions, but asserting fills exist keeps
-    the workload representative of the entry+exit paths it claims to
-    cover. Fails loudly if fixture/strategy drift ever neuters it.
+    still catch loop-level regressions, but requiring closed trades
+    across sessions keeps the workload representative of the entry+exit
+    paths it claims to cover. Fails loudly on fixture/strategy drift.
     """
     for strategy_id in _BUDGETS_MS_PER_BAR:
         result = _evaluate(_entry_for(strategy_id), synthetic_candles)
-        assert len(result.post_trades) > 0, (
-            f"{strategy_id}: evaluator produced zero closed trades on the "
-            f"synthetic workload — the timing gate would no longer be "
-            f"measuring the entry/exit paths. Fix the fixture or the strategy."
-        )
+        _assert_complete_workload(strategy_id, synthetic_candles, result)
 
 
 @pytest.mark.perf
+@pytest.mark.timeout(180)
 @pytest.mark.parametrize(
     "strategy_id,budget_ms_per_bar",
     sorted(_BUDGETS_MS_PER_BAR.items()),
@@ -293,14 +323,17 @@ def test_strategy_eval_per_bar_budget(
 
     # Warmup: import/class construction and first-touch allocation stay
     # out of the measurement.
-    _evaluate(entry, synthetic_candles)
+    result = _evaluate(entry, synthetic_candles)
+    _assert_complete_workload(strategy_id, synthetic_candles, result)
 
     n = len(synthetic_candles)
     samples_us_per_bar: list[float] = []
     for _ in range(_TIMING_RUNS):
         t0 = time.perf_counter()
-        _evaluate(entry, synthetic_candles)
-        samples_us_per_bar.append((time.perf_counter() - t0) * 1e6 / n)
+        result = _evaluate(entry, synthetic_candles)
+        elapsed = time.perf_counter() - t0
+        _assert_complete_workload(strategy_id, synthetic_candles, result)
+        samples_us_per_bar.append(elapsed * 1e6 / n)
 
     min_us = min(samples_us_per_bar)
     median_us = statistics.median(samples_us_per_bar)
