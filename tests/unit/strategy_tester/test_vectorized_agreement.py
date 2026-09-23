@@ -7,8 +7,8 @@ final cash, cash/quantity adjustments, decisions, and dtypes.
 
 Covers every entry trigger kind, every exit trigger kind, both
 directions, arm-window (incl. midnight wrap + malformed values),
-RTH gating, cooldown/caps, STACK policy (vectorized entry, legacy
-exits), partial exits, EOD kill switch, NaNs, flat series, single-bar
+RTH gating, cooldown/caps, STACK policy (scalar price exits), partial
+exits, EOD kill switch, NaNs, flat series, single-bar
 input, timestamp gaps, warmup mode, and fixed-seed randomized
 strategy/candle fuzzing.
 """
@@ -240,13 +240,13 @@ def _run_both(
     )
     base.update(kwargs)
     r_new = evaluate_symbol(
-        **base,
+        **copy.deepcopy(base),
         entry_strategy=copy.deepcopy(entry),
         exit_strategy=copy.deepcopy(exit),
         use_vectorized=True,
     )
     r_old = evaluate_symbol(
-        **base,
+        **copy.deepcopy(base),
         entry_strategy=copy.deepcopy(entry),
         exit_strategy=copy.deepcopy(exit),
         use_vectorized=False,
@@ -734,8 +734,212 @@ def test_disabled_entry_agrees() -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("direction", [Direction.LONG, Direction.SHORT])
+@pytest.mark.parametrize("same_leg", [False, True])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_duplicate_exit_ids_do_not_share_price_targets(direction, same_leg, reverse) -> None:
+    entry = _entry_strategy(
+        EntryTrigger(kind=EntryTriggerKind.MARKET), max_per_symbol=1, direction=direction,
+    )
+    profit, stop = (110.0, 90.0) if direction is Direction.LONG else (90.0, 110.0)
+    triggers = [
+        ExitTrigger(id="shared", kind=ExitTriggerKind.LIMIT, price=profit),
+        ExitTrigger(id="shared", kind=ExitTriggerKind.STOP, price=stop),
+    ]
+    if reverse:
+        triggers.reverse()
+    legs = [ExitLeg(id="both", triggers=triggers)] if same_leg else [
+        _leg(trigger, leg_id=str(i)) for i, trigger in enumerate(triggers)
+    ]
+    exit = _exit_strategy(legs)
+    r_new, r_old = _run_both(candles=_et_candles([100.0] * 8), entry=entry, exit=exit)
+    assert len(r_old.fills) == 1
+    _assert_identical(r_new, r_old)
+
+
+@pytest.mark.parametrize("cutoff", ["09:99", "-1:00", "24:00", "12:-1", "bogus", "", None])
+def test_invalid_exit_cutoff_does_not_fire(cutoff) -> None:
+    entry = _entry_strategy(EntryTrigger(kind=EntryTriggerKind.MARKET), max_per_symbol=1)
+    exit = _exit_strategy([_leg(ExitTrigger(kind=ExitTriggerKind.TIME_OF_DAY, time_of_day=cutoff))])
+    r_new, r_old = _run_both(candles=_et_candles([100.0] * 30), entry=entry, exit=exit)
+    assert len(r_old.fills) == 1
+    _assert_identical(r_new, r_old)
+
+
+@pytest.mark.parametrize("scope", ["entry", "exit"])
+@pytest.mark.parametrize("custom_kind", [False, True])
+@pytest.mark.parametrize("fire", [False, True])
+def test_registered_custom_handler_is_not_bypassed(monkeypatch, scope, custom_kind, fire) -> None:
+    from tradinglab.entries.dispatch import _ENTRY_DISPATCH
+    from tradinglab.exits.dispatch import _EXIT_DISPATCH
+    from tradinglab.exits.spec import Decision
+
+    entry_kind = "custom" if scope == "entry" and custom_kind else EntryTriggerKind.MARKET
+    exit_kind = "custom" if scope == "exit" and custom_kind else ExitTriggerKind.MARKET
+    entry = _entry_strategy(EntryTrigger(kind=entry_kind), max_per_symbol=1)
+    exit = _exit_strategy([_leg(ExitTrigger(kind=exit_kind))])
+    calls = []
+    if scope == "entry":
+        def handler(trigger, ctx):
+            calls.append((trigger.kind, ctx.bar.close))
+            return fire, []
+        monkeypatch.setitem(_ENTRY_DISPATCH, entry_kind, handler)
+    else:
+        def handler(trigger, ctx):
+            calls.append((trigger.kind, ctx.bar.close))
+            return Decision(fire=fire)
+        monkeypatch.setitem(_EXIT_DISPATCH, exit_kind, handler)
+    r_new, r_old = _run_both(candles=_et_candles([100.0] * 8), entry=entry, exit=exit)
+    assert calls
+    assert len(r_old.fills) == (2 if fire else (0 if scope == "entry" else 1))
+    _assert_identical(r_new, r_old)
+
+
+@pytest.mark.parametrize("scope", ["entry", "exit"])
+def test_handler_replaced_after_plan_build_uses_scalar(monkeypatch, scope) -> None:
+    from tradinglab.entries.dispatch import _ENTRY_DISPATCH
+    from tradinglab.exits.dispatch import _EXIT_DISPATCH
+    from tradinglab.exits.spec import Decision
+    from tradinglab.strategy_tester import evaluator
+
+    entry = _entry_strategy(EntryTrigger(kind=EntryTriggerKind.MARKET), max_per_symbol=1)
+    exit = _exit_strategy([_leg(ExitTrigger(kind=ExitTriggerKind.LIMIT, price=90.0))])
+    original = evaluator.vector_eval.build_plan
+    calls = []
+
+    def handler(trigger, ctx):
+        calls.append(ctx.bar.date if scope == "exit" else ctx.bar.close)
+        if scope == "exit":
+            assert ctx.bar.date.timestamp() > 0
+            # Must not leak this mutation into the next bar's position adapter.
+            assert ctx.position.qty_open == 5.0
+            ctx.position.qty_open = 123.0
+            return Decision(fire=False)
+        return False, []
+
+    def build_and_replace(**kwargs):
+        plan = original(**kwargs)
+        registry = _ENTRY_DISPATCH if scope == "entry" else _EXIT_DISPATCH
+        kind = EntryTriggerKind.MARKET if scope == "entry" else ExitTriggerKind.LIMIT
+        monkeypatch.setitem(registry, kind, handler)
+        return plan
+
+    monkeypatch.setattr(evaluator.vector_eval, "build_plan", build_and_replace)
+    r_new, r_old = _run_both(candles=_et_candles([100.0] * 8), entry=entry, exit=exit)
+    assert calls
+    _assert_identical(r_new, r_old)
+
+
+@pytest.mark.parametrize("scope", ["entry", "exit"])
+def test_custom_indicator_handler_is_not_bypassed(monkeypatch, scope) -> None:
+    from tradinglab.entries.dispatch import _ENTRY_DISPATCH
+    from tradinglab.exits.dispatch import _EXIT_DISPATCH
+    from tradinglab.exits.spec import Decision
+
+    entry = _entry_strategy(EntryTrigger(
+        kind=EntryTriggerKind.INDICATOR, condition=_close_gt(50.0),
+    ), max_per_symbol=1)
+    exit = _exit_strategy([_leg(ExitTrigger(kind=ExitTriggerKind.INDICATOR, condition=_close_gt(50.0)))])
+    if scope == "entry":
+        monkeypatch.setitem(_ENTRY_DISPATCH, EntryTriggerKind.INDICATOR, lambda t, c: (False, []))
+    else:
+        monkeypatch.setitem(_EXIT_DISPATCH, ExitTriggerKind.INDICATOR, lambda t, c: Decision(fire=False))
+    r_new, r_old = _run_both(candles=_et_candles([100.0] * 8), entry=entry, exit=exit)
+    assert len(r_old.fills) == (0 if scope == "entry" else 1)
+    _assert_identical(r_new, r_old)
+
+
+@pytest.mark.parametrize("kind", [ExitTriggerKind.LIMIT, ExitTriggerKind.STOP, ExitTriggerKind.STOP_LIMIT])
+def test_replaced_price_handler_is_not_bypassed(monkeypatch, kind) -> None:
+    from tradinglab.exits.dispatch import _EXIT_DISPATCH
+    from tradinglab.exits.spec import Decision
+
+    entry = _entry_strategy(EntryTrigger(kind=EntryTriggerKind.MARKET), max_per_symbol=1)
+    exit = _exit_strategy([_leg(ExitTrigger(
+        kind=kind, price=99.0 if kind is ExitTriggerKind.LIMIT else 101.0,
+    ))])
+    calls = []
+
+    def handler(trigger, ctx):
+        calls.append(trigger.kind)
+        return Decision(fire=False)
+
+    monkeypatch.setitem(_EXIT_DISPATCH, kind, handler)
+    r_new, r_old = _run_both(candles=_et_candles([100.0] * 8), entry=entry, exit=exit)
+    assert calls
+    assert len(r_old.fills) == 1
+    _assert_identical(r_new, r_old)
+
+
+@pytest.mark.parametrize("use_vectorized", [False, True])
+def test_unsupported_exit_kind_still_raises(monkeypatch, use_vectorized) -> None:
+    from tradinglab.exits.dispatch import _EXIT_DISPATCH
+    from tradinglab.strategy_tester import UnsupportedTriggerKind
+
+    monkeypatch.delitem(_EXIT_DISPATCH, ExitTriggerKind.LIMIT)
+    with pytest.raises(UnsupportedTriggerKind) as exc:
+        evaluate_symbol(
+            symbol="TEST", candles=_et_candles([100.0] * 8), interval="5m",
+            entry_strategy=_entry_strategy(EntryTrigger(kind=EntryTriggerKind.MARKET)),
+            exit_strategy=_exit_strategy([_leg(ExitTrigger(kind=ExitTriggerKind.LIMIT, price=110.0))]),
+            starting_cash=100_000.0, cost_model=CostModel(), use_vectorized=use_vectorized,
+        )
+    assert exc.value.side == "exit"
+
+
+@pytest.mark.parametrize("eod", [False, True])
+def test_cancel_and_warmup_agree(eod) -> None:
+    from .test_cancel_responsiveness import _CountingCancelToken
+
+    candles = _et_candles([100.0] * 600, step_minutes=1)
+    entry = _entry_strategy(EntryTrigger(kind=EntryTriggerKind.MARKET))
+    exit = _exit_strategy(
+        [_leg(ExitTrigger(kind=ExitTriggerKind.STOP, price=50.0))], eod_kill_switch=eod,
+    )
+    r_new, r_old = _run_both(
+        candles=candles, entry=entry, exit=exit, interval="1m",
+        warmup_until_ts=int(candles[30].date.timestamp()),
+        cancel_token=_CountingCancelToken(threshold=1),
+    )
+    assert 0 < len(r_old.equity_curve) < len(candles)
+    assert len(r_old.fills) == (2 if eod else 1)
+    _assert_identical(r_new, r_old)
+
+
+@pytest.mark.parametrize("qty_pct", [float("nan"), float("inf"), 0.0, -10.0, 50.0, 150.0])
+@pytest.mark.parametrize("kind", [ExitTriggerKind.MARKET, ExitTriggerKind.LIMIT, ExitTriggerKind.TIME_OF_DAY])
+def test_exit_quantity_edge_cases_agree(qty_pct, kind) -> None:
+    entry = _entry_strategy(EntryTrigger(kind=EntryTriggerKind.MARKET), max_per_symbol=1)
+    exit = _exit_strategy([_leg(ExitTrigger(
+        kind=kind, price=99.0, time_of_day="09:35", qty_pct=qty_pct,
+    ))])
+    r_new, r_old = _run_both(candles=_et_candles([100.0] * 8), entry=entry, exit=exit)
+    assert r_old.fills
+    _assert_identical(r_new, r_old)
+
+
+@pytest.mark.parametrize("kind", [ExitTriggerKind.LIMIT, ExitTriggerKind.STOP, ExitTriggerKind.STOP_LIMIT])
+@pytest.mark.parametrize("direction", [Direction.LONG, Direction.SHORT])
+def test_stack_scalar_price_fallback_when_average_changes(kind, direction) -> None:
+    entry = _entry_strategy(
+        EntryTrigger(kind=EntryTriggerKind.MARKET), policy=PositionAlreadyOpenPolicy.STACK,
+        direction=direction, max_per_symbol=8,
+    )
+    exit = _exit_strategy([_leg(ExitTrigger(kind=kind, offset_dollar=2.0, qty_pct=50.0))])
+    r_new, r_old = _run_both(
+        candles=_et_candles([100.0, 105.0, 103.0, 110.0, 100.0, 95.0, 101.0] * 3),
+        entry=entry, exit=exit,
+    )
+    assert len(r_old.fills) > 2
+    entries = [f for f in r_old.fills if f.side.value == ("buy" if direction is Direction.LONG else "sell")]
+    assert len(entries) >= 2
+    assert len({f.fill_price for f in entries}) > 1
+    assert len(entries) < len(r_old.fills), "must also exercise partial exits"
+    _assert_identical(r_new, r_old)
+
+
 def test_within_last_indicator_falls_back_and_agrees() -> None:
-    """Vec-unsupported trees (within-last) take the legacy loop — still identical."""
+    """Vec-unsupported trees (within-last) use scalar dispatch — still identical."""
     closes = [100 + 0.5 * i for i in range(40)]
     candles = _et_candles(closes)
     cond = Group(

@@ -7,9 +7,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
 
+import numpy as np
+
+from ..backtest.bars import BarSeries
 from ..core.side import Side
 from ..positions.model import Position
 from ..scanner.engine import evaluate_group as _evaluate_group
+from ..scanner.engine import evaluate_group_vec
 from .model import ExitTrigger, TriggerKind
 from .spec import (
     Bar,
@@ -32,6 +36,8 @@ LOG = logging.getLogger(__name__)
 __all__ = [
     "ExitTriggerContext",
     "ExitTriggerHandler",
+    "PreparedExit",
+    "prepare_trigger_mask",
     "check_trigger_decision",
     "supported_trigger_kinds",
     "_EXIT_DISPATCH",
@@ -62,7 +68,7 @@ def _no_fire(reason: str = "") -> Decision:
     return Decision(fire=False, reason=reason)
 
 
-def _legacy_resolve_exit_price(trigger: ExitTrigger, ctx: ExitTriggerContext) -> float | None:
+def _legacy_resolve_exit_price(trigger: ExitTrigger, position: Position) -> float | None:
     """Resolve strategy-tester legacy signed offsets for price exits.
 
     The live exit evaluator's canonical spec interprets ``offset_pct`` /
@@ -74,8 +80,8 @@ def _legacy_resolve_exit_price(trigger: ExitTrigger, ctx: ExitTriggerContext) ->
     if trigger.price is not None:
         return float(trigger.price)
 
-    side = Side.from_str(ctx.position.side)
-    ref_price = float(ctx.position.avg_entry_price)
+    side = Side.from_str(position.side)
+    ref_price = float(position.avg_entry_price)
     leg_sign = 1.0 if trigger.kind is TriggerKind.LIMIT else -1.0
 
     if trigger.offset_pct is not None:
@@ -88,31 +94,37 @@ def _legacy_resolve_exit_price(trigger: ExitTrigger, ctx: ExitTriggerContext) ->
 
 
 def _legacy_limit(trigger: ExitTrigger, ctx: ExitTriggerContext) -> Decision:
-    target = _legacy_resolve_exit_price(trigger, ctx)
+    target = _legacy_resolve_exit_price(trigger, ctx.position)
     if target is None:
         return _no_fire("malformed limit (no price)")
     qty = compute_qty_at_fire(trigger, ctx.position)
     if qty <= 0:
         return _no_fire("position flat")
-    side = Side.from_str(ctx.position.side)
-    favorable = ctx.bar.high if side.is_long else ctx.bar.low
-    if (favorable >= target) if side.is_long else (favorable <= target):
+    if _legacy_price_touched(trigger.kind, ctx.position.side, ctx.bar, target):
         return Decision(fire=True, fire_price=target, qty=qty, reason="limit-touched-legacy")
     return _no_fire("limit not touched")
 
 
 def _legacy_stop(trigger: ExitTrigger, ctx: ExitTriggerContext) -> Decision:
-    stop = _legacy_resolve_exit_price(trigger, ctx)
+    stop = _legacy_resolve_exit_price(trigger, ctx.position)
     if stop is None:
         return _no_fire("malformed stop (no price)")
     qty = compute_qty_at_fire(trigger, ctx.position)
     if qty <= 0:
         return _no_fire("position flat")
-    side = Side.from_str(ctx.position.side)
-    adverse = ctx.bar.low if side.is_long else ctx.bar.high
-    if (adverse <= stop) if side.is_long else (adverse >= stop):
+    if _legacy_price_touched(trigger.kind, ctx.position.side, ctx.bar, stop):
         return Decision(fire=True, fire_price=stop, qty=qty, reason="stop-touched-legacy")
     return _no_fire("stop not touched")
+
+
+def _legacy_price_touched(
+    kind: TriggerKind, side: str, bar: Bar | BarSeries, target: float,
+) -> bool | np.ndarray:
+    """Same comparison for a scalar Bar or all-bars OHLC arrays."""
+    is_long = Side.from_str(side).is_long
+    if kind is TriggerKind.LIMIT:
+        return (bar.high >= target) if is_long else (bar.low <= target)
+    return (bar.low <= target) if is_long else (bar.high >= target)
 
 
 def _legacy_stop_limit(trigger: ExitTrigger, ctx: ExitTriggerContext) -> Decision:
@@ -247,6 +259,75 @@ _EXIT_DISPATCH: dict[TriggerKind, ExitTriggerHandler] = {
     TriggerKind.INDICATOR: _h_indicator,
     TriggerKind.CHANDELIER: _h_chandelier,
 }
+
+
+@dataclass(frozen=True)
+class PreparedExitMask:
+    """A close-bar indicator predicate tied to its canonical handler."""
+
+    handler: ExitTriggerHandler
+    values: np.ndarray
+
+    def fires(self, trigger: ExitTrigger, index: int, position: Position) -> bool | None:
+        if _EXIT_DISPATCH.get(trigger.kind) is not self.handler:
+            return None
+        return bool(self.values[index])
+
+
+class PreparedExit(Protocol):
+    def fires(self, trigger: ExitTrigger, index: int, position: Position) -> bool | None: ...
+
+
+@dataclass
+class _PreparedLegacyPrice:
+    handler: ExitTriggerHandler
+    bars: BarSeries
+    position_key: tuple[str, float] | None = None
+    target: float | None = None
+    values: np.ndarray | None = None
+
+    def fires(self, trigger: ExitTrigger, index: int, position: Position) -> bool | None:
+        if _EXIT_DISPATCH.get(trigger.kind) is not self.handler:
+            return None
+        key = (position.side, position.avg_entry_price)
+        if key != self.position_key:
+            target = _legacy_resolve_exit_price(trigger, position)
+            self.target = target
+            self.values = None
+            self.position_key = key
+        if self.target is None:
+            return False
+        if compute_qty_at_fire(trigger, position) <= 0:
+            return False
+        if self.values is None:
+            self.values = np.asarray(
+                _legacy_price_touched(trigger.kind, position.side, self.bars, self.target), dtype=bool,
+            )
+        return bool(self.values[index])
+
+
+def prepare_trigger_mask(
+    trigger: ExitTrigger, *, bars: BarSeries, eval_ctx: Any,
+    normalized_conditions: dict[str, Any],
+    cache_prices: bool,
+) -> PreparedExit | None:
+    """Prepare mechanical legacy-price/indicator kernels for canonical handlers."""
+    handler = _EXIT_DISPATCH.get(trigger.kind)
+    if cache_prices and (
+        (trigger.kind is TriggerKind.LIMIT and handler is _h_limit)
+        or (trigger.kind is TriggerKind.STOP and handler is _h_stop)
+        or (trigger.kind is TriggerKind.STOP_LIMIT and handler is _h_stop_limit)
+    ):
+        return _PreparedLegacyPrice(handler, bars)
+    if handler is not _h_indicator or trigger.kind is not TriggerKind.INDICATOR:
+        return None
+    if eval_ctx is None or trigger.condition is None:
+        return None
+    condition = normalized_conditions.get(trigger.id, trigger.condition)
+    masks = evaluate_group_vec(condition, eval_ctx)
+    if masks is None:
+        return None
+    return PreparedExitMask(handler, masks[0])
 
 
 def check_trigger_decision(trigger: ExitTrigger, ctx: ExitTriggerContext) -> Decision:

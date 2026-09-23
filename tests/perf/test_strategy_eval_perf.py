@@ -8,9 +8,8 @@ configuration that used to pay per-bar ``datetime`` construction,
 Timing uses min-of-N with the two paths interleaved so machine drift
 cannot systematically favour either side (per AGENTS.md §7.26 the min,
 not the median, is the gate). The required margin is deliberately
-generous: the measured min-of-12 speedup on the reference machine is
-~2.8x, so the gate only fails on a real regression of the vectorized
-path, not on noise.
+generous but fixed at 1.5x. Actual speedup is machine-dependent and
+printed on each run; shared scalar orchestration remains the floor.
 """
 
 from __future__ import annotations
@@ -49,8 +48,7 @@ _ET = ZoneInfo("America/New_York")
 _BARS = 4056  # 52 trading days x 78 five-minute bars
 _TIMING_RUNS = 7
 # The vectorized path must be at least this much faster than the legacy
-# path (min-of-N vs min-of-N). Measured ~2.8x on the reference machine;
-# 1.5x is the generous, non-flaky bar.
+# path (min-of-N vs min-of-N).
 _REQUIRED_SPEEDUP = 1.5
 
 

@@ -105,6 +105,17 @@ def get_zoneinfo(name: str | None) -> tzinfo | None:
 ET: tzinfo | None = get_et()
 
 
+def parse_hhmm(value: str | None) -> _dt.time | None:
+    """Parse a wall-clock HH:MM; blank or out-of-range values return None."""
+    if not value:
+        return None
+    try:
+        hour, minute = value.split(":")
+        return _dt.time(hour=int(hour), minute=int(minute))
+    except (ValueError, AttributeError):
+        return None
+
+
 def now_et() -> datetime:
     """Return the current wall-clock time in ET.
 
