@@ -25,7 +25,10 @@ settings and opens the system browser for manual login/MFA. The developer app
 key and secret identify the application; they are not account passwords or
 OAuth tokens. A temporary local HTTPS listener captures the browser return,
 then TradingLab exchanges the code and saves both the access and refresh tokens.
-On Windows, credentials and OAuth tokens use protected local storage.
+On Windows, credentials and OAuth tokens use protected local storage (DPAPI).
+On macOS/Linux, OAuth tokens are stored as **plaintext JSON files** readable
+only by the file owner (mode `0600`) — they are *not* encrypted at rest, so
+anyone with read access to your user account can read them.
 Never put a secret or token in a screenshot, diagnostic note or issue.
 
 There is no separate Schwab **Test connection** prerequisite. With an app key,

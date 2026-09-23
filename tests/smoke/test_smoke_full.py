@@ -6965,7 +6965,7 @@ def check_d39_indicators_phase1(app) -> None:
     """Indicators Phase 1 — compute layer + manager + cache + loader.
 
     Pure compute layer + IndicatorManager + IndicatorCache + custom
-    loader smoke. Does NOT exercise rendering (Phase 2) or persistence
+    loader smoke, including external-import consent. Does NOT exercise rendering (Phase 2) or persistence
     integration (Phase 3) — those land in later check_* functions.
     """
     import os
@@ -7278,7 +7278,10 @@ def check_d39_indicators_phase1(app) -> None:
 
         # First, run with register_globally=False to verify capture
         # without polluting global state.
-        result = discover_user_indicators(tmp, register_globally=False)
+        result = discover_user_indicators(
+            tmp, register_globally=False,
+            approval_prompt=lambda _p, _d: True, approvals_path=tmp / "approvals.json",
+        )
         assert isinstance(result, DiscoveryResult)
         loaded_names = [li.name for li in result.loaded]
         assert "Trivial-d39" in loaded_names, \
@@ -7291,7 +7294,10 @@ def check_d39_indicators_phase1(app) -> None:
         assert "Trivial-d39" not in INDICATORS
 
         # Now register globally + verify cleanup is possible.
-        result2 = discover_user_indicators(tmp, register_globally=True)
+        result2 = discover_user_indicators(
+            tmp, register_globally=True,
+            approval_prompt=lambda _p, _d: True, approvals_path=tmp / "approvals.json",
+        )
         assert "Trivial-d39" in INDICATORS
         # Cleanup: pop manually for test hygiene.
         INDICATORS.pop("Trivial-d39", None)
@@ -7302,6 +7308,37 @@ def check_d39_indicators_phase1(app) -> None:
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print("  [OK] §d39.H custom-indicator loader (good+bad+missing)")
+
+    # ---- I) External builder headers do not bypass import consent ----
+    if sys.platform == "darwin":
+        print("[SKIP] d39.I dialog: headless macOS transient deadlock (AGENTS §7.1)")
+    else:
+        from unittest.mock import patch
+
+        from tradinglab.gui import custom_indicator_dialog as dialog_mod
+
+        with tempfile.TemporaryDirectory(prefix="d39_import_") as folder:
+            external = Path(folder) / "consent_d39.py"
+            external.write_text(
+                "# tradinglab-custom-indicator\n# mode: building_blocks\n"
+                "register_indicator('consent_d39', lambda: None)\n",
+                encoding="utf-8",
+            )
+            target_dir = Path(folder) / "indicators"
+            target_dir.mkdir()
+            dlg = dialog_mod.CustomIndicatorDialog(app, directory=target_dir)
+            try:
+                with (
+                    patch.object(dialog_mod.filedialog, "askopenfilename", return_value=str(external)),
+                    patch.object(dialog_mod.messagebox, "askokcancel", return_value=False) as consent,
+                ):
+                    dlg._on_import()
+                    assert consent.call_count == 1
+                    assert not (target_dir / external.name).exists()
+                    assert "consent_d39" not in INDICATORS
+            finally:
+                dlg.destroy()
+        print("  [OK] §d39.I marked external import requires consent")
 
     print("[OK] §d39 indicators phase 1 — compute + manager + cache + loader")
 

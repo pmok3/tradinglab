@@ -1,6 +1,6 @@
 # `updates.py` — Background GitHub Releases update checks
 
-Last updated: 2026-09-07
+Last updated: 2026-09-23
 
 ## Purpose
 Surface "a newer release is available" to users who never visit GitHub
@@ -16,8 +16,22 @@ auto-checks and Help → Check for Updates.
    `https://api.github.com/repos/pmok3/tradinglab/releases/latest`.
 
 Blank across all three returns `UpdateResult(status="disabled")`. Only
-`http://` and `https://` schemes are accepted; invalid schemes fail before
-`urlopen` is reached.
+`https://` endpoints with a host are accepted at the transport layer;
+invalid schemes fail before the private urllib opener is reached.
+
+## HTTPS-only overrides
+Any user-/config-supplied override — the `update_check_url` tunable or
+`TRADINGLAB_UPDATE_URL` — must be an `https://` URL with a host. A
+non-HTTPS override (`http://`, `file://`, a bare hostname, …) is
+**rejected**, not silently ignored: `check_now()` returns
+`UpdateResult(status="error")` naming the refused scheme, before any
+cache lookup or network I/O, so a misconfigured endpoint can never
+fall back to the built-in default unnoticed and release metadata is
+never fetched over plaintext HTTP. The built-in default is already
+`https://`. `_resolve_url()` runs once per check and `_is_https_url()` is
+the shared predicate for endpoints, redirect destinations and release
+links. A private opener with `_HTTPSOnlyRedirectHandler` rejects downgrade
+redirects before urllib follows them; HTTPS redirects remain supported.
 
 ## Strictly RTH-suppressed
 The poll never makes an outbound HTTPS call during US regular trading hours
@@ -56,7 +70,9 @@ Two release payload shapes are accepted:
 - GitHub Releases: `{ "tag_name": "v0.2.3", "html_url": "..." }`.
 
 `version` wins if both keys are present. `html_url` (or `url`) is passed to UI
-surfaces as the release link when available.
+surfaces as the release link when available, only if HTTPS with a host.
+An invalid non-empty link turns the check into an error rather than
+advertising an unsafe browser target. Missing links remain valid.
 
 ## Cache
 Network outcomes (`up_to_date`, `available`, `error`) are cached for six hours
@@ -64,10 +80,16 @@ in memory and in `<app_data>/update_check_cache.json`. The cache key includes
 the resolved endpoint URL and the current local version, so changing forks or
 upgrading TradingLab does not reuse stale release state. `force=True` bypasses
 both caches but still honors disabled/RTH policy.
+Memory and disk cache results revalidate release URLs before being returned
+to the UI, so legacy HTTP cache entries become errors without network I/O.
 
 ## Security
 - Response body reads are capped at 64 KiB (`_MAX_RESPONSE_BYTES`).
-- URL schemes are allow-listed to `http`/`https` before `urlopen`.
+- Endpoints and every redirect destination must use HTTPS before fetching.
+- Returned and cached release links must use HTTPS before reaching the UI.
+- User-/config-supplied endpoint overrides must be `https://`
+  (see "HTTPS-only overrides"); anything else fails closed with
+  `status="error"` before cache or network work.
 - `HTTP_TIMEOUT_SECONDS = 8.0`; no retries.
 - All check failures become `UpdateResult(status="error")`; callers never see
   exceptions.

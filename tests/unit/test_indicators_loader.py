@@ -34,6 +34,10 @@ from tradinglab.indicators.loader import (
 )
 
 
+def _APPROVE_ALL(_path, _digest):
+    """Auto-approve trust prompt for loader tests (approval is not under test)."""
+    return True
+
 @pytest.fixture(autouse=True)
 def _snapshot_indicators_registry():
     """Snapshot and restore the module-level indicator registries.
@@ -65,7 +69,7 @@ def test_discover_returns_empty_on_missing_dir(tmp_path: Path) -> None:
     missing = tmp_path / "does_not_exist"
     assert not missing.exists()
 
-    result = discover_user_indicators(directory=missing)
+    result = discover_user_indicators(directory=missing, approval_prompt=_APPROVE_ALL)
 
     assert isinstance(result, DiscoveryResult)
     assert result.loaded == []
@@ -93,7 +97,7 @@ def test_plugin_namespace_has_module_attrs(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    result = discover_user_indicators(tmp_path, register_globally=False)
+    result = discover_user_indicators(tmp_path, register_globally=False, approval_prompt=_APPROVE_ALL)
 
     assert result.errors == []
     records = [li for li in result.loaded if li.name == "custom_x"]
@@ -141,7 +145,7 @@ def test_partial_failure_rolls_back_globally_registered(tmp_path: Path) -> None:
     assert "partial_ind" not in snapshot_before
     assert "good_ind" not in snapshot_before
 
-    result = discover_user_indicators(tmp_path, register_globally=True)
+    result = discover_user_indicators(tmp_path, register_globally=True, approval_prompt=_APPROVE_ALL)
 
     # The loader never re-raises; failures are surfaced via the errors list.
     assert len(result.errors) == 1
@@ -183,7 +187,7 @@ def test_register_globally_false_is_capture_only(tmp_path: Path) -> None:
 
     assert "captured_only" not in _base.INDICATORS
 
-    result = discover_user_indicators(tmp_path, register_globally=False)
+    result = discover_user_indicators(tmp_path, register_globally=False, approval_prompt=_APPROVE_ALL)
 
     assert result.errors == []
     loaded_names = {li.name for li in result.loaded}

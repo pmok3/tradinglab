@@ -50,6 +50,11 @@ def tmp_dir(tmp_path: Path) -> Path:
 
 
 @pytest.fixture(autouse=True)
+def _isolate_approval_store(monkeypatch, tmp_path):
+    monkeypatch.setattr(ind_loader, "_approvals_store_path", lambda _override: tmp_path / "approvals.json")
+
+
+@pytest.fixture(autouse=True)
 def cleanup_registry():
     before = set(ind_base.INDICATORS.keys())
     yield
@@ -336,7 +341,8 @@ def test_loader_hot_register_round_trip(tmp_dir) -> None:
     )
     (tmp_dir / "round_trip_test.py").write_text(src, encoding="utf-8")
     result = ind_loader.register_user_indicator_file(
-        tmp_dir / "round_trip_test.py"
+        tmp_dir / "round_trip_test.py",
+        approval_prompt=lambda _path, _digest: True,
     )
     try:
         assert not result.errors, result.errors
@@ -583,6 +589,7 @@ def test_import_builder_file_registers_and_lists(
     monkeypatch.setattr(
         mod.filedialog, "askopenfilename", lambda *a, **k: str(external),
     )
+    monkeypatch.setattr(mod.messagebox, "askokcancel", lambda *a, **k: True)
     dlg._on_import()
     try:
         # Copied into the indicators dir.
@@ -645,6 +652,7 @@ def test_import_collision_prompts_overwrite(
     monkeypatch.setattr(
         mod.filedialog, "askopenfilename", lambda *a, **k: str(external),
     )
+    monkeypatch.setattr(mod.messagebox, "askokcancel", lambda *a, **k: True)
     seen = {"asked": False}
     def _ask(*a, **k):
         seen["asked"] = True
@@ -653,6 +661,108 @@ def test_import_collision_prompts_overwrite(
     dlg._on_import()
     assert seen["asked"] is True
     dlg.destroy()
+
+
+@pytest.mark.parametrize("mode", ["expression", "building_blocks", "conditions", "python"])
+def test_import_self_claimed_builder_header_requires_consent(root, tmp_dir, tmp_path, monkeypatch, mode):
+    plugin = _ext_dir(tmp_path) / "untrusted.py"
+    plugin.write_text(
+        f"# tradinglab-custom-indicator\n# mode: {mode}\n"
+        "register_indicator('untrusted', lambda: None)\n", encoding="utf-8",
+    )
+    dlg = _mk(root, tmp_dir)
+    asked = []
+    monkeypatch.setattr(mod.filedialog, "askopenfilename", lambda **_kw: str(plugin))
+    monkeypatch.setattr(mod.messagebox, "askokcancel", lambda *a, **k: asked.append(a) or False)
+    try:
+        dlg._on_import()
+        assert len(asked) == 1
+        assert ind_loader.hash_indicator_source(plugin.read_text(encoding="utf-8")) in asked[0][1]
+        assert not (tmp_dir / "untrusted.py").exists()
+        assert "untrusted" not in ind_base.INDICATORS
+        assert not (tmp_path / "approvals.json").exists()
+    finally:
+        dlg.destroy()
+
+
+def test_import_copies_and_executes_consented_snapshot(root, tmp_dir, tmp_path, monkeypatch):
+    plugin = _ext_dir(tmp_path) / "snapshot.py"
+    source = "# tradinglab-custom-indicator\nregister_indicator('snapshot', lambda: 'approved')\n"
+    plugin.write_text(source, encoding="utf-8")
+    dlg = _mk(root, tmp_dir)
+    monkeypatch.setattr(mod.filedialog, "askopenfilename", lambda **_kw: str(plugin))
+
+    def approve(*_a, **_kw):
+        plugin.write_text(
+            "# tradinglab-custom-indicator\nregister_indicator('snapshot', lambda: 'changed')\n",
+            encoding="utf-8",
+        )
+        return True
+
+    monkeypatch.setattr(mod.messagebox, "askokcancel", approve)
+    try:
+        dlg._on_import()
+        target = tmp_dir / plugin.name
+        assert target.read_text(encoding="utf-8") == source
+        assert ind_base.INDICATORS["snapshot"]() == "approved"
+        assert ind_loader.is_indicator_approved(target, ind_loader.hash_indicator_source(source))
+    finally:
+        dlg.destroy()
+
+
+@pytest.mark.parametrize("operation", ["import", "save"])
+def test_approval_persistence_failure_is_visible(root, tmp_dir, tmp_path, monkeypatch, operation):
+    dlg = _mk(root, tmp_dir)
+
+    def fail(*_a, **_kw):
+        raise OSError("approval disk unavailable")
+
+    monkeypatch.setattr(ind_loader, "record_indicator_approval", fail)
+    monkeypatch.setattr(
+        ind_loader, "register_user_indicator_file",
+        lambda *_a, **_kw: pytest.fail("must not register after persistence failure"),
+    )
+    monkeypatch.setattr(mod.messagebox, "askokcancel", lambda *_a, **_kw: True)
+    try:
+        if operation == "import":
+            plugin = _write_builder_file(_ext_dir(tmp_path), "persist_import")
+            monkeypatch.setattr(mod.filedialog, "askopenfilename", lambda **_kw: str(plugin))
+            dlg._on_import()
+        else:
+            dlg._name_var.set("persist_save")
+            dlg._mode_var.set(mod._EXPRESSION_MODE)
+            dlg._on_mode_changed()
+            dlg._expr_text.insert("1.0", "close")
+            dlg._on_save()
+        assert "approval persistence failed" in dlg._status_var.get()
+        assert "approval disk unavailable" in dlg._status_var.get()
+    finally:
+        dlg.destroy()
+
+
+def test_saved_approval_does_not_cover_replaced_file(root, tmp_dir, monkeypatch):
+    dlg = _mk(root, tmp_dir)
+    dlg._name_var.set("replaced")
+    dlg._mode_var.set(mod._EXPRESSION_MODE)
+    dlg._on_mode_changed()
+    dlg._expr_text.insert("1.0", "close")
+    original_write = dlg._atomic_write
+
+    def replace_after_write(path, text):
+        original_write(path, text)
+        path.write_text(
+            "# tradinglab-custom-indicator\nregister_indicator('replaced', lambda: 'tampered')\n",
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(dlg, "_atomic_write", replace_after_write)
+    try:
+        dlg._on_save()
+        assert "registration failed" in dlg._status_var.get()
+        assert "no trust approval" in dlg._status_var.get()
+        assert "replaced" not in ind_base.INDICATORS
+    finally:
+        dlg.destroy()
 
 
 
