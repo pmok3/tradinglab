@@ -328,10 +328,11 @@ def fetch_candles_for_symbol(
         if fetched:
             try:
                 merged = disk_cache.merge_candles(disk_cache.load(*key), fetched)
-                disk_cache.save(*key, merged)
+                if not disk_cache.save(*key, merged):
+                    log.debug("strategy_tester: disk_cache save failed for %s/%s", symbol, interval)
                 return list(merged)
-            except Exception:  # noqa: BLE001 — cache write failure must not break the Run
-                log.debug("strategy_tester: disk_cache save failed for %s/%s", symbol, interval)
+            except Exception:  # noqa: BLE001 — cache failure must not break the Run
+                log.debug("strategy_tester: disk_cache merge failed for %s/%s", symbol, interval)
         return fetched
 
 

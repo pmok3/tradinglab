@@ -1,6 +1,6 @@
 # disk_cache.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-23
 
 ## Purpose
 Durable cache of fetched candle data, keyed by `(source, ticker, interval)`. Acts as a log of every bar we've ever seen for a key, so that historical bars which fall outside a provider's current window (e.g. yfinance's 60-day intraday cap) are retained across sessions. Freshness policy is **not** enforced here — sealed OHLCV bars are immutable facts; the caller (`ChartApp._cache_is_stale`) decides when to re-fetch.
@@ -44,15 +44,27 @@ Durable cache of fetched candle data, keyed by `(source, ticker, interval)`. Act
   row from lingering forever (dropped on load but never erased), which
   otherwise keeps the series' visible tail under-reporting the last
   real bar and lets the stale row re-surface through any raw-file
-  reader. The rewrite is best-effort (`save` swallows write errors) and
-  only fires when a drop occurred (`_drop_nonfinite_ohlc` returns the
+  reader. The rewrite is best-effort (`save` reports failure via its
+  `False` return and logs it) and only fires when a drop occurred (`_drop_nonfinite_ohlc` returns the
   same list object when nothing was dropped — an identity check, no
   second scan); a clean file is never rewritten. `load` still never
   raises.
-- `save(source, ticker, interval, candles)` — atomic write
+- `save(source, ticker, interval, candles) -> bool` — atomic write
   (`tempfile.mkstemp` in the same directory + `os.replace`). Writes
   one JSON object per line via `_candle_to_dict`. **No-op for ratio
-  pseudo-symbols** (`_is_ratio_ticker`) and `mark_no_persist` sources.
+  pseudo-symbols** (`_is_ratio_ticker`) and `mark_no_persist` sources —
+  both return `True` (nothing to persist is success, not failure).
+  **Write failures are logged and return `False`, never swallowed
+  silently** — callers that need the data on disk must check the return
+  value and account for intentional opt-outs; `True` alone does not prove
+  a file exists. Integral volumes (including integers beyond float precision
+  or range and integer strings) retain their exact value, without a float
+  conversion. Finite fractional volumes are truncated; fractional numeric
+  strings remain supported. Non-finite volumes (NaN/Inf), missing values
+  and invalid numeric inputs are coerced to 0 at
+  serialisation time so one bad bar can no longer abort the whole
+  write (previously `int(c.volume)` raised and lost the entire
+  series).
 - `load_window(source, ticker, interval, *, start_day, end_day) ->
   Optional[List[Candle]]` — the windowed sibling of `load`. Both bounds are
   **inclusive `YYYY-MM-DD` strings** compared against the record's own ISO
@@ -204,7 +216,8 @@ Durable cache of fetched candle data, keyed by `(source, ticker, interval)`. Act
 - `load_window()` never raises and never writes — a windowed read must not
   be able to truncate the on-disk series to its window.
 - `save()` either replaces the destination atomically or leaves the
-  prior file intact.
+  prior file intact. Its `bool` return is `True` for a completed write or
+  intentional persistence opt-out, `False` for a failed write (logged).
 - **Single-instance assumption — last-writer-wins** — no advisory
   locking. Two processes writing simultaneously will silently
   overwrite. Run only one TradingLab instance per cache directory.
@@ -213,6 +226,10 @@ Durable cache of fetched candle data, keyed by `(source, ticker, interval)`. Act
   unlinks them on first launch after upgrade.
 
 ## Testing
+- `tests/unit/test_disk_cache_save_contract.py` — failure reporting, atomic
+  overwrite/recovery, no-persist opt-outs and exact integral/non-finite volume
+  normalization. Scoped failure patches preserve the temporary cache directory
+  during recovery; the tests never undo cache isolation mid-test.
 - `tests/unit/test_disk_cache_merge.py` — save/load round-trip and
   merge-on-fetch.
 - `tests/unit/test_disk_cache_list_entries.py` — `list_entries()`

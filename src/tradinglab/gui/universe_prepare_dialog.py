@@ -20,6 +20,7 @@ later sandbox session can reference the universe without re-fetching.
 
 from __future__ import annotations
 
+import logging
 import queue as _queue
 import threading
 import tkinter as tk
@@ -41,6 +42,8 @@ from ..preload.fundamental_filter import (
 )
 from ._modal_base import BaseModalDialog, make_scrollable_form, protect_combobox_wheel
 from .colors import MUTED_GREY
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Defaults
@@ -1197,10 +1200,12 @@ class UniversePrepareDialog(BaseModalDialog):
                 if bars:
                     # Persist for the regular preload phase (and
                     # future runs) — daily bars are cheap to store.
-                    try:
-                        _disk_cache.save(source, sym, _DAILY_INTERVAL, bars)
-                    except Exception:  # noqa: BLE001
-                        pass
+                    # save() reports failure via False (never raises);
+                    # a failed persist must not fail the screen.
+                    if _disk_cache.save(source, sym, _DAILY_INTERVAL, bars) is False:
+                        logger.debug(
+                            "universe_prepare: disk_cache save failed for %s/%s",
+                            source, sym)
             if not bars:
                 return (sym, False)
             return (sym, passes_fundamental_filter(bars, spec))

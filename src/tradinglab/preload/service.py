@@ -16,8 +16,9 @@ Per-symbol-per-interval contract:
        attempts on transient failure. Sleep ``rate_limit_s`` (via the
        cancellation-aware ``sleep_fn``) between retries.
     4. On success, ``merge`` against any existing disk cache, then
-       ``cache_save``, then verify with a follow-up ``cache_load`` so
-       a silent disk-cache failure surfaces in the result.
+       ``cache_save`` — an explicit ``False`` return fails the interval.
+       Otherwise verify with ``cache_load``: intentional no-persist
+       sources and legacy savers must not imply durable availability.
     5. ``rate_limit_s`` cancellation-aware sleep before the next call.
 
 Cancellation is checked at every retry boundary and between symbols, so
@@ -37,7 +38,7 @@ from ..models import Candle
 # Type aliases — keep the long Callables readable in signatures.
 Fetcher = Callable[[str, str], list[Candle] | None]
 CacheLoad = Callable[[str, str, str], list[Candle] | None]
-CacheSave = Callable[[str, str, str, list[Candle]], None]
+CacheSave = Callable[[str, str, str, list[Candle]], bool | None]
 Merger = Callable[[list[Candle] | None, list[Candle] | None],
                   list[Candle]]
 SleepFn = Callable[[threading.Event, float], None]
@@ -186,7 +187,9 @@ def preload_universe(
             Synchronous; may raise; may return ``None`` or empty list
             on no-data.
         cache_load: ``(source, sym, interval) -> Optional[List[Candle]]``.
-        cache_save: ``(source, sym, interval, candles) -> None``.
+        cache_save: ``(source, sym, interval, candles) -> bool | None`` —
+            explicit ``False`` on write failure. Other results require
+            read-back verification, including legacy ``None`` returns.
         merge: ``(old, new) -> List[Candle]`` — must implement
             newer-wins-on-overlap semantics so accumulating fetches
             extend past the provider window cap.
@@ -324,21 +327,22 @@ def _run_one(
             last_err = repr(exc)
             fetched = []
         if fetched:
-            # Step 4: merge + persist + verify.
+            # Step 4: merge + persist + verify. A successful no-op or a
+            # legacy None result is not proof the bars are on disk.
             try:
                 old = cache_load(source_name, sym, itv) or []
                 merged = merge(old, fetched)
-                cache_save(source_name, sym, itv, merged)
-                # Verify the save actually landed — disk_cache.save
-                # swallows OS errors silently, so without this check
-                # we could falsely report success.
-                verify = cache_load(source_name, sym, itv) or []
-                if not verify:
+                if cache_save(source_name, sym, itv, merged) is False:
+                    return IntervalOutcome(
+                        interval=itv, status="failed", bars=0,
+                        error="persistence failed")
+                verified = cache_load(source_name, sym, itv) or []
+                if not verified:
                     return IntervalOutcome(
                         interval=itv, status="failed", bars=0,
                         error="persistence verification failed")
                 return IntervalOutcome(
-                    interval=itv, status="fetched", bars=len(verify))
+                    interval=itv, status="fetched", bars=len(verified))
             except Exception as exc:  # noqa: BLE001
                 last_err = f"persist error: {exc!r}"
                 # Fall through to retry — the underlying fetch
