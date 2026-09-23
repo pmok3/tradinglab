@@ -3498,16 +3498,25 @@ class ChartApp(
         # hint. The smoke check at §12 still matches against
         # ``"not found"`` so the phrase is preserved.
         if primary_failed and raw_primary:
+            notice = disk_cache.history_notice(src, raw_primary, interval)
+            if notice:
+                self._set_data_state(primary_raw=[], primary=[], compare_raw=[], compare=[])
+                self._render()
             try:
                 self.ticker_var.set(self._confirmed_primary_ticker)
-                self._status.error(self._ratio_failure_message(raw_primary))
+                self._status.error(
+                    notice or self._ratio_failure_message(raw_primary)
+                )
             except Exception:  # noqa: BLE001
                 pass
             return
         if compare_failed and raw_compare:
             try:
                 self.compare_ticker_var.set(self._confirmed_compare_ticker)
-                self._status.error(self._ratio_failure_message(raw_compare))
+                self._status.error(
+                    disk_cache.history_notice(src, raw_compare, interval)
+                    or self._ratio_failure_message(raw_compare)
+                )
             except Exception:  # noqa: BLE001
                 pass
             # keep going with primary-only
@@ -3549,8 +3558,8 @@ class ChartApp(
 
         primary_raw_ref = primary_raw
         compare_raw_ref = compare_raw
-        primary_raw = list(primary_raw or [])
-        compare_raw = list(compare_raw) if compare_raw is not None else []
+        primary_raw = disk_cache.copy_candles(primary_raw)
+        compare_raw = disk_cache.copy_candles(compare_raw)
 
         # Store back into both memory + disk caches so the next session
         # has persistent access to what we've seen. Cache stores the
@@ -3695,6 +3704,10 @@ class ChartApp(
                     f"({first_d} \u2192 {last_d})")
             else:
                 self._status.info(f"{raw_primary} {interval}: {n} bars")
+            for ticker in (raw_primary, raw_compare):
+                notice = disk_cache.history_notice(src, ticker, interval) if ticker else None
+                if notice:
+                    self._status.warn(notice)
         except Exception:  # noqa: BLE001
             pass
         # Arm the next-bar scheduler (event-driven, §9.3).

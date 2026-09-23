@@ -622,6 +622,21 @@ table.
 - Try a different *Source* — `Sample` always works offline.
 - Some tickers don't have intraday data; switch to `1d`.
 
+### "Deep history withheld" / temporarily shorter history
+
+The **yfinance+alpaca** source (also used by **Auto** when selected as the best
+available source) checks that its recent Yahoo bars and cached Alpaca history
+share a compatible price basis. A stock split, a provider that has not adjusted
+yet, or too little overlapping history can prevent that check.
+
+Until a replacement can be verified, the chart shows only verified recent bars
+and explains the shorter history in the status bar. If those bars are also
+unavailable, it clears the obsolete chart rather than displaying incompatible
+prices. Subsequent fetches retry deep history after a delay starting at one
+minute and increasing to at most thirty minutes. Yahoo keeps supplying the
+recent window during recovery. This does not rescale prices or delete other
+symbols' history; do not clear all caches to force a retry.
+
 ### Nothing happens when I scroll-zoom
 
 - Make sure your cursor is **inside** the chart area when you scroll

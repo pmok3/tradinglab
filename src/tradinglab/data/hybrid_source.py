@@ -16,14 +16,10 @@ volume quality — the user's rule). Consequences of that single rule:
 * Alpaca only contributes the deep tail **older than yfinance's oldest bar**,
   which yfinance can't reach.
 
-Because Alpaca's contribution is sealed history, the deep leg is
-reused from the on-disk ``alpaca`` cache after the first fetch, so the live
-poll never re-paginates Alpaca — with one exception: the cached tail is
-revalidated against the fresh yfinance leg on overlapping bars every fetch.
-Both vendors restate history retroactively after a stock split, so a
-wholesale price-scale disagreement there means the cache is pre-split and
-is refetched + re-saved (otherwise the merged series would keep a permanent
-artificial price cliff at the seam).
+The deep cache is reused only while fresh overlap can validate its price
+basis. Missing overlap or inconsistent prices trigger a checked replacement.
+Until it succeeds, only verified recent bars are published, with a visible
+notice and bounded retries; derived caches cannot restore the rejected tail.
 
 Registered as :data:`HYBRID_SOURCE_NAME` (``"yfinance+alpaca"``) in
 :data:`DATA_SOURCES` only when Alpaca credentials are configured (yfinance is
@@ -33,9 +29,14 @@ trailing fetch returns the full merged series.
 from __future__ import annotations
 
 import logging
+import math
+import threading
+import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
+from ..core.lru_dict import LRUDict
 from ..models import Candle
 from .alpaca_source import fetch_alpaca_data
 from .ratio_source import parse_ratio_symbol
@@ -53,7 +54,7 @@ _DEEP_SOURCE = "alpaca"
 
 CandleFetcher = Callable[..., "list[Candle] | None"]
 DeepLoader = Callable[[str, str], "list[Candle] | None"]
-DeepSaver = Callable[[str, str, "list[Candle]"], None]
+DeepSaver = Callable[[str, str, "list[Candle]"], bool | None]
 
 #: Median fresh/cached close ratio outside this band means the cached deep
 #: leg was restated wholesale (e.g. a stock split) and must be refetched.
@@ -66,6 +67,40 @@ _RESTATED_RATIO_HI = 1.25
 #: Minimum overlapping bars before the restatement check trusts its median
 #: (too few bars and one noisy print could force a needless refetch).
 _MIN_RESTATED_OVERLAP = 5
+_RETRY_INITIAL_SECONDS = 60
+_RETRY_MAX_SECONDS = 1800
+_FETCH_LOCKS = tuple(threading.RLock() for _ in range(32))
+_RECOVERY_LOCK = threading.RLock()
+
+
+@dataclass
+class _Recovery:
+    quarantined: bool = False
+    failures: int = 0
+    retry_at: float = 0.0
+    verified: list[Candle] | None = None
+
+
+_RECOVERY: LRUDict[tuple[str, str, str], _Recovery] = LRUDict(maxsize=128)
+
+
+def _overlap_ratios(cached: list[Candle], recent: list[Candle]) -> list[float]:
+    recent_close = {c.date: c.close for c in recent}
+    ratios = []
+    for date, close in {c.date: c.close for c in cached}.items():
+        fresh = recent_close.get(date)
+        if fresh is not None and math.isfinite(fresh) and math.isfinite(close) and fresh > 0 and close > 0:
+            ratio = fresh / close
+            if math.isfinite(ratio) and ratio > 0:
+                ratios.append(ratio)
+    return ratios
+
+
+def _deep_leg_compatible(cached: list[Candle], recent: list[Candle]) -> bool:
+    ratios = _overlap_ratios(cached, recent)
+    return len(ratios) >= _MIN_RESTATED_OVERLAP and all(
+        _RESTATED_RATIO_LO <= ratio <= _RESTATED_RATIO_HI for ratio in ratios
+    )
 
 
 def _deep_leg_restated(cached: list[Candle], recent: list[Candle]) -> bool:
@@ -77,20 +112,12 @@ def _deep_leg_restated(cached: list[Candle], recent: list[Candle]) -> bool:
     cross-vendor noise and dividend drift stay near 1.0. Returns False when
     the legs share too few timestamps to judge. Never raises.
     """
-    try:
-        recent_close = {c.date: c.close for c in recent}
-        ratios = []
-        for c in cached:
-            fresh = recent_close.get(c.date)
-            if fresh and c.close:
-                ratios.append(fresh / c.close)
-        if len(ratios) < _MIN_RESTATED_OVERLAP:
-            return False
-        ratios.sort()
-        median = ratios[len(ratios) // 2]
-        return median < _RESTATED_RATIO_LO or median > _RESTATED_RATIO_HI
-    except Exception:  # noqa: BLE001
+    ratios = sorted(_overlap_ratios(cached, recent))
+    if len(ratios) < _MIN_RESTATED_OVERLAP:
         return False
+    median = ratios[len(ratios) // 2]
+    coherent = sum(abs(ratio / median - 1) <= 0.05 for ratio in ratios) >= 0.9 * len(ratios)
+    return coherent and (median < _RESTATED_RATIO_LO or median > _RESTATED_RATIO_HI)
 
 
 def merge_prefer_recent(
@@ -116,10 +143,34 @@ def _default_deep_loader(ticker: str, interval: str) -> list[Candle] | None:
     return disk_cache.load(_DEEP_SOURCE, ticker, interval)
 
 
-def _default_deep_saver(ticker: str, interval: str, candles: list[Candle]) -> None:
+def _default_deep_saver(ticker: str, interval: str, candles: list[Candle]) -> bool | None:
     from .. import disk_cache
 
-    disk_cache.save(_DEEP_SOURCE, ticker, interval, candles)
+    return disk_cache.save(_DEEP_SOURCE, ticker, interval, candles)
+
+
+def _persist_verified_deep(
+    ticker: str, interval: str, fetched: list[Candle], recovery: _Recovery, saver: DeepSaver,
+) -> None:
+    from .. import disk_cache
+
+    try:
+        saved = saver(ticker, interval, fetched) is not False
+    except Exception:  # noqa: BLE001
+        LOG.warning("hybrid: deep cache save failed for %s/%s", ticker, interval, exc_info=True)
+        saved = False
+    if saved:
+        recovery.verified = None
+        recovery.failures = 0
+        recovery.retry_at = 0.0
+        disk_cache.confirm_history(ticker, interval)
+    else:
+        recovery.verified = fetched
+        recovery.failures = min(recovery.failures + 1, 6)
+        delay = min(_RETRY_INITIAL_SECONDS * 2 ** (recovery.failures - 1), _RETRY_MAX_SECONDS)
+        recovery.retry_at = time.monotonic() + delay
+        LOG.warning("hybrid: verified deep history for %s/%s could not be saved; retry in %ss",
+                    ticker, interval, delay)
 
 
 def _resolve_deep_leg(
@@ -129,43 +180,54 @@ def _resolve_deep_leg(
     deep_fetcher: CandleFetcher,
     deep_loader: DeepLoader,
     deep_saver: DeepSaver,
+    recovery: _Recovery,
     recent: list[Candle] | None = None,
 ) -> list[Candle]:
-    """Return Alpaca's deep-history bars, reusing the disk cache when present.
+    """Reuse verified history or retry a replacement without publishing guesses."""
+    from .. import disk_cache
 
-    Alpaca's contribution is the OLD tail (yfinance owns the recent window),
-    which is sealed history — so a cached copy is authoritative and the slow
-    paginated network fetch is paid only on a cold miss, UNLESS the cache
-    fails revalidation: both vendors restate history retroactively after a
-    stock split, so when the fresh ``recent`` leg disagrees wholesale with
-    the cached tail on overlapping bars (see :func:`_deep_leg_restated`),
-    the cache is pre-split and is refetched + re-saved. Without this the
-    merged series would keep a permanent artificial price cliff at the seam.
+    def quarantine(reason: str) -> None:
+        if not recovery.quarantined:
+            recovery.quarantined = True
+            recovery.verified = None
+            disk_cache.invalidate_history(ticker, interval)
+            LOG.warning("hybrid: withholding deep history for %s/%s: %s", ticker, interval, reason)
 
-    This keeps the live poll cheap: each tick refetches only the yfinance
-    leg plus an in-memory overlap comparison, and re-paginates Alpaca only
-    when a restatement is actually detected. Never raises.
-    """
     try:
-        cached = deep_loader(ticker, interval)
+        cached = recovery.verified or deep_loader(ticker, interval)
     except Exception:  # noqa: BLE001
+        LOG.warning("hybrid: deep cache read failed for %s/%s", ticker, interval, exc_info=True)
         cached = None
-    if cached and not (recent and _deep_leg_restated(cached, recent)):
-        return cached
     if cached:
-        LOG.info(
-            "hybrid: deep leg for %s %s looks restated (split?) — refetching",
-            ticker, interval,
+        if not recovery.quarantined and (not recent or _deep_leg_compatible(cached, recent)):
+            if recovery.verified is not None and time.monotonic() >= recovery.retry_at:
+                _persist_verified_deep(ticker, interval, cached, recovery, deep_saver)
+            return cached
+        quarantine(
+            "coherent price restatement" if recent and _deep_leg_restated(cached, recent)
+            else "insufficient or inconsistent overlap"
         )
+    if time.monotonic() < recovery.retry_at:
+        return []
     try:
         fetched = deep_fetcher(ticker, interval) or []
     except Exception:  # noqa: BLE001
+        LOG.warning("hybrid: deep refetch failed for %s/%s", ticker, interval, exc_info=True)
         fetched = []
-    if fetched:
-        try:
-            deep_saver(ticker, interval, fetched)
-        except Exception:  # noqa: BLE001
-            pass
+    verified = bool(fetched) and (
+        _deep_leg_compatible(fetched, recent) if recent else not recovery.quarantined
+    )
+    if not verified:
+        quarantine("replacement unavailable or not yet on a verifiable price basis")
+        recovery.failures = min(recovery.failures + 1, 6)
+        delay = min(_RETRY_INITIAL_SECONDS * 2 ** (recovery.failures - 1), _RETRY_MAX_SECONDS)
+        recovery.retry_at = time.monotonic() + delay
+        LOG.warning("hybrid: deep history for %s/%s remains withheld; retry in %ss", ticker, interval, delay)
+        return []
+    recovery.quarantined = False
+    recovery.failures = 0
+    recovery.retry_at = 0.0
+    _persist_verified_deep(ticker, interval, fetched, recovery, deep_saver)
     return fetched
 
 
@@ -195,6 +257,7 @@ def fetch_hybrid_data(
     app's usual "``None`` = failed fetch" handling still fires; an Alpaca-only
     result (yfinance down but deep history present) is returned as data.
     """
+    ticker = ticker.strip().upper()
     recent_fetcher = recent_fetcher or fetch_live_data
     deep_fetcher = deep_fetcher or fetch_alpaca_data
     deep_loader = deep_loader or _default_deep_loader
@@ -208,30 +271,37 @@ def fetch_hybrid_data(
         except Exception:  # noqa: BLE001
             return None
 
-    try:
-        recent = recent_fetcher(ticker, interval)
-    except Exception:  # noqa: BLE001
-        recent = None
-    recent_list = recent or []
+    from .. import disk_cache
 
-    deep = _resolve_deep_leg(
-        ticker,
-        interval,
-        deep_fetcher=deep_fetcher,
-        deep_loader=deep_loader,
-        deep_saver=deep_saver,
-        recent=recent_list,
-    )
-
-    if not deep and not recent_list:
-        # Nothing from either leg: preserve the "None = hard failure" signal
-        # when yfinance itself failed; otherwise an empty list (valid: no data).
-        return None if recent is None else []
-    if not deep:
-        return recent_list
-    if not recent_list:
-        return deep
-    return merge_prefer_recent(deep, recent_list)
+    # Fixed lock stripes bound synchronization state and serialize a key's
+    # recent/deep observations, including calls made through Auto.
+    with _FETCH_LOCKS[hash((ticker, interval)) % len(_FETCH_LOCKS)]:
+        key = (str(disk_cache._cache_dir()), ticker, interval)
+        with _RECOVERY_LOCK:
+            recovery = _RECOVERY.get(key)
+            if recovery is None:
+                recovery = _Recovery(quarantined=disk_cache.history_pending(ticker, interval))
+                _RECOVERY[key] = recovery
+        try:
+            recent = recent_fetcher(ticker, interval)
+        except Exception:  # noqa: BLE001
+            LOG.warning("hybrid: recent fetch failed for %s/%s", ticker, interval, exc_info=True)
+            recent = None
+        recent_list = recent or []
+        deep = _resolve_deep_leg(
+            ticker, interval, deep_fetcher=deep_fetcher, deep_loader=deep_loader,
+            deep_saver=deep_saver, recovery=recovery, recent=recent_list,
+        )
+        notice = None
+        if recovery.quarantined:
+            delay = max(0, math.ceil(recovery.retry_at - time.monotonic()))
+            notice = f"{ticker}: deep history withheld; showing verified recent bars only. Retry in {delay}s."
+        result = disk_cache.history_snapshot(
+            ticker, interval, merge_prefer_recent(deep, recent_list), notice=notice,
+        )
+        if not result and recent is None:
+            return None
+        return result
 
 
 __all__ = ["HYBRID_SOURCE_NAME", "fetch_hybrid_data", "merge_prefer_recent"]
