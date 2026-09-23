@@ -1,6 +1,6 @@
 # `updates.py` — Background GitHub Releases update checks
 
-Last updated: 2026-09-07
+Last updated: 2026-09-23
 
 ## Purpose
 Surface "a newer release is available" to users who never visit GitHub
@@ -42,8 +42,26 @@ tests can keep patching them at call time.
   `error`. Status is one of `"disabled"`, `"rth_suppressed"`, `"up_to_date"`,
   `"available"`, `"error"`.
 - `check_now(*, force=False) -> UpdateResult` — synchronous probe.
-- `schedule_check_async(after_fn, callback, *, force=False)` — run `check_now`
-  on a daemon thread and marshal the result back via `after_fn(0, ...)`.
+- `schedule_check_async(tk_widget, callback, *, force=False, poll_ms=250)` —
+  run `check_now` on a daemon thread; the worker writes the `UpdateResult`
+  into a hand-off slot and the Tk main thread polls the slot via
+  `tk_widget.after`, invoking `callback` there. The worker never calls
+  `after` itself (cross-thread `after` is banned, AGENTS.md §7.15). The
+  poll re-arms while the worker is alive plus one grace tick, so a result
+  written between the slot-read and the liveness check is still delivered;
+  if the worker dies without writing, polling stops. The scheduler itself
+  must be called on the widget's owner thread. Threaded Tcl (normally
+  included with stock Windows CPython) can marshal cross-thread calls
+  while the owner services `mainloop`; the polling contract avoids relying
+  on that during startup/teardown or when the loop is not servicing events.
+  Each poll/rearm checks widget existence on the owner thread: destroyed
+  widgets/interpreters stop delivery without invoking the UI callback.
+  Tcl errors during existence checks are teardown (debug logged); scheduling
+  Tcl errors and callback exceptions are logged rather than silently lost.
+  Non-Tcl scheduling errors propagate. Delivery is once per scheduled check;
+  no retry follows a callback exception. Event-driven tests in
+  `tests/unit/test_updates.py` pin delayed delivery, the exit-race grace tick,
+  destroyed widgets, bounded empty-worker polling and error reporting.
 - `compare_versions(current, advertised) -> Optional[str]` — tolerant
   `MAJOR.MINOR.PATCH` comparison used by smoke tests and the poll.
 - `reset_cache_for_tests(clear_disk=False)` — clear in-memory cache; tests can

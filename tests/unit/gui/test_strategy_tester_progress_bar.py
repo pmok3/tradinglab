@@ -7,15 +7,19 @@ then exercises the progress bar public API — ``_set_running_ui``,
 * The ``_pbar`` widget exists and is a ``ttk.Progressbar``.
 * The bar is hidden initially and shown when a run starts.
 * ``_apply_progress(done, total)`` updates both ``value`` and ``maximum``.
-* ``_on_progress(test_run)`` (called from a "worker thread" — simulated here
-  on the main thread) schedules a ``after(0, ...)`` callback that lands
-  correctly after ``update()`` drains the event queue.
-* Sequential calls with done=1, 2, 3 out of 3 cause the bar's value to
-  reach 3.
+* ``_on_progress(test_run)`` (called from the runner's worker thread)
+  writes the latest ``(done, total)`` tick into ``_latest_progress``
+  WITHOUT touching Tk; the Tk-thread ``_on_poll`` picks it up and paints.
+  Cross-thread ``after(0, ...)`` is banned (AGENTS.md §7.15) — these tests
+  pin the slot hand-off instead.
+* Sequential ``_apply_progress`` calls with done=1, 2, 3 out of 3 cause
+  the bar's value to reach 3.
 """
 from __future__ import annotations
 
 import sys
+import threading
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -32,6 +36,8 @@ from tradinglab.strategy_tester import (  # noqa: E402
     UniverseKind,
     UniverseSpec,
 )
+from tradinglab.strategy_tester.runner import RunResult  # noqa: E402
+from tradinglab.strategy_tester.universe import ResolvedUniverse  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Tk fixture
@@ -39,22 +45,18 @@ from tradinglab.strategy_tester import (  # noqa: E402
 
 
 @pytest.fixture()
-def tk_root():
-    """Create a minimal off-screen Tk root; skip if Tk is unavailable."""
-    try:
-        r = tk.Tk()
-    except tk.TclError as exc:
-        pytest.skip(f"Tk unavailable: {exc}")
-    try:
-        r.geometry("800x600-3000-3000")  # park off-screen
-    except tk.TclError:
-        pass
-    yield r
-    try:
-        r.update_idletasks()
-        r.destroy()
-    except tk.TclError:
-        pass
+def tk_root(root):
+    """Use the shared Tk interpreter and an off-screen per-test window."""
+    root.geometry("800x600-3000-3000")
+    root.deiconify()
+    return root
+
+
+@pytest.fixture(autouse=True)
+def _isolate_recent_runs(monkeypatch):
+    from tradinglab.strategy_tester import storage
+
+    monkeypatch.setattr(storage, "list_runs_with_paths", lambda: [])
 
 
 # ---------------------------------------------------------------------------
@@ -107,9 +109,79 @@ def _make_tab(root: Any):
     return tab
 
 
-def _drain(root: Any) -> None:
-    """Drain after(0, ...) callbacks and idle tasks."""
-    root.update()
+def _drive_one_poll(tab: Any) -> None:
+    """Run one Tk-thread ``_on_poll`` against a fake live worker.
+
+    Cleans up the re-armed poll timer afterwards so no callbacks leak
+    into other tests.
+    """
+    stop = threading.Event()
+    worker = threading.Thread(target=stop.wait, daemon=True)
+    worker.start()
+    try:
+        tab._worker = worker
+        tab._on_poll()
+    finally:
+        stop.set()
+        worker.join(timeout=5.0)
+        tab._worker = None
+        if tab._poll_after_id is not None:
+            try:
+                tab.after_cancel(tab._poll_after_id)
+            except Exception:  # noqa: BLE001
+                pass
+            tab._poll_after_id = None
+
+
+def _poll_once(tab):
+    if tab._poll_after_id is not None:
+        tab.after_cancel(tab._poll_after_id)
+    tab._on_poll()
+
+
+def _prepare_run(tab, monkeypatch, tmp_path, *, done=2, total=2, status=RunStatus.DONE):
+    from tradinglab.gui import strategy_tab
+
+    run = _make_test_run(done, total)
+    run.status = status
+    run.error = "test failure" if status is RunStatus.FAILED else ""
+    universe = ResolvedUniverse(symbols=("AAPL", "MSFT"), label="Test", provenance="symbols:2")
+    result = RunResult(run, tmp_path, universe, [])
+    monkeypatch.setattr(tab, "_build_config_from_ui", _cfg)
+    monkeypatch.setattr(tab, "_selected_entry", lambda: SimpleNamespace(id="e1"))
+    monkeypatch.setattr(tab, "_selected_exit", lambda: SimpleNamespace(id="x1"))
+    monkeypatch.setattr(strategy_tab, "incompatible_indicators_for_interval", lambda *args: [])
+    monkeypatch.setattr(strategy_tab, "load_aggregate", lambda path: SimpleNamespace(trade_count=0))
+    monkeypatch.setattr(tab, "_render_aggregate", lambda *args: None)
+    monkeypatch.setattr(strategy_tab.messagebox, "showerror", lambda *args: None)
+    return result
+
+
+@pytest.fixture
+def tk_calls(monkeypatch):
+    """Record UI calls even when production catches their exceptions."""
+    calls = []
+
+    def watch(tab):
+        for obj, name in (
+            (tab, "after"),
+            (tab, "after_cancel"),
+            (tab._pbar, "configure"),
+            (tab._pbar, "update_idletasks"),
+            (tab._var_status, "set"),
+        ):
+            original = getattr(obj, name)
+
+            def checked(*args, _original=original, **kwargs):
+                calls.append(threading.get_ident())
+                assert threading.current_thread() is threading.main_thread()
+                return _original(*args, **kwargs)
+
+            monkeypatch.setattr(obj, name, checked)
+
+    yield watch
+    assert calls
+    assert set(calls) == {threading.get_ident()}
 
 
 # ---------------------------------------------------------------------------
@@ -210,37 +282,64 @@ class TestApplyProgress:
 
 
 class TestOnProgress:
-    """Verify _on_progress marshals updates to the Tk thread via after(0, ...)."""
+    """Verify _on_progress hands ticks to the Tk thread via _latest_progress.
 
-    def test_on_progress_updates_bar_after_drain(self, tk_root: Any) -> None:
-        """_on_progress schedules an after(0,...) update; bar value
-        reaches 3 once the event loop is drained."""
+    Regression: _on_progress used to call ``self.after(0, ...)`` from the
+    runner worker thread. Threaded Tcl can marshal this while mainloop is
+    running, but calls can fail or block without a servicing owner loop or
+    during teardown. Workers must not depend on that (AGENTS.md §7.15).
+    """
+
+    def test_on_progress_writes_slot_without_touching_tk(
+        self, tk_root: Any
+    ) -> None:
+        """_on_progress only writes _latest_progress; no drain needed."""
         tab = _make_tab(tk_root)
         tab._set_running_ui(True)
         tk_root.update_idletasks()
 
-        # Simulate the runner calling _on_progress (from worker thread in
-        # production — called directly here for simplicity).
-        for done in range(1, 4):
-            test_run = _make_test_run(done=done, total=3)
-            tab._on_progress(test_run)
-            _drain(tk_root)  # drain after(0, ...) callbacks
-            assert tab._pbar["value"] == done, (
-                f"expected bar value {done} after on_progress with done={done}"
-            )
+        tab._on_progress(_make_test_run(done=2, total=5))
 
-        assert tab._pbar["value"] == 3
+        assert tab._latest_progress == (2, 5)
+        # Bar untouched until the Tk-thread poller applies the tick.
+        assert tab._pbar["value"] == 0
 
-    def test_on_progress_updates_status_label(self, tk_root: Any) -> None:
-        """_on_progress updates the status label with symbol counts."""
+    def test_on_progress_from_real_worker_thread(self, tk_root: Any) -> None:
+        """Production path: the runner calls _on_progress off the Tk thread.
+
+        Must not raise and must leave the latest tick in the slot.
+        """
+        tab = _make_tab(tk_root)
+        tab._set_running_ui(True)
+        errors: list[BaseException] = []
+
+        def _worker() -> None:
+            try:
+                for done in range(1, 4):
+                    tab._on_progress(_make_test_run(done=done, total=3))
+            except BaseException as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        t = threading.Thread(target=_worker)
+        t.start()
+        t.join(timeout=5.0)
+
+        assert not t.is_alive(), "worker thread hung"
+        assert not errors, f"_on_progress raised off-thread: {errors!r}"
+        assert tab._latest_progress == (3, 3)
+
+    def test_poll_applies_slotted_progress(self, tk_root: Any) -> None:
+        """_on_poll (Tk thread) paints the slotted tick and clears it."""
         tab = _make_tab(tk_root)
         tab._set_running_ui(True)
         tk_root.update_idletasks()
 
-        test_run = _make_test_run(done=2, total=5)
-        tab._on_progress(test_run)
-        _drain(tk_root)
+        tab._on_progress(_make_test_run(done=2, total=5))
+        _drive_one_poll(tab)
 
+        assert tab._pbar["value"] == 2
+        assert tab._pbar["maximum"] == 5
+        assert tab._latest_progress is None
         status = tab._var_status.get()
         assert "2" in status
         assert "5" in status
@@ -251,11 +350,214 @@ class TestOnProgress:
         tab._set_running_ui(True)
         tk_root.update_idletasks()
 
-        test_run = _make_test_run(done=0, total=0)
-        tab._on_progress(test_run)  # must not raise
-        _drain(tk_root)
-        # Bar value stays at 0; no crash.
+        tab._on_progress(_make_test_run(done=0, total=0))  # must not raise
+        assert tab._latest_progress == (0, 0)
+
+
+@pytest.mark.parametrize("exit_during_paint", [False, True])
+def test_final_tick_published_during_paint_is_not_lost(
+    tk_root, monkeypatch, tmp_path, tk_calls, exit_during_paint,
+):
+    tab = _make_tab(tk_root)
+    result = _prepare_run(tab, monkeypatch, tmp_path)
+    tk_calls(tab)
+    first_tick = threading.Event()
+    painting = threading.Event()
+    final_tick = threading.Event()
+    finish = threading.Event()
+
+    def run(cfg, *, progress, **kwargs):
+        progress(_make_test_run(1, 2))
+        first_tick.set()
+        assert painting.wait(5)
+        progress(result.test_run)
+        final_tick.set()
+        if not exit_during_paint:
+            assert finish.wait(5)
+        return result
+
+    monkeypatch.setattr(tab, "_run_fn", run)
+    apply = tab._apply_progress
+
+    def paint(done, total):
+        apply(done, total)
+        if done == 1:
+            painting.set()
+            assert final_tick.wait(5), "publishing must not wait for Tk painting"
+            if exit_during_paint:
+                worker.join(5)
+                assert not worker.is_alive()
+
+    monkeypatch.setattr(tab, "_apply_progress", paint)
+    tab._on_run_clicked()
+    worker = tab._worker
+    try:
+        assert first_tick.wait(5)
+        _poll_once(tab)
+        if tab._worker is not None:
+            _poll_once(tab)
+        assert tab._pbar["value"] == 2
+        assert tab._pbar["maximum"] == 2
+        finish.set()
+        worker.join(5)
+        assert not worker.is_alive()
+        _poll_once(tab)
+        assert tab._worker is None
+        assert tab._latest_progress is None
+        assert tab._var_status.get() == "Done. 2 symbols, 0 trades."
+    finally:
+        painting.set()
+        finish.set()
+        worker.join(5)
+
+
+@pytest.mark.parametrize(
+    ("status", "done", "expected"),
+    [
+        (RunStatus.DONE, 2, "Done. 2 symbols, 0 trades."),
+        (RunStatus.CANCELLED, 1, "Stopped. Partial results: 1/2 symbols."),
+        (RunStatus.FAILED, 1, "Run failed: test failure"),
+    ],
+)
+@pytest.mark.parametrize("publish_initial", [False, True])
+def test_completion_uses_manifest_counts_without_final_callback(
+    tk_root, monkeypatch, tmp_path, tk_calls, status, done, expected, publish_initial,
+):
+    tab = _make_tab(tk_root)
+    result = _prepare_run(tab, monkeypatch, tmp_path, done=done, status=status)
+    tk_calls(tab)
+    started = threading.Event()
+    finish = threading.Event()
+
+    def run(cfg, *, progress, cancel_token, **kwargs):
+        if publish_initial:
+            progress(_make_test_run(0, 2))
+        started.set()
+        assert finish.wait(5)
+        assert cancel_token.is_cancelled() == (status is RunStatus.CANCELLED)
+        return result
+
+    monkeypatch.setattr(tab, "_run_fn", run)
+    tab._on_run_clicked()
+    worker = tab._worker
+    try:
+        assert started.wait(5)
+        _poll_once(tab)
+        if status is RunStatus.CANCELLED:
+            tab._on_stop_clicked()
+        finish.set()
+        worker.join(5)
+        assert not worker.is_alive()
+        _poll_once(tab)
+        assert tab._pbar["value"] == done
+        assert tab._pbar["maximum"] == 2
+        assert tab._var_status.get() == expected
+        assert tab._worker is None
+        assert tab._latest_progress is None
+    finally:
+        finish.set()
+        worker.join(5)
+
+
+@pytest.mark.parametrize("crash", [False, True])
+def test_run_without_progress_or_result_stops_polling(
+    tk_root, monkeypatch, tmp_path, tk_calls, crash,
+):
+    tab = _make_tab(tk_root)
+    _prepare_run(tab, monkeypatch, tmp_path)
+    tk_calls(tab)
+
+    def run(*args, **kwargs):
+        if crash:
+            raise RuntimeError("runner failed")
+        return None
+
+    monkeypatch.setattr(tab, "_run_fn", run)
+    tab._on_run_clicked()
+    worker = tab._worker
+    worker.join(5)
+    assert not worker.is_alive()
+    _poll_once(tab)
+    assert tab._worker is None
+    assert tab._poll_after_id is None
+    assert tab._latest_progress is None
+    assert tab._pbar["value"] == 0
+    expected = "Run failed: runner failed" if crash else "Run produced no result."
+    assert tab._var_status.get() == expected
+
+
+def test_destroy_with_pending_progress_cancels_poll_without_worker_tk(
+    tk_root, monkeypatch, tmp_path, tk_calls,
+):
+    tab = _make_tab(tk_root)
+    result = _prepare_run(tab, monkeypatch, tmp_path)
+    tk_calls(tab)
+    started = threading.Event()
+    finish = threading.Event()
+
+    def run(cfg, *, progress, cancel_token, **kwargs):
+        progress(_make_test_run(1, 2))
+        started.set()
+        assert finish.wait(5)
+        assert cancel_token.is_cancelled()
+        progress(result.test_run)
+        return result
+
+    monkeypatch.setattr(tab, "_run_fn", run)
+    tab._on_run_clicked()
+    worker = tab._worker
+    try:
+        assert started.wait(5)
+        poll_id = tab._poll_after_id
+        tab.destroy()
+        assert poll_id not in tk_root.tk.call("after", "info")
+        finish.set()
+        worker.join(5)
+        assert not worker.is_alive()
+        assert "error" not in tab._worker_result
+        tk_root.update()
+    finally:
+        finish.set()
+        worker.join(5)
+
+
+def test_rerun_clears_pending_tick_and_cancels_old_hide_timer(
+    tk_root, monkeypatch, tmp_path, tk_calls,
+):
+    tab = _make_tab(tk_root)
+    result = _prepare_run(tab, monkeypatch, tmp_path)
+    tk_calls(tab)
+    monkeypatch.setattr(tab, "_run_fn", lambda *args, **kwargs: result)
+    tab._on_run_clicked()
+    tab._worker.join(5)
+    assert not tab._worker.is_alive()
+    _poll_once(tab)
+    hide_id = tab._pbar_hide_after_id
+    tab._on_progress(_make_test_run(2, 2))
+    finish = threading.Event()
+
+    def run(*args, **kwargs):
+        assert finish.wait(5)
+        return result
+
+    monkeypatch.setattr(tab, "_run_fn", run)
+    tab._on_run_clicked()
+    worker = tab._worker
+    try:
+        assert tab._latest_progress is None
         assert tab._pbar["value"] == 0
+        assert hide_id not in tk_root.tk.call("after", "info")
+        _poll_once(tab)
+        assert tab._pbar["value"] == 0
+        assert tab._pbar.grid_info()
+        finish.set()
+        worker.join(5)
+        assert not worker.is_alive()
+        _poll_once(tab)
+        assert tab._pbar["value"] == 2
+    finally:
+        finish.set()
+        worker.join(5)
 
 
 class TestProgressPaintForcing:
@@ -265,13 +567,12 @@ class TestProgressPaintForcing:
 
     def test_apply_progress_calls_update_idletasks(self, tk_root: Any) -> None:
         """Each _apply_progress call must invoke _pbar.update_idletasks()
-        so the bar visibly advances between rapid sequential updates.
+        so the bar visibly advances between poll ticks.
 
-        Without this, when the runner fires progress(test_run) N times
-        in <100ms (e.g. cached data, fast strategies), all N after(0, ...)
-        callbacks queue and process in a single Tk batch — the bar jumps
-        straight from 0 to N/N at the END of the run instead of advancing
-        one symbol at a time.
+        Without this, when the runner completes symbols sub-second
+        (e.g. cached data, fast strategies), each 250 ms poll tick applies
+        the latest progress but Tk batches the paint with the next redraw
+        — the bar jumps instead of advancing steadily.
         """
         tab = _make_tab(tk_root)
         tab._set_running_ui(True)
@@ -301,16 +602,16 @@ class TestProgressPaintForcing:
             f"(got {calls}, expected [1.0, 2.0, 3.0, 4.0, 5.0])"
         )
 
-    def test_rapid_after_queue_drains_with_intermediate_paints(
+    def test_rapid_progress_ticks_coalesce_to_latest(
         self, tk_root: Any
     ) -> None:
-        """End-to-end repro: queue 12 _on_progress events WITHOUT draining
-        between them, drain once, verify update_idletasks was called 12 times.
+        """Burst repro: 12 _on_progress ticks with no poll between them
+        coalesce to the latest; one _on_poll paints once with value 12.
 
         This mirrors what the runner does in production — fires progress()
-        rapidly from the worker thread, each call queues an after(0, ...)
-        on the Tk thread. The fix forces a paint after each, so the user
-        sees the bar advance step-by-step.
+        rapidly from the worker thread. The slot keeps only the latest tick
+        (intermediate ticks are intentionally dropped); the Tk poller
+        applies it on its next 250 ms tick and forces one paint.
         """
         tab = _make_tab(tk_root)
         tab._set_running_ui(True)
@@ -325,15 +626,20 @@ class TestProgressPaintForcing:
 
         tab._pbar.update_idletasks = _counting_update  # type: ignore[method-assign]
 
-        # Queue 12 updates without draining between them, as the runner
-        # does in production when symbols complete sub-second.
+        # 12 ticks with no poll between them, as the runner does in
+        # production when symbols complete sub-second.
         for done in range(1, 13):
             test_run = _make_test_run(done=done, total=12)
             tab._on_progress(test_run)
-        _drain(tk_root)
 
-        assert call_count[0] == 12, (
-            f"all 12 queued after(0, ...) callbacks must each force a paint "
+        # No paint yet — ticks only wrote the slot; latest wins.
+        assert call_count[0] == 0
+        assert tab._latest_progress == (12, 12)
+
+        _drive_one_poll(tab)
+
+        assert call_count[0] == 1, (
+            f"one poll tick must force exactly one paint "
             f"(got {call_count[0]} update_idletasks calls)"
         )
         assert tab._pbar["value"] == 12

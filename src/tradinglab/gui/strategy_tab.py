@@ -122,6 +122,11 @@ class StrategyTab(ttk.Frame):
         self._worker: threading.Thread | None = None
         self._worker_result: dict[str, Any] = {}
         self._poll_after_id: str | None = None
+        # Latest ``(done, total)`` tick written by the runner worker thread
+        # via ``_on_progress``; picked up by the Tk-main-thread ``_on_poll``.
+        # Take-and-clear is locked; painting must not block the publisher.
+        self._progress_lock = threading.Lock()
+        self._latest_progress: tuple[int, int] | None = None
         self._pbar_hide_after_id: str | None = None
         self._current_run_dir: Path | None = None
         self._current_aggregate: RunAggregate | None = None
@@ -983,6 +988,8 @@ class StrategyTab(ttk.Frame):
 
         self._token = AcceptanceToken()
         self._worker_result = {}
+        with self._progress_lock:
+            self._latest_progress = None
         self._set_running_ui(True)
         self._var_status.set("Run starting…")
 
@@ -1032,12 +1039,27 @@ class StrategyTab(ttk.Frame):
         self._poll_after_id = None
         if self._worker is None:
             return
-        if self._worker.is_alive():
+        # Observe liveness first: a worker that exits during painting still
+        # gets another poll, so its final publication cannot be stranded.
+        running = self._worker.is_alive()
+        with self._progress_lock:
+            progress = self._latest_progress
+            self._latest_progress = None
+        if progress is not None:
+            self._apply_progress(*progress)
+        if running:
             self._schedule_poll()
             return
         # Worker finished
         err = self._worker_result.get("error")
         result = self._worker_result.get("result")
+        if result is not None:
+            final_progress = (
+                result.test_run.symbol_count_done,
+                result.test_run.symbol_count_total,
+            )
+            if final_progress != progress:
+                self._apply_progress(*final_progress)
         self._set_running_ui(False)
         self._worker = None
         if err:
@@ -1128,7 +1150,7 @@ class StrategyTab(ttk.Frame):
         else:
             self._btn_run.configure(state="normal")
             self._btn_stop.configure(state="disabled")
-            # Keep the bar visible for 1 s so the user sees the "full" state.
+            # Keep final counts visible for 1 s, including partial runs.
             self._pbar_hide_after_id = self.after(1000, self._hide_progress_bar)
 
     def _hide_progress_bar(self) -> None:
@@ -1142,29 +1164,38 @@ class StrategyTab(ttk.Frame):
     def _on_progress(self, test_run: Any) -> None:
         """Progress callback; invoked from the runner's worker thread.
 
-        Marshals the update onto the Tk main thread via ``after(0, ...)``.
-        The bar shows completed / total symbols; the status label is updated
-        with the same counts.
+        Writes the latest ``(done, total)`` tuple into
+        ``self._latest_progress`` for the Tk-main-thread poller
+        (``_on_poll``) to pick up and paint via ``_apply_progress``.
+        The bar shows completed / total symbols; the status label is
+        updated with the same counts.
+
+        Never touches Tk here: threaded Tcl can marshal cross-thread calls
+        while its owner is servicing mainloop, but workers must not depend
+        on that during startup or teardown (AGENTS.md §7.15). Publication
+        and the poller's take-and-clear share a lock, released before any
+        Tk painting. Only intermediate ticks may be coalesced.
         """
         try:
             done = getattr(test_run, "symbol_count_done", 0)
             total = getattr(test_run, "symbol_count_total", 0)
-            self.after(0, lambda d=done, t=total: self._apply_progress(d, t))
         except Exception:  # noqa: BLE001
-            pass
+            done, total = 0, 0
+        with self._progress_lock:
+            self._latest_progress = (done, total)
 
     def _apply_progress(self, done: int, total: int) -> None:
         """Apply a progress update on the Tk main thread.
 
         ``update_idletasks()`` at the end is mandatory: when symbols complete
         sub-second (e.g. cached data + simple strategies), the runner fires
-        ``progress(test_run)`` 12 times in <100ms, which queues 12
-        ``after(0, ...)`` callbacks. Tk processes them all in a single
-        batch BEFORE yielding to redraw, so without forcing idle-task
-        processing here the bar visually jumps straight from 0 to N/N at
-        the end of the run instead of advancing one symbol at a time.
-        ``update_idletasks()`` flushes pending paint requests synchronously
-        without re-entering the event loop, which is exactly what we want.
+        ``progress(test_run)`` many times per 250 ms poll tick. Each tick
+        overwrites ``_latest_progress`` (latest wins) and Tk batches the
+        resulting paint with the next redraw, so without forcing idle-task
+        processing here the bar visually jumps instead of advancing
+        steadily between poll ticks. ``update_idletasks()`` flushes pending
+        paint requests synchronously without re-entering the event loop,
+        which is exactly what we want.
         """
         try:
             if total > 0:
@@ -1482,11 +1513,9 @@ class StrategyTab(ttk.Frame):
         # latest_progress is updated from the background thread (atomic
         # tuple assignment is safe under the GIL) and read by the
         # Tk-main-thread poller. We intentionally do NOT call
-        # ``self.after`` from the worker because tkinter's ``after`` is
-        # only thread-safe when CPython's Tcl was built with threads,
-        # which is not the case on the default Windows install — the
-        # ``RuntimeError("main thread is not in main loop")`` surfaces
-        # in pytest as PytestUnhandledThreadExceptionWarning.
+        # ``self.after`` from the worker: threaded Tcl can marshal it
+        # while mainloop runs, but it can fail or block when the owner
+        # loop is not servicing events or is shutting down.
         self._export_latest_progress: tuple[int, int, str] | None = None
         self._set_export_ui(True, kind)
 

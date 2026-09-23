@@ -1,6 +1,6 @@
 # `gui/strategy_tab.py` — Spec
 
-Last updated: 2026-09-15
+Last updated: 2026-09-23
 
 ## Purpose
 PR 4 of the Strategy Tester rollout. A self-contained Tk widget
@@ -72,13 +72,10 @@ root in smoke tests). The popup wrapper + menubar wiring live in
     bar hides itself so the finished state is visible momentarily.
   - **Paint-forcing invariant** — ``_apply_progress`` MUST call
     ``self._pbar.update_idletasks()`` after every ``configure`` so the
-    bar visibly advances between rapid sequential updates. Without
-    this, when symbols complete sub-second (cached data + simple
-    strategies), the runner's ``progress(test_run)`` fires 12 times in
-    <100ms which queues 12 ``after(0, ...)`` callbacks; Tk processes
-    them all in a single batch BEFORE yielding to redraw, so the bar
-    visually jumps from 0 to N/N at the END of the run instead of
-    advancing one symbol at a time.
+    bar visibly advances on each 250 ms poll tick. Without this, when
+    symbols complete sub-second (cached data + simple strategies), Tk
+    batches the paint for the applied tick with the next redraw and the
+    bar visually jumps instead of advancing steadily.
 
 
 ### Report pane (right)
@@ -166,11 +163,11 @@ root in smoke tests). The popup wrapper + menubar wiring live in
   on completion. The status label reads
   ``"Exporting <kind>… (current/total: label)"``.
 - **No cross-thread ``self.after``.** We deliberately don't call
-  ``self.after(0, ...)`` from the export thread. ``tkinter.Misc.after``
-  is only thread-safe when the underlying Tcl was built with thread
-  support, which is not the case on the stock CPython Windows install
-  — it raises ``RuntimeError("main thread is not in main loop")`` and
-  the callback is silently dropped. Instead the worker writes its
+  ``self.after(0, ...)`` from the export thread. Stock Windows CPython
+  normally includes threaded Tcl, which can marshal cross-thread calls
+  while the owner thread services ``mainloop``. Calls can still fail or
+  block without a servicing loop or during teardown; worker delivery
+  must not depend on it. Instead the worker writes its
   result into a result dict (``self._export_result``) + tuple
   (``self._export_latest_progress``); the Tk main thread polls via
   ``self.after(100, self._on_export_poll)``. This mirrors the runner
@@ -219,6 +216,25 @@ root in smoke tests). The popup wrapper + menubar wiring live in
 - A 250 ms ``after()`` poll loop watches `self._worker.is_alive()`
   and, on completion, loads the aggregate via
   ``report.load_aggregate(run_dir)`` and re-renders the Report pane.
+- **Progress.** The runner's ``progress(test_run)`` callback
+  (``_on_progress``) runs on the worker thread and writes the latest
+  ``(done, total)`` tick into ``self._latest_progress`` — it never
+  touches Tk (cross-thread ``after`` is banned, AGENTS.md §7.15).
+  Publication and the poller's take-and-clear use ``_progress_lock``;
+  the lock is released before ``_apply_progress`` touches Tk. A tick
+  published during painting therefore remains pending. The poll samples
+  worker liveness **before** consuming progress and schedules another
+  tick if it observed a live worker, even if the worker exits during
+  painting. Once the worker is known to have exited, the slot is stable
+  and completion reconciles the bar with ``result.test_run``'s actual
+  completed/total counters before setting the terminal status. Cancelled
+  and failed runs retain partial counts rather than forcing 100%.
+  Latest tick wins; only intermediate ticks are intentionally coalesced.
+  Starting another run clears the slot and cancels the prior hide timer.
+  Deterministic Event-coordinated regressions in
+  ``tests/unit/gui/test_strategy_tester_progress_bar.py`` cover publication
+  during painting with both live and exiting workers, missing final
+  callbacks, cancellation, teardown, rerun, and Tk owner-thread affinity.
 - Status transitions: ``Ready`` → ``Run starting…`` → ``Running… N/M
   symbols`` → ``Done. N symbols, K trades.`` (or ``Stopped. Partial
   results: N/M symbols.`` on cancel).
