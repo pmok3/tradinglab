@@ -419,8 +419,9 @@ def test_final_tick_published_during_paint_is_not_lost(
         (RunStatus.FAILED, 1, "Run failed: test failure"),
     ],
 )
+@pytest.mark.parametrize("publish_initial", [False, True])
 def test_completion_uses_manifest_counts_without_final_callback(
-    tk_root, monkeypatch, tmp_path, tk_calls, status, done, expected,
+    tk_root, monkeypatch, tmp_path, tk_calls, status, done, expected, publish_initial,
 ):
     tab = _make_tab(tk_root)
     result = _prepare_run(tab, monkeypatch, tmp_path, done=done, status=status)
@@ -429,7 +430,8 @@ def test_completion_uses_manifest_counts_without_final_callback(
     finish = threading.Event()
 
     def run(cfg, *, progress, cancel_token, **kwargs):
-        progress(_make_test_run(0, 2))
+        if publish_initial:
+            progress(_make_test_run(0, 2))
         started.set()
         assert finish.wait(5)
         assert cancel_token.is_cancelled() == (status is RunStatus.CANCELLED)
@@ -455,6 +457,33 @@ def test_completion_uses_manifest_counts_without_final_callback(
     finally:
         finish.set()
         worker.join(5)
+
+
+@pytest.mark.parametrize("crash", [False, True])
+def test_run_without_progress_or_result_stops_polling(
+    tk_root, monkeypatch, tmp_path, tk_calls, crash,
+):
+    tab = _make_tab(tk_root)
+    _prepare_run(tab, monkeypatch, tmp_path)
+    tk_calls(tab)
+
+    def run(*args, **kwargs):
+        if crash:
+            raise RuntimeError("runner failed")
+        return None
+
+    monkeypatch.setattr(tab, "_run_fn", run)
+    tab._on_run_clicked()
+    worker = tab._worker
+    worker.join(5)
+    assert not worker.is_alive()
+    _poll_once(tab)
+    assert tab._worker is None
+    assert tab._poll_after_id is None
+    assert tab._latest_progress is None
+    assert tab._pbar["value"] == 0
+    expected = "Run failed: runner failed" if crash else "Run produced no result."
+    assert tab._var_status.get() == expected
 
 
 def test_destroy_with_pending_progress_cancels_poll_without_worker_tk(

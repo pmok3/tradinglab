@@ -15,6 +15,7 @@ disk so a restart shortly after a check does not poll GitHub again.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 import time
@@ -25,6 +26,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -458,6 +461,8 @@ def schedule_check_async(
     delivered. If the worker dies without writing (e.g. ``BaseException``),
     polling stops instead of spinning forever.
     """
+    from tkinter import TclError
+
     slot: dict[str, UpdateResult] = {}
 
     def _worker() -> None:
@@ -475,14 +480,25 @@ def schedule_check_async(
     t.start()
     seen_dead = False
 
+    def _widget_exists() -> bool:
+        try:
+            return bool(tk_widget.winfo_exists())
+        except TclError:
+            logger.debug("Update-check widget is no longer available", exc_info=True)
+            return False
+
     def _rearm() -> None:
+        if not _widget_exists():
+            return
         try:
             tk_widget.after(poll_ms, _poll)
-        except Exception:  # noqa: BLE001
-            pass  # widget destroyed; drop the result
+        except TclError:
+            logger.exception("Could not schedule update-check result polling")
 
     def _poll() -> None:
         nonlocal seen_dead
+        if not _widget_exists():
+            return
         result = slot.get("result")
         if result is None:
             if t.is_alive():
@@ -494,7 +510,7 @@ def schedule_check_async(
         try:
             callback(result)
         except Exception:  # noqa: BLE001
-            pass
+            logger.exception("Update-check result callback failed")
 
     _rearm()
 

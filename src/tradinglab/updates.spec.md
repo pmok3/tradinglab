@@ -54,6 +54,14 @@ tests can keep patching them at call time.
   included with stock Windows CPython) can marshal cross-thread calls
   while the owner services `mainloop`; the polling contract avoids relying
   on that during startup/teardown or when the loop is not servicing events.
+  Each poll/rearm checks widget existence on the owner thread: destroyed
+  widgets/interpreters stop delivery without invoking the UI callback.
+  Tcl errors during existence checks are teardown (debug logged); scheduling
+  Tcl errors and callback exceptions are logged rather than silently lost.
+  Non-Tcl scheduling errors propagate. Delivery is once per scheduled check;
+  no retry follows a callback exception. Event-driven tests in
+  `tests/unit/test_updates.py` pin delayed delivery, the exit-race grace tick,
+  destroyed widgets, bounded empty-worker polling and error reporting.
 - `compare_versions(current, advertised) -> Optional[str]` — tolerant
   `MAJOR.MINOR.PATCH` comparison used by smoke tests and the poll.
 - `reset_cache_for_tests(clear_disk=False)` — clear in-memory cache; tests can
