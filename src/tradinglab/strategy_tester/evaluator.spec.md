@@ -45,15 +45,19 @@ Only optional decision kernels and time facts differ between modes.
 - The entry time gate combines intraday arm-window and RTH masks.
   `core.timezones.parse_hhmm` is shared by scalar/vector arm-window gates
   and scalar TIME_OF_DAY exits, including range validation.
-- Exit INDICATOR predicates use optional scanner masks. Exit price masks
-  lazily call shared dispatch price resolution and touch comparisons;
-  they refresh when side or average price changes. Non-BLOCK policies keep
-  price exits scalar to avoid all-bars mask rebuilding on each STACK add.
+- Exit INDICATOR predicates use optional scanner masks. Exit price kernels
+  cache a target/direction and call the shared current-bar scalar touch rule;
+  targets refresh when side or average price changes, without rebuilding
+  any full-history array. Each eligible price check does constant work,
+  including high-turnover BLOCK close/re-entry. Non-BLOCK policies keep
+  price exits scalar.
   Plan slots use `(leg_index, trigger_index)`, never user-authored IDs.
 - MARKET/TIME_OF_DAY/stateful exit handlers stay scalar, retaining their
   validation, NaN quantity gates, exception behavior and dated adapters.
   Position adapters may be reused only while all source fields are
   unchanged; any scalar fallback invalidates the cached adapter.
+  OHLC tuple/spec-Bar adapters are allocated lazily for activation or
+  scalar dispatch, and sizing reads only the close when no tuple is needed.
 - Handler identity is checked at both kernel creation and consumption.
   Custom handlers, new kinds and unsupported scanner trees use scalar
   dispatch; missing handlers raise at the original dispatch point.
@@ -244,7 +248,8 @@ Multi-leg OCO is reduced to first-leg-to-fire. Proper OCO semantics are still de
   (within-last), `UnsupportedTriggerKind` in both paths, fixed-seed
   randomized strategy fuzzing (3 seeds × 10 trials), duplicate exit IDs,
   invalid cutoffs, registered/replaced custom handlers, NaN quantity gates,
-  STACK repricing, cancellation with warmup, and a deliberate
+  STACK repricing, bounded high-turnover BLOCK price work, cancellation
+  with warmup, and a deliberate
   perturbation check (`test_limit_entry_exact_touch_boundary_agrees`
   fails if the LIMIT touch comparison is weakened to `<`).
 - `tests/perf/test_strategy_eval_perf.py` (`@pytest.mark.perf`) —

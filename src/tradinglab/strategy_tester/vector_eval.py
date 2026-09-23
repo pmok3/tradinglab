@@ -27,6 +27,7 @@ from ..scanner.model import Group
 
 @dataclass
 class VectorEvalPlan:
+    bars: BarSeries
     entry_gate: np.ndarray
     entry: PreparedEntryMask | None
     exits: dict[tuple[int, int], PreparedExit]
@@ -79,4 +80,4 @@ def build_plan(
             )
             if mask is not None:
                 exits[leg_idx, trigger_idx] = mask
-    return VectorEvalPlan(entry_gate=gate, entry=entry, exits=exits)
+    return VectorEvalPlan(bars=bars, entry_gate=gate, entry=entry, exits=exits)

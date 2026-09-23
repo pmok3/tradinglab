@@ -1043,7 +1043,7 @@ def _bar_at(idx: int, bars) -> _BarTuple:
 
 def _check_entry(
     ctx: EvalContext,
-    bar: _BarTuple,
+    bar: _BarTuple | None,
     *,
     eval_ctx: _ScannerEvalContext | None = None,
     normalized_conditions: dict[str, _ScannerGroup] | None = None,
@@ -1142,6 +1142,9 @@ def _check_entry(
     if plan is not None and plan.entry is not None:
         fired = plan.entry.fires(trigger, bar_index, ctx.scanner_alert_prev_match)
     if fired is None:
+        if bar is None:
+            assert plan is not None
+            bar = _bar_at(bar_index, plan.bars)
         direction = (
             EntryDirection.LONG
             if ctx.entry_strategy.direction is EntryDirection.LONG
@@ -1159,7 +1162,11 @@ def _check_entry(
     if not fired:
         return False, side, 0.0
 
-    _o, _h, _l, close_price = bar
+    if bar is None:
+        assert plan is not None
+        close_price = float(plan.bars.close[bar_index])
+    else:
+        close_price = bar[3]
     qty = _compute_quantity(
         strategy=ctx.entry_strategy,
         decision_price=close_price,
@@ -1170,7 +1177,7 @@ def _check_entry(
 
 def _check_exits(
     ctx: EvalContext,
-    bar: _BarTuple,
+    bar: _BarTuple | None,
     *,
     eval_ctx: _ScannerEvalContext | None = None,
     normalized_conditions: dict[str, _ScannerGroup] | None = None,
@@ -1224,6 +1231,9 @@ def _check_exits(
                     # Scalar/custom handlers get the original adapter lifetime.
                     plan.position = None
                 if spec_bar is None:
+                    if bar is None:
+                        assert plan is not None
+                        bar = _bar_at(bar_index, plan.bars)
                     spec_bar = _bar_to_specbar(bar, bar_ts)
                 state = ctx.trigger_states.get(trigger.id)
                 if (
@@ -1522,7 +1532,7 @@ def evaluate_symbol(
                     break
             except Exception:  # noqa: BLE001 — duck-typed token; never gate on probe failure
                 pass
-        bar = _bar_at(i, bars)
+        bar = _bar_at(i, bars) if plan is None else None
         ts = int(bars.ts[i])
         # NEW: warmup gate. During warmup the engine still ticks (so
         # indicators hydrate + scanner eval_ctx state stays consistent)
@@ -1604,6 +1614,8 @@ def evaluate_symbol(
         # exit (e.g. take-profit hit on the activation bar) still sees
         # the freshly-seeded chandelier state.
         if ctx.position_open and not ctx.prev_position_open:
+            if bar is None:
+                bar = _bar_at(i, bars)
             _reset_trigger_states_on_activation(ctx, bar, ts)
         ctx.prev_position_open = ctx.position_open
 

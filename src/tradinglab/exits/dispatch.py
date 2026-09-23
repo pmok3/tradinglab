@@ -100,7 +100,9 @@ def _legacy_limit(trigger: ExitTrigger, ctx: ExitTriggerContext) -> Decision:
     qty = compute_qty_at_fire(trigger, ctx.position)
     if qty <= 0:
         return _no_fire("position flat")
-    if _legacy_price_touched(trigger.kind, ctx.position.side, ctx.bar, target):
+    if _legacy_price_touched(
+        trigger.kind, Side.from_str(ctx.position.side).is_long, ctx.bar.high, ctx.bar.low, target,
+    ):
         return Decision(fire=True, fire_price=target, qty=qty, reason="limit-touched-legacy")
     return _no_fire("limit not touched")
 
@@ -112,19 +114,20 @@ def _legacy_stop(trigger: ExitTrigger, ctx: ExitTriggerContext) -> Decision:
     qty = compute_qty_at_fire(trigger, ctx.position)
     if qty <= 0:
         return _no_fire("position flat")
-    if _legacy_price_touched(trigger.kind, ctx.position.side, ctx.bar, stop):
+    if _legacy_price_touched(
+        trigger.kind, Side.from_str(ctx.position.side).is_long, ctx.bar.high, ctx.bar.low, stop,
+    ):
         return Decision(fire=True, fire_price=stop, qty=qty, reason="stop-touched-legacy")
     return _no_fire("stop not touched")
 
 
 def _legacy_price_touched(
-    kind: TriggerKind, side: str, bar: Bar | BarSeries, target: float,
-) -> bool | np.ndarray:
-    """Same comparison for a scalar Bar or all-bars OHLC arrays."""
-    is_long = Side.from_str(side).is_long
+    kind: TriggerKind, is_long: bool, high: float, low: float, target: float,
+) -> bool:
+    """Canonical legacy touch rule for the current bar only."""
     if kind is TriggerKind.LIMIT:
-        return (bar.high >= target) if is_long else (bar.low <= target)
-    return (bar.low <= target) if is_long else (bar.high >= target)
+        return (high >= target) if is_long else (low <= target)
+    return (low <= target) if is_long else (high >= target)
 
 
 def _legacy_stop_limit(trigger: ExitTrigger, ctx: ExitTriggerContext) -> Decision:
@@ -284,7 +287,7 @@ class _PreparedLegacyPrice:
     bars: BarSeries
     position_key: tuple[str, float] | None = None
     target: float | None = None
-    values: np.ndarray | None = None
+    is_long: bool = True
 
     def fires(self, trigger: ExitTrigger, index: int, position: Position) -> bool | None:
         if _EXIT_DISPATCH.get(trigger.kind) is not self.handler:
@@ -293,17 +296,16 @@ class _PreparedLegacyPrice:
         if key != self.position_key:
             target = _legacy_resolve_exit_price(trigger, position)
             self.target = target
-            self.values = None
+            self.is_long = Side.from_str(position.side).is_long
             self.position_key = key
         if self.target is None:
             return False
         if compute_qty_at_fire(trigger, position) <= 0:
             return False
-        if self.values is None:
-            self.values = np.asarray(
-                _legacy_price_touched(trigger.kind, position.side, self.bars, self.target), dtype=bool,
-            )
-        return bool(self.values[index])
+        return _legacy_price_touched(
+            trigger.kind, self.is_long, float(self.bars.high[index]),
+            float(self.bars.low[index]), self.target,
+        )
 
 
 def prepare_trigger_mask(

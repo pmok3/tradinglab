@@ -8,7 +8,7 @@ This module owns no order submission, sizing, counters, activation, EOD
 flattening or exit price rules. Dispatch owns the optional trigger kernels.
 
 ## Public API
-- `VectorEvalPlan`: `entry_gate: bool[n]`, optional dispatch-owned `entry`
+- `VectorEvalPlan`: source `bars`, `entry_gate: bool[n]`, optional dispatch-owned `entry`
   predicate, and `exits` keyed by `(leg_index, trigger_index)`. Slots are
   unambiguous even when different triggers have identical user-authored IDs.
 - `position` / `position_key` cache the evaluator's canonical Position
@@ -31,10 +31,11 @@ flattening or exit price rules. Dispatch owns the optional trigger kernels.
 - Entry MARKET and supported INDICATOR/SCANNER_ALERT trees have masks.
   Price entries deliberately use scalar dispatch.
 - Exit INDICATOR masks come from the scanner vector kernel. Legacy price
-  exits have lazy position-dependent masks implemented in exit dispatch,
-  using the same resolver, touch comparison and quantity helper as scalar.
-  Non-BLOCK entry policies keep price exits scalar, avoiding repeated
-  all-bars mask construction on STACK adds.
+  exits cache a scalar target/direction in exit dispatch, using the same
+  resolver, current-bar touch comparison and quantity helper as scalar.
+  No full-history arrays are rebuilt on position changes: repeated BLOCK
+  close/re-entry remains constant work per eligible price check.
+  Non-BLOCK entry policies keep price exits scalar.
 - MARKET/TIME_OF_DAY/stateful exit rules remain scalar. Both modes share
   `_check_exits`, activation, quantity clamping and first-trigger-wins order.
 - Unsupported trees and custom/new handlers fall back per trigger, not via
@@ -45,8 +46,10 @@ flattening or exit price rules. Dispatch owns the optional trigger kernels.
 ## Dtypes and lifetime
 OHLC arrays are float64, timestamps and ET seconds are int64, masks are bool
 and positionally aligned with bars. Plans are per-symbol and never global.
-Time gates and scanner masks are built once; price masks refresh when the
-position reference changes. No dtype downcast, rounding or tolerance is added.
+Time gates and scanner masks are built once; scalar price targets refresh
+when the position reference changes. Source bars allow the evaluator to
+defer unused tuple/spec-Bar adapters until scalar dispatch, activation or
+sizing needs them. No dtype downcast, rounding or tolerance is added.
 
 ## Testing
 - `tests/unit/strategy_tester/test_vectorized_agreement.py`: exact complete

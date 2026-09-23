@@ -938,6 +938,35 @@ def test_stack_scalar_price_fallback_when_average_changes(kind, direction) -> No
     _assert_identical(r_new, r_old)
 
 
+@pytest.mark.parametrize("n", [128, 512, 2048])
+@pytest.mark.parametrize("direction", [Direction.LONG, Direction.SHORT])
+def test_high_turnover_block_price_checks_are_constant_work(monkeypatch, n, direction) -> None:
+    from tradinglab.exits import dispatch
+
+    original = dispatch._legacy_price_touched
+    calls = []
+
+    def scalar_touch(kind, is_long, high, low, target):
+        assert isinstance(high, float) and isinstance(low, float)
+        calls.append(target)
+        return original(kind, is_long, high, low, target)
+
+    monkeypatch.setattr(dispatch, "_legacy_price_touched", scalar_touch)
+    entry = _entry_strategy(
+        EntryTrigger(kind=EntryTriggerKind.MARKET), direction=direction,
+        arm_window_start=None, arm_window_end=None, require_market_open=False, max_per_symbol=n,
+    )
+    exit = _exit_strategy([_leg(ExitTrigger(kind=ExitTriggerKind.LIMIT, offset_dollar=0.1))])
+    r_new, r_old = _run_both(
+        candles=_et_candles([100.0 + i * 0.01 for i in range(n)], step_minutes=1),
+        entry=entry, exit=exit,
+    )
+    _assert_identical(r_new, r_old)
+    assert len(r_old.post_trades) == n // 2 - 1
+    assert len(calls) == n, "one scalar touch per holding in each mode, never a history scan"
+    assert len(set(calls)) >= n // 2, "exercise different targets on repeated BLOCK re-entry"
+
+
 def test_within_last_indicator_falls_back_and_agrees() -> None:
     """Vec-unsupported trees (within-last) use scalar dispatch — still identical."""
     closes = [100 + 0.5 * i for i in range(40)]

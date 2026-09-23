@@ -50,12 +50,14 @@ change instead of two drifting handler chains.
   `EvaluationContext`. The handler only evaluates the condition and
   returns evidence.
 - Price kernels lazily resolve a target using the same
-  `_legacy_resolve_exit_price` as scalar dispatch, then broadcast the
-  shared `_legacy_price_touched` comparison over OHLC arrays. Each plan
+  `_legacy_resolve_exit_price` as scalar dispatch, then apply the shared
+  `_legacy_price_touched` comparison to the current bar's high/low only.
+  Each check does constant work and allocates no full-history mask, even
+  when BLOCK positions close and re-enter at new prices on alternate bars.
+  Each plan
   slot owns its own kernel: user-authored trigger IDs are not cache keys.
-  Side/average-entry changes invalidate masks. Non-BLOCK entry policies
-  pass `cache_prices=False` and keep price exits scalar, avoiding quadratic
-  all-bars mask rebuilding on frequent STACK adds;
+  Side/average-entry changes invalidate the cached scalar target/direction.
+  Non-BLOCK entry policies pass `cache_prices=False` and keep price exits scalar;
   the canonical `compute_qty_at_fire` gate still runs on each check.
   Missing targets and malformed quantities keep scalar evaluation order
   and exception timing. INDICATOR masks use `evaluate_group_vec`;
@@ -71,4 +73,6 @@ change instead of two drifting handler chains.
   legacy signed-offset policy.
 - `tests/unit/strategy_tester/test_vectorized_agreement.py` covers duplicate
   IDs, quantity edge cases, STACK repricing, custom and replaced handlers,
-  scalar fallback and exact result agreement.
+  scalar fallback and exact result agreement. High-turnover BLOCK tests
+  at increasing bar counts assert changing targets, exact trades and one
+  scalar touch comparison per eligible check, rather than a history scan.
