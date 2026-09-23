@@ -1,6 +1,6 @@
 # app.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-23
 
 ## Purpose
 Top-level Tk + matplotlib application. Owns all runtime state (Tk widgets, `Figure`, caches, stream/fetch tokens, worker pool) and orchestrates the data → render → stream pipeline. `ChartApp` is composed of `tk.Tk` + a stack of mixins (each owns a concern documented in its own `*.spec.md`).
@@ -100,6 +100,15 @@ patch `tradinglab.app.<name>`.
 8. **Background prefetch scheduler (`data/prefetch/*`).** A priority-queue, rate-gated, breadth-first preloader integrated behind the `TRADINGLAB_PREFETCH_SCHEDULER` env flag (default live; `off` / `0` / `false` / `no` = disabled kill-switch; `shadow` = observe-only). When enabled it constructs a `PrefetchDriver`+`PrefetchScheduler` (live shares the process-wide `global_bucket_registry()` — Decision 1; shadow uses a throwaway unlimited registry). `_build_prefetch_context()` snapshots app state (source/ticker/interval/compare + `partition_watchlists(active sub-tab, pinned)`; universe deferred) into a `PrefetchContext`. Re-arm hooks (all no-op when off / in sandbox): the `_load_data_async` chokepoint (`_prefetch_observe_soon()`, deferred — covers ticker/watchlist/chart-stack/axis switches), `_on_compare_toggle` (`_prefetch_observe_compare()`), the watchlist subtab/pinned handlers (`_prefetch_observe_watchlists()`), and a startup `_prefetch_observe_soon()`. In **shadow** mode observe logs how many jobs it WOULD dispatch (no side effects); **live** mode drives fetches through the dedicated prefetch worker pool (`_prefetch_submit`: worker-side merge/save, Tk-thread stash+`complete`+re-pump; the live driver uses `apply_result=None` so the app owns all cache writes). Full design: session `PREFETCH_SCHEDULER_DESIGN.md`.
 
 ### Cache staleness (`_cache_is_stale`)
+
+Hybrid/Auto cache lists carry `disk_cache.HistorySnapshot` revision fences.
+Invalidated lists are not eligible for memory hits or failed-fetch fallback;
+`_load_data` preserves fences with `copy_candles` through its cache copies.
+Pending hybrid recovery displays a warning that only verified recent bars are
+available and names the retry delay. When neither leg supplies usable data,
+an invalidated old chart is cleared and the recovery error is shown rather
+than a misleading bad-ticker error or pre-split history. Async and sync loads
+share the common guarded merge/save path; ordinary sources are unaffected.
 Interval- and session-aware:
 - **Intraday (`1m`–`1h`)**: outside Mon–Fri 04:00–20:00 ET, never stale (sealed yfinance bars are immutable). In-session: `now − last_ts > 2 × interval_sec`. Session classification via `zoneinfo`; falls open if `tzdata` missing.
 - **Daily+**: `now − last_ts > 2 × interval_sec` (1d → 2 days, absorbs weekend visits).

@@ -36,16 +36,163 @@ time so synthetic-source bars cannot leak into the user's real cache
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import tempfile
+import threading
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .core.lru_dict import LRUDict
 from .models import Candle
 
 _CACHE_SUFFIX = ".jsonl"
+LOG = logging.getLogger(__name__)
+_HISTORY_SOURCES = ("yfinance+alpaca", "Auto")
+_HISTORY_LOCK = threading.RLock()
+
+
+@dataclass(eq=False)
+class _HistoryRevision:
+    ticker: str
+    interval: str
+    active: bool = True
+    replacement: bool = False
+    blocked: set[str] = field(default_factory=set)
+    notice: str | None = None
+    parents: tuple[_HistoryRevision, ...] = ()
+
+    @property
+    def valid(self) -> bool:
+        return self.active and all(parent.valid for parent in self.parents)
+
+    @valid.setter
+    def valid(self, value: bool) -> None:
+        self.active = value
+
+
+_HISTORY_REVISIONS: LRUDict[str, _HistoryRevision] = LRUDict(maxsize=128)
+
+
+class HistorySnapshot(list[Candle]):
+    """List-compatible hybrid history carrying an in-process invalidation fence."""
+
+    def __init__(self, candles: list[Candle], revision: _HistoryRevision, *, fetched: bool = False):
+        super().__init__(candles)
+        self.revision = revision
+        self.fetched = fetched
+
+    def __bool__(self) -> bool:
+        return self.revision.valid and len(self) > 0
+
+    def copy(self) -> HistorySnapshot:
+        return HistorySnapshot(self, self.revision, fetched=self.fetched)
+
+
+def current_candles(candles: list[Candle] | None) -> list[Candle] | None:
+    """Reject a cache/read/worker result superseded by history revalidation."""
+    if isinstance(candles, HistorySnapshot) and not candles.revision.valid:
+        return None
+    return candles
+
+
+def copy_candles(candles: list[Candle] | None) -> list[Candle]:
+    """Copy a current series without dropping its invalidation fence."""
+    current = current_candles(candles)
+    return current.copy() if current is not None else []
+
+
+def _history_revision(ticker: str, interval: str) -> _HistoryRevision:
+    key = str(_path_for(_HISTORY_SOURCES[0], ticker, interval))
+    with _HISTORY_LOCK:
+        revision = _HISTORY_REVISIONS.get(key)
+        if revision is None or not revision.valid:
+            if revision is None and len(_HISTORY_REVISIONS) >= _HISTORY_REVISIONS.maxsize:
+                _, evicted = _HISTORY_REVISIONS.popitem(last=False)
+                evicted.valid = False
+            pending = _path_for(_HISTORY_SOURCES[0], ticker, interval).with_suffix(".invalid").exists()
+            revision = _HistoryRevision(
+                ticker, interval, replacement=pending,
+                blocked=set(_HISTORY_SOURCES) if pending else set(),
+                notice="Deep history withheld; revalidation required." if pending else None,
+            )
+            _HISTORY_REVISIONS[key] = revision
+        return revision
+
+
+def history_snapshot(
+    ticker: str, interval: str, candles: list[Candle], *, notice: str | None = None,
+) -> HistorySnapshot:
+    revision = _history_revision(ticker, interval)
+    revision.notice = notice
+    return HistorySnapshot(candles, revision, fetched=True)
+
+
+def derived_history_snapshot(
+    ticker: str, interval: str, candles: list[Candle], *legs: Sequence[Candle],
+) -> list[Candle]:
+    """Retain up to two underlying revision fences through ratio computation."""
+    parents = tuple(leg.revision for leg in legs if isinstance(leg, HistorySnapshot))
+    if not parents:
+        return candles
+    with _HISTORY_LOCK:
+        revision = _history_revision(ticker, interval)
+        revision.parents = parents
+        revision.replacement = any(parent.replacement for parent in parents)
+        revision.notice = next((parent.notice for parent in parents if parent.notice), None)
+        return HistorySnapshot(candles, revision, fetched=True)
+
+
+def history_notice(source: str, ticker: str, interval: str) -> str | None:
+    if source not in _HISTORY_SOURCES:
+        return None
+    with _HISTORY_LOCK:
+        revision = _HISTORY_REVISIONS.get(str(_path_for(_HISTORY_SOURCES[0], ticker, interval)))
+        if revision is not None and not revision.valid:
+            return "History invalidated; awaiting verified source data."
+    return _history_revision(ticker, interval).notice
+
+
+def history_pending(ticker: str, interval: str) -> bool:
+    return _path_for(_HISTORY_SOURCES[0], ticker, interval).with_suffix(".invalid").exists()
+
+
+def confirm_history(ticker: str, interval: str) -> None:
+    """Clear durable quarantine only after verified deep history was persisted."""
+    with _HISTORY_LOCK:
+        try:
+            _path_for(_HISTORY_SOURCES[0], ticker, interval).with_suffix(".invalid").unlink(missing_ok=True)
+        except OSError:
+            LOG.warning("Cannot clear history quarantine for %s/%s", ticker, interval, exc_info=True)
+
+
+def invalidate_history(ticker: str, interval: str) -> None:
+    """Fence old hybrid/Auto work and retire only this derived cache pair.
+
+    The rejected Alpaca file is retained for diagnosis/revalidation, but the
+    hybrid source must not use it until its replacement has been validated.
+    """
+    with _HISTORY_LOCK:
+        previous = _history_revision(ticker, interval)
+        previous.valid = False
+        key = str(_path_for(_HISTORY_SOURCES[0], ticker, interval))
+        revision = _HistoryRevision(
+            ticker, interval, replacement=True, blocked=set(_HISTORY_SOURCES),
+        )
+        _HISTORY_REVISIONS[key] = revision
+        try:
+            _path_for(_HISTORY_SOURCES[0], ticker, interval).with_suffix(".invalid").touch(exist_ok=True)
+        except OSError:
+            LOG.error("Cannot persist history quarantine for %s/%s", ticker, interval, exc_info=True)
+        for source in _HISTORY_SOURCES:
+            try:
+                _path_for(source, ticker, interval).unlink(missing_ok=True)
+            except OSError:
+                LOG.warning("Cannot retire %s history for %s/%s", source, ticker, interval, exc_info=True)
 
 
 def _cache_dir() -> Path:
@@ -240,6 +387,9 @@ def load(source: str, ticker: str, interval: str) -> list[Candle] | None:
         return None
     if _is_ratio_ticker(ticker):
         return None  # ratios are derived — never persisted (see _is_ratio_ticker)
+    revision = _history_revision(ticker, interval) if source in _HISTORY_SOURCES else None
+    if revision is not None and source in revision.blocked:
+        return None
     path = _path_for(source, ticker, interval)
     if not path.exists():
         return None
@@ -282,9 +432,12 @@ def load(source: str, ticker: str, interval: str) -> list[Candle] | None:
     # the returned data and ``load`` still never raises.
     if cleaned is not candles:
         try:
-            save(source, ticker, interval, cleaned)
+            save(source, ticker, interval,
+                 HistorySnapshot(cleaned, revision) if revision is not None else cleaned)
         except Exception:  # noqa: BLE001
             pass
+    if revision is not None:
+        return current_candles(HistorySnapshot(cleaned, revision))
     return cleaned
 
 
@@ -353,6 +506,12 @@ def load_window(
         return None
     if _is_ratio_ticker(ticker):
         return None  # ratios are derived — never persisted
+    if source in _HISTORY_SOURCES:
+        bars = load(source, ticker, interval)
+        if bars is None:
+            return None
+        selected = [c for c in bars if start_day <= c.date.isoformat()[:_ISO_DAY_LEN] <= end_day]
+        return HistorySnapshot(selected, bars.revision) if isinstance(bars, HistorySnapshot) else selected
     path = _path_for(source, ticker, interval)
     if not path.exists():
         return None
@@ -418,6 +577,8 @@ def merge_adds_nothing(previous: list[Candle] | None,
     """
     if not previous or not merged:
         return False
+    if isinstance(merged, HistorySnapshot):
+        return current_candles(previous) is not None and previous == merged
     if len(previous) != len(merged):
         return False
     a, b = previous[-1], merged[-1]
@@ -432,7 +593,7 @@ def merge_adds_nothing(previous: list[Candle] | None,
         return False
 
 
-def save(source: str, ticker: str, interval: str, candles: list[Candle]) -> None:
+def save(source: str, ticker: str, interval: str, candles: list[Candle]) -> bool:
     """Atomically persist ``candles`` keyed by (source, ticker, interval).
 
     No-op for sources marked via :func:`mark_no_persist` (BYOD); CSV
@@ -442,11 +603,16 @@ def save(source: str, ticker: str, interval: str, candles: list[Candle]) -> None
     Write-to-temp then ``os.replace`` so a crash mid-write cannot leave
     a truncated file behind. The temp file is created in the same
     directory so the rename is a true atomic operation.
+    Return True on success/intentional no-op, False on logged I/O failure
+    or rejection of a superseded hybrid history snapshot.
     """
     if source in _NO_PERSIST:
-        return
+        return True
     if _is_ratio_ticker(ticker):
-        return  # ratios are derived — never persisted (see _is_ratio_ticker)
+        return True  # ratios are derived — never persisted (see _is_ratio_ticker)
+    if current_candles(candles) is None:
+        LOG.warning("Discarding superseded history write for %s/%s/%s", source, ticker, interval)
+        return False
     try:
         path = _path_for(source, ticker, interval)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -458,7 +624,15 @@ def save(source: str, ticker: str, interval: str, candles: list[Candle]) -> None
                     f.write(json.dumps(
                         _candle_to_dict(c), separators=(",", ":")))
                     f.write("\n")
-            os.replace(tmp_name, str(path))
+            with _HISTORY_LOCK:
+                if current_candles(candles) is None:
+                    LOG.warning("Discarding superseded history write for %s/%s/%s", source, ticker, interval)
+                    os.unlink(tmp_name)
+                    return False
+                os.replace(tmp_name, str(path))
+                if source in _HISTORY_SOURCES:
+                    _history_revision(ticker, interval).blocked.discard(source)
+            return True
         except Exception:
             try:
                 os.unlink(tmp_name)
@@ -466,7 +640,8 @@ def save(source: str, ticker: str, interval: str, candles: list[Candle]) -> None
                 pass
             raise
     except Exception:  # noqa: BLE001
-        pass
+        LOG.warning("Cannot save history for %s/%s/%s", source, ticker, interval, exc_info=True)
+        return False
 
 
 def merge_candles(
@@ -498,24 +673,55 @@ def merge_candles(
     raises ``TypeError`` and falls back to ``list(new)`` exactly as
     before.
     """
+    if isinstance(new, HistorySnapshot) and not new.revision.valid:
+        LOG.warning("Discarding superseded hybrid history result")
+        return copy_candles(old) if isinstance(old, HistorySnapshot) else []
+    old = current_candles(old)
+    snapshot = new if isinstance(new, HistorySnapshot) else old
+    if isinstance(new, HistorySnapshot) and new.revision.replacement:
+        if not isinstance(old, HistorySnapshot) or old.revision is not new.revision:
+            old = None
+    if old and isinstance(new, HistorySnapshot) and new.fetched and old is not new:
+        from .data.hybrid_source import _deep_leg_compatible
+
+        if not _deep_leg_compatible(old, new):
+            LOG.warning("Discarding unverified prior hybrid history for %s/%s",
+                        new.revision.ticker, new.revision.interval)
+            with _HISTORY_LOCK:
+                if not new.revision.valid:
+                    return copy_candles(old) if isinstance(old, HistorySnapshot) else []
+                notice = new.revision.notice
+                parents = new.revision.parents
+                invalidate_history(new.revision.ticker, new.revision.interval)
+                # The fetcher's raw and merged handoffs share the same safe
+                # observation. Retag it so the raw side isn't mistaken for
+                # failed data after retiring the old outer cache's revision.
+                new.revision = _history_revision(new.revision.ticker, new.revision.interval)
+                new.revision.notice = notice
+                new.revision.parents = parents
+            old = None
     if not old and not new:
         return []
     if not old:
-        return _drop_nonfinite_ohlc(list(new or []))
-    if not new:
-        return _drop_nonfinite_ohlc(list(old))
-    try:
-        if presorted or (_is_sorted_by_date(old) and _is_sorted_by_date(new)):
-            merged = _merge_sorted_candles(old, new)
-        else:
-            merged = _merge_candles_dict_sort(old, new)
-    except TypeError:
-        # tz-aware vs tz-naive comparison — give up on merge, use new.
-        merged = list(new)
+        merged = list(new or [])
+    elif not new:
+        merged = list(old)
+    else:
+        try:
+            if presorted or (_is_sorted_by_date(old) and _is_sorted_by_date(new)):
+                merged = _merge_sorted_candles(old, new)
+            else:
+                merged = _merge_candles_dict_sort(old, new)
+        except TypeError:
+            # tz-aware vs tz-naive comparison — give up on merge, use new.
+            merged = list(new)
     # A non-finite-OHLC bar present on either side (typically a stale
     # poison bar already on disk) is dropped from the merged result so it
     # can never be re-persisted or rendered. See _drop_nonfinite_ohlc.
-    return _drop_nonfinite_ohlc(merged)
+    cleaned = _drop_nonfinite_ohlc(merged)
+    if isinstance(snapshot, HistorySnapshot):
+        return HistorySnapshot(cleaned, snapshot.revision, fetched=snapshot.fetched)
+    return cleaned
 
 
 def _is_sorted_by_date(candles: list[Candle]) -> bool:

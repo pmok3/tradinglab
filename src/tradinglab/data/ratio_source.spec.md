@@ -1,6 +1,6 @@
 # data/ratio_source.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-23
 
 ## Purpose
 **Ratio pseudo-symbols** — a typed ticker that charts the per-bar quotient of
@@ -65,9 +65,14 @@ registry — a separator-free string like `RSPSPY` is treated as an ordinary
 - `fetch_ratio(ticker, interval, *, leg_fetcher) -> list[Candle] | None` —
   routes to the scalar or quotient path and fetches via `leg_fetcher` (the
   active source's `(ticker, interval) -> candles` callable).
+  If either leg carries a hybrid history revision, the computed list preserves
+  dependencies on those revisions via `disk_cache.derived_history_snapshot`.
+  Invalidating either underlying leg also invalidates cached/in-flight scaled
+  or quotient results. Pure calculation helpers and other sources are unchanged;
+  ratios remain excluded from disk persistence.
 
 ## Dependencies
-- Internal: `..models.Candle`.
+- Internal: `..models.Candle`, `..disk_cache.derived_history_snapshot`.
 - External: `re` (the scale-constant grammar). No network — it composes
   whatever the caller's `leg_fetcher` returns, so it is source-agnostic.
 
@@ -210,4 +215,3 @@ registry — a separator-free string like `RSPSPY` is treated as an ordinary
   A constant divisor calibrated against an unadjusted price (e.g. `SPX/10 ≈
   SPY`) drifts as the numerator is adjusted; it is a visual alignment, never an
   executable price.
-

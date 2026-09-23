@@ -1,6 +1,6 @@
 # gui/prefetch_app.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-23
 
 ## Purpose
 `PrefetchAppMixin` — the ChartApp glue for the flagged background prefetch
@@ -74,6 +74,9 @@ ceiling (§7.24). A pure method-bag mixin: **no `__init__`**.
   `_prefetch_observe_soon()`.
 
 ## Contract
+- `_prefetch_submit` preserves hybrid history revision fences with
+  `disk_cache.copy_candles` before worker-side merge/persistence. A late
+  prefetch must not republish a retired price basis.
 - Gated by `TRADINGLAB_PREFETCH_SCHEDULER` (default live; explicit `off` /
   `0` / `false` / `no` disables construction). Reads only `self.<attr>` state owned by
   `ChartApp` (`source_var`/`ticker_var`/`interval_var`/`compare_ticker_var`/

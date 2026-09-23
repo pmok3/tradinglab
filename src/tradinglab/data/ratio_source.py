@@ -312,6 +312,8 @@ def fetch_ratio(
     (``100/VIX``, ``16/4``) — so the caller's normal ``None``-handling (status
     message, disk fallback) applies unchanged.
     """
+    from ..disk_cache import derived_history_snapshot
+
     legs = parse_ratio_symbol(ticker)
     if legs is None:
         return None
@@ -329,14 +331,14 @@ def fetch_ratio(
         base = leg_fetcher(num_sym, interval)
         if not base:
             return None
-        return compute_scaled_candles(base, divisor)
+        return derived_history_snapshot(ticker, interval, compute_scaled_candles(base, divisor), base)
     num = leg_fetcher(num_sym, interval)
     if not num:
         return None
     den = leg_fetcher(den_sym, interval)
     if not den:
         return None
-    return compute_ratio_candles(num, den)
+    return derived_history_snapshot(ticker, interval, compute_ratio_candles(num, den), num, den)
 
 
 __all__ = [
