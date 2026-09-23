@@ -890,8 +890,8 @@ def check_c7_watchlist_columns(app) -> None:
     watchlist, rebuilds the sub-tab, and verifies:
 
       * the Treeview gains the signal column with its custom header;
-      * the signal evaluator (driven synchronously here for
-        determinism, then also via the async executor path) produces a
+      * the signal evaluator (driven through the actual async
+        snapshot/worker/inbox path) produces a
         numeric value that renders as a non-loading cell;
       * sorting by the new column does not raise.
 
@@ -932,10 +932,15 @@ def check_c7_watchlist_columns(app) -> None:
         assert "VolSig" in tree.heading(cid, "text"), (
             f"custom header label missing: {tree.heading(cid, 'text')!r}")
 
-        # Deterministic path: compute on the main thread + repaint.
-        src = app.source_var.get()
+        # Wait out the rebuild's worker, then demand fresh inbox-applied cells.
+        _pump_until(app, lambda: not getattr(app, "_watchlist_signals_inflight", False), timeout=10)
+        assert not getattr(app, "_watchlist_signals_inflight", False)
         tickers = list(app._pinned_ticker_union())
-        app._compute_watchlist_signals(tuple(tickers), (col,), src)
+        for ticker in tickers:
+            app._watchlist_snapshot.get(ticker, {}).get("_sig", {}).pop(cid, None)
+        app._preload_watchlist_signals()
+        _pump_until(app, lambda: not app._watchlist_signals_inflight, timeout=10)
+        assert not app._watchlist_signals_inflight
         _pump(app, 0.3)
 
         # The evaluator produced a numeric raw for at least one ticker.
