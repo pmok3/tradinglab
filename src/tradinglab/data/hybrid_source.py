@@ -143,7 +143,7 @@ def _default_deep_loader(ticker: str, interval: str) -> list[Candle] | None:
     return disk_cache.load(_DEEP_SOURCE, ticker, interval)
 
 
-def _default_deep_saver(ticker: str, interval: str, candles: list[Candle]) -> bool | None:
+def _default_deep_saver(ticker: str, interval: str, candles: list[Candle]) -> bool:
     from .. import disk_cache
 
     return disk_cache.save(_DEEP_SOURCE, ticker, interval, candles)
@@ -155,11 +155,11 @@ def _persist_verified_deep(
     from .. import disk_cache
 
     try:
-        saved = saver(ticker, interval, fetched) is not False
+        saved = saver(ticker, interval, fetched)
     except Exception:  # noqa: BLE001
         LOG.warning("hybrid: deep cache save failed for %s/%s", ticker, interval, exc_info=True)
         saved = False
-    if saved:
+    if saved is True:
         recovery.verified = None
         recovery.failures = 0
         recovery.retry_at = 0.0
@@ -169,8 +169,9 @@ def _persist_verified_deep(
         recovery.failures = min(recovery.failures + 1, 6)
         delay = min(_RETRY_INITIAL_SECONDS * 2 ** (recovery.failures - 1), _RETRY_MAX_SECONDS)
         recovery.retry_at = time.monotonic() + delay
-        LOG.warning("hybrid: verified deep history for %s/%s could not be saved; retry in %ss",
-                    ticker, interval, delay)
+        outcome = "persistence is unconfirmed" if saved is None else "could not be saved"
+        LOG.warning("hybrid: verified deep history for %s/%s %s; retry in %ss",
+                    ticker, interval, outcome, delay)
 
 
 def _resolve_deep_leg(

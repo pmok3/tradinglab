@@ -628,6 +628,8 @@ The **yfinance+alpaca** source (also used by **Auto** when selected as the best
 available source) checks that its recent Yahoo bars and cached Alpaca history
 share a compatible price basis. A stock split, a provider that has not adjusted
 yet, or too little overlapping history can prevent that check.
+The comparison allows ordinary provider differences; it is not a guarantee
+that every small corporate restatement will be detected.
 
 Until a replacement can be verified, the chart shows only verified recent bars
 and explains the shorter history in the status bar. If those bars are also

@@ -23,7 +23,10 @@ window PLUS Alpaca's deep intraday reach (IEX, ~2016+). Registered as
   Sub-fetchers + deep-cache loader/saver are injectable seams for
   offline tests (production defaults: `yfinance_source.fetch_live_data`,
   `alpaca_source.fetch_alpaca_data`, and the `alpaca`-keyed `disk_cache`).
-  A saver may return `bool` (`False` means failure) or legacy `None`.
+  A saver may return `bool` (`True` confirms persistence; `False` means failure)
+  or legacy `None` (unknown, never proof of persistence). Only explicit `True`
+  clears durable quarantine. An unknown outcome retains verified memory bars
+  and uses the bounded persistence retry path without another network fetch.
 
 ## Contract
 - **yfinance wins overlaps (the user's quality rule).** On any bar both legs
@@ -40,6 +43,8 @@ window PLUS Alpaca's deep intraday reach (IEX, ~2016+). Registered as
   only a coherent large rescaling (median outside the band and at least 90%
   of ratios within 5% of that median). Other failures are described as
   insufficient/inconsistent evidence, never silently rescaled or called splits.
+  The `[0.8, 1.25]` band is compatibility evidence, not a guarantee of detecting
+  every corporate restatement: small changes inside the tolerance can pass.
 - **Quarantine reaches derived caches.** On entering quarantine, invalidate the
   exact ticker/interval's hybrid and Auto disk files and in-flight/memory
   snapshots through `disk_cache.invalidate_history`. The suspect Alpaca file is
@@ -124,6 +129,9 @@ replacement, both outer namespaces, bounded retries and recovery, restart
 quarantine, write failures, stale worker publication, finite/unique evidence,
 and unrelated-key preservation. `tests/unit/gui/test_hybrid_recovery_app.py`
 drives real synchronous/asynchronous ChartApp loaders through the Auto delegate.
+The legacy `None`/no-op saver regression verifies that rejected Alpaca bytes
+cannot be accepted after restart during a Yahoo outage; both `False` and `None`
+outcomes retry persistence without refetching, and explicit `True` clears the marker.
 Ranking is pinned in
 `tests/unit/data/test_source_ranking.py` (`test_hybrid_ranks_just_above_yfinance`);
 volume metadata is pinned in `tests/unit/data/test_quality.py`

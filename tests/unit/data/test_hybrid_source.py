@@ -428,7 +428,7 @@ def test_delayed_adjustment_backs_off_then_recovers(_isolated_hybrid):
             "AAPL", "5m", recent_fetcher=lambda *_: recent,
             deep_fetcher=lambda *_: (calls.append(clock[0]) or replacement[0]),
             deep_loader=lambda *_: disk[0],
-            deep_saver=lambda t, i, bars: disk.__setitem__(0, bars),
+            deep_saver=lambda t, i, bars: disk.__setitem__(0, bars) or True,
         )
 
     assert fetch() == recent
@@ -464,6 +464,29 @@ def test_quarantine_survives_restart_and_recent_outage(monkeypatch):
         "AAPL", "5m", recent_fetcher=lambda *_: None,
         deep_fetcher=lambda *_: old, deep_loader=lambda *_: old,
         deep_saver=lambda *_: pytest.fail("outage must not bless quarantined data"),
+    )
+    assert out is None
+    assert disk_cache.history_pending("AAPL", "5m")
+
+
+def test_none_noop_saver_keeps_quarantine_across_restart_and_yahoo_outage(monkeypatch):
+    old = _leg(range(1, 21), 400, drift=0)
+    good = _leg(range(1, 21), 100, drift=0)
+    recent = _leg(range(15, 26), 100, drift=0)
+    disk_cache.save("alpaca", "AAPL", "5m", old)
+    out = fetch_hybrid_data(
+        "AAPL", "5m", recent_fetcher=lambda *_: recent,
+        deep_fetcher=lambda *_: good, deep_saver=lambda *_: None,
+    )
+    assert out and all(c.close == 100 for c in out), "verified replacement remains usable in memory"
+    assert disk_cache.load("alpaca", "AAPL", "5m") == old
+    assert disk_cache.history_pending("AAPL", "5m"), "None must not prove that rejected bytes were replaced"
+    monkeypatch.setattr(hybrid_source, "_RECOVERY", LRUDict(maxsize=128))
+    monkeypatch.setattr(disk_cache, "_HISTORY_REVISIONS", LRUDict(maxsize=128))
+    out = fetch_hybrid_data(
+        "AAPL", "5m", recent_fetcher=lambda *_: None,
+        deep_fetcher=lambda *_: old,
+        deep_saver=lambda *_: pytest.fail("restart/outage must not bless the still-rejected file"),
     )
     assert out is None
     assert disk_cache.history_pending("AAPL", "5m")
@@ -616,7 +639,8 @@ def test_registered_ratio_and_scaled_memory_follow_either_leg_invalidation(monke
     assert disk_cache.load(HYBRID_SOURCE_NAME, symbol, "5m") is None
 
 
-def test_failed_deep_save_retries_without_refetch_then_clears_quarantine(_isolated_hybrid):
+@pytest.mark.parametrize("first_result", [False, None])
+def test_failed_deep_save_retries_without_refetch_then_clears_quarantine(_isolated_hybrid, first_result, caplog):
     clock = _isolated_hybrid
     calls, saves = [], []
     old = _leg(range(1, 21), 400, drift=0)
@@ -625,7 +649,7 @@ def test_failed_deep_save_retries_without_refetch_then_clears_quarantine(_isolat
 
     def saver(*_):
         saves.append(clock[0])
-        return len(saves) > 1
+        return True if len(saves) > 1 else first_result
 
     for clock[0] in (100, 101, 159, 160):
         out = fetch_hybrid_data(
@@ -637,6 +661,8 @@ def test_failed_deep_save_retries_without_refetch_then_clears_quarantine(_isolat
     assert calls == [1]
     assert saves == [100, 160]
     assert not disk_cache.history_pending("AAPL", "5m")
+    if first_result is None:
+        assert "persistence is unconfirmed" in caplog.text
 
 
 def test_failed_file_retirement_remains_blocked_across_restart(monkeypatch, caplog):
