@@ -1,23 +1,14 @@
 """Keep `fetch_chunks_parallel` — the I/O-parallel fetch primitive.
 
-Verdict of the P1 module-cleanup review: ``src/tradinglab/data/parallel.py``
-is USED and stays. Evidence pinned here:
-
-1. ``tradinglab.data.__init__`` re-exports ``fetch_chunks_parallel`` and
-   lists it in ``__all__`` (part of the public data facade).
-2. ``gui/universe_prepare_dialog.py`` documents its filter pre-pass as
-   mirroring ``data/parallel.fetch_chunks_parallel`` semantics — the
-   module is the canonical statement of that pattern.
-3. Doc index entries in ``src/tradinglab/data/__init__.spec.md``,
-   ``docs/spec.md`` and ``docs/SPEC_INDEX.md``.
-
-No dynamic imports touch the module (no ``importlib``/``__import__``
-references anywhere), so static greps are sufficient evidence.
+No shipped runtime caller was found in the P1 module-cleanup review.
+Keep the helper for compatibility: ``tradinglab.data`` re-exports it and
+lists it in ``__all__``. The GUI filter pre-pass references it only in a
+docstring and uses a separate executor; that is not a runtime call.
 
 This file exercises the contract directly, with no network access:
 
 1. Facade re-export identity (same object) + ``__all__`` listing.
-2. Input-order concatenation even when chunks complete in reverse order.
+2. Overlapping workers and input-order concatenation despite proven reverse completion.
 3. ``None`` worker results are ignored (empty-range chunks).
 4. Empty chunk list returns ``[]`` without calling the worker.
 5. Any iterable (e.g. a generator) is accepted.
@@ -26,15 +17,17 @@ This file exercises the contract directly, with no network access:
 8. ``submit`` is called exactly once per chunk, in order (via mock).
 9. Owned pools shut down on return: ``fetch-chunk-*`` threads are gone.
 10. ``max_workers`` is clamped to the chunk count for owned pools.
+11. A cancelled submitted future propagates ``CancelledError``.
 """
 
 from __future__ import annotations
 
 import threading
 import time
-from concurrent.futures import Future, ThreadPoolExecutor
+from collections.abc import Callable
+from concurrent.futures import CancelledError, Executor, Future, ThreadPoolExecutor
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -59,13 +52,43 @@ def test_concatenates_in_input_order_despite_reversed_completion() -> None:
     finish in. Bars must stay date-sorted, so a reordered merge would
     force an expensive post-sort."""
 
-    def worker(chunk: int) -> list[int]:
-        # Later chunks finish first: chunk 0 sleeps longest.
-        time.sleep(0.03 * (2 - chunk))
-        return [chunk]
+    started = [threading.Event() for _ in range(3)]
+    release = [threading.Event() for _ in range(3)]
+    completed = [threading.Event() for _ in range(3)]
+    completion_order: list[int] = []
 
-    result = fetch_chunks_parallel([0, 1, 2], worker)
-    assert result == [0, 1, 2]
+    def worker(chunk: int) -> list[int]:
+        started[chunk].set()
+        assert release[chunk].wait(10), f"chunk {chunk} was not released"
+        return [chunk, chunk + 10]
+
+    with ThreadPoolExecutor(max_workers=3) as pool, ThreadPoolExecutor(max_workers=1) as caller:
+        real_submit = pool.submit
+
+        def submit(fn: Callable[[int], list[int]], chunk: int) -> Future[list[int]]:
+            future = real_submit(fn, chunk)
+
+            def on_done(_future: Future[list[int]]) -> None:
+                completion_order.append(chunk)
+                completed[chunk].set()
+
+            future.add_done_callback(on_done)
+            return future
+
+        with patch.object(pool, "submit", side_effect=submit):
+            result = caller.submit(fetch_chunks_parallel, [0, 1, 2], worker, executor=pool)
+            try:
+                for chunk, event in enumerate(started):
+                    assert event.wait(5), f"chunk {chunk} did not start concurrently"
+                assert not any(event.is_set() for event in completed)
+                for chunk in (2, 1, 0):
+                    release[chunk].set()
+                    assert completed[chunk].wait(5), f"chunk {chunk} did not complete"
+                assert completion_order == [2, 1, 0]
+                assert result.result(timeout=5) == [0, 10, 1, 11, 2, 12]
+            finally:
+                for event in release:
+                    event.set()
 
 
 # 3. None handling ------------------------------------------------------------
@@ -115,6 +138,21 @@ def test_worker_exception_propagates_to_caller() -> None:
 
     with pytest.raises(ValueError, match="rate limited"):
         fetch_chunks_parallel([0, 1, 2], worker)
+
+
+def test_cancelled_future_propagates_to_caller() -> None:
+    future: Future[list[int]] = Future()
+    assert future.cancel()
+    executor = Mock(spec=Executor)
+    executor.submit.return_value = future
+    worker = Mock(return_value=[1])
+
+    with pytest.raises(CancelledError):
+        fetch_chunks_parallel([1], worker, executor=executor)
+
+    executor.submit.assert_called_once_with(worker, 1)
+    worker.assert_not_called()
+    executor.shutdown.assert_not_called()
 
 
 # 7. Shared executor ownership -------------------------------------------------
