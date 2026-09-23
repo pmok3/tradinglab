@@ -445,10 +445,12 @@ def schedule_check_async(
     The worker writes the :class:`UpdateResult` into a hand-off slot; the
     Tk main thread polls the slot via ``tk_widget.after`` and invokes
     ``callback`` there. The worker never calls ``tk_widget.after`` itself:
-    cross-thread ``after`` raises ``RuntimeError("main thread is not in
-    main loop")`` on stock Windows CPython and the result is silently
-    dropped (AGENTS.md §7.15). The single slot assignment is atomic under
-    the GIL, so no lock is needed.
+    threaded Tcl (normally included with Windows CPython) can marshal
+    cross-thread calls while the owner services ``mainloop``, but calls
+    can fail or block without that loop or during teardown (AGENTS.md
+    §7.15). Call this scheduler on the widget's owner thread. The worker
+    publishes once and the poller never clears the slot, so there is no
+    read/clear race.
 
     The poll re-arms while the worker is alive, plus one grace tick after
     observing its death — so a result written in the microsecond window

@@ -344,9 +344,9 @@ def test_schedule_check_async_delivers_result_on_tk_thread(monkeypatch) -> None:
     only ever called from the scheduling (Tk) thread, never the worker.
 
     Regression: the worker used to call the raw ``after_fn`` itself, which
-    raises ``RuntimeError("main thread is not in main loop")`` on stock
-    Windows CPython — the startup update check silently never showed its
-    banner (AGENTS.md §7.15).
+    can fail or block without a servicing owner mainloop or during teardown.
+    Threaded Tcl can marshal calls while mainloop runs, but worker delivery
+    must not depend on that (AGENTS.md §7.15).
     """
     monkeypatch.setattr(updates_mod, "RELEASES_URL", "https://example.invalid/releases.json")
     monkeypatch.setattr(updates_mod, "_is_rth_now", lambda: False)

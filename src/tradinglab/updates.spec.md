@@ -1,6 +1,6 @@
 # `updates.py` — Background GitHub Releases update checks
 
-Last updated: 2026-09-20
+Last updated: 2026-09-23
 
 ## Purpose
 Surface "a newer release is available" to users who never visit GitHub
@@ -49,7 +49,11 @@ tests can keep patching them at call time.
   `after` itself (cross-thread `after` is banned, AGENTS.md §7.15). The
   poll re-arms while the worker is alive plus one grace tick, so a result
   written between the slot-read and the liveness check is still delivered;
-  if the worker dies without writing, polling stops.
+  if the worker dies without writing, polling stops. The scheduler itself
+  must be called on the widget's owner thread. Threaded Tcl (normally
+  included with stock Windows CPython) can marshal cross-thread calls
+  while the owner services `mainloop`; the polling contract avoids relying
+  on that during startup/teardown or when the loop is not servicing events.
 - `compare_versions(current, advertised) -> Optional[str]` — tolerant
   `MAJOR.MINOR.PATCH` comparison used by smoke tests and the poll.
 - `reset_cache_for_tests(clear_disk=False)` — clear in-memory cache; tests can

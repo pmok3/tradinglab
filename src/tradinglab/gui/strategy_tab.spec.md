@@ -1,6 +1,6 @@
 # `gui/strategy_tab.py` — Spec
 
-Last updated: 2026-09-20
+Last updated: 2026-09-23
 
 ## Purpose
 PR 4 of the Strategy Tester rollout. A self-contained Tk widget
@@ -163,11 +163,11 @@ root in smoke tests). The popup wrapper + menubar wiring live in
   on completion. The status label reads
   ``"Exporting <kind>… (current/total: label)"``.
 - **No cross-thread ``self.after``.** We deliberately don't call
-  ``self.after(0, ...)`` from the export thread. ``tkinter.Misc.after``
-  is only thread-safe when the underlying Tcl was built with thread
-  support, which is not the case on the stock CPython Windows install
-  — it raises ``RuntimeError("main thread is not in main loop")`` and
-  the callback is silently dropped. Instead the worker writes its
+  ``self.after(0, ...)`` from the export thread. Stock Windows CPython
+  normally includes threaded Tcl, which can marshal cross-thread calls
+  while the owner thread services ``mainloop``. Calls can still fail or
+  block without a servicing loop or during teardown; worker delivery
+  must not depend on it. Instead the worker writes its
   result into a result dict (``self._export_result``) + tuple
   (``self._export_latest_progress``); the Tk main thread polls via
   ``self.after(100, self._on_export_poll)``. This mirrors the runner
@@ -220,10 +220,21 @@ root in smoke tests). The popup wrapper + menubar wiring live in
   (``_on_progress``) runs on the worker thread and writes the latest
   ``(done, total)`` tick into ``self._latest_progress`` — it never
   touches Tk (cross-thread ``after`` is banned, AGENTS.md §7.15).
-  Each 250 ms ``_on_poll`` tick picks the slot up and paints it via
-  ``_apply_progress``. Latest tick wins; intermediate ticks are
-  intentionally coalesced. Same hand-off shape as
-  ``_export_latest_progress`` / ``_on_export_poll``.
+  Publication and the poller's take-and-clear use ``_progress_lock``;
+  the lock is released before ``_apply_progress`` touches Tk. A tick
+  published during painting therefore remains pending. The poll samples
+  worker liveness **before** consuming progress and schedules another
+  tick if it observed a live worker, even if the worker exits during
+  painting. Once the worker is known to have exited, the slot is stable
+  and completion reconciles the bar with ``result.test_run``'s actual
+  completed/total counters before setting the terminal status. Cancelled
+  and failed runs retain partial counts rather than forcing 100%.
+  Latest tick wins; only intermediate ticks are intentionally coalesced.
+  Starting another run clears the slot and cancels the prior hide timer.
+  Deterministic Event-coordinated regressions in
+  ``tests/unit/gui/test_strategy_tester_progress_bar.py`` cover publication
+  during painting with both live and exiting workers, missing final
+  callbacks, cancellation, teardown, rerun, and Tk owner-thread affinity.
 - Status transitions: ``Ready`` → ``Run starting…`` → ``Running… N/M
   symbols`` → ``Done. N symbols, K trades.`` (or ``Stopped. Partial
   results: N/M symbols.`` on cancel).

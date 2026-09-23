@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import sys
 import threading
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -35,6 +36,8 @@ from tradinglab.strategy_tester import (  # noqa: E402
     UniverseKind,
     UniverseSpec,
 )
+from tradinglab.strategy_tester.runner import RunResult  # noqa: E402
+from tradinglab.strategy_tester.universe import ResolvedUniverse  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Tk fixture
@@ -42,22 +45,18 @@ from tradinglab.strategy_tester import (  # noqa: E402
 
 
 @pytest.fixture()
-def tk_root():
-    """Create a minimal off-screen Tk root; skip if Tk is unavailable."""
-    try:
-        r = tk.Tk()
-    except tk.TclError as exc:
-        pytest.skip(f"Tk unavailable: {exc}")
-    try:
-        r.geometry("800x600-3000-3000")  # park off-screen
-    except tk.TclError:
-        pass
-    yield r
-    try:
-        r.update_idletasks()
-        r.destroy()
-    except tk.TclError:
-        pass
+def tk_root(root):
+    """Use the shared Tk interpreter and an off-screen per-test window."""
+    root.geometry("800x600-3000-3000")
+    root.deiconify()
+    return root
+
+
+@pytest.fixture(autouse=True)
+def _isolate_recent_runs(monkeypatch):
+    from tradinglab.strategy_tester import storage
+
+    monkeypatch.setattr(storage, "list_runs_with_paths", lambda: [])
 
 
 # ---------------------------------------------------------------------------
@@ -132,6 +131,57 @@ def _drive_one_poll(tab: Any) -> None:
             except Exception:  # noqa: BLE001
                 pass
             tab._poll_after_id = None
+
+
+def _poll_once(tab):
+    if tab._poll_after_id is not None:
+        tab.after_cancel(tab._poll_after_id)
+    tab._on_poll()
+
+
+def _prepare_run(tab, monkeypatch, tmp_path, *, done=2, total=2, status=RunStatus.DONE):
+    from tradinglab.gui import strategy_tab
+
+    run = _make_test_run(done, total)
+    run.status = status
+    run.error = "test failure" if status is RunStatus.FAILED else ""
+    universe = ResolvedUniverse(symbols=("AAPL", "MSFT"), label="Test", provenance="symbols:2")
+    result = RunResult(run, tmp_path, universe, [])
+    monkeypatch.setattr(tab, "_build_config_from_ui", _cfg)
+    monkeypatch.setattr(tab, "_selected_entry", lambda: SimpleNamespace(id="e1"))
+    monkeypatch.setattr(tab, "_selected_exit", lambda: SimpleNamespace(id="x1"))
+    monkeypatch.setattr(strategy_tab, "incompatible_indicators_for_interval", lambda *args: [])
+    monkeypatch.setattr(strategy_tab, "load_aggregate", lambda path: SimpleNamespace(trade_count=0))
+    monkeypatch.setattr(tab, "_render_aggregate", lambda *args: None)
+    monkeypatch.setattr(strategy_tab.messagebox, "showerror", lambda *args: None)
+    return result
+
+
+@pytest.fixture
+def tk_calls(monkeypatch):
+    """Record UI calls even when production catches their exceptions."""
+    calls = []
+
+    def watch(tab):
+        for obj, name in (
+            (tab, "after"),
+            (tab, "after_cancel"),
+            (tab._pbar, "configure"),
+            (tab._pbar, "update_idletasks"),
+            (tab._var_status, "set"),
+        ):
+            original = getattr(obj, name)
+
+            def checked(*args, _original=original, **kwargs):
+                calls.append(threading.get_ident())
+                assert threading.current_thread() is threading.main_thread()
+                return _original(*args, **kwargs)
+
+            monkeypatch.setattr(obj, name, checked)
+
+    yield watch
+    assert calls
+    assert set(calls) == {threading.get_ident()}
 
 
 # ---------------------------------------------------------------------------
@@ -235,9 +285,9 @@ class TestOnProgress:
     """Verify _on_progress hands ticks to the Tk thread via _latest_progress.
 
     Regression: _on_progress used to call ``self.after(0, ...)`` from the
-    runner worker thread, which raises ``RuntimeError("main thread is not
-    in main loop")`` on stock Windows CPython — the progress bar silently
-    never advanced during a run (AGENTS.md §7.15).
+    runner worker thread. Threaded Tcl can marshal this while mainloop is
+    running, but calls can fail or block without a servicing owner loop or
+    during teardown. Workers must not depend on that (AGENTS.md §7.15).
     """
 
     def test_on_progress_writes_slot_without_touching_tk(
@@ -302,6 +352,183 @@ class TestOnProgress:
 
         tab._on_progress(_make_test_run(done=0, total=0))  # must not raise
         assert tab._latest_progress == (0, 0)
+
+
+@pytest.mark.parametrize("exit_during_paint", [False, True])
+def test_final_tick_published_during_paint_is_not_lost(
+    tk_root, monkeypatch, tmp_path, tk_calls, exit_during_paint,
+):
+    tab = _make_tab(tk_root)
+    result = _prepare_run(tab, monkeypatch, tmp_path)
+    tk_calls(tab)
+    first_tick = threading.Event()
+    painting = threading.Event()
+    final_tick = threading.Event()
+    finish = threading.Event()
+
+    def run(cfg, *, progress, **kwargs):
+        progress(_make_test_run(1, 2))
+        first_tick.set()
+        assert painting.wait(5)
+        progress(result.test_run)
+        final_tick.set()
+        if not exit_during_paint:
+            assert finish.wait(5)
+        return result
+
+    monkeypatch.setattr(tab, "_run_fn", run)
+    apply = tab._apply_progress
+
+    def paint(done, total):
+        apply(done, total)
+        if done == 1:
+            painting.set()
+            assert final_tick.wait(5), "publishing must not wait for Tk painting"
+            if exit_during_paint:
+                worker.join(5)
+                assert not worker.is_alive()
+
+    monkeypatch.setattr(tab, "_apply_progress", paint)
+    tab._on_run_clicked()
+    worker = tab._worker
+    try:
+        assert first_tick.wait(5)
+        _poll_once(tab)
+        if tab._worker is not None:
+            _poll_once(tab)
+        assert tab._pbar["value"] == 2
+        assert tab._pbar["maximum"] == 2
+        finish.set()
+        worker.join(5)
+        assert not worker.is_alive()
+        _poll_once(tab)
+        assert tab._worker is None
+        assert tab._latest_progress is None
+        assert tab._var_status.get() == "Done. 2 symbols, 0 trades."
+    finally:
+        painting.set()
+        finish.set()
+        worker.join(5)
+
+
+@pytest.mark.parametrize(
+    ("status", "done", "expected"),
+    [
+        (RunStatus.DONE, 2, "Done. 2 symbols, 0 trades."),
+        (RunStatus.CANCELLED, 1, "Stopped. Partial results: 1/2 symbols."),
+        (RunStatus.FAILED, 1, "Run failed: test failure"),
+    ],
+)
+def test_completion_uses_manifest_counts_without_final_callback(
+    tk_root, monkeypatch, tmp_path, tk_calls, status, done, expected,
+):
+    tab = _make_tab(tk_root)
+    result = _prepare_run(tab, monkeypatch, tmp_path, done=done, status=status)
+    tk_calls(tab)
+    started = threading.Event()
+    finish = threading.Event()
+
+    def run(cfg, *, progress, cancel_token, **kwargs):
+        progress(_make_test_run(0, 2))
+        started.set()
+        assert finish.wait(5)
+        assert cancel_token.is_cancelled() == (status is RunStatus.CANCELLED)
+        return result
+
+    monkeypatch.setattr(tab, "_run_fn", run)
+    tab._on_run_clicked()
+    worker = tab._worker
+    try:
+        assert started.wait(5)
+        _poll_once(tab)
+        if status is RunStatus.CANCELLED:
+            tab._on_stop_clicked()
+        finish.set()
+        worker.join(5)
+        assert not worker.is_alive()
+        _poll_once(tab)
+        assert tab._pbar["value"] == done
+        assert tab._pbar["maximum"] == 2
+        assert tab._var_status.get() == expected
+        assert tab._worker is None
+        assert tab._latest_progress is None
+    finally:
+        finish.set()
+        worker.join(5)
+
+
+def test_destroy_with_pending_progress_cancels_poll_without_worker_tk(
+    tk_root, monkeypatch, tmp_path, tk_calls,
+):
+    tab = _make_tab(tk_root)
+    result = _prepare_run(tab, monkeypatch, tmp_path)
+    tk_calls(tab)
+    started = threading.Event()
+    finish = threading.Event()
+
+    def run(cfg, *, progress, cancel_token, **kwargs):
+        progress(_make_test_run(1, 2))
+        started.set()
+        assert finish.wait(5)
+        assert cancel_token.is_cancelled()
+        progress(result.test_run)
+        return result
+
+    monkeypatch.setattr(tab, "_run_fn", run)
+    tab._on_run_clicked()
+    worker = tab._worker
+    try:
+        assert started.wait(5)
+        poll_id = tab._poll_after_id
+        tab.destroy()
+        assert poll_id not in tk_root.tk.call("after", "info")
+        finish.set()
+        worker.join(5)
+        assert not worker.is_alive()
+        assert "error" not in tab._worker_result
+        tk_root.update()
+    finally:
+        finish.set()
+        worker.join(5)
+
+
+def test_rerun_clears_pending_tick_and_cancels_old_hide_timer(
+    tk_root, monkeypatch, tmp_path, tk_calls,
+):
+    tab = _make_tab(tk_root)
+    result = _prepare_run(tab, monkeypatch, tmp_path)
+    tk_calls(tab)
+    monkeypatch.setattr(tab, "_run_fn", lambda *args, **kwargs: result)
+    tab._on_run_clicked()
+    tab._worker.join(5)
+    assert not tab._worker.is_alive()
+    _poll_once(tab)
+    hide_id = tab._pbar_hide_after_id
+    tab._on_progress(_make_test_run(2, 2))
+    finish = threading.Event()
+
+    def run(*args, **kwargs):
+        assert finish.wait(5)
+        return result
+
+    monkeypatch.setattr(tab, "_run_fn", run)
+    tab._on_run_clicked()
+    worker = tab._worker
+    try:
+        assert tab._latest_progress is None
+        assert tab._pbar["value"] == 0
+        assert hide_id not in tk_root.tk.call("after", "info")
+        _poll_once(tab)
+        assert tab._pbar["value"] == 0
+        assert tab._pbar.grid_info()
+        finish.set()
+        worker.join(5)
+        assert not worker.is_alive()
+        _poll_once(tab)
+        assert tab._pbar["value"] == 2
+    finally:
+        finish.set()
+        worker.join(5)
 
 
 class TestProgressPaintForcing:
