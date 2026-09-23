@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 
 from tradinglab.indicators import base as _base
+from tradinglab.indicators import loader
 from tradinglab.indicators.loader import (
     discover_user_indicators,
     hash_indicator_source,
@@ -256,3 +257,72 @@ def test_approval_store_survives_corrupt_file(tmp_path: Path) -> None:
     assert is_indicator_approved(
         plugin, hash_indicator_source(_PLUGIN_V1), approvals_path=store
     )
+
+
+def test_prompt_mutation_does_not_change_executed_source(tmp_path):
+    plugin = _write_plugin(tmp_path, "snapshot.py", _PLUGIN_V1)
+    store = tmp_path / "approvals.json"
+
+    def approve(path, digest):
+        assert digest == hash_indicator_source(_PLUGIN_V1)
+        path.write_text(_PLUGIN_V2, encoding="utf-8")
+        return True
+
+    result = register_user_indicator_file(plugin, approval_prompt=approve, approvals_path=store)
+    assert not result.errors
+    assert result.loaded[0].factory(None) == {}
+    assert result.loaded[0].source_hash == hash_indicator_source(_PLUGIN_V1)[:16]
+    changed = register_user_indicator_file(plugin, approvals_path=store)
+    assert not changed.loaded
+    assert "no trust approval" in changed.errors[0].error
+
+
+@pytest.mark.parametrize("unresolved", [False, True])
+def test_store_failure_refuses_execution(tmp_path, monkeypatch, unresolved):
+    plugin = _write_plugin(tmp_path, "persist.py", _PLUGIN_V1)
+    if unresolved:
+        monkeypatch.setattr(loader, "_approvals_store_path", lambda _: None)
+    else:
+        def fail(*_a):
+            raise OSError("disk full")
+        monkeypatch.setattr(loader, "_atomic_write_text", fail)
+    result = register_user_indicator_file(
+        plugin, approval_prompt=lambda *_: True, approvals_path=tmp_path / "approvals.json",
+    )
+    assert not result.loaded
+    assert "approval persistence failed" in result.errors[0].error
+    assert "approved_ind" not in _base.INDICATORS
+
+
+def test_single_file_registration_never_executes_siblings(tmp_path):
+    plugin = _write_plugin(tmp_path, "chosen.py", _PLUGIN_V1)
+    sibling = _write_plugin(tmp_path, "sibling.py", "register_indicator('sibling', lambda: None)\n")
+    store = tmp_path / "approvals.json"
+    record_indicator_approval(sibling, hash_indicator_source(sibling.read_text()), approvals_path=store)
+    result = register_user_indicator_file(
+        plugin, approval_prompt=lambda *_: True, approvals_path=store,
+    )
+    assert not result.errors
+    assert [item.name for item in result.loaded] == ["approved_ind"]
+    assert "sibling" not in _base.INDICATORS
+
+
+def test_missing_single_file_is_reported(tmp_path):
+    result = register_user_indicator_file(tmp_path / "missing.py")
+    assert not result.loaded
+    assert "stat failed" in result.errors[0].error
+
+
+def test_file_growth_after_stat_is_rejected(tmp_path, monkeypatch):
+    plugin = _write_plugin(tmp_path, "growing.py", _PLUGIN_V1)
+    read_text = Path.read_text
+
+    def changed_read(path, *a, **kw):
+        if path == plugin:
+            return "#" * (loader._MAX_FILE_SIZE + 1)
+        return read_text(path, *a, **kw)
+
+    monkeypatch.setattr(Path, "read_text", changed_read)
+    result = register_user_indicator_file(plugin, approval_prompt=lambda *_: pytest.fail("oversized prompt"))
+    assert not result.loaded
+    assert "file too large" in result.errors[0].error

@@ -883,8 +883,8 @@ class CustomIndicatorDialog(BaseModalDialog):
             "executed with the same privileges as TradingLab.\n\n"
             f"File: {path.name}\n"
             f"SHA-256: {digest}\n\n"
-            "Only approve files you authored or fully trust. You will "
-            "be asked again if the file changes.",
+            "Only approve files you authored or fully trust. Changed "
+            "files require new approval; re-import to approve them.",
             parent=self, icon="warning",
         )
 
@@ -899,23 +899,14 @@ class CustomIndicatorDialog(BaseModalDialog):
         src = Path(src_str)
         try:
             text = src.read_text(encoding="utf-8")
-        except OSError as exc:
+        except (OSError, UnicodeError) as exc:
             self._set_status(f"Cannot read {src.name}: {exc}", level="error")
             return
 
-        meta = _read_header_metadata(src)
-        mode = (meta.get("mode") or "").strip()
-        is_builder = ind_loader.is_builder_file(text)
         digest = ind_loader.hash_indicator_source(text)
-        # Trust gate: any file that runs arbitrary Python (Python-mode
-        # builder file, or a hand-authored plugin with no marker) is
-        # gated behind an explicit first-load approval showing the
-        # file's SHA-256, mirroring the Save-time Python-mode prompt.
-        # The approval is recorded after the copy so registration
-        # below does not prompt a second time.
-        if mode == "python" or not is_builder:
-            if not self._prompt_indicator_trust(src, digest):
-                return
+        # External headers are self-claimed; every import is executable Python.
+        if not self._prompt_indicator_trust(src, digest):
+            return
 
         target_name = src.stem
         target = self._directory / f"{target_name}.py"
@@ -932,17 +923,18 @@ class CustomIndicatorDialog(BaseModalDialog):
 
         try:
             written = ind_loader.import_indicator_file(
-                src, self._directory, overwrite=overwrite,
+                src, self._directory, overwrite=overwrite, source_text=text,
             )
         except Exception as exc:  # noqa: BLE001
             self._set_status(f"Import failed: {exc}", level="error")
             return
 
-        # The user just approved this exact content (or it is a
-        # builder-managed file, which this dialog's generators
-        # authored); record the trust approval so registration — and
-        # later loads of the unchanged file — do not re-prompt.
-        ind_loader.record_indicator_approval(written, digest)
+        try:
+            ind_loader.record_indicator_approval(written, digest)
+        except OSError as exc:
+            self._refresh_saved_list()
+            self._set_status(f"Imported but approval persistence failed: {exc}", level="error")
+            return
 
         ind_loader.unregister_indicator(target_name)
         result = ind_loader.register_user_indicator_file(written)
@@ -1307,17 +1299,17 @@ class CustomIndicatorDialog(BaseModalDialog):
             self._set_status(f"Write failed: {exc}", level="error")
             return
 
-        # Drop any prior in-process registration so the new file
-        # supersedes it (handles edits + name reuse).
-        ind_loader.unregister_indicator(name)
         # The dialog authored this exact content (Python mode already
-        # passed its own confirmation gate above); record the trust
-        # approval so registration — and later loads of the unchanged
-        # file — do not prompt. A later hand-edit changes the hash and
-        # re-prompts.
-        ind_loader.record_indicator_approval(
-            target, ind_loader.hash_indicator_source(source),
-        )
+        # passed its own confirmation gate above), not a re-read from disk.
+        try:
+            ind_loader.record_indicator_approval(
+                target, ind_loader.hash_indicator_source(source),
+            )
+        except OSError as exc:
+            self._refresh_saved_list()
+            self._set_status(f"Saved but approval persistence failed: {exc}", level="error")
+            return
+        ind_loader.unregister_indicator(name)
         result = ind_loader.register_user_indicator_file(target)
         if result.errors:
             err = result.errors[0]

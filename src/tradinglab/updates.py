@@ -132,7 +132,7 @@ def _cached_if_fresh(current: str, source_url: str) -> UpdateResult | None:
             return None
         if (time.time() - _cached_at) > CACHE_TTL_SECONDS:
             return None
-        return _cached_result
+        return _validate_result_url(_cached_result)
 
 
 def _result_to_payload(result: UpdateResult) -> dict[str, str]:
@@ -151,13 +151,22 @@ def _result_from_payload(payload: object) -> UpdateResult | None:
     status = str(payload.get("status", ""))
     if status not in _CACHEABLE_STATUSES:
         return None
-    return UpdateResult(
+    return _validate_result_url(UpdateResult(
         status=status,
         current=str(payload.get("current", "")),
         latest=str(payload.get("latest", "")),
         url=str(payload.get("url", "")),
         error=str(payload.get("error", "")),
-    )
+    ))
+
+
+def _validate_result_url(result: UpdateResult) -> UpdateResult:
+    if result.url and not _is_https_url(result.url):
+        return UpdateResult(
+            status="error", current=result.current,
+            error="release URL must use https:// with a host",
+        )
+    return result
 
 
 def _load_disk_cache(current: str, source_url: str) -> UpdateResult | None:
@@ -266,37 +275,13 @@ def _resolve_url(explicit: str | None = None) -> str | None:
     return None
 
 
-def _override_url(explicit: str | None = None) -> str | None:
-    """Return the first non-empty user-/config-supplied override URL.
-
-    Mirrors the override half of :func:`_resolve_url` (explicit >
-    ``update_check_url`` tunable > ``TRADINGLAB_UPDATE_URL``) without
-    falling back to the built-in default, so callers can tell a
-    user-supplied endpoint apart from the shipped one.
-    """
-    for raw in (explicit, _configured_tunable_url(), os.environ.get(ENV_URL, "")):
-        if not isinstance(raw, str):
-            continue
-        url = raw.strip()
-        if url:
-            return url
-    return None
-
-
 def _is_https_url(url: str) -> bool:
-    """Return ``True`` only for ``https://`` URLs with a host.
-
-    Update-check *overrides* must be HTTPS: fetching release metadata
-    over plaintext HTTP would let a network adversary steer the update
-    banner and the release-page link. The broader
-    :func:`_is_http_url` transport gate below stays as-is on purpose —
-    it is the last line of defence, not the policy.
-    """
+    """Shared gate for endpoints, redirects, and release links."""
     try:
         parsed = urllib.parse.urlparse(url)
+        return parsed.scheme == "https" and bool(parsed.hostname)
     except (TypeError, ValueError):
         return False
-    return parsed.scheme == "https" and bool(parsed.netloc)
 
 
 def _override_scheme(url: str) -> str:
@@ -308,12 +293,14 @@ def _override_scheme(url: str) -> str:
     return scheme or "(missing)"
 
 
-def _is_http_url(url: str) -> bool:
-    try:
-        parsed = urllib.parse.urlparse(url)
-    except (TypeError, ValueError):
-        return False
-    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+class _HTTPSOnlyRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not _is_https_url(newurl):
+            raise ValueError("update redirect URL must use https:// with a host")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_HTTPS_OPENER = urllib.request.build_opener(_HTTPSOnlyRedirectHandler())
 
 
 def _fetch_release_info(url: str, timeout: float) -> dict[str, Any]:
@@ -322,8 +309,8 @@ def _fetch_release_info(url: str, timeout: float) -> dict[str, Any]:
     Raises on transport, status, parse, schema, or scheme failures. Callers
     convert those failures into ``UpdateResult(status="error")``.
     """
-    if not _is_http_url(url):
-        raise ValueError("update URL must use http or https")
+    if not _is_https_url(url):
+        raise ValueError("update URL must use https:// with a host")
     req = urllib.request.Request(
         url,
         headers={
@@ -331,7 +318,7 @@ def _fetch_release_info(url: str, timeout: float) -> dict[str, Any]:
             "User-Agent": USER_AGENT,
         },
     )
-    with urllib.request.urlopen(  # noqa: S310 (configured HTTPS URL)
+    with _HTTPS_OPENER.open(
         req,
         timeout=timeout,
     ) as resp:
@@ -366,7 +353,10 @@ def _extract_release_url(payload: object) -> str:
     for key in ("html_url", "url"):
         val = payload.get(key)
         if isinstance(val, str) and val.strip():
-            return val.strip()
+            url = val.strip()
+            if not _is_https_url(url):
+                raise ValueError("release URL must use https:// with a host")
+            return url
     return ""
 
 
@@ -439,24 +429,18 @@ def check_now(*, force: bool = False) -> UpdateResult:
             are policy, not caching.
     """
     current = _current_version()
-    # Reject non-HTTPS overrides before any cache or network work: a
-    # user-/config-supplied endpoint is trusted for release metadata
-    # and the release-page link, so plaintext HTTP (or any other
-    # scheme) is a hard failure, never a silent fallback to default.
-    override = _override_url()
-    if override is not None and not _is_https_url(override):
+    source_url = _resolve_url()
+    if not source_url:
+        return UpdateResult(status="disabled", current=current)
+    if not _is_https_url(source_url):
         return UpdateResult(
             status="error",
             current=current,
             error=(
-                "update-check URL override must use https://; "
-                f"refusing scheme {_override_scheme(override)!r}"
+                "update-check URL must use https://; "
+                f"refusing scheme {_override_scheme(source_url)!r}"
             ),
         )
-    source_url = _resolve_url()
-    if not source_url:
-        return UpdateResult(status="disabled", current=current)
-
     if not force:
         cached = _cached_if_fresh(current, source_url)
         if cached is not None:

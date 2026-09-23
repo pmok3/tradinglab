@@ -1,6 +1,6 @@
 # gui/custom_indicator_dialog
 
-Last updated: 2026-09-20
+Last updated: 2026-09-23
 
 The header form plus saved-list chrome supplies an opt-in measured width floor
 before restore; the Conditions editor and preview plot do **not** determine the
@@ -18,8 +18,9 @@ viewport, preserving their visual order while the editor yields available height
 A modeless Toplevel reachable from **Indicators → Custom Indicator
 Builder…** (sits directly under *Manage Indicators…*). Lets the user
 author, preview, save, edit, and delete custom indicators backed by
-`.py` files in `%LOCALAPPDATA%\TradingLab\indicators\` (the same
-directory the existing `indicators.loader` already scans on startup).
+`.py` files in `%LOCALAPPDATA%\TradingLab\indicators\` (the
+default directory exposed by `indicators.loader`). Save/import register
+immediately; there is no application startup/reload discovery hook.
 
 Three authoring modes (default: **Conditions**):
 
@@ -50,8 +51,8 @@ Three authoring modes (default: **Conditions**):
    `mode:` header still reads `building_blocks` for back-compat; only
    the dialog label changed.
 3. **Python** — full Python module. Gated behind a per-save
-   confirmation prompt because saved files are exec'd on every app
-   start by the loader (and every preview by this dialog). The user
+   confirmation prompt because saving executes the source for dry-compute
+   and registration (preview also executes it after consent). The user
    must define a class + call `register_indicator(name, factory)`.
 
 State of all three bodies is preserved across mode switches inside the
@@ -102,6 +103,8 @@ to switch the exec namespace from the locked-down `_SAFE_BUILTINS` to real
 internal `tradinglab.indicators.expression`, `tradinglab.scanner.engine`,
 and `tradinglab.core.bars` helpers that the restricted import hook would
 block.
+This marker is self-claimed metadata, not a trust boundary. Both marked
+and unmarked imports require explicit consent before any execution.
 
 ## Layout
 
@@ -211,18 +214,17 @@ template that already defines a class and calls `register_indicator`.
   delegates to `indicators.loader.export_indicator_file`. No selection
   → status-bar error, no dialog. A cancelled save dialog is a no-op.
 - **Import** reads a user-chosen `.py` via `filedialog.askopenfilename`.
-  Files that execute arbitrary Python — a Python-mode builder file
-  (`mode: python`) OR any file lacking the builder marker — are gated
-  behind a first-load trust approval: an `askokcancel` warning dialog
+  Every external file is executable Python regardless of its claimed
+  marker or mode and requires an `askokcancel` warning dialog
   showing the file name and full SHA-256 digest ("Approve custom
   indicator"), via `_prompt_indicator_trust` (mirrors the Python-mode
-  save gate). On approval the dialog copies the file with
+  save gate). On approval the dialog copies that exact in-memory source with
   `indicators.loader.import_indicator_file` and records the trust
-  approval with `record_indicator_approval` (builder-managed files are
-  recorded without prompting, since this dialog's generators authored
-  them) so `register_user_indicator_file` does not prompt a second
+  approval with `record_indicator_approval`, never granting trust based
+  on an external header, so `register_user_indicator_file` does not prompt a second
   time. A name collision with an existing indicators-dir file
-  triggers an `askyesno` overwrite prompt. Registration errors surface
+  triggers an `askyesno` overwrite prompt. Persistence failures stop
+  registration and surface in the status bar. Registration errors surface
   in the status bar. Builder-managed imports are loaded into the
   editor and selected in the saved list; marker-less plugins register
   but are not shown in the list.
@@ -230,7 +232,12 @@ template that already defines a class and calls `register_indicator`.
   `record_indicator_approval` (the dialog authored the content; Python
   mode already passed its own confirmation), so registration and
   later loads of the unchanged file do not prompt. A later hand-edit
-  changes the hash and re-prompts on next load.
+  changes the hash and requires new approval. A load without an approval
+  callback refuses changed content; re-import to approve it through the GUI.
+  Approval-store failures are shown in the status bar, not silently ignored.
+  Save hashes generated source, and registration checks the on-disk snapshot
+  against that hash before executing it; replacement content is never
+  auto-approved. Single-file registration never executes siblings.
 - **List refresh** filters the indicators directory to files whose
   first ≤10 lines contain the `# tradinglab-custom-indicator` marker
   — hand-authored plugin files coexist in the same directory and are

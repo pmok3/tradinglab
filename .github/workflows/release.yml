@@ -234,6 +234,15 @@ jobs:
       - name: List collected artifacts
         run: ls -lh dist/
 
+      - name: Generate and verify release checksums
+        shell: bash
+        run: |
+          test "$(find dist -maxdepth 1 -name 'TradingLab-*-win64.zip' | wc -l)" -eq 1
+          test "$(find dist -maxdepth 1 -name 'TradingLab-*-winarm64.zip' | wc -l)" -eq 1
+          test "$(find dist -type f | wc -l)" -eq 2
+          python3 scripts/release_checksums.py --artifacts dist --manifest dist/SHA256SUMS
+          python3 scripts/release_checksums.py --verify --artifacts dist --manifest dist/SHA256SUMS
+
       - name: Build release notes from CHANGELOG
         shell: bash
         # Prepend the curated CHANGELOG section for this version to the
@@ -261,7 +270,9 @@ jobs:
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v3
         with:
-          files: dist/TradingLab-*.zip
+          files: |
+            dist/TradingLab-*.zip
+            dist/SHA256SUMS
           body_path: release_notes.md
           generate_release_notes: true
           fail_on_unmatched_files: true

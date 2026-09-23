@@ -165,3 +165,25 @@ class TestArtifactUploadDownload:
         assert download_step is not None, (
             "publish must include an actions/download-artifact step"
         )
+
+    def test_checksums_generated_verified_and_published_after_collection(self, release_yaml):
+        steps = release_yaml["jobs"]["publish"]["steps"]
+        download = next(i for i, s in enumerate(steps) if "download-artifact@" in s.get("uses", ""))
+        checksums = next(i for i, s in enumerate(steps) if s.get("name") == "Generate and verify release checksums")
+        publish = next(i for i, s in enumerate(steps) if "action-gh-release@" in s.get("uses", ""))
+        assert download < checksums < publish
+        step = steps[checksums]
+        assert not step.get("continue-on-error", False)
+        assert step["shell"] == "bash"
+        commands = step["run"].splitlines()
+        assert commands[-2:] == [
+            "python3 scripts/release_checksums.py --artifacts dist --manifest dist/SHA256SUMS",
+            "python3 scripts/release_checksums.py --verify --artifacts dist --manifest dist/SHA256SUMS",
+        ]
+        assert "TradingLab-*-win64.zip" in commands[0] and commands[0].endswith("-eq 1")
+        assert "TradingLab-*-winarm64.zip" in commands[1] and commands[1].endswith("-eq 1")
+        assert commands[2].endswith("-eq 2")
+        assert steps[publish]["with"]["files"].splitlines() == [
+            "dist/TradingLab-*.zip", "dist/SHA256SUMS",
+        ]
+        assert steps[publish]["with"]["fail_on_unmatched_files"] is True

@@ -245,16 +245,18 @@ CI then:
    scanner + logic + isolated GUI + smoke gates before PyInstaller starts.
 3. Runs `tools/build_exe.ps1`.
 4. Runs `tools/verify_frozen.ps1` against the result.
-5. Uploads the zip as both a workflow artifact and a GitHub Release
-   asset attached to the tag.
+5. Uploads each zip as a workflow artifact. The publish job collects
+   both architectures, requires one zip per architecture, generates and
+   verifies `SHA256SUMS`, then uploads both zips and the manifest as
+   GitHub Release assets attached to the tag.
 
-For a hand-built local release, generate and verify a SHA-256 manifest
-for the zips before handing them out — see
-[Release checksums](RELEASE_CHECKSUMS.md):
+Normal releases are tag-triggered CI builds, not local builds. For local
+debugging or verification of downloaded assets, use a directory containing
+only the artifacts being checked; see [Release checksums](RELEASE_CHECKSUMS.md):
 
 ```powershell
-python scripts/release_checksums.py --artifacts dist --manifest dist/SHA256SUMS
-python scripts/release_checksums.py --verify --artifacts dist --manifest dist/SHA256SUMS
+python scripts\release_checksums.py --artifacts dist --manifest dist\SHA256SUMS
+python scripts\release_checksums.py --verify --artifacts dist --manifest dist\SHA256SUMS
 ```
 
 You can also trigger the workflow manually (`workflow_dispatch`) from
