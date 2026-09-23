@@ -21752,7 +21752,11 @@ def check_d24_n7_async_load_offloads_to_executor(app) -> None:
 
 
 def check_e1_async_cache_write_failure(app) -> None:
-    """A failed worker save still renders without another merge/write on Tk."""
+    """A failed worker save still renders without another merge/write on Tk.
+
+    Live prefetch may independently save the same symbol (and interval). Match
+    the interactive worker's list object, not a process-wide ticker counter.
+    """
     import threading
     from unittest.mock import patch
 
@@ -21770,13 +21774,13 @@ def check_e1_async_cache_write_failure(app) -> None:
     disk_cache._path_for(*key).unlink(missing_ok=True)
 
     def save(source, ticker, interval, bars):
-        if ticker == "N7PROBE":
-            saves.append(threading.get_ident())
+        if (source, ticker, interval) == key:
+            saves.append((bars, threading.get_ident()))
             return False
         return original_save(source, ticker, interval, bars)
 
     def merge(old, new, **kwargs):
-        merges.append((id(new), threading.get_ident()))
+        merges.append((new, threading.get_ident()))
         return original_merge(old, new, **kwargs)
 
     def load():
@@ -21795,8 +21799,10 @@ def check_e1_async_cache_write_failure(app) -> None:
         assert len(payloads) == 1
         assert payloads[0]["primary_merged"]
         assert payloads[0]["primary_save_result"] is False
-        assert len(saves) == 1 and saves[0] != main_thread
-        probe_merges = [thread for raw_id, thread in merges if raw_id == id(payloads[0]["primary"])]
+        probe_saves = [thread for bars, thread in saves if bars is payloads[0]["primary_merged"]]
+        assert len(probe_saves) == 1 and probe_saves[0] != main_thread
+        assert all(thread != main_thread for _, thread in saves), "cache write retried on Tk"
+        probe_merges = [thread for bars, thread in merges if bars is payloads[0]["primary"]]
         assert len(probe_merges) == 1 and probe_merges[0] != main_thread
         assert not disk_cache._path_for(*key).exists()
     finally:

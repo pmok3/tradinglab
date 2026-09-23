@@ -209,3 +209,49 @@ def test_legacy_worker_payload_does_not_invent_save_success(handoff, shape):
     assert [bar.close for bar in app._compare] == [102, 103]
     assert payloads[0]["primary_save_result"] is None
     assert payloads[0]["compare_save_result"] is None
+
+
+@pytest.mark.parametrize("prefetch_interval", ["5m", "1d"])
+@pytest.mark.parametrize("tk_retry", [None, "merge", "save"])
+def test_cache_smoke_tracks_its_worker_and_rejects_tk_retries(
+    handoff, monkeypatch, prefetch_interval, tk_retry,
+):
+    """Independent prefetch writes must not mask or mimic interactive retries."""
+    from tests.smoke import test_smoke_full as smoke
+    from tradinglab import disk_cache
+    from tradinglab.data.fetch_service import FetchService
+
+    app, pending, root = handoff
+    service = FetchService(worker_count=1, prefetch_workers=1)
+    background_results = []
+
+    def load_with_prefetch(app):
+        app.compare_var.set(False)
+        app.ticker_var.set("N7PROBE")
+        app._load_data_async()
+        result = pending[0][0].result(timeout=10)
+        _complete(app, pending)
+        if tk_retry == "merge":
+            disk_cache.merge_candles(result[2], result[0])
+        elif tk_retry == "save":
+            disk_cache.save("unit-source", "N7PROBE", "5m", list(result[4]))
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            result = pool.submit(
+                service.apply_prefetch_result,
+                ("unit-source", "N7PROBE", prefetch_interval),
+                [_bar(4, 104)], {}, disk_cache, lambda *_: None,
+                memory_allowed=False,
+            ).result(timeout=10)
+        background_results.append(result)
+
+    monkeypatch.setattr(smoke, "check_d24_n7_async_load_offloads_to_executor", load_with_prefetch)
+    try:
+        if tk_retry is None:
+            smoke.check_e1_async_cache_write_failure(app)
+        else:
+            with pytest.raises(AssertionError):
+                smoke.check_e1_async_cache_write_failure(app)
+    finally:
+        service.shutdown()
+    assert [[bar.close for bar in result] for result in background_results] == [[104]]
+    assert not (root / "unit-source__N7PROBE__5m.jsonl").exists()
