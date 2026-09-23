@@ -9,10 +9,9 @@ behavior: import/Ticker/property error posture, the documented
 no-raise fallback, partial-success bundle assembly, symbol
 normalization, and the one-shot warning guard.
 
-``yfinance`` is NOT installed in this environment, so the wire is
-unreachable by construction. Every test here runs against a stub
-``yfinance`` module injected into ``sys.modules`` by the
-``fake_yfinance`` fixture — there is no real network access.
+Tests replace ``yfinance`` in ``sys.modules`` with the ``fake_yfinance``
+stub, or ``None`` to simulate an import failure. No test uses the real
+SDK or network, whether or not ``yfinance`` is installed.
 """
 from __future__ import annotations
 
@@ -21,6 +20,7 @@ import logging
 import math
 import sys
 import types
+from unittest.mock import Mock
 
 import pandas as pd
 import pytest
@@ -299,7 +299,7 @@ def test_unexpected_columns_tolerated(fake_yfinance):
     assert math.isnan(bundle.earnings[0].eps_actual)
 
 
-@pytest.mark.xfail(strict=True, reason=(
+@pytest.mark.xfail(strict=True, raises=ValueError, reason=(
     "NaT index row makes fetch_yfinance_events raise "
     "ValueError('cannot convert float NaN to integer'), violating the "
     "documented no-raise posture. Chain: pandas 2.1.4 pd.NaT.date() "
@@ -323,7 +323,7 @@ def test_nat_index_rows_are_skipped(fake_yfinance):
     assert bundle.earnings[0].eps_estimate == pytest.approx(2.10)
 
 
-@pytest.mark.xfail(strict=True, reason=(
+@pytest.mark.xfail(strict=True, raises=ValueError, reason=(
     "Same NaT chain as test_nat_index_rows_are_skipped: a frame whose "
     "rows are ALL NaT-indexed should decode to zero records and make "
     "the fetcher return None, but currently raises ValueError."))
@@ -395,6 +395,35 @@ def test_actions_raises_returns_none_with_earnings(fake_yfinance):
     assert isinstance(bundle, EventBundle)
     assert len(bundle.earnings) == 1
     assert bundle.dividends == []
+
+
+def test_earnings_dates_raises_returns_bundle_with_actions(fake_yfinance):
+    """An earnings failure still returns cash dividends and stock splits."""
+    tk = _FakeTicker("AAPL")
+    tk.earnings_exc = ConnectionError("provider unreachable")
+    tk.actions_df = _actions_frame(
+        (_ny_dt(2024, 5, 15, 16, 0), 0.75, 0.0),
+        (_ny_dt(2024, 6, 7, 16, 0), 0.0, 4.0),
+    )
+    fake_yfinance.Ticker = lambda symbol: tk  # noqa: E731
+
+    bundle = yfinance_events.fetch_yfinance_events("AAPL")
+
+    assert isinstance(bundle, EventBundle)
+    assert bundle.symbol == "AAPL"
+    assert bundle.earnings == []
+    assert len(bundle.dividends) == 2
+    cash, split = bundle.dividends
+    assert cash == DividendRecord(
+        ex_ts=_midnight_ms(dt.datetime(2024, 5, 15, tzinfo=dt.timezone.utc)),
+        symbol="AAPL", amount=0.75, kind="cash", source="yfinance",
+    )
+    assert (split.ex_ts, split.symbol, split.kind,
+            split.ratio_num, split.ratio_den, split.source) == (
+        _midnight_ms(dt.datetime(2024, 6, 7, tzinfo=dt.timezone.utc)),
+        "AAPL", "stock_split", 4, 1, "yfinance",
+    )
+    assert math.isnan(split.amount)
 
 
 def test_both_properties_raise_returns_none(fake_yfinance):
@@ -478,12 +507,12 @@ def test_symbol_normalization_strip_and_upper(fake_yfinance):
     normalized symbol."""
     tk = _FakeTicker("AAPL")
     tk.earnings_df = _earnings_frame((_ny_dt(2024, 1, 25, 16, 5), 2.1, 2.18))
-    fake_yfinance.Ticker = lambda symbol: tk  # noqa: E731
+    fake_yfinance.Ticker = Mock(return_value=tk)
 
     bundle = yfinance_events.fetch_yfinance_events("  aapl  ")
 
+    fake_yfinance.Ticker.assert_called_once_with("AAPL")
     assert bundle.symbol == "AAPL"
-    assert tk.symbol == "AAPL"
 
 
 def test_fetched_at_is_recent_utc_ms(fake_yfinance):
@@ -509,18 +538,34 @@ def test_bundle_records_sorted_ascending(fake_yfinance):
         (_ny_dt(2024, 1, 25, 16, 5), 2.10, 2.18),
     )
     tk.actions_df = _actions_frame(
-        (_ny_dt(2024, 5, 15, 16, 0), 0.75, 0.0),
+        (_ny_dt(2024, 5, 15, 16, 0), 0.80, 0.0),
         (_ny_dt(2024, 2, 14, 16, 0), 0.75, 0.0),
     )
     fake_yfinance.Ticker = lambda symbol: tk  # noqa: E731
 
     bundle = yfinance_events.fetch_yfinance_events("AAPL")
 
-    earn_ts = [r.ts for r in bundle.earnings]
-    div_ts = [r.ex_ts for r in bundle.dividends]
-    assert earn_ts == sorted(earn_ts)
-    assert div_ts == sorted(div_ts)
-    assert bundle.earnings[0].ts < bundle.earnings[1].ts
+    assert isinstance(bundle, EventBundle)
+    assert bundle.symbol == "AAPL"
+    assert len(bundle.earnings) == 2
+    assert len(bundle.dividends) == 2
+    assert [(r.ts, r.symbol, r.when, r.eps_estimate, r.eps_actual, r.source)
+            for r in bundle.earnings] == [
+        (_midnight_ms(dt.datetime(2024, 1, 25, tzinfo=dt.timezone.utc)),
+         "AAPL", "AMC", 2.10, 2.18, "yfinance"),
+        (_midnight_ms(dt.datetime(2024, 7, 25, tzinfo=dt.timezone.utc)),
+         "AAPL", "AMC", 1.50, 1.45, "yfinance"),
+    ]
+    assert bundle.dividends == [
+        DividendRecord(
+            ex_ts=_midnight_ms(dt.datetime(2024, 2, 14, tzinfo=dt.timezone.utc)),
+            symbol="AAPL", amount=0.75, kind="cash", source="yfinance",
+        ),
+        DividendRecord(
+            ex_ts=_midnight_ms(dt.datetime(2024, 5, 15, tzinfo=dt.timezone.utc)),
+            symbol="AAPL", amount=0.80, kind="cash", source="yfinance",
+        ),
+    ]
 
 
 def test_utc_date_boundary_floors_correctly(fake_yfinance):
