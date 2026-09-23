@@ -3230,8 +3230,10 @@ class ChartApp(
             # uses ``os.replace`` (atomic on Windows + POSIX), so a
             # concurrent read on a sibling worker thread either sees
             # the OLD file or the NEW file — never a torn one.
-            p_merged: list | None = None
-            c_merged: list | None = None
+            p_merged: list | None = None if p else p_disk
+            c_merged: list | None = None if c else c_disk
+            p_save_result: bool | None = None
+            c_save_result: bool | None = None
             try:
                 if p:
                     p_merged = disk_cache.merge_candles(p_disk, p, presorted=True)
@@ -3240,29 +3242,27 @@ class ChartApp(
                     # universe) — ~450 ms saved per switch on a 115k-bar
                     # 5m file. See disk_cache.merge_adds_nothing.
                     if not disk_cache.merge_adds_nothing(p_disk, p_merged):
-                        if not disk_cache.save(src, raw_primary, interval, p_merged):
-                            # Keep the "p_merged set ⟹ on disk" invariant
-                            # the Tk phase relies on: drop the merged list
-                            # so _load_data re-merges instead of assuming
-                            # the worker's write landed.
+                        p_save_result = disk_cache.save(src, raw_primary, interval, p_merged)
+                        if p_save_result is False:
                             logger.warning(
                                 "disk_cache save failed for %s/%s/%s",
                                 src, raw_primary, interval)
-                            p_merged = None
             except Exception:  # noqa: BLE001
-                p_merged = None
+                p_save_result = False
+                logger.exception("disk_cache merge/save failed for %s/%s/%s", src, raw_primary, interval)
             try:
                 if c:
                     c_merged = disk_cache.merge_candles(c_disk, c, presorted=True)
                     if not disk_cache.merge_adds_nothing(c_disk, c_merged):
-                        if not disk_cache.save(src, raw_compare, interval, c_merged):
+                        c_save_result = disk_cache.save(src, raw_compare, interval, c_merged)
+                        if c_save_result is False:
                             logger.warning(
                                 "disk_cache save failed for %s/%s/%s",
                                 src, raw_compare, interval)
-                            c_merged = None
             except Exception:  # noqa: BLE001
-                c_merged = None
-            return p, c, p_disk, c_disk, p_merged, c_merged
+                c_save_result = False
+                logger.exception("disk_cache merge/save failed for %s/%s/%s", src, raw_compare, interval)
+            return p, c, p_disk, c_disk, p_merged, c_merged, p_save_result, c_save_result
 
         try:
             fut = executor.submit(_work)
@@ -3274,10 +3274,13 @@ class ChartApp(
             # Stale-token guard: a newer fetch superseded us.
             if token != self._fetch_token:
                 return
+            p_save_result, c_save_result = None, None
             if result is None:
                 p_raw, c_raw = None, None
                 p_disk, c_disk = None, None
                 p_merged, c_merged = None, None
+            elif len(result) == 8:
+                p_raw, c_raw, p_disk, c_disk, p_merged, c_merged, p_save_result, c_save_result = result
             elif len(result) == 6:
                 p_raw, c_raw, p_disk, c_disk, p_merged, c_merged = result
             else:
@@ -3298,11 +3301,12 @@ class ChartApp(
                 "primary_disk": p_disk,
                 "compare_disk": c_disk,
                 "disk_preloaded": True,
-                # H4: pre-merged + pre-saved by the worker so
-                # _load_data can skip its merge_candles + save block.
+                # A completed merge remains useful even if persistence failed.
+                # None save results mean skipped/unknown, not successful writes.
                 "primary_merged": p_merged,
                 "compare_merged": c_merged,
-                "merge_preloaded": True,
+                "primary_save_result": p_save_result,
+                "compare_save_result": c_save_result,
             }
             try:
                 self._load_data()
@@ -3533,26 +3537,24 @@ class ChartApp(
         # H4 (audit "ticker-switch latency"): when ``_load_data_async``
         # ran the merge + ``disk_cache.save`` on the worker thread,
         # ``prefetched["primary_merged"]`` / ``["compare_merged"]`` is
-        # the already-merged list and the on-disk file is already
-        # up-to-date. Consume the pre-merged result and skip the
-        # ``merge_candles`` + ``disk_cache.save`` calls below — those
-        # would re-do work the worker just finished.
-        merge_preloaded = bool(prefetched_valid and prefetched.get("merge_preloaded"))
+        # the already-merged list, independently of the save outcome.
+        # Consume each completed merge without retrying heavy work on Tk;
+        # an unsuccessful write is retried by a later worker refresh.
         primary_merged_cached = (
-            prefetched.get("primary_merged") if merge_preloaded else None
+            prefetched.get("primary_merged") if prefetched_valid else None
         )
         compare_merged_cached = (
-            prefetched.get("compare_merged") if merge_preloaded else None
+            prefetched.get("compare_merged") if prefetched_valid else None
         )
         if primary_raw and mem_primary is not primary_raw:
-            if merge_preloaded and primary_merged_cached is not None:
+            if primary_merged_cached is not None:
                 primary_raw = primary_merged_cached
             else:
                 primary_raw = disk_cache.merge_candles(
                     _disk_for(primary_key, "primary"), primary_raw,
                 )
         if compare_key and compare_raw and mem_compare is not compare_raw:
-            if merge_preloaded and compare_merged_cached is not None:
+            if compare_merged_cached is not None:
                 compare_raw = compare_merged_cached
             else:
                 compare_raw = disk_cache.merge_candles(
@@ -3572,22 +3574,22 @@ class ChartApp(
         # today's real daily bar simply lands here and overwrites our
         # synth at the next render boundary.
         #
-        # H4: skip the ``disk_cache.save`` when the worker already did
-        # it. Memory cache still gets updated here (the worker's merge
+        # H4: skip the ``disk_cache.save`` when the worker already handled
+        # that side's persistence attempt. Memory still gets updated (the merge
         # is per-side and the memory cache write needs to happen on
         # the Tk thread for the token-gated visibility contract).
         if primary_raw:
             self._full_cache[primary_key] = primary_raw
             self._trim_full_cache()
             self._confirmed_primary_ticker = raw_primary
-            if mem_primary is not primary_raw and not merge_preloaded:
+            if mem_primary is not primary_raw_ref and primary_merged_cached is None:
                 if not disk_cache.save(*primary_key, primary_raw):
                     logger.warning("disk_cache save failed for %s", primary_key)
         if compare_key and compare_raw:
             self._full_cache[compare_key] = compare_raw
             self._trim_full_cache()
             self._confirmed_compare_ticker = raw_compare
-            if mem_compare is not compare_raw and not merge_preloaded:
+            if mem_compare is not compare_raw_ref and compare_merged_cached is None:
                 if not disk_cache.save(*compare_key, compare_raw):
                     logger.warning("disk_cache save failed for %s", compare_key)
 

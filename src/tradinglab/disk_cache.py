@@ -87,13 +87,15 @@ def _candle_to_dict(c: Candle) -> dict[str, Any]:
         return xf
 
     def _v(vol: Any) -> int:
-        # Volumes arrive as ints, but a provider can hand us NaN/Inf
-        # (or a numeric string); int() raises on non-finite floats, which
-        # used to abort the entire save. Coerce junk to 0 so one bad bar
-        # can't lose the whole series.
+        # Preserve integral inputs exactly, including values beyond float's
+        # precision/range. Decimal strings still use the float fallback.
+        try:
+            return int(vol)
+        except (TypeError, ValueError, OverflowError):
+            pass
         try:
             fvol = float(vol)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return 0
         if math.isnan(fvol) or math.isinf(fvol):
             return 0
@@ -452,7 +454,8 @@ def merge_adds_nothing(previous: list[Candle] | None,
 def save(source: str, ticker: str, interval: str, candles: list[Candle]) -> bool:
     """Atomically persist ``candles`` keyed by (source, ticker, interval).
 
-    Returns ``True`` when the bars landed on disk. No-op for sources
+    Returns ``True`` when the write succeeded or persistence is intentionally
+    skipped. No-op for sources
     marked via :func:`mark_no_persist` (BYOD) and for derived ratio
     tickers — those return ``True`` since there is nothing to persist
     (CSV files on disk are already the source of truth for BYOD, so
@@ -460,7 +463,8 @@ def save(source: str, ticker: str, interval: str, candles: list[Candle]) -> bool
 
     Write failures are logged and reported via the ``False`` return —
     never swallowed silently. Callers that need the data on disk must
-    check the return value instead of assuming persistence.
+    check the return value and account for those opt-outs; ``True`` alone
+    does not prove a file exists.
 
     Write-to-temp then ``os.replace`` so a crash mid-write cannot leave
     a truncated file behind. The temp file is created in the same

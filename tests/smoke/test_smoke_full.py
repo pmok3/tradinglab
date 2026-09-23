@@ -21751,6 +21751,64 @@ def check_d24_n7_async_load_offloads_to_executor(app) -> None:
     print("  [OK] N7 _load_data_async offloads fetch + cache-hit fast path")
 
 
+def check_e1_async_cache_write_failure(app) -> None:
+    """A failed worker save still renders without another merge/write on Tk."""
+    import threading
+    from unittest.mock import patch
+
+    from tradinglab import disk_cache
+
+    original_save = disk_cache.save
+    original_merge = disk_cache.merge_candles
+    original_load = app._load_data
+    main_thread = threading.get_ident()
+    saves, merges, payloads = [], [], []
+    variables = (app.source_var, app.interval_var, app.ticker_var, app.compare_var, app.compare_ticker_var)
+    saved_values = [var.get() for var in variables]
+    saved_cache = app._full_cache.copy()
+    key = (app.source_var.get(), "N7PROBE", app.interval_var.get())
+    disk_cache._path_for(*key).unlink(missing_ok=True)
+
+    def save(source, ticker, interval, bars):
+        if ticker == "N7PROBE":
+            saves.append(threading.get_ident())
+            return False
+        return original_save(source, ticker, interval, bars)
+
+    def merge(old, new, **kwargs):
+        merges.append((id(new), threading.get_ident()))
+        return original_merge(old, new, **kwargs)
+
+    def load():
+        payload = app._prefetched_raw
+        if payload and payload.get("primary_ticker") == "N7PROBE":
+            payloads.append(dict(payload))
+        return original_load()
+
+    try:
+        with (
+            patch.object(disk_cache, "save", save),
+            patch.object(disk_cache, "merge_candles", merge),
+            patch.object(app, "_load_data", load),
+        ):
+            check_d24_n7_async_load_offloads_to_executor(app)
+        assert len(payloads) == 1
+        assert payloads[0]["primary_merged"]
+        assert payloads[0]["primary_save_result"] is False
+        assert len(saves) == 1 and saves[0] != main_thread
+        probe_merges = [thread for raw_id, thread in merges if raw_id == id(payloads[0]["primary"])]
+        assert len(probe_merges) == 1 and probe_merges[0] != main_thread
+        assert not disk_cache._path_for(*key).exists()
+    finally:
+        app._bump_fetch_token()
+        for var, value in zip(variables, saved_values, strict=True):
+            var.set(value)
+        app._full_cache.clear()
+        app._full_cache.update(saved_cache)
+        app._load_data()
+    print("  [OK] failed worker persist retains data and never repeats merge/write on Tk")
+
+
 def check_d25_scroll_wheel_zoom_anchored_on_cursor(app) -> None:
     """Mouse-wheel zoom: scroll DOWN zooms IN, scroll UP zooms OUT,
     and the bar under the cursor stays fixed in screen space.
@@ -24324,6 +24382,7 @@ def _run_all_checks(app) -> None:
     check_d84_targeted_intraday_fetch(app)
     check_d85_sandbox_feed_warms_watchlist(app)
     check_e0_disk_cache_persist(app)
+    check_e1_async_cache_write_failure(app)
 
 
 def main() -> int:
@@ -24731,6 +24790,7 @@ def _build_check_sequence():
         ("check_d85_sandbox_feed_warms_watchlist",
          check_d85_sandbox_feed_warms_watchlist),
         ("check_e0_disk_cache_persist", check_e0_disk_cache_persist),
+        ("check_e1_async_cache_write_failure", check_e1_async_cache_write_failure),
     ]
     return seq
 

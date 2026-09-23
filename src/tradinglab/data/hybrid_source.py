@@ -48,7 +48,7 @@ _DEEP_SOURCE = "alpaca"
 
 CandleFetcher = Callable[..., "list[Candle] | None"]
 DeepLoader = Callable[[str, str], "list[Candle] | None"]
-DeepSaver = Callable[[str, str, "list[Candle]"], bool]
+DeepSaver = Callable[[str, str, "list[Candle]"], bool | None]
 
 
 def merge_prefer_recent(
@@ -74,14 +74,10 @@ def _default_deep_loader(ticker: str, interval: str) -> list[Candle] | None:
     return disk_cache.load(_DEEP_SOURCE, ticker, interval)
 
 
-def _default_deep_saver(ticker: str, interval: str, candles: list[Candle]) -> None:
+def _default_deep_saver(ticker: str, interval: str, candles: list[Candle]) -> bool:
     from .. import disk_cache
 
-    # save() reports failure via an explicit False return (never raises);
-    # only that counts as failure so None-returning doubles keep working.
-    if disk_cache.save(_DEEP_SOURCE, ticker, interval, candles) is False:
-        LOG.warning("hybrid_source: deep-leg disk_cache save failed for %s/%s",
-                    ticker, interval)
+    return disk_cache.save(_DEEP_SOURCE, ticker, interval, candles)
 
 
 def _resolve_deep_leg(
@@ -112,9 +108,12 @@ def _resolve_deep_leg(
         fetched = []
     if fetched:
         try:
-            deep_saver(ticker, interval, fetched)
+            if deep_saver(ticker, interval, fetched) is False:
+                LOG.warning("hybrid_source: deep-leg disk_cache save failed for %s/%s",
+                            ticker, interval)
         except Exception:  # noqa: BLE001
-            pass
+            LOG.exception("hybrid_source: deep-leg disk_cache save failed for %s/%s",
+                          ticker, interval)
     return fetched
 
 

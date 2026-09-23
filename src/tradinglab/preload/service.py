@@ -16,9 +16,9 @@ Per-symbol-per-interval contract:
        attempts on transient failure. Sleep ``rate_limit_s`` (via the
        cancellation-aware ``sleep_fn``) between retries.
     4. On success, ``merge`` against any existing disk cache, then
-       ``cache_save`` — an explicit ``False`` return surfaces the
-       interval as failed so a silent disk-cache failure can never be
-       reported as success.
+       ``cache_save`` — an explicit ``False`` return fails the interval.
+       Otherwise verify with ``cache_load``: intentional no-persist
+       sources and legacy savers must not imply durable availability.
     5. ``rate_limit_s`` cancellation-aware sleep before the next call.
 
 Cancellation is checked at every retry boundary and between symbols, so
@@ -38,7 +38,7 @@ from ..models import Candle
 # Type aliases — keep the long Callables readable in signatures.
 Fetcher = Callable[[str, str], list[Candle] | None]
 CacheLoad = Callable[[str, str, str], list[Candle] | None]
-CacheSave = Callable[[str, str, str, list[Candle]], bool]
+CacheSave = Callable[[str, str, str, list[Candle]], bool | None]
 Merger = Callable[[list[Candle] | None, list[Candle] | None],
                   list[Candle]]
 SleepFn = Callable[[threading.Event, float], None]
@@ -187,9 +187,9 @@ def preload_universe(
             Synchronous; may raise; may return ``None`` or empty list
             on no-data.
         cache_load: ``(source, sym, interval) -> Optional[List[Candle]]``.
-        cache_save: ``(source, sym, interval, candles) -> bool`` —
-            ``True`` when the bars landed on disk, explicit ``False``
-            on write failure (never raises).
+        cache_save: ``(source, sym, interval, candles) -> bool | None`` —
+            explicit ``False`` on write failure. Other results require
+            read-back verification, including legacy ``None`` returns.
         merge: ``(old, new) -> List[Candle]`` — must implement
             newer-wins-on-overlap semantics so accumulating fetches
             extend past the provider window cap.
@@ -327,10 +327,8 @@ def _run_one(
             last_err = repr(exc)
             fetched = []
         if fetched:
-            # Step 4: merge + persist. cache_save reports failure via
-            # an explicit False return (it logs and never raises) — only
-            # that is treated as failure, so older doubles returning None
-            # keep working. No follow-up read needed: save is atomic.
+            # Step 4: merge + persist + verify. A successful no-op or a
+            # legacy None result is not proof the bars are on disk.
             try:
                 old = cache_load(source_name, sym, itv) or []
                 merged = merge(old, fetched)
@@ -338,8 +336,13 @@ def _run_one(
                     return IntervalOutcome(
                         interval=itv, status="failed", bars=0,
                         error="persistence failed")
+                verified = cache_load(source_name, sym, itv) or []
+                if not verified:
+                    return IntervalOutcome(
+                        interval=itv, status="failed", bars=0,
+                        error="persistence verification failed")
                 return IntervalOutcome(
-                    interval=itv, status="fetched", bars=len(merged))
+                    interval=itv, status="fetched", bars=len(verified))
             except Exception as exc:  # noqa: BLE001
                 last_err = f"persist error: {exc!r}"
                 # Fall through to retry — the underlying fetch

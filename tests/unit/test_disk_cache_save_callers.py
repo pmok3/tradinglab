@@ -82,6 +82,23 @@ def test_mutate_save_none_return_is_not_failure(caplog) -> None:
     assert not _logged(caplog, "Could not persist stream correction")
 
 
+def test_mutate_legacy_save_oserror_warns_and_keeps_correction(caplog) -> None:
+    from tradinglab.data.stream_controller import StreamController, StreamMutation
+
+    key = ("yfinance", "AMD", "5m")
+    cache = {key: _candles(1)}
+    corrected = _candles(1)[0]
+    corrected.close = 99.0
+
+    def save(*_):
+        raise OSError("disk full")
+
+    mutation = StreamController()._mutate(key, corrected, "closed", cache, None, save, None)
+    assert mutation is StreamMutation.LAST
+    assert cache[key][0].close == 99.0
+    assert _logged(caplog, "Could not persist stream correction")
+
+
 # ---------------------------------------------------------------------------
 # 2. gui/drilldown._targeted_range_fetch — save failure is a debug, not an error
 # ---------------------------------------------------------------------------

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
+
 from tradinglab.data.hybrid_source import (
     HYBRID_SOURCE_NAME,
     fetch_hybrid_data,
@@ -174,3 +176,40 @@ def test_deep_leg_errors_are_swallowed():
 
 def test_hybrid_source_name_constant():
     assert HYBRID_SOURCE_NAME == "yfinance+alpaca"
+
+
+@pytest.mark.parametrize("result", [True, False])
+def test_default_deep_saver_returns_disk_outcome(monkeypatch, result):
+    from tradinglab import disk_cache
+    from tradinglab.data.hybrid_source import _default_deep_saver
+
+    calls = []
+
+    def save(*args):
+        calls.append(args)
+        return result
+
+    monkeypatch.setattr(disk_cache, "save", save)
+    bars = [_c(1)]
+    assert _default_deep_saver("AMD", "5m", bars) is result
+    assert calls == [("alpaca", "AMD", "5m", bars)]
+
+
+@pytest.mark.parametrize("result", [False, None, True, OSError("disk full")])
+def test_deep_persistence_failure_keeps_fetched_history(caplog, result):
+    def save(*_):
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    out = fetch_hybrid_data(
+        "AMD", "5m",
+        recent_fetcher=lambda *_: [_c(3, volume=999)],
+        deep_fetcher=lambda *_: [_c(1), _c(2)],
+        deep_loader=lambda *_: None,
+        deep_saver=save,
+    )
+    assert _days(out) == [1, 2, 3]
+    assert ("deep-leg disk_cache save failed" in caplog.text) == (
+        result is False or isinstance(result, Exception)
+    )

@@ -1,6 +1,6 @@
 # data/hybrid_source.py — Spec
 
-Last updated: 2026-09-20
+Last updated: 2026-09-23
 
 ## Purpose
 A composite data source that stitches **yfinance (recent + live)** over
@@ -23,10 +23,12 @@ window PLUS Alpaca's deep intraday reach (IEX, ~2016+). Registered as
   `alpaca_source.fetch_alpaca_data`, and the `alpaca`-keyed `disk_cache`).
 
 ## Contract
-- **`DeepSaver` is `Callable[[str, str, list[Candle]], bool]`** matching the
-  `disk_cache.save` contract: an explicit `False` return means the deep-leg
-  write failed. `_default_deep_saver` logs that failure as a warning; injected
-  doubles that return `None` keep working because only `False` is checked.
+- **`DeepSaver` is `Callable[[str, str, list[Candle]], bool | None]`**:
+  `_default_deep_saver` returns the actual `disk_cache.save` boolean.
+  `_resolve_deep_leg` logs explicit `False` results and raised saver errors
+  without discarding fetched history. Legacy injected savers returning `None`
+  remain accepted, but that value does not prove persistence; the next request
+  still consults the loader before deciding whether to refetch.
 - **yfinance wins overlaps (the user's quality rule).** On any bar both legs
   have, the yfinance value is kept — so the recent/visible window is pure
   yfinance (full volume AND real-time). Alpaca only contributes the tail
@@ -74,8 +76,9 @@ window PLUS Alpaca's deep intraday reach (IEX, ~2016+). Registered as
 
 ## Invariants
 - Merged output is date-ascending; overlapping dates carry the yfinance bar.
-- The deep (Alpaca) leg is fetched from the network at most once per
-  `(ticker, interval)` until its disk cache is cleared.
+- After successful persistence, the deep (Alpaca) leg is fetched from the
+  network at most once per `(ticker, interval)` until its disk cache is
+  cleared. Failed saves leave the next request eligible to refetch.
 - Registered only when `AlpacaCredentials.is_configured()`; if Alpaca is later
   removed, `AppState._resolve_source` demotes a persisted `"yfinance+alpaca"`
   selection to the first user-visible source.
@@ -84,7 +87,8 @@ window PLUS Alpaca's deep intraday reach (IEX, ~2016+). Registered as
 `tests/unit/data/test_hybrid_source.py` — `merge_prefer_recent` overlap/empty;
 `fetch_hybrid_data` cold-stitch+persist, warm-cache-reuse (no network), recent-
 only, deep-only-on-yfinance-fail, `None`-vs-`[]` distinction, ratio short-
-circuit, deep-error swallow, name constant. Ranking is pinned in
+circuit, deep-error swallow, saver return forwarding and failure logging
+without history loss, name constant. Ranking is pinned in
 `tests/unit/data/test_source_ranking.py` (`test_hybrid_ranks_just_above_yfinance`);
 volume metadata is pinned in `tests/unit/data/test_quality.py`
 (`test_hybrid_volume_is_full`).

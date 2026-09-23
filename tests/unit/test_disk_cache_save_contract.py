@@ -20,6 +20,7 @@ Contract under test:
 from __future__ import annotations
 
 import datetime as _dt
+import json
 import logging
 import math
 import os
@@ -117,13 +118,27 @@ def test_inf_volume_coerced(_cache_dir) -> None:
 def test_volume_coercion_table(_cache_dir) -> None:
     # None / junk / numeric strings keep their historical mapping;
     # only non-finite floats changed (they used to raise).
-    cases = [(None, 0), ("junk", 0), ("123", 123), (45.9, 45)]
+    cases = [
+        (None, 0), ("junk", 0), ("123", 123), ("45.9", 45), (45.9, 45),
+        (2**53 + 1, 2**53 + 1), (10**400, 10**400),
+        (str(2**53 + 1), 2**53 + 1),
+    ]
     for raw, expected in cases:
         bars = _candles(1)
         bars[0] = Candle(date=bars[0].date, open=1.0, high=2.0, low=0.5,
                          close=1.5, volume=raw)
         assert disk_cache.save(*KEY, bars) is True
         assert disk_cache.load(*KEY)[0].volume == expected
+
+
+def test_volume_normalization_produces_strict_json(_cache_dir) -> None:
+    bars = _candles(3)
+    for bar, volume in zip(bars, [float("nan"), float("inf"), float("-inf")], strict=True):
+        bar.volume = volume
+    assert disk_cache.save(*KEY, bars) is True
+    lines = _cache_file(_cache_dir).read_text(encoding="utf-8").splitlines()
+    assert [json.loads(line)["v"] for line in lines] == [0, 0, 0]
+    assert all("NaN" not in line and "Infinity" not in line for line in lines)
 
 
 # ---------------------------------------------------------------------------
@@ -165,12 +180,14 @@ def test_success_after_failure_recovers(_cache_dir, monkeypatch) -> None:
     def _boom(*_a, **_k):
         raise OSError("disk full")
 
-    monkeypatch.setattr("tradinglab.disk_cache.tempfile.mkstemp", _boom)
-    assert disk_cache.save(*KEY, _candles(3)) is False
-    assert disk_cache.load(*KEY) is None
+    with monkeypatch.context() as failure:
+        failure.setattr("tradinglab.disk_cache.tempfile.mkstemp", _boom)
+        assert disk_cache.save(*KEY, _candles(3)) is False
+        assert disk_cache.load(*KEY) is None
 
-    monkeypatch.undo()
     assert disk_cache.save(*KEY, _candles(4, start_day=10)) is True
+    assert disk_cache._path_for(*KEY).parent == _cache_dir
+    assert _cache_file(_cache_dir).exists()
     got = disk_cache.load(*KEY)
     assert [c.date.day for c in got] == [10, 11, 12, 13]
 
@@ -185,10 +202,12 @@ def test_failure_does_not_shadow_later_success_for_same_key(
     def _boom(*_a, **_k):
         raise OSError("transient")
 
-    monkeypatch.setattr("tradinglab.disk_cache.tempfile.mkstemp", _boom)
-    assert disk_cache.save(*KEY, _candles(5, start_day=10)) is False
-    assert [c.date.day for c in disk_cache.load(*KEY)] == [1, 2]
+    with monkeypatch.context() as failure:
+        failure.setattr("tradinglab.disk_cache.tempfile.mkstemp", _boom)
+        assert disk_cache.save(*KEY, _candles(5, start_day=10)) is False
+        assert [c.date.day for c in disk_cache.load(*KEY)] == [1, 2]
 
-    monkeypatch.undo()
     assert disk_cache.save(*KEY, _candles(3, start_day=20)) is True
+    assert disk_cache._path_for(*KEY).parent == _cache_dir
+    assert _cache_file(_cache_dir).exists()
     assert [c.date.day for c in disk_cache.load(*KEY)] == [20, 21, 22]
