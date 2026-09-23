@@ -7,13 +7,10 @@ from ..models import Candle
 from .normalize import candles_from_dataframe
 from .ratio_source import fetch_ratio, parse_ratio_symbol
 
-#: Network timeout (seconds) for the ``yf.Ticker(...).history(...)``
-#: request. Matches the 15 s fetch timeout the other REST vendors use
-#: (alpaca / polygon / schwab all pass ``timeout=15``). Read at call time
-#: (not bound as a default arg) so tests can monkeypatch it. Without this
-#: a stalled connection would occupy a fetch worker indefinitely and
-#: starve the pool.
-YFINANCE_TIMEOUT_S = 15
+#: Explicit history-request timeout, preserving yfinance 1.3.0's 10 s default.
+#: Not a whole-fetch deadline: bootstrap requests and internal retries can
+#: extend the operation beyond this timeout.
+YFINANCE_TIMEOUT_S = 10
 
 
 def fetch_live_data(ticker: str = "AMD", interval: str = "1d") -> list[Candle] | None:

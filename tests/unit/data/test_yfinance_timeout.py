@@ -1,28 +1,13 @@
-"""Tests for the yfinance fetch timeout.
+"""Offline tests for the explicit yfinance history-request timeout.
 
-P0 regression: ``fetch_live_data`` passed no timeout to
-``yf.Ticker(...).history(...)``, so a stalled connection occupied a fetch
-worker indefinitely and starved the pool. The fix passes
-``YFINANCE_TIMEOUT_S`` (15 s, matching the other REST vendors) to the
-``history()`` call; yfinance raises on timeout and the source-layer
-``except Exception`` coerces it to ``None`` per the ``data/base.py``
-no-raise contract.
-
-``yfinance`` is not installed in the test environment, so the tests stub
-``sys.modules["yfinance"]`` with a fake ``Ticker`` whose ``history()``
-honours the ``timeout`` kwarg the way the real transport does: it blocks,
-then raises once the deadline elapses. (The real yfinance raises
-``requests.exceptions.ConnectTimeout``/``ReadTimeout`` — both
-``OSError`` subclasses; the fake raises builtin ``TimeoutError`` since
-``requests`` is only a transitive dependency. The source-layer behavior
-under test — ``Exception`` → ``None`` — is identical for either.)
+The 10-second argument preserves yfinance 1.3.0's history default. These
+tests stub ``sys.modules["yfinance"]`` to check argument forwarding and
+existing result/error handling, not real transport timing. Bootstrap
+requests and internal retries can take the whole fetch beyond this timeout.
 """
 from __future__ import annotations
 
 import sys
-import threading
-import time
-from concurrent.futures import ThreadPoolExecutor
 from types import ModuleType
 
 import pandas as pd
@@ -72,72 +57,72 @@ def fake_yfinance(monkeypatch):
     return behaviors, calls
 
 
-def test_timeout_kwarg_reaches_history_call(fake_yfinance) -> None:
-    """The timeout is passed to the actual network call (``history()``),
-    not just stored on a config object."""
+@pytest.mark.parametrize(
+    ("interval", "period", "prepost"),
+    [("1d", "2y", False), ("5m", "60d", True)],
+)
+def test_timeout_kwarg_reaches_history_call(fake_yfinance, interval, period, prepost) -> None:
+    """Explicitly preserve the history timeout and existing request options."""
+    behaviors, calls = fake_yfinance
+    behaviors["AMD"] = lambda ticker, kwargs: _one_bar_frame()
+
+    candles = yf_src.fetch_live_data("AMD", interval)
+
+    assert calls == [("AMD", {
+        "period": period, "interval": interval, "prepost": prepost, "timeout": 10,
+    })]
+    assert yf_src.YFINANCE_TIMEOUT_S == 10
+    assert candles is not None and len(candles) == 1
+    bar = candles[0]
+    assert (bar.open, bar.high, bar.low, bar.close, bar.volume) == (100, 101, 99, 100.5, 1_000)
+
+
+def test_timeout_constant_is_read_at_call_time(fake_yfinance, monkeypatch) -> None:
+    behaviors, calls = fake_yfinance
+    behaviors["AMD"] = lambda ticker, kwargs: pd.DataFrame()
+    monkeypatch.setattr(yf_src, "YFINANCE_TIMEOUT_S", 0.2)
+
+    assert yf_src.fetch_live_data("AMD", "1d") is None
+    assert calls == [("AMD", {
+        "period": "2y", "interval": "1d", "prepost": False, "timeout": 0.2,
+    })]
+
+
+@pytest.mark.parametrize("error_type", [TimeoutError, OSError, ValueError, KeyError])
+def test_history_errors_return_none_with_diagnostic(fake_yfinance, capsys, error_type) -> None:
+    """Errors reaching the adapter retain the no-raise contract."""
+    behaviors, calls = fake_yfinance
+    error = error_type("history failed")
+
+    def _fail(ticker: str, kwargs: dict):
+        raise error
+
+    behaviors["AMD"] = _fail
+
+    assert yf_src.fetch_live_data("AMD", "1d") is None
+    assert len(calls) == 1  # The adapter adds no retry of its own.
+    assert capsys.readouterr().out == f"Live fetch failed: {error}\n"
+
+
+def test_empty_history_returns_none(fake_yfinance, capsys) -> None:
     behaviors, calls = fake_yfinance
     behaviors["AMD"] = lambda ticker, kwargs: pd.DataFrame()
 
-    assert yf_src.fetch_live_data("AMD", "1d") is None  # empty frame → None
-
-    assert calls, "Ticker.history() was never called"
-    _ticker, kwargs = calls[0]
-    assert kwargs["timeout"] == yf_src.YFINANCE_TIMEOUT_S
-    assert yf_src.YFINANCE_TIMEOUT_S == 15  # matches the other vendors
+    assert yf_src.fetch_live_data("AMD", "1d") is None
+    assert len(calls) == 1
+    assert capsys.readouterr().out == ""
 
 
-def test_stalled_fetch_returns_none_promptly(fake_yfinance, monkeypatch) -> None:
-    """A stalled connection raises (timeout) instead of hanging forever:
-    the fetch returns ``None`` promptly per the no-raise contract."""
+def test_nonempty_history_with_invalid_ohlc_returns_empty_list(fake_yfinance) -> None:
     behaviors, _calls = fake_yfinance
-    monkeypatch.setattr(yf_src, "YFINANCE_TIMEOUT_S", 0.2)
-    never_set = threading.Event()
+    frame = _one_bar_frame()
+    frame["Open"] = float("nan")
+    behaviors["AMD"] = lambda ticker, kwargs: frame
 
-    def _hang(ticker: str, kwargs: dict):
-        timeout = kwargs.get("timeout")
-        assert timeout == 0.2, "timeout override must reach the network call"
-        # Simulate the transport honouring the timeout: block, then raise
-        # once the deadline elapses (never_set is never set).
-        if not never_set.wait(timeout):
-            raise TimeoutError(f"stalled connection for {ticker}")
-        raise AssertionError("unreachable")
-
-    behaviors["STALL"] = _hang
-
-    start = time.monotonic()
-    assert yf_src.fetch_live_data("STALL", "1d") is None
-    elapsed = time.monotonic() - start
-    assert elapsed < 5, f"stalled fetch hung for {elapsed:.1f}s"
+    assert yf_src.fetch_live_data("AMD", "1d") == []
 
 
-def test_timed_out_fetch_releases_worker(fake_yfinance, monkeypatch) -> None:
-    """Downstream order effect: a timed-out fetch releases its worker.
+def test_missing_yfinance_returns_none(monkeypatch) -> None:
+    monkeypatch.setitem(sys.modules, "yfinance", None)
 
-    With a single-worker pool, the fast fetch is queued *behind* the
-    stalled one. Without the timeout the worker would be occupied forever
-    and ``fast.result()`` would raise ``concurrent.futures.TimeoutError``;
-    with the fix the stalled fetch resolves to ``None`` quickly and the
-    fast fetch still completes.
-    """
-    behaviors, _calls = fake_yfinance
-    monkeypatch.setattr(yf_src, "YFINANCE_TIMEOUT_S", 0.2)
-    never_set = threading.Event()
-
-    def _hang(ticker: str, kwargs: dict):
-        if not never_set.wait(kwargs["timeout"]):
-            raise TimeoutError(f"stalled connection for {ticker}")
-        raise AssertionError("unreachable")
-
-    def _fast(ticker: str, kwargs: dict):
-        return _one_bar_frame()
-
-    behaviors["STALL"] = _hang
-    behaviors["FAST"] = _fast
-
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        slow = pool.submit(yf_src.fetch_live_data, "STALL", "1d")
-        fast = pool.submit(yf_src.fetch_live_data, "FAST", "1d")
-
-        candles = fast.result(timeout=10)
-        assert candles is not None and len(candles) == 1
-        assert slow.result(timeout=10) is None
+    assert yf_src.fetch_live_data("AMD", "1d") is None
