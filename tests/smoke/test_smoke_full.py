@@ -501,6 +501,7 @@ def check_96_stream_readiness_and_corrections(app) -> None:
             cancel_job("_reload_job")
             cancel_job("_poll_job")
             app._stream_ctrl = StreamController()
+            app._chart_loader.streams = app._stream_ctrl
             app._sync_stream_aliases()
             app._full_cache[key] = raws
             app._set_data_state(primary_raw=raws, primary=raws)
@@ -574,6 +575,7 @@ def check_96_stream_readiness_and_corrections(app) -> None:
             app._full_cache.clear()
             app._full_cache.update(old_cache)
             app._stream_ctrl = old_ctrl
+            app._chart_loader.streams = old_ctrl
             app._sync_stream_aliases()
             app._set_data_state(primary_raw=old_raw, primary=old_primary)
             app._confirmed_primary_ticker, app._confirmed_compare_ticker = old_confirmed
@@ -1383,9 +1385,9 @@ def check_d10_poll_tick_offloads_fetch_to_executor(app) -> None:
         _pump(app, 0.3)  # let self.after(0, _finish) flush
         assert called["n"] >= 1, (
             f"fetcher was not called via executor (called={called['n']})")
-        # Prefetched slot should be cleared after _load_data consumes it.
-        assert app._prefetched_raw is None, (
-            "prefetched_raw leak after _load_data consumed results")
+        assert app._primary and app._primary[-1].close == 100.5, (
+            "typed poll completion did not publish provider bars")
+        assert not app._chart_loader.pending, "completed poll request still pending"
     finally:
         if prev_fetcher is not None:
             _data_pkg.DATA_SOURCES[src] = prev_fetcher
@@ -1394,10 +1396,11 @@ def check_d10_poll_tick_offloads_fetch_to_executor(app) -> None:
         app._primary = prev_primary
         app._primary_raw = prev_primary_raw
         app.candles = prev_primary
-        app._full_cache = prev_full_cache
+        app._full_cache.clear()
+        app._full_cache.update(prev_full_cache)
         app.ticker_var.set(prev_ticker)
         app.interval_var.set(prev_interval)
-        app._prefetched_raw = None
+        app._bump_fetch_token()
         _pump(app, 0.1)
     print("  [OK] poll tick offloads fetcher to executor "
           f"(main thread <{main_thread_ms:.0f}ms vs "

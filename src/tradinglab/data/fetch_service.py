@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Iterable, Mapping, MutableMapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any
@@ -10,6 +11,8 @@ from ..core import reference_data as _reference_data
 from ..core.bars import Bars
 from ..models import Candle
 from .base import DATA_SOURCES
+
+LOG = logging.getLogger(__name__)
 
 CacheKey = tuple[str, str, str]
 StatusFn = Callable[[str], None]
@@ -389,11 +392,12 @@ class FetchService:
                 try:
                     result = fut.result()
                 except Exception:  # noqa: BLE001
+                    LOG.exception("Background fetch failed")
                     result = None
                 try:
                     on_done(result)
                 except Exception:  # noqa: BLE001
-                    pass
+                    LOG.exception("Background fetch completion failed")
                 return
             try:
                 track_after(poll_ms, _check)

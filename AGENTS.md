@@ -1139,6 +1139,7 @@ These files are **never** committed to git. Use them for working memory.
 | Update-check banner + banner cleanup | `src/tradinglab/gui/update_check.py` (UpdateCheckMixin, wave 2) |
 | Sandbox property aliases | `src/tradinglab/backtest/sandbox_app_aliases.py` (SandboxAliasMixin, wave 2) |
 | Fetch executor / cache | `src/tradinglab/data/fetch_service.py`, `app.py` `_load_data_async` / `_load_events_async` |
+| Chart-load transaction / publication | `data/chart_load.py` (`ChartLoadCoordinator`); `ChartApp` snapshots controls and delivers typed completions. Interactive, synchronous and polling loads share request acceptance; replay bypasses it. |
 | Data source registry + `internal` flag | `src/tradinglab/data/base.py` (see §7.25 — `register_source(..., internal=True)`, `user_visible_sources()`) |
 | Source-list resync + "Auto" re-resolve after a registration change | `src/tradinglab/gui/source_registry_app.py` (SourceRegistryAppMixin) |
 | Polling / next-bar tick | `src/tradinglab/gui/polling.py` |

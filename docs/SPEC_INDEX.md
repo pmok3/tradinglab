@@ -44,6 +44,7 @@ not an exhaustive enumeration.**
 | `data/__init__.spec.md` | `DATA_SOURCES` registry. |
 | `data/_http.spec.md` | Shared credential-safe HTTP opener — `credentialed_opener()` strips auth on cross-host 30x; `MAX_RESPONSE_BYTES = 8 MB`. |
 | `data/base.spec.md` | `DataFetcher` protocol. |
+| `data/chart_load.spec.md` | Headless chart-load requests, typed results, shared generation/selection gates and primary/compare publication. |
 | `data/verify.spec.md` | Credential verification ("Test connection") — vendor-agnostic `VerifyResult` + status taxonomy + `register_verifier` / `verify_vendor`. |
 | `data/credential_store.spec.md` | Versioned per-vendor DPAPI credential store — v2 schema, v1 auto-migration, persisted verification verdicts (status + timestamp only). |
 | `data/schwab_callback.spec.md` | Temporary HTTPS loopback OAuth receiver, local certificate, exact state/URI validation and cancellation. |

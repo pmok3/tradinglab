@@ -75,6 +75,7 @@ from .data import (
     source_supports_range,
     user_visible_sources,
 )
+from .data.chart_load import ChartLoadCoordinator, ChartLoadRequest, ChartLoadResult, ChartSelection
 from .data.stream_controller import StreamController
 from .data.today_upsample import (
     SUPPORTED_INTERVALS as _DAILY_UPSAMPLE_INTERVALS,
@@ -826,6 +827,10 @@ class ChartApp(
         self._stream_ctrl = StreamController()
         self._stream_status_message = ""
         self._sync_stream_aliases()
+        self._chart_loader = ChartLoadCoordinator(
+            self._data_ctrl, self._stream_ctrl, self._view,
+            is_stale=lambda bars, interval: self._cache_is_stale(bars, interval),
+        )
         self._renderer = ChartRenderer()
         # Render topology state (spec §6.3/§7)
         self._panel_state: dict[str, dict[str, Any]] = self._renderer.panel_state
@@ -1082,13 +1087,6 @@ class ChartApp(
         # on successful advance or explicit user reload.
         self._poll_retry_count = 0
         self._poll_retry_expected_min_ts: float | None = None
-        # One-shot prefetch hand-off used by ``_next_bar_fetch_tick``:
-        # when the poll tick runs the fetcher on the thread pool, it
-        # stashes the results here and then re-enters ``_load_data`` on
-        # the main thread. ``_load_data`` consumes this dict instead of
-        # calling the (blocking) fetcher itself. Always reset to None
-        # by the caller after ``_load_data`` returns.
-        self._prefetched_raw: dict[str, Any] | None = None
         self._visible_lo = 0
         self._visible_hi = 0
         # Theme state lives in ``ThemeController``; keep the aliases above
@@ -2184,6 +2182,11 @@ class ChartApp(
                     self.compare_var.set(False)
             return
 
+        if self._chart_loader.pending:
+            # A compare edit supersedes the entire pair, not just one side.
+            self._load_data_async()
+            return
+
         # View-safe compare toggle (compare-toggle-drilldown-preserve).
         # When the user is viewing an OLD window (reached by double-click
         # drill OR manual pan/zoom) that the compare's cached 5m history
@@ -3093,564 +3096,105 @@ class ChartApp(
             poll_ms=poll_ms,
         )
 
-    def _load_data_async(self) -> None:
-        """N7: async user-triggered load. Probes cache; on miss, runs
-        the fetcher on ``_fetch_executor`` and marshals the result back
-        to the Tk thread via the ``_prefetched_raw`` slot — same
-        hand-off pattern as ``_next_bar_fetch_tick``.
+    def _chart_selection(self) -> ChartSelection:
+        compare_on = bool(self.compare_var.get())
+        return ChartSelection(
+            self.source_var.get(), self.ticker_var.get().strip().upper(),
+            self.interval_var.get(), compare_on,
+            self.compare_ticker_var.get().strip().upper() if compare_on else "",
+            bool(self.prepost_var.get()),
+        )
 
-        Cache-hit-only invocations (both sides fresh in ``_full_cache``)
-        short-circuit to ``_load_data()`` directly so M2's deferred
-        render still kicks in. Fetch errors and missing async infra
-        fall back to a synchronous ``_load_data()`` so the user
-        always gets a render attempt.
-
-        Stale-completion guard: ``_fetch_token`` is bumped before
-        ``executor.submit``; if a newer ``_load_data_async`` /
-        ``_next_bar_fetch_tick`` / ``_load_data`` runs while the fetch
-        is in flight, the completion callback no-ops.
-
-        Used by user-triggered code paths (entry bindings, watchlist
-        double-click, scheduled reload, explicit axis change). Paths
-        that immediately read ``self._primary`` after loading
-        (``_reset_view``, ``_zoom_5m_for_date``, ``_reload_preserving_drilldown``,
-        startup) intentionally still call ``_load_data`` synchronously.
-        """
-        # Sandbox owns the primary slot while a session is active —
-        # async fetch path is bypassed. Routed through register_ticker
-        # synchronously (the user accepted brief UI freezes for
-        # uncached tickers — locked decision 3 of 1c-redux).
+    def _load_sandbox_selection(self) -> bool:
         if self._is_sandbox_active():
-            # In sandbox, the chart's xlim is pre-allocated to the
-            # full session range (``_sandbox_full_session_xlim``) and
-            # must stay pinned across compare-ticker swaps. The
-            # typing-driven reload path (``_do_scheduled_reload``)
-            # cleared ``_preserve_xlim_on_render = False`` just before
-            # calling us, which would cause ``_install_sandbox_compare_series``'
-            # ``_render`` call to fall back to the default 200-bar
-            # right-edge window — the user sees the primary chart
-            # "jump" on every typed compare ticker. Re-arm preserve
-            # so _render keeps the existing (full-session) xlim.
             self._preserve_xlim_on_render = True
-            # Re-resolve here too — see the sandbox branch in ``_load_data``.
             self._reresolve_symbols_for_source()
             raw_primary = self.ticker_var.get().strip().upper()
             if raw_primary:
                 self._sandbox_register_and_focus(raw_primary)
-            # Mirror for compare: when compare is on (or the
-            # compare_ticker_var has changed and the user expects the
-            # compare slot to follow), route through the sandbox
-            # compare-register path. Without this, typing a new ticker
-            # in the compare entry or cycling the compare slot via
-            # the watchlist would silently no-op in sandbox mode (b38).
             self._sandbox_sync_compare_to_var()
+            return True
+        return False
+
+    def _load_data_async(self) -> None:
+        """Request an interactive chart load; only UI delivery runs on Tk."""
+        if self._chart_loader.closed or self._load_sandbox_selection():
             return
-        self._reresolve_symbols_for_source()
-        src = self.source_var.get()
-        interval = self.interval_var.get()
-        raw_primary = self.ticker_var.get().strip().upper()
-        compare_on = bool(self.compare_var.get())
-        if not self._stream_ctrl.matches(src, raw_primary, interval, compare_on=compare_on):
-            self._stop_stream()
-        # Re-arm the (flagged) prefetch scheduler for the new active context —
-        # deferred off this perf-critical path; no-op when the feature is off.
         self._prefetch_observe_soon()
-        raw_compare = (self.compare_ticker_var.get().strip().upper()
-                       if compare_on else "")
-        primary_key = ((src, raw_primary, interval)
-                       if raw_primary else None)
-        compare_key = ((src, raw_compare, interval)
-                       if raw_compare else None)
-
-        def _fresh(key) -> bool:
-            if key is None:
-                return True  # nothing needed for this side
-            cached = self._full_cache.get(key)
-            return bool(cached) and not self._cache_is_stale(cached, interval)
-
-        # Cache-hit-only fast path: no network needed → defer to the
-        # synchronous loader, which itself routes through M2's
-        # `_request_deferred_render` for the all-cache-hit branch.
-        if _fresh(primary_key) and (compare_key is None or _fresh(compare_key)):
-            self._load_data()
-            return
-
-        fetcher = DATA_SOURCES.get(src)
-        executor = getattr(self, "_fetch_executor", None)
-        if fetcher is None or executor is None:
-            # No async infrastructure available — fall back to sync.
-            self._load_data()
-            return
-
-        try:
-            self._status.info(f"Loading {raw_primary} {interval}…")
-        except Exception:  # noqa: BLE001
-            pass
-
-        # Bump token BEFORE submit so a follow-up load supersedes us.
-        token = self._bump_fetch_token()
-
-        def _work():
-            p: list = []
-            c: list = []
-            if raw_primary:
-                try:
-                    p = fetcher(raw_primary, interval) or []
-                except Exception:  # noqa: BLE001
-                    p = []
-            if raw_compare:
-                try:
-                    c = fetcher(raw_compare, interval) or []
-                except Exception:  # noqa: BLE001
-                    c = []
-            # H2: piggy-back the disk-cache read onto the worker so the
-            # Tk thread doesn't pay JSON parsing latency for the merge
-            # or the network-failure fallback. disk_cache.save() uses
-            # atomic os.replace so concurrent reads on the worker are
-            # race-safe against any Tk-thread save still in flight.
-            p_disk: list | None = None
-            c_disk: list | None = None
-            try:
-                if raw_primary:
-                    p_disk = disk_cache.load(src, raw_primary, interval)
-            except Exception:  # noqa: BLE001
-                p_disk = None
-            try:
-                if raw_compare:
-                    c_disk = disk_cache.load(src, raw_compare, interval)
-            except Exception:  # noqa: BLE001
-                c_disk = None
-            # H4 (audit "ticker-switch latency"): do the
-            # ``disk_cache.merge_candles`` + ``disk_cache.save`` here
-            # on the worker so ``_load_data`` doesn't pay the O(N)
-            # merge + atomic-replace I/O on the Tk thread. The new
-            # merged lists are stashed alongside the prefetch so the
-            # Tk-thread phase can short-circuit the merge block.
-            # Save is also safe to run here because ``disk_cache.save``
-            # uses ``os.replace`` (atomic on Windows + POSIX), so a
-            # concurrent read on a sibling worker thread either sees
-            # the OLD file or the NEW file — never a torn one.
-            p_merged: list | None = None
-            c_merged: list | None = None
-            try:
-                if p:
-                    p_merged = disk_cache.merge_candles(p_disk, p, presorted=True)
-                    # Skip the multi-MB rewrite when the trailing fetch
-                    # added nothing new (fully pre-downloaded / sealed
-                    # universe) — ~450 ms saved per switch on a 115k-bar
-                    # 5m file. See disk_cache.merge_adds_nothing.
-                    if not disk_cache.merge_adds_nothing(p_disk, p_merged):
-                        disk_cache.save(src, raw_primary, interval, p_merged)
-            except Exception:  # noqa: BLE001
-                p_merged = None
-            try:
-                if c:
-                    c_merged = disk_cache.merge_candles(c_disk, c, presorted=True)
-                    if not disk_cache.merge_adds_nothing(c_disk, c_merged):
-                        disk_cache.save(src, raw_compare, interval, c_merged)
-            except Exception:  # noqa: BLE001
-                c_merged = None
-            return p, c, p_disk, c_disk, p_merged, c_merged
-
-        try:
-            fut = executor.submit(_work)
-        except Exception:  # noqa: BLE001
-            self._load_data()
-            return
-
-        def _on_result(result) -> None:
-            # Stale-token guard: a newer fetch superseded us.
-            if token != self._fetch_token:
-                return
-            if result is None:
-                p_raw, c_raw = None, None
-                p_disk, c_disk = None, None
-                p_merged, c_merged = None, None
-            elif len(result) == 6:
-                p_raw, c_raw, p_disk, c_disk, p_merged, c_merged = result
-            else:
-                # Back-compat with any out-of-tree call site that still
-                # uses the old 4-tuple shape.
-                p_raw, c_raw, p_disk, c_disk = result
-                p_merged, c_merged = None, None
-            self._prefetched_raw = {
-                "token": token,
-                "src": src,
-                "interval": interval,
-                "primary_ticker": raw_primary,
-                "compare_ticker": raw_compare,
-                "primary": p_raw,
-                "compare": c_raw,
-                # H2: disk pre-loads, consumed by _load_data so it
-                # doesn't re-read the JSON file on the Tk thread.
-                "primary_disk": p_disk,
-                "compare_disk": c_disk,
-                "disk_preloaded": True,
-                # H4: pre-merged + pre-saved by the worker so
-                # _load_data can skip its merge_candles + save block.
-                "primary_merged": p_merged,
-                "compare_merged": c_merged,
-                "merge_preloaded": True,
-            }
-            try:
-                self._load_data()
-            finally:
-                self._prefetched_raw = None
-
-        self._await_future_on_tk(fut, _on_result)
+        self._start_chart_load(asynchronous=True)
 
     def _load_data(self) -> None:
-        """Load primary (and, if enabled, compare) candles + render.
-
-        Two-phase: an in-memory probe first, then an on-demand disk
-        load submitted to the worker pool. The render runs once both
-        sides have resolved. Synchronous — see ``_load_data_async`` for
-        the user-triggered async wrapper that offloads fetcher HTTP
-        calls to ``_fetch_executor`` (N7).
-        """
-        # This render services whatever load is current (including a
-        # just-completed explicit source/interval switch). Tell the view
-        # controller: lower the switch-in-flight guard (so normal polling
-        # resumes) and learn whether THIS load completes an explicit async
-        # switch. While the switch was in flight, ``render_directives`` HELD
-        # the view on every intervening render (poll tick, prefetch daily-synth
-        # refresh, reference redraw, deferred idle render) so none of them
-        # could consume the durable time-remap intent or let a racing
-        # index-preserve re-arm win. When ``was_completing_switch`` is True the
-        # switch's own render (below) applies + consumes that intent — and we
-        # render SYNCHRONOUSLY so nothing can slip in first (this is the
-        # generic replacement for the old ``_pending_axis_switch_time_preserve``
-        # re-assertion; audit ``view-intent-controller`` / earlier
-        # ``source-switch-view-preserve``).
-        was_completing_switch = self._view.begin_completing_load()
-        # Sandbox replay owns primary-slot updates while active; route
-        # ticker-entry / watchlist double-clicks through the controller's
-        # register_ticker path instead of the regular cache+render path.
-        # The controller's visible-list contract preserves identity for
-        # the indicator + series cache so this is the only correct way
-        # to surface a new ticker mid-session.
-        if self._is_sandbox_active():
-            # See ``_load_data_async``: the typing-driven reload path
-            # cleared ``_preserve_xlim_on_render`` just before calling
-            # us, but in sandbox the full-session xlim must stay
-            # pinned across compare-ticker swaps. Re-arm it.
-            self._preserve_xlim_on_render = True
-            # Sandbox returns early — re-resolve here too, or a Quant row
-            # registers ``VIX`` while cache/universe hold ``^VIX``.
-            self._reresolve_symbols_for_source()
-            raw_primary = self.ticker_var.get().strip().upper()
-            if raw_primary:
-                self._sandbox_register_and_focus(raw_primary)
-            self._sandbox_sync_compare_to_var()
+        """Synchronous chart load for startup and immediate drilldown callers."""
+        if self._chart_loader.closed or self._load_sandbox_selection():
             return
-        # Bump fetch token: any in-flight callbacks become stale (spec §9.1).
-        self._bump_fetch_token()
+        self._start_chart_load(asynchronous=False)
+
+    def _start_chart_load(self, *, asynchronous: bool, refresh: bool = False) -> None:
+        if self._chart_loader.closed:
+            return
         self._reresolve_symbols_for_source()
-        src = self.source_var.get()
-        interval = self.interval_var.get()
-        raw_primary = self.ticker_var.get().strip().upper()
-        primary_key = (src, raw_primary, interval)
-        compare_on = bool(self.compare_var.get())
-        if not self._stream_ctrl.matches(src, raw_primary, interval, compare_on=compare_on):
+        selection = self._chart_selection()
+        if not self._stream_ctrl.matches(
+            selection.source, selection.ticker, selection.interval, compare_on=selection.compare_on,
+        ):
             self._stop_stream()
-        compare_key: tuple[str, str, str] | None = None
-        raw_compare: str = ""
-        if compare_on:
-            raw_compare = self.compare_ticker_var.get().strip().upper()
-            if raw_compare:
-                compare_key = (src, raw_compare, interval)
-
-        try:
-            self._status.info(f"Loading {raw_primary} {interval}…")
-        except Exception:  # noqa: BLE001
-            pass
-
-        # Phase 1: memory probe. Sealed OHLCV bars are immutable, so the
-        # memory cache is trusted as long as the most recent bar isn't so
-        # old that we must be missing sealed bars produced while the user
-        # was looking elsewhere. Staleness is interval-aware
-        # (``_cache_is_stale``).
-        mem_primary = self._full_cache.get(primary_key)
-        if mem_primary is not None:
-            # LRU touch: mark this key as recently used so companion
-            # prefetches don't FIFO-evict the active view.
-            try:
-                self._full_cache.move_to_end(primary_key)
-            except KeyError:
-                pass
-        primary_raw = (
-            mem_primary
-            if mem_primary and not self._cache_is_stale(mem_primary, interval)
-            else None
-        )
-        try:
-            if primary_raw is not None:
-                self._status.info(
-                    f"Cache hit (memory): {raw_primary}/{interval} "
-                    f"({len(primary_raw)} bars)")
-            elif mem_primary is not None:
-                self._status.info(
-                    f"Cache stale: {raw_primary}/{interval} "
-                    "— refetch required")
-            else:
-                self._status.info(f"Cache miss: {raw_primary}/{interval}")
-        except Exception:  # noqa: BLE001
-            pass
-        mem_compare = self._full_cache.get(compare_key) if compare_key else None
-        if mem_compare is not None and compare_key is not None:
-            try:
-                self._full_cache.move_to_end(compare_key)
-            except KeyError:
-                pass
-        compare_raw = (
-            mem_compare
-            if mem_compare and not self._cache_is_stale(mem_compare, interval)
-            else None
-        )
-
-        # Phase 2: source fetch for any side still missing (spec §9). We
-        # intentionally do NOT consult the disk cache as a primary source
-        # — that would risk showing stale historical data and miss any
-        # post-mortem revisions the provider has issued since we last ran.
-        # Disk is only touched in the network-failure fallback below and
-        # for the merge-on-save path.
-        #
-        # If the poll-tick path already ran the fetcher on the worker
-        # pool, its results are stashed in ``self._prefetched_raw``;
-        # consume them here to avoid re-blocking the main thread.
-        # Validity is keyed on (src, interval, primary_ticker,
-        # compare_ticker) so a superseded ticker load ignores a stale
-        # prefetch. Token gating is handled by the caller.
-        prefetched = self._prefetched_raw
-        prefetched_valid = bool(
-            prefetched
-            and prefetched.get("src") == src
-            and prefetched.get("interval") == interval
-            and prefetched.get("primary_ticker") == raw_primary
-            and prefetched.get("compare_ticker") == raw_compare
-        )
-        # H2: disk-cache reads piggy-backed onto the async worker. When
-        # the prefetched-raw payload is valid for this load, consume
-        # the cached disk reads instead of paying JSON parsing latency
-        # on the Tk thread for the merge / fallback paths below.
-        disk_preloaded = bool(prefetched_valid and prefetched.get("disk_preloaded"))
-        primary_disk_cached = (
-            prefetched.get("primary_disk") if disk_preloaded else None
-        )
-        compare_disk_cached = (
-            prefetched.get("compare_disk") if disk_preloaded else None
-        )
-
-        def _disk_for(key, side: str):
-            if disk_preloaded:
-                return (primary_disk_cached if side == "primary"
-                        else compare_disk_cached)
-            return self._disk_load(key)
-        fetcher = DATA_SOURCES.get(src)
-        primary_failed = False
-        compare_failed = False
-        prefetched_primary_used = False
-        prefetched_compare_used = False
-        if (primary_raw is None or (prefetched_valid and self._stream_ctrl.subscribed)) and fetcher is not None:
-            if prefetched_valid:
-                primary_raw = prefetched.get("primary") or []
-                prefetched_primary_used = bool(primary_raw)
-            else:
-                try:
-                    primary_raw = fetcher(primary_key[1], interval) or []
-                except Exception:  # noqa: BLE001
-                    primary_raw = []
-            if not primary_raw:
-                primary_failed = True
-                # Last-resort fallback: serve stale in-memory or disk data
-                # rather than go blank if the network is down.
-                primary_raw = (
-                    mem_primary
-                    or (_disk_for(primary_key, "primary") or [])
-                )
-                if primary_raw:
-                    primary_failed = False
-        if compare_key is not None and compare_raw is None and fetcher is not None:
-            if prefetched_valid:
-                compare_raw = prefetched.get("compare") or []
-                prefetched_compare_used = bool(compare_raw)
-            else:
-                try:
-                    compare_raw = fetcher(compare_key[1], interval) or []
-                except Exception:  # noqa: BLE001
-                    compare_raw = []
-            if not compare_raw:
-                compare_failed = True
-                compare_raw = (
-                    mem_compare
-                    or (_disk_for(compare_key, "compare") or [])
-                )
-                if compare_raw:
-                    compare_failed = False
-
-        # Bad-ticker rejection (spec §12): revert StringVar to last confirmed.
-        # Audit ``bad-ticker-friendlier``: the status message used to
-        # reveal the internal vendor name (``"... not found (yfinance)."``)
-        # which leaks an implementation detail and confuses a user who
-        # has only ever seen the friendly "Yahoo Finance" label of the
-        # source dropdown (or worse: doesn't know what "yfinance" is at
-        # all). Drop the parenthetical and replace with an actionable
-        # hint. The smoke check at §12 still matches against
-        # ``"not found"`` so the phrase is preserved.
-        if primary_failed and raw_primary:
-            try:
-                self.ticker_var.set(self._confirmed_primary_ticker)
-                self._status.error(self._ratio_failure_message(raw_primary))
-            except Exception:  # noqa: BLE001
-                pass
+        request = self._chart_loader.begin(selection, refresh=refresh)
+        self._status.info(f"Loading {selection.ticker} {selection.interval}…")
+        if not asynchronous or (not refresh and self._chart_loader.cache_hit(request)):
+            self._accept_chart_load(request)
             return
-        if compare_failed and raw_compare:
-            try:
-                self.compare_ticker_var.set(self._confirmed_compare_ticker)
-                self._status.error(self._ratio_failure_message(raw_compare))
-            except Exception:  # noqa: BLE001
-                pass
-            # keep going with primary-only
-
-        # If we just fetched (cache was missing or stale), merge with any
-        # pre-existing disk cache so historical bars that fall outside the
-        # provider's current window (e.g. yfinance's 60-day intraday cap)
-        # are retained across sessions. New bars always win on overlap so
-        # provider revisions propagate.
-        #
-        # H4 (audit "ticker-switch latency"): when ``_load_data_async``
-        # ran the merge + ``disk_cache.save`` on the worker thread,
-        # ``prefetched["primary_merged"]`` / ``["compare_merged"]`` is
-        # the already-merged list and the on-disk file is already
-        # up-to-date. Consume the pre-merged result and skip the
-        # ``merge_candles`` + ``disk_cache.save`` calls below — those
-        # would re-do work the worker just finished.
-        merge_preloaded = bool(prefetched_valid and prefetched.get("merge_preloaded"))
-        primary_merged_cached = (
-            prefetched.get("primary_merged") if merge_preloaded else None
+        executor = getattr(self, "_fetch_executor", None)
+        if request.fetcher is None or executor is None:
+            self._accept_chart_load(request)
+            return
+        try:
+            future = executor.submit(self._chart_loader.fetch, request)
+        except RuntimeError:
+            logger.exception("Chart load submission failed; using synchronous loader")
+            self._accept_chart_load(request)
+            return
+        self._await_future_on_tk(
+            future, lambda result: self._accept_chart_load(request, result or ChartLoadResult(request)),
         )
-        compare_merged_cached = (
-            prefetched.get("compare_merged") if merge_preloaded else None
-        )
-        if primary_raw and mem_primary is not primary_raw:
-            if merge_preloaded and primary_merged_cached is not None:
-                primary_raw = primary_merged_cached
-            else:
-                primary_raw = disk_cache.merge_candles(
-                    _disk_for(primary_key, "primary"), primary_raw,
-                )
-        if compare_key and compare_raw and mem_compare is not compare_raw:
-            if merge_preloaded and compare_merged_cached is not None:
-                compare_raw = compare_merged_cached
-            else:
-                compare_raw = disk_cache.merge_candles(
-                    _disk_for(compare_key, "compare"), compare_raw,
-                )
 
-        primary_raw_ref = primary_raw
-        compare_raw_ref = compare_raw
-        primary_raw = list(primary_raw or [])
-        compare_raw = list(compare_raw) if compare_raw is not None else []
-
-        # Store back into both memory + disk caches so the next session
-        # has persistent access to what we've seen. Cache stores the
-        # truthful (provider-as-is) candles BEFORE we layer today's
-        # synthetic daily bar on top — keeps the on-disk + in-memory
-        # caches faithful, so the next provider fetch that includes
-        # today's real daily bar simply lands here and overwrites our
-        # synth at the next render boundary.
-        #
-        # H4: skip the ``disk_cache.save`` when the worker already did
-        # it. Memory cache still gets updated here (the worker's merge
-        # is per-side and the memory cache write needs to happen on
-        # the Tk thread for the token-gated visibility contract).
-        if primary_raw:
-            self._full_cache[primary_key] = primary_raw
-            self._trim_full_cache()
-            self._confirmed_primary_ticker = raw_primary
-            if mem_primary is not primary_raw and not merge_preloaded:
-                disk_cache.save(*primary_key, primary_raw)
-        if compare_key and compare_raw:
-            self._full_cache[compare_key] = compare_raw
-            self._trim_full_cache()
-            self._confirmed_compare_ticker = raw_compare
-            if mem_compare is not compare_raw and not merge_preloaded:
-                disk_cache.save(*compare_key, compare_raw)
-
-        # Today's-bar upsampling for daily-class views: most providers
-        # lag the live session by ~1 day, so 1d shows "everything up
-        # to yesterday" mid-session while 5m shows the current bar.
-        # When we have intraday data cached for the same symbol,
-        # aggregate today's intraday bars into a synthetic daily bar
-        # and append it. Audit ``daily-today-upsample``.
-        primary_raw = self._maybe_upsample_today_daily(
-            primary_raw, source=src, symbol=raw_primary, interval=interval,
-        )
-        if compare_key and compare_raw:
-            compare_raw = self._maybe_upsample_today_daily(
-                compare_raw, source=src, symbol=raw_compare,
-                interval=interval,
-            )
-
-        # Apply pair filter + align. Always run — even in single-chart
-        # mode — so the Pre/Post toggle actually drops extended-hours
-        # bars when disabled (spec §5).
-        if compare_on and compare_raw:
-            primary, compare = self._apply_pair_filter_and_align(
-                primary_raw, compare_raw,
-            )
-        else:
-            primary, _ = self._apply_pair_filter_and_align(
-                primary_raw, None,
-            )
-            compare = []
-
+    def _accept_chart_load(
+        self, request: ChartLoadRequest, result: ChartLoadResult | None = None,
+    ) -> None:
+        if self._chart_loader.closed or self._is_sandbox_active():
+            return
         old_primary = self._primary
         old_compare = self._compare
-        self._set_data_state(
-            primary_raw=primary_raw,
-            primary=primary,
-            compare_raw=compare_raw,
-            compare=compare,
+        completion = self._chart_loader.complete(
+            request, result, current=self._chart_selection(),
+            pinned_tickers=self._pinned_ticker_union(),
         )
-        # Fresh provider reloads replace the visible lists. Drop the
-        # previous entries so fingerprint fallback cannot rebind stale
-        # indicator arrays onto the replacement lists.
-        if prefetched_primary_used:
+        if completion is None:
+            return
+        if completion.stream_rejected:
+            self._schedule_next_bar_fetch()
+            self._update_stream_health()
+            return
+        selection = request.selection
+        raw_primary, raw_compare, interval = selection.ticker, selection.compare_ticker, selection.interval
+        if completion.primary_failed:
+            self.ticker_var.set(self._confirmed_primary_ticker)
+            self._status.error(self._ratio_failure_message(raw_primary))
+            return
+        if completion.compare_failed:
+            self.compare_ticker_var.set(self._confirmed_compare_ticker)
+            self._status.error(self._ratio_failure_message(raw_compare))
+        self._sync_data_aliases()
+        if self._primary_raw:
+            self._confirmed_primary_ticker = raw_primary
+        if selection.compare_key and self._compare_raw:
+            self._confirmed_compare_ticker = raw_compare
+        if completion.primary_fetched:
             self._invalidate_focused_panels(old_primary)
-        if prefetched_compare_used:
+        if completion.compare_fetched:
             self._invalidate_focused_panels(old_compare)
-        # M2: when both sides came from the in-memory cache, the data
-        # arrays are already in their final form so the render is just
-        # a redraw. Defer it via ``after_idle`` so Tk gets a chance to
-        # repaint the status bar and tab labels first — visible "click
-        # registered" feedback before the (sometimes >50ms) canvas
-        # redraw kicks in. Falling back to synchronous on fetch keeps
-        # the legacy behavior where tests pump after `_load_data` and
-        # expect rendered state to be available.
-        cache_hit_only = (
-            mem_primary is primary_raw_ref
-            and (compare_key is None or mem_compare is compare_raw_ref)
-        )
-        # When _preserve_xlim_on_render is armed (drill-down path), the
-        # caller is about to mutate xlim on the price axis and read
-        # `_panel_state` / `_ax_candle_map` to autoscale Y. Deferring the
-        # render leaves those references pointing at the OLD interval's
-        # axes + candle list, so the post-load xlim lands on stale axes
-        # and the Y autoscale silently no-ops (xlim indices fall outside
-        # the old candle list -> hi <= lo). Force synchronous render so
-        # callers downstream operate on fresh state.
-        if was_completing_switch:
-            # Completion of an explicit source/interval switch. The view
-            # controller already holds the switch's intent (KEEP_DATES for a
-            # source-only change, DEFAULT for an interval change) and
-            # ``render_directives`` will apply it now — enforcing
-            # ``by_time`` > index-preserve so any mid-switch index re-arm
-            # loses. Render SYNCHRONOUSLY so no intervening poll-tick /
-            # prefetch event can consume the intent first. Audit
-            # ``view-intent-controller``.
+        if completion.completing_switch:
             self._render()
-        elif cache_hit_only and not getattr(self, "_preserve_xlim_on_render", False):
+        elif completion.cache_hit_only and not self._preserve_xlim_on_render:
             self._request_deferred_render()
         else:
             self._render()
@@ -3681,8 +3225,8 @@ class ChartApp(
             # unavailable (headless tests without a running mainloop).
             _kick_events()
         try:
-            n = len(primary)
-            span = self._series_date_span(primary)
+            n = len(self._primary)
+            span = self._series_date_span(self._primary)
             if span is not None:
                 first_d, last_d, _stale = span
                 # Surface the loaded series' DATE RANGE, not just the bar
@@ -7048,6 +6592,7 @@ class ChartApp(
         # sees an interruption.
         if not self._confirm_close_when_dirty():
             return
+        self._chart_loader.close()
         # Capture sandbox-resume metadata BEFORE we start tearing
         # down the engine. ``write_resume_metadata`` is atomic + best
         # effort; any failure is logged through the exception path.

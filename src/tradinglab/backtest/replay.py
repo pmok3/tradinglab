@@ -572,9 +572,8 @@ class SandboxController(EventsControllerMixin):
 
         # Cancel/drain background fetch jobs. Bumps _fetch_token so
         # any callback in flight from a pre-sandbox _load_data_async
-        # finds itself stale and bails out. Clearing _prefetched_raw
-        # belt-and-braces against a torn-down future-completion that
-        # already wrote into the slot.
+        # finds itself stale and bails out. ChartLoadCoordinator shares
+        # this generation; there is no mutable completion handoff slot.
         try:
             self.app._cancel_background_fetch_jobs()
         except AttributeError:
@@ -590,8 +589,6 @@ class SandboxController(EventsControllerMixin):
                     setattr(self.app, jname, None)
         if hasattr(self.app, "_fetch_token"):
             self.app._fetch_token = int(self.app._fetch_token) + 1
-        if hasattr(self.app, "_prefetched_raw"):
-            self.app._prefetched_raw = None
 
         self.active = True
         self.focus_symbol = reference_symbol

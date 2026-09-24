@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import datetime as dt
-from collections import OrderedDict
+from concurrent.futures import Future
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
+import pytest
 
 import tradinglab.app as app_mod
 from tradinglab.app import ChartApp
 from tradinglab.core.bars import Bars
+from tradinglab.data.chart_load import ChartLoadCoordinator, ChartLoadResult, FetchedSide
+from tradinglab.data.controller import DataController
 from tradinglab.data.stream_controller import StreamController
 from tradinglab.indicators.cache import IndicatorCache, config_hash
 from tradinglab.indicators.moving_averages import SMA
@@ -69,10 +73,7 @@ def _install_load_data_harness(app, *, primary, compare) -> None:
     app._compare = compare
     app._primary_raw = primary
     app._compare_raw = compare
-    app._full_cache = OrderedDict()
-    app._series_cache = {}
     app._indicator_cache = IndicatorCache(capacity=8)
-    app._prefetched_raw = None
     app._fetch_token = 0
     app._confirmed_primary_ticker = "AMD"
     app._confirmed_compare_ticker = "SPY"
@@ -85,23 +86,16 @@ def _install_load_data_harness(app, *, primary, compare) -> None:
     app.prepost_var = _Var(False)
 
     app._is_sandbox_active = lambda: False
-    app._bump_fetch_token = lambda: 1
     app._stop_stream = lambda: None
     app._cache_is_stale = lambda _candles, _interval: True
-    app._disk_load = lambda _key: None
-    app._trim_full_cache = lambda: None
-    app._maybe_upsample_today_daily = lambda candles, **_kwargs: candles
-    app._apply_pair_filter_and_align = (
-        lambda primary_raw, compare_raw: (primary_raw, compare_raw or [])
+    app._data_ctrl = DataController()
+    app._data_ctrl.set_primary(primary, primary, compare_raw=compare, compare_filtered=compare)
+    app._chart_loader = ChartLoadCoordinator(
+        app._data_ctrl, app._stream_ctrl, app._view, is_stale=app._cache_is_stale,
     )
-
-    def _set_data_state(*, primary_raw, primary, compare_raw, compare) -> None:
-        app._primary_raw = primary_raw
-        app._primary = primary
-        app._compare_raw = compare_raw
-        app._compare = compare
-
-    app._set_data_state = _set_data_state
+    app._sync_data_aliases()
+    app._pinned_ticker_union = lambda: []
+    app.after_idle = lambda _callback: None
     app._invalidate_focused_panels = ChartApp._invalidate_focused_panels.__get__(
         app,
         ChartApp,
@@ -111,8 +105,8 @@ def _install_load_data_harness(app, *, primary, compare) -> None:
     app._load_events_async = lambda _symbol: None
     app._schedule_next_bar_fetch = lambda: None
     app._start_stream_if_applicable = lambda: None
-    app._preload_watchlist = lambda: None
-    app._preload_watchlist_daily = lambda: None
+    app._preload_watchlist_events = lambda: None
+    app._preload_watchlist_signals = lambda: None
 
 
 def test_prefetched_load_invalidates_prior_visible_indicator_entries(monkeypatch) -> None:
@@ -134,7 +128,7 @@ def test_prefetched_load_invalidates_prior_visible_indicator_entries(monkeypatch
     )
 
     def _fetcher(_ticker: str, _interval: str):
-        raise _UnexpectedFetch("_load_data should consume _prefetched_raw")
+        raise _UnexpectedFetch("completion should consume its typed result")
 
     monkeypatch.setitem(app_mod.DATA_SOURCES, "unit-source", _fetcher)
     monkeypatch.setattr(
@@ -144,16 +138,9 @@ def test_prefetched_load_invalidates_prior_visible_indicator_entries(monkeypatch
     )
     monkeypatch.setattr(app_mod.disk_cache, "save", lambda *_args, **_kwargs: None)
 
-    app._prefetched_raw = {
-        "src": "unit-source",
-        "interval": "5m",
-        "primary_ticker": "AMD",
-        "compare_ticker": "SPY",
-        "primary": new_primary,
-        "compare": new_compare,
-    }
-
-    ChartApp._load_data(app)
+    request = app._chart_loader.begin(app._chart_selection())
+    result = ChartLoadResult(request, FetchedSide(new_primary), FetchedSide(new_compare))
+    ChartApp._accept_chart_load(app, request, result)
 
     assert app._indicator_cache.get(old_primary, h) is None
     assert app._indicator_cache.get(old_compare, h) is None
@@ -189,3 +176,171 @@ def test_prefetched_load_invalidates_prior_visible_indicator_entries(monkeypatch
         SMA(length=2).compute(app._compare)["sma"],
         equal_nan=True,
     )
+
+
+class _ManualExecutor:
+    def __init__(self):
+        self.jobs = []
+
+    def submit(self, fn, *args):
+        future = Future()
+        self.jobs.append((future, fn, args))
+        return future
+
+    def finish(self, index):
+        future, fn, args = self.jobs[index]
+        future.set_result(fn(*args))
+        return future
+
+
+@pytest.fixture
+def load_app(monkeypatch):
+    app = ChartApp.__new__(ChartApp)
+    _install_load_data_harness(app, primary=_candles(50), compare=[])
+    app.compare_var.set(False)
+    app._prefetch_observe_soon = lambda: None
+    app._prefetch_observe_compare = lambda: None
+    app._fetch_executor = _ManualExecutor()
+    app.deliveries = {}
+    app.renders = []
+    app._render = lambda: app.renders.append("sync")
+    app._request_deferred_render = lambda: app.renders.append("deferred")
+    app._await_future_on_tk = lambda future, callback: app.deliveries.setdefault(future, callback)
+    monkeypatch.setattr(app_mod.disk_cache, "load", lambda *_: None)
+    monkeypatch.setattr(app_mod.disk_cache, "save", lambda *_: None)
+    monkeypatch.setitem(
+        app_mod.DATA_SOURCES, "unit-source",
+        lambda ticker, _interval: _candles({"AMD": 100, "MSFT": 200, "SPY": 300}[ticker]),
+    )
+    return app
+
+
+def _deliver(app, index):
+    future = app._fetch_executor.finish(index)
+    app.deliveries[future](future.result())
+
+
+def test_real_async_adapter_discards_out_of_order_completion(load_app):
+    app = load_app
+    app._load_data_async()
+    assert not app.renders
+    app.ticker_var.set("MSFT")
+    app._load_data_async()
+    _deliver(app, 1)
+    installed = app._primary
+    assert installed[0].close == 200
+    assert app._confirmed_primary_ticker == "MSFT"
+    _deliver(app, 0)
+    assert app._primary is installed
+    assert app.renders == ["sync"]
+
+
+def test_compare_toggle_replaces_inflight_pair(load_app):
+    app = load_app
+    app._load_data_async()
+    app.compare_var.set(True)
+    app._on_compare_toggle()
+    assert len(app._fetch_executor.jobs) == 2
+    _deliver(app, 0)
+    assert not app.renders
+    _deliver(app, 1)
+    assert app._primary[0].close == 100
+    assert app._compare[0].close == 300
+    assert app.renders == ["sync"]
+
+
+def test_cache_hit_uses_same_acceptance_without_executor(load_app):
+    app = load_app
+    app._chart_loader._is_stale = lambda *_: False
+    app._full_cache[("unit-source", "AMD", "5m")] = _candles(150)
+    app._load_data_async()
+    assert not app._fetch_executor.jobs
+    assert app._primary[0].close == 150
+    assert app.renders == ["deferred"]
+
+
+def test_accepted_source_switch_renders_synchronously(load_app):
+    from tradinglab.core.view_intent import ViewMode
+
+    app = load_app
+    app._view.request(ViewMode.KEEP_DATES, load_pending=True)
+    app._load_data_async()
+    app._view.arm_keep_bars()
+    assert app._view.load_pending
+    _deliver(app, 0)
+    assert app._view.by_time and not app._view.load_pending
+    assert app.renders == ["sync"]
+
+
+def test_closed_completion_does_not_even_read_widgets(load_app):
+    app = load_app
+    app._load_data_async()
+    app._chart_loader.close()
+
+    def fail():
+        pytest.fail("closed completion touched Tk controls")
+
+    app._chart_selection = fail
+    _deliver(app, 0)
+    assert not app.renders
+    assert app._primary[0].close == 50
+
+
+def test_replay_owns_lists_and_live_entrypoints_do_not_bump_token(load_app):
+    app = load_app
+    app._is_sandbox_active = lambda: True
+    registrations = []
+    app._sandbox_register_and_focus = registrations.append
+    app._sandbox_sync_compare_to_var = lambda: None
+    prior = app._primary
+    token = app._fetch_token
+    app._load_data()
+    app._load_data_async()
+    assert registrations == ["AMD", "AMD"]
+    assert app._primary is prior and app._fetch_token == token
+    assert not app._fetch_executor.jobs
+
+
+def test_rejected_submission_preserves_synchronous_fallback(load_app):
+    app = load_app
+
+    def reject(*_):
+        raise RuntimeError("executor shut down")
+
+    app._fetch_executor.submit = reject
+    app._load_data_async()
+    assert app._primary[0].close == 100
+    assert app.renders == ["sync"]
+
+
+def test_close_confirmation_controls_load_invalidation(load_app):
+    app = load_app
+    app._load_data_async()
+    owner = app._chart_loader
+    shell = SimpleNamespace(
+        _confirm_close_when_dirty=lambda: False,
+        _chart_loader=owner,
+        _after_jobs=set(),
+        destroy=lambda: None,
+    )
+    ChartApp._on_close(shell)
+    assert owner.pending and not owner.closed
+    shell._confirm_close_when_dirty = lambda: True
+    ChartApp._on_close(shell)
+    assert owner.closed and not owner.pending
+    _deliver(app, 0)
+    assert not app.renders
+
+
+def test_sync_cache_load_supersedes_an_outstanding_fetch(load_app):
+    app = load_app
+    app._load_data_async()
+    app.ticker_var.set("MSFT")
+    app._chart_loader._is_stale = lambda *_: False
+    app._full_cache[("unit-source", "MSFT", "5m")] = _candles(450)
+    app._load_data()
+    installed = app._primary
+    _deliver(app, 0)
+    assert app._primary is installed
+    assert installed[0].close == 450
+    assert app.renders == ["deferred"]

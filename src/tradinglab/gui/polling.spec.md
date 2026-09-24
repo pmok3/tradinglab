@@ -1,6 +1,6 @@
 # gui/polling.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-24
 
 ## Purpose
 
@@ -98,11 +98,11 @@ Also hosts the pure scheduler helpers (only caller is here).
 - Same-context fallback fetches preserve the writable stream cache and
   subscription warm-up. Successful history arrival resets requested coverage;
   late poll results are rejected after stream takeover.
-- Poll submission records `StreamHistoryRequest`; only a matching fresh response
-  applied through `_load_data` acknowledges debt. `_load_data` completing with
+- Poll submission records `StreamHistoryRequest` in the shared chart-load request;
+  only a matching fresh response applied by `ChartLoadCoordinator` acknowledges debt. Completing with
   cached fallback is not success. A pre-boundary in-flight request cannot
   discharge debt created by a later bucket rollover, even if it completes late.
-- Before handing a nonempty streaming response to `_load_data`, call
+- Before publishing a nonempty streaming response, the coordinator calls
   `prepare_history` to merge safely retained stream buckets and post-request
   appends into the payload. This precedes disk persistence and readiness
   acknowledgement. Keep the original provider list for debt/provenance checks.
@@ -147,12 +147,13 @@ Also hosts the pure scheduler helpers (only caller is here).
   delayed, so no live poll is armed). Retry path: if prev tick
   expected newer bar but fetch didn't advance, schedule retry at
   `_POLL_RETRY_DELAY_MS` until `_POLL_RETRY_MAX` exhausted.
-- `_next_bar_fetch_tick()` — actual fetch. Provider HTTP runs on
-  `_fetch_executor` (off Tk thread). Result marshaled via
-  `_await_future_on_tk` and fed into `_load_data` through
-  `_prefetched_raw`. `_load_data` invalidates prior visible
-  primary/compare indicator entries when it consumes those fresh bars.
-  Bumps `_fetch_token` before submission so stale results from a
+- `_next_bar_fetch_tick()` — delegates actual fetch to
+  `_start_chart_load(asynchronous=True, refresh=True)`. Provider HTTP runs on
+  `_fetch_executor` (off Tk thread). Typed results are delivered via
+  `_await_future_on_tk` to `_accept_chart_load`, sharing the interactive
+  coordinator's acceptance and publication path. The UI adapter invalidates prior
+  visible indicator entries after fresh worker data is accepted.
+  The coordinator bumps `_fetch_token` before submission so stale results from a
   superseding ticker switch can drop. Bails at the top (clearing
   `_poll_job`) when `_live_updates_delayed_for_source()` — catches a
   tier auto-downgrade (paid→free) that lands after a poll was already
@@ -169,8 +170,8 @@ Also hosts the pure scheduler helpers (only caller is here).
   index-preservation here would jump the view to a different calendar
   day. Otherwise it requests `SNAP_RIGHT` (keep width, shift to the
   newest bar) — or `KEEP_BARS` when the user has panned away from the
-  right edge. The switch's `_load_data` lowers the guard
-  (`self._view.begin_completing_load()`) + re-arms polling.
+  right edge. Accepted chart-load completion lowers the guard
+  (`view.begin_completing_load()`); its UI adapter re-arms polling.
 
 ### Class attributes expected on the host
 

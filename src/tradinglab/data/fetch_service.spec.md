@@ -1,6 +1,6 @@
 # data/fetch_service.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-24
 
 ## Purpose
 Owns TradingLab's general worker pool, dedicated foreground fetch pool, and the background prefetch/reference-data orchestration that used to live in `ChartApp`.
@@ -62,6 +62,8 @@ Owns:
   happens for a key absent from memory.
 - `shutdown()` leaves both executors unusable and clears fetch-related bookkeeping.
 - `await_future_on_tk()` never uses `Future.add_done_callback()` to call Tk APIs from a worker thread.
+- Worker exceptions are logged before delivering `None`; completion exceptions
+  are logged rather than silently dropping a failed chart publication.
 
 ## Testing
 - Covered by existing smoke/unit paths that exercise compare warming, drilldown prefetch reuse, poll-tick async fetches, reference-data redraws, and close-time executor shutdown.

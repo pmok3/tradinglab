@@ -10,9 +10,12 @@ from types import SimpleNamespace
 import pytest
 
 from tradinglab import disk_cache
+from tradinglab.app import ChartApp
 from tradinglab.core.timezones import ET
 from tradinglab.core.view_intent import ViewController
 from tradinglab.data import DATA_SOURCES
+from tradinglab.data.chart_load import ChartLoadCoordinator, ChartLoadResult, FetchedSide
+from tradinglab.data.controller import DataController
 from tradinglab.data.stream_controller import StreamController
 from tradinglab.gui.polling import PollingMixin
 from tradinglab.models import Candle
@@ -36,21 +39,33 @@ class _Source:
 class _Executor:
     def __init__(self):
         self.works = []
+        self.requests = []
 
-    def submit(self, work):
-        self.works.append(work)
+    def submit(self, work, request):
+        self.works.append(lambda: work(request))
+        self.requests.append(request)
         return Future()
 
 
 class _Harness(PollingMixin):
+    _fetch_token = ChartApp._fetch_token
+    _chart_selection = ChartApp._chart_selection
+    _start_chart_load = ChartApp._start_chart_load
+    _accept_chart_load = ChartApp._accept_chart_load
+    _sync_data_aliases = ChartApp._sync_data_aliases
     _MIN_POLL_BACKOFF_MS = 1000
     _POLL_RETRY_DELAY_MS = 1000
     _POLL_RETRY_MAX = 3
 
     def __init__(self):
         self.key = ("schwab", "AMD", "5m")
-        self._full_cache = {self.key: [_bar(0, volume=900)]}
+        self._data_ctrl = DataController()
+        self._full_cache = self._data_ctrl._full_cache
+        self._full_cache[self.key] = [_bar(0, volume=900)]
         self._primary = self._full_cache[self.key]
+        self._compare = []
+        self._series_cache = {}
+        self._data_ctrl.set_primary(self._primary, self._primary)
         self._view = ViewController()
         self._fetch_token = 0
         self._fetch_executor = _Executor()
@@ -63,12 +78,24 @@ class _Harness(PollingMixin):
         self.completed = []
         self.loads = []
         self._status = SimpleNamespace(info=lambda message: None)
+        self._preserve_xlim_on_render = True
+        self._reresolve_symbols_for_source = lambda: None
+        self._pinned_ticker_union = lambda: []
+        self._invalidate_focused_panels = lambda _bars: None
+        self.after_idle = lambda _callback: None
+        self._series_date_span = lambda _bars: None
+        self._preload_watchlist_events = lambda: None
+        self._preload_watchlist_signals = lambda: None
         for name, value in (("source_var", "schwab"), ("ticker_var", "AMD"),
                             ("interval_var", "5m"), ("compare_var", False),
                             ("compare_ticker_var", ""), ("prepost_var", True)):
             setattr(self, name, SimpleNamespace(get=lambda value=value: value))
         self.source = _Source()
         self._stream_ctrl = StreamController()
+        self._chart_loader = ChartLoadCoordinator(
+            self._data_ctrl, self._stream_ctrl, self._view,
+            is_stale=lambda *_: True,
+        )
         self._start_stream()
         self._sync_stream_aliases()
 
@@ -87,8 +114,15 @@ class _Harness(PollingMixin):
         return False
 
     def _bump_fetch_token(self):
-        self._fetch_token += 1
-        return self._fetch_token
+        self._fetch_token = self._data_ctrl.bump_token()
+        return self._data_ctrl.token
+
+    def _stop_stream(self):
+        self._stream_ctrl.stop()
+
+    def _start_stream_if_applicable(self):
+        self._start_stream()
+        self._sync_stream_aliases()
 
     def after(self, delay, callback):
         job = f"job-{len(self._after_jobs)}-{self._fetch_token}"
@@ -101,15 +135,10 @@ class _Harness(PollingMixin):
     def _await_future_on_tk(self, future, callback):
         self.completed.append((future, callback))
 
-    def _load_data(self):
-        bars = self._prefetched_raw["primary"] or self._full_cache[self.key]
-        self.loads.append([replace(bar) for bar in bars])
-        self._full_cache[self.key] = [replace(bar) for bar in bars]
-        self._primary = self._full_cache[self.key]
-        self._bump_fetch_token()
-        self._start_stream()
-        self._sync_stream_aliases()
-        self._schedule_next_bar_fetch()
+    def _render(self):
+        self.loads.append([replace(bar) for bar in self._primary])
+
+    _request_deferred_render = _render
 
     def emit(self, kind, minute):
         self.source.callback(kind, _bar(minute))
@@ -118,7 +147,8 @@ class _Harness(PollingMixin):
 
     def complete(self, index, bars):
         future, callback = self.completed[index]
-        future.set_result((bars, [], None, None))
+        request = self._fetch_executor.requests[index]
+        future.set_result(ChartLoadResult(request, FetchedSide(bars), disk_preloaded=True))
         callback(future.result())
 
 
@@ -166,7 +196,7 @@ def test_failed_post_boundary_fetch_cannot_discharge_debt_via_cached_fallback(mo
         return None
 
     monkeypatch.setitem(DATA_SOURCES, "schwab", fetch)
-    monkeypatch.setattr("tradinglab.gui.polling._disk_cache.load", lambda *_args: None)
+    monkeypatch.setattr(disk_cache, "load", lambda *_args: None)
     monkeypatch.setattr("tradinglab.gui.polling._compute_fetch_delay_ms", lambda **kwargs: 1000)
     app = _Harness()
     for kind, minute in (("rollover", 3), ("closed", 3), ("closed", 4), ("rollover", 5)):
@@ -190,10 +220,17 @@ class _PersistingHarness(_Harness):
         super().__init__()
         self.ready_at_save = []
 
-    def _load_data(self):
-        super()._load_data()
-        self.ready_at_save.append(self._stream_ctrl.active)
-        disk_cache.save(*self.key, self._full_cache[self.key])
+        app = self
+
+        class RecordingStore:
+            load = staticmethod(disk_cache.load)
+
+            @staticmethod
+            def save(*args):
+                app.ready_at_save.append(app._stream_ctrl.active)
+                disk_cache.save(*args)
+
+        self._chart_loader._store = RecordingStore()
 
 
 def _start_delayed_debt_fetch(app):

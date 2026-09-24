@@ -85,7 +85,6 @@ class _FakeChartApp:
     _confirmed_primary_ticker: str = ""
     _confirmed_compare_ticker: str = ""
     _fetch_token: int = 0
-    _prefetched_raw: Any = None
     _sandbox_panel: Any = None
 
     # Tk-var stand-ins.

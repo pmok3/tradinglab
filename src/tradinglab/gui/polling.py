@@ -25,7 +25,7 @@ Mixin rules (see decomposition plan):
   ``_reload_job``, ``_poll_retry_count``, ``_poll_retry_expected_min_ts``,
   ``_full_cache``, ``_primary``, ``_fetch_executor``, ``_fetch_token``,
   ``_stream_active``, ``_stream_token``, ``_indicator_cache``,
-  ``_prefetched_raw``, ``_preserve_xlim_on_render``,
+  ``_chart_loader``, ``_preserve_xlim_on_render``,
   ``_slide_xlim_to_right_edge``, ``_drilldown_day``, plus Tk vars
   (``source_var``, ``interval_var``, ``ticker_var``, ``compare_var``,
   ``compare_ticker_var``, ``prepost_var``).
@@ -41,10 +41,8 @@ import queue
 import time
 import tkinter as tk
 
-from .. import disk_cache as _disk_cache
 from ..constants import interval_minutes, is_intraday
 from ..core.view_intent import ViewMode
-from ..data import DATA_SOURCES
 from ..data.stream_controller import StreamMutation
 
 # Adaptive live-tick repaint coalescing (audit ``tick-repaint-coalesce``).
@@ -735,14 +733,9 @@ class PollingMixin:
         the floor — the engine drives clock advancement, not the live
         poll.
 
-        Runs the provider fetch on ``_fetch_executor`` so the Tk main
-        thread stays responsive — a slow yfinance HTTP call no longer
-        freezes the GUI mid-pan/hover. When the fetch resolves, the
-        result is marshalled back to the main thread via
-        ``self.after(0, …)`` and handed to ``_load_data`` through the
-        ``_prefetched_raw`` slot. Stale results (superseded by a newer
-        ticker/interval load) are dropped via ``_fetch_token`` gating
-        before ``_load_data`` is even invoked.
+        Uses the same headless chart-load transaction as interactive
+        requests, with forced refresh and stream-safe history acceptance.
+        The Tk adapter delivers its typed completion on the main thread.
 
         Also preserves xlim and records retry bookkeeping (see
         ``_schedule_next_bar_fetch``).
@@ -776,7 +769,6 @@ class PollingMixin:
             ViewMode.KEEP_BARS if self._user_has_panned_x() else ViewMode.SNAP_RIGHT
         )
 
-        src = self.source_var.get()
         interval = self.interval_var.get()
         raw_primary = self.ticker_var.get().strip().upper()
         compare_on = bool(self.compare_var.get())
@@ -826,110 +818,7 @@ class PollingMixin:
                 pass
             return
 
-        # An existing stream may take over while REST is in flight. Its current
-        # cache must remain writable; the prefetched payload still forces refresh.
-        ctrl = getattr(self, "_stream_ctrl", None)
-        if ctrl is None or not ctrl.subscribed:
-            for tic in (raw_primary, raw_compare):
-                if tic:
-                    self._full_cache.pop((src, tic, interval), None)
-
-        fetcher = DATA_SOURCES.get(src)
-        executor = getattr(self, "_fetch_executor", None)
-        if fetcher is None or executor is None:
-            # No async infrastructure available — fall back to sync path.
-            try:
-                self._load_data()
-            except Exception:  # noqa: BLE001
-                pass
-            return
-
-        # Bump token BEFORE submitting so a ticker-switch that happens
-        # while this fetch is in-flight supersedes it cleanly.
-        token = self._bump_fetch_token()
-        stream_request = ctrl.history_request() if ctrl is not None else None
-
-        def _work():
-            p: list = []
-            c: list = []
-            try:
-                p = fetcher(raw_primary, interval) or []
-            except Exception:  # noqa: BLE001
-                p = []
-            if raw_compare:
-                try:
-                    c = fetcher(raw_compare, interval) or []
-                except Exception:  # noqa: BLE001
-                    c = []
-            # H2: piggy-back disk-cache reads onto the worker.
-            p_disk: list | None = None
-            c_disk: list | None = None
-            try:
-                if raw_primary:
-                    p_disk = _disk_cache.load(src, raw_primary, interval)
-            except Exception:  # noqa: BLE001
-                p_disk = None
-            try:
-                if raw_compare:
-                    c_disk = _disk_cache.load(src, raw_compare, interval)
-            except Exception:  # noqa: BLE001
-                c_disk = None
-            return p, c, p_disk, c_disk
-
-        try:
-            fut = executor.submit(_work)
-        except Exception:  # noqa: BLE001
-            # Executor rejected submission (e.g. shutdown): fallback.
-            try:
-                self._load_data()
-            except Exception:  # noqa: BLE001
-                pass
-            return
-
-        def _on_result(result) -> None:
-            # Stale-token guard: a newer fetch (or explicit ticker
-            # change) has superseded us — silently drop.
-            if token != self._fetch_token:
-                return
-            if result is None:
-                p_raw, c_raw = None, None
-                p_disk, c_disk = None, None
-            else:
-                p_raw, c_raw, p_disk, c_disk = result
-            fresh_primary = p_raw
-            if ctrl is not None and ctrl.subscribed and p_raw:
-                p_raw = ctrl.prepare_history(
-                    (src, raw_primary, interval), p_raw, request=stream_request)
-                if p_raw is None:
-                    self._schedule_next_bar_fetch()
-                    self._update_stream_health()
-                    return
-            self._prefetched_raw = {
-                "token": token,
-                "src": src,
-                "interval": interval,
-                "primary_ticker": raw_primary,
-                "compare_ticker": raw_compare,
-                "primary": p_raw,
-                "compare": c_raw,
-                "primary_disk": p_disk,
-                "compare_disk": c_disk,
-                "disk_preloaded": True,
-            }
-            try:
-                self._load_data()
-                if ctrl is not None and p_raw:
-                    ctrl.history_refreshed(
-                        (src, raw_primary, interval), self._full_cache,
-                        request=stream_request, fresh=fresh_primary,
-                    )
-            finally:
-                self._prefetched_raw = None
-
-        # Marshal back to Tk via a main-loop poll (see
-        # `_await_future_on_tk` for why `add_done_callback` +
-        # `self.after()` from the worker thread is unsafe).
-        self._await_future_on_tk(fut, _on_result)
+        self._start_chart_load(asynchronous=True, refresh=True)
 
 
 __all__ = [

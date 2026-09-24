@@ -1,6 +1,6 @@
 # backtest/replay.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-24
 
 > ⚠ **Tk-coupled module** — imports `tkinter`. The SOLE Tk-coupled
 > module in `backtest/`; must NEVER be auto-imported from
@@ -64,7 +64,9 @@ Frozen result record returned by `skip_to_next_day`. Fields: `bars_advanced` (ma
 - **Catch-up replay on register**: a symbol joining at clock index 50 immediately gets bars `0..50` appended (driven by `BarSeries.index_for_ts(now_ts)`). Bars not in the master timeline are skipped.
 - **`_fast_forward_to_session_open`**: bumps `clock.index` directly to the first bar of `session_date` (UTC midnight), clears warmup equity curve, re-syncs visibles. No fills during lookback.
 - **`SandboxMemento` is explicit**: every pre-sandbox app state captured + restored in one call.
-- **Bumps `app._fetch_token` at start**: stale background fetches bail. Also clears `_prefetched_raw` and `_drilldown_day`.
+- **Bumps `app._fetch_token` at start**: stale chart-load transactions bail through
+  the shared `DataController` generation. Also clears `_drilldown_day`; there is
+  no mutable prefetched-result slot.
 - **Blind mode (display-only)**: replay behaviour identical to non-blind; only display differs. Price axis anchored as if `now` were the right edge; date readout suppressed (only time-of-day shows). Time-of-day NOT hidden — session-relative position is inferable. Mirrored in [`session.spec.md`](session.spec.md).
 - **Per-day watch notes**: `_day_notes` (dict keyed by UTC session date) buffers the trader's free-text pre-trade observations captured during replay via `set_day_note`; `_day_ordinal` counts distinct session days visited (incremented on each `next_bar` day-boundary cross, reset to 1 in `start_session`). `result()` folds `_day_notes` into `SessionResult.day_notes` on BOTH the single-cycle fast path and the auto-cycle merge path, so they persist through `save_session` and surface in the Performance View daily-journal pane. Engine-independent (like the post-trade review text) so reproducibility is unaffected.
 - **Optional decision capture**: `_decisions` is controller-owned, reset on each fresh start, and folded into both `result()` paths without per-cycle archiving. `log_decision` records the current clock and focused symbol only after explicit user invocation. `next_bar` never creates an implicit record, so unlogged bars remain unknown rather than `pass`.

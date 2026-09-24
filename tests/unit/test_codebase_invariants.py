@@ -298,7 +298,7 @@ def test_app_spec_md_mro_matches_real_chartapp_bases():
 #          is_quotient_ratio, and each records WHY a scaled symbol is excluded
 #          (rebase cancels the divisor; volume is real). Deliberate raise — a
 #          mixin for two cohesive helpers would cost more than it saves.
-_APP_PY_LOC_CEILING = 7492
+_APP_PY_LOC_CEILING = 6950
 
 # Once a real extraction drops app.py well under the ceiling, lower the
 # constant to lock the reduction in. The band keeps ordinary small edits from

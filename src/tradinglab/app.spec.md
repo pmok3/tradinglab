@@ -1,6 +1,6 @@
 # app.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-24
 
 ## Purpose
 Top-level Tk + matplotlib application. Owns all runtime state (Tk widgets, `Figure`, caches, stream/fetch tokens, worker pool) and orchestrates the data → render → stream pipeline. `ChartApp` is composed of `tk.Tk` + a stack of mixins (each owns a concern documented in its own `*.spec.md`).
@@ -85,17 +85,24 @@ test patch seams, even if moved behavior no longer uses the name in this
 file. Do not remove these re-exports without updating the tests that
 patch `tradinglab.app.<name>`.
 
-### Two-phase data load (`_load_data_async` → `_load_data`)
-1. `_load_data_async` probes `_full_cache`; on cold/stale sides it submits a worker that calls the source fetcher, preloads disk-cache rows, and pre-merges/pre-saves fresh bars. Cache-hit-only paths call `_load_data` directly so its deferred-render branch still applies.
+### Headless chart-load transaction
+1. `_load_data_async` and `_load_data` delegate to `_start_chart_load`, which captures
+   a `ChartSelection` and begins a `data.chart_load.ChartLoadCoordinator` request.
+   The coordinator resolves memory, provider, disk fallback, pair filtering and
+   data publication without accessing Tk. `_accept_chart_load` handles controls,
+   status, indicator invalidation and rendering.
 2. On empty/error, fall back to `disk_cache.load`.
-3. Token-gated callback: `_fetch_token` bump on submit; callback drops if mismatched.
+3. The coordinator advances the shared `_fetch_token` before work begins. Acceptance
+   requires the same request, generation and current selection; close rejects
+   publication before reading any controls. Replay retains its existing token cutover.
 4. `_full_cache[(source,ticker,interval)]` — OrderedDict, LRU, soft cap `_FULL_CACHE_MAX=16`. Pinned entries (watchlist + currently active chart ticker) never evicted by trim. The active-ticker pin is essential so the 1d view's 5m companion (used by the volume-TOD overlay and the synthetic today-bar in `_maybe_upsample_today_daily`) survives stashes for unrelated tickers landing from background prefetches.
 5. `_series_cache[id(candles)]` — memoizes `_build_series_safe(...)`; verified via `sa._candles is candles` to defend against id-reuse.
-6. `_prefetched_raw` ingests executor-fetched bars from `_load_data_async` or the poll tick without a second
-   provider call. Its worker payload may include disk-preloaded and pre-merged/pre-saved primary/compare lists so `_load_data` can skip Tk-thread JSON parsing, `merge_candles`, and `disk_cache.save`. The worker's per-side merge+save is itself guarded by `disk_cache.merge_adds_nothing(disk, merged)`: when the trailing fetch adds nothing new (fully pre-downloaded / sealed universe — the common case when browsing the cached S&P/Nasdaq universe), the ~450 ms rewrite of the multi-MB 5m JSONL is skipped (the in-memory merged list is still returned for render). When it supplies fresh primary/compare data,
-   `_load_data` invalidates indicator entries for the prior visible
-   lists before rendering. This prevents stale fingerprint hits from
-   rebinding onto replacement lists.
+6. `ChartLoadResult` carries named primary/compare provider, disk and premerged
+   lists; there is no positional tuple or mutable handoff slot. Interactive
+   workers retain `merge_adds_nothing`-guarded persistence. Polling/subscribed-stream
+   workers only read disk, so stream reconciliation precedes persistence.
+   Accepted worker bars invalidate prior visible indicator entries before render.
+   A compare edit during a pending load starts a replacement pair request.
 7. Compare / companion-interval / watchlist OHLC prefetch is scheduler-owned; `_load_data` no longer submits those reactive background fetches itself.
 8. **Background prefetch scheduler (`data/prefetch/*`).** A priority-queue, rate-gated, breadth-first preloader integrated behind the `TRADINGLAB_PREFETCH_SCHEDULER` env flag (default live; `off` / `0` / `false` / `no` = disabled kill-switch; `shadow` = observe-only). When enabled it constructs a `PrefetchDriver`+`PrefetchScheduler` (live shares the process-wide `global_bucket_registry()` — Decision 1; shadow uses a throwaway unlimited registry). `_build_prefetch_context()` snapshots app state (source/ticker/interval/compare + `partition_watchlists(active sub-tab, pinned)`; universe deferred) into a `PrefetchContext`. Re-arm hooks (all no-op when off / in sandbox): the `_load_data_async` chokepoint (`_prefetch_observe_soon()`, deferred — covers ticker/watchlist/chart-stack/axis switches), `_on_compare_toggle` (`_prefetch_observe_compare()`), the watchlist subtab/pinned handlers (`_prefetch_observe_watchlists()`), and a startup `_prefetch_observe_soon()`. In **shadow** mode observe logs how many jobs it WOULD dispatch (no side effects); **live** mode drives fetches through the dedicated prefetch worker pool (`_prefetch_submit`: worker-side merge/save, Tk-thread stash+`complete`+re-pump; the live driver uses `apply_result=None` so the app owns all cache writes). Full design: session `PREFETCH_SCHEDULER_DESIGN.md`.
 
@@ -154,7 +161,11 @@ Active when no stream is registered for the source. Delay computed by pure helpe
 
 **Poll retry on API-not-ready**: when `last_bar_epoch < _poll_retry_expected_min_ts` and `_poll_retry_count < _POLL_RETRY_MAX(=2)`, arm a 5 s retry (bypasses `_MIN_POLL_BACKOFF_MS=30_000`). Up to 3 fetches per bar close. Daily+ never retries.
 
-**Async poll/user fetch**: `_next_bar_fetch_tick` and user-triggered `_load_data_async` submit fetch work on `_fetch_executor`; results are marshalled back through `_prefetched_raw` and consumed by `_load_data`. Paths that must read freshly-loaded state immediately still call `_load_data` synchronously.
+**Async poll/user fetch**: both use `_start_chart_load` and the headless
+coordinator, with typed results delivered by `_await_future_on_tk` to
+`_accept_chart_load`. Paths needing immediately loaded state still call
+`_load_data` synchronously. Cache-only loads may defer rendering, but drilldown
+and an accepted explicit source/interval switch always render synchronously.
 
 ### Scheduler-owned background prefetch
 The prefetch scheduler owns compare warming, the `{"5m", "1d"}` dual-interval
@@ -312,7 +323,7 @@ The prior fix (disk-preload the compare's full history) could not solve the jump
 
 **Gates:** `use_time_preserve` = `intraday` AND a visible window exists AND (`_drilldown_day` is set OR (`is_historical` AND `compare_covers`)). It is engaged for BOTH toggle directions. The formal-drill branch deliberately includes the newest/right-edge session; only a non-drilled right-edge view keeps the fast index-preserve. The historical + coverage branch handles manual pan/zoom without resetting a short/non-overlapping view. The INNER gate `compare_lacks` remains historical-only: `is_historical` AND `use_time_preserve` AND `compare_on` AND `not _compare_cache_covers(lo_ts)` (the compare cache does NOT reach at/before the window's left edge — **including a genuinely EMPTY cache**, e.g. SPY preloaded at 1d only, so its 5m was never fetched). It additionally engages `keep_window` + background-fill (only meaningful when turning compare ON — you can't fill compare while turning it off). **Empty-cache targeted-first-load (`compare-toggle-targeted-first-load`):** when `compare_lacks` is set and the cache miss reaches `_apply_compare_toggle`'s no-in-memory-data fallback, a range-capable provider (`source_supports_range(src)`) on an intraday interval renders the primary IMMEDIATELY (holding the drilled window via `keep_window`, compare empty) and returns — instead of the old FULL `_load_data` of the compare's entire recent history (~120 days of 5m ≈ 5s on Alpaca). The caller's `_maybe_fill_compare_for_window(lo_ts, hi_ts)` then fetches ONLY the viewed day (~1 API page) and re-renders with the compare when it lands. Non-range / newest-session cache misses keep the `_load_data` fallback. `check_d52` frames an interior window and toggles compare once — both preserve strategies satisfy its coarse "framed window preserved" assertion, and repeated-toggle no-creep is pinned separately by `check_d88`/`check_d89`. The toggle body is extracted into `_apply_compare_toggle(compare_on, *, keep_window=None)` (behaviour-identical) so both the gated path and `_on_compare_fill_done` can invoke it. Instance state: `_compare_fill_inflight: set`, `_compare_fetch_token: int` (init in `__init__`). The old cache-hit compare force-refresh path was removed in the scheduler cut-over; a genuinely missing historical window is filled by `_maybe_fill_compare_for_window` instead (audit `compare-toggle-historical-no-refetch`). Pinned by `check_d86` (deep-history no-jump + fill-on-completion), `check_d87` (in-coverage grid-mismatch: sparse primary + dense compare inserts gaps → time-preserve holds the drilled day as the left edge; fails without the broadened `use_time_preserve` gate), `check_d88` (historical repeated-toggle no-creep plus Compare-on → newest-session drill → Compare-off view preservation), `check_d89` (REPEATED manual-pan toggle on/off must not creep the window — the `_drilldown_day`-independent path), `check_d92` (compare toggle on a drilled day shows EXACTLY that day — no next-day bar from the half-integer-xlim remap round bug — and does not force-refetch on a historical view), and `check_d93` (empty compare 5m cache on a range-capable provider does a TARGETED single-day fill, not a full `_load_data`).
 
-Cleared by `_reset_view` and `_on_explicit_axis_change`. **All visible-X preservation state now lives in the single `core.view_intent.ViewController` (`self._view`); the historical booleans (`_preserve_xlim_on_render` / `_preserve_xlim_by_time_on_render` / `_slide_xlim_to_right_edge` / `_axis_switch_inflight`) are thin bridging properties over it (audit `view-intent-controller`, see `core/view_intent.spec.md`).** Entry points declare an intent via `self._view.request(mode)` / `arm_keep_bars()`: pan/zoom/drilldown → `KEEP_BARS`; a source-only switch → `KEEP_DATES`; an interval switch → `DEFAULT`; a live poll tick at the right edge → `SNAP_RIGHT` (else `KEEP_BARS` when panned). On an **interval** change the drilldown day drops and `request(DEFAULT)` snaps to the right edge. On a **source-only** change (same ticker + interval, different provider) the drilldown day clears and `request(KEEP_DATES, load_pending=True)` preserves the view by TIME so a different-length provider series doesn't reinterpret the stale bar-index window as another calendar day (the "switch source → jump a month back" bug; audit `source-switch-view-preserve`). Source vs interval is classified via `_prev_axis_source` / `_prev_axis_interval` (seeded in `__init__`, updated each call). `_render` reads `self._view.render_directives()` at the top; `_load_data` calls `self._view.begin_completing_load()` (lowering the switch guard + learning whether this load completes a switch → renders synchronously). **Durable time-preserve across the async boundary (`source-switch-view-preserve` / `view-intent-controller`):** the poll-tick guard (`_next_bar_fetch_tick` bails while `self._view.load_pending`) is NOT sufficient by itself — an intervening render from a *non-poll* path (a scheduler prefetch landing, a `_refresh_daily_synth_for_active_view`, a reference-data redraw, a deferred idle render) can fire during the async switch load. The controller makes this safe generically: while `load_pending` is set, `render_directives()` returns HOLD (keep the current index view, CONSUME NOTHING) so no intervening render can eat the one-shot `KEEP_DATES` intent, **and `self._view.request()` ignores any non-switch re-arm (`arm_keep_bars()` / `SNAP_RIGHT` / `DEFAULT`) while a switch is pending so a mid-switch poll/compare/pan re-arm can't clobber the armed `by_time` intent either** (the `render_directives` HOLD guards CONSUMPTION; the `request` guard covers INTENT-SETTING — without it a mid-switch `arm_keep_bars()` reset `by_time` to False while `load_pending` stayed True, so the completing render did stale index-preserve → the reproduced "toggle yfinance→alpaca jumps to 2021" bug); and when the intent IS applied it enforces `by_time` > index-preserve (a stale bar-INDEX window can never clobber the calendar remap → the "Compare ON→OFF then switch yfinance→alpaca → chart moved to 2021" repro is structurally impossible). The switch's completing `_load_data` render is the only one that applies + consumes it. This one rule replaces the earlier bespoke `_pending_axis_switch_time_preserve` re-assertion. Interval changes request `DEFAULT` (right-edge snap unaffected); sandbox `_load_data` early-returns before the render. Pinned by `check_d94` (simulates BOTH mid-switch index-preserve re-arm routes — a bare `_preserve_xlim_on_render` poke AND an `arm_keep_bars()` via `request()` — and asserts the view stays recent, not years-back) + `tests/core/test_view_intent.py`. Pre/Post has its own handler `_on_prepost_toggle` (render-scope, not view-scope) that drills via `_reload_preserving_drilldown` and re-zooms to fit the new bar count.
+Cleared by `_reset_view` and `_on_explicit_axis_change`. **All visible-X preservation state now lives in the single `core.view_intent.ViewController` (`self._view`); the historical booleans (`_preserve_xlim_on_render` / `_preserve_xlim_by_time_on_render` / `_slide_xlim_to_right_edge` / `_axis_switch_inflight`) are thin bridging properties over it (audit `view-intent-controller`, see `core/view_intent.spec.md`).** Entry points declare an intent via `self._view.request(mode)` / `arm_keep_bars()`: pan/zoom/drilldown → `KEEP_BARS`; a source-only switch → `KEEP_DATES`; an interval switch → `DEFAULT`; a live poll tick at the right edge → `SNAP_RIGHT` (else `KEEP_BARS` when panned). On an **interval** change the drilldown day drops and `request(DEFAULT)` snaps to the right edge. On a **source-only** change (same ticker + interval, different provider) the drilldown day clears and `request(KEEP_DATES, load_pending=True)` preserves the view by TIME so a different-length provider series doesn't reinterpret the stale bar-index window as another calendar day (the "switch source → jump a month back" bug; audit `source-switch-view-preserve`). Source vs interval is classified via `_prev_axis_source` / `_prev_axis_interval` (seeded in `__init__`, updated each call). `_render` reads `self._view.render_directives()` at the top; accepted `ChartLoadCoordinator.complete` calls `view.begin_completing_load()` (lowering the switch guard + learning whether this load completes a switch → the UI adapter renders synchronously). **Durable time-preserve across the async boundary (`source-switch-view-preserve` / `view-intent-controller`):** the poll-tick guard (`_next_bar_fetch_tick` bails while `self._view.load_pending`) is NOT sufficient by itself — an intervening render from a *non-poll* path (a scheduler prefetch landing, a `_refresh_daily_synth_for_active_view`, a reference-data redraw, a deferred idle render) can fire during the async switch load. The controller makes this safe generically: while `load_pending` is set, `render_directives()` returns HOLD (keep the current index view, CONSUME NOTHING) so no intervening render can eat the one-shot `KEEP_DATES` intent, **and `self._view.request()` ignores any non-switch re-arm (`arm_keep_bars()` / `SNAP_RIGHT` / `DEFAULT`) while a switch is pending so a mid-switch poll/compare/pan re-arm can't clobber the armed `by_time` intent either** (the `render_directives` HOLD guards CONSUMPTION; the `request` guard covers INTENT-SETTING — without it a mid-switch `arm_keep_bars()` reset `by_time` to False while `load_pending` stayed True, so the completing render did stale index-preserve → the reproduced "toggle yfinance→alpaca jumps to 2021" bug); and when the intent IS applied it enforces `by_time` > index-preserve (a stale bar-INDEX window can never clobber the calendar remap → the "Compare ON→OFF then switch yfinance→alpaca → chart moved to 2021" repro is structurally impossible). The switch's accepted `_accept_chart_load` render is the only one that applies + consumes it. This one rule replaces the earlier bespoke `_pending_axis_switch_time_preserve` re-assertion. Interval changes request `DEFAULT` (right-edge snap unaffected); sandbox `_load_data` bypasses live loading. Pinned by `check_d94` (simulates BOTH mid-switch index-preserve re-arm routes — a bare `_preserve_xlim_on_render` poke AND an `arm_keep_bars()` via `request()` — and asserts the view stays recent, not years-back) + `tests/core/test_view_intent.py`. Pre/Post has its own handler `_on_prepost_toggle` (render-scope, not view-scope) that drills via `_reload_preserving_drilldown` and re-zooms to fit the new bar count.
 
 **Partial-volume warning (perf item #1).** `on_axis_change` (the toolbar source/interval callback) emits a one-time `_status.warn` when the active source is switched to one with partial (IEX) volume — `data.quality.partial_volume_warning(source)` — because RVOL/RRVOL and the volume pane are understated on ~2–3%-of-tape IEX data. Tracked via `_partial_vol_warned_src` (lazily read via `getattr`, no `__init__` field) so an interval-only change doesn't re-warn.
 
@@ -436,7 +447,8 @@ Pinned by `tests/unit/gui/test_avwap_anchor_pick_iconify.py` (6 tests covering p
 11. Bad-ticker path reverts the StringVar to `_confirmed_*_ticker`.
 12. Token bump on `_start_stream_if_applicable` drops stale subscription events.
 13. Compare-mode toggle without fresh data uses pre-fetched cache when available.
-14. `_prefetched_raw` is one-shot: set by `_load_data_async` or poll-tick callbacks, consumed by `_load_data`, cleared in `finally`.
+14. A chart-load request can publish at most once, only while its generation and
+    full selection match. Rejected work never consumes pending viewport intent.
 15. `_poll_retry_count` / `_poll_retry_expected_min_ts` reset on bar advance, retry exhaustion, non-intraday, or explicit reload.
 16. Poll retries (5 s × 2) bypass `_MIN_POLL_BACKOFF_MS=30_000`; aligned schedule respects it.
 17. `_ensure_prefetched` never touches UI state — only `_full_cache` + disk.
@@ -449,26 +461,27 @@ Pinned by `tests/unit/gui/test_avwap_anchor_pick_iconify.py` (6 tests covering p
 
 ## Data Flow
 
-### User-triggered load (async wrapper + synchronous sink)
+### User-triggered load (shared coordinator + presentation adapter)
 ```
 _load_data_async():
-    if both requested sides are fresh in _full_cache: _load_data(); return
-    token = ++_fetch_token
-    fut = _fetch_executor.submit(fetcher + disk preload + merge/save, ...)
-    callback if token matches:
-        _prefetched_raw = {primary, compare, primary_disk, compare_disk,
-                           primary_merged, compare_merged, ...}
-        try: _load_data()
-        finally: _prefetched_raw = None
+    bypass live loader while replay owns the chart
+    request = coordinator.begin(snapshot controls)
+    if coordinator.cache_hit(request): _accept_chart_load(request)
+    else: submit coordinator.fetch(request); deliver typed result on Tk
 
 _load_data():
-    token = ++_fetch_token
-    memory probe → if fresh: use cached, skip fetcher
-    if _prefetched_raw matches: consume          # async/poll hand-off
-    else: candles = fetcher(...)                  # blocks main thread
-    if empty: revert StringVar; return
-    merge with disk cache unless worker pre-merged; _full_cache[key] = candles
-    apply pair filter + align
+    bypass live loader while replay owns the chart
+    request = coordinator.begin(snapshot controls)
+    _accept_chart_load(request)  # synchronous resolution of missing sides
+
+_accept_chart_load(request, result=None):
+    reject before reading controls if closed or replay owns the chart
+    completion = coordinator.complete(request, result, current selection)
+    if stale: return
+    if unsafe stream history: rearm polling; return
+    if primary failed: revert StringVar; return
+    sync controller aliases; report partial compare failure
+    invalidate previous indicator entries for accepted worker data
     _render() or _request_deferred_render() for pure memory-hit redraws
     after_idle(_load_events_async for primary/compare)
     _schedule_next_bar_fetch(); _start_stream_if_applicable()
@@ -477,19 +490,13 @@ _load_data():
 ### Poll-tick (off-thread fetch)
 ```
 _next_bar_fetch_tick():
-    _preserve_xlim_on_render = True
-    _slide_xlim_to_right_edge = not _user_has_panned_x()
+    honor replay, stream readiness, delayed-feed and pending-switch guards
+    request KEEP_BARS or SNAP_RIGHT viewport intent
     _poll_retry_expected_min_ts = last_bar_epoch + interval_sec
-    evict src/ticker/interval from _full_cache
-    token = ++_fetch_token
-    fut = _fetch_executor.submit(fetcher, ...)
-    fut.add_done_callback(lambda f: after(0, _finish))
-
-_finish():
-    if token != _fetch_token: drop
-    _prefetched_raw = {...}
-    try: _load_data()
-    finally: _prefetched_raw = None
+    if daily: warm intraday companion and rearm polling; return
+    _start_chart_load(asynchronous=True, refresh=True)
+    # Coordinator preserves subscribed cache, reconciles before saving,
+    # and only acknowledges genuinely fresh history after publication.
 ```
 
 ### Scheduler delay
@@ -559,7 +566,9 @@ Update check (`updates.schedule_check_async`) is controlled by the `update_check
 - `check_c0/c5/c6` — watchlist tab + 5-tab notebook + bad-ticker revert.
 - `check_d2_preserve_xlim_across_compare_toggle`, `check_d5_x_axis_pan_stability`, `check_d7_slide_to_right_edge`.
 - `check_d8_scheduler_aligns_to_bar_close`, `check_d9_poll_retry_when_bar_not_ready`, `check_d10_offload_to_executor`.
-- `test_prefetched_load_invalidates_prior_visible_indicator_entries` — `_prefetched_raw` reloads do not reuse stale indicator results through fingerprint fallback.
+- `test_prefetched_load_invalidates_prior_visible_indicator_entries` — typed worker
+  completions do not reuse stale indicator results through fingerprint fallback.
+- `tests/unit/data/test_chart_load.py` — headless lifecycle and publication contracts.
 - `check_d11_tab_labels`, `check_d12_companion_prefetch`, `check_d13_watchlist_pinned_subtabs`, `check_d14_theme_overrides`, `check_d15_pin_kicks_preload`.
 - `check_d16_startup_defaults`, `check_d17_drilldown_to_5m`, `check_d18_display_timezone`.
 - `check_d23_perf_h3_h6_m2_m4`, `check_d24_async_user_load`, `check_d25_scroll_wheel_zoom`, `check_d26_scroll_invert`, `check_d27_floating_price_label`, `check_d28_readout_strip`.

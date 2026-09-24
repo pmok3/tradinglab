@@ -1,6 +1,6 @@
 # `core/view_intent` — chart X-window preservation intent
 
-Last updated: 2026-09-07
+Last updated: 2026-09-24
 
 Single source of truth for what happens to the chart's visible X window
 (matplotlib `xlim`) on the next render. Replaces the scattered `ChartApp`
@@ -50,9 +50,10 @@ existing test surface while the DECISION logic lives here.
   genuinely new explicit switch (`load_pending=True`) still supersedes.
 - `load_pending` (property) — True while a switch is loading; the live poll tick
   bails while set so it can't re-arm index-preserve or launch a competing fetch.
-- `begin_completing_load() -> bool` — called at the TOP of the load servicing the
-  render; lowers `load_pending` and returns whether this load completes an
-  explicit switch (caller then renders SYNCHRONOUSLY).
+- `begin_completing_load() -> bool` — called by an accepted
+  `ChartLoadCoordinator.complete`, never a stale completion; lowers
+  `load_pending` and returns whether this load completes an explicit switch
+  (the UI adapter then renders SYNCHRONOUSLY).
 - `render_directives() -> (preserve, by_time, slide)` — called at the TOP of
   `_render`. Contract below.
 - `snapshot()/restore()` — opaque save/restore for tests.
