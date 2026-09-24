@@ -5,6 +5,9 @@ No strategy run, replay session, export, network provider or credential is neede
 The module pauses history dispatch while real worker-pool fences and inbox drains
 settle earlier work before snapshots. ChartStack receives deterministic card-only
 data; the original main-cache and primary/compare assertions remain unchanged.
+Layout preservation keeps the window mapped through snapshot and restoration.
+Otherwise Tk can clamp a saved divider against a still-narrow withdrawn window,
+leaving the next case with a collapsed notebook.
 
 Settings, Performance and Strategy use transient Toplevels. Those cases retain
 the headless-macOS guard from AGENTS.md sections 5 and 7.1, before construction
@@ -134,52 +137,54 @@ def _pause_width_background_fetches(app):
 def _preserve_app_layout(app, monkeypatch):
     from tradinglab import settings
 
-    geometry, minimum, maximum = app.geometry(), app.minsize(), app.maxsize()
-    selected = app._notebook.select()
-    tab_states = {tab: app._notebook.tab(tab, "state") for tab in app._notebook.tabs()}
-    paned = app._main_paned
-    sashes = [paned.sashpos(i) for i in range(len(paned.panes()) - 1)]
-    chartstack = app._chartstack
-    chartstack_visible = app._chartstack_currently_visible(paned)
-    chartstack_setting = settings.get("chartstack.enabled", False)
-    axes = [(ax, ax.get_xlim(), ax.get_ylim()) for ax in app._figure.axes]
-    original_status = app.status.get()
-    primary, compare = list(app._primary), list(app._compare)
-    candles = {key: list(value) for key, value in app._full_cache.items()}
-    geometry_store = getattr(app, "_geometry_store", None)
-    saved_windows = dict(geometry_store._windows) if geometry_store is not None else None
-    if geometry_store is not None:
-        monkeypatch.setattr(geometry_store, "save", lambda: None)
-    try:
-        yield
-    finally:
-        app._toggle_chartstack(target=chartstack_visible)
-        settings.set("chartstack.enabled", chartstack_setting)
-        if chartstack is None and app._chartstack is not None:
-            app._chartstack.destroy()
-            app._chartstack = None
-        for tab, state in tab_states.items():
-            app._notebook.tab(tab, state=state)
-        app._notebook.select(selected)
-        app.minsize(*minimum)
-        app.maxsize(*maximum)
-        app.geometry(geometry)
-        settle(app)
-        for index, sash in enumerate(sashes):
-            paned.sashpos(index, sash)
-        for ax, xlim, ylim in axes:
-            if ax in app._figure.axes:
-                ax.set_xlim(xlim)
-                ax.set_ylim(ylim)
-        app.status.set(original_status)
+    with mapped_window(app):
+        geometry, minimum, maximum = app.geometry(), app.minsize(), app.maxsize()
+        selected = app._notebook.select()
+        tab_states = {tab: app._notebook.tab(tab, "state") for tab in app._notebook.tabs()}
+        paned = app._main_paned
+        sashes = [paned.sashpos(i) for i in range(len(paned.panes()) - 1)]
+        chartstack = app._chartstack
+        chartstack_visible = app._chartstack_currently_visible(paned)
+        chartstack_setting = settings.get("chartstack.enabled", False)
+        axes = [(ax, ax.get_xlim(), ax.get_ylim()) for ax in app._figure.axes]
+        original_status = app.status.get()
+        primary, compare = list(app._primary), list(app._compare)
+        candles = {key: list(value) for key, value in app._full_cache.items()}
+        geometry_store = getattr(app, "_geometry_store", None)
+        saved_windows = dict(geometry_store._windows) if geometry_store is not None else None
         if geometry_store is not None:
-            for job in tuple(geometry_store._pending_after.values()):
-                app.after_cancel(job)
-            geometry_store._pending_after.clear()
-            geometry_store._windows.clear()
-            geometry_store._windows.update(saved_windows)
-        assert app._primary == primary and app._compare == compare, "Width probes changed chart bars"
-        assert dict(app._full_cache) == candles, "Width probes changed the chart candle cache"
+            monkeypatch.setattr(geometry_store, "save", lambda: None)
+        try:
+            yield
+        finally:
+            app._toggle_chartstack(target=chartstack_visible)
+            settings.set("chartstack.enabled", chartstack_setting)
+            if chartstack is None and app._chartstack is not None:
+                app._chartstack.destroy()
+                app._chartstack = None
+            for tab, state in tab_states.items():
+                app._notebook.tab(tab, state=state)
+            app._notebook.select(selected)
+            app.minsize(*minimum)
+            app.maxsize(*maximum)
+            app.geometry(geometry)
+            settle(app)
+            for index, sash in enumerate(sashes):
+                paned.sashpos(index, sash)
+            settle(app)
+            for ax, xlim, ylim in axes:
+                if ax in app._figure.axes:
+                    ax.set_xlim(xlim)
+                    ax.set_ylim(ylim)
+            app.status.set(original_status)
+            if geometry_store is not None:
+                for job in tuple(geometry_store._pending_after.values()):
+                    app.after_cancel(job)
+                geometry_store._pending_after.clear()
+                geometry_store._windows.clear()
+                geometry_store._windows.update(saved_windows)
+            assert app._primary == primary and app._compare == compare, "Width probes changed chart bars"
+            assert dict(app._full_cache) == candles, "Width probes changed the chart candle cache"
 
 
 def _session_result():
@@ -462,7 +467,7 @@ def check_w0_application_window_width(app, case, scenario, font_size, monkeypatc
     _settle_fetch_workers(app)
     fonts = enlarged_fonts(app, size=font_size) if font_size else nullcontext()
     failures = []
-    with _preserve_app_layout(app, monkeypatch), mapped_window(app), fonts:
+    with _preserve_app_layout(app, monkeypatch), fonts:
         if case.name == "main":
             store.restore_window(app, "main", default=app._initial_geometry, min_size=app.minsize())
         with _heavy_probe(case, app, monkeypatch, tmp_path) as probe, mapped_window(probe.window):
@@ -493,6 +498,46 @@ def check_w0_application_window_width(app, case, scenario, font_size, monkeypatc
 @pytest.mark.parametrize("font_size", [None, 16], ids=["normal-font", "large-font"])
 def test_application_window_width(app, case, scenario, font_size, monkeypatch, tmp_path):
     check_w0_application_window_width(app, case, scenario, font_size, monkeypatch, tmp_path)
+
+
+@pytest.mark.parametrize("probe_fails", [False, True], ids=["normal-exit", "exception-exit"])
+def test_layout_restores_geometry_and_sashes_before_unmapping(app, monkeypatch, probe_fails):
+    _settle_fetch_workers(app)
+    with mapped_window(app), _preserve_app_layout(app, monkeypatch):
+        _, minimum_height = app.minsize()
+        wide = min(app.winfo_screenwidth() - 40, app.maxsize()[0], 1700)
+        narrow = wide // 2
+        # This tests restoration, not the application's normal minimum-width policy.
+        app.minsize(narrow, minimum_height)
+        height = max(800, minimum_height)
+        app.geometry(f"{wide}x{height}+20+20")
+        settle(app)
+        paned = app._main_paned
+        boundary_index = len(paned.panes()) - 2
+        paned.sashpos(boundary_index, wide * 4 // 5)
+        settle(app)
+        geometry = app.geometry()
+        sashes = [paned.sashpos(i) for i in range(len(paned.panes()) - 1)]
+        assert sashes[boundary_index] > narrow
+        app.withdraw()
+        try:
+            outcome = pytest.raises(RuntimeError, match="probe failed") if probe_fails else nullcontext()
+            with outcome, _preserve_app_layout(app, monkeypatch), mapped_window(app):
+                app.geometry(f"{narrow}x{height}+20+20")
+                settle(app)
+                assert paned.winfo_width() < sashes[boundary_index]
+                if probe_fails:
+                    raise RuntimeError("probe failed")
+            assert app.state() == "withdrawn"
+            with mapped_window(app):
+                settle(app)
+                assert app.geometry() == geometry
+                assert [paned.sashpos(i) for i in range(len(sashes))] == sashes
+                assert app._notebook.winfo_ismapped()
+        finally:
+            # The outer cleanup must remain mapped even if the inner regression fails.
+            app.deiconify()
+            settle(app)
 
 
 @pytest.mark.window_width(window_id="tradinglab.app.ChartApp")

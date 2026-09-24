@@ -974,7 +974,10 @@ Standard cases live in `tests/unit/gui/test_window_width.py`, popup cases in
 `tests/smoke/test_smoke_window_width.py`. Keep their mapping, geometry, fonts,
 callbacks and data isolated; use the shared Tk fixture in `tests/conftest.py`,
 not a second root. Preserve the adversarial checker/discovery tests when changing
-the guard.
+the guard. Keep the application mapped through layout snapshot and restoration:
+restoring sashes while withdrawn can clamp them against the prior narrow width.
+`test_layout_restores_geometry_and_sashes_before_unmapping` pins normal and
+exception-path cleanup.
 
 ---
 
