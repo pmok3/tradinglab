@@ -54,9 +54,10 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, time
+from datetime import datetime
 from typing import Any
 
+from ..core.timezones import parse_hhmm
 from ..positions.model import Position
 from .model import (
     ActivationUnit,
@@ -569,12 +570,8 @@ def evaluate_time_of_day(
     """
     if trigger.kind != TriggerKind.TIME_OF_DAY:
         return _no_fire("kind mismatch")
-    if not trigger.time_of_day:
-        return _no_fire("malformed time_of_day")
-    try:
-        h, m = trigger.time_of_day.split(":")
-        cutoff = time(hour=int(h), minute=int(m))
-    except (ValueError, AttributeError):
+    cutoff = parse_hhmm(trigger.time_of_day)
+    if cutoff is None:
         return _no_fire("malformed time_of_day")
     qty = compute_qty_at_fire(trigger, position)
     if qty <= 0:

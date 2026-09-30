@@ -1,6 +1,6 @@
 # timezones.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-23
 
 ## Purpose
 Single source of truth for :class:`zoneinfo.ZoneInfo` resolution.
@@ -10,6 +10,11 @@ environments, with subtly drifting fallback policies) with cached
 primitives.
 
 ## Public API
+- `parse_hhmm(value) -> time | None` — shared validated wall-clock
+  parser for strategy arm windows and exit cutoffs. Blank, malformed
+  or out-of-range hour/minute values return `None`; integer syntax
+  (including non-zero-padded components) retains scalar compatibility.
+  Pinned by `tests/core/test_timezones.py`.
 - `ET: tzinfo | None` — eagerly resolved at import. `None` when
   `tzdata` is missing. Most callers import this.
 - `get_et() -> tzinfo | None` — lazy accessor; identical to `ET`

@@ -31,7 +31,10 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+import numpy as np
+
 from ..scanner.engine import evaluate_group as _evaluate_group
+from ..scanner.engine import evaluate_group_vec
 from ..scanner.model import MatchEvidence
 from .model import Direction, EntryTrigger, TriggerKind
 from .signals import EntryOrderKind
@@ -48,6 +51,8 @@ __all__ = [
     "BarView",
     "TriggerContext",
     "TriggerHandler",
+    "PreparedEntryMask",
+    "prepare_trigger_mask",
     "check_trigger_fires",
     "reference_price",
     "signal_price_for_kind",
@@ -254,13 +259,17 @@ def _h_scanner_alert(
         )
         return False, []
     matched_now = result is True
+    return _scanner_alert_edge(trigger.id, matched_now, ctx.scanner_alert_prev_match), []
+
+
+def _scanner_alert_edge(
+    trigger_id: str, matched: bool, previous: dict[str, bool] | None,
+) -> bool:
     prev = None
-    if ctx.scanner_alert_prev_match is not None:
-        prev = ctx.scanner_alert_prev_match.get(trigger.id)
-        ctx.scanner_alert_prev_match[trigger.id] = matched_now
-    if prev is None:
-        return False, []
-    return (matched_now and not prev), []
+    if previous is not None:
+        prev = previous.get(trigger_id)
+        previous[trigger_id] = matched
+    return prev is not None and matched and not prev
 
 
 # ---------------------------------------------------------------------------
@@ -276,6 +285,55 @@ _ENTRY_DISPATCH: dict[TriggerKind, TriggerHandler] = {
     TriggerKind.INDICATOR: _h_indicator,
     TriggerKind.SCANNER_ALERT: _h_scanner_alert,
 }
+
+
+@dataclass(frozen=True)
+class PreparedEntryMask:
+    """Dispatch-owned close-bar predicate; None from fires means scalar fallback."""
+
+    handler: TriggerHandler
+    values: np.ndarray
+    scanner_alert: bool = False
+
+    def fires(
+        self, trigger: EntryTrigger, index: int, previous: dict[str, bool],
+    ) -> bool | None:
+        if _ENTRY_DISPATCH.get(trigger.kind) is not self.handler:
+            return None
+        matched = bool(self.values[index])
+        if self.scanner_alert:
+            return _scanner_alert_edge(trigger.id, matched, previous)
+        return matched
+
+
+def prepare_trigger_mask(
+    trigger: EntryTrigger, *, n: int, eval_ctx: Any,
+    normalized_conditions: dict[str, Any],
+) -> PreparedEntryMask | None:
+    """Optional mechanical close-bar kernel for the *current* handler.
+
+    Price/custom handlers stay scalar. Missing scanner inputs also stay scalar
+    so scanner-alert state is not updated when the handler would return early.
+    """
+    handler = _ENTRY_DISPATCH.get(trigger.kind)
+    if handler is _h_market and trigger.kind is TriggerKind.MARKET:
+        return PreparedEntryMask(handler, np.ones(n, dtype=bool))
+    if handler is _h_indicator and trigger.kind is TriggerKind.INDICATOR:
+        if eval_ctx is None or trigger.condition is None:
+            return None
+        condition = normalized_conditions.get(trigger.id, trigger.condition)
+    elif handler is _h_scanner_alert and trigger.kind is TriggerKind.SCANNER_ALERT:
+        if eval_ctx is None or not trigger.scanner_id:
+            return None
+        condition = normalized_conditions.get(trigger.id)
+        if condition is None:
+            return None
+    else:
+        return None
+    masks = evaluate_group_vec(condition, eval_ctx)
+    if masks is None:
+        return None
+    return PreparedEntryMask(handler, masks[0], trigger.kind is TriggerKind.SCANNER_ALERT)
 
 
 def supported_trigger_kinds() -> set[TriggerKind]:
