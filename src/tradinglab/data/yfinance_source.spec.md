@@ -1,6 +1,6 @@
 # data/yfinance_source.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-23
 
 ## Purpose
 Live-data fetcher backed by yfinance. Thin adapter: pulls a DataFrame via `yf.Ticker(t).history(...)` and delegates to the vectorized `candles_from_dataframe` normalizer.
@@ -20,7 +20,8 @@ Live-data fetcher backed by yfinance. Thin adapter: pulls a DataFrame via `yf.Ti
 - **`period` chosen from `INTERVAL_PERIODS`** (e.g. `"5m"→"60d"`, `"1h"→"730d"`): maximizes history within yfinance's per-interval caps. Fallback `"2y"` for unknown intervals.
 - **Uses `candles_from_dataframe` (not iterrows)**: 5–20× faster on typical intraday fetches; also populates the prebuilt-arrays side channel so the subsequent `SeriesArrays` build skips extraction.
 - **Non-finite OHLC rows are dropped by the shared normalizer**: Yahoo can emit a phantom current-session row before any trade prints (NaN OHLC, sometimes stray volume). `candles_from_dataframe` filters those rows before `Candle` construction; NaN volume on otherwise-valid bars is still coerced to `0`.
-- **Errors are caught at the source layer, never propagated** — a broad `except Exception` swallows yfinance's varied HTTP/JSON/KeyError failures and returns `None`. Diagnostics go via `print()` at `yfinance_source.py:43` (no `_status` available in this stateless module). This honours the `data/base.py` contract that fetchers MUST NOT raise.
+- **Errors are caught at the source layer, never propagated** — a broad `except Exception` catches yfinance's varied HTTP/JSON/KeyError failures that reach the adapter and returns `None`. Diagnostics go via `print()` in `fetch_live_data` (no `_status` available in this stateless module). This honours the `data/base.py` contract that fetchers MUST NOT raise. yfinance may instead handle an error internally and return an empty frame, which is also coerced to `None`.
+- **Explicit 10 s history-request timeout** — `Ticker().history(...)` is called with `timeout=YFINANCE_TIMEOUT_S` (`10`), preserving yfinance 1.3.0's existing finite default rather than adding a previously missing timeout. The constant is read at call time (not bound as a default arg) so tests can monkeypatch it. This is not a whole-operation deadline: timezone/cookie bootstrap requests and internal retries/backoff are outside a single history-request timeout budget, so the complete fetch can take longer.
 
 ## Invariants
 - `fetch_live_data(t, i)` returns either `None` or a `List[Candle]` (possibly empty after non-finite-OHLC filtering). Empty frames are coerced to `None`.
@@ -29,11 +30,12 @@ Live-data fetcher backed by yfinance. Thin adapter: pulls a DataFrame via `yf.Ti
 
 ## Testing
 - Test conftest pins startup to `"yfinance"` and stubs the yfinance fetcher with deterministic offline candles, so the smoke suite exercises the registry path without network. Live fetch is exercised manually. `check_c6_bad_ticker` covers the failure path.
+- `tests/unit/data/test_yfinance_timeout.py` uses a fake yfinance module to pin the explicit `timeout=10` argument for daily and intraday history calls, call-time constant overrides, unchanged request options and candle normalization, diagnostic/`None` handling for raised errors, empty-frame/`None` handling, all-invalid-OHLC/`[]` handling, and the missing-import path. These offline adapter tests do not measure live transport timing or establish a whole-fetch deadline.
 
 ## Known limitations
 - **Asset-class scope** — Tested with US equities and ETFs only (USD-denominated). yfinance accepts crypto / FX / international tickers but our normalisation, session classification, and ET timestamping all assume US-equity conventions. Do not rely on those asset classes.
 - **Yahoo lookback caps** — Supported intervals: 1m, 2m, 5m, 15m, 30m, 60m/1h, 1d, 1wk, 1mo. Yahoo enforces lookback limits per interval (1m: ~7 days; 2–30m: ~60 days; 60m: ~730 days; daily+: full history). Requests beyond these silently return empty.
 - **Pre/post-market data is sparse** — `prepost=True` is set, but TRF / dark-pool prints often have NaN volume and individual sub-15:00 ET pre-market trades may be aggregated. Volume in extended hours is NOT a reliable liquidity signal.
 - **Single-ticker only** — Batch downloads return a `MultiIndex` columns DataFrame; downstream code does not handle that shape. Use one fetcher call per ticker.
-- yfinance occasionally rate-limits or returns empty frames for transient reasons. No retry; the app-level fallback (disk cache or stale memory cache) papers over this.
+- yfinance occasionally rate-limits or returns empty frames for transient reasons. This adapter adds no retries of its own (yfinance may retry internally); the app-level fallback uses disk cache or stale memory cache.
 - No `prepost=False` override for users who want to avoid extended-hours bars at fetch time rather than filter-time.
