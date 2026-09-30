@@ -364,13 +364,15 @@ jobs:
 
   perf-gate:
     needs: spec-freshness
-    # Indicator perf-budget regression gate (see docs/PERFORMANCE.md +
-    # CLAUDE.md §7.27). Opt-in marker so the default smoke matrix
+    # Indicator and strategy-evaluation perf-budget regression gates
+    # (see docs/PERFORMANCE.md + CLAUDE.md §7.14 / §7.27).
+    # Opt-in marker so the default smoke matrix
     # stays fast; runs unconditionally on push to main so any
     # accidentally-merged regression surfaces immediately, and on
-    # every PR — the suite is <1 second so the cost is negligible.
-    # Budgets are sized at 4× the v0.3.0 ARM64 baseline so the gate
-    # tolerates the Linux x86 runner's different micro-architecture.
+    # every PR. Indicators use ~4× baseline budgets; strategy evaluation
+    # uses 20×+ catastrophic-regression budgets, not latency targets.
+    # Strategy timing cases allow 180s each: at the EMA budget, warmup
+    # plus seven complete 8k-bar samples take 128s before overhead.
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -379,5 +381,5 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e .[dev]
-      - name: Run indicator perf-budget gates
+      - name: Run indicator and strategy-evaluation perf-budget gates
         run: pytest tests/perf -m perf -v --tb=short
