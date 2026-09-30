@@ -49,6 +49,7 @@ def fetch_window(
 
     Returns ``(bars, error, retry_after_s)``.
     """
+    from ...disk_cache import copy_candles
     from ..base import DATA_SOURCES, fetch_page
 
     if window is not None and window.kind == "range":
@@ -71,7 +72,7 @@ def fetch_window(
         bars = fetcher(symbol, interval) or []
     except Exception as exc:  # noqa: BLE001 — scheduler owns retry/poison
         return ([], exc, None)
-    return (list(bars), None, None)
+    return (copy_candles(bars), None, None)
 
 
 __all__ = ["FetchOutcome", "oldest_ts", "fetch_window"]

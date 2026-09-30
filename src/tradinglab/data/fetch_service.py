@@ -8,6 +8,7 @@ from typing import Any
 
 from ..core import reference_data as _reference_data
 from ..core.bars import Bars
+from ..disk_cache import HistorySnapshot, current_candles
 from ..models import Candle
 from .base import DATA_SOURCES
 
@@ -34,6 +35,8 @@ def _candles_extended_or_updated(
     """
     if base is None:
         return bool(merged)
+    if isinstance(merged, HistorySnapshot):
+        return current_candles(base) is None or base != merged
     if len(base) != len(merged):
         return True
     if not merged:
@@ -206,7 +209,7 @@ class FetchService:
             )
             return None
         try:
-            current = full_cache.get(key)
+            current = current_candles(full_cache.get(key))
             if stale_guard and current and fetched:
                 try:
                     cur_last = current[-1].date.timestamp()
@@ -230,6 +233,9 @@ class FetchService:
             # Both sides are date-ascending (disk saved sorted; fetchers
             # return time-ordered) → skip merge_candles' O(N) sort checks.
             merged = disk_cache_mod.merge_candles(base, fetched, presorted=True)
+            if not merged:
+                self._status(status_fn, f"Prefetch skipped (invalidated history): {ticker}/{interval}")
+                return None
             if memory_allowed:
                 stash_fn(key, merged)
             if _candles_extended_or_updated(base, merged):
@@ -241,7 +247,8 @@ class FetchService:
             last = merged[-1].date if merged else None
             self._status(
                 status_fn,
-                f"Prefetch done: {ticker}/{interval} ({len(merged)} bars, {first} → {last})",
+                (merged.revision.notice if isinstance(merged, HistorySnapshot) else None)
+                or f"Prefetch done: {ticker}/{interval} ({len(merged)} bars, {first} → {last})",
             )
             return merged
         except Exception:  # noqa: BLE001

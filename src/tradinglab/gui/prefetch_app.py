@@ -102,7 +102,7 @@ class PrefetchAppMixin:
                 # Worker-side merge + disk save; memory_allowed=False so the
                 # worker never touches the Tk-owned in-memory cache.
                 merged = fetch_svc.apply_prefetch_result(
-                    key, list(bars), full_cache, disk_cache, stash,
+                    key, disk_cache.copy_candles(bars), full_cache, disk_cache, stash,
                     memory_allowed=False, stale_guard=stale_guard,
                 )
             except Exception:  # noqa: BLE001

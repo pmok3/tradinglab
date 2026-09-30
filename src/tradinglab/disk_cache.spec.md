@@ -1,6 +1,6 @@
 # disk_cache.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-23
 
 ## Purpose
 Durable cache of fetched candle data, keyed by `(source, ticker, interval)`. Acts as a log of every bar we've ever seen for a key, so that historical bars which fall outside a provider's current window (e.g. yfinance's 60-day intraday cap) are retained across sessions. Freshness policy is **not** enforced here — sealed OHLCV bars are immutable facts; the caller (`ChartApp._cache_is_stale`) decides when to re-fetch.
@@ -44,15 +44,17 @@ Durable cache of fetched candle data, keyed by `(source, ticker, interval)`. Act
   row from lingering forever (dropped on load but never erased), which
   otherwise keeps the series' visible tail under-reporting the last
   real bar and lets the stale row re-surface through any raw-file
-  reader. The rewrite is best-effort (`save` swallows write errors) and
+  reader. The rewrite is best-effort (`save` logs write errors) and
   only fires when a drop occurred (`_drop_nonfinite_ohlc` returns the
   same list object when nothing was dropped — an identity check, no
   second scan); a clean file is never rewritten. `load` still never
   raises.
-- `save(source, ticker, interval, candles)` — atomic write
+- `save(source, ticker, interval, candles) -> bool` — atomic write
   (`tempfile.mkstemp` in the same directory + `os.replace`). Writes
   one JSON object per line via `_candle_to_dict`. **No-op for ratio
   pseudo-symbols** (`_is_ratio_ticker`) and `mark_no_persist` sources.
+  Returns `True` for a completed write or intentional no-op, `False` with a
+  diagnostic for write failure or a superseded history snapshot.
 - `load_window(source, ticker, interval, *, start_day, end_day) ->
   Optional[List[Candle]]` — the windowed sibling of `load`. Both bounds are
   **inclusive `YYYY-MM-DD` strings** compared against the record's own ISO
@@ -73,6 +75,8 @@ Durable cache of fetched candle data, keyed by `(source, ticker, interval)`. Act
   and the loader then falls back to a real parse plus a parsed-date window
   check (and keeps scanning — ordering can't be assumed for such a file).
   The trick is an optimisation and never the source of truth.
+  Hybrid/Auto reads instead use the generation-aware full loader then filter;
+  any heal-on-load rewrite covers the full series, never just the window.
   **Why it exists:** sandbox replay warms a whole universe (see
   `backtest/sandbox_feed.spec.md`). A session only needs its lookback
   window, but `load` materialises everything ever fetched for that key — a
@@ -138,6 +142,40 @@ Durable cache of fetched candle data, keyed by `(source, ticker, interval)`. Act
   persistence registry. When a source name is in the no-persist set,
   `load()` returns `None` immediately (without touching disk) and
   `save()` is a no-op. Used by BYOD.
+
+### Hybrid history invalidation
+- `HistorySnapshot` is a `list[Candle]` with an in-process revision fence.
+  An invalidated snapshot tests false; `current_candles` rejects it and
+  `copy_candles` preserves the fence on valid copies. Chart cache copies and
+  both prefetch handoffs must use this helper, not `list(snapshot)`.
+- `history_snapshot(ticker, interval, candles, notice=None)` stamps fresh
+  hybrid output; `load` stamps the hybrid and opaque Auto cache namespaces.
+  The revision registry is an `LRUDict(maxsize=128)` keyed by cache root and
+  ticker/interval. Eviction invalidates retained snapshots, not their disk data.
+- `derived_history_snapshot` carries up to two underlying revision dependencies
+  into scaled/quotient lists. Invalidation of either leg rejects old ratio memory
+  and work without global symbol sweeps or changing ratio disk exclusions.
+- `invalidate_history` retires only that ticker/interval's hybrid and Auto
+  files and old revisions, and creates a `.invalid` sidecar. Disk reads remain
+  blocked until a safe replacement is saved. The sidecar survives restart;
+  `history_pending` exposes it and `confirm_history` removes it only after
+  the hybrid source has persisted a validated deep replacement. Alpaca and
+  unrelated source/symbol/interval files are not deleted.
+- Merging fresh hybrid output cannot resurrect an invalidated or unverified
+  old prefix. Fresh hybrid-vs-outer-cache overlap uses the same positive,
+  finite, minimum-five same-basis check as the deep leg; insufficient or
+  inconsistent evidence retires the outer history rather than inferring a
+  split. Same-basis histories still accumulate normally; plain-list merges
+  for other sources are unchanged. Revision metadata survives merges.
+- `merge_adds_nothing` uses full equality for hybrid snapshots: an interior
+  restatement must be persisted even with unchanged length and last bar.
+- Save rechecks the fence immediately before `os.replace` under the same
+  short lock as invalidation. A superseded worker cannot republish an old
+  file; temporary files are removed. I/O failures are logged, and failed
+  retirement leaves the namespace blocked in-process.
+- `history_notice` exposes the hybrid recovery warning for chart status;
+  JSONL candle rows remain unchanged. Revision fences are process-local,
+  not cross-process locks.
 
 ## Dependencies
 - Internal: `.models.Candle`, `tradinglab.paths.cache_dir`.

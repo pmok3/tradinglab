@@ -6961,6 +6961,79 @@ def check_d37_status_bar(app) -> None:
         _pump(app, 0.1)
 
 
+def check_d97_hybrid_history_recovery_notice(app) -> None:
+    """Hybrid recovery renders recent-only data and a visible status warning."""
+    import tempfile
+    from datetime import timezone
+
+    from tradinglab import disk_cache
+    from tradinglab.data import hybrid_source
+    from tradinglab.data.base import DATA_SOURCES
+    from tradinglab.models import Candle
+
+    variables = ("source_var", "ticker_var", "interval_var", "compare_var", "prepost_var")
+    saved = {name: getattr(app, name).get() for name in variables}
+    old_cache = app._full_cache.copy()
+    old_drilldown = app._drilldown_day
+    old_preserve = app._preserve_xlim_on_render
+    old_confirmed = app._confirmed_primary_ticker
+    symbol = "_D97_HYBRID"
+    recent = [Candle(datetime(2024, 6, d, 14, tzinfo=timezone.utc), 100, 100, 100, 100, 999)
+              for d in range(15, 26)]
+    old = [Candle(datetime(2024, 6, d, 14, tzinfo=timezone.utc), 400, 400, 400, 400, 100)
+           for d in range(1, 21)]
+    calls = []
+
+    def fetch(ticker, interval):
+        return hybrid_source.fetch_hybrid_data(
+            ticker, interval, recent_fetcher=lambda *_: recent,
+            deep_fetcher=lambda *_: calls.append("deep"),
+            deep_loader=lambda *_: old, deep_saver=lambda *_: None,
+        )
+
+    try:
+        app._bump_fetch_token()
+        if app._poll_job is not None:
+            app.after_cancel(app._poll_job)
+            app._poll_job = None
+        with tempfile.TemporaryDirectory(prefix="tradinglab-hybrid-") as cache, pytest.MonkeyPatch.context() as mp:
+            mp.setenv("TRADINGLAB_CACHE_DIR", cache)
+            mp.setitem(DATA_SOURCES, hybrid_source.HYBRID_SOURCE_NAME, fetch)
+            for method in ("_schedule_next_bar_fetch", "_start_stream_if_applicable",
+                           "_load_events_async", "_preload_watchlist_events",
+                           "_preload_watchlist_signals", "_prefetch_observe_soon"):
+                mp.setattr(app, method, lambda *a, **k: None)
+            app.source_var.set(hybrid_source.HYBRID_SOURCE_NAME)
+            app.ticker_var.set(symbol)
+            app.interval_var.set("5m")
+            app.compare_var.set(False)
+            app.prepost_var.set(True)
+            app._drilldown_day = None
+            app._preserve_xlim_on_render = False
+            key = (hybrid_source.HYBRID_SOURCE_NAME, symbol, "5m")
+            disk_cache.save(*key, old)
+            app._full_cache.pop(key, None)
+            app._load_data()
+            assert calls == ["deep"]
+            assert len(app._primary) == len(recent)
+            assert all(c.close == 100 for c in app._primary)
+            assert disk_cache.load(*key) == recent
+            assert any(e.level == "WARN" and symbol in e.message and "deep history withheld" in e.message
+                       for e in app._status.history())
+            _pump(app, 0.1)
+            assert "deep history withheld" in app.status.get()
+    finally:
+        app._bump_fetch_token()
+        for name, value in saved.items():
+            getattr(app, name).set(value)
+        app._full_cache.clear()
+        app._full_cache.update(old_cache)
+        app._confirmed_primary_ticker = old_confirmed
+        app._drilldown_day = old_drilldown
+        app._preserve_xlim_on_render = old_preserve
+        app._load_data()
+
+
 def check_d39_indicators_phase1(app) -> None:
     """Indicators Phase 1 — compute layer + manager + cache + loader.
 
@@ -24323,6 +24396,7 @@ def _run_all_checks(app) -> None:
     check_d83_entries_scanner_alert_renders_scanner_id_entry(app)
     check_d84_targeted_intraday_fetch(app)
     check_d85_sandbox_feed_warms_watchlist(app)
+    check_d97_hybrid_history_recovery_notice(app)
     check_e0_disk_cache_persist(app)
 
 
@@ -24730,6 +24804,8 @@ def _build_check_sequence():
          check_d84_targeted_intraday_fetch),
         ("check_d85_sandbox_feed_warms_watchlist",
          check_d85_sandbox_feed_warms_watchlist),
+        ("check_d97_hybrid_history_recovery_notice",
+         check_d97_hybrid_history_recovery_notice),
         ("check_e0_disk_cache_persist", check_e0_disk_cache_persist),
     ]
     return seq
