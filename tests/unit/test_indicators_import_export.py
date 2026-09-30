@@ -43,6 +43,12 @@ _BUILDER_SOURCE = (
 # ---------------------------------------------------------------------------
 
 
+def _APPROVE_ALL(_path, _digest):
+    """Auto-approve trust prompt for loader tests (approval is not under test)."""
+    return True
+
+
+
 def test_is_builder_file_detects_marker() -> None:
     assert is_builder_file(_BUILDER_SOURCE) is True
 
@@ -190,7 +196,7 @@ def test_export_import_round_trip_discovers(tmp_path: Path) -> None:
     # base, so it registers globally regardless of register_globally —
     # discover with global registration and assert the registry sees it.
     had_before = "roundtrip_ind" in ind_loader.INDICATORS
-    result = ind_loader.discover_user_indicators(fresh_dir, register_globally=True)
+    result = ind_loader.discover_user_indicators(fresh_dir, register_globally=True, approval_prompt=_APPROVE_ALL)
     try:
         assert result.errors == []
         assert "roundtrip_ind" in ind_loader.INDICATORS

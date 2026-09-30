@@ -1,11 +1,9 @@
 """Custom-indicator drop-in folder loader.
 
-When the user toggles ``custom_indicators_enabled`` in the Settings
-dialog, the app calls :func:`discover_user_indicators` once at startup
-(and on demand via *Indicators → Reload Custom*). Each ``*.py`` file
-in :func:`default_user_dir` is executed in a fresh module-like
-namespace; any class registered via :func:`tradinglab.indicators.
-register_indicator` becomes available in the Add menu.
+The builder uses :func:`register_user_indicator_file` after save/import.
+:func:`discover_user_indicators` is also available to explicit callers;
+there is currently no application startup/reload discovery hook. Each
+approved ``*.py`` is executed in a fresh module-like namespace.
 
 **Security note.** Custom indicators execute as in-process Python with
 the same OS privileges as TradingLab itself — they can open files,
@@ -21,6 +19,16 @@ as fully-privileged code, equivalent to running ``python``
 ``my_indicator.py`` from a terminal.** Do not load files you did
 not author or fully audit.
 
+Because of that, the loader also keeps a *first-load trust approval*:
+before exec'ing a file it computes the file's SHA-256 and requires a
+recorded approval for exactly that content hash
+(``custom_indicator_approvals.json`` under the app-data dir). The
+builder asks for consent on every external import. Explicit loader
+callers may supply an approval callback; without one, new or changed
+content is refused rather than prompting automatically. See
+:func:`discover_user_indicators`, :func:`is_indicator_approved`, and
+:func:`record_indicator_approval`.
+
 The caller is still expected to:
 
 1. Gate the call behind the ``custom_indicators_enabled`` setting.
@@ -35,9 +43,12 @@ from __future__ import annotations
 
 import builtins as _builtins
 import hashlib
+import json
 import os
 import tempfile
 import traceback
+from collections.abc import Callable
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import NamedTuple
 
@@ -64,8 +75,8 @@ _SAFE_IMPORT_PREFIXES = ("numpy.",)
 
 #: Marker line that distinguishes builder-managed indicator files
 #: (created via the Custom Indicator Builder dialog) from hand-authored
-#: plugin files. Builder files are saved by trusted in-app UI code and
-#: may freely import internal ``tradinglab.*`` helpers (e.g.
+#: plugin files. This self-claimed marker is NOT evidence of trust.
+#: After hash approval, marked files may import internal helpers (e.g.
 #: ``tradinglab.indicators.expression`` and
 #: ``tradinglab.indicators.ma_kernels``) which the restricted
 #: ``_safe_import`` blocks for hand-authored plugins. Detection is a
@@ -79,13 +90,128 @@ def _is_builder_file(source: str) -> bool:
     return BUILDER_HEADER_MARKER in source[:512]
 
 
+def hash_indicator_source(source: str) -> str:
+    """Return the full SHA-256 hex digest of indicator source text.
+
+    Used for first-load trust approvals. Note this is the *full*
+    64-character digest; :class:`LoadedIndicator.source_hash` keeps a
+    truncated 16-character display form for log/status lines.
+    """
+    return hashlib.sha256(source.encode("utf-8")).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# First-load trust approvals
+# ---------------------------------------------------------------------------
+#
+# Custom indicators exec as fully-privileged code (see the module
+# docstring). As a speed bump against dropped-in / tampered files, the
+# loader requires a recorded trust approval before executing a file
+# for the first time:
+#
+# * ``approval_prompt`` (a GUI messagebox in the builder dialog, a test
+#   double in tests) is invoked with the file path and the full
+#   SHA-256 digest. Declining — or having no prompt to ask — refuses
+#   the load; the refusal is reported as a :class:`LoadError`.
+# * An approval is recorded keyed by (absolute path, digest). A later
+#   load of identical source text skips the prompt; changed content
+#   requires a callback to prompt, or is refused.
+# * Approvals persist in ``custom_indicator_approvals.json`` under the
+#   app-data dir so the decision survives restarts.
+#
+# The Custom Indicator Builder dialog records approvals itself for
+# generated save content and explicitly consented imports, so users are
+# not prompted twice.
+
+#: Filename of the persisted trust-approval store under the app-data dir.
+_APPROVALS_FILENAME = "custom_indicator_approvals.json"
+
+#: ``approval_prompt`` callback: ``(path, sha256_hexdigest) -> bool``.
+#: Return ``True`` to approve the file's current content for loading.
+ApprovalPrompt = Callable[[Path, str], bool]
+
+
+def _approvals_store_path(override: Path | None) -> Path | None:
+    """Resolve the trust-approval store file.
+
+    ``override`` (tests) wins; otherwise the app-data dir. ``None``
+    when the app-data dir cannot be resolved — callers then treat
+    every file as unapproved (fail closed).
+    """
+    if override is not None:
+        return Path(override)
+    try:
+        from ..paths import app_data_dir as _add
+
+        return _add() / _APPROVALS_FILENAME
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _approval_key(path: Path) -> str:
+    """Stable store key for a file path (absolute, symlink-preserving)."""
+    return str(Path(os.path.abspath(path)))
+
+
+def _read_approval_records(store: Path) -> dict[str, dict[str, str]]:
+    """Read ``{key: {"sha256": ...}}`` from the store; ``{}`` on any problem."""
+    try:
+        payload = json.loads(store.read_text(encoding="utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    records = payload.get("approvals")
+    if not isinstance(records, dict):
+        return {}
+    out: dict[str, dict[str, str]] = {}
+    for key, rec in records.items():
+        if not isinstance(key, str) or not isinstance(rec, dict):
+            continue
+        digest = rec.get("sha256")
+        if isinstance(digest, str) and digest:
+            out[key] = {"sha256": digest}
+    return out
+
+
+def is_indicator_approved(
+    path: Path, digest: str, *, approvals_path: Path | None = None
+) -> bool:
+    """Return ``True`` if ``path`` has a recorded approval for ``digest``."""
+    store = _approvals_store_path(approvals_path)
+    if store is None:
+        return False
+    return _read_approval_records(store).get(_approval_key(path), {}).get("sha256") == digest
+
+
+def record_indicator_approval(
+    path: Path, digest: str, *, approvals_path: Path | None = None
+) -> None:
+    """Persist a trust approval for ``path`` at content hash ``digest``.
+
+    Overwrites any prior approval for the path (re-approval after an
+    edit). Raises OSError if the store cannot be resolved or written;
+    callers must surface this failure and refuse registration.
+    """
+    store = _approvals_store_path(approvals_path)
+    if store is None:
+        raise OSError("cannot resolve custom indicator approval store")
+    records = _read_approval_records(store)
+    records[_approval_key(path)] = {
+        "sha256": digest,
+        "approved_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+    }
+    _atomic_write_text(
+        store,
+        json.dumps({"version": 1, "approvals": records}, indent=2, sort_keys=True),
+    )
+
+
 def is_builder_file(source: str) -> bool:
     """Public predicate: does ``source`` carry the builder header marker?
 
     Thin public alias of :func:`_is_builder_file` for callers outside the
-    loader (e.g. the Custom Indicator Builder dialog's Import flow, which
-    uses it to decide whether an external file is a trusted builder file
-    or arbitrary hand-authored Python requiring a confirmation prompt).
+    loader. The marker describes a file format, never provenance or trust.
     """
     return _is_builder_file(source)
 
@@ -142,6 +268,7 @@ def import_indicator_file(
     *,
     overwrite: bool = False,
     target_name: str | None = None,
+    source_text: str | None = None,
 ) -> Path:
     """Copy an external ``.py`` indicator into the custom-indicators dir.
 
@@ -159,6 +286,9 @@ def import_indicator_file(
     target_name
         Override the destination file stem. ``None`` uses
         ``source.stem``.
+    source_text
+        Already-read source snapshot, when the caller obtained consent
+        for that exact text. Copy it without re-reading the external file.
 
     Validation mirrors :func:`discover_user_indicators`: the file must
     have a ``.py`` suffix and stay within :data:`_MAX_FILE_SIZE`. The
@@ -174,12 +304,14 @@ def import_indicator_file(
         raise FileNotFoundError(f"no such file: {source}")
     if source.suffix.lower() != ".py":
         raise ValueError(f"not a Python (.py) indicator file: {source.name}")
-    size = source.stat().st_size
+    if source_text is None and source.stat().st_size > _MAX_FILE_SIZE:
+        raise ValueError(f"file too large: exceeds {_MAX_FILE_SIZE}-byte limit")
+    text = source.read_text(encoding="utf-8") if source_text is None else source_text
+    size = len(text.encode("utf-8"))
     if size > _MAX_FILE_SIZE:
         raise ValueError(
             f"file too large: {size} bytes exceeds {_MAX_FILE_SIZE}-byte limit",
         )
-    text = source.read_text(encoding="utf-8")
     stem = (target_name if target_name is not None else source.stem).strip()
     if not stem:
         raise ValueError("target indicator name is empty")
@@ -309,6 +441,8 @@ def discover_user_indicators(
     directory: Path | None = None,
     *,
     register_globally: bool = True,
+    approval_prompt: ApprovalPrompt | None = None,
+    approvals_path: Path | None = None,
 ) -> DiscoveryResult:
     """Scan ``directory`` for ``*.py`` files and exec each one.
 
@@ -323,6 +457,16 @@ def discover_user_indicators(
         global :data:`INDICATORS` registry. When ``False`` (testing
         path), a per-call shim records what *would* have been
         registered without polluting the global state.
+    approval_prompt
+        ``(path, sha256_hexdigest) -> bool`` invoked when a file has
+        no recorded trust approval for its current content. Files are
+        re-prompted only when their content hash changes; declining
+        (or passing no prompt) refuses the load and records a
+        :class:`LoadError`. Approvals are stored via
+        :func:`record_indicator_approval` before the file is exec'd.
+    approvals_path
+        Override for the trust-approval store location (tests).
+        ``None`` uses ``<app_data_dir>/custom_indicator_approvals.json``.
     """
     directory = directory or default_user_dir()
     loaded: list[LoadedIndicator] = []
@@ -332,6 +476,21 @@ def discover_user_indicators(
         return DiscoveryResult(loaded=loaded, errors=errors)
 
     files = sorted(p for p in directory.iterdir() if p.is_file() and p.suffix == ".py")
+    return _load_indicator_files(
+        files, register_globally=register_globally,
+        approval_prompt=approval_prompt, approvals_path=approvals_path,
+    )
+
+
+def _load_indicator_files(
+    files: list[Path],
+    *,
+    register_globally: bool,
+    approval_prompt: ApprovalPrompt | None,
+    approvals_path: Path | None,
+) -> DiscoveryResult:
+    loaded: list[LoadedIndicator] = []
+    errors: list[LoadError] = []
     for path in files:
         try:
             file_size = path.stat().st_size
@@ -360,7 +519,9 @@ def discover_user_indicators(
 
         try:
             source = path.read_text(encoding="utf-8")
-        except OSError as exc:
+            if len(source.encode("utf-8")) > _MAX_FILE_SIZE:
+                raise ValueError(f"file too large: exceeds {_MAX_FILE_SIZE}-byte limit")
+        except (OSError, ValueError) as exc:
             errors.append(
                 LoadError(
                     source_path=path,
@@ -370,7 +531,50 @@ def discover_user_indicators(
             )
             continue
 
-        source_hash = hashlib.sha256(source.encode()).hexdigest()[:16]
+        full_hash = hash_indicator_source(source)
+        source_hash = full_hash[:16]
+
+        # First-load trust gate: custom indicators exec as
+        # fully-privileged code. Prompt only when the content hash has
+        # no recorded approval; changed content requires fresh consent.
+        # An approved file loads silently. Declining — or having no prompt —
+        # refuses the load (fail closed).
+        if not is_indicator_approved(path, full_hash, approvals_path=approvals_path):
+            approved = False
+            was_asked = False
+            if approval_prompt is not None:
+                was_asked = True
+                try:
+                    approved = bool(approval_prompt(path, full_hash))
+                except Exception:  # noqa: BLE001
+                    approved = False
+            if not approved:
+                reason = (
+                    "trust approval declined"
+                    if was_asked
+                    else "no trust approval recorded and no prompt available"
+                )
+                errors.append(
+                    LoadError(
+                        source_path=path,
+                        error=(
+                            f"not loaded: {reason} (sha256:{source_hash}…); "
+                            "approve the file to load it"
+                        ),
+                        traceback_text="",
+                    )
+                )
+                continue
+            try:
+                record_indicator_approval(path, full_hash, approvals_path=approvals_path)
+            except OSError as exc:
+                errors.append(LoadError(
+                    source_path=path,
+                    error=f"approval persistence failed: {exc}",
+                    traceback_text=traceback.format_exc(),
+                ))
+                continue
+
         local_loaded: list[LoadedIndicator] = []
 
         def _capture_register(
@@ -446,22 +650,26 @@ def unregister_indicator(name: str) -> bool:
     return removed
 
 
-def register_user_indicator_file(path: Path) -> DiscoveryResult:
+def register_user_indicator_file(
+    path: Path,
+    *,
+    approval_prompt: ApprovalPrompt | None = None,
+    approvals_path: Path | None = None,
+) -> DiscoveryResult:
     """Discover + register a single ``.py`` file via the standard loader.
 
-    Thin wrapper around :func:`discover_user_indicators` that scans the
-    parent directory but filters the file list to ``path`` only. Lets
-    the builder dialog hot-reload one freshly-saved file without
-    rescanning every plugin.
-    """
-    if not path.is_file():
-        return DiscoveryResult(loaded=[], errors=[])
-    # Single-file scan: build a minimal DiscoveryResult by reusing the
-    # multi-file path under a tempdir-equivalent — we just call
-    # ``discover_user_indicators`` on the parent and filter out
-    # non-matching results. Cheap; user-indicators dirs are tiny.
-    result = discover_user_indicators(path.parent, register_globally=True)
-    matched_loaded = [li for li in result.loaded if li.source_path == path]
-    matched_errors = [e for e in result.errors if e.source_path == path]
-    return DiscoveryResult(loaded=matched_loaded, errors=matched_errors)
+    Uses the same read/hash/approve/exec implementation as discovery,
+    but never reads or executes sibling files.
 
+    ``approval_prompt`` / ``approvals_path`` are forwarded to
+    :func:`discover_user_indicators` unchanged; the caller (the Custom
+    Indicator Builder dialog) normally records the approval itself
+    before calling, since its save/import flows carry their own trust
+    gates.
+    """
+    return _load_indicator_files(
+        [path],
+        register_globally=True,
+        approval_prompt=approval_prompt,
+        approvals_path=approvals_path,
+    )

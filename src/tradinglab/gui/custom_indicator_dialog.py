@@ -869,6 +869,25 @@ class CustomIndicatorDialog(BaseModalDialog):
             return
         self._set_status(f"Exported {path.stem!r} to {written}", level="ok")
 
+    def _prompt_indicator_trust(self, path: Path, digest: str) -> bool:
+        """First-load trust prompt for a custom-indicator file.
+
+        ``ApprovalPrompt``-shaped helper used by the import flow: shows
+        the file name and full SHA-256 digest so the user can verify
+        what they are approving. Mirrors the dialog's other
+        code-execution gates (warning icon, explicit trust wording).
+        """
+        return messagebox.askokcancel(
+            "Approve custom indicator",
+            "This indicator file contains Python code that will be "
+            "executed with the same privileges as TradingLab.\n\n"
+            f"File: {path.name}\n"
+            f"SHA-256: {digest}\n\n"
+            "Only approve files you authored or fully trust. Changed "
+            "files require new approval; re-import to approve them.",
+            parent=self, icon="warning",
+        )
+
     def _on_import(self) -> None:
         src_str = filedialog.askopenfilename(
             parent=self,
@@ -880,26 +899,14 @@ class CustomIndicatorDialog(BaseModalDialog):
         src = Path(src_str)
         try:
             text = src.read_text(encoding="utf-8")
-        except OSError as exc:
+        except (OSError, UnicodeError) as exc:
             self._set_status(f"Cannot read {src.name}: {exc}", level="error")
             return
 
-        meta = _read_header_metadata(src)
-        mode = (meta.get("mode") or "").strip()
-        is_builder = ind_loader.is_builder_file(text)
-        # Trust gate: any file that runs arbitrary Python (Python-mode
-        # builder file, or a hand-authored plugin with no marker) is
-        # gated behind an explicit confirmation, mirroring the Save-time
-        # Python-mode prompt.
-        if mode == "python" or not is_builder:
-            if not messagebox.askokcancel(
-                "Import custom indicator",
-                "This indicator file contains Python code that will be "
-                "executed when the indicator is computed.\n\n"
-                "Only import indicators you trust. Continue?",
-                parent=self, icon="warning",
-            ):
-                return
+        digest = ind_loader.hash_indicator_source(text)
+        # External headers are self-claimed; every import is executable Python.
+        if not self._prompt_indicator_trust(src, digest):
+            return
 
         target_name = src.stem
         target = self._directory / f"{target_name}.py"
@@ -916,10 +923,17 @@ class CustomIndicatorDialog(BaseModalDialog):
 
         try:
             written = ind_loader.import_indicator_file(
-                src, self._directory, overwrite=overwrite,
+                src, self._directory, overwrite=overwrite, source_text=text,
             )
         except Exception as exc:  # noqa: BLE001
             self._set_status(f"Import failed: {exc}", level="error")
+            return
+
+        try:
+            ind_loader.record_indicator_approval(written, digest)
+        except OSError as exc:
+            self._refresh_saved_list()
+            self._set_status(f"Imported but approval persistence failed: {exc}", level="error")
             return
 
         ind_loader.unregister_indicator(target_name)
@@ -1285,8 +1299,16 @@ class CustomIndicatorDialog(BaseModalDialog):
             self._set_status(f"Write failed: {exc}", level="error")
             return
 
-        # Drop any prior in-process registration so the new file
-        # supersedes it (handles edits + name reuse).
+        # The dialog authored this exact content (Python mode already
+        # passed its own confirmation gate above), not a re-read from disk.
+        try:
+            ind_loader.record_indicator_approval(
+                target, ind_loader.hash_indicator_source(source),
+            )
+        except OSError as exc:
+            self._refresh_saved_list()
+            self._set_status(f"Saved but approval persistence failed: {exc}", level="error")
+            return
         ind_loader.unregister_indicator(name)
         result = ind_loader.register_user_indicator_file(target)
         if result.errors:

@@ -19,10 +19,13 @@ written when the banner is shown / dismissed.
 """
 from __future__ import annotations
 
+import logging
 import tkinter as tk
 import webbrowser
 from tkinter import ttk
 from typing import Any
+
+from ..updates import _is_https_url
 
 
 class UpdateCheckMixin:
@@ -55,6 +58,9 @@ class UpdateCheckMixin:
         existing = getattr(self, "_update_banner_frame", None)
         if existing is not None:
             return
+        if url and not _is_https_url(url):
+            logging.getLogger(__name__).warning("Refusing non-HTTPS update release link")
+            url = ""
         try:
             frame = ttk.Frame(self, padding=(8, 4))
             frame.pack(side=tk.TOP, fill=tk.X)
