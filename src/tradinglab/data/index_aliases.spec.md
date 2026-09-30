@@ -1,6 +1,6 @@
 # data/index_aliases.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-30
 
 ## Purpose
 **Source-aware index-symbol aliases** — let the user type the shorthand they
@@ -12,7 +12,8 @@ index, not a tradeable stock, and no vendor quotes it under the bare name.
 ## Public API
 - `INDEX_ALIASES: dict[str, dict[str, str]]` — canonical shorthand → per-source
   form. A source absent from an entry gets no alias and passes through.
-  Covers the volatility complex (`VIX`, `VVIX`, `VXN`, `SKEW`, `GVZ`, `OVX`),
+  Covers the volatility complex (`VIX`, `VVIX`, `VIXEQ`, `VXN`, `SKEW`, `GVZ`,
+  `OVX`),
   the equity indices (`SPX`, `NDX`, `DJI`, `RUT`, `OEX`, `IXIC`), and the
   Treasury yield curve (`IRX`, `FVX`, `TNX`, `TYX`).
 - `NEVER_ALIAS: frozenset[str]` — symbols that must never be treated as index
@@ -108,6 +109,10 @@ and ratio membership cases are also pinned by `tests/unit/test_quant_universe.py
   Polygon forms are from vendor docs; verify before relying on them.
 - **The table is deliberately small.** Adding an entry requires checking that
   the bare shorthand is not a real ticker on any supported venue — the
-  `COMP` / `MOVE` lesson. Do not bulk-import an index list.
+  `COMP` / `MOVE` lesson. Do not bulk-import an index list. (`VIXEQ` was
+  checked: Yahoo reports no quote for the bare symbol.)
+- **An alias does not guarantee history depth.** `^VIXEQ` resolves and has
+  intraday bars on Yahoo, but its `1d` request returns only the current
+  session. Depth is a vendor property, not something this table can fix.
 - **No user-editable aliases.** A personal-shorthand file was considered and
   deferred; the curated table covers the realistic set for this app.

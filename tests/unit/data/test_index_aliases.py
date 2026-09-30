@@ -53,6 +53,12 @@ def _series(n=2, base=20.0):
     ("OVX", "yfinance", "^OVX"),
     ("SKEW", "schwab", "$SKEW"),
     ("OVX", "polygon", "I:OVX"),
+    # Cboe S&P 500 Constituent Volatility; bare VIXEQ is not a listed equity.
+    ("VIXEQ", "yfinance", "^VIXEQ"),
+    ("VIXEQ", "schwab", "$VIXEQ"),
+    ("VIXEQ", "polygon", "I:VIXEQ"),
+    ("VIXEQ", "Auto", "^VIXEQ"),
+    ("VIXEQ", "alpaca", "VIXEQ"),
 ])
 def test_resolves_shorthand_to_vendor_form(shorthand, source, expected):
     assert resolve_symbol(shorthand, source) == expected

@@ -53,6 +53,9 @@ from .ratio_source import (
 INDEX_ALIASES: dict[str, dict[str, str]] = {
     "VIX":  {"yfinance": "^VIX",  "schwab": "$VIX",   "polygon": "I:VIX"},
     "VVIX": {"yfinance": "^VVIX", "schwab": "$VVIX",  "polygon": "I:VVIX"},
+    # Cboe S&P 500 Constituent Volatility. Yahoo serves intraday history but
+    # only the current session's daily bar (see quant/catalog.spec.md).
+    "VIXEQ": {"yfinance": "^VIXEQ", "schwab": "$VIXEQ", "polygon": "I:VIXEQ"},
     "VXN":  {"yfinance": "^VXN",  "schwab": "$VXN",   "polygon": "I:VXN"},
     "SKEW": {"yfinance": "^SKEW", "schwab": "$SKEW",  "polygon": "I:SKEW"},
     "GVZ":  {"yfinance": "^GVZ",  "schwab": "$GVZ",   "polygon": "I:GVZ"},

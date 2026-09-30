@@ -1,6 +1,6 @@
 # quant/catalog.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-30
 
 ## Purpose
 Defines the curated set of market-internals rows rendered by the **Quant**
@@ -74,6 +74,12 @@ preload and cache-export views.
 - **Symbols verified against the live vendor.** `^RVX` is delisted and
   `^VIX3M` / `^VIX9D` are quote-only on Yahoo (one bar of history), so no
   term-structure ratio is offered — it would inner-join to a single bar.
+- **`VIXEQ` ships even though its daily history is quote-only.** Yahoo
+  serves full intraday history for `^VIXEQ` but a single `1d` bar, so the
+  row charts normally on intraday intervals. The daily-derived Last column
+  needs two daily closes and therefore stays blank; the row's description
+  says so rather than leaving a silent gap. No ratio is built on it for the
+  same inner-join reason as the term-structure pairs.
 
 ## Invariants
 - `row.symbol` is empty **iff** `row.available` is `False`.
@@ -107,5 +113,7 @@ that `MOVE` is *not* used as bare shorthand. The extended tests also pin
   `gui/export_cache_dialog.is_quant_entry`.
 
 ## Recent history
+- Added the `VIXEQ` (S&P 500 constituent volatility) row to the volatility
+  group.
 - Added `quant_leg_symbols()` for sandbox preload and cache-export filtering.
 - Initial version: 7 groups, 31 rows, 2 of them disabled (`GEX`, `DIX`).

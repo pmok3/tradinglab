@@ -146,6 +146,17 @@ def test_move_row_uses_the_explicit_index_form():
     assert row.symbol == "^MOVE"
 
 
+def test_vixeq_row_resolves_to_the_cboe_index():
+    """VIXEQ is shorthand, and its row must admit the blank daily Last."""
+    row = row_for_key("vixeq")
+    assert row is not None
+    assert row.available
+    assert resolve_symbol(row.symbol, "yfinance") == "^VIXEQ"
+    assert resolve_symbol(row.symbol, "schwab") == "$VIXEQ"
+    assert "VIXEQ" in quant_leg_symbols()
+    assert "Last stays blank" in row.description
+
+
 def test_expected_move_divisors_are_sqrt_periods():
     """The three SPY expected-move rows encode √252 / √52 / √12."""
     import math

@@ -101,7 +101,7 @@ The box updates to show the real symbol, and **it re-resolves automatically if
 you switch data source**, so a chart of `^VIX` becomes `$VIX` when you move to
 Schwab rather than silently failing.
 
-Recognised shorthands: `VIX`, `VVIX`, `VXN`, `SPX`, `NDX`, `DJI`, `RUT`, `TNX`,
+Recognised shorthands: `VIX`, `VVIX`, `VIXEQ`, `VXN`, `SPX`, `NDX`, `DJI`, `RUT`, `TNX`,
 `OEX`, `IXIC`. Anything else is passed through untouched — including `COMP` and
 `MOVE`, which are **real listed stocks** and are deliberately never treated as
 index shorthand. (The Nasdaq Composite is `IXIC`, not `COMP`.)

@@ -116,6 +116,14 @@ QUANT_CATALOG: tuple[QuantGroup, ...] = (
                 ),
             ),
             QuantRow(
+                key="vixeq", name="VIXEQ (constituent vol)", symbol="VIXEQ",
+                description=(
+                    "Cap-weighted implied volatility of the S&P 500's own stocks. "
+                    "Its premium over VIX is priced diversification. Intraday "
+                    "only: no daily history, so Last stays blank."
+                ),
+            ),
+            QuantRow(
                 key="skew", name="SKEW", symbol="^SKEW",
                 description=(
                     "Relative price of far out-of-the-money S&P puts — how "
