@@ -1,6 +1,6 @@
 # `gui/help_menu.py` — Help cascade for the ChartApp menubar
 
-Last updated: 2026-09-14
+Last updated: 2026-09-20
 
 ## Purpose
 
@@ -83,7 +83,7 @@ Schwab connect, local data, and CSV export.
 - `_on_tools_export_bars_to_csv` —
   `gui.export_cache_dialog.open_export_cache_dialog(self)`.
 - `_on_help_check_for_updates` — fires
-  `updates.schedule_check_async(self.after, _present, force=False)`
+  `updates.schedule_check_async(self, _present, force=False)`
   and presents the `UpdateResult` as a messagebox.
 - `_on_help_reset_install` — confirm-then-`shutil.rmtree` the data
   folder, then exit via `self._on_close()`.
