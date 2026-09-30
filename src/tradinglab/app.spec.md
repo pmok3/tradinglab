@@ -1,6 +1,6 @@
 # app.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-23
 
 ## Purpose
 Top-level Tk + matplotlib application. Owns all runtime state (Tk widgets, `Figure`, caches, stream/fetch tokens, worker pool) and orchestrates the data → render → stream pipeline. `ChartApp` is composed of `tk.Tk` + a stack of mixins (each owns a concern documented in its own `*.spec.md`).
@@ -92,7 +92,24 @@ patch `tradinglab.app.<name>`.
 4. `_full_cache[(source,ticker,interval)]` — OrderedDict, LRU, soft cap `_FULL_CACHE_MAX=16`. Pinned entries (watchlist + currently active chart ticker) never evicted by trim. The active-ticker pin is essential so the 1d view's 5m companion (used by the volume-TOD overlay and the synthetic today-bar in `_maybe_upsample_today_daily`) survives stashes for unrelated tickers landing from background prefetches.
 5. `_series_cache[id(candles)]` — memoizes `_build_series_safe(...)`; verified via `sa._candles is candles` to defend against id-reuse.
 6. `_prefetched_raw` ingests executor-fetched bars from `_load_data_async` or the poll tick without a second
-   provider call. Its worker payload may include disk-preloaded and pre-merged/pre-saved primary/compare lists so `_load_data` can skip Tk-thread JSON parsing, `merge_candles`, and `disk_cache.save`. The worker's per-side merge+save is itself guarded by `disk_cache.merge_adds_nothing(disk, merged)`: when the trailing fetch adds nothing new (fully pre-downloaded / sealed universe — the common case when browsing the cached S&P/Nasdaq universe), the ~450 ms rewrite of the multi-MB 5m JSONL is skipped (the in-memory merged list is still returned for render). When it supplies fresh primary/compare data,
+   provider call. Its worker payload includes disk-preloaded and per-side merged lists so
+   `_load_data` can skip Tk-thread JSON parsing, `merge_candles`, and `disk_cache.save`.
+   A failed save **retains the valid merged list** for display; merge availability does
+   not imply persistence. `primary_save_result` / `compare_save_result` independently
+   carry `False` on failure (logged), `True` on save success or intentional BYOD/ratio
+   no-op, and `None` when skipped or unknown. The worker returns an eight-tuple;
+   legacy four-/six-tuples remain accepted with unknown save outcomes. Each non-None
+   merged list suppresses that side's repeated merge/save, never the other side's.
+   There is no Tk-thread retry or recursive resubmission: a later independent async
+   refresh retries against the unchanged disk file. On empty fetches, disk fallbacks
+   are handed off as ready lists without rewriting them; memory hits/fallbacks also
+   avoid writes after the display-list copy. The worker's per-side merge+save is
+   guarded by `disk_cache.merge_adds_nothing(disk, merged)`: when the trailing fetch
+   adds nothing new, the multi-MB rewrite is skipped (the merged list still renders).
+   `tests/unit/test_app_cache_handoff.py` exercises the actual worker/callback/loader,
+   independent primary/compare failures, thread identity, later recovery and no-ops;
+   smoke `check_e1_async_cache_write_failure` checks the Tk handoff and cache-hit path.
+   When it supplies fresh primary/compare data,
    `_load_data` invalidates indicator entries for the prior visible
    lists before rendering. This prevents stale fingerprint hits from
    rebinding onto replacement lists.

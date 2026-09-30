@@ -33,6 +33,7 @@ Methods delegated back to ChartApp (called via ``self.``):
 
 from __future__ import annotations
 
+import logging
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
@@ -47,6 +48,8 @@ from ..constants import provider_lookback_days, targeted_window
 from ..data import DATA_SOURCES, coverage, fetch_range, source_supports_range
 from ..data.auto_source import AUTO_SOURCE_NAME, resolve_auto_source
 from ..models import Candle
+
+logger = logging.getLogger(__name__)
 
 
 def _day_to_ts(day) -> int:
@@ -651,7 +654,10 @@ class DrilldownMixin:
                         disk_cache.merge_candles(existing, bars)
                         if existing else list(bars)
                     )
-                    disk_cache.save(src, sym, interval, merged)
+                    if not disk_cache.save(src, sym, interval, merged):
+                        logger.debug(
+                            "drilldown: disk_cache save failed for %s/%s/%s",
+                            src, sym, interval)
                 except Exception:  # noqa: BLE001
                     pass
             return list(bars)
@@ -752,10 +758,8 @@ class DrilldownMixin:
                 merged = disk_cache.merge_candles(current, merged)
             self._full_cache[key] = merged
             self._trim_full_cache()
-            try:
-                disk_cache.save(*key, merged)
-            except Exception:  # noqa: BLE001
-                pass
+            if not disk_cache.save(*key, merged):
+                logger.debug("drilldown: disk_cache save failed for %s", key)
         except Exception:  # noqa: BLE001
             merged = bars
             try:

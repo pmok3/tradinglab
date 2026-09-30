@@ -1,6 +1,6 @@
 # data/stream_controller.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-23
 
 ## Purpose
 Encapsulates chart subscription lifetime, provider/interval capability resolution,
@@ -40,6 +40,12 @@ correction and append/upsert persistence.
 - External: stdlib `queue`.
 
 ## Design Decisions
+- **Stream-disk persistence failures are detected, not swallowed.**
+  `DiskSaveFn` is `Callable[[str, str, str, list[Candle]], bool | None]`;
+  `_mutate` logs explicit `False` returns and `OSError` from legacy injected
+  savers. `None` remains an accepted legacy result, not a claim of persistence.
+  In all three cases the accepted in-memory correction and mutation result
+  survive; `disk_cache.save` itself returns a boolean and logs write failures.
 - **Controller owns only stream mechanics**; Tk scheduling stays in `gui.polling.PollingMixin`.
 - **Token gating stays authoritative** so late callbacks from superseded subscriptions are dropped.
 - **Compare mode remains both-live-or-neither**; `start()` exits early when compare is enabled.

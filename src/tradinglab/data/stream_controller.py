@@ -20,7 +20,7 @@ from .normalize import pop_prebuilt_arrays
 LOG = logging.getLogger(__name__)
 StreamEvent = tuple[Any, ...]
 CacheKey = tuple[str, str, str]
-DiskSaveFn = Callable[[str, str, str, list[Candle]], None]
+DiskSaveFn = Callable[[str, str, str, list[Candle]], bool | None]
 
 
 class IndicatorCacheLike(Protocol):
@@ -429,9 +429,10 @@ class StreamController:
             or (mutation is StreamMutation.APPEND and (old_length > 0 or kind == "rollover"))
         ):
             try:
-                save(*key, raw)
+                if save(*key, raw) is False:
+                    LOG.warning("Could not persist stream correction for %s", key)
             except OSError:
-                LOG.exception("Could not persist stream correction")
+                LOG.exception("Could not persist stream correction for %s", key)
         return mutation
 
     def _record_stream_update(self, bar: Candle) -> None:
