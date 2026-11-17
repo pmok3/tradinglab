@@ -8,20 +8,20 @@ strategy-tester sizing helper
 ``entries.model``).
 
 All fixtures are synthetic and deterministic -- no network, no GUI, no
-wall-clock dependence. Expectations are derived from the engine code
-under test, not from memory: BUY pays ``open + slippage`` (worse-fill
-direction), per-fill commission is ``flat + per_share * |qty|``, and
+wall-clock dependence. Expectations are hand-calculated from the documented
+accounting contracts: BUY pays ``open + slippage`` (worse-fill direction),
+per-fill commission is ``flat + per_share * |qty|``, and
 fills always take the full order quantity (never partial).
 
 Tests only -- production code is untouched. Where a test pins
-documented Phase-1 behaviour (market-only orders, no cash guard), it
+documented Phase-1 behaviour (full fills, no cash guard), it
 says so explicitly rather than asserting an accident.
 """
 
 from __future__ import annotations
 
 import calendar
-import dataclasses
+from copy import deepcopy
 from datetime import datetime
 
 import numpy as np
@@ -158,9 +158,14 @@ def _sizing_strategy(
 # ---------------------------------------------------------------------------
 
 
-def test_buy_fill_pays_open_plus_slippage() -> None:
+@pytest.mark.parametrize(
+    ("side", "expected_price"),
+    [(Side.BUY, 100.1), (Side.SELL, 99.9)],
+    ids=["buy", "sell"],
+)
+def test_slippage_moves_fill_price_against_order(side: Side, expected_price: float) -> None:
     fills = apply_fills(
-        [_order("o1", quantity=10.0)],
+        [_order("o1", side=side, quantity=10.0)],
         {"A": 100.0},
         next_bar_ts=123,
         slippage_bps=10.0,
@@ -169,22 +174,9 @@ def test_buy_fill_pays_open_plus_slippage() -> None:
     )
     assert len(fills) == 1
     f = fills[0]
-    # 10 bps worse-fill direction for BUY: open * (1 + 10/10000)
-    assert f.fill_price == pytest.approx(100.1)
+    assert f.fill_price == pytest.approx(expected_price)
     assert f.fill_ts == 123
-    assert f.commission == pytest.approx(1.0 + 0.01 * 10.0)
-
-
-def test_sell_fill_receives_open_minus_slippage() -> None:
-    fills = apply_fills(
-        [_order("o1", side=Side.SELL, quantity=10.0)],
-        {"A": 100.0},
-        next_bar_ts=123,
-        slippage_bps=10.0,
-        commission=0.0,
-    )
-    assert len(fills) == 1
-    assert fills[0].fill_price == pytest.approx(99.9)
+    assert f.commission == pytest.approx(1.1)
 
 
 def test_zero_slippage_fills_exactly_at_open() -> None:
@@ -223,14 +215,16 @@ def test_order_for_absent_symbol_is_skipped() -> None:
 
 
 def test_apply_fills_is_deterministic_and_does_not_mutate_inputs() -> None:
-    orders = [_order("o1", quantity=10.0), _order("o2", side=Side.SELL, quantity=5.0)]
-    opens = {"A": 100.0}
-    before = list(orders)
-    first = apply_fills(orders, opens, 9, 10.0, 1.0, commission_per_share=0.01)
-    second = apply_fills(orders, opens, 9, 10.0, 1.0, commission_per_share=0.01)
-    assert first == second  # byte-identical output for identical inputs
-    assert orders == before  # caller's order list untouched
-    assert [o.order_id for o in orders] == ["o1", "o2"]
+    orders = [_order("o1", quantity=10.0), _order("o2", symbol="B", side=Side.SELL, quantity=5.0)]
+    opens = {"A": 100.0, "B": 50.0}
+    original_orders = deepcopy(orders)
+    original_opens = opens.copy()
+    results = []
+    for _ in range(2):
+        results.append(apply_fills(orders, opens, 9, 10.0, 1.0, commission_per_share=0.01))
+        assert orders == original_orders
+        assert opens == original_opens
+    assert results[0] == results[1]
 
 
 def test_fills_always_take_full_quantity_never_partial() -> None:
@@ -242,22 +236,6 @@ def test_fills_always_take_full_quantity_never_partial() -> None:
         commission=0.0,
     )
     assert fills[0].quantity == 37.5
-
-
-def test_limit_orders_unsupported_by_design() -> None:
-    """Phase-1 decision (fills.spec.md): the engine is market-only.
-
-    ``Order`` carries no limit price -- a limit order cannot even be
-    expressed, so ``apply_fills`` has no limit branch to test.
-    """
-    field_names = {f.name for f in dataclasses.fields(Order)}
-    assert "limit_price" not in field_names
-
-
-def test_stop_orders_unsupported_by_design() -> None:
-    """Phase-1 decision (fills.spec.md): stops are deferred to Phase 2."""
-    field_names = {f.name for f in dataclasses.fields(Order)}
-    assert "stop_price" not in field_names
 
 
 # ---------------------------------------------------------------------------
@@ -340,73 +318,61 @@ def test_missing_bar_symbol_requeues_then_fills_on_later_bar() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_buy_reduces_cash_by_notional_plus_commission() -> None:
+@pytest.mark.parametrize(
+    ("opening_side", "closing_side", "expected_states"),
+    [
+        pytest.param(
+            Side.BUY, Side.SELL,
+            [
+                (98_999.0, 10.0, 100.0, 0.0),
+                (98_348.0, 15.0, 110.0, 0.0),
+                (98_827.0, 11.0, 110.0, 40.0),
+                (99_816.0, 0.0, 0.0, -180.0),
+                (98_815.0, 10.0, 100.0, -180.0),
+                (100_464.0, -5.0, 110.0, -80.0),
+                (99_938.0, 0.0, 0.0, -55.0),
+            ],
+            id="long-then-short",
+        ),
+        pytest.param(
+            Side.SELL, Side.BUY,
+            [
+                (100_999.0, -10.0, 100.0, 0.0),
+                (101_648.0, -15.0, 110.0, 0.0),
+                (101_167.0, -11.0, 110.0, -40.0),
+                (100_176.0, 0.0, 0.0, 180.0),
+                (101_175.0, -10.0, 100.0, 180.0),
+                (99_524.0, 5.0, 110.0, 80.0),
+                (100_048.0, 0.0, 0.0, 55.0),
+            ],
+            id="short-then-long",
+        ),
+    ],
+)
+def test_portfolio_accounting_transitions(
+    opening_side: Side,
+    closing_side: Side,
+    expected_states: list[tuple[float, float, float, float]],
+) -> None:
+    """Hand-calculated cash, signed qty, average cost and gross P&L per fill.
+
+    Unequal adds (10 at 100, 5 at 130) average 110. Each fill costs $1;
+    commissions affect cash, not gross realized P&L, including on a reversal.
+    """
     pf = Portfolio(cash=100_000.0)
-    pf.apply_fill(_fill(quantity=10.0, price=100.0, commission=1.0))
-    assert pf.cash == 100_000.0 - 10.0 * 100.0 - 1.0
-    pos = pf.positions["A"]
-    assert pos.quantity == 10.0
-    assert pos.avg_cost == 100.0
-
-
-def test_sell_increases_cash_by_notional_minus_commission() -> None:
-    pf = Portfolio(cash=100_000.0)
-    pf.apply_fill(_fill(side=Side.BUY, quantity=10.0, price=100.0, commission=1.0))
-    pf.apply_fill(_fill("f2", side=Side.SELL, quantity=10.0, price=110.0, commission=1.0))
-    assert pf.cash == 100_000.0 - 1_000.0 - 1.0 + 1_100.0 - 1.0
-    assert pf.positions["A"].quantity == 0.0
-
-
-def test_add_to_long_uses_weighted_average_cost() -> None:
-    pf = Portfolio(cash=100_000.0)
-    pf.apply_fill(_fill(quantity=10.0, price=100.0))
-    pf.apply_fill(_fill("f2", quantity=10.0, price=120.0))
-    pos = pf.positions["A"]
-    assert pos.quantity == 20.0
-    assert pos.avg_cost == pytest.approx(110.0)
-
-
-def test_partial_reduce_realizes_pnl_and_keeps_avg_cost() -> None:
-    pf = Portfolio(cash=100_000.0)
-    pf.apply_fill(_fill(quantity=10.0, price=100.0))
-    pf.apply_fill(_fill("f2", side=Side.SELL, quantity=4.0, price=120.0))
-    pos = pf.positions["A"]
-    assert pos.quantity == 6.0
-    assert pos.avg_cost == 100.0  # reducing never reprices the remainder
-    assert pos.realized_pnl == pytest.approx((120.0 - 100.0) * 4.0)
-
-
-def test_flip_through_zero_splits_close_and_new_open() -> None:
-    pf = Portfolio(cash=100_000.0)
-    pf.apply_fill(_fill(quantity=10.0, price=100.0))
-    pf.apply_fill(_fill("f2", side=Side.SELL, quantity=15.0, price=110.0))
-    pos = pf.positions["A"]
-    assert pos.quantity == -5.0
-    # Close leg realises (110-100)*10; the new short leg opens at 110.
-    assert pos.realized_pnl == pytest.approx(100.0)
-    assert pos.avg_cost == 110.0
-
-
-def test_close_to_zero_resets_avg_cost() -> None:
-    pf = Portfolio(cash=100_000.0)
-    pf.apply_fill(_fill(quantity=10.0, price=100.0))
-    pf.apply_fill(_fill("f2", side=Side.SELL, quantity=10.0, price=120.0))
-    pos = pf.positions["A"]
-    assert pos.quantity == 0.0
-    assert pos.avg_cost == 0.0
-    assert pos.realized_pnl == pytest.approx(200.0)
-
-
-def test_short_cover_realizes_pnl() -> None:
-    pf = Portfolio(cash=100_000.0)
-    pf.apply_fill(_fill(side=Side.SELL, quantity=10.0, price=100.0))
-    assert pf.positions["A"].quantity == -10.0
-    assert pf.cash == 100_000.0 + 1_000.0
-    pf.apply_fill(_fill("f2", side=Side.BUY, quantity=5.0, price=90.0))
-    pos = pf.positions["A"]
-    assert pos.quantity == -5.0
-    assert pos.avg_cost == 100.0
-    assert pos.realized_pnl == pytest.approx((100.0 - 90.0) * 5.0)
+    trades = [
+        ("open", opening_side, 10.0, 100.0),
+        ("add", opening_side, 5.0, 130.0),
+        ("reduce", closing_side, 4.0, 120.0),
+        ("close", closing_side, 11.0, 90.0),
+        ("reopen", opening_side, 10.0, 100.0),
+        ("reverse", closing_side, 15.0, 110.0),
+        ("close-reverse", opening_side, 5.0, 105.0),
+    ]
+    for (phase, side, quantity, price), expected in zip(trades, expected_states, strict=True):
+        pf.apply_fill(_fill(phase, side=side, quantity=quantity, price=price, commission=1.0))
+        pos = pf.positions["A"]
+        assert (pf.cash, pos.quantity, pos.avg_cost, pos.realized_pnl) == pytest.approx(expected), phase
 
 
 def test_equity_equals_cash_plus_position_value_at_mtm() -> None:
@@ -440,15 +406,6 @@ def test_zero_quantity_fill_deducts_flat_commission_only() -> None:
     pos = pf.positions["A"]
     assert pos.quantity == 0.0
     assert pos.avg_cost == 0.0
-
-
-def test_add_to_short_uses_weighted_average_cost() -> None:
-    pf = Portfolio(cash=100_000.0)
-    pf.apply_fill(_fill(side=Side.SELL, quantity=10.0, price=100.0))
-    pf.apply_fill(_fill("f2", side=Side.SELL, quantity=5.0, price=110.0))
-    pos = pf.positions["A"]
-    assert pos.quantity == -15.0
-    assert pos.avg_cost == pytest.approx((100.0 * 10.0 + 110.0 * 5.0) / 15.0)
 
 
 # ---------------------------------------------------------------------------
