@@ -1,6 +1,6 @@
 # gui/polling.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-11-16
 
 ## Purpose
 
@@ -61,7 +61,9 @@ Also hosts the pure scheduler helpers (only caller is here).
   blocks the worker), so they post to `self._worker_inbox`.
 - `_drain_worker_inbox()` — pop items: `stash` (cache fetched
   bars), `refresh` (watchlist refresh), `reference` (reference-
-  data redraw), `card_stash` (chartstack card cache fill). When
+  data redraw), `quant_result` (detached Quant daily bars — snapshot and
+  cache apply together on Tk via `_apply_quant_fetch_result`; apply failures
+  are logged without stopping the drain), `card_stash` (chartstack card cache fill). When
   a `prefetch` event arrives for an intraday interval, also
   calls `_refresh_daily_synth_for_active_view` so a daily chart
   picks up the freshly-warmed intraday data without a round-trip

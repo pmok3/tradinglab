@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import contextlib
 import datetime as _dt
+import logging
 import queue
 import time
 import tkinter as tk
@@ -46,6 +47,8 @@ from ..constants import interval_minutes, is_intraday
 from ..core.view_intent import ViewMode
 from ..data import DATA_SOURCES
 from ..data.stream_controller import StreamMutation
+
+logger = logging.getLogger(__name__)
 
 # Adaptive live-tick repaint coalescing (audit ``tick-repaint-coalesce``).
 # A sub-minute LEVELONE stream (Schwab) can enqueue many ticks/second; the
@@ -344,6 +347,14 @@ class PollingMixin:
                     refresh_pending = True
                 elif kind == "reference":
                     reference_pending = True
+                elif kind == "quant_result":
+                    try:
+                        apply = getattr(
+                            self, "_apply_quant_fetch_result", None)
+                        if callable(apply):
+                            apply(*payload)
+                    except Exception:  # noqa: BLE001
+                        logger.debug("Quant result apply failed", exc_info=True)
                 elif kind == "card_stash":
                     try:
                         slot_index, token, symbol, bars = payload

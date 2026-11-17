@@ -12747,13 +12747,14 @@ def check_g5_quant_tab(app) -> None:
       * the refresh loop stops when the tab is put away (a live `after`
         job outliving its panel is a real leak, unlike §7.5 noise).
 
-    The Last column is deliberately NOT asserted on: it is fed by a
-    background daily fetch whose timing is the flake surface §7.26 warns
-    about. `tests/unit/gui/test_quant_app.py` pins that logic directly.
+    Last is checked through a deterministic fetched-result callback, not
+    by waiting for a background fetch (§7.26).
     """
+    from datetime import datetime, timedelta, timezone
     from types import SimpleNamespace
 
     from tradinglab.data.index_aliases import resolve_symbol as _resolve_symbol
+    from tradinglab.models import Candle
     from tradinglab.quant.catalog import QUANT_CATALOG, available_rows, iter_rows
 
     tab = getattr(app, "_quant_tab", None)
@@ -12790,6 +12791,36 @@ def check_g5_quant_tab(app) -> None:
         symbols = {s.upper() for s in tab.symbols()}
         for wanted in ("VIX", "VIX/15.87", "RSP", "RSP/SPY", "HYG", "TLT"):
             assert wanted in symbols, f"{wanted} missing from the Quant tab"
+
+        # Exercise the worker-result apply seam without racing async fetches.
+        src = app.source_var.get()
+        sym = _resolve_symbol("VIX", src)
+        key = (src, sym, "1d")
+        previous_snapshot = app._watchlist_snapshot.pop(sym, None)
+        previous_bars = app._full_cache.pop(key, None)
+        previous_text = tab.tree.set("row:vix", "last")
+        try:
+            base = datetime(2026, 6, 8, tzinfo=timezone.utc)
+            bars = [
+                Candle(base, 200.0, 200.0, 200.0, 200.0, 1000),
+                Candle(base + timedelta(days=1), 300.0, 300.0, 300.0, 300.0, 1000),
+            ]
+            app._apply_quant_fetch_result(sym, src, bars)
+            app._paint_quant_last_values()
+            snap = app._watchlist_snapshot[sym]
+            assert (snap["last"], snap["change_1d"], snap["pct_1d"]) == (300.0, 100.0, 50.0)
+            assert tab.tree.set("row:vix", "last") == "300.00"
+            assert app._full_cache[key][-1].close == 300.0
+        finally:
+            if previous_snapshot is None:
+                app._watchlist_snapshot.pop(sym, None)
+            else:
+                app._watchlist_snapshot[sym] = previous_snapshot
+            if previous_bars is None:
+                app._full_cache.pop(key, None)
+            else:
+                app._full_cache[key] = previous_bars
+            tab.tree.set("row:vix", "last", previous_text)
 
         # --- double-click loads the chart -----------------------------
         # Driven through the tab's own handler with a stubbed hit-test:

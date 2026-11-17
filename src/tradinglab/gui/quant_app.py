@@ -29,7 +29,10 @@ from __future__ import annotations
 import logging
 import threading
 import tkinter as tk
+from dataclasses import replace
 from typing import Any
+
+from ..models import Candle
 
 logger = logging.getLogger(__name__)
 
@@ -362,12 +365,7 @@ class QuantAppMixin:
         return bool(getattr(self, "_sandbox_strict_offline", False))
 
     def _fetch_quant_last(self, symbol: str, src: str) -> None:
-        """Worker-thread body: fetch daily bars and record the snapshot.
-
-        Runs off the Tk thread, so it must not call ``self.after`` (§7.15).
-        Bars are handed to the Tk thread through ``_worker_inbox``; the
-        snapshot seam is called directly, matching ``_preload_one_last``.
-        """
+        """Fetch daily bars; transfer one detached result to the Tk thread."""
         from ..data import DATA_SOURCES
 
         try:
@@ -377,21 +375,33 @@ class QuantAppMixin:
             bars = fetcher(symbol, QUANT_LAST_INTERVAL)
             if not bars:
                 return
-            try:
-                self._apply_watchlist_snapshot_from_bars(
-                    symbol, src, QUANT_LAST_INTERVAL, bars)
-            except Exception:  # noqa: BLE001
-                pass
-            key = (src, symbol, QUANT_LAST_INTERVAL)
-            rows = list(bars)
+            # Candle is mutable: a list copy alone aliases provider-owned fields.
+            rows = [replace(bar) for bar in bars]
             if threading.current_thread() is threading.main_thread():
-                self._stash_full_cache(key, rows)
+                self._apply_quant_fetch_result(symbol, src, rows)
             else:
-                self._worker_inbox.put_nowait(("stash", (key, rows)))
+                try:
+                    self._worker_inbox.put_nowait(
+                        ("quant_result", (symbol, src, rows)))
+                except Exception:  # noqa: BLE001
+                    logger.debug("Quant result handoff failed for %s", symbol, exc_info=True)
+                    self._worker_inbox.put_nowait(
+                        ("stash", ((src, symbol, QUANT_LAST_INTERVAL), rows)))
         except Exception:  # noqa: BLE001
             logger.debug("Quant last fetch failed for %s", symbol, exc_info=True)
         finally:
             self._quant_fetch_inflight.discard(symbol)
+
+    def _apply_quant_fetch_result(
+        self, symbol: str, src: str, bars: list[Candle]
+    ) -> None:
+        """Tk thread: derive coherent cells, then cache the same owned bars."""
+        try:
+            self._apply_watchlist_snapshot_from_bars(
+                symbol, src, QUANT_LAST_INTERVAL, bars)
+        except Exception:  # noqa: BLE001
+            logger.debug("Quant snapshot apply failed for %s", symbol, exc_info=True)
+        self._stash_full_cache((src, symbol, QUANT_LAST_INTERVAL), bars)
 
     # ------------------------------------------------------------------
     # Theming
