@@ -14,13 +14,18 @@ printed on each run; shared scalar orchestration remains the floor.
 
 from __future__ import annotations
 
+import copy
+import math
 import statistics
+import sys
 import time
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
 
+from tradinglab.backtest.session import SessionResult
 from tradinglab.entries.model import (
     Direction,
     EntryStrategy,
@@ -149,11 +154,12 @@ def test_vectorized_eval_beats_legacy(candles_4k: list[Candle]) -> None:
     """
     vec_samples: list[float] = []
     legacy_samples: list[float] = []
+    reference: SessionResult | None = None
     for _ in range(_TIMING_RUNS):
         # Interleave: a slow machine phase hits both paths equally.
         for use_vec, acc in ((True, vec_samples), (False, legacy_samples)):
             t0 = time.perf_counter()
-            evaluate_symbol(
+            result = evaluate_symbol(
                 symbol="TEST",
                 candles=candles_4k,
                 interval="5m",
@@ -164,6 +170,17 @@ def test_vectorized_eval_beats_legacy(candles_4k: list[Candle]) -> None:
                 use_vectorized=use_vec,
             )
             acc.append(time.perf_counter() - t0)
+            assert isinstance(result, SessionResult), "benchmark sample returned no SessionResult"
+            assert len(result.equity_curve) == _BARS, "benchmark sample omitted bars"
+            assert result.post_trades and len(result.fills) == 2 * len(result.post_trades), (
+                "benchmark sample must contain completed round-trip trades"
+            )
+            assert math.isfinite(result.final_cash)
+            assert all(math.isfinite(equity) for _, equity in result.equity_curve)
+            if reference is None:
+                reference = result
+            else:
+                assert result == reference, "benchmark sample differs from complete reference result"
 
     min_vec = min(vec_samples)
     min_legacy = min(legacy_samples)
@@ -182,3 +199,30 @@ def test_vectorized_eval_beats_legacy(candles_4k: list[Candle]) -> None:
         f"below the {_REQUIRED_SPEEDUP}x gate at {_BARS} bars. "
         f"(medians: vec={med_vec:.3f}s legacy={med_legacy:.3f}s)"
     )
+
+
+@pytest.mark.parametrize("sample", [0, 1, 6, 13])
+@pytest.mark.parametrize("damage", ["missing", "truncated", "empty", "divergent"])
+def test_perf_gate_rejects_invalid_sample(monkeypatch, candles_4k, sample, damage) -> None:
+    reference = evaluate_symbol(
+        symbol="TEST", candles=candles_4k, interval="5m",
+        entry_strategy=_entry(), exit_strategy=_exit(),
+        starting_cash=100_000.0, cost_model=CostModel(), use_vectorized=False,
+    )
+    broken = copy.deepcopy(reference)
+    if damage == "missing":
+        broken = None
+    elif damage == "truncated":
+        broken.equity_curve.pop()
+    elif damage == "empty":
+        broken.fills.clear()
+        broken.post_trades.clear()
+    else:
+        broken.final_cash += 1.0
+    samples = iter(broken if i == sample else reference for i in range(2 * _TIMING_RUNS))
+    ticks = iter([0.0, 1.0, 0.0, 2.0] * _TIMING_RUNS)
+    module = sys.modules[__name__]
+    monkeypatch.setattr(module, "evaluate_symbol", lambda **kwargs: next(samples))
+    monkeypatch.setattr(module, "time", SimpleNamespace(perf_counter=lambda: next(ticks)))
+    with pytest.raises(AssertionError):
+        test_vectorized_eval_beats_legacy(candles_4k)

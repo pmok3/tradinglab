@@ -323,6 +323,16 @@ OPERATOR_EVALUATORS: dict[str, OpHandler] = {
     OP_NR7: OpHandler(_eval_nr7),
 }
 
+_BUILTIN_OPERATOR_EVALUATORS = OPERATOR_EVALUATORS.copy()
+
+
+def using_builtin_operators() -> bool:
+    """Whether optional hardcoded kernels still match the scalar registry."""
+    return len(OPERATOR_EVALUATORS) == len(_BUILTIN_OPERATOR_EVALUATORS) and all(
+        OPERATOR_EVALUATORS.get(op) is handler
+        for op, handler in _BUILTIN_OPERATOR_EVALUATORS.items()
+    )
+
 
 def register_op(name: str, handler: OpHandler) -> None:
     """Register (or replace) a handler for operator ``name``.
@@ -348,4 +358,5 @@ __all__ = [
     "OPERATOR_EVALUATORS",
     "TRANSITION_OPS",
     "register_op",
+    "using_builtin_operators",
 ]

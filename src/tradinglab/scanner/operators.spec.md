@@ -1,6 +1,6 @@
 # `scanner/operators.py` — operator dispatch registry
 
-Last updated: 2026-09-07
+Last updated: 2026-11-16
 
 ## Purpose
 
@@ -27,6 +27,11 @@ single dict lookup. Mirrors the entry-dispatch pattern shipped for
 - `register_op(name, handler)` — extension hook for tests + plugins.
   Mutates `OPERATOR_EVALUATORS` in place; tests should save/restore the
   prior handler in `try/finally`.
+- `using_builtin_operators() -> bool` — compares current registry keys and
+  handler identities against a snapshot taken here before any registration.
+  Hardcoded vector kernels conservatively require the entire built-in registry
+  to remain intact. Added, removed or replaced handlers request scalar fallback;
+  restoring the original registry permits acceleration again.
 
 ## Evaluator contract
 

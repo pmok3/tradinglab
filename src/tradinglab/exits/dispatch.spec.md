@@ -1,6 +1,6 @@
 # exits.dispatch
 
-Last updated: 2026-09-23
+Last updated: 2026-11-16
 
 ## Purpose
 
@@ -29,6 +29,9 @@ change instead of two drifting handler chains.
   scalar fallback. Only canonical INDICATOR and legacy-price
   LIMIT/STOP/STOP_LIMIT handlers have kernels. Identity checks at
   preparation and consumption preserve custom/replaced handlers.
+  INDICATOR masks also require the original scanner operator registry at
+  preparation and consumption; operator additions, removals or replacements
+  (including after preparation) request canonical scalar dispatch.
   This API is specifically for the tester's `legacy_signed_offsets=True`
   policy, not the live raw-offset policy.
 

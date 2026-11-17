@@ -1,6 +1,6 @@
 # strategy_tester/evaluator.py — Spec
 
-Last updated: 2026-09-23
+Last updated: 2026-11-16
 
 ## Purpose
 Headless trigger-evaluation kernel for the Strategy Tester. The live `EntryEvaluator` / `ExitEvaluator` are Tk-thread-guarded (they touch `PaperBrokerEngine`, journal, indicator-manager, audit log). The mechanical tester builds its own worker-safe context, delegates trigger decisions to the shared entry / exit dispatch registries, and emits `Order`s directly into a fresh per-symbol `SandboxEngine`.
@@ -63,6 +63,9 @@ Only optional decision kernels and time facts differ between modes.
   dispatch; missing handlers raise at the original dispatch point.
   Scanner-alert edge updates share the scalar dispatch helper and occur
   only after entry gates pass.
+- Scanner masks additionally require the original operator registry both at
+  preparation and consumption. `register_op` replacements, removals and new
+  operators conservatively select canonical scalar dispatch.
 
 Dtypes: bar timestamps `int64`, OHLC `float64`, ET offsets `int64`,
 seconds-since-ET-midnight `int64`, all decision masks `bool`.
@@ -71,7 +74,10 @@ Complete `SessionResult` equality (including fills, equity, cash and
 dtypes) is pinned against scalar mode by `test_vectorized_agreement.py`.
 The performance contract is `tests/perf/test_strategy_eval_perf.py`:
 min-of-7 interleaved wall-clock on 4,056 bars must clear the unchanged
-1.5x speedup gate. Timings are machine-dependent, not a universal 2.9x claim.
+1.5x speedup gate. Every timed sample must return a complete, finite,
+nonempty trading result exactly equal across both modes; these assertions
+run outside the timed sections. Timings are machine-dependent, not a universal
+2.9x claim.
 
 ## Time-of-day gates (`_check_entry`)
 - **`arm_window_start/end`** — `"HH:MM"` strings; default `"09:35"/"15:30"` ET. Blank string disables the gate (mirrors live `_parse_hhmm("")` → None). Supports midnight wrap (start > end → "fire if t >= start OR t <= end").

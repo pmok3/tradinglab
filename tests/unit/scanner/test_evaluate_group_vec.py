@@ -201,6 +201,24 @@ def test_warmup_region_is_nan_in_both():
 
 # --- unsupported trees must return None (fall back) -------------------------
 
+@pytest.mark.parametrize("remove", [False, True])
+def test_registered_operator_changes_fall_back(monkeypatch, remove):
+    from tradinglab.scanner.operators import OPERATOR_EVALUATORS, OpHandler, register_op
+
+    g = Group(children=[
+        _cond(FieldRef.builtin("close"), ">", right=FieldRef.literal(0.0)),
+    ])
+    ctx = _ctx(_candles(5))
+    assert evaluate_group_vec(g, ctx) is not None
+    if remove:
+        monkeypatch.delitem(OPERATOR_EVALUATORS, ">")
+    else:
+        monkeypatch.setitem(OPERATOR_EVALUATORS, ">", OPERATOR_EVALUATORS[">"])
+        register_op(">", OpHandler(lambda cond, ctx, index: False))
+        assert evaluate_group(g, ctx) is False
+    assert evaluate_group_vec(g, ctx) is None
+
+
 def test_within_last_falls_back():
     g = Group(combinator="and", children=[
         Condition(left=FieldRef.builtin("close"), op=">",

@@ -1,6 +1,6 @@
 # strategy_tester/vector_eval.py — Spec
 
-Last updated: 2026-09-23
+Last updated: 2026-11-16
 
 ## Purpose
 Optional decision facts for the mechanical evaluator's single bar loop.
@@ -42,6 +42,9 @@ flattening or exit price rules. Dispatch owns the optional trigger kernels.
   another orchestration loop. Kernels check current handler identity again
   when consumed. Missing registry entries retain `UnsupportedTriggerKind`
   at the original scalar dispatch point.
+- Scanner operator registration remains authoritative too. Indicator/scanner
+  masks require the original operator registry at preparation and consumption;
+  any operator registration change conservatively selects scalar dispatch.
 
 ## Dtypes and lifetime
 OHLC arrays are float64, timestamps and ET seconds are int64, masks are bool
@@ -57,7 +60,9 @@ sizing needs them. No dtype downcast, rounding or tolerance is added.
   duplicate trigger IDs, invalid cutoffs, custom handlers, STACK, partial
   exits, NaN quantities, cancellation, warmup, EOD and scanner fallback.
 - `tests/perf/test_strategy_eval_perf.py`: unchanged min-of-7 interleaved
-  speedup gate of at least 1.5x on 4,056 bars.
+  speedup gate of at least 1.5x on 4,056 bars. Every sample is checked outside
+  timing for a complete, finite, nonempty trading result and exact agreement
+  across both modes; missing, truncated, empty or divergent results fail.
 
 ## See also
 - `evaluator.spec.md`

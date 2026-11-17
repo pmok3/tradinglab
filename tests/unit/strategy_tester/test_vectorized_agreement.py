@@ -871,6 +871,56 @@ def test_replaced_price_handler_is_not_bypassed(monkeypatch, kind) -> None:
     _assert_identical(r_new, r_old)
 
 
+@pytest.mark.parametrize("scope", ["entry", "exit", "scanner_alert"])
+@pytest.mark.parametrize("after_preparation", [False, True])
+def test_registered_operator_replacement_is_not_bypassed(
+    monkeypatch, tmp_path, scope, after_preparation,
+) -> None:
+    from tradinglab.scanner.operators import OPERATOR_EVALUATORS, OpHandler, register_op
+    from tradinglab.strategy_tester import evaluator
+
+    calls = []
+
+    def replacement(cond, ctx, index):
+        calls.append(index)
+        return bool(index % 2) if scope == "scanner_alert" else False
+
+    monkeypatch.setitem(OPERATOR_EVALUATORS, OP_GT, OPERATOR_EVALUATORS[OP_GT])
+    handler = OpHandler(replacement)
+    if scope == "scanner_alert":
+        scan_id = _save_scan("replacement-scan", 99.0, monkeypatch, tmp_path)
+        entry_trigger = EntryTrigger(kind=EntryTriggerKind.SCANNER_ALERT, scanner_id=scan_id)
+    elif scope == "entry":
+        entry_trigger = EntryTrigger(kind=EntryTriggerKind.INDICATOR, condition=_close_gt(99.0))
+    else:
+        entry_trigger = EntryTrigger(kind=EntryTriggerKind.MARKET)
+    entry = _entry_strategy(entry_trigger, max_per_symbol=1 if scope == "exit" else 100)
+    exit_trigger = (
+        ExitTrigger(kind=ExitTriggerKind.INDICATOR, condition=_close_gt(99.0))
+        if scope == "exit" else ExitTrigger(kind=ExitTriggerKind.MARKET)
+    )
+    exit = _exit_strategy([_leg(exit_trigger)])
+    if after_preparation:
+        original = evaluator.vector_eval.build_plan
+
+        def build_and_replace(**kwargs):
+            plan = original(**kwargs)
+            assert plan.exits if scope == "exit" else plan.entry is not None
+            register_op(OP_GT, handler)
+            return plan
+
+        monkeypatch.setattr(evaluator.vector_eval, "build_plan", build_and_replace)
+    else:
+        register_op(OP_GT, handler)
+
+    r_new, r_old = _run_both(
+        candles=_et_candles([100.0, 101.0, 102.0, 103.0, 104.0]), entry=entry, exit=exit,
+    )
+    assert calls, "the registered operator must execute through scalar dispatch"
+    assert len(r_old.fills) == {"entry": 0, "exit": 1, "scanner_alert": 2}[scope]
+    _assert_identical(r_new, r_old)
+
+
 @pytest.mark.parametrize("use_vectorized", [False, True])
 def test_unsupported_exit_kind_still_raises(monkeypatch, use_vectorized) -> None:
     from tradinglab.exits.dispatch import _EXIT_DISPATCH

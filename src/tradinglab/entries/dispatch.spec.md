@@ -1,6 +1,6 @@
 # entries/dispatch.py — shared entry-trigger dispatch registry
 
-Last updated: 2026-09-23
+Last updated: 2026-11-16
 
 ## Purpose
 
@@ -139,6 +139,10 @@ still works (see `tests/unit/strategy_tester/test_evaluator.py`).
   inputs, unsupported scanner trees and custom handlers remain scalar.
   Handler identity is checked both at preparation and consumption, so
   registry replacements and newly registered kinds cannot be bypassed.
+  Scanner masks additionally require the original scanner operator registry
+  both when prepared and when consumed. Adding, removing or replacing an
+  operator (including after preparation) falls back to scalar dispatch without
+  changing scanner-alert edge state before the scalar handler runs.
   Scanner-alert edge bookkeeping is shared with the scalar handler and
   runs only after the caller's entry gates pass. Evidence remains scalar-only;
   the mechanical caller does not consume it.

@@ -36,6 +36,7 @@ import numpy as np
 from ..scanner.engine import evaluate_group as _evaluate_group
 from ..scanner.engine import evaluate_group_vec
 from ..scanner.model import MatchEvidence
+from ..scanner.operators import using_builtin_operators
 from .model import Direction, EntryTrigger, TriggerKind
 from .signals import EntryOrderKind
 from .spec import (
@@ -299,6 +300,8 @@ class PreparedEntryMask:
         self, trigger: EntryTrigger, index: int, previous: dict[str, bool],
     ) -> bool | None:
         if _ENTRY_DISPATCH.get(trigger.kind) is not self.handler:
+            return None
+        if trigger.kind is not TriggerKind.MARKET and not using_builtin_operators():
             return None
         matched = bool(self.values[index])
         if self.scanner_alert:

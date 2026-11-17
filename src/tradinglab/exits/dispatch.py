@@ -14,6 +14,7 @@ from ..core.side import Side
 from ..positions.model import Position
 from ..scanner.engine import evaluate_group as _evaluate_group
 from ..scanner.engine import evaluate_group_vec
+from ..scanner.operators import using_builtin_operators
 from .model import ExitTrigger, TriggerKind
 from .spec import (
     Bar,
@@ -273,6 +274,8 @@ class PreparedExitMask:
 
     def fires(self, trigger: ExitTrigger, index: int, position: Position) -> bool | None:
         if _EXIT_DISPATCH.get(trigger.kind) is not self.handler:
+            return None
+        if not using_builtin_operators():
             return None
         return bool(self.values[index])
 
