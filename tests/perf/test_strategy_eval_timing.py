@@ -36,9 +36,10 @@ motivated this), not a precision instrument for 2× regressions.
 
 Every warmup and timed result must contain all 8,000 equity points,
 reach the final input timestamp, and close trades entered on multiple
-ET sessions. These checks run outside the timed region: early returns
-and no-trade runs cannot masquerade as speedups, even when selecting
-just one timing case.
+ET sessions, with exactly two fills per closed trade (one entry and
+one full exit). These checks run outside the timed region: early returns,
+no-trade runs, and unfinished trades cannot masquerade as speedups,
+even when selecting just one timing case.
 
 Budgets and rationale
 ---------------------
@@ -282,25 +283,15 @@ def _assert_complete_workload(
         f"{strategy_id}: workload must close trades entered on multiple ET sessions; "
         f"got {len(trade_sessions)}. Fix the fixture or the strategy."
     )
+    assert len(result.fills) == 2 * len(result.post_trades), (
+        f"{strategy_id}: workload must have two fills per closed trade and no open trades; "
+        f"got {len(result.fills)} fills for {len(result.post_trades)} closed trades"
+    )
 
 
 @pytest.fixture(scope="module")
 def synthetic_candles() -> list[Candle]:
     return _synthetic_rth_5m_candles()
-
-
-@pytest.mark.perf
-def test_eval_workloads_produce_trades(synthetic_candles: list[Candle]) -> None:
-    """Every budgeted strategy must finish the workload and trade across sessions.
-
-    A timing gate that only ever ticks bars with no entries/exits would
-    still catch loop-level regressions, but requiring closed trades
-    across sessions keeps the workload representative of the entry+exit
-    paths it claims to cover. Fails loudly on fixture/strategy drift.
-    """
-    for strategy_id in _BUDGETS_MS_PER_BAR:
-        result = _evaluate(_entry_for(strategy_id), synthetic_candles)
-        _assert_complete_workload(strategy_id, synthetic_candles, result)
 
 
 @pytest.mark.perf

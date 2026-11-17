@@ -40,18 +40,6 @@ def test_timing_case_rejects_truncation_in_warmup_or_any_sample(workload, monkey
     assert calls == bad_run + 1
 
 
-def test_standalone_workload_guard_rejects_real_truncation(workload, monkeypatch):
-    strategy_id, candles, complete, truncated = workload
-
-    def evaluate(entry, supplied_candles):
-        assert supplied_candles is candles
-        return truncated if entry.name == gate._entry_for(strategy_id).name else complete
-
-    monkeypatch.setattr(gate, "_evaluate", evaluate)
-    with pytest.raises(AssertionError, match="incomplete workload"):
-        gate.test_eval_workloads_produce_trades(candles)
-
-
 @pytest.mark.parametrize(
     "defect,message",
     [
@@ -59,6 +47,8 @@ def test_standalone_workload_guard_rejects_real_truncation(workload, monkeypatch
         ("wrong-end", "final input timestamp"),
         ("no-trades", "multiple ET sessions"),
         ("one-session", "multiple ET sessions"),
+        ("missing-fills", "two fills per closed trade"),
+        ("open-trade", "two fills per closed trade"),
     ],
 )
 def test_complete_workload_contract(workload, defect, message):
@@ -72,6 +62,11 @@ def test_complete_workload_contract(workload, defect, message):
         result = replace(complete, post_trades=[])
     elif defect == "one-session":
         result = replace(complete, post_trades=truncated.post_trades * 2)
+    elif defect == "missing-fills":
+        result = replace(complete, fills=[])
+    elif defect == "open-trade":
+        assert complete.fills[-1].side.value == "sell"
+        result = replace(complete, fills=complete.fills[:-1], post_trades=complete.post_trades[:-1])
     with pytest.raises(AssertionError, match=message):
         gate._assert_complete_workload(strategy_id, candles, result)
 
