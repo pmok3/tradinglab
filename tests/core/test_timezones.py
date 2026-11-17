@@ -3,13 +3,25 @@
 from __future__ import annotations
 
 import ast
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 from pathlib import Path
 
 import pytest
 
 from tradinglab.core import timezones
 from tradinglab.core.lru_dict import LRUDict
+
+
+@pytest.mark.parametrize("value", [None, "", "bogus", "09:99", "-1:00", "24:00", "12:-1", "12:30:00"])
+def test_parse_hhmm_rejects_malformed_times(value):
+    assert timezones.parse_hhmm(value) is None
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("00:00", time(0, 0)), ("23:59", time(23, 59)), ("9:5", time(9, 5)), (" 9:05 ", time(9, 5)),
+])
+def test_parse_hhmm_preserves_accepted_integer_syntax(value, expected):
+    assert timezones.parse_hhmm(value) == expected
 
 
 class TestET:

@@ -1,10 +1,14 @@
 # exits/spec.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-23
 
 ## Purpose
 
 Pure-function trigger-evaluation helpers for native exit triggers (market, limit, stop, trailing-stop, chandelier, time-of-day) plus state-machine maths for trailing / chandelier. `update_*` mutates a small dataclass; `evaluate_*` reads it + the new bar. No Tk, no I/O.
+
+Time-of-day cutoffs use `core.timezones.parse_hhmm`, shared with mechanical
+entry arm-window gates. Invalid hours/minutes (e.g. `09:99`, `-1:00`) are
+malformed no-fire decisions, never normalized into another valid time.
 
 ## Public API
 

@@ -1,6 +1,6 @@
 # scanner/engine.py — spec
 
-Last updated: 2026-09-07
+Last updated: 2026-11-16
 
 ## Purpose
 
@@ -39,7 +39,10 @@ Pure-Python tri-valued (Kleene) scan evaluator. Takes a
   contract:** `None` is returned (fall back) for any within-last
   quantifier, cross-interval `Condition`, cross-symbol/cross-interval
   `FieldRef`, non-column builtin field, or operator outside
-  `_VEC_SUPPORTED_OPS` — so the supported subset is bit-equivalent to the
+  `_VEC_SUPPORTED_OPS`. A changed operator registry also requests scalar
+  fallback, even when the tree uses a normally supported operator: hardcoded
+  comparisons must never bypass `register_op` replacements or removed handlers.
+  Thus the supported subset is bit-equivalent to the
   scalar path and the remainder stays on it. Used by the Conditions-mode
   custom-indicator `compute_arr` (compute #2; ~3 orders of magnitude faster
   than the per-bar walk on a 25k-bar series). Pinned by

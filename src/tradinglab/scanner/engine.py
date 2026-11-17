@@ -1150,6 +1150,8 @@ def evaluate_group_vec(
     to the per-bar :func:`evaluate_group` loop. Any unexpected error is also
     swallowed into ``None`` so the safe scalar path always wins.
     """
+    if not _operators.using_builtin_operators():
+        return None
     try:
         n = len(ctx.bars)
     except Exception:  # noqa: BLE001
