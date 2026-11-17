@@ -133,7 +133,8 @@ def _index_to_date(idx) -> _dt.date | None:
                 idx = idx.tz_convert("UTC")
             except Exception:  # noqa: BLE001
                 pass
-        return idx.date()
+        day = idx.date()
+        return _dt.date(day.year, day.month, day.day)
     except Exception:  # noqa: BLE001
         return None
 

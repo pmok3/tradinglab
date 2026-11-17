@@ -20468,7 +20468,7 @@ def check_b60_events_protocol_registry(app) -> None:
     fetchers, and that the synthetic fetcher returns a well-formed
     :class:`EventBundle` with ``EarningsRecord`` / ``DividendRecord``
     payloads (ms-since-epoch ts, BMO/AMC slot enum, finite-or-NaN
-    floats).
+    floats). Invalid provider dates must not discard valid events.
     """
     from tradinglab import events as _events_pkg
     from tradinglab.events import (
@@ -20517,8 +20517,28 @@ def check_b60_events_protocol_registry(app) -> None:
     assert [e.ts for e in bundle.earnings] == [e.ts for e in bundle2.earnings]
     assert [d.ex_ts for d in bundle.dividends] == [d.ex_ts for d in bundle2.dividends]
 
+    import sys
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    import pandas as pd
+
+    from tradinglab.events.yfinance_events import fetch_yfinance_events
+
+    index = pd.to_datetime(["2024-01-25", None], utc=True)
+    ticker = SimpleNamespace(
+        earnings_dates=pd.DataFrame({"EPS Estimate": [2.1, 9.0]}, index=index),
+        actions=pd.DataFrame({"Dividends": [0.75, 9.0]}, index=index),
+    )
+    with patch.dict(sys.modules, {"yfinance": SimpleNamespace(Ticker=lambda symbol: ticker)}):
+        normalized = fetch_yfinance_events("AAA")
+    assert isinstance(normalized, EventBundle)
+    assert [(r.ts, r.eps_estimate) for r in normalized.earnings] == [(1706140800000, 2.1)]
+    assert [(r.ex_ts, r.amount) for r in normalized.dividends] == [(1706140800000, 0.75)]
+
     print("  [OK] b60 events protocol + EVENT_SOURCES registry + "
-          "idempotent register + deterministic synthetic bundle shape")
+          "idempotent register + deterministic synthetic bundle shape + "
+          "invalid provider dates isolated")
 
 
 def check_b61_engine_corporate_action_phase(app) -> None:

@@ -17,6 +17,7 @@ Plus:
 * Missing-column tolerance (NaN fields)
 * Case-insensitive column lookup
 * Tz-aware index decode (slot inference and UTC midnight floor)
+* Invalid index dates skip only their own rows
 * Split-ratio float → (num, den) for forward / reverse / no-op
 * Cash+split on a single row emits two records
 * Empty / None frames return []
@@ -25,6 +26,7 @@ Plus:
 from __future__ import annotations
 
 import math
+from datetime import date
 
 import pandas as pd
 import pytest
@@ -176,15 +178,19 @@ def test_earnings_case_insensitive_column_lookup():
     assert recs[0].eps_actual == pytest.approx(2.18)
 
 
-def test_earnings_missing_columns_yield_nan_fields():
-    # Frame has only the est column; act + revenue cols absent.
-    df = pd.DataFrame({"EPS Estimate": [1.0, 2.0]},
+@pytest.mark.parametrize("column", ["EPS Estimate", "Unexpected Column"])
+def test_earnings_missing_columns_yield_nan_fields(column):
+    df = pd.DataFrame({column: [1.0, 2.0]},
                       index=pd.DatetimeIndex([
                           _ny_dt(2024, 1, 25, 16, 5),
                           _ny_dt(2024, 4, 25, 16, 5),
                       ]))
     recs = normalize_earnings_df(df, symbol="X", source="yfinance")
     assert len(recs) == 2
+    if column == "EPS Estimate":
+        assert [r.eps_estimate for r in recs] == [1.0, 2.0]
+    else:
+        assert all(math.isnan(r.eps_estimate) for r in recs)
     assert all(math.isnan(r.eps_actual) for r in recs)
     assert all(math.isnan(r.revenue_estimate) for r in recs)
     assert all(math.isnan(r.revenue_actual) for r in recs)
@@ -194,14 +200,34 @@ def test_earnings_missing_columns_yield_nan_fields():
 # Index / slot decode
 # ---------------------------------------------------------------------------
 
-def test_earnings_tz_aware_index_floors_to_utc_midnight():
-    # 2024-01-25 16:05 ET floors to 2024-01-25 00:00 UTC midnight.
-    import datetime as dt
-    expected = date_to_midnight_ms(dt.date(2024, 1, 25))
-    rows = [(_ny_dt(2024, 1, 25, 16, 5), 1.0, 1.1, None, None)]
+@pytest.mark.parametrize(("timestamp", "day", "slot"), [
+    (_ny_dt(2024, 1, 25, 16, 5), date(2024, 1, 25), "AMC"),
+    (_ny_dt(2024, 1, 25, 23, 59), date(2024, 1, 26), "AMC"),
+    (pd.Timestamp(2024, 1, 25, 16, 5), date(2024, 1, 25), ""),
+])
+def test_earnings_index_floors_to_utc_midnight(timestamp, day, slot):
+    rows = [(timestamp, 1.0, 1.1, None, None)]
     df = _make_earn_df(rows=rows)
     recs = normalize_earnings_df(df, symbol="X", source="yfinance")
-    assert recs[0].ts == expected
+    assert len(recs) == 1
+    assert recs[0].ts == date_to_midnight_ms(day)
+    assert recs[0].when == slot
+
+
+def test_earnings_nat_rows_preserve_valid_records():
+    df = _make_earn_df(rows=[
+        (pd.NaT, 9.0, 9.1, None, None),
+        (_ny_dt(2024, 4, 25, 16, 5), 1.5, 1.45, None, None),
+        (pd.NaT, 8.0, 8.1, None, None),
+        (_ny_dt(2024, 1, 25, 16, 5), 2.1, 2.18, None, None),
+    ])
+
+    recs = normalize_earnings_df(df, symbol="X", source="yfinance")
+
+    assert [(r.ts, r.eps_estimate, r.eps_actual) for r in recs] == [
+        (date_to_midnight_ms(date(2024, 1, 25)), 2.1, 2.18),
+        (date_to_midnight_ms(date(2024, 4, 25)), 1.5, 1.45),
+    ]
 
 
 def test_earnings_slot_amc_at_16_00_et():
@@ -260,9 +286,38 @@ def test_actions_none_returns_empty_list():
     assert normalize_actions_df(None, symbol="X") == []
 
 
+@pytest.mark.parametrize(("normalizer", "data"), [
+    (normalize_earnings_df, {"EPS Estimate": [1.5], "Reported EPS": [1.45]}),
+    (normalize_actions_df, {"Dividends": [0.75], "Stock Splits": [2.0]}),
+])
+def test_frames_with_only_invalid_dates_return_empty_list(normalizer, data):
+    df = pd.DataFrame(data, index=pd.DatetimeIndex([pd.NaT]))
+    assert normalizer(df, symbol="X") == []
+
+
 # ---------------------------------------------------------------------------
 # Actions: dividend column
 # ---------------------------------------------------------------------------
+
+def test_actions_nat_rows_preserve_dividends_and_splits():
+    df = pd.DataFrame({
+        "Dividends": [9.0, 0.75, 8.0, 0.0],
+        "Stock Splits": [9.0, 0.0, 8.0, 2.0],
+    }, index=pd.DatetimeIndex([
+        pd.NaT, _ny_dt(2024, 4, 1), pd.NaT, _ny_dt(2024, 1, 1),
+    ]))
+
+    recs = normalize_actions_df(df, symbol="X", source="yfinance")
+
+    assert len(recs) == 2
+    split, cash = recs
+    assert (split.ex_ts, split.kind, split.ratio_num, split.ratio_den) == (
+        date_to_midnight_ms(date(2024, 1, 1)), "stock_split", 2, 1,
+    )
+    assert cash == DividendRecord(
+        ex_ts=date_to_midnight_ms(date(2024, 4, 1)),
+        symbol="X", amount=0.75, source="yfinance",
+    )
 
 def test_actions_cash_dividends_with_zero_rows_dropped():
     df = pd.DataFrame({
