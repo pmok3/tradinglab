@@ -12,7 +12,10 @@ from __future__ import annotations
 import datetime as dt
 from types import SimpleNamespace
 
+import pytest
+
 import tradinglab.app as app_mod
+from tradinglab.core.lru_dict import LRUDict
 from tradinglab.data.today_upsample import _today_et
 from tradinglab.models import Candle
 
@@ -113,6 +116,21 @@ def test_synth_applied_and_no_prefetch_when_intraday_present():
     assert calls == [], "no prefetch needed when intraday already cached"
     assert out[-1].date.date() == _TODAY.date(), "synth today-bar must be appended"
     assert len(out) == len(daily) + 1
+
+
+@pytest.mark.parametrize("with_today", [False, True])
+def test_synth_retains_daily_history_fence(monkeypatch, tmp_path, with_today):
+    cache = app_mod.disk_cache
+    monkeypatch.setenv("TRADINGLAB_CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(cache, "_HISTORY_REVISIONS", LRUDict(maxsize=128))
+    daily = cache.history_snapshot("SPY", "1d", [_daily(_YESTERDAY)])
+    intraday = _five_min_today() if with_today else [_daily(_YESTERDAY)]
+    stub, _ = _stub({("Auto", "SPY", "5m"): intraday})
+    result = stub._maybe_upsample_today_daily(daily, source="Auto", symbol="SPY", interval="1d")
+    assert len(result) == (2 if with_today else 1)
+    assert len(daily) == 1, "synthesis must not mutate truthful daily history"
+    cache.invalidate_history("SPY", "1d")
+    assert cache.current_candles(result) is None, "daily synthesis must not erase the revision fence"
 
 
 def test_no_prefetch_when_allow_prefetch_false():

@@ -181,7 +181,7 @@ def upsample_daily_with_today(
     without worrying about mutating shared cache state. Audit
     ``daily-today-upsample``.
     """
-    base = list(daily_candles or [])
+    base = daily_candles.copy() if isinstance(daily_candles, list) else list(daily_candles or [])
     if not intraday_candles:
         return base
     synth = synthesize_today_daily_candle(

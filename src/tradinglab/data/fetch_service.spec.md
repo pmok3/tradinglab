@@ -1,6 +1,6 @@
 # data/fetch_service.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-23
 
 ## Purpose
 Owns TradingLab's general worker pool, dedicated foreground fetch pool, and the background prefetch/reference-data orchestration that used to live in `ChartApp`.
@@ -52,6 +52,11 @@ Owns:
   (`_candles_extended_or_updated`) rather than an O(N) `list.__eq__`.
 
 ## Invariants
+- Hybrid history revision fences survive prefetch application. Invalidated
+  memory is not a stale-guard/merge base and superseded results cannot restore
+  it. Hybrid snapshots use full equality for persistence (interior revisions
+  count even when the tail is identical) and surface their recovery notice
+  through `status_fn`. Other sources retain the tail-only save optimization.
 - Prefetches are deduped by `(source, ticker, interval)` and capped by the caller-provided inflight limit.
 - Empty/failed prefetches clear their inflight slot.
 - A prefetch that adds no new bars to the disk-authoritative in-memory

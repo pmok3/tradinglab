@@ -2859,8 +2859,8 @@ class ChartApp(
             return
         if prefetched_symbol not in (raw_primary, raw_compare):
             return
-        primary_clean = list(
-            self._full_cache.get((src, raw_primary, interval)) or [],
+        primary_clean = disk_cache.copy_candles(
+            self._full_cache.get((src, raw_primary, interval)),
         )
         if not primary_clean:
             return
@@ -2870,8 +2870,8 @@ class ChartApp(
         )
         compare_raw: list[Candle] = []
         if compare_on and raw_compare:
-            compare_clean = list(
-                self._full_cache.get((src, raw_compare, interval)) or [],
+            compare_clean = disk_cache.copy_candles(
+                self._full_cache.get((src, raw_compare, interval)),
             )
             if not compare_clean:
                 # The compare's daily bars may have been LRU-evicted from
@@ -2879,13 +2879,13 @@ class ChartApp(
                 # / compare-warm churn — the cache holds only
                 # ``full_cache_size`` entries). This best-effort synth
                 # refresh (triggered by a PRIMARY intraday prefetch) must
-                # NEVER blank a compare panel that is currently on-screen.
+                # NEVER blank a usable compare panel that is on-screen.
                 # Fall back to disk (the truthful persistent store), then
                 # re-warm memory so subsequent refreshes hit the cache.
                 # Audit ``daily-synth-compare-drop``.
                 try:
-                    compare_clean = list(
-                        disk_cache.load(src, raw_compare, interval) or [],
+                    compare_clean = disk_cache.copy_candles(
+                        disk_cache.load(src, raw_compare, interval),
                     )
                 except Exception:  # noqa: BLE001
                     compare_clean = []
@@ -2897,8 +2897,8 @@ class ChartApp(
                         pass
             if not compare_clean:
                 # Still nothing (compare not on disk either) — preserve the
-                # currently-rendered compare rather than dropping the panel.
-                compare_clean = list(getattr(self, "_compare_raw", None) or [])
+                # current compare unless its history has been invalidated.
+                compare_clean = disk_cache.copy_candles(getattr(self, "_compare_raw", None))
             if compare_clean:
                 compare_raw = self._maybe_upsample_today_daily(
                     compare_clean, source=src, symbol=raw_compare,
@@ -3498,16 +3498,25 @@ class ChartApp(
         # hint. The smoke check at §12 still matches against
         # ``"not found"`` so the phrase is preserved.
         if primary_failed and raw_primary:
+            notice = disk_cache.history_notice(src, raw_primary, interval)
+            if notice:
+                self._set_data_state(primary_raw=[], primary=[], compare_raw=[], compare=[])
+                self._render()
             try:
                 self.ticker_var.set(self._confirmed_primary_ticker)
-                self._status.error(self._ratio_failure_message(raw_primary))
+                self._status.error(
+                    notice or self._ratio_failure_message(raw_primary)
+                )
             except Exception:  # noqa: BLE001
                 pass
             return
         if compare_failed and raw_compare:
             try:
                 self.compare_ticker_var.set(self._confirmed_compare_ticker)
-                self._status.error(self._ratio_failure_message(raw_compare))
+                self._status.error(
+                    disk_cache.history_notice(src, raw_compare, interval)
+                    or self._ratio_failure_message(raw_compare)
+                )
             except Exception:  # noqa: BLE001
                 pass
             # keep going with primary-only
@@ -3549,8 +3558,8 @@ class ChartApp(
 
         primary_raw_ref = primary_raw
         compare_raw_ref = compare_raw
-        primary_raw = list(primary_raw or [])
-        compare_raw = list(compare_raw) if compare_raw is not None else []
+        primary_raw = disk_cache.copy_candles(primary_raw)
+        compare_raw = disk_cache.copy_candles(compare_raw)
 
         # Store back into both memory + disk caches so the next session
         # has persistent access to what we've seen. Cache stores the
@@ -3695,6 +3704,10 @@ class ChartApp(
                     f"({first_d} \u2192 {last_d})")
             else:
                 self._status.info(f"{raw_primary} {interval}: {n} bars")
+            for ticker in (raw_primary, raw_compare):
+                notice = disk_cache.history_notice(src, ticker, interval) if ticker else None
+                if notice:
+                    self._status.warn(notice)
         except Exception:  # noqa: BLE001
             pass
         # Arm the next-bar scheduler (event-driven, §9.3).

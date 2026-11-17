@@ -1,6 +1,6 @@
 # data/prefetch/live.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-23
 
 ## Purpose
 Live-mode fetch translation for the prefetch scheduler: map a `FetchWindow` to a
@@ -25,6 +25,9 @@ concrete registry fetch, and derive the deepening `oldest_ts`. The app's live
 - **period** window (and the range-`unsupported` fallback) →
   `DATA_SOURCES[source](symbol, interval)` trailing window; a missing fetcher →
   `([], None, None)`; a raising fetcher → `([], exc, None)`.
+- Period results are copied with `disk_cache.copy_candles`, retaining hybrid
+  invalidation fences across the scheduler handoff; obsolete snapshots are
+  discarded instead of converted into unguarded plain lists.
 - `oldest_ts` uses `min` (not `bars[0]`) so a mis-ordered page still yields the
   true oldest bar for the band step-back; any bar lacking `.date.timestamp()` →
   `None` (→ scheduler treats as "no older data" → exhausted).
