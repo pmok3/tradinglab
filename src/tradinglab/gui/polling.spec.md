@@ -1,6 +1,6 @@
 # gui/polling.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-20
 
 ## Purpose
 
@@ -85,7 +85,12 @@ Also hosts the pure scheduler helpers (only caller is here).
   `"card:N"`-slot events to `self._chartstack.apply_stream_event`;
   routes `tick`/`rollover` for main chart through
   `_apply_stream_tick`/`_apply_stream_rollover`. Rewires
-  primary slot's candle list after rollover (may build new list).
+  primary slot's candle list after rollover (may build new list) via
+  the canonical `_set_data_state(primary_raw=raw, primary=raw)` — never
+  by writing `self._primary` / `self.candles` directly — so the
+  DataController and the legacy aliases are updated atomically and a
+  later bare `_set_data_state()` cannot restore stale pre-rollover
+  controller state over the fresh list.
   A `tick`-only drain requests a repaint via `_request_tick_repaint`
   (rate-limited); a `rollover` repaints synchronously via
   `_refresh_view_after_append`.
