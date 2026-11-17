@@ -236,16 +236,33 @@ def test_worker_never_mutates_snapshot_or_releases_inflight_before_drain():
     assert app.cell().raw == 103
 
 
-@pytest.mark.parametrize("change", ["source", "columns", "tickers", "enter", "exit", "clock", "session"])
-def test_stale_context_is_rejected_and_latest_context_resubmitted(change):
+def test_worker_completes_without_access_to_any_app_state():
+    class TkOnlyApp(_App):
+        def __getattribute__(self, name):
+            assert threading.current_thread() is threading.main_thread(), name
+            return super().__getattribute__(name)
+
+    app = TkOnlyApp()
+    app._preload_watchlist_signals()
+    app.complete()
+    assert app.cell().raw == 103
+    assert not app._watchlist_signals_inflight
+
+
+@pytest.mark.parametrize(
+    "change", ["source", "provider", "columns", "tickers", "enter", "exit", "clock", "session", "interval"],
+)
+def test_stale_context_is_rejected_and_latest_context_resubmitted(monkeypatch, change):
     app = _App()
-    if change in ("exit", "clock", "session"):
+    if change in ("exit", "clock", "session", "interval"):
         _replay(app)
     app._preload_watchlist_signals()
     app._executor.run()
     if change == "source":
         app.source_var.value = "other"
         app._full_cache[("other", "AMD", "5m")] = _bars()
+    elif change == "provider":
+        monkeypatch.setitem(DATA_SOURCES, "yfinance", lambda *_: _bars())
     elif change == "columns":
         app.columns = [_column("high")]
     elif change == "tickers":
@@ -257,6 +274,8 @@ def test_stale_context_is_rejected_and_latest_context_resubmitted(change):
         app._sandbox = None
     elif change == "clock":
         app._sandbox.timestamp -= 300
+    elif change == "interval":
+        app._sandbox.interval = "15m"
     else:
         _replay(app)
     app._drain_worker_inbox()
@@ -268,7 +287,7 @@ def test_stale_context_is_rejected_and_latest_context_resubmitted(change):
     assert not app._watchlist_signals_inflight
 
 
-def test_old_generation_cannot_retire_a_new_job_even_after_context_returns():
+def test_old_request_cannot_retire_a_new_job_even_after_context_returns():
     app = _App()
     app._preload_watchlist_signals()
     app._executor.run()
@@ -294,7 +313,7 @@ def test_column_parameters_are_owned_and_changes_invalidate_results():
     params = {"nested": {"value": 1}}
     app.columns = [replace(app.columns[0], ref=FieldRef("builtin", "close", params=params, interval="5m"))]
     app._preload_watchlist_signals()
-    context = app._executor.jobs[0][2][1]
+    context = app._executor.jobs[0][2][0].context
     params["nested"]["value"] = 2
     assert context.columns[0].ref.params["nested"]["value"] == 1
     app.complete()
@@ -388,7 +407,7 @@ def test_worker_uses_frozen_fetcher_and_clock_after_replay_advances(monkeypatch)
     monkeypatch.setitem(DATA_SOURCES, "yfinance", lambda *_: pytest.fail("new fetcher used by old job"))
     app._executor.run()
     _, payload = app._worker_inbox.get_nowait()
-    assert payload[2]["AMD"]["close"].raw == 102
+    assert payload[1]["AMD"]["close"].raw == 102
     assert calls == [("AMD", "5m")]
 
 

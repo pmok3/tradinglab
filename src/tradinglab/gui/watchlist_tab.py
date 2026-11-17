@@ -39,6 +39,7 @@ from collections.abc import Callable, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import date
+from queue import Queue
 from tkinter import ttk
 
 from ..data import DATA_SOURCES
@@ -90,6 +91,13 @@ class _SignalContext:
     session_id: int | None
     interval: str | None
     fetcher: Callable[[str, str], list[Candle]] | None
+
+
+@dataclass(frozen=True, eq=False)
+class _SignalRequest:
+    context: _SignalContext
+    bars: dict[tuple[str, str], list[Candle] | None]
+    inbox: Queue
 
 
 def _copy_signal_bars(
@@ -1938,6 +1946,10 @@ class WatchlistTabMixin:
                     out.append(col)
         return out
 
+    @property
+    def _watchlist_signals_inflight(self) -> bool:
+        return getattr(self, "_watchlist_signal_job", None) is not None
+
     def _preload_watchlist_signals(self) -> None:
         """Tk thread: snapshot values and context before submitting one worker."""
         executor = getattr(self, "_executor", None)
@@ -1950,11 +1962,11 @@ class WatchlistTabMixin:
             return
         if context != getattr(self, "_watchlist_signal_context", None):
             self._watchlist_signal_context = context
-            self._watchlist_signal_generation = getattr(self, "_watchlist_signal_generation", 0) + 1
             for snap in self._watchlist_snapshot.values():
                 snap.pop("_sig", None)
+        context = self._watchlist_signal_context
         if (not context.columns or not context.tickers
-                or getattr(self, "_watchlist_signals_inflight", False)):
+                or self._watchlist_signals_inflight):
             return
         try:
             from ..watchlists.signals import DEFAULT_INTERVAL
@@ -1966,18 +1978,14 @@ class WatchlistTabMixin:
                 )
                 for symbol in context.tickers for interval in intervals
             }
-            self._watchlist_signal_generation += 1
-            generation = self._watchlist_signal_generation
-            self._watchlist_signal_job = generation
-            self._watchlist_signals_inflight = True
-            future = executor.submit(self._compute_watchlist_signals, generation, context, bars)
-            inbox = self._worker_inbox
+            request = _SignalRequest(context, bars, self._worker_inbox)
+            self._watchlist_signal_job = request
+            future = executor.submit(self._compute_watchlist_signals, request)
             future.add_done_callback(
-                lambda done: inbox.put_nowait(("watchlist_signals", (generation, context, None)))
+                lambda done: request.inbox.put_nowait(("watchlist_signals", (request, None)))
                 if done.cancelled() else None
             )
         except Exception:  # noqa: BLE001
-            self._watchlist_signals_inflight = False
             self._watchlist_signal_job = None
             logging.getLogger(__name__).exception("Could not submit watchlist signals")
 
@@ -2020,15 +2028,14 @@ class WatchlistTabMixin:
             bars = self._full_cache.get((context.source, symbol, interval))
         return _copy_signal_bars(bars, context, interval) if bars else None
 
-    def _compute_watchlist_signals(
-        self, generation: int, context: _SignalContext,
-        snapshots: dict[tuple[str, str], list[Candle] | None],
-    ) -> None:
-        """Worker: consume owned inputs and queue a generation-tagged completion."""
+    @staticmethod
+    def _compute_watchlist_signals(request: _SignalRequest) -> None:
+        """Worker: consume one owned request without accessing the app."""
+        context = request.context
         results = None
 
         def bars_provider(source, symbol, interval):
-            bars = snapshots[(symbol, interval)]
+            bars = request.bars[(symbol, interval)]
             if bars is None and context.fetcher is not None:
                 try:
                     fetched = context.fetcher(symbol, interval)
@@ -2046,17 +2053,16 @@ class WatchlistTabMixin:
         except Exception:  # noqa: BLE001
             logging.getLogger(__name__).exception("Could not evaluate watchlist signals")
         finally:
-            self._worker_inbox.put_nowait(("watchlist_signals", (generation, context, results)))
+            request.inbox.put_nowait(("watchlist_signals", (request, results)))
 
     def _apply_watchlist_signals(self, payload) -> None:
         """Tk thread: retire the matching job and reject obsolete contexts."""
-        generation, context, results = payload
-        if generation != getattr(self, "_watchlist_signal_job", None):
+        request, results = payload
+        if request is not getattr(self, "_watchlist_signal_job", None):
             return
         self._watchlist_signal_job = None
-        self._watchlist_signals_inflight = False
-        if (generation != self._watchlist_signal_generation
-                or context != self._capture_watchlist_signal_context()):
+        if (request.context is not self._watchlist_signal_context
+                or request.context != self._capture_watchlist_signal_context()):
             self._preload_watchlist_signals()
             return
         for sym, cells in (results or {}).items():

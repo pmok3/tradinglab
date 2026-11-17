@@ -1,6 +1,6 @@
 # gui/watchlist_tab.py — Spec
 
-Last updated: 2026-09-23
+Last updated: 2026-11-16
 
 ## Purpose
 
@@ -273,14 +273,17 @@ larger; pinning makes a list reachable from the main UI.
   fetch on the worker using the captured fetcher and replay cutoff.
   Each job gets a fresh `WatchlistSignalEvaluator`, avoiding timestamp-only
   cache reuse after a forming-bar correction.
-  Each submitted job has a unique generation. Completion is
-  `("watchlist_signals", (generation, context, results))`;
+  One owned `_SignalRequest` carries that context, candle snapshots and
+  the completion inbox. The static worker has no app reference.
+  Completion is `("watchlist_signals", (request, results))`;
   failure/cancellation carries `None` results. Workers never mutate the
   GUI snapshot or in-flight bookkeeping. `_apply_watchlist_signals` retires
-  only the matching job on Tk and rejects changed source/provider, columns,
-  tickers, replay session or clock. Observed context changes advance the
-  generation and clear old signal cells; returning to an earlier context
-  does not resurrect that generation's results. Stale completion schedules
+  only the identical request on Tk; busy state derives from that request
+  rather than a separate flag. It rejects changed source/provider, columns,
+  tickers, replay session, interval or clock. Observed context changes replace
+  the current context object and clear old signal cells; context identity
+  prevents returning to an earlier configuration from resurrecting an old
+  request's results. Stale completion schedules
   one replacement for the latest context, with at most one worker in flight.
   Accepted cells merge on Tk, then queue the existing refresh nudge.
   Submission/evaluation/fetch failures are logged; cancellation and failure

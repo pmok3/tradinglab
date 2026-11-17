@@ -1,6 +1,6 @@
 # gui/polling.py — Spec
 
-Last updated: 2026-09-23
+Last updated: 2026-11-16
 
 ## Purpose
 
@@ -63,7 +63,7 @@ Also hosts the pure scheduler helpers (only caller is here).
   bars), `refresh` (watchlist refresh), `watchlist_signals` (worker-
   computed signal cells, applied on the Tk thread via the watchlist
   tab's `_apply_watchlist_signals` — the signal worker never mutates
-  `_watchlist_snapshot` itself; the generation/context/results payload
+  `_watchlist_snapshot` itself; the owned-request/results payload
   also retires matching in-flight work and rejects stale completions;
   apply failures are logged), `reference` (reference-
   data redraw), `card_stash` (chartstack card cache fill). When
