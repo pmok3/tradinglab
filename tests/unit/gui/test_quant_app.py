@@ -493,13 +493,17 @@ def test_submit_is_inert_without_an_executor(app):
 
 
 def test_worker_records_a_snapshot_and_stashes_bars(app, monkeypatch):
-    from tradinglab import data as data_mod
+    from datetime import datetime
 
-    monkeypatch.setitem(data_mod.DATA_SOURCES, "yfinance", lambda s, i: [42.0])
+    from tradinglab import data as data_mod
+    from tradinglab.models import Candle
+
+    bars = [Candle(datetime(2026, 6, 8), 42.0, 42.0, 42.0, 42.0, 1000)]
+    monkeypatch.setitem(data_mod.DATA_SOURCES, "yfinance", lambda s, i: bars)
     app._quant_fetch_inflight.add("VIX")
     app._fetch_quant_last("VIX", "yfinance")
     assert app.snapshot_calls[0][:3] == ("VIX", "yfinance", QUANT_LAST_INTERVAL)
-    assert app.stashed == [(("yfinance", "VIX", QUANT_LAST_INTERVAL), [42.0])]
+    assert app.stashed == [(("yfinance", "VIX", QUANT_LAST_INTERVAL), bars)]
     assert "VIX" not in app._quant_fetch_inflight
 
 

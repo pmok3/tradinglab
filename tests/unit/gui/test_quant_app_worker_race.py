@@ -1,4 +1,4 @@
-"""Quant fetch worker race: snapshot-at-handoff + Tk-thread apply.
+"""Quant fetch worker race: detached results + Tk-thread apply.
 
 Regression suite for the P1 "``_fetch_quant_last`` worker-thread race":
 
@@ -8,15 +8,15 @@ shared ``_watchlist_snapshot`` (``setdefault`` + in-place cell updates)
 while the Tk thread reads it in ``_paint_quant_last_values`` /
 ``_populate_watchlist_tab`` / ``_watchlist_cell_text``, and reading
 ``_full_cache`` / queueing a refresh off-thread. It now posts
-``("quant_snapshot", (symbol, src, interval, bars))`` on ``_worker_inbox``
-(bars snapshotted with ``list(bars)`` at handoff); the Tk-thread
-``_drain_worker_inbox`` applies it via ``_apply_quant_snapshot_from_bars``.
+``("quant_result", (symbol, src, bars))`` on ``_worker_inbox``
+(including copies of mutable Candle fields); the Tk-thread
+``_drain_worker_inbox`` applies snapshot and cache via ``_apply_quant_fetch_result``.
 On the Tk thread itself (synchronous test shims) the apply runs directly,
 matching ``_preload_one_last``'s fast-path.
 
 The tests below capture the downstream order effects: the worker must never
-apply off-thread, the posted handoff must precede the ``("stash", …)``
-item, the debounced refresh the apply queues must reach the next drain,
+apply off-thread, snapshot and cache must land in the same drain,
+the debounced refresh the apply queues must reach the next drain,
 and the posted bars must be insulated from later reuse of the fetcher's
 buffer.
 
@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import queue
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import pytest
@@ -114,6 +115,7 @@ def _patch_data_sources(monkeypatch):
 def _run_worker(app: _App, symbol: str, src: str) -> None:
     """Run ``_fetch_quant_last`` on a real worker thread."""
     errors: list[BaseException] = []
+    app._quant_fetch_inflight.add(symbol)
 
     def _target() -> None:
         try:
@@ -146,7 +148,7 @@ def _drain_all(inbox: queue.Queue) -> list[tuple]:
 def test_worker_posts_handoff_and_never_applies_off_thread(_patch_data_sources):
     """The race: the worker used to call the snapshot seam directly,
     mutating ``_watchlist_snapshot`` off the Tk thread. It must now post
-    ``("quant_snapshot", …)`` and leave the shared snapshot untouched."""
+    ``("quant_result", …)`` and leave the shared snapshot untouched."""
     app = _App()
     sentinel = {"last": 42.0}
     app._watchlist_snapshot["^VIX"] = sentinel
@@ -158,12 +160,10 @@ def test_worker_posts_handoff_and_never_applies_off_thread(_patch_data_sources):
     # ...so the pre-existing snapshot dict is the identical, untouched object.
     assert app._watchlist_snapshot["^VIX"] is sentinel
     assert sentinel == {"last": 42.0}
-    # The handoff is on the inbox AHEAD of the cache stash (the same
-    # relative order the old direct calls had), bars snapshotted at handoff.
     items = _drain_all(app._worker_inbox)
-    assert [kind for kind, _ in items] == ["quant_snapshot", "stash"]
-    sym, src, itv, bars = items[0][1]
-    assert (sym, src, itv) == ("^VIX", "testsrc", QUANT_LAST_INTERVAL)
+    assert [kind for kind, _ in items] == ["quant_result"]
+    sym, src, bars = items[0][1]
+    assert (sym, src) == ("^VIX", "testsrc")
     assert [c.close for c in bars] == _state_closes(7)
     # The fetcher ran on the worker thread with the daily interval.
     fetcher = _patch_data_sources
@@ -182,7 +182,7 @@ def test_main_thread_call_applies_directly_without_the_inbox(_patch_data_sources
 
     assert app.apply_threads == [threading.main_thread().name]
     assert app._watchlist_snapshot["^VIX"]["last"] == _state_closes(7)[-1]
-    # No snapshot handoff on the inbox in the fast path — only the
+    # No result handoff on the inbox in the fast path — only the
     # debounced refresh the apply queued.
     assert [k for k, _ in _drain_all(app._worker_inbox)] == ["refresh"]
     assert len(app.stashed) == 1
@@ -204,11 +204,11 @@ def test_tk_thread_apply_derives_last_from_posted_bars(_patch_data_sources):
 
     _run_worker(app, "^VIX", "testsrc")
     payloads = [p for k, p in _drain_all(app._worker_inbox)
-                if k == "quant_snapshot"]
+                if k == "quant_result"]
     assert len(payloads) == 1
 
     # Tk-thread apply (the main thread in this harness).
-    app._apply_quant_snapshot_from_bars(*payloads[0])
+    app._apply_quant_fetch_result(*payloads[0])
 
     assert app.apply_threads == [threading.main_thread().name]
     snap = app._watchlist_snapshot["^VIX"]
@@ -231,8 +231,8 @@ def test_posted_bars_are_insulated_from_later_buffer_reuse(_patch_data_sources):
     fetcher.bars[:] = _daily_bars(99)
 
     payloads = [p for k, p in _drain_all(app._worker_inbox)
-                if k == "quant_snapshot"]
-    app._apply_quant_snapshot_from_bars(*payloads[0])
+                if k == "quant_result"]
+    app._apply_quant_fetch_result(*payloads[0])
 
     assert app._watchlist_snapshot["^VIX"]["last"] == _state_closes(7)[-1]
 
@@ -244,7 +244,7 @@ def test_posted_bars_are_insulated_from_later_buffer_reuse(_patch_data_sources):
 
 class _DrainHarness(_App, _polling.PollingMixin):
     """Combined harness wiring the real ``_drain_worker_inbox`` to the
-    real ``_apply_quant_snapshot_from_bars`` (no Tk interpreter)."""
+    real ``_apply_quant_fetch_result`` (no Tk interpreter)."""
 
     def __init__(self) -> None:
         _App.__init__(self)
@@ -292,33 +292,130 @@ def test_end_to_end_worker_inbox_drain_applies_quant_snapshot(_patch_data_source
     assert h._worker_inbox.empty()
 
 
+def test_one_result_applies_snapshot_and_cache_before_worker_continues(
+    _patch_data_sources,
+):
+    """A drain between worker posts must not publish half a fetch result."""
+    h = _DrainHarness()
+    posted = threading.Event()
+    resume = threading.Event()
+
+    class _PausedInbox(queue.Queue):
+        def put_nowait(self, item):
+            super().put_nowait(item)
+            if item[0] == "quant_result":
+                posted.set()
+                assert resume.wait(10), "Tk drain did not release the worker"
+
+    h._worker_inbox = _PausedInbox()
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(h._fetch_quant_last, "^VIX", "testsrc")
+        try:
+            assert posted.wait(10), "worker did not post its result"
+            h._drain_worker_inbox()
+            assert h._watchlist_snapshot["^VIX"]["last"] == _state_closes(7)[-1]
+            assert len(h.stashed) == 1
+            assert h.stashed[0][1][-1].close == _state_closes(7)[-1]
+        finally:
+            resume.set()
+            future.result(timeout=10)
+
+
+def test_result_detaches_mutable_candle_fields(_patch_data_sources):
+    """A list copy alone still aliases every mutable Candle in the result."""
+    h = _DrainHarness()
+    fetcher = _patch_data_sources
+    expected = [(c.date, c.close, c.volume) for c in fetcher.bars]
+
+    _run_worker(h, "^VIX", "testsrc")
+    for candle in fetcher.bars:
+        candle.date = expected[0][0]
+        candle.close = -999.0
+        candle.volume = 0
+    h._drain_worker_inbox()
+
+    snap = h._watchlist_snapshot["^VIX"]
+    assert snap["last"] == expected[-1][1]
+    assert snap["change_1d"] == pytest.approx(1.0)
+    assert snap["pct_1d"] == pytest.approx(100 / expected[-2][1])
+    assert [(c.date, c.close, c.volume) for c in h.stashed[0][1]] == expected
+
+
+def test_result_uses_newer_intraday_last_at_tk_apply(_patch_data_sources):
+    """Fetched daily bars must not replace a newer intraday Last."""
+    h = _DrainHarness()
+    bars = _patch_data_sources.bars
+    bars[-2].close, bars[-1].close = 200.0, 250.0
+    _run_worker(h, "^VIX", "testsrc")
+    h._watchlist_snapshot["^VIX"] = {
+        "last": 300.0, "_last_day": bars[-1].date.date(),
+        "_last_source": "intraday", "note": "keep me",
+    }
+
+    h._drain_worker_inbox()
+
+    snap = h._watchlist_snapshot["^VIX"]
+    assert (snap["last"], snap["change_1d"], snap["pct_1d"]) == (300.0, 100.0, 50.0)
+    assert snap["_last_source"] == "intraday"
+    assert snap["note"] == "keep me"
+
+
+def test_result_uses_sandbox_clock_at_tk_apply(_patch_data_sources):
+    """Starting replay before the drain must not expose future daily closes."""
+    from types import SimpleNamespace
+
+    h = _DrainHarness()
+    bars = _patch_data_sources.bars
+    _run_worker(h, "^VIX", "testsrc")
+    h._is_sandbox_active = lambda: True
+    h._sandbox = SimpleNamespace(
+        clock_ts=lambda: int(bars[-2].date.timestamp()),
+        current_session_date=lambda: bars[-2].date.date(),
+    )
+    h._watchlist_snapshot["^VIX"] = {
+        "last": 7100.0, "_last_day": bars[-2].date.date(),
+        "_last_source": "intraday",
+    }
+
+    h._drain_worker_inbox()
+
+    snap = h._watchlist_snapshot["^VIX"]
+    prior = bars[-3].close
+    assert snap["last"] == 7100.0
+    assert snap["change_1d"] == pytest.approx(7100.0 - prior)
+    assert snap["pct_1d"] == pytest.approx((7100.0 - prior) / prior * 100)
+    assert snap["_daily_change_tail"][-1] == (bars[-3].date.date(), prior)
+
+
 # ---------------------------------------------------------------------------
-# 4. The defensive swallows: inbox-full, seam failure, drain failure
+# 4. Failure isolation: inbox-full, teardown, seam failure, drain failure
 # ---------------------------------------------------------------------------
 
 
-class _FailingSnapshotInbox(queue.Queue):
-    """Inbox that rejects the ``quant_snapshot`` handoff (as if full) but
+class _FailingResultInbox(queue.Queue):
+    """Inbox that rejects the ``quant_result`` handoff (as if full) but
     accepts everything else."""
 
     def put_nowait(self, item) -> None:  # noqa: ANN001
-        if item[0] == "quant_snapshot":
+        if item[0] == "quant_result":
             raise queue.Full("inbox full")
         super().put_nowait(item)
 
 
-def test_worker_handoff_failure_is_swallowed_and_stash_still_posts(
-    _patch_data_sources,
+def test_worker_handoff_failure_is_logged_and_stash_still_posts(
+    _patch_data_sources, caplog,
 ):
-    """The ``quant_snapshot`` handoff is best-effort: when the inbox
-    rejects it, the worker swallows the failure (``except: pass``), still
+    """The ``quant_result`` handoff is best-effort: when the inbox
+    rejects it, the worker logs the failure, still
     posts the ``("stash", …)`` item, and releases the inflight marker."""
     app = _App()
-    app._worker_inbox = _FailingSnapshotInbox()
+    app._worker_inbox = _FailingResultInbox()
 
-    _run_worker(app, "^VIX", "testsrc")  # must not raise
+    with caplog.at_level("DEBUG", logger="tradinglab.gui.quant_app"):
+        _run_worker(app, "^VIX", "testsrc")
 
     assert "^VIX" not in app._quant_fetch_inflight
+    assert "Quant result handoff failed" in caplog.text
     assert app.apply_threads == []
     items = _drain_all(app._worker_inbox)
     assert [kind for kind, _ in items] == ["stash"]
@@ -327,8 +424,26 @@ def test_worker_handoff_failure_is_swallowed_and_stash_still_posts(
     assert [c.close for c in bars] == _state_closes(7)
 
 
-def test_apply_quant_snapshot_swallows_seam_failure():
-    """``_apply_quant_snapshot_from_bars`` is a defensive Tk-thread seam:
+def test_worker_releases_inflight_when_teardown_rejects_all_posts(
+    _patch_data_sources, caplog,
+):
+    class _ClosedInbox(queue.Queue):
+        def put_nowait(self, item):
+            raise RuntimeError("application closed")
+
+    app = _App()
+    app._worker_inbox = _ClosedInbox()
+    with caplog.at_level("DEBUG", logger="tradinglab.gui.quant_app"):
+        _run_worker(app, "^VIX", "testsrc")
+
+    assert "^VIX" not in app._quant_fetch_inflight
+    assert app._watchlist_snapshot == {}
+    assert app.stashed == []
+    assert "Quant last fetch failed" in caplog.text
+
+
+def test_apply_quant_result_logs_seam_failure_and_still_stashes(caplog):
+    """``_apply_quant_fetch_result`` is a defensive Tk-thread seam:
     a raising ``_apply_watchlist_snapshot_from_bars`` must not propagate
     to the drain."""
 
@@ -339,28 +454,33 @@ def test_apply_quant_snapshot_swallows_seam_failure():
 
     app._apply_watchlist_snapshot_from_bars = _boom
 
-    # Must not raise.
-    app._apply_quant_snapshot_from_bars(
-        "^VIX", "testsrc", QUANT_LAST_INTERVAL, _daily_bars(7))
+    with caplog.at_level("DEBUG", logger="tradinglab.gui.quant_app"):
+        app._apply_quant_fetch_result("^VIX", "testsrc", _daily_bars(7))
 
     assert app._watchlist_snapshot == {}
+    assert len(app.stashed) == 1
+    assert "Quant snapshot apply failed" in caplog.text
 
 
-def test_drain_swallows_quant_snapshot_apply_failure(_patch_data_sources):
+def test_drain_logs_quant_result_apply_failure_and_continues(caplog):
     """The Tk-thread drain applies the posted handoff defensively: a
-    raising ``_apply_quant_snapshot_from_bars`` is swallowed and the drain
+    raising ``_apply_quant_fetch_result`` is logged and the drain
     still re-arms its tick."""
     h = _DrainHarness()
 
     def _boom(*args, **kwargs):  # noqa: ANN001, ANN002, ANN003
         raise RuntimeError("apply exploded")
 
-    h._apply_quant_snapshot_from_bars = _boom
+    h._apply_quant_fetch_result = _boom
     h._worker_inbox.put_nowait(
-        ("quant_snapshot",
-         ("^VIX", "testsrc", QUANT_LAST_INTERVAL, _daily_bars(7))))
+        ("quant_result", ("^VIX", "testsrc", _daily_bars(7))))
+    h._worker_inbox.put_nowait(("stash", (("other", "TLT", "1d"), _daily_bars(1))))
 
-    h._drain_worker_inbox()  # must not raise
+    with caplog.at_level("DEBUG", logger="tradinglab.gui.polling"):
+        h._drain_worker_inbox()
 
     assert h._worker_inbox.empty()
+    assert len(h.stashed) == 1
+    assert h.stashed[0][0] == ("other", "TLT", "1d")
+    assert "Quant result apply failed" in caplog.text
     assert h.after_calls and h.after_calls[-1][0] == 80

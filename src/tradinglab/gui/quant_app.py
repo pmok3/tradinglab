@@ -29,7 +29,10 @@ from __future__ import annotations
 import logging
 import threading
 import tkinter as tk
+from dataclasses import replace
 from typing import Any
+
+from ..models import Candle
 
 logger = logging.getLogger(__name__)
 
@@ -362,17 +365,7 @@ class QuantAppMixin:
         return bool(getattr(self, "_sandbox_strict_offline", False))
 
     def _fetch_quant_last(self, symbol: str, src: str) -> None:
-        """Worker-thread body: fetch daily bars and record the snapshot.
-
-        Runs off the Tk thread, so it must not call ``self.after`` (§7.15)
-        and must not touch the shared ``_watchlist_snapshot`` — Tk-thread
-        paint paths read it concurrently. On a worker the fetched bars
-        cross on ``_worker_inbox`` as ``("quant_snapshot", …)`` and the
-        Tk-thread drain applies them via
-        :meth:`_apply_quant_snapshot_from_bars`; on the Tk thread itself
-        (e.g. test shims) the apply runs directly, matching
-        ``_preload_one_last``'s fast-path.
-        """
+        """Fetch daily bars; transfer one detached result to the Tk thread."""
         from ..data import DATA_SOURCES
 
         try:
@@ -382,49 +375,33 @@ class QuantAppMixin:
             bars = fetcher(symbol, QUANT_LAST_INTERVAL)
             if not bars:
                 return
-            # Snapshot at handoff: the worker must not call the snapshot
-            # seam — it mutates ``_watchlist_snapshot`` (read by Tk-thread
-            # paint paths), reads ``_full_cache`` and queues a refresh.
-            # The payload crosses on ``_worker_inbox``; the Tk-thread
-            # drain owns the shared snapshot.
+            # Candle is mutable: a list copy alone aliases provider-owned fields.
+            rows = [replace(bar) for bar in bars]
             if threading.current_thread() is threading.main_thread():
-                self._apply_quant_snapshot_from_bars(
-                    symbol, src, QUANT_LAST_INTERVAL, bars)
+                self._apply_quant_fetch_result(symbol, src, rows)
             else:
                 try:
                     self._worker_inbox.put_nowait(
-                        ("quant_snapshot",
-                         (symbol, src, QUANT_LAST_INTERVAL, list(bars))))
+                        ("quant_result", (symbol, src, rows)))
                 except Exception:  # noqa: BLE001
-                    pass
-            key = (src, symbol, QUANT_LAST_INTERVAL)
-            rows = list(bars)
-            if threading.current_thread() is threading.main_thread():
-                self._stash_full_cache(key, rows)
-            else:
-                self._worker_inbox.put_nowait(("stash", (key, rows)))
+                    logger.debug("Quant result handoff failed for %s", symbol, exc_info=True)
+                    self._worker_inbox.put_nowait(
+                        ("stash", ((src, symbol, QUANT_LAST_INTERVAL), rows)))
         except Exception:  # noqa: BLE001
             logger.debug("Quant last fetch failed for %s", symbol, exc_info=True)
         finally:
             self._quant_fetch_inflight.discard(symbol)
 
-    def _apply_quant_snapshot_from_bars(
-        self, symbol: str, src: str, interval: str, bars: list
+    def _apply_quant_fetch_result(
+        self, symbol: str, src: str, bars: list[Candle]
     ) -> None:
-        """Tk thread: derive the snapshot from worker-fetched daily bars.
-
-        Applies the ``("quant_snapshot", …)`` inbox item posted by
-        :meth:`_fetch_quant_last`. The worker snapshots the fetched bars
-        at handoff and never touches ``_watchlist_snapshot`` — the seam
-        below mutates it (and reads ``_full_cache`` / queues a debounced
-        repaint) while Tk-thread paint paths read it, so it runs here on
-        the Tk thread only (AGENTS.md §7.15).
-        """
+        """Tk thread: derive coherent cells, then cache the same owned bars."""
         try:
             self._apply_watchlist_snapshot_from_bars(
-                symbol, src, interval, bars)
+                symbol, src, QUANT_LAST_INTERVAL, bars)
         except Exception:  # noqa: BLE001
-            pass
+            logger.debug("Quant snapshot apply failed for %s", symbol, exc_info=True)
+        self._stash_full_cache((src, symbol, QUANT_LAST_INTERVAL), bars)
 
     # ------------------------------------------------------------------
     # Theming
