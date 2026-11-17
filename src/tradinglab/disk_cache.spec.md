@@ -1,6 +1,6 @@
 # disk_cache.py — Spec
 
-Last updated: 2026-09-23
+Last updated: 2026-11-16
 
 ## Purpose
 Durable cache of fetched candle data, keyed by `(source, ticker, interval)`. Acts as a log of every bar we've ever seen for a key, so that historical bars which fall outside a provider's current window (e.g. yfinance's 60-day intraday cap) are retained across sessions. Freshness policy is **not** enforced here — sealed OHLCV bars are immutable facts; the caller (`ChartApp._cache_is_stale`) decides when to re-fetch.
@@ -64,7 +64,8 @@ Durable cache of fetched candle data, keyed by `(source, ticker, interval)`. Act
   and invalid numeric inputs are coerced to 0 at
   serialisation time so one bad bar can no longer abort the whole
   write (previously `int(c.volume)` raised and lost the entire
-  series).
+  series). `_volume_as_int` applies this same policy when loading full or
+  windowed cache files, including legacy non-finite volume records.
 - `load_window(source, ticker, interval, *, start_day, end_day) ->
   Optional[List[Candle]]` — the windowed sibling of `load`. Both bounds are
   **inclusive `YYYY-MM-DD` strings** compared against the record's own ISO
@@ -250,3 +251,7 @@ Durable cache of fetched candle data, keyed by `(source, ticker, interval)`. Act
   encoding overhead). Acceptable trade-off for the RCE-surface
   removal; Parquet (smaller and faster) was rejected because
   pyarrow has had its own CVE history.
+
+## Recent history
+- 2026-11-16: Shared exact-integer/non-finite volume normalization between
+  serialization and full/windowed reads; malformed legacy volumes cannot abort a load.

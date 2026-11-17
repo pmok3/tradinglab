@@ -1,6 +1,6 @@
 # app.py — Spec
 
-Last updated: 2026-09-23
+Last updated: 2026-11-16
 
 ## Purpose
 Top-level Tk + matplotlib application. Owns all runtime state (Tk widgets, `Figure`, caches, stream/fetch tokens, worker pool) and orchestrates the data → render → stream pipeline. `ChartApp` is composed of `tk.Tk` + a stack of mixins (each owns a concern documented in its own `*.spec.md`).
@@ -97,9 +97,11 @@ patch `tradinglab.app.<name>`.
    A failed save **retains the valid merged list** for display; merge availability does
    not imply persistence. `primary_save_result` / `compare_save_result` independently
    carry `False` on failure (logged), `True` on save success or intentional BYOD/ratio
-   no-op, and `None` when skipped or unknown. The worker returns an eight-tuple;
-   legacy four-/six-tuples remain accepted with unknown save outcomes. Each non-None
-   merged list suppresses that side's repeated merge/save, never the other side's.
+   no-op, and `None` when skipped or unknown. The interactive worker returns one
+   typed dictionary, consumed directly by the callback without positional adapters.
+   Each non-None merged list suppresses that side's repeated merge/save, never the
+   other side's. If merging raises, that slot retains the fetched bars, logs the
+   failure and skips persistence rather than retrying the failed merge on Tk.
    There is no Tk-thread retry or recursive resubmission: a later independent async
    refresh retries against the unchanged disk file. On empty fetches, disk fallbacks
    are handed off as ready lists without rewriting them; memory hits/fallbacks also
@@ -592,3 +594,7 @@ Sandbox integration coverage lives in `backtest/replay.spec.md`.
 - No US market holiday calendar; half-days unhandled.
 - Weekly polls every weekday at 16:05 (could tighten to Fridays-only).
 - User-triggered `_load_data` is synchronous (poll path is async).
+
+## Recent history
+- 2026-11-16: Replaced positional worker adapters with a named payload; cache
+  merge failures retain fetched data without retrying merge/save work on Tk.

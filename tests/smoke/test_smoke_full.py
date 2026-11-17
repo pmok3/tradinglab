@@ -21787,7 +21787,10 @@ def check_e1_async_cache_write_failure(app) -> None:
         payload = app._prefetched_raw
         if payload and payload.get("primary_ticker") == "N7PROBE":
             payloads.append(dict(payload))
-        return original_load()
+        result = original_load()
+        if payload and payload.get("primary_ticker") == "N7PROBE":
+            assert app._full_cache[key] == payload["primary_merged"]
+        return result
 
     try:
         with (

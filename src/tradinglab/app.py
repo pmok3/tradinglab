@@ -32,7 +32,7 @@ from pathlib import Path
 from tkinter import filedialog as filedialog  # noqa: F401  # patch seam for tests
 from tkinter import messagebox as messagebox  # noqa: F401  # patch seam for tests
 from tkinter import ttk
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, TypedDict
 
 import numpy as np
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -219,6 +219,17 @@ _FULL_CACHE_MAX = _defaults.get("full_cache_size")
 # high catches reliably. Audit ``drawings-snap-extended``.
 _DRAWINGS_SNAP_PIXEL_THRESHOLD = 8.0
 _DATA_STATE_UNSET = object()
+
+
+class _LoadDataResult(TypedDict):
+    primary: list[Candle]
+    compare: list[Candle]
+    primary_disk: list[Candle] | None
+    compare_disk: list[Candle] | None
+    primary_merged: list[Candle] | None
+    compare_merged: list[Candle] | None
+    primary_save_result: bool | None
+    compare_save_result: bool | None
 
 
 @contextlib.contextmanager
@@ -3190,9 +3201,9 @@ class ChartApp(
         # Bump token BEFORE submit so a follow-up load supersedes us.
         token = self._bump_fetch_token()
 
-        def _work():
-            p: list = []
-            c: list = []
+        def _work() -> _LoadDataResult:
+            p: list[Candle] = []
+            c: list[Candle] = []
             if raw_primary:
                 try:
                     p = fetcher(raw_primary, interval) or []
@@ -3208,8 +3219,8 @@ class ChartApp(
             # or the network-failure fallback. disk_cache.save() uses
             # atomic os.replace so concurrent reads on the worker are
             # race-safe against any Tk-thread save still in flight.
-            p_disk: list | None = None
-            c_disk: list | None = None
+            p_disk: list[Candle] | None = None
+            c_disk: list[Candle] | None = None
             try:
                 if raw_primary:
                     p_disk = disk_cache.load(src, raw_primary, interval)
@@ -3230,8 +3241,10 @@ class ChartApp(
             # uses ``os.replace`` (atomic on Windows + POSIX), so a
             # concurrent read on a sibling worker thread either sees
             # the OLD file or the NEW file — never a torn one.
-            p_merged: list | None = None if p else p_disk
-            c_merged: list | None = None if c else c_disk
+            # Keep fetched bars usable even if the merge itself fails; Tk must
+            # not repeat failed worker work or turn a cache error into a blank chart.
+            p_merged: list[Candle] | None = p or p_disk
+            c_merged: list[Candle] | None = c or c_disk
             p_save_result: bool | None = None
             c_save_result: bool | None = None
             try:
@@ -3262,7 +3275,16 @@ class ChartApp(
             except Exception:  # noqa: BLE001
                 c_save_result = False
                 logger.exception("disk_cache merge/save failed for %s/%s/%s", src, raw_compare, interval)
-            return p, c, p_disk, c_disk, p_merged, c_merged, p_save_result, c_save_result
+            return {
+                "primary": p,
+                "compare": c,
+                "primary_disk": p_disk,
+                "compare_disk": c_disk,
+                "primary_merged": p_merged,
+                "compare_merged": c_merged,
+                "primary_save_result": p_save_result,
+                "compare_save_result": c_save_result,
+            }
 
         try:
             fut = executor.submit(_work)
@@ -3270,43 +3292,18 @@ class ChartApp(
             self._load_data()
             return
 
-        def _on_result(result) -> None:
+        def _on_result(result: _LoadDataResult | None) -> None:
             # Stale-token guard: a newer fetch superseded us.
             if token != self._fetch_token:
                 return
-            p_save_result, c_save_result = None, None
-            if result is None:
-                p_raw, c_raw = None, None
-                p_disk, c_disk = None, None
-                p_merged, c_merged = None, None
-            elif len(result) == 8:
-                p_raw, c_raw, p_disk, c_disk, p_merged, c_merged, p_save_result, c_save_result = result
-            elif len(result) == 6:
-                p_raw, c_raw, p_disk, c_disk, p_merged, c_merged = result
-            else:
-                # Back-compat with any out-of-tree call site that still
-                # uses the old 4-tuple shape.
-                p_raw, c_raw, p_disk, c_disk = result
-                p_merged, c_merged = None, None
             self._prefetched_raw = {
                 "token": token,
                 "src": src,
                 "interval": interval,
                 "primary_ticker": raw_primary,
                 "compare_ticker": raw_compare,
-                "primary": p_raw,
-                "compare": c_raw,
-                # H2: disk pre-loads, consumed by _load_data so it
-                # doesn't re-read the JSON file on the Tk thread.
-                "primary_disk": p_disk,
-                "compare_disk": c_disk,
                 "disk_preloaded": True,
-                # A completed merge remains useful even if persistence failed.
-                # None save results mean skipped/unknown, not successful writes.
-                "primary_merged": p_merged,
-                "compare_merged": c_merged,
-                "primary_save_result": p_save_result,
-                "compare_save_result": c_save_result,
+                **(result or {}),
             }
             try:
                 self._load_data()

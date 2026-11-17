@@ -69,6 +69,17 @@ def _path_for(source: str, ticker: str, interval: str) -> Path:
     return _cache_dir() / f"{source}__{safe_ticker}__{interval}{_CACHE_SUFFIX}"
 
 
+def _volume_as_int(value: Any) -> int:
+    """Preserve exact integers; truncate fractions; map invalid volumes to zero."""
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        try:
+            return int(float(value))
+        except (TypeError, ValueError, OverflowError):
+            return 0
+
+
 def _candle_to_dict(c: Candle) -> dict[str, Any]:
     """Serialise one candle to a JSON-safe primitive dict.
 
@@ -86,25 +97,10 @@ def _candle_to_dict(c: Candle) -> dict[str, Any]:
             return None
         return xf
 
-    def _v(vol: Any) -> int:
-        # Preserve integral inputs exactly, including values beyond float's
-        # precision/range. Decimal strings still use the float fallback.
-        try:
-            return int(vol)
-        except (TypeError, ValueError, OverflowError):
-            pass
-        try:
-            fvol = float(vol)
-        except (TypeError, ValueError, OverflowError):
-            return 0
-        if math.isnan(fvol) or math.isinf(fvol):
-            return 0
-        return int(fvol)
-
     return {
         "d": c.date.isoformat() if isinstance(c.date, datetime) else str(c.date),
         "o": _f(c.open), "h": _f(c.high), "l": _f(c.low), "c": _f(c.close),
-        "v": _v(c.volume),
+        "v": _volume_as_int(c.volume),
         "s": str(c.session) if c.session else "regular",
     }
 
@@ -133,17 +129,13 @@ def _candle_from_dict(d: dict[str, Any]) -> Candle | None:
             return float(v)
         except (TypeError, ValueError):
             return math.nan
-    try:
-        volume = int(d.get("v") or 0)
-    except (TypeError, ValueError):
-        volume = 0
     session = d.get("s")
     if not isinstance(session, str):
         session = "regular"
     return Candle(
         date=parsed,
         open=_g("o"), high=_g("h"), low=_g("l"), close=_g("c"),
-        volume=volume, session=session,
+        volume=_volume_as_int(d.get("v")), session=session,
     )
 
 

@@ -141,6 +141,31 @@ def test_volume_normalization_produces_strict_json(_cache_dir) -> None:
     assert all("NaN" not in line and "Infinity" not in line for line in lines)
 
 
+@pytest.mark.parametrize("windowed", [False, True])
+def test_existing_volume_records_use_the_same_normalization(_cache_dir, windowed) -> None:
+    cases = [
+        (float("nan"), 0), (float("inf"), 0), (float("-inf"), 0),
+        (None, 0), ("junk", 0), ("45.9", 45), ("1e2", 100),
+        (2**53 + 1, 2**53 + 1), (10**400, 10**400),
+        (str(2**53 + 1), 2**53 + 1),
+    ]
+    records = []
+    for bar, (raw, _) in zip(_candles(len(cases)), cases, strict=True):
+        record = disk_cache._candle_to_dict(bar)
+        record["v"] = raw
+        records.append(json.dumps(record))
+    _cache_file(_cache_dir).write_text("\n".join(records) + "\n", encoding="utf-8")
+
+    if windowed:
+        got = disk_cache.load_window(*KEY, start_day="2026-06-01", end_day="2026-06-30")
+    else:
+        got = disk_cache.load(*KEY)
+
+    assert got is not None
+    assert [bar.volume for bar in got] == [expected for _, expected in cases]
+    assert [bar.close for bar in got] == [bar.close for bar in _candles(len(cases))]
+
+
 # ---------------------------------------------------------------------------
 # 3. Downstream ordering: failure → read, success-after-failure
 # ---------------------------------------------------------------------------

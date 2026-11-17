@@ -151,6 +151,62 @@ def test_worker_no_write_paths_keep_merged_data(handoff, monkeypatch, kind):
         assert list(root.iterdir()) == []
 
 
+def test_worker_legacy_saver_keeps_unknown_outcome_without_tk_retry(handoff, monkeypatch):
+    app, pending, _ = handoff
+    app.compare_var.set(False)
+    real_save = app_mod.disk_cache.save
+    saves, payloads = [], []
+
+    def save(*args):
+        saves.append(threading.get_ident())
+        real_save(*args)
+
+    app._render.side_effect = lambda: payloads.append(dict(app._prefetched_raw))
+    monkeypatch.setattr(app_mod.disk_cache, "save", save)
+    app._load_data_async()
+    _complete(app, pending)
+
+    assert len(saves) == 1 and saves[0] != threading.get_ident()
+    assert [bar.close for bar in app._primary] == [102, 103]
+    assert payloads[0]["primary_save_result"] is None
+    assert app_mod.disk_cache.load("unit-source", "AMD", "5m") == app._primary
+
+
+@pytest.mark.parametrize("failed_symbol", ["AMD", "SPY"])
+def test_worker_merge_failure_renders_fetched_bars_without_tk_retry(
+    handoff, monkeypatch, caplog, failed_symbol,
+):
+    app, pending, _ = handoff
+    disk_cache = app_mod.disk_cache
+    for symbol in ("AMD", "SPY"):
+        assert disk_cache.save("unit-source", symbol, "5m", [_bar(0, 100)])
+    real_merge = disk_cache.merge_candles
+    merges = []
+    save = Mock(wraps=disk_cache.save)
+    failed_index = 0 if failed_symbol == "AMD" else 1
+
+    def merge(*args, **kwargs):
+        index = len(merges)
+        merges.append(threading.get_ident())
+        if index == failed_index:
+            raise ValueError("invalid cache history")
+        return real_merge(*args, **kwargs)
+
+    monkeypatch.setattr(disk_cache, "merge_candles", merge)
+    monkeypatch.setattr(disk_cache, "save", save)
+    app._load_data_async()
+    _complete(app, pending)
+
+    assert len(merges) == 2
+    assert all(thread != threading.get_ident() for thread in merges)
+    assert save.call_count == 1
+    assert save.call_args.args[1] != failed_symbol
+    for symbol, side in (("AMD", "primary"), ("SPY", "compare")):
+        expected = [102, 103] if symbol == failed_symbol else [100, 102, 103]
+        assert [bar.close for bar in getattr(app, f"_{side}")] == expected
+    assert f"merge/save failed for unit-source/{failed_symbol}/5m" in caplog.text
+
+
 def test_async_stale_callback_does_not_replace_visible_data(handoff):
     app, pending, _ = handoff
     app._load_data_async()
@@ -196,19 +252,26 @@ def test_memory_hit_does_not_write_cache_on_tk(handoff, monkeypatch):
     assert [bar.close for bar in app._primary] == [100]
 
 
-@pytest.mark.parametrize("shape", [4, 6])
-def test_legacy_worker_payload_does_not_invent_save_success(handoff, shape):
+def test_failed_future_keeps_memory_without_tk_cache_work(handoff, monkeypatch):
     app, pending, _ = handoff
-    payloads = []
-    app._render.side_effect = lambda: payloads.append(dict(app._prefetched_raw))
+    for symbol in ("AMD", "SPY"):
+        app._full_cache[("unit-source", symbol, "5m")] = [_bar(0, 100)]
     app._load_data_async()
     future, callback = pending.pop()
-    callback(future.result(timeout=10)[:shape])
+    future.result(timeout=10)
+    merge = Mock(side_effect=AssertionError("no Tk merge"))
+    save = Mock(side_effect=AssertionError("no Tk save"))
+    load = Mock(side_effect=AssertionError("no Tk disk read"))
+    monkeypatch.setattr(app_mod.disk_cache, "merge_candles", merge)
+    monkeypatch.setattr(app_mod.disk_cache, "save", save)
+    monkeypatch.setattr(app_mod.disk_cache, "load", load)
+    callback(None)
     assert app._prefetched_raw is None
-    assert [bar.close for bar in app._primary] == [102, 103]
-    assert [bar.close for bar in app._compare] == [102, 103]
-    assert payloads[0]["primary_save_result"] is None
-    assert payloads[0]["compare_save_result"] is None
+    assert [bar.close for bar in app._primary] == [100]
+    assert [bar.close for bar in app._compare] == [100]
+    merge.assert_not_called()
+    save.assert_not_called()
+    load.assert_not_called()
 
 
 @pytest.mark.parametrize("prefetch_interval", ["5m", "1d"])
@@ -232,9 +295,9 @@ def test_cache_smoke_tracks_its_worker_and_rejects_tk_retries(
         result = pending[0][0].result(timeout=10)
         _complete(app, pending)
         if tk_retry == "merge":
-            disk_cache.merge_candles(result[2], result[0])
+            disk_cache.merge_candles(result["primary_disk"], result["primary"])
         elif tk_retry == "save":
-            disk_cache.save("unit-source", "N7PROBE", "5m", list(result[4]))
+            disk_cache.save("unit-source", "N7PROBE", "5m", list(result["primary_merged"]))
         with ThreadPoolExecutor(max_workers=1) as pool:
             result = pool.submit(
                 service.apply_prefetch_result,
