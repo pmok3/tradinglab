@@ -16,6 +16,7 @@ test (same guard as ``test_indicators_loader.py``).
 
 from __future__ import annotations
 
+import io
 import json
 from pathlib import Path
 
@@ -310,19 +311,38 @@ def test_single_file_registration_never_executes_siblings(tmp_path):
 def test_missing_single_file_is_reported(tmp_path):
     result = register_user_indicator_file(tmp_path / "missing.py")
     assert not result.loaded
-    assert "stat failed" in result.errors[0].error
+    assert "read failed" in result.errors[0].error
 
 
-def test_file_growth_after_stat_is_rejected(tmp_path, monkeypatch):
+def test_source_read_is_bounded_even_if_file_grows(tmp_path, monkeypatch):
     plugin = _write_plugin(tmp_path, "growing.py", _PLUGIN_V1)
-    read_text = Path.read_text
+    open_path = Path.open
+    reads = []
 
-    def changed_read(path, *a, **kw):
+    class GrowingSource(io.BytesIO):
+        def read(self, size=-1):
+            reads.append(size)
+            return super().read(size)
+
+    def changed_open(path, *a, **kw):
         if path == plugin:
-            return "#" * (loader._MAX_FILE_SIZE + 1)
-        return read_text(path, *a, **kw)
+            return GrowingSource(b"#" * (loader._MAX_FILE_SIZE * 2))
+        return open_path(path, *a, **kw)
 
-    monkeypatch.setattr(Path, "read_text", changed_read)
+    monkeypatch.setattr(Path, "open", changed_open)
     result = register_user_indicator_file(plugin, approval_prompt=lambda *_: pytest.fail("oversized prompt"))
     assert not result.loaded
     assert "file too large" in result.errors[0].error
+    assert reads == [loader._MAX_FILE_SIZE + 1]
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
+def test_source_snapshot_preserves_universal_newline_hashes(tmp_path, newline):
+    plugin = tmp_path / "newlines.py"
+    plugin.write_bytes(_PLUGIN_V1.replace("\n", newline).encode("utf-8"))
+    store = tmp_path / "approvals.json"
+    record_indicator_approval(plugin, hash_indicator_source(_PLUGIN_V1), approvals_path=store)
+    result = register_user_indicator_file(plugin, approvals_path=store)
+    assert not result.errors
+    assert result.loaded[0].factory(None) == {}
+    assert result.loaded[0].source_hash == hash_indicator_source(_PLUGIN_V1)[:16]

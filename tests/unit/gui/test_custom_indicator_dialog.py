@@ -685,7 +685,8 @@ def test_import_self_claimed_builder_header_requires_consent(root, tmp_dir, tmp_
         dlg.destroy()
 
 
-def test_import_copies_and_executes_consented_snapshot(root, tmp_dir, tmp_path, monkeypatch):
+@pytest.mark.parametrize("removed", [False, True])
+def test_import_copies_and_executes_consented_snapshot(root, tmp_dir, tmp_path, monkeypatch, removed):
     plugin = _ext_dir(tmp_path) / "snapshot.py"
     source = "# tradinglab-custom-indicator\nregister_indicator('snapshot', lambda: 'approved')\n"
     plugin.write_text(source, encoding="utf-8")
@@ -693,10 +694,13 @@ def test_import_copies_and_executes_consented_snapshot(root, tmp_dir, tmp_path, 
     monkeypatch.setattr(mod.filedialog, "askopenfilename", lambda **_kw: str(plugin))
 
     def approve(*_a, **_kw):
-        plugin.write_text(
-            "# tradinglab-custom-indicator\nregister_indicator('snapshot', lambda: 'changed')\n",
-            encoding="utf-8",
-        )
+        if removed:
+            plugin.unlink()
+        else:
+            plugin.write_text(
+                "# tradinglab-custom-indicator\nregister_indicator('snapshot', lambda: 'changed')\n",
+                encoding="utf-8",
+            )
         return True
 
     monkeypatch.setattr(mod.messagebox, "askokcancel", approve)
@@ -706,6 +710,28 @@ def test_import_copies_and_executes_consented_snapshot(root, tmp_dir, tmp_path, 
         assert target.read_text(encoding="utf-8") == source
         assert ind_base.INDICATORS["snapshot"]() == "approved"
         assert ind_loader.is_indicator_approved(target, ind_loader.hash_indicator_source(source))
+    finally:
+        dlg.destroy()
+
+
+@pytest.mark.parametrize("suffix,content,error", [
+    (".txt", b"pass\n", "Python"),
+    (".py", b"#" * (ind_loader._MAX_FILE_SIZE + 1), "too large"),
+    (".py", b"\xff", "utf-8"),
+], ids=["not-python", "oversized", "invalid-utf8"])
+def test_import_validates_before_consent(root, tmp_dir, tmp_path, monkeypatch, suffix, content, error):
+    plugin = _ext_dir(tmp_path) / f"invalid{suffix}"
+    plugin.write_bytes(content)
+    dlg = _mk(root, tmp_dir)
+    monkeypatch.setattr(mod.filedialog, "askopenfilename", lambda **_kw: str(plugin))
+    asked = []
+    monkeypatch.setattr(mod.messagebox, "askokcancel", lambda *a, **k: asked.append(a) or False)
+    try:
+        dlg._on_import()
+        assert not asked, "invalid source must be rejected before requesting trust"
+        assert error in dlg._status_var.get()
+        assert not (tmp_dir / "invalid.py").exists()
+        assert not (tmp_path / "approvals.json").exists()
     finally:
         dlg.destroy()
 

@@ -100,6 +100,17 @@ def hash_indicator_source(source: str) -> str:
     return hashlib.sha256(source.encode("utf-8")).hexdigest()
 
 
+def read_indicator_source(path: Path) -> str:
+    """Read one size-limited UTF-8 Python snapshot with universal newlines."""
+    if path.suffix.lower() != ".py":
+        raise ValueError(f"not a Python (.py) indicator file: {path.name}")
+    with path.open("rb") as stream:
+        raw = stream.read(_MAX_FILE_SIZE + 1)
+    if len(raw) > _MAX_FILE_SIZE:
+        raise ValueError(f"file too large: exceeds {_MAX_FILE_SIZE}-byte limit")
+    return raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+
+
 # ---------------------------------------------------------------------------
 # First-load trust approvals
 # ---------------------------------------------------------------------------
@@ -300,13 +311,9 @@ def import_indicator_file(
     """
     directory = Path(directory) if directory is not None else default_user_dir()
     source = Path(source)
-    if not source.is_file():
-        raise FileNotFoundError(f"no such file: {source}")
     if source.suffix.lower() != ".py":
         raise ValueError(f"not a Python (.py) indicator file: {source.name}")
-    if source_text is None and source.stat().st_size > _MAX_FILE_SIZE:
-        raise ValueError(f"file too large: exceeds {_MAX_FILE_SIZE}-byte limit")
-    text = source.read_text(encoding="utf-8") if source_text is None else source_text
+    text = read_indicator_source(source) if source_text is None else source_text
     size = len(text.encode("utf-8"))
     if size > _MAX_FILE_SIZE:
         raise ValueError(
@@ -493,34 +500,7 @@ def _load_indicator_files(
     errors: list[LoadError] = []
     for path in files:
         try:
-            file_size = path.stat().st_size
-        except OSError as exc:
-            errors.append(
-                LoadError(
-                    source_path=path,
-                    error=f"stat failed: {exc!r}",
-                    traceback_text=traceback.format_exc(),
-                )
-            )
-            continue
-
-        if file_size > _MAX_FILE_SIZE:
-            errors.append(
-                LoadError(
-                    source_path=path,
-                    error=(
-                        "file too large: "
-                        f"{file_size} bytes exceeds {_MAX_FILE_SIZE}-byte limit"
-                    ),
-                    traceback_text="",
-                )
-            )
-            continue
-
-        try:
-            source = path.read_text(encoding="utf-8")
-            if len(source.encode("utf-8")) > _MAX_FILE_SIZE:
-                raise ValueError(f"file too large: exceeds {_MAX_FILE_SIZE}-byte limit")
+            source = read_indicator_source(path)
         except (OSError, ValueError) as exc:
             errors.append(
                 LoadError(
@@ -661,9 +641,9 @@ def register_user_indicator_file(
     Uses the same read/hash/approve/exec implementation as discovery,
     but never reads or executes sibling files.
 
-    ``approval_prompt`` / ``approvals_path`` are forwarded to
-    :func:`discover_user_indicators` unchanged; the caller (the Custom
-    Indicator Builder dialog) normally records the approval itself
+    ``approval_prompt`` / ``approvals_path`` have the same meaning as in
+    :func:`discover_user_indicators`; the caller (the Custom Indicator
+    Builder dialog) normally records the approval itself
     before calling, since its save/import flows carry their own trust
     gates.
     """

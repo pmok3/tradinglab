@@ -7309,7 +7309,7 @@ def check_d39_indicators_phase1(app) -> None:
         shutil.rmtree(tmp, ignore_errors=True)
     print("  [OK] §d39.H custom-indicator loader (good+bad+missing)")
 
-    # ---- I) External builder headers do not bypass import consent ----
+    # ---- I) External imports validate before requesting consent ----
     if sys.platform == "darwin":
         print("[SKIP] d39.I dialog: headless macOS transient deadlock (AGENTS §7.1)")
     else:
@@ -7336,9 +7336,15 @@ def check_d39_indicators_phase1(app) -> None:
                     assert consent.call_count == 1
                     assert not (target_dir / external.name).exists()
                     assert "consent_d39" not in INDICATORS
+                    external.write_bytes(b"#" * (256 * 1024 + 1))
+                    consent.reset_mock()
+                    dlg._on_import()
+                    assert consent.call_count == 0
+                    assert "too large" in dlg._status_var.get()
+                    assert not (target_dir / external.name).exists()
             finally:
                 dlg.destroy()
-        print("  [OK] §d39.I marked external import requires consent")
+        print("  [OK] §d39.I import validates source before requiring consent")
 
     print("[OK] §d39 indicators phase 1 — compute + manager + cache + loader")
 

@@ -1,6 +1,6 @@
 # gui/custom_indicator_dialog
 
-Last updated: 2026-09-23
+Last updated: 2026-11-16
 
 The header form plus saved-list chrome supplies an opt-in measured width floor
 before restore; the Conditions editor and preview plot do **not** determine the
@@ -214,6 +214,9 @@ template that already defines a class and calls `register_indicator`.
   delegates to `indicators.loader.export_indicator_file`. No selection
   → status-bar error, no dialog. A cancelled save dialog is a no-op.
 - **Import** reads a user-chosen `.py` via `filedialog.askopenfilename`.
+  The loader's shared bounded reader rejects a non-Python suffix,
+  oversized source or invalid UTF-8 in the status bar before requesting
+  consent. It reads at most 256 KB + 1 byte.
   Every external file is executable Python regardless of its claimed
   marker or mode and requires an `askokcancel` warning dialog
   showing the file name and full SHA-256 digest ("Approve custom
@@ -225,7 +228,9 @@ template that already defines a class and calls `register_indicator`.
   time. A name collision with an existing indicators-dir file
   triggers an `askyesno` overwrite prompt. Persistence failures stop
   registration and surface in the status bar. Registration errors surface
-  in the status bar. Builder-managed imports are loaded into the
+  in the status bar. The approved external file may change or disappear
+  during the prompt without altering or invalidating the captured snapshot.
+  Builder-managed imports are loaded into the
   editor and selected in the saved list; marker-less plugins register
   but are not shown in the list.
 - **Save** records a trust approval for the freshly-written file via
@@ -280,3 +285,7 @@ template that already defines a class and calls `register_indicator`.
   guards the Mode combobox, and dark-mode native-widget theming
   (Listbox/Text colours via `_apply_native_theme`, auto-applied from
   `app._theme_ctrl.theme`, re-applied after mode switch).
+
+## Recent history
+- 2026-11-16: Validated bounded import snapshots before consent; preserved
+  the approved snapshot even if the external file disappeared mid-prompt.

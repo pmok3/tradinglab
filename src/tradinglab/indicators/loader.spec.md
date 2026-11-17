@@ -1,6 +1,6 @@
 # indicators/loader.py — Spec
 
-Last updated: 2026-09-23
+Last updated: 2026-11-16
 
 ## Purpose
 Custom-indicator loader for explicit callers. The builder hot-registers a
@@ -34,6 +34,10 @@ become available in the Add menu.
   reads or executes siblings. Missing files produce a `LoadError`.
 - `hash_indicator_source(source) -> str` — full SHA-256 hex digest of
   source text (64 chars); the trust-approval identifier.
+- `read_indicator_source(path) -> str` — shared bounded read for imports
+  and loading. Validates the `.py` suffix, reads at most 256 KB + 1 byte,
+  rejects oversize/invalid UTF-8, and normalizes universal newlines like
+  `Path.read_text` so existing text-hash approvals remain valid.
 - `is_indicator_approved(path, digest, *, approvals_path=None) -> bool`
   — True iff `path` has a recorded approval for exactly `digest`.
 - `record_indicator_approval(path, digest, *, approvals_path=None) -> None`
@@ -59,7 +63,8 @@ become available in the Add menu.
   name collision unless `overwrite=True`. Does **not** register —
   the caller must call `register_user_indicator_file` so exec-time
   errors surface separately. `source_text` supplies the already-consented
-  snapshot without re-reading the external file. Pure (Tk-free).
+  snapshot without re-reading or requiring the external file to still
+  exist. The supplied snapshot is size-checked before copying. Pure (Tk-free).
 - `BUILDER_HEADER_MARKER = "# tradinglab-custom-indicator"` +
   `_is_builder_file(source) -> bool` — detect Builder-managed files.
   Builder files are exec'd with **full `builtins.__dict__`** (not
@@ -102,8 +107,9 @@ become available in the Add menu.
 - **File size cap.** Files > `256 * 1024` bytes are rejected. This
   is a defense against accidentally importing a 30 MB
   machine-learned blob; it does not bound damage from a malicious
-  100-line plugin. The loaded source snapshot is checked again after
-  reading, so a stale pre-read stat cannot admit oversized source.
+  100-line plugin. Import and discovery use the same bounded source read
+  before requesting trust, without a separate stat/read race or an
+  unbounded allocation if a file grows.
 - **Source hash audit trail.** Every loaded indicator gets
   `source_hash = sha256(source.encode()).hexdigest()[:16]` recorded
   in `LoadedIndicator` so the user can verify "the file I trust" is
@@ -167,3 +173,8 @@ become available in the Add menu.
   directory discovery is an explicit API, not an automatic GUI rescan.
 - No version pinning — plugins use whatever version of allowed
   third-party libraries is on the user's environment.
+
+## Recent history
+- 2026-11-16: Unified bounded source reads across import and discovery;
+  retained newline-compatible approvals and removed external-file access
+  when copying an already-consented snapshot.

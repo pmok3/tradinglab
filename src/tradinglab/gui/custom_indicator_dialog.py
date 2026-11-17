@@ -898,8 +898,8 @@ class CustomIndicatorDialog(BaseModalDialog):
             return
         src = Path(src_str)
         try:
-            text = src.read_text(encoding="utf-8")
-        except (OSError, UnicodeError) as exc:
+            text = ind_loader.read_indicator_source(src)
+        except (OSError, ValueError) as exc:
             self._set_status(f"Cannot read {src.name}: {exc}", level="error")
             return
 
