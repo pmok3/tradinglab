@@ -36,6 +36,7 @@ time so synthetic-source bars cannot leak into the user's real cache
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import tempfile
@@ -44,6 +45,8 @@ from pathlib import Path
 from typing import Any
 
 from .models import Candle
+
+logger = logging.getLogger(__name__)
 
 _CACHE_SUFFIX = ".jsonl"
 
@@ -66,6 +69,17 @@ def _path_for(source: str, ticker: str, interval: str) -> Path:
     return _cache_dir() / f"{source}__{safe_ticker}__{interval}{_CACHE_SUFFIX}"
 
 
+def _volume_as_int(value: Any) -> int:
+    """Preserve exact integers; truncate fractions; map invalid volumes to zero."""
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        try:
+            return int(float(value))
+        except (TypeError, ValueError, OverflowError):
+            return 0
+
+
 def _candle_to_dict(c: Candle) -> dict[str, Any]:
     """Serialise one candle to a JSON-safe primitive dict.
 
@@ -82,10 +96,11 @@ def _candle_to_dict(c: Candle) -> dict[str, Any]:
         if math.isnan(xf) or math.isinf(xf):
             return None
         return xf
+
     return {
         "d": c.date.isoformat() if isinstance(c.date, datetime) else str(c.date),
         "o": _f(c.open), "h": _f(c.high), "l": _f(c.low), "c": _f(c.close),
-        "v": int(c.volume) if c.volume is not None else 0,
+        "v": _volume_as_int(c.volume),
         "s": str(c.session) if c.session else "regular",
     }
 
@@ -114,17 +129,13 @@ def _candle_from_dict(d: dict[str, Any]) -> Candle | None:
             return float(v)
         except (TypeError, ValueError):
             return math.nan
-    try:
-        volume = int(d.get("v") or 0)
-    except (TypeError, ValueError):
-        volume = 0
     session = d.get("s")
     if not isinstance(session, str):
         session = "regular"
     return Candle(
         date=parsed,
         open=_g("o"), high=_g("h"), low=_g("l"), close=_g("c"),
-        volume=volume, session=session,
+        volume=_volume_as_int(d.get("v")), session=session,
     )
 
 
@@ -281,10 +292,10 @@ def load(source: str, ticker: str, interval: str) -> list[Candle] | None:
     # (``save`` uses temp + os.replace); a write failure never affects
     # the returned data and ``load`` still never raises.
     if cleaned is not candles:
-        try:
-            save(source, ticker, interval, cleaned)
-        except Exception:  # noqa: BLE001
-            pass
+        # Best-effort: save() reports failure via its return value and
+        # logs it; a failed heal must not affect the returned data and
+        # ``load`` still never raises.
+        save(source, ticker, interval, cleaned)
     return cleaned
 
 
@@ -432,21 +443,29 @@ def merge_adds_nothing(previous: list[Candle] | None,
         return False
 
 
-def save(source: str, ticker: str, interval: str, candles: list[Candle]) -> None:
+def save(source: str, ticker: str, interval: str, candles: list[Candle]) -> bool:
     """Atomically persist ``candles`` keyed by (source, ticker, interval).
 
-    No-op for sources marked via :func:`mark_no_persist` (BYOD); CSV
-    files on disk are already the source of truth, so caching them
-    would just create stale copies that the user can't see.
+    Returns ``True`` when the write succeeded or persistence is intentionally
+    skipped. No-op for sources
+    marked via :func:`mark_no_persist` (BYOD) and for derived ratio
+    tickers — those return ``True`` since there is nothing to persist
+    (CSV files on disk are already the source of truth for BYOD, so
+    caching them would just create stale copies the user can't see).
+
+    Write failures are logged and reported via the ``False`` return —
+    never swallowed silently. Callers that need the data on disk must
+    check the return value and account for those opt-outs; ``True`` alone
+    does not prove a file exists.
 
     Write-to-temp then ``os.replace`` so a crash mid-write cannot leave
     a truncated file behind. The temp file is created in the same
     directory so the rename is a true atomic operation.
     """
     if source in _NO_PERSIST:
-        return
+        return True
     if _is_ratio_ticker(ticker):
-        return  # ratios are derived — never persisted (see _is_ratio_ticker)
+        return True  # ratios are derived — never persisted (see _is_ratio_ticker)
     try:
         path = _path_for(source, ticker, interval)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -465,8 +484,11 @@ def save(source: str, ticker: str, interval: str, candles: list[Candle]) -> None
             except OSError:
                 pass
             raise
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("disk_cache.save failed for %s/%s/%s: %r",
+                       source, ticker, interval, exc)
+        return False
+    return True
 
 
 def merge_candles(

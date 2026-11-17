@@ -1,6 +1,6 @@
 # preload/service.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-23
 
 ## Purpose
 Pure-logic batch fetch loop for the sandbox universe-preload feature. Serial, cancellable, retry-aware. All dependencies are injected (fetcher, cache_load, cache_save, merge, sleep, progress callback) so the service can be unit-tested without Tk, network, or filesystem.
@@ -18,7 +18,11 @@ Pure-logic batch fetch loop for the sandbox universe-preload feature. Serial, ca
 1. **L1 hit** — if `l1_check(source, sym, itv)` returns a non-empty list, status = `"l1_hit"`, skip both disk and network.
 2. **Disk hit** — if `cache_load(source, sym, itv)` returns a non-empty list, status = `"disk_hit"`, skip network. (Sealed OHLCV bars are immutable; aggressive re-fetching wastes the yfinance rate-limit budget.)
 3. **Live fetch** with up to `max_retries` attempts, using `sleep_fn(cancel_event, rate_limit_s)` between retries. Success → continue; exception or empty → retry.
-4. **Merge + persist + verify**: `merge(cache_load(...), fetched) → cache_save(...) → cache_load(...)`. The follow-up `cache_load` is a verification step because `disk_cache.save()` swallows OSErrors silently.
+4. **Merge + persist + verify**: `merge(cache_load(...), fetched) → cache_save(...)`.
+   An explicit `False` marks the interval `failed` with a persistence error.
+   Otherwise a follow-up `cache_load` must return non-empty bars before reporting
+   `"fetched"` with the reloaded count. A successful save no-op (BYOD/ratio) or
+   a legacy `None`-returning saver is not proof of durable availability.
 5. **Inter-op rate-limit** — after `_run_one` returns from the main loop with `status == "fetched"`, the loop calls `sleep_fn(cancel_event, rate_limit_s)` before moving on. This is the explicit fix for the gap that existed in earlier versions: the retry-internal sleep only fired between retries, so a sequence of N first-try successes would back-to-back-fire N HTTP requests with no inter-op delay and cliff into the yfinance CDN throttle at full-exchange scale (~5,000 unbroken requests). The sleep is gated on the `"fetched"` status so it does NOT fire after `"l1_hit"` or `"disk_hit"` (local, no network) nor after `"failed"` (already paid its retry-budget sleeps) nor after `"cancelled"`.
 
 ## Cancellation contract
@@ -39,8 +43,13 @@ Pure-logic batch fetch loop for the sandbox universe-preload feature. Serial, ca
 ## Design Decisions
 - **Pure-logic with injection**, not a class with instance state, because every dependency (fetcher, cache, sleep) needs to be substitutable for tests. A function with kwargs is the smallest interface that supports that.
 - **Disk-cache hit short-circuits live fetch.** Sealed bars are immutable, so a present cache means "we already have this." Re-fetching costs network budget for no payoff. If the user wants to refresh, they can delete the manifest + cache files; future work may add a "refresh" toggle.
-- **Verify-after-save**, because `disk_cache.save()` is `try: ... except: pass`. Without verification the service would falsely claim success on disk-full / permission-denied / corrupt JSONL write paths.
-- **Retry on persist errors too**, not just fetch errors. The fetch succeeded; if persist fails, retrying the whole op (re-fetching) burns budget but also resyncs against potential transient FS issues. Conservative.
+- **Explicit save-failure signal plus read-back verification.** `CacheSave`
+  accepts `bool | None`; `False` fails immediately, while other returns must
+  pass the historical non-empty read-back check. This retains legacy saver
+  compatibility without reporting success when no file was written.
+- **Retry on raised persist errors too**, not just fetch errors. Raised errors
+  consume the existing bounded retry budget; explicit `False` and failed
+  read-back verification return failure without repeated fetches.
 - **Status is a string enum, not an `enum.Enum`**, to keep `to_dict` round-tripping trivial for downstream consumers (the dialog log + future metrics aggregators).
 - **Index/total in every ProgressEvent**, so the GUI can render `42 / 1006` without tracking state itself.
 - **Cancelled ops still emit a ProgressEvent**, so the cancel-summary count matches the planned-op count.
@@ -52,3 +61,9 @@ Pure-logic batch fetch loop for the sandbox universe-preload feature. Serial, ca
 - `loaded_per_symbol()` keys ⊆ `set(symbols)`; values are tuples of strings ⊆ `set(intervals)`.
 - The total number of `kind="symbol"` ProgressEvents equals `sum(len(so.intervals) for so in result.per_symbol)`.
 - Exactly one `kind="start"` and one `kind="finish"` event are emitted per call.
+
+## Testing
+- `tests/unit/test_preload_service.py` — fetch/load ladder, failed save,
+  unverified legacy/no-op returns, and BYOD/ratio no-persist outcomes.
+- `tests/unit/test_preload_service_rate_limit.py` — verified legacy saver
+  compatibility and rate-limit/cancellation boundaries.
