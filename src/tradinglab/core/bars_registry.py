@@ -44,6 +44,7 @@ from ..models import Candle
 from ..scanner.engine import IndicatorMemo
 from .bars import Bars
 from .bars_buffer import BarsBuffer
+from .lru_dict import LRUDict
 
 # Fingerprint shape mirrors ``scanner.runner._Fingerprint`` exactly so
 # the registry's reuse / rebuild semantics match what the runner does
@@ -102,6 +103,10 @@ class BarsView:
 
 _Key = tuple[str, str]
 
+# Defensive bound if a caller retains a registry across many symbols.
+# Touch both maps in the same order so they evict the same pair.
+_MEMO_CACHE_MAX_SIZE = 512
+
 
 class BarsRegistry:
     """Shared ``(symbol, interval) → (BarsBuffer, IndicatorMemo)`` registry.
@@ -119,9 +124,11 @@ class BarsRegistry:
       ``None`` — callers (the runner, exit evaluator) treat this as
       "skip this symbol gracefully on this tick".
 
-    The registry has no notion of "request this key" or stale
-    eviction — that is the cache's job (and a future slice). Memo
-    invalidation is explicit via :meth:`invalidate` / :meth:`clear`.
+    The registry has no notion of "request this key" or stale buffer
+    eviction — that is the cache's job (and a future slice). The memo /
+    fingerprint maps are themselves bounded (LRU, ``_MEMO_CACHE_MAX_SIZE``
+    entries); memo invalidation is explicit via :meth:`invalidate` /
+    :meth:`clear`, plus lazy rebuild after an LRU eviction.
     """
 
     def __init__(self, multi_interval_cache: MultiIntervalCache) -> None:
@@ -133,8 +140,10 @@ class BarsRegistry:
         :meth:`MultiIntervalCache.set_bars`.
         """
         self._cache: MultiIntervalCache = multi_interval_cache
-        self._memos: dict[_Key, IndicatorMemo] = {}
-        self._fingerprints: dict[_Key, _Fingerprint] = {}
+        self._memos: LRUDict[_Key, IndicatorMemo] = LRUDict(maxsize=_MEMO_CACHE_MAX_SIZE)
+        self._fingerprints: LRUDict[_Key, _Fingerprint] = LRUDict(
+            maxsize=_MEMO_CACHE_MAX_SIZE
+        )
         self._stats: dict[str, int] = {
             "views_built": 0,
             "memos_reused": 0,
