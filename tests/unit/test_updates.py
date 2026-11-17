@@ -1,7 +1,7 @@
 """Tests for the background GitHub Releases update poll.
 
 Pure logic — no real network. Tests that exercise the network path monkeypatch
-``urllib.request.urlopen`` to a fake and isolate the six-hour cache to a pytest
+the private HTTPS opener to a fake and isolate the six-hour cache to a pytest
 ``tmp_path``.
 """
 
@@ -92,7 +92,7 @@ def test_check_now_disabled_when_all_urls_blank(monkeypatch) -> None:
     def _boom(*_a, **_kw):
         raise AssertionError("urlopen must not be called when disabled")
 
-    monkeypatch.setattr(urllib.request, "urlopen", _boom)
+    monkeypatch.setattr(updates_mod._HTTPS_OPENER, "open", _boom)
 
     result = updates_mod.check_now()
 
@@ -112,8 +112,8 @@ def test_check_now_rth_suppression(monkeypatch) -> None:
 
     counter = {"n": 0}
     monkeypatch.setattr(
-        urllib.request,
-        "urlopen",
+        updates_mod._HTTPS_OPENER,
+        "open",
         _make_urlopen(
             {"tag_name": "v9.9.9", "html_url": "https://example.invalid/r"},
             counter,
@@ -181,8 +181,8 @@ def test_check_now_available_from_github_payload(monkeypatch) -> None:
 
     counter = {"n": 0}
     monkeypatch.setattr(
-        urllib.request,
-        "urlopen",
+        updates_mod._HTTPS_OPENER,
+        "open",
         _make_urlopen(
             {"tag_name": "v0.2.0", "html_url": "https://example.invalid/r"},
             counter,
@@ -203,8 +203,8 @@ def test_check_now_available_from_plain_version_payload(monkeypatch) -> None:
 
     counter = {"n": 0}
     monkeypatch.setattr(
-        urllib.request,
-        "urlopen",
+        updates_mod._HTTPS_OPENER,
+        "open",
         _make_urlopen({"version": "0.2.0"}, counter),
     )
 
@@ -221,8 +221,8 @@ def test_check_now_force_bypasses_cache(monkeypatch) -> None:
 
     counter = {"n": 0}
     monkeypatch.setattr(
-        urllib.request,
-        "urlopen",
+        updates_mod._HTTPS_OPENER,
+        "open",
         _make_urlopen(
             {"tag_name": "v0.1.1", "html_url": "https://example.invalid/r"},
             counter,
@@ -249,8 +249,8 @@ def test_check_now_reuses_disk_cache_after_memory_reset(monkeypatch) -> None:
 
     counter = {"n": 0}
     monkeypatch.setattr(
-        urllib.request,
-        "urlopen",
+        updates_mod._HTTPS_OPENER,
+        "open",
         _make_urlopen(
             {"tag_name": "v0.1.1", "html_url": "https://example.invalid/r"},
             counter,
@@ -277,7 +277,7 @@ def test_check_now_caches_network_errors(monkeypatch) -> None:
         counter["n"] += 1
         raise urllib.error.URLError("dns")
 
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(updates_mod._HTTPS_OPENER, "open", fake_urlopen)
 
     first = updates_mod.check_now()
     assert first.status == "error"
@@ -297,11 +297,11 @@ def test_check_now_rejects_non_http_url_without_network(monkeypatch) -> None:
     def _boom(*_a, **_kw):
         raise AssertionError("urlopen must not be called for non-http schemes")
 
-    monkeypatch.setattr(urllib.request, "urlopen", _boom)
+    monkeypatch.setattr(updates_mod._HTTPS_OPENER, "open", _boom)
 
     result = updates_mod.check_now(force=True)
     assert result.status == "error"
-    assert "http or https" in result.error
+    assert "https://" in result.error
 
 
 def test_schedule_check_async_uses_after_fn(monkeypatch) -> None:
@@ -310,8 +310,8 @@ def test_schedule_check_async_uses_after_fn(monkeypatch) -> None:
 
     counter = {"n": 0}
     monkeypatch.setattr(
-        urllib.request,
-        "urlopen",
+        updates_mod._HTTPS_OPENER,
+        "open",
         _make_urlopen(
             {"tag_name": "v0.0.1", "html_url": "https://example.invalid/r"},
             counter,
@@ -357,3 +357,156 @@ def test_schedule_check_async_uses_after_fn(monkeypatch) -> None:
     assert len(received) == 1
     assert received[0].status == "error"
     assert "RuntimeError" in received[0].error
+
+
+# ---------------------------------------------------------------------------
+# HTTPS-only overrides
+# ---------------------------------------------------------------------------
+
+
+def test_http_tunable_override_rejected(monkeypatch) -> None:
+    """An http:// ``update_check_url`` tunable must be refused, never fetched."""
+    monkeypatch.setattr(
+        updates_mod, "_configured_tunable_url", lambda: "http://mirror.example/latest"
+    )
+    monkeypatch.setattr(updates_mod, "_is_rth_now", lambda: False)
+
+    counter = {"n": 0}
+
+    def _boom(*_a, **_kw):
+        counter["n"] += 1
+        raise AssertionError("urlopen must not be called for an http:// override")
+
+    monkeypatch.setattr(updates_mod._HTTPS_OPENER, "open", _boom)
+
+    result = updates_mod.check_now(force=True)
+
+    assert result.status == "error"
+    assert "https" in result.error
+    assert counter["n"] == 0
+
+
+def test_http_env_override_rejected(monkeypatch) -> None:
+    """An http:// TRADINGLAB_UPDATE_URL must be refused, never fetched."""
+    monkeypatch.setenv(updates_mod.ENV_URL, "http://mirror.example/latest")
+    monkeypatch.setattr(updates_mod, "_is_rth_now", lambda: False)
+
+    counter = {"n": 0}
+
+    def _boom(*_a, **_kw):
+        counter["n"] += 1
+        raise AssertionError("urlopen must not be called for an http:// override")
+
+    monkeypatch.setattr(updates_mod._HTTPS_OPENER, "open", _boom)
+
+    result = updates_mod.check_now(force=True)
+
+    assert result.status == "error"
+    assert "https" in result.error
+    assert counter["n"] == 0
+
+
+@pytest.mark.parametrize(
+    "bad", ["file:///etc/passwd", "api.github.com/repos/x/latest", "ftp://x/y"]
+)
+def test_non_http_scheme_override_rejected(monkeypatch, bad) -> None:
+    """Non-http(s) override schemes (file://, bare hosts) are refused too."""
+    monkeypatch.setattr(updates_mod, "_configured_tunable_url", lambda: bad)
+    monkeypatch.setattr(updates_mod, "_is_rth_now", lambda: False)
+
+    counter = {"n": 0}
+
+    def _boom(*_a, **_kw):
+        counter["n"] += 1
+        raise AssertionError("urlopen must not be called for a bad override")
+
+    monkeypatch.setattr(updates_mod._HTTPS_OPENER, "open", _boom)
+
+    result = updates_mod.check_now(force=True)
+
+    assert result.status == "error"
+    assert "https" in result.error
+    assert counter["n"] == 0
+
+
+def test_https_override_still_works(monkeypatch) -> None:
+    """An https:// override keeps flowing through to a normal check."""
+    monkeypatch.setattr(
+        updates_mod,
+        "_configured_tunable_url",
+        lambda: "https://mirror.example/latest",
+    )
+    monkeypatch.setattr(updates_mod, "_is_rth_now", lambda: False)
+    monkeypatch.setattr(updates_mod, "_current_version", lambda: "0.1.1")
+
+    counter = {"n": 0}
+    monkeypatch.setattr(
+        updates_mod._HTTPS_OPENER,
+        "open",
+        _make_urlopen(
+            {"tag_name": "v0.2.0", "html_url": "https://mirror.example/r"}, counter
+        ),
+    )
+
+    result = updates_mod.check_now(force=True)
+
+    assert result.status == "available"
+    assert result.latest == "v0.2.0"
+    assert counter["n"] == 1
+
+
+def test_https_scheme_helper() -> None:
+    assert updates_mod._is_https_url("https://example.invalid/x")
+    assert not updates_mod._is_https_url("http://example.invalid/x")
+    assert not updates_mod._is_https_url("https://")
+    assert not updates_mod._is_https_url("not a url")
+
+
+@pytest.mark.parametrize("key", ["html_url", "url"])
+@pytest.mark.parametrize("url", ["http://example.invalid/r", "file:///tmp/update", "https://"])
+def test_returned_release_link_requires_https(monkeypatch, key, url):
+    monkeypatch.setattr(updates_mod, "_is_rth_now", lambda: False)
+    monkeypatch.setattr(
+        updates_mod._HTTPS_OPENER, "open",
+        _make_urlopen({"tag_name": "v99.0.0", key: url}, {"n": 0}),
+    )
+    result = updates_mod.check_now(force=True)
+    assert result.status == "error"
+    assert result.url == ""
+    assert "release URL" in result.error
+
+
+@pytest.mark.parametrize("disk", [False, True])
+def test_unsafe_cached_release_link_is_not_returned(monkeypatch, disk):
+    bad = updates_mod.UpdateResult(
+        status="available", current=updates_mod._current_version(),
+        latest="v99.0.0", url="http://example.invalid/release",
+    )
+    updates_mod._store_cache(bad, source_url=updates_mod.RELEASES_URL)
+    if disk:
+        updates_mod.reset_cache_for_tests()
+    monkeypatch.setattr(updates_mod, "_is_rth_now", lambda: True)
+    monkeypatch.setattr(
+        updates_mod._HTTPS_OPENER, "open",
+        lambda *_a, **_kw: pytest.fail("cache validation must not fetch"),
+    )
+    result = updates_mod.check_now()
+    assert result.status == "error"
+    assert result.url == ""
+
+
+def test_resolves_endpoint_only_once(monkeypatch):
+    calls = []
+
+    def tunable():
+        calls.append(True)
+        return "https://example.invalid/latest" if len(calls) == 1 else "http://example.invalid/latest"
+
+    monkeypatch.setattr(updates_mod, "_configured_tunable_url", tunable)
+    monkeypatch.setattr(updates_mod, "_is_rth_now", lambda: False)
+    monkeypatch.setattr(
+        updates_mod._HTTPS_OPENER, "open",
+        _make_urlopen({"version": "99.0.0"}, {"n": 0}),
+    )
+    assert updates_mod.check_now(force=True).status == "available"
+    assert len(calls) == 1

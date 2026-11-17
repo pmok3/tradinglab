@@ -1,6 +1,6 @@
 # gui/update_check.py — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-09-23
 
 ## Purpose
 
@@ -25,7 +25,9 @@ self.after, self._on_update_check_result, force=False)``) stays in
   hiccup never breaks the chart.
 - `_show_update_banner(new_version, *, url="") -> None` —
   build + pack the one-line dismissable ttk.Frame. Adds a
-  "View release" button when ``url`` is non-empty. Idempotent:
+  "View release" button when ``url`` is non-empty and passes the shared
+  HTTPS-with-host predicate. Unsafe links log a warning and are omitted,
+  including when the banner is called directly. Idempotent:
   a second call while the banner is already visible is a no-op.
 
 ## State touched
@@ -38,7 +40,7 @@ self.after, self._on_update_check_result, force=False)``) stays in
 ## Dependencies
 
 - External: `tkinter`, `tkinter.ttk`, `webbrowser`.
-- Internal: none. Mirrors the
+- Internal: `updates._is_https_url`. Mirrors the
   :class:`gui.banner.FirstRunBannerMixin` pattern but kept
   separate because update-banner semantics (dismiss button +
   release link + idempotency on re-fire) diverge from the

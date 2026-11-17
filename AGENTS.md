@@ -984,8 +984,12 @@ the guard.
 `.github/workflows/release.yml` builds x64 (`windows-latest`) and ARM64
 (`windows-11-arm`) in parallel on native runners. A blocking spec-freshness job
 runs before either build; each build is then gated by the full unit / scanner /
-logic / gui / smoke battery. The publish job collects both zips and creates a
-GitHub Release with the CHANGELOG section as the body. ~12 minutes end to end.
+logic / gui / smoke battery. The publish job collects both zips, requires one
+per architecture, generates and verifies `dist/SHA256SUMS` with
+`scripts/release_checksums.py`, and publishes both zips plus the manifest.
+The GitHub Release uses the CHANGELOG section as its body. Checksums detect
+corruption, not authenticity (the manifest is unsigned); see
+`docs/RELEASE_CHECKSUMS.md` and `tests/unit/test_release_workflow_matrix.py`.
 Both native build legs use the same verified GUI desktop setup as CI (§6).
 Manual validation runs leave `publish_release=false`: they build artifacts
 without creating a tag or publishing a release.

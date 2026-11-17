@@ -1,6 +1,9 @@
 """Security hardening tests for :mod:`tradinglab.updates` HTTP fetches."""
 from __future__ import annotations
 
+import io
+import urllib.request
+from email.message import Message
 from typing import Any
 from unittest import mock
 
@@ -30,7 +33,7 @@ class _SpyResp:
 
 def test_fetch_release_info_caps_response_read() -> None:
     spy = _SpyResp()
-    with mock.patch("urllib.request.urlopen", return_value=spy):
+    with mock.patch.object(updates._HTTPS_OPENER, "open", return_value=spy):
         updates._fetch_release_info("https://api.example.com/release.json", timeout=1.0)
     assert spy.read_calls, "the fetcher must have called resp.read(...)"
     assert spy.read_calls[0] == updates._MAX_RESPONSE_BYTES
@@ -39,6 +42,7 @@ def test_fetch_release_info_caps_response_read() -> None:
 @pytest.mark.parametrize(
     "scheme_url",
     [
+        "http://example.com/latest",
         "file:///etc/passwd",
         "ftp://example.com/file",
         "ldap://example.com/x",
@@ -48,7 +52,7 @@ def test_fetch_release_info_caps_response_read() -> None:
 )
 def test_fetch_release_info_rejects_non_http_schemes(scheme_url: str) -> None:
     """Non-HTTP schemes must fail before any network IO."""
-    with mock.patch("urllib.request.urlopen") as m_open:
+    with mock.patch.object(updates._HTTPS_OPENER, "open") as m_open:
         with pytest.raises(ValueError):
             updates._fetch_release_info(scheme_url, timeout=1.0)
     assert not m_open.called
@@ -57,13 +61,12 @@ def test_fetch_release_info_rejects_non_http_schemes(scheme_url: str) -> None:
 @pytest.mark.parametrize(
     "scheme_url",
     [
-        "http://api.example.com/release.json",
         "https://api.example.com/release.json",
     ],
 )
-def test_fetch_release_info_accepts_http_and_https(scheme_url: str) -> None:
+def test_fetch_release_info_accepts_https(scheme_url: str) -> None:
     spy = _SpyResp()
-    with mock.patch("urllib.request.urlopen", return_value=spy):
+    with mock.patch.object(updates._HTTPS_OPENER, "open", return_value=spy):
         result = updates._fetch_release_info(scheme_url, timeout=1.0)
     assert result == {"version": "0.1.0"}
 
@@ -79,7 +82,77 @@ def test_fetch_release_info_handles_bad_json_gracefully_via_check_now(monkeypatc
     monkeypatch.setattr(updates, "_configured_tunable_url", lambda: "")
     monkeypatch.setattr(updates, "_is_rth_now", lambda: False)
     updates.reset_cache_for_tests()
-    with mock.patch("urllib.request.urlopen", return_value=spy):
+    with mock.patch.object(updates._HTTPS_OPENER, "open", return_value=spy):
         result = updates.check_now(force=True)
     assert result.status == "error"
     assert "UnicodeDecodeError" in result.error or "JSONDecodeError" in result.error
+
+
+@pytest.mark.parametrize("code", [301, 302, 303, 307, 308])
+@pytest.mark.parametrize("destination", ["http://example.invalid/plain", "https://example.invalid/safe"])
+def test_redirect_policy_before_following(monkeypatch, code, destination):
+    """Exercise urllib's real redirect chain with transport replaced, not redirect handling."""
+    seen = []
+
+    def transport(_handler, req):
+        seen.append(req.full_url)
+        headers = Message()
+        status = 200
+        if len(seen) == 1:
+            headers["Location"] = destination
+            status = code
+        response = urllib.response.addinfourl(
+            io.BytesIO(b'{"version":"99.0.0"}'), headers, req.full_url, status,
+        )
+        response.msg = "test response"
+        return response
+
+    monkeypatch.setattr(urllib.request.HTTPSHandler, "https_open", transport)
+    monkeypatch.setattr(
+        urllib.request.HTTPHandler, "http_open",
+        lambda *_a: pytest.fail("plaintext request reached the transport"),
+    )
+    monkeypatch.setattr(updates, "_HTTPS_OPENER", urllib.request.build_opener(
+        urllib.request.ProxyHandler({}), updates._HTTPSOnlyRedirectHandler(),
+    ))
+    if destination.startswith("http:"):
+        with pytest.raises(ValueError, match="redirect URL must use https"):
+            updates._fetch_release_info("https://example.invalid/latest", 1.0)
+        assert seen == ["https://example.invalid/latest"]
+    else:
+        assert updates._fetch_release_info("https://example.invalid/latest", 1.0) == {"version": "99.0.0"}
+        assert seen == ["https://example.invalid/latest", destination]
+
+
+@pytest.mark.parametrize("url,allowed", [
+    ("https://example.invalid/release", True),
+    ("http://example.invalid/release", False),
+    ("file:///tmp/release", False),
+])
+def test_banner_never_offers_unsafe_browser_target(_tk_root, monkeypatch, caplog, url, allowed):
+    import tkinter as tk
+    from tkinter import ttk
+
+    from tradinglab.gui import update_check
+
+    class Host(update_check.UpdateCheckMixin, tk.Toplevel):
+        pass
+
+    host = Host(_tk_root)
+    host.withdraw()
+    opened = []
+    monkeypatch.setattr(update_check.webbrowser, "open", lambda target: opened.append(target))
+    try:
+        host._show_update_banner("99.0.0", url=url)
+        buttons = [
+            w for w in host._update_banner_frame.winfo_children()
+            if isinstance(w, ttk.Button) and w.cget("text") == "View release"
+        ]
+        assert bool(buttons) is allowed
+        for button in buttons:
+            button.invoke()
+        assert opened == ([url] if allowed else [])
+        if not allowed:
+            assert "Refusing non-HTTPS" in caplog.text
+    finally:
+        host.destroy()
