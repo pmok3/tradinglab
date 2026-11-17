@@ -103,14 +103,8 @@ class BarsView:
 
 _Key = tuple[str, str]
 
-# Process-lifetime bound for the memo/fingerprint maps. The key space
-# ``(symbol, interval)`` grows with the scan universe, so an unbounded
-# dict leaks memory over long sessions. 512 comfortably covers the
-# standing scan universe; LRU eviction on insert, ``get_view`` touches
-# both maps in the same order so hot pairs survive and the two evict in
-# lockstep. An evicted memo rebuilds lazily on the next ``get_view``
-# (a missing fingerprint is treated as a mismatch) — eviction costs
-# recompute, never correctness.
+# Defensive bound if a caller retains a registry across many symbols.
+# Touch both maps in the same order so they evict the same pair.
 _MEMO_CACHE_MAX_SIZE = 512
 
 

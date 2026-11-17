@@ -7,6 +7,7 @@ per-interval isolation. Pure-logic; no Tk, no real network.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import List
 
@@ -197,18 +198,17 @@ def test_memo_maps_bounded_at_maxsize_under_load():
     from tradinglab.core import bars_registry as br_mod
 
     cap = br_mod._MEMO_CACHE_MAX_SIZE
-    assert cap == 512
     reg = _make_registry()
     for i in range(10 * cap):
         sym = f"S{i}"
         reg._cache.set_bars(sym, "5m", _candles(3))
         assert reg.get_view(sym, "5m") is not None
-    assert len(reg._memos) <= cap
-    assert len(reg._fingerprints) <= cap
+    assert len(reg._memos) == cap
+    assert list(reg._memos) == list(reg._fingerprints)
 
 
-def test_lru_hot_memo_survives_eviction_same_identity():
-    """A touched pair survives with the same memo identity; the untouched LRU pair is evicted."""
+def test_lru_eviction_recomputes_cold_memo_and_preserves_hot_identity():
+    """An evicted pair recomputes its indicator while a hot memo survives."""
     from tradinglab.core import bars_registry as br_mod
 
     cap = br_mod._MEMO_CACHE_MAX_SIZE
@@ -216,7 +216,10 @@ def test_lru_hot_memo_survives_eviction_same_identity():
     reg._cache.set_bars("HOT", "5m", _candles(3))
     reg._cache.set_bars("COLD", "5m", _candles(3))
     assert reg.get_view("HOT", "5m") is not None
-    assert reg.get_view("COLD", "5m") is not None
+    cold_view = reg.get_view("COLD", "5m")
+    assert cold_view is not None
+    cold_value = cold_view.memo.get("rvol", {"length": 2})["rvol"][-1]
+    assert cold_value == pytest.approx(1002 / 1000.5)
     for i in range(cap - 2):
         reg._cache.set_bars(f"FILL{i}", "5m", _candles(3))
         assert reg.get_view(f"FILL{i}", "5m") is not None
@@ -234,3 +237,35 @@ def test_lru_hot_memo_survives_eviction_same_identity():
     assert again.memo is hot_view.memo  # same identity, lazily surviving
     assert ("COLD", "5m") not in reg._memos
     assert ("COLD", "5m") not in reg._fingerprints
+    assert list(reg._memos) == list(reg._fingerprints)
+
+    rebuilt = reg.get_view("COLD", "5m")
+    assert rebuilt is not None
+    assert rebuilt.buffer is cold_view.buffer
+    assert rebuilt.memo is not cold_view.memo
+    assert rebuilt.memo.get("rvol", {"length": 2})["rvol"][-1] == pytest.approx(cold_value)
+    assert len(reg._memos) == cap
+    assert list(reg._memos) == list(reg._fingerprints)
+
+
+def test_full_memo_cache_rebuilds_for_forming_volume_change():
+    from tradinglab.core import bars_registry as br_mod
+
+    reg = _make_registry()
+    candles = _candles(3)
+    reg._cache.set_bars("HOT", "1m", candles)
+    before = reg.get_view("HOT", "1m")
+    assert before is not None
+    old_value = before.memo.get("rvol", {"length": 2})["rvol"][-1]
+    assert old_value == pytest.approx(1002 / 1000.5)
+    for i in range(br_mod._MEMO_CACHE_MAX_SIZE - 1):
+        reg._cache.set_bars(f"FILL{i}", "1m", _candles(3))
+        assert reg.get_view(f"FILL{i}", "1m") is not None
+
+    reg._cache.on_1m_tick("HOT", replace(candles[-1], volume=2004), forming=True)
+    after = reg.get_view("HOT", "1m")
+    assert after is not None
+    assert after.memo is not before.memo
+    assert after.memo.get("rvol", {"length": 2})["rvol"][-1] == pytest.approx(2 * old_value)
+    assert len(reg._memos) == br_mod._MEMO_CACHE_MAX_SIZE
+    assert list(reg._memos) == list(reg._fingerprints)

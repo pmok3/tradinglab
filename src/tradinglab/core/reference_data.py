@@ -81,12 +81,8 @@ from .lru_dict import LRUDict
 # Module state
 # ----------------------------------------------------------------------
 
-# Process-lifetime bound for the reference-bars cache. The key space
-# ``(source, symbol, interval)`` grows with every distinct reference
-# symbol the session touches (RRVOL cross-symbol fetches, scanner runs),
-# so an unbounded dict leaks memory over long sessions. 256 covers a
-# full day's worth of distinct reference pairs; LRU eviction re-fetches
-# on next miss — a correctness-preserving recompute cost.
+# Bound retained reference series across the app lifetime. Evicted keys
+# use the existing provider-miss path when requested again.
 _CACHE_MAX_SIZE = 256
 
 _lock = threading.RLock()
