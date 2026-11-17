@@ -1,6 +1,6 @@
 # `gui/strategy_tab.py` — Spec
 
-Last updated: 2026-09-23
+Last updated: 2026-11-17
 
 ## Purpose
 PR 4 of the Strategy Tester rollout. A self-contained Tk widget
@@ -226,15 +226,17 @@ root in smoke tests). The popup wrapper + menubar wiring live in
   worker liveness **before** consuming progress and schedules another
   tick if it observed a live worker, even if the worker exits during
   painting. Once the worker is known to have exited, the slot is stable
-  and completion reconciles the bar with ``result.test_run``'s actual
-  completed/total counters before setting the terminal status. Cancelled
-  and failed runs retain partial counts rather than forcing 100%.
+  and completion replaces any pending tick with ``result.test_run``'s actual
+  completed/total counters before painting once and setting the terminal
+  status. Cancelled and failed runs retain partial counts rather than
+  forcing 100%.
   Latest tick wins; only intermediate ticks are intentionally coalesced.
   Starting another run clears the slot and cancels the prior hide timer.
   Deterministic Event-coordinated regressions in
   ``tests/unit/gui/test_strategy_tester_progress_bar.py`` cover publication
   during painting with both live and exiting workers, missing final
-  callbacks, cancellation, teardown, rerun, and Tk owner-thread affinity.
+  callbacks, cancellation, destruction during an idle paint callback,
+  rerun, and Tk owner-thread affinity.
 - Status transitions: ``Ready`` → ``Run starting…`` → ``Running… N/M
   symbols`` → ``Done. N symbols, K trades.`` (or ``Stopped. Partial
   results: N/M symbols.`` on cancel).
@@ -263,9 +265,13 @@ root in smoke tests). The popup wrapper + menubar wiring live in
   ``runner.run`` falls back to ``DEFAULT_MAX_WORKERS``.
 
 ## Cleanup
-- ``<Destroy>`` binding cancels any in-flight Run (``token.cancel()``)
-  and disposes the pending ``after()`` callback. The worker thread is
-  a daemon so it dies with the app.
+- The tab's ``<Destroy>`` binding marks it closed, cancels in-flight Run
+  and export tokens, and cancels/clears all three timer IDs in one teardown
+  path. Repeated teardown and descendant-widget events are ignored.
+  Run polling cannot rearm after closure. Because ``update_idletasks()``
+  also executes idle callbacks that may destroy the tab, the active run
+  poll checks closure again after painting, before scheduling or completing
+  the UI. The worker thread is a daemon so it dies with the app.
 
 ## Known gaps / Future work
 - No equity-curve chart in the Report pane (line + DD shading).

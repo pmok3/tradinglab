@@ -122,6 +122,7 @@ class StrategyTab(ttk.Frame):
         self._worker: threading.Thread | None = None
         self._worker_result: dict[str, Any] = {}
         self._poll_after_id: str | None = None
+        self._closed = False
         # Latest ``(done, total)`` tick written by the runner worker thread
         # via ``_on_progress``; picked up by the Tk-main-thread ``_on_poll``.
         # Take-and-clear is locked; painting must not block the publisher.
@@ -1023,21 +1024,15 @@ class StrategyTab(ttk.Frame):
         self._var_status.set("Stopping… (waiting for in-flight symbols)")
 
     def _schedule_poll(self) -> None:
-        if self._poll_after_id is not None:
-            try:
-                self.after_cancel(self._poll_after_id)
-            except Exception:  # noqa: BLE001
-                pass
-        try:
-            self._poll_after_id = self.after(
-                self.POLL_INTERVAL_MS, self._on_poll
-            )
-        except Exception:  # noqa: BLE001
-            self._poll_after_id = None
+        if self._closed or self._poll_after_id is not None:
+            return
+        self._poll_after_id = self.after(
+            self.POLL_INTERVAL_MS, self._on_poll
+        )
 
     def _on_poll(self) -> None:
         self._poll_after_id = None
-        if self._worker is None:
+        if self._closed or self._worker is None:
             return
         # Observe liveness first: a worker that exits during painting still
         # gets another poll, so its final publication cannot be stranded.
@@ -1045,21 +1040,22 @@ class StrategyTab(ttk.Frame):
         with self._progress_lock:
             progress = self._latest_progress
             self._latest_progress = None
+        result = None if running else self._worker_result.get("result")
+        if result is not None:
+            progress = (
+                result.test_run.symbol_count_done,
+                result.test_run.symbol_count_total,
+            )
         if progress is not None:
             self._apply_progress(*progress)
+        # Painting flushes idle callbacks, which can destroy this tab.
+        if self._closed:
+            return
         if running:
             self._schedule_poll()
             return
         # Worker finished
         err = self._worker_result.get("error")
-        result = self._worker_result.get("result")
-        if result is not None:
-            final_progress = (
-                result.test_run.symbol_count_done,
-                result.test_run.symbol_count_total,
-            )
-            if final_progress != progress:
-                self._apply_progress(*final_progress)
         self._set_running_ui(False)
         self._worker = None
         if err:
@@ -1194,8 +1190,8 @@ class StrategyTab(ttk.Frame):
         resulting paint with the next redraw, so without forcing idle-task
         processing here the bar visually jumps instead of advancing
         steadily between poll ticks. ``update_idletasks()`` flushes pending
-        paint requests synchronously without re-entering the event loop,
-        which is exactly what we want.
+        paints and other idle callbacks, including widget teardown, but
+        does not process ordinary input or timer events.
         """
         try:
             if total > 0:
@@ -1895,32 +1891,24 @@ class StrategyTab(ttk.Frame):
     # Cleanup
     # ------------------------------------------------------------------
 
-    def _on_destroy(self, _evt) -> None:
-        try:
-            if self._token is not None:
-                self._token.cancel()
-        except Exception:  # noqa: BLE001
-            pass
-        try:
-            if self._poll_after_id is not None:
-                self.after_cancel(self._poll_after_id)
-        except Exception:  # noqa: BLE001
-            pass
-        try:
-            if self._pbar_hide_after_id is not None:
-                self.after_cancel(self._pbar_hide_after_id)
-        except Exception:  # noqa: BLE001
-            pass
-        try:
-            if self._export_cancel_token is not None:
-                self._export_cancel_token.cancel()
-        except Exception:  # noqa: BLE001
-            pass
-        try:
-            if self._export_poll_after_id is not None:
-                self.after_cancel(self._export_poll_after_id)
-        except Exception:  # noqa: BLE001
-            pass
+    def _on_destroy(self, event: tk.Event) -> None:
+        if event.widget is not self or self._closed:
+            return
+        self._closed = True
+        if self._token is not None:
+            self._token.cancel()
+        if self._export_cancel_token is not None:
+            self._export_cancel_token.cancel()
+        for job in (
+            self._poll_after_id, self._pbar_hide_after_id,
+            self._export_poll_after_id,
+        ):
+            if job is not None:
+                try:
+                    self.after_cancel(job)
+                except tk.TclError:
+                    logger.debug("StrategyTab: timer unavailable during teardown", exc_info=True)
+        self._poll_after_id = self._pbar_hide_after_id = self._export_poll_after_id = None
         # Audit Tier 1.7 — best-effort join on the export daemon thread
         # so deterministic-teardown tests don't trip on a thread that
         # outlives the dialog. 2-second ceiling — the export polls

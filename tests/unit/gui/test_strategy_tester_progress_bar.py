@@ -521,6 +521,75 @@ def test_destroy_with_pending_progress_cancels_poll_without_worker_tk(
         worker.join(5)
 
 
+@pytest.mark.parametrize("phase", ["running", "terminal-tick", "terminal-result"])
+def test_destroy_during_progress_paint_stops_run_polling(
+    tk_root, monkeypatch, tmp_path, tk_calls, phase,
+):
+    tab = _make_tab(tk_root)
+    result = _prepare_run(tab, monkeypatch, tmp_path)
+    tk_calls(tab)
+    started = threading.Event()
+    finish = threading.Event()
+
+    def run(cfg, *, progress, **kwargs):
+        if phase != "terminal-result":
+            progress(_make_test_run(1, 2))
+        started.set()
+        if phase == "running":
+            assert finish.wait(5)
+        return result
+
+    monkeypatch.setattr(tab, "_run_fn", run)
+    tab._on_run_clicked()
+    worker = tab._worker
+    try:
+        assert started.wait(5)
+        if phase != "running":
+            worker.join(5)
+            assert not worker.is_alive()
+        tab.after_idle(tab.destroy)
+        _poll_once(tab)
+        assert not tab.winfo_exists()
+        assert tab._token.is_cancelled()
+        assert tab._poll_after_id is None
+        assert tab._pbar_hide_after_id is None
+        tab._schedule_poll()
+        tab._on_poll()
+        assert tab._poll_after_id is None
+    finally:
+        finish.set()
+        worker.join(5)
+        if tab._poll_after_id is not None:
+            tab.after_cancel(tab._poll_after_id)
+            tab._poll_after_id = None
+
+
+def test_completion_paints_authoritative_counts_once(
+    tk_root, monkeypatch, tmp_path,
+):
+    tab = _make_tab(tk_root)
+    result = _prepare_run(tab, monkeypatch, tmp_path)
+    painted = []
+    apply = tab._apply_progress
+
+    def paint(done, total):
+        painted.append((done, total))
+        apply(done, total)
+
+    def run(cfg, *, progress, **kwargs):
+        progress(_make_test_run(1, 2))
+        return result
+
+    monkeypatch.setattr(tab, "_apply_progress", paint)
+    monkeypatch.setattr(tab, "_run_fn", run)
+    tab._on_run_clicked()
+    tab._worker.join(5)
+    assert not tab._worker.is_alive()
+    _poll_once(tab)
+    assert painted == [(2, 2)]
+    assert tab._var_status.get() == "Done. 2 symbols, 0 trades."
+
+
 def test_rerun_clears_pending_tick_and_cancels_old_hide_timer(
     tk_root, monkeypatch, tmp_path, tk_calls,
 ):
