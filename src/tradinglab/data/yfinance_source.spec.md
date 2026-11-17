@@ -1,6 +1,6 @@
 # data/yfinance_source.py — Spec
 
-Last updated: 2026-09-23
+Last updated: 2026-11-16
 
 ## Purpose
 Live-data fetcher backed by yfinance. Thin adapter: pulls a DataFrame via `yf.Ticker(t).history(...)` and delegates to the vectorized `candles_from_dataframe` normalizer.
@@ -30,7 +30,7 @@ Live-data fetcher backed by yfinance. Thin adapter: pulls a DataFrame via `yf.Ti
 
 ## Testing
 - Test conftest pins startup to `"yfinance"` and stubs the yfinance fetcher with deterministic offline candles, so the smoke suite exercises the registry path without network. Live fetch is exercised manually. `check_c6_bad_ticker` covers the failure path.
-- `tests/unit/data/test_yfinance_timeout.py` uses a fake yfinance module to pin the explicit `timeout=10` argument for daily and intraday history calls, call-time constant overrides, unchanged request options and candle normalization, diagnostic/`None` handling for raised errors, empty-frame/`None` handling, all-invalid-OHLC/`[]` handling, and the missing-import path. These offline adapter tests do not measure live transport timing or establish a whole-fetch deadline.
+- `tests/unit/data/test_yfinance_timeout.py` uses standard-library mocks for yfinance to pin the explicit `timeout=10` argument for daily and intraday history calls, call-time constant overrides, unchanged request options and candle normalization, diagnostic/`None` handling for raised errors, empty-frame/`None` handling, all-invalid-OHLC/`[]` handling, and the missing-import path. These offline adapter tests do not measure live transport timing or establish a whole-fetch deadline.
 
 ## Known limitations
 - **Asset-class scope** — Tested with US equities and ETFs only (USD-denominated). yfinance accepts crypto / FX / international tickers but our normalisation, session classification, and ET timestamping all assume US-equity conventions. Do not rely on those asset classes.

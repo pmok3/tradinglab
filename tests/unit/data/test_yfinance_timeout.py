@@ -8,7 +8,7 @@ requests and internal retries can take the whole fetch beyond this timeout.
 from __future__ import annotations
 
 import sys
-from types import ModuleType
+from unittest.mock import Mock
 
 import pandas as pd
 import pytest
@@ -33,28 +33,10 @@ def _one_bar_frame() -> pd.DataFrame:
 
 @pytest.fixture()
 def fake_yfinance(monkeypatch):
-    """Install a fake ``yfinance`` module.
-
-    Returns ``(behaviors, calls)`` where ``behaviors`` maps a ticker to a
-    ``(ticker, kwargs) -> DataFrame`` callable invoked by the fake
-    ``Ticker.history()``, and ``calls`` records every ``history()``
-    invocation as ``(ticker, kwargs)``.
-    """
-    behaviors: dict = {}
-    calls: list = []
-
-    class _FakeTicker:
-        def __init__(self, ticker: str) -> None:
-            self._ticker = ticker
-
-        def history(self, **kwargs):
-            calls.append((self._ticker, kwargs))
-            return behaviors[self._ticker](self._ticker, kwargs)
-
-    mod = ModuleType("yfinance")
-    mod.Ticker = _FakeTicker
-    monkeypatch.setitem(sys.modules, "yfinance", mod)
-    return behaviors, calls
+    fake = Mock()
+    fake.Ticker.return_value.history.return_value = _one_bar_frame()
+    monkeypatch.setitem(sys.modules, "yfinance", fake)
+    return fake
 
 
 @pytest.mark.parametrize(
@@ -63,61 +45,52 @@ def fake_yfinance(monkeypatch):
 )
 def test_timeout_kwarg_reaches_history_call(fake_yfinance, interval, period, prepost) -> None:
     """Explicitly preserve the history timeout and existing request options."""
-    behaviors, calls = fake_yfinance
-    behaviors["AMD"] = lambda ticker, kwargs: _one_bar_frame()
-
     candles = yf_src.fetch_live_data("AMD", interval)
 
-    assert calls == [("AMD", {
-        "period": period, "interval": interval, "prepost": prepost, "timeout": 10,
-    })]
-    assert yf_src.YFINANCE_TIMEOUT_S == 10
+    fake_yfinance.Ticker.assert_called_once_with("AMD")
+    fake_yfinance.Ticker.return_value.history.assert_called_once_with(
+        period=period, interval=interval, prepost=prepost, timeout=10,
+    )
     assert candles is not None and len(candles) == 1
     bar = candles[0]
     assert (bar.open, bar.high, bar.low, bar.close, bar.volume) == (100, 101, 99, 100.5, 1_000)
 
 
 def test_timeout_constant_is_read_at_call_time(fake_yfinance, monkeypatch) -> None:
-    behaviors, calls = fake_yfinance
-    behaviors["AMD"] = lambda ticker, kwargs: pd.DataFrame()
+    fake_yfinance.Ticker.return_value.history.return_value = pd.DataFrame()
     monkeypatch.setattr(yf_src, "YFINANCE_TIMEOUT_S", 0.2)
 
     assert yf_src.fetch_live_data("AMD", "1d") is None
-    assert calls == [("AMD", {
-        "period": "2y", "interval": "1d", "prepost": False, "timeout": 0.2,
-    })]
+    fake_yfinance.Ticker.return_value.history.assert_called_once_with(
+        period="2y", interval="1d", prepost=False, timeout=0.2,
+    )
 
 
 @pytest.mark.parametrize("error_type", [TimeoutError, OSError, ValueError, KeyError])
 def test_history_errors_return_none_with_diagnostic(fake_yfinance, capsys, error_type) -> None:
     """Errors reaching the adapter retain the no-raise contract."""
-    behaviors, calls = fake_yfinance
     error = error_type("history failed")
-
-    def _fail(ticker: str, kwargs: dict):
-        raise error
-
-    behaviors["AMD"] = _fail
+    history = fake_yfinance.Ticker.return_value.history
+    history.side_effect = error
 
     assert yf_src.fetch_live_data("AMD", "1d") is None
-    assert len(calls) == 1  # The adapter adds no retry of its own.
+    history.assert_called_once()
     assert capsys.readouterr().out == f"Live fetch failed: {error}\n"
 
 
 def test_empty_history_returns_none(fake_yfinance, capsys) -> None:
-    behaviors, calls = fake_yfinance
-    behaviors["AMD"] = lambda ticker, kwargs: pd.DataFrame()
+    history = fake_yfinance.Ticker.return_value.history
+    history.return_value = pd.DataFrame()
 
     assert yf_src.fetch_live_data("AMD", "1d") is None
-    assert len(calls) == 1
+    history.assert_called_once()
     assert capsys.readouterr().out == ""
 
 
 def test_nonempty_history_with_invalid_ohlc_returns_empty_list(fake_yfinance) -> None:
-    behaviors, _calls = fake_yfinance
     frame = _one_bar_frame()
     frame["Open"] = float("nan")
-    behaviors["AMD"] = lambda ticker, kwargs: frame
+    fake_yfinance.Ticker.return_value.history.return_value = frame
 
     assert yf_src.fetch_live_data("AMD", "1d") == []
 
