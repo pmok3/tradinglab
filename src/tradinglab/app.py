@@ -1211,7 +1211,7 @@ class ChartApp(
             if bool(_defaults.get("update_check_on_startup")):
                 from . import updates as _updates
                 _updates.schedule_check_async(
-                    self.after,
+                    self,
                     self._on_update_check_result,
                     force=False,
                 )

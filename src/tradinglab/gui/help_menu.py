@@ -859,7 +859,7 @@ class HelpMenuMixin:
                 parent=self,
             )
 
-        _updates.schedule_check_async(self.after, _present, force=False)
+        _updates.schedule_check_async(self, _present, force=False)
 
     # ---- Reset / purge ------------------------------------------------
 

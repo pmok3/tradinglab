@@ -536,9 +536,11 @@ Live-chart and scanner perf work is scoped in `docs/PERFORMANCE.md` and
 ### 7.15 Strategy Tester exports (PDF/HTML/CSV) run on a background thread
 
 Exporting on the Tk thread freezes the app for 20-60 s. Exports run on
-`StrategyTabExport*` daemon threads; the worker **must not call `self.after`**
-(non-threaded Tcl raises and silently drops the callback) — it writes result/progress
-state and the Tk thread polls every 100 ms. PDF/HTML honour cancel tokens; CSV is a
+`StrategyTabExport*` daemon threads; the worker **must not call `self.after`**.
+Stock Windows CPython normally includes threaded Tcl, which can marshal calls while
+the owner services `mainloop`; calls can still fail or block without that loop or
+during teardown. Workers write result/progress state and the Tk thread polls every
+100 ms. PDF/HTML honour cancel tokens; CSV is a
 single copy. Specs: `export.spec.md`, `strategy_tab.spec.md`. Tests:
 `test_export_cancel_and_progress.py`, `test_strategy_tab_async_export.py`.
 

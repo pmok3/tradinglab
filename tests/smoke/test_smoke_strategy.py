@@ -459,6 +459,16 @@ def check_st3_strategy_tab_end_to_end(tmp_cache_root: Path) -> None:
         worker_status = tab._worker_result.get("result")
         assert worker_status is not None
         assert worker_status.test_run.status is RunStatus.DONE
+        assert tab._pbar["value"] == worker_status.test_run.symbol_count_done == 3
+        assert tab._pbar["maximum"] == worker_status.test_run.symbol_count_total == 3
+        assert tab._latest_progress is None
+
+        tab.destroy()
+        assert tab._poll_after_id is None
+        assert tab._pbar_hide_after_id is None
+        assert tab._export_poll_after_id is None
+        tab._schedule_poll()
+        assert tab._poll_after_id is None
 
     finally:
         try:
