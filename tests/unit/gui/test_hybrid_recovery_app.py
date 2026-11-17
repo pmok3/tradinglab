@@ -42,6 +42,7 @@ class _Executor:
 class _Chart:
     _load_data = ChartApp._load_data
     _load_data_async = ChartApp._load_data_async
+    _refresh_daily_synth_for_active_view = ChartApp._refresh_daily_synth_for_active_view
     _series_date_span = staticmethod(ChartApp._series_date_span)
 
     def __init__(self, source):
@@ -177,6 +178,28 @@ def test_restatement_only_in_outer_cache_keeps_async_raw_handoff_usable(series):
     assert app._primary[-1] == recent[-1]
     assert not any(level == "error" for level, _ in app.messages)
     assert disk_cache.load("Auto", "AAPL", "5m") == app._primary
+
+
+@pytest.mark.parametrize("compare_origin", ["memory", "disk", "rendered"])
+def test_daily_synth_compare_fallback_cannot_restore_invalidated_history(series, compare_origin):
+    app = _Chart("Auto")
+    app.interval_var.set("1d")
+    primary = disk_cache.history_snapshot("AAPL", "1d", _bars(1, 21, 100))
+    compare = disk_cache.history_snapshot("MSFT", "1d", _bars(1, 21, 400))
+    app._full_cache[("Auto", "AAPL", "1d")] = primary
+    if compare_origin == "memory":
+        app._full_cache[("Auto", "MSFT", "1d")] = compare
+    elif compare_origin == "disk":
+        assert disk_cache.save("Auto", "MSFT", "1d", compare)
+    else:
+        app._compare_raw = compare
+
+    app._refresh_daily_synth_for_active_view(prefetched_symbol="AAPL")
+    assert app._compare == compare, "ordinary eviction fallback must preserve the compare"
+    disk_cache.invalidate_history("MSFT", "1d")
+    app._refresh_daily_synth_for_active_view(prefetched_symbol="AAPL")
+    assert app._primary == primary
+    assert app._compare_raw == app._compare == [], "an invalidated compare must not be copied back"
 
 
 def test_scheduler_handoffs_preserve_fence_end_to_end(series, monkeypatch):

@@ -1,6 +1,6 @@
 # app.py — Spec
 
-Last updated: 2026-09-23
+Last updated: 2026-11-16
 
 ## Purpose
 Top-level Tk + matplotlib application. Owns all runtime state (Tk widgets, `Figure`, caches, stream/fetch tokens, worker pool) and orchestrates the data → render → stream pipeline. `ChartApp` is composed of `tk.Tk` + a stack of mixins (each owns a concern documented in its own `*.spec.md`).
@@ -104,6 +104,10 @@ patch `tradinglab.app.<name>`.
 Hybrid/Auto cache lists carry `disk_cache.HistorySnapshot` revision fences.
 Invalidated lists are not eligible for memory hits or failed-fetch fallback;
 `_load_data` preserves fences with `copy_candles` through its cache copies.
+Daily-synth refreshes preserve the same fences through primary/compare memory,
+compare disk re-warming and rendered-compare fallback. Ordinary LRU eviction
+still preserves the compare, but an invalidated compare is cleared rather than
+copied back onto the chart.
 Pending hybrid recovery displays a warning that only verified recent bars are
 available and names the retry delay. When neither leg supplies usable data,
 an invalidated old chart is cleared and the recovery error is shown rather

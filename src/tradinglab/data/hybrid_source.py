@@ -154,6 +154,10 @@ def _persist_verified_deep(
 ) -> None:
     from .. import disk_cache
 
+    if recovery.quarantined:
+        recovery.failures = 0
+        recovery.retry_at = 0.0
+    recovery.quarantined = False
     try:
         saved = saver(ticker, interval, fetched)
     except Exception:  # noqa: BLE001
@@ -194,14 +198,21 @@ def _resolve_deep_leg(
             disk_cache.invalidate_history(ticker, interval)
             LOG.warning("hybrid: withholding deep history for %s/%s: %s", ticker, interval, reason)
 
+    # An outer-cache merge can quarantine history after the source returned.
+    # Verified unsaved memory remains usable; a disk candidate needs evidence.
+    if recovery.verified is None and disk_cache.history_pending(ticker, interval):
+        recovery.quarantined = True
     try:
         cached = recovery.verified or deep_loader(ticker, interval)
     except Exception:  # noqa: BLE001
         LOG.warning("hybrid: deep cache read failed for %s/%s", ticker, interval, exc_info=True)
         cached = None
     if cached:
-        if not recovery.quarantined and (not recent or _deep_leg_compatible(cached, recent)):
-            if recovery.verified is not None and time.monotonic() >= recovery.retry_at:
+        compatible = _deep_leg_compatible(cached, recent) if recent else not recovery.quarantined
+        if compatible:
+            if recovery.quarantined or (
+                recovery.verified is not None and time.monotonic() >= recovery.retry_at
+            ):
                 _persist_verified_deep(ticker, interval, cached, recovery, deep_saver)
             return cached
         quarantine(
@@ -225,9 +236,6 @@ def _resolve_deep_leg(
         recovery.retry_at = time.monotonic() + delay
         LOG.warning("hybrid: deep history for %s/%s remains withheld; retry in %ss", ticker, interval, delay)
         return []
-    recovery.quarantined = False
-    recovery.failures = 0
-    recovery.retry_at = 0.0
     _persist_verified_deep(ticker, interval, fetched, recovery, deep_saver)
     return fetched
 
@@ -281,7 +289,7 @@ def fetch_hybrid_data(
         with _RECOVERY_LOCK:
             recovery = _RECOVERY.get(key)
             if recovery is None:
-                recovery = _Recovery(quarantined=disk_cache.history_pending(ticker, interval))
+                recovery = _Recovery()
                 _RECOVERY[key] = recovery
         try:
             recent = recent_fetcher(ticker, interval)

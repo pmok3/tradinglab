@@ -1,6 +1,6 @@
 # `data/today_upsample.py` — Spec
 
-Last updated: 2026-09-07
+Last updated: 2026-11-16
 
 ## Purpose
 
@@ -34,7 +34,9 @@ yesterday" mid-day. Audit tag `daily-today-upsample`.
   — `list[Candle]`. Append-or-overwrite: when the daily series' last
   bar's ET date matches today's, overwrites with the freshly
   synthesised bar; otherwise appends. Always returns a fresh list (no
-  mutation of inputs).
+  mutation of inputs). List inputs use their `copy()` protocol, preserving
+  a hybrid/Auto `HistorySnapshot` daily revision fence whether or not a
+  synthetic bar is available. Other sequence inputs remain supported.
 
 ## Dependencies
 

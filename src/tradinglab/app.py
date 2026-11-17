@@ -2859,8 +2859,8 @@ class ChartApp(
             return
         if prefetched_symbol not in (raw_primary, raw_compare):
             return
-        primary_clean = list(
-            self._full_cache.get((src, raw_primary, interval)) or [],
+        primary_clean = disk_cache.copy_candles(
+            self._full_cache.get((src, raw_primary, interval)),
         )
         if not primary_clean:
             return
@@ -2870,8 +2870,8 @@ class ChartApp(
         )
         compare_raw: list[Candle] = []
         if compare_on and raw_compare:
-            compare_clean = list(
-                self._full_cache.get((src, raw_compare, interval)) or [],
+            compare_clean = disk_cache.copy_candles(
+                self._full_cache.get((src, raw_compare, interval)),
             )
             if not compare_clean:
                 # The compare's daily bars may have been LRU-evicted from
@@ -2879,13 +2879,13 @@ class ChartApp(
                 # / compare-warm churn — the cache holds only
                 # ``full_cache_size`` entries). This best-effort synth
                 # refresh (triggered by a PRIMARY intraday prefetch) must
-                # NEVER blank a compare panel that is currently on-screen.
+                # NEVER blank a usable compare panel that is on-screen.
                 # Fall back to disk (the truthful persistent store), then
                 # re-warm memory so subsequent refreshes hit the cache.
                 # Audit ``daily-synth-compare-drop``.
                 try:
-                    compare_clean = list(
-                        disk_cache.load(src, raw_compare, interval) or [],
+                    compare_clean = disk_cache.copy_candles(
+                        disk_cache.load(src, raw_compare, interval),
                     )
                 except Exception:  # noqa: BLE001
                     compare_clean = []
@@ -2897,8 +2897,8 @@ class ChartApp(
                         pass
             if not compare_clean:
                 # Still nothing (compare not on disk either) — preserve the
-                # currently-rendered compare rather than dropping the panel.
-                compare_clean = list(getattr(self, "_compare_raw", None) or [])
+                # current compare unless its history has been invalidated.
+                compare_clean = disk_cache.copy_candles(getattr(self, "_compare_raw", None))
             if compare_clean:
                 compare_raw = self._maybe_upsample_today_daily(
                     compare_clean, source=src, symbol=raw_compare,

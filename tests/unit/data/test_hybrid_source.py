@@ -665,6 +665,52 @@ def test_failed_deep_save_retries_without_refetch_then_clears_quarantine(_isolat
         assert "persistence is unconfirmed" in caplog.text
 
 
+@pytest.mark.parametrize("first_result", [True, False, None])
+def test_outer_only_quarantine_revalidates_persists_and_survives_restart(
+    _isolated_hybrid, monkeypatch, first_result,
+):
+    clock = _isolated_hybrid
+    old = _leg(range(1, 21), 400, drift=0)
+    good = _leg(range(1, 21), 100, drift=0)
+    recent = _leg(range(15, 26), 100, volume=999, drift=0)
+    assert disk_cache.save("alpaca", "AAPL", "5m", good)
+    assert disk_cache.save("Auto", "AAPL", "5m", old)
+    outer = disk_cache.load("Auto", "AAPL", "5m")
+    saves = []
+
+    def saver(ticker, interval, bars):
+        saves.append(clock[0])
+        if len(saves) == 1 and first_result is not True:
+            return first_result
+        return disk_cache.save("alpaca", ticker, interval, bars)
+
+    def fetch(recent_bars):
+        return fetch_hybrid_data(
+            "AAPL", "5m", recent_fetcher=lambda *_: recent_bars,
+            deep_fetcher=lambda *_: pytest.fail("compatible persisted deep history needs no refetch"),
+            deep_saver=saver,
+        )
+
+    fresh = fetch(recent)
+    assert saves == [], "ordinary warm reuse must not rewrite deep history"
+    merged = disk_cache.merge_candles(outer, fresh)
+    assert all(c.close == 100 for c in merged) and not outer
+    assert disk_cache.history_pending("AAPL", "5m")
+    assert disk_cache.save("Auto", "AAPL", "5m", merged)
+
+    for clock[0] in (100, 101, 159, 160):
+        result = fetch(recent)
+        assert len(result) == 25 and all(c.close == 100 for c in result)
+        assert all(c.volume == 999 for c in result if c.date.day >= 15)
+        if clock[0] < 160:
+            assert disk_cache.history_pending("AAPL", "5m") is (first_result is not True)
+    assert saves == ([100] if first_result is True else [100, 160])
+    assert not disk_cache.history_pending("AAPL", "5m")
+    monkeypatch.setattr(hybrid_source, "_RECOVERY", LRUDict(maxsize=128))
+    monkeypatch.setattr(disk_cache, "_HISTORY_REVISIONS", LRUDict(maxsize=128))
+    assert fetch(None) == good, "confirmed compatible history remains usable during a restarted Yahoo outage"
+
+
 def test_failed_file_retirement_remains_blocked_across_restart(monkeypatch, caplog):
     from pathlib import Path
 

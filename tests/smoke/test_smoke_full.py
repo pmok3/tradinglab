@@ -6962,7 +6962,7 @@ def check_d37_status_bar(app) -> None:
 
 
 def check_d97_hybrid_history_recovery_notice(app) -> None:
-    """Hybrid recovery renders recent-only data and a visible status warning."""
+    """Hybrid recovery warns and daily refresh cannot restore a rejected compare."""
     import tempfile
     from datetime import timezone
 
@@ -6971,7 +6971,7 @@ def check_d97_hybrid_history_recovery_notice(app) -> None:
     from tradinglab.data.base import DATA_SOURCES
     from tradinglab.models import Candle
 
-    variables = ("source_var", "ticker_var", "interval_var", "compare_var", "prepost_var")
+    variables = ("source_var", "ticker_var", "interval_var", "compare_var", "compare_ticker_var", "prepost_var")
     saved = {name: getattr(app, name).get() for name in variables}
     old_cache = app._full_cache.copy()
     old_drilldown = app._drilldown_day
@@ -7022,6 +7022,19 @@ def check_d97_hybrid_history_recovery_notice(app) -> None:
                        for e in app._status.history())
             _pump(app, 0.1)
             assert "deep history withheld" in app.status.get()
+            compare_symbol = "_D97_COMPARE"
+            app.interval_var.set("1d")
+            app.compare_ticker_var.set(compare_symbol)
+            app.compare_var.set(True)
+            app._full_cache[(hybrid_source.HYBRID_SOURCE_NAME, symbol, "1d")] = (
+                disk_cache.history_snapshot(symbol, "1d", recent)
+            )
+            assert disk_cache.save(hybrid_source.HYBRID_SOURCE_NAME, compare_symbol, "1d", old)
+            app._refresh_daily_synth_for_active_view(prefetched_symbol=symbol)
+            assert app._compare, "ordinary disk fallback preserves the compare panel"
+            disk_cache.invalidate_history(compare_symbol, "1d")
+            app._refresh_daily_synth_for_active_view(prefetched_symbol=symbol)
+            assert app._primary and not app._compare_raw and not app._compare
     finally:
         app._bump_fetch_token()
         for name, value in saved.items():

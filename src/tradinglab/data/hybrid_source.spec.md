@@ -1,6 +1,6 @@
 # data/hybrid_source.py — Spec
 
-Last updated: 2026-09-23
+Last updated: 2026-11-16
 
 ## Purpose
 A composite data source that stitches **yfinance (recent + live)** over
@@ -69,6 +69,13 @@ window PLUS Alpaca's deep intraday reach (IEX, ~2016+). Registered as
   during an ordinary Yahoo outage remains supported, but never while that
   history is quarantined. The chart clears an obsolete view rather than
   falling back to an invalidated snapshot.
+- **One verified-replacement transition.** The deep resolver observes durable
+  quarantine on every fetch, including invalidation discovered later by an
+  outer-cache merge. A cached deep leg with fresh compatible overlap can be
+  reused without another network fetch, but takes the same confirmed-save
+  transition as a fetched replacement before clearing durable quarantine.
+  Failed/unknown saves keep verified memory usable and retry persistence on the
+  existing backoff; a restarted Yahoo outage cannot validate quarantined disk.
 - **Ratio pseudo-symbols** (`AMD/NVDA`) short-circuit to the yfinance leg only
   (Alpaca has no ratio concept) — avoids a wasted 404 Alpaca fetch and matches
   yfinance's own ratio behaviour.
@@ -132,6 +139,8 @@ drives real synchronous/asynchronous ChartApp loaders through the Auto delegate.
 The legacy `None`/no-op saver regression verifies that rejected Alpaca bytes
 cannot be accepted after restart during a Yahoo outage; both `False` and `None`
 outcomes retry persistence without refetching, and explicit `True` clears the marker.
+Outer-cache-only disagreement also exercises that transition through compatible
+polls, failed/unknown saves and restart followed by a Yahoo outage.
 Ranking is pinned in
 `tests/unit/data/test_source_ranking.py` (`test_hybrid_ranks_just_above_yfinance`);
 volume metadata is pinned in `tests/unit/data/test_quality.py`
