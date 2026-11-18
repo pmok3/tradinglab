@@ -580,9 +580,13 @@ class _InboxHarness(_PollingHarness):
         self.prefetch_calls: list[tuple] = []
         self.reference_calls = 0
         self.watchlist_refresh_calls = 0
+        self.signal_payloads: list = []
 
     def _stash_full_cache(self, key, bars):
         self.stash_calls.append((key, bars))
+
+    def _apply_watchlist_signals(self, results):
+        self.signal_payloads.append(results)
 
     def _apply_prefetch_result(self, key, bars):
         self.prefetch_calls.append((key, bars))
@@ -635,6 +639,34 @@ class TestDrainWorkerInbox:
         assert h.watchlist_tab.calls == 1
         # Self path NOT called when the tab handled it.
         assert h.watchlist_refresh_calls == 0
+
+    def test_watchlist_signals_event_applies_on_self(self):
+        """New inbox kind: worker-computed signal cells are applied on
+        the Tk thread via _apply_watchlist_signals (the worker never
+        mutates _watchlist_snapshot itself)."""
+        h = _InboxHarness()
+        payload = {"AMD": {"sig1": "cell"}}
+        h._worker_inbox.put(("watchlist_signals", payload))
+        h._drain_worker_inbox()
+        assert h.signal_payloads == [payload]
+
+    def test_watchlist_signals_event_routes_to_watchlist_tab_when_present(self):
+        h = _InboxHarness()
+
+        class _WTab:
+            def __init__(self):
+                self.payloads = []
+
+            def _apply_watchlist_signals(self, results):
+                self.payloads.append(results)
+
+        h.watchlist_tab = _WTab()
+        payload = {"AMD": {"sig1": "cell"}}
+        h._worker_inbox.put(("watchlist_signals", payload))
+        h._drain_worker_inbox()
+        assert h.watchlist_tab.payloads == [payload]
+        # Self path NOT called when the tab handled it.
+        assert h.signal_payloads == []
 
     def test_reference_event_redraws(self):
         h = _InboxHarness()
