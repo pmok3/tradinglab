@@ -886,7 +886,7 @@ def check_c6_bad_ticker(app) -> None:
 def check_c7_watchlist_columns(app) -> None:
     """Configurable watchlist signal columns (feature ``watchlist-columns``).
 
-    Adds a builtin ``volume`` signal column to the first pinned
+    Adds a builtin ``volume`` signal column to the selected pinned
     watchlist, rebuilds the sub-tab, and verifies:
 
       * the Treeview gains the signal column with its custom header;
@@ -913,7 +913,8 @@ def check_c7_watchlist_columns(app) -> None:
     assert mgr is not None, "watchlists manager missing"
     pinned = mgr.pinned_names()
     assert pinned, "expected at least one pinned watchlist"
-    name = pinned[0]
+    selected = app.watchlist_var.get()
+    name = selected if selected in pinned else pinned[0]
     saved = mgr.columns_for(name)
     ref = FieldRef.builtin("volume")
     cid = signal_column_id(ref)
@@ -938,10 +939,22 @@ def check_c7_watchlist_columns(app) -> None:
         tickers = list(app._pinned_ticker_union())
         for ticker in tickers:
             app._watchlist_snapshot.get(ticker, {}).get("_sig", {}).pop(cid, None)
+        app._populate_watchlist_tab(name)
+
+        def signal_rendered():
+            # Completion and the debounced repaint happen on separate Tk turns.
+            if app._watchlist_signals_inflight:
+                return False
+            for iid in tree.get_children():
+                ticker = tree.item(iid, "values")[0]
+                cell = app._watchlist_snapshot.get(ticker, {}).get("_sig", {}).get(cid)
+                if cell is not None and cell.raw is not None and tree.set(iid, cid) == cell.text:
+                    return True
+            return False
+
         app._preload_watchlist_signals()
-        _pump_until(app, lambda: not app._watchlist_signals_inflight, timeout=10)
-        assert not app._watchlist_signals_inflight
-        _pump(app, 0.3)
+        assert _pump_until(app, signal_rendered, timeout=10), (
+            "signal column did not render a freshly evaluated numeric cell")
 
         # The evaluator produced a numeric raw for at least one ticker.
         evaluated = False
