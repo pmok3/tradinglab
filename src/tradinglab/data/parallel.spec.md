@@ -1,9 +1,9 @@
 # data/parallel.py — Spec
 
-Last updated: 2026-09-23
+Last updated: 2026-11-16
 
 ## Purpose
-Shared primitive for running I/O-bound fetch chunks concurrently. Rationale: the GIL is released during network syscalls, so splitting one logical fetch into N independent sub-requests and joining the results is a real speedup for any provider with a date-range or page API. CPU-bound work (Candle construction, session tagging) does **not** benefit and should stay serialized after the merge.
+Shared primitive for running independent I/O-bound fetch chunks concurrently and concatenating their results in input order.
 
 ## Public API
 - `fetch_chunks_parallel(chunks, worker, *, executor=None, max_workers=4) -> List[R]` — submits `worker(chunk)` for each chunk, concatenates results in **input order**. `worker` may return `None` (treated as empty); raised exceptions propagate (callers that want best-effort wrap the worker themselves). If `executor` is omitted, a short-lived `ThreadPoolExecutor` is created and shut down on return.
@@ -33,9 +33,9 @@ No shipped runtime caller was found in the P1 module-cleanup review. Retain the 
 - `None` from a worker contributes no elements (not a `None` in the list).
 
 ## Testing
-- `tests/unit/data/test_parallel.py` (no network): facade re-export identity + `__all__`; concurrent overlap and input-order concatenation under event-controlled reverse future completion, with bounded waits and unconditional worker release; `None`-worker handling; empty chunks (worker not called); generator input; worker-exception and cancelled-future propagation; shared-executor ownership (not shut down after return; exactly one `submit` per chunk, in order); owned-pool thread cleanup (no `fetch-chunk-*` threads linger); `max_workers` clamped to `min(max_workers, len(chunks))`.
-- Not exercised by the current smoke suite (yfinance single-request path doesn't need chunking, and synthetic is in-process). The primitive is kept ready for Polygon-style providers.
+- `tests/unit/data/test_parallel.py` (no network): facade re-export identity + `__all__`; concurrent overlap and input-order concatenation under event-controlled reverse future completion, with bounded waits and unconditional worker release; `None`-worker handling; empty chunks (no worker call or pool creation); generator input; worker-exception and cancelled-future propagation; shared-executor ownership (not shut down after return; exactly one `submit` of the supplied worker per chunk, in order); owned-pool worker threads stopped immediately on return without polling; parameterized `max_workers` clamping to `min(max_workers, len(chunks))` using the real pool.
+- Not exercised by the current smoke suite (yfinance single-request path doesn't need chunking, and synthetic is in-process).
 
 ## Known limitations
-- **Currently unused by shipped data sources** — Polygon and Alpaca now ship as single-request provider adapters and do not use this primitive. It remains ready for a future multi-symbol-per-request or date-chunked source.
+- **Currently unused by shipped data sources** — Polygon and Alpaca now ship as single-request provider adapters and do not use this primitive.
 - No per-chunk retry/backoff policy. If/when a flaky provider is integrated, wrap `worker` with retry logic at the call site rather than adding parameters here.

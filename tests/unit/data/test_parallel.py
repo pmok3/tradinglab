@@ -23,11 +23,9 @@ This file exercises the contract directly, with no network access:
 from __future__ import annotations
 
 import threading
-import time
 from collections.abc import Callable
 from concurrent.futures import CancelledError, Executor, Future, ThreadPoolExecutor
-from typing import Any
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 import pytest
 
@@ -106,10 +104,11 @@ def test_none_worker_results_are_ignored() -> None:
 def test_empty_chunks_returns_empty_without_calling_worker() -> None:
     """An empty chunk list short-circuits: the worker is never invoked and
     no executor is even created."""
-    calls: list[Any] = []
-    result = fetch_chunks_parallel([], lambda c: calls.append(c) or [c])
-    assert result == []
-    assert calls == []
+    worker = Mock()
+    with patch("tradinglab.data.parallel.ThreadPoolExecutor") as pool:
+        assert fetch_chunks_parallel([], worker) == []
+    worker.assert_not_called()
+    pool.assert_not_called()
 
 
 # 5. Iterable input -----------------------------------------------------------
@@ -160,13 +159,10 @@ def test_shared_executor_is_not_shut_down() -> None:
     """When the caller passes its own executor (e.g. the app's main fetch
     executor), ownership stays with the caller — the primitive must not
     shut it down on return."""
-    executor = ThreadPoolExecutor(max_workers=2)
-    try:
+    with ThreadPoolExecutor(max_workers=2) as executor:
         assert fetch_chunks_parallel([1, 2], lambda c: [c * 10], executor=executor) == [10, 20]
         # Still usable after return: submit must not raise RuntimeError.
-        assert executor.submit(lambda: 42).result() == 42
-    finally:
-        executor.shutdown(wait=True)
+        assert executor.submit(lambda: 42).result(timeout=5) == 42
 
 
 def test_submit_called_once_per_chunk_in_order() -> None:
@@ -174,65 +170,36 @@ def test_submit_called_once_per_chunk_in_order() -> None:
     policy of its own: exactly one ``submit(worker, chunk)`` per chunk,
     in input order."""
 
-    class MockExecutor:
-        def __init__(self) -> None:
-            self.submits: list[tuple[Any, Any]] = []
+    def worker(chunk: int) -> list[int]:
+        return [chunk]
 
-        def submit(self, fn: Any, chunk: Any) -> Future[list[int]]:
-            self.submits.append((fn, chunk))
-            fut: Future[list[int]] = Future()
-            fut.set_result([chunk])
-            return fut
-
-    mock_executor = MockExecutor()
-    result = fetch_chunks_parallel([5, 6, 7], lambda c: [c], executor=mock_executor)
-
-    assert result == [5, 6, 7]
-    assert len(mock_executor.submits) == 3
-    for (fn, chunk), expected in zip(mock_executor.submits, [5, 6, 7], strict=True):
-        assert chunk == expected
-        assert fn is not None  # the caller-provided worker
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        with patch.object(executor, "submit", wraps=executor.submit) as submit:
+            assert fetch_chunks_parallel([5, 6, 7], worker, executor=executor) == [5, 6, 7]
+        assert submit.call_args_list == [call(worker, chunk) for chunk in (5, 6, 7)]
 
 
 # 8. Owned-pool thread cleanup --------------------------------------------------
 def test_owned_pool_threads_are_gone_after_return() -> None:
     """When no executor is passed, the owned pool is shut down on return —
-    no ``fetch-chunk-*`` threads may linger."""
-    assert fetch_chunks_parallel([1, 2, 3], lambda c: [c]) == [1, 2, 3]
-
-    deadline = time.monotonic() + 5.0
-    while time.monotonic() < deadline:
-        alive = [
-            t.name for t in threading.enumerate() if t.name.startswith("fetch-chunk")
-        ]
-        if not alive:
-            break
-        time.sleep(0.01)
-    else:  # pragma: no cover - only reached on a real leak
-        pytest.fail(f"owned pool threads still alive after return: {alive}")
-
-    assert not [t for t in threading.enumerate() if t.name.startswith("fetch-chunk")]
+    its worker threads must already be stopped, without polling."""
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        with patch("tradinglab.data.parallel.ThreadPoolExecutor", return_value=executor):
+            threads = fetch_chunks_parallel([1, 2, 3], lambda c: [threading.current_thread()])
+        assert len(threads) == 3
+        assert not any(thread.is_alive() for thread in threads)
 
 
 # 9. max_workers clamping ------------------------------------------------------
-def test_max_workers_clamped_to_chunk_count_for_owned_pool() -> None:
+@pytest.mark.parametrize(("chunk_count", "expected_workers"), [(2, 2), (12, 10)])
+def test_max_workers_clamped_to_chunk_count_for_owned_pool(
+    chunk_count: int, expected_workers: int,
+) -> None:
     """The owned pool is created with ``min(max_workers, len(chunks))`` —
     we don't spawn 10 threads for 2 chunks, and we don't over-clamp when
     chunks outnumber ``max_workers``."""
-    real_pool = ThreadPoolExecutor
-    captured: dict[str, Any] = {}
-
-    class SpyPool(real_pool):  # type: ignore[valid-type,misc]
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            captured.update(kwargs)
-            super().__init__(*args, **kwargs)
-
-    with patch("tradinglab.data.parallel.ThreadPoolExecutor", SpyPool):
-        fetch_chunks_parallel([1, 2], lambda c: [c], max_workers=10)
-    assert captured["max_workers"] == 2
-    assert captured["thread_name_prefix"] == "fetch-chunk"
-
-    captured.clear()
-    with patch("tradinglab.data.parallel.ThreadPoolExecutor", SpyPool):
-        fetch_chunks_parallel(list(range(12)), lambda c: [c], max_workers=10)
-    assert captured["max_workers"] == 10
+    with patch("tradinglab.data.parallel.ThreadPoolExecutor", wraps=ThreadPoolExecutor) as pool:
+        assert fetch_chunks_parallel(range(chunk_count), lambda c: [c], max_workers=10) == list(
+            range(chunk_count)
+        )
+    pool.assert_called_once_with(max_workers=expected_workers, thread_name_prefix="fetch-chunk")
